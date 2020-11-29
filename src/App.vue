@@ -1,8 +1,17 @@
 <template>
   <div id="app">
-    <img alt="Vue logo" src="./assets/logo.png" />
-    <HelloWorld msg="Welcome to the GARAIO Emergency Room Vue.js Base App" />
-    <Counter />
+    <div class="level">
+      <Train ref="train1" :train="train" />
+      <div v-for="(tile, key) in level" :key="key" class="tile">
+        <div class="debug">
+          {{ key }}
+        </div>
+        <component :is="tile.component" class="component"></component>
+      </div>
+    </div>
+    <pre>
+      {{ level }}
+    </pre>
   </div>
 </template>
 
@@ -17,7 +26,61 @@ import Counter from "@/modules/counterExample/views/Counter.vue";
     Counter,
   },
 })
-export default class App extends Vue {}
+export default class App extends Vue {
+  train = {
+    ref: "train1",
+    x: 1,
+    y: 0,
+  };
+
+  level = {
+    "0,0": {
+      component: "",
+      x: 0,
+      y: 0,
+    },
+    "1,0": {
+      component: "Tile",
+      x: 1,
+      y: 0,
+    },
+    "2,0": {
+      component: "",
+      x: 2,
+      y: 0,
+    },
+    "0,1": {
+      component: "",
+      x: 0,
+      y: 1,
+    },
+    "1,1": {
+      component: "Tile",
+      x: 1,
+      y: 1,
+    },
+    "2,1": {
+      component: "",
+      x: 2,
+      y: 1,
+    },
+    "0,2": {
+      component: "",
+      x: 0,
+      y: 2,
+    },
+    "1,2": {
+      component: "",
+      x: 1,
+      y: 2,
+    },
+    "2,2": {
+      component: "",
+      x: 2,
+      y: 2,
+    },
+  };
+}
 </script>
 
 <style lang="scss">
@@ -27,5 +90,28 @@ export default class App extends Vue {}
   text-align: center;
   color: $vueBlack;
   margin-top: 60px;
+}
+pre {
+  text-align: left;
+}
+
+.level {
+  display: flex;
+  border: 1px solid green;
+  max-width: 300px;
+  flex-wrap: wrap;
+  margin: 0 auto;
+  position: relative;
+}
+.tile {
+  position: relative;
+  outline: 1px solid red;
+  flex: 0 0 auto;
+  width: 100px;
+  height: 100px;
+}
+.debug {
+  position: absolute;
+  z-index: 1;
 }
 </style>
