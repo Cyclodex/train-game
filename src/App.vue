@@ -6,7 +6,12 @@
         <div class="debug">
           {{ key }}
         </div>
-        <component :is="tile.component" class="component"></component>
+        <component
+          :is="tile.component"
+          class="component"
+          :train="tile.train"
+          @train-update="trainUpdate($event)"
+        ></component>
       </div>
     </div>
     <pre>
@@ -29,7 +34,7 @@ import Counter from "@/modules/counterExample/views/Counter.vue";
 export default class App extends Vue {
   train = {
     ref: "train1",
-    x: 1,
+    x: 0,
     y: 0,
   };
 
@@ -43,6 +48,7 @@ export default class App extends Vue {
       component: "Tile",
       x: 1,
       y: 0,
+      train: {},
     },
     "2,0": {
       component: "",
@@ -58,6 +64,7 @@ export default class App extends Vue {
       component: "Tile",
       x: 1,
       y: 1,
+      train: {},
     },
     "2,1": {
       component: "",
@@ -80,6 +87,19 @@ export default class App extends Vue {
       y: 2,
     },
   };
+
+  mounted() {
+    this.train.x = 1;
+    this.level["1,0"].train = { ...this.train };
+  }
+
+  trainUpdate(train: any) {
+    debugger;
+    console.log(train);
+    this.train = Object.assign({}, this, train, train);
+    const tilePosition: any = train.x + "," + train.y;
+    // this.level[tilePosition].train = { ...this.train };
+  }
 }
 </script>
 

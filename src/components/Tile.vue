@@ -3,10 +3,19 @@
 </template>
 
 <script lang="ts">
-import { Component, Vue } from "vue-property-decorator";
+import { Component, Emit, Prop, Vue, Watch } from "vue-property-decorator";
 
 @Component
-export default class Tile extends Vue {}
+export default class Tile extends Vue {
+  @Prop({ type: Object, default: () => ({}) }) train: any;
+
+  @Watch("train", { immediate: true, deep: true })
+  incomingTrain(newTrain, oldTrain) {
+    if (this.train?.y !== undefined) {
+      this.$emit("train-update", { ...this.train, y: this.train.y + 1 });
+    }
+  }
+}
 </script>
 
 <style scoped>
