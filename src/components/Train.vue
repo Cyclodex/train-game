@@ -1,6 +1,10 @@
 <template>
-  <div class="train" :style="[defaultStyle, getPosition]">
-    <div class="debug">{{ train.x }}, {{ train.y }}</div>
+  <div
+    :id="trainData.ref"
+    class="train"
+    :style="[defaultStyle, initialPosition]"
+  >
+    <span class="train-debug">{{ trainData.x }}, {{ trainData.y }}</span>
   </div>
 </template>
 
@@ -9,13 +13,18 @@ import { Component, Prop, Vue } from "vue-property-decorator";
 
 @Component
 export default class Train extends Vue {
-  @Prop({ type: Object, default: {} }) train: any;
+  @Prop({ type: Object, default: {} }) trainData: any;
   defaultStyle = { color: "white" };
+  initialPosition = {};
 
-  get getPosition() {
-    return {
-      left: this.$props.train.x * 100 + 50 + "px",
-      top: this.$props.train.y * 100 + "px",
+  created() {
+    this.setInitialPosition();
+  }
+
+  setInitialPosition() {
+    this.initialPosition = {
+      left: this.trainData.x * 100 + 50 + "px",
+      top: this.trainData.y * 100 + "px",
     };
   }
 }
@@ -25,10 +34,13 @@ export default class Train extends Vue {
 .train {
   background-color: blue;
   border-radius: 25%;
-  width: 25px;
-  height: 25px;
+  width: 40px;
+  height: 100px;
   position: absolute;
   z-index: 10;
   transform: translate(-50%, -50%);
+}
+.train-debug {
+  font-size: 14px;
 }
 </style>

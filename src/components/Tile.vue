@@ -4,16 +4,33 @@
 
 <script lang="ts">
 import { Component, Emit, Prop, Vue, Watch } from "vue-property-decorator";
+import { gsap } from "gsap";
 
 @Component
 export default class Tile extends Vue {
-  @Prop({ type: Object, default: () => ({}) }) train: any;
+  @Prop({ type: Object, default: () => ({}) }) tile: any;
 
-  @Watch("train", { immediate: true, deep: true })
-  incomingTrain(newTrain, oldTrain) {
-    if (this.train?.y !== undefined) {
-      this.$emit("train-update", { ...this.train, y: this.train.y + 1 });
+  @Watch("tile.train", { immediate: true, deep: true })
+  incomingTrain(newTrain: any, oldTrain: any) {
+    console.warn(this.tile);
+    if (newTrain?.ref !== oldTrain?.ref) {
+      this.animateTrain(newTrain);
     }
+  }
+
+  animateTrain(trainData: any) {
+    const train = document.getElementById(trainData.ref);
+    gsap.to(train, {
+      duration: 2,
+      y: "+=100",
+      onComplete: () => this.trainUpdate(trainData),
+    });
+  }
+
+  @Emit("trainUpdate")
+  trainUpdate(trainData: any) {
+    // only return how much y+ x+
+    return { ...trainData, y: trainData.y + 1 };
   }
 }
 </script>
