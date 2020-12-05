@@ -1,5 +1,5 @@
 <template>
-  <div class="tile"></div>
+  <div class="tile tile-straight"></div>
 </template>
 
 <script lang="ts">
@@ -13,11 +13,10 @@ export default class TileStraight extends TileBase {
   animateTrain(trainObject: TrainObject, train: HTMLElement) {
     // Define tile exit
     trainObject.y += 1;
-
     // Animate
     gsap.to(train, {
       duration: 2,
-      y: "+=100",
+      y: `+=${this.tileSize}`,
       onComplete: () => this.trainLeavesTile(trainObject),
     });
   }
@@ -25,9 +24,6 @@ export default class TileStraight extends TileBase {
 </script>
 
 <style scoped>
-.tile {
-  background-color: lightgreen;
-  width: 100%;
-  height: 100%;
+.tile-straight {
 }
 </style>

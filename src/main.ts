@@ -10,6 +10,10 @@ import Train from "@/components/Train.vue";
 Vue.component("Train", Train);
 
 new Vue({
+  data: {
+    tileSize: 100,
+    levelSizeX: 3,
+  },
   store,
   render: h => h(App),
 }).$mount("#app");

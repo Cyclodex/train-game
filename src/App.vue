@@ -1,21 +1,35 @@
 <template>
   <div id="app">
-    <div class="level">
+    <div
+      class="level"
+      :style="{
+        maxWidth: $root.tileSize * $root.levelSizeX + 'px',
+      }"
+    >
       <Train v-for="train in trains" :key="train.id" :train-object="train" />
-      <div v-for="(tile, key) in level" :key="key" class="tile">
+      <div
+        v-for="(tile, key) in level"
+        :key="key"
+        class="level-tile"
+        :style="{
+          width: $root.tileSize + 'px',
+          height: $root.tileSize + 'px',
+        }"
+      >
         <div class="debug">
           {{ key }}
         </div>
         <component
           :is="tile.component"
           :key="tile.id"
-          class="component"
+          class="tile-component"
           :tile="tile"
           @trainLeavesTile="trainLeavesTile($event, tile)"
         ></component>
       </div>
     </div>
     <pre>
+      {{ trains }}
       {{ level }}
     </pre>
   </div>
@@ -123,7 +137,7 @@ export default class App extends Vue {
     return `${options.x},${options.y}`;
   }
 
-  trainLeavesTile(train: any, tile: any) {
+  trainLeavesTile(train: TrainObject, tile: TileObject) {
     console.log("trainLeavesTile", train, tile);
     this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
     this.trainEntersTile(train);
@@ -155,17 +169,14 @@ pre {
 .level {
   display: flex;
   border: 1px solid green;
-  max-width: 300px;
   flex-wrap: wrap;
   margin: 0 auto;
   position: relative;
 }
-.tile {
+.level-tile {
   position: relative;
   outline: 1px solid red;
   flex: 0 0 auto;
-  width: 100px;
-  height: 100px;
 }
 .debug {
   position: absolute;

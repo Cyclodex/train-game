@@ -24,8 +24,8 @@ export default class Train extends Vue {
 
   setInitialPosition() {
     this.initialPosition = {
-      left: this.trainObject.x * 100 + 50 + "px",
-      top: this.trainObject.y * 100 + "px",
+      left: this.trainObject.x * this.$root.tileSize * 1.5 + "px",
+      top: this.trainObject.y * this.$root.tileSize + "px",
     };
   }
 }

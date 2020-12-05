@@ -10,6 +10,7 @@ import { TileObject, TrainObject } from "@/types";
 @Component
 export default class TileBase extends Vue {
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
+  tileSize = this.$root.tileSize;
 
   @Watch("tile.train", { immediate: true, deep: true })
   incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
@@ -28,7 +29,7 @@ export default class TileBase extends Vue {
     // Animate
     gsap.to(train, {
       duration: 2,
-      y: "+=100",
+      y: `+=${this.tileSize}`,
       onComplete: () => this.trainLeavesTile(trainObject),
     });
   }
@@ -40,7 +41,7 @@ export default class TileBase extends Vue {
 }
 </script>
 
-<style scoped>
+<style>
 .tile {
   background-color: lightgreen;
   width: 100%;
