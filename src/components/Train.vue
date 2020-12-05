@@ -1,19 +1,20 @@
 <template>
   <div
-    :id="trainData.ref"
+    :id="trainObject.id"
     class="train"
     :style="[defaultStyle, initialPosition]"
   >
-    <span class="train-debug">{{ trainData.x }}, {{ trainData.y }}</span>
+    <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
   </div>
 </template>
 
 <script lang="ts">
+import { TrainObject } from "@/types";
 import { Component, Prop, Vue } from "vue-property-decorator";
 
 @Component
 export default class Train extends Vue {
-  @Prop({ type: Object, default: {} }) trainData: any;
+  @Prop({ type: Object, default: {} }) trainObject!: TrainObject;
   defaultStyle = { color: "white" };
   initialPosition = {};
 
@@ -23,8 +24,8 @@ export default class Train extends Vue {
 
   setInitialPosition() {
     this.initialPosition = {
-      left: this.trainData.x * 100 + 50 + "px",
-      top: this.trainData.y * 100 + "px",
+      left: this.trainObject.x * 100 + 50 + "px",
+      top: this.trainObject.y * 100 + "px",
     };
   }
 }

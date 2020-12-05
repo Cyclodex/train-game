@@ -1,17 +1,17 @@
 <template>
   <div id="app">
     <div class="level">
-      <Train :train-data="train1" />
+      <Train v-for="train in trains" :key="train.id" :train-object="train" />
       <div v-for="(tile, key) in level" :key="key" class="tile">
         <div class="debug">
           {{ key }}
         </div>
         <component
           :is="tile.component"
-          :key="tile.key"
+          :key="tile.id"
           class="component"
           :tile="tile"
-          @trainUpdate="trainUpdate($event)"
+          @trainLeavesTile="trainLeavesTile($event, tile)"
         ></component>
       </div>
     </div>
@@ -25,6 +25,7 @@
 import { Component, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
+import { TrainObject, TileObject } from "@/types";
 
 @Component({
   components: {
@@ -33,87 +34,105 @@ import Counter from "@/modules/counterExample/views/Counter.vue";
   },
 })
 export default class App extends Vue {
-  train1 = {
-    ref: "train1",
-    x: 1,
-    y: 0,
+  trains: { [index: string]: TrainObject } = {
+    train1: {
+      id: "train1",
+      x: 1,
+      y: 0,
+    },
+    train2: {
+      id: "train2",
+      x: 1,
+      y: 1,
+    },
   };
 
-  level: { [index: string]: any } = {
+  level: { [index: string]: TileObject } = {
     "0,0": {
+      id: "0,0",
       component: "",
-      key: 0,
       x: 0,
       y: 0,
-      train: {},
+      train: null,
     },
     "1,0": {
+      id: "1,0",
       component: "Tile",
-      key: 1,
       x: 1,
       y: 0,
-      train: {},
+      train: null,
     },
     "2,0": {
+      id: "2,0",
       component: "",
       x: 2,
       y: 0,
-      train: {},
+      train: null,
     },
     "0,1": {
+      id: "0,1",
       component: "",
       x: 0,
       y: 1,
-      train: {},
+      train: null,
     },
     "1,1": {
+      id: "1,1",
       component: "Tile",
-      key: 2,
       x: 1,
       y: 1,
-      train: {},
+      train: null,
     },
     "2,1": {
+      id: "2,1",
       component: "",
       x: 2,
       y: 1,
-      train: {},
+      train: null,
     },
     "0,2": {
+      id: "0,2",
       component: "",
       x: 0,
       y: 2,
-      train: {},
+      train: null,
     },
     "1,2": {
+      id: "1,2",
       component: "Tile",
-      key: 3,
       x: 1,
       y: 2,
-      train: {},
+      train: null,
     },
     "2,2": {
+      id: "2,2",
       component: "",
       x: 2,
       y: 2,
-      train: {},
+      train: null,
     },
   };
 
   mounted() {
-    this.level[`${this.train1.x},${this.train1.y}`].train = { ...this.train1 };
+    Object.values(this.trains).map(train => {
+      this.level[this.getCoordinatesId(train)].train = { ...train };
+    });
   }
 
-  trainUpdate(train: any) {
-    // Get the new and old X,Y, to also delete the old train on the level.
-    console.log("trainUpdate", train);
-    // TODO should we update the train?
-    this.train1 = Object.assign({}, this.train1, train);
-    this.giveTrainToTile(train);
+  getCoordinatesId(options: TrainObject | TileObject) {
+    return `${options.x},${options.y}`;
   }
 
-  giveTrainToTile(train: any) {
-    const tilePosition: any = train.x + "," + train.y;
+  trainLeavesTile(train: any, tile: any) {
+    console.log("trainLeavesTile", train, tile);
+    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+    this.trainEntersTile(train);
+    // TODO delete the leaving train on the old tile (but only this train)
+    // this.level[this.getCoordinatesId(tile)].train = null;
+  }
+
+  trainEntersTile(train: TrainObject) {
+    const tilePosition: string = this.getCoordinatesId(train);
     if (this.level[tilePosition]) {
       this.level[tilePosition].train = { ...train };
     }

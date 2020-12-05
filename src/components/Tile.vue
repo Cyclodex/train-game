@@ -5,32 +5,31 @@
 <script lang="ts">
 import { Component, Emit, Prop, Vue, Watch } from "vue-property-decorator";
 import { gsap } from "gsap";
+import { TileObject, TrainObject } from "@/types";
 
 @Component
 export default class Tile extends Vue {
-  @Prop({ type: Object, default: () => ({}) }) tile: any;
+  @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
 
   @Watch("tile.train", { immediate: true, deep: true })
-  incomingTrain(newTrain: any, oldTrain: any) {
-    console.warn(this.tile);
-    if (newTrain?.ref !== oldTrain?.ref) {
+  incomingTrain(newTrain: TrainObject, oldTrain: TrainObject) {
+    if (newTrain?.id !== oldTrain?.id) {
       this.animateTrain(newTrain);
     }
   }
 
-  animateTrain(trainData: any) {
-    const train = document.getElementById(trainData.ref);
+  animateTrain(trainObject: TrainObject) {
+    const train = document.getElementById(trainObject.id);
     gsap.to(train, {
       duration: 2,
       y: "+=100",
-      onComplete: () => this.trainUpdate(trainData),
+      onComplete: () => this.trainLeavesTile(trainObject),
     });
   }
 
-  @Emit("trainUpdate")
-  trainUpdate(trainData: any) {
-    // only return how much y+ x+
-    return { ...trainData, y: trainData.y + 1 };
+  @Emit("trainLeavesTile")
+  trainLeavesTile(trainObject: TrainObject) {
+    return { ...trainObject, y: trainObject.y + 1 };
   }
 }
 </script>
