@@ -39,7 +39,7 @@
 import { Component, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
-import { TrainObject, TileObject } from "@/types";
+import { TrainObject, TileObject, TrainDirection } from "@/types";
 
 @Component({
   components: {
@@ -53,11 +53,13 @@ export default class App extends Vue {
       id: "train1",
       x: 1,
       y: 0,
+      direction: TrainDirection.Down,
     },
     train2: {
       id: "train2",
-      x: 1,
-      y: 1,
+      x: 2,
+      y: 2,
+      direction: TrainDirection.Up,
     },
   };
 
@@ -78,7 +80,7 @@ export default class App extends Vue {
     },
     "2,0": {
       id: "2,0",
-      component: "",
+      component: "TileStraight",
       x: 2,
       y: 0,
       train: null,
@@ -99,7 +101,7 @@ export default class App extends Vue {
     },
     "2,1": {
       id: "2,1",
-      component: "",
+      component: "TileStraight",
       x: 2,
       y: 1,
       train: null,
@@ -120,7 +122,7 @@ export default class App extends Vue {
     },
     "2,2": {
       id: "2,2",
-      component: "",
+      component: "TileStraight",
       x: 2,
       y: 2,
       train: null,
@@ -133,16 +135,44 @@ export default class App extends Vue {
     });
   }
 
-  getCoordinatesId(options: TrainObject | TileObject) {
+  getCoordinatesId(
+    options: TrainObject | TileObject | { x: number; y: number }
+  ) {
     return `${options.x},${options.y}`;
   }
 
   trainLeavesTile(train: TrainObject, tile: TileObject) {
     console.log("trainLeavesTile", train, tile);
-    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+    this.updateTrain(train);
     this.trainEntersTile(train);
     // TODO delete the leaving train on the old tile (but only this train)
     // this.level[this.getCoordinatesId(tile)].train = null;
+  }
+
+  updateTrain(train: TrainObject) {
+    train.direction = this.getTrainDirection(train);
+    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+  }
+
+  getTrainDirection(train: TrainObject) {
+    const trainOrigin = this.trains[train.id];
+    const x = train.x - trainOrigin.x;
+    const y = train.y - trainOrigin.y;
+    const directionCode = this.getCoordinatesId({ x, y });
+    console.log("train direction", { x, y }, directionCode);
+    switch (directionCode) {
+      case "0,1":
+        return TrainDirection.Down;
+      case "-1,0":
+        return TrainDirection.Left;
+      case "0,-1":
+        return TrainDirection.Up;
+      case "1,0":
+      return TrainDirection.Right;
+      default:
+        console.error("getTrainDirection: failed");
+        return TrainDirection.Down;
+    }
   }
 
   trainEntersTile(train: TrainObject) {

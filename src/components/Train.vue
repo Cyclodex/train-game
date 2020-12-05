@@ -9,7 +9,7 @@
 </template>
 
 <script lang="ts">
-import { TrainObject } from "@/types";
+import { TrainDirection, TrainObject } from "@/types";
 import { Component, Prop, Vue } from "vue-property-decorator";
 
 @Component
@@ -23,9 +23,16 @@ export default class Train extends Vue {
   }
 
   setInitialPosition() {
+    const pushToTileBottom =
+      this.trainObject.direction === TrainDirection.Up
+        ? this.$root.tileSize
+        : 0;
     this.initialPosition = {
-      left: this.trainObject.x * this.$root.tileSize * 1.5 + "px",
-      top: this.trainObject.y * this.$root.tileSize + "px",
+      left:
+        this.trainObject.x * this.$root.tileSize +
+        this.$root.tileSize / 2 +
+        "px",
+      top: this.trainObject.y * this.$root.tileSize + pushToTileBottom + "px",
     };
   }
 }
