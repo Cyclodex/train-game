@@ -8,18 +8,24 @@ import { gsap } from "gsap";
 import { TileObject, TrainObject } from "@/types";
 
 @Component
-export default class Tile extends Vue {
+export default class TileBase extends Vue {
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
 
   @Watch("tile.train", { immediate: true, deep: true })
-  incomingTrain(newTrain: TrainObject, oldTrain: TrainObject) {
-    if (newTrain?.id !== oldTrain?.id) {
-      this.animateTrain(newTrain);
+  incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
+    if (incomingTrainObject?.id !== oldTrain?.id) {
+      const train = document.getElementById(incomingTrainObject.id);
+      if (train) {
+        this.animateTrain(incomingTrainObject, train);
+      }
     }
   }
 
-  animateTrain(trainObject: TrainObject) {
-    const train = document.getElementById(trainObject.id);
+  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+    // Define tile exit
+    trainObject.y += 1;
+
+    // Animate
     gsap.to(train, {
       duration: 2,
       y: "+=100",
@@ -29,7 +35,7 @@ export default class Tile extends Vue {
 
   @Emit("trainLeavesTile")
   trainLeavesTile(trainObject: TrainObject) {
-    return { ...trainObject, y: trainObject.y + 1 };
+    return { ...trainObject };
   }
 }
 </script>

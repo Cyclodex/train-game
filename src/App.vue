@@ -57,7 +57,7 @@ export default class App extends Vue {
     },
     "1,0": {
       id: "1,0",
-      component: "Tile",
+      component: "TileStraight",
       x: 1,
       y: 0,
       train: null,
@@ -78,7 +78,7 @@ export default class App extends Vue {
     },
     "1,1": {
       id: "1,1",
-      component: "Tile",
+      component: "TileStraight",
       x: 1,
       y: 1,
       train: null,
@@ -99,7 +99,7 @@ export default class App extends Vue {
     },
     "1,2": {
       id: "1,2",
-      component: "Tile",
+      component: "TileStraight",
       x: 1,
       y: 2,
       train: null,

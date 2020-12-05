@@ -4,8 +4,8 @@ import store from "./store";
 
 Vue.config.productionTip = false;
 
-import Tile from "@/components/Tile.vue";
-Vue.component("Tile", Tile);
+import TileStraight from "@/components/TileStraight.vue";
+Vue.component("TileStraight", TileStraight);
 import Train from "@/components/Train.vue";
 Vue.component("Train", Train);
 
