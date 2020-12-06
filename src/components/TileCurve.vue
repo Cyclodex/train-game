@@ -48,46 +48,45 @@ export default class TileCurve extends TileBase {
     //   x: `${xMinusOrPlus}=${this.tileSize / 2}`,
     //   onComplete: () => this.trainLeavesTile(trainObject),
     // });
+
     // const tl = gsap.timeline(); //create the timeline
-    gsap.to(train, {
-      keyframes: [
-        {
-          x: `${xMinusOrPlus}=${this.tileSize / 2}`,
-          ease: xEase,
-          duration: 2,
-        },
-        {
-          y: `${yMinusOrPlus}=${this.tileSize / 2}`,
-          ease: yEase,
-          duration: 2,
-          delay: -2,
-        },
-        {
-          rotation: `${rotate}=90`,
-          ease: "none",
-          duration: 2,
-          delay: -2,
-        },
-      ],
-      onComplete: () => this.trainLeavesTile(trainObject),
-    });
-    // Animate
+
+    // Keyframes solution :-/
     // gsap.to(train, {
+    //   keyframes: [
+    //     {
+    //       x: `${xMinusOrPlus}=${this.tileSize / 2}`,
+    //       ease: xEase,
+    //       duration: 2,
+    //     },
+    //     {
+    //       y: `${yMinusOrPlus}=${this.tileSize / 2}`,
+    //       ease: yEase,
+    //       duration: 2,
+    //       delay: -2,
+    //     },
+    //     {
+    //       rotation: `${rotate}=90`,
+    //       ease: "none",
+    //       duration: 2,
+    //       delay: -2,
+    //     },
+    //   ],
     //   onComplete: () => this.trainLeavesTile(trainObject),
-    //   duration: 2,
-    //   motionPath: {
-    //     // type: "cubic",
-    //     // autoRotate: 90,
-    //     path: [
-    //       { x: 0, y: 0 },
-    //       { x: 200, y: 0 },
-    //       { x: 300, y: 500 },
-    //       { x: 500, y: 500 },
-    //     ],
-    //     type: "cubic",
-    //     curviness: 1,
-    //   },
     // });
+
+    // Animate
+    gsap.to(train, {
+      onComplete: () => this.trainLeavesTile(trainObject),
+      duration: 2,
+      ease: "none",
+      motionPath: {
+        align: "self",
+        autoRotate: 90,
+        path: "M 50 0 q 0 50 -50 50",
+        curviness: 2,
+      },
+    });
   }
 }
 </script>
