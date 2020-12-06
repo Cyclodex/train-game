@@ -1,5 +1,7 @@
 <template>
-  <div class="tile"></div>
+  <div class="tile">
+    <span class="debug">{{ tile.id }}</span>
+  </div>
 </template>
 
 <script lang="ts">

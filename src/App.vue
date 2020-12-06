@@ -16,9 +16,6 @@
           height: $root.tileSize + 'px',
         }"
       >
-        <div class="debug">
-          {{ key }}
-        </div>
         <component
           :is="tile.component"
           :key="tile.id"
@@ -87,14 +84,14 @@ export default class App extends Vue {
     },
     "0,1": {
       id: "0,1",
-      component: "",
+      component: "TileCurve",
       x: 0,
       y: 1,
       train: null,
     },
     "1,1": {
       id: "1,1",
-      component: "TileStraight",
+      component: "TileCurve",
       x: 1,
       y: 1,
       train: null,
@@ -108,14 +105,14 @@ export default class App extends Vue {
     },
     "0,2": {
       id: "0,2",
-      component: "",
+      component: "TileStraight",
       x: 0,
       y: 2,
       train: null,
     },
     "1,2": {
       id: "1,2",
-      component: "TileStraight",
+      component: "",
       x: 1,
       y: 2,
       train: null,
