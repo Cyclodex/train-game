@@ -88,6 +88,7 @@ export default class App extends Vue {
       x: 0,
       y: 1,
       train: null,
+      rotation: 1,
     },
     "1,1": {
       id: "1,1",
@@ -95,6 +96,7 @@ export default class App extends Vue {
       x: 1,
       y: 1,
       train: null,
+      rotation: 3,
     },
     "2,1": {
       id: "2,1",
@@ -132,6 +134,7 @@ export default class App extends Vue {
     });
   }
 
+  // Helper funtion TODO: extract
   getCoordinatesId(
     options: TrainObject | TileObject | { x: number; y: number }
   ) {
@@ -158,17 +161,17 @@ export default class App extends Vue {
     const directionCode = this.getCoordinatesId({ x, y });
     console.log("train direction", { x, y }, directionCode);
     switch (directionCode) {
-      case "0,1":
-        return TrainDirection.Down;
-      case "-1,0":
-        return TrainDirection.Left;
-      case "0,-1":
-        return TrainDirection.Up;
-      case "1,0":
-      return TrainDirection.Right;
-      default:
-        console.error("getTrainDirection: failed");
-        return TrainDirection.Down;
+    case "0,1":
+      return TrainDirection.Down;
+    case "-1,0":
+      return TrainDirection.Left;
+    case "0,-1":
+      return TrainDirection.Up;
+    case "1,0":
+        return TrainDirection.Right;
+    default:
+      console.error("getTrainDirection: failed");
+      return TrainDirection.Down;
     }
   }
 
@@ -208,5 +211,6 @@ pre {
 .debug {
   position: absolute;
   z-index: 1;
+  text-align: left;
 }
 </style>

@@ -14,7 +14,7 @@ export default class TileBase extends Vue {
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
   tileSize = this.$root.tileSize;
 
-  @Watch("tile.train", { immediate: true, deep: true })
+  @Watch("tile.train", { immediate: true, deep: false })
   incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
     if (incomingTrainObject?.id !== oldTrain?.id) {
       const train = document.getElementById(incomingTrainObject.id);
@@ -38,6 +38,8 @@ export default class TileBase extends Vue {
 
   @Emit("trainLeavesTile")
   trainLeavesTile(trainObject: TrainObject) {
+    console.log(trainObject);
+
     return { ...trainObject };
   }
 }
