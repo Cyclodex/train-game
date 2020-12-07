@@ -12,7 +12,7 @@ export enum TrainDirection {
   "Left" = "L",
 }
 
-export enum Possition {
+export enum Position {
   "Top" = "T",
   "Right" = "R",
   "Bottom" = "B",
@@ -20,14 +20,25 @@ export enum Possition {
 }
 
 export enum Rotations {
-  "tr",
-  "rb",
-  "bl",
-  "lt",
+  "Top",
+  "Right",
+  "Bottom",
+  "Left",
+}
+
+export interface PossibleRoutesPerRotation {
+  [index: number]: PossibleRoutes;
+}
+
+export interface PossibleRoutes {
+  [index: string]: {
+    path: string;
+    leavesAtPosition: Position;
+    rotate?: number;
+  };
 }
 
 export interface TileObject {
-  id: string;
   component: string;
   x: number;
   y: number;

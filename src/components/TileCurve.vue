@@ -1,16 +1,22 @@
 <template>
-  <div class="tile tile-curve" @click="rotate">
+  <div class="tile tile-curve clickable" @click="rotate">
     <div v-if="$root.debug" class="debug">
-      <div class="">T-ID:{{ tile.id }}</div>
-      <div class="">Rotation: {{ currentRotation }}</div>
-      <div class="">Train incoming: {{ incomingTrainPosition }}</div>
+      <div class="">R: {{ currentRotation }}</div>
+      <div class="">T enter: {{ incomingTrainPosition }}</div>
+      <div v-if="trainRoute" class="">T Route:<br />{{ trainRoute.path }}</div>
+      <debug-show-routes :routes="allPossibleRoutesWithCurrentRotation" />
     </div>
   </div>
 </template>
 
 <script lang="ts">
-import { Component, Prop } from "vue-property-decorator";
-import { Possition, Rotations, TrainDirection, TrainObject } from "@/types";
+import { Component } from "vue-property-decorator";
+import {
+  Position,
+  PossibleRoutesPerRotation,
+  Rotations,
+  TrainObject,
+} from "@/types";
 import TileBase from "./TileBase.vue";
 
 import { gsap } from "gsap";
@@ -20,133 +26,76 @@ gsap.registerPlugin(MotionPathPlugin);
 // Info
 // t=top, r=rigth, b=bottom, l=left
 
-interface PossibleRoutes {
-  [index: number]: {
-    [index: string]: { path: string; leavesAtPosition: Possition };
-  };
-}
-
 @Component
 export default class TileCurve extends TileBase {
-  currentRotation!: Rotations;
-
-  possibleRoutes: PossibleRoutes = {
-    [Rotations.tr]: {
-      [Possition.Top]: {
+  possibleRoutes: PossibleRoutesPerRotation = {
+    [Rotations.Top]: {
+      [Position.Top]: {
         path: "M 50 0 q 0 50 50 50",
-        leavesAtPosition: Possition.Right,
+        leavesAtPosition: Position.Right,
       },
-      [Possition.Right]: {
+      [Position.Right]: {
         path: "M 100 50 q -50 0 -50 -50",
-        leavesAtPosition: Possition.Top,
+        leavesAtPosition: Position.Top,
       },
     },
-    [Rotations.rb]: {
-      [Possition.Right]: {
+    [Rotations.Right]: {
+      [Position.Right]: {
         path: "M 100 50 q -50 0 -50 50",
-        leavesAtPosition: Possition.Bottom,
+        leavesAtPosition: Position.Bottom,
       },
-      [Possition.Bottom]: {
+      [Position.Bottom]: {
         path: "M 50 100 q 0 -50 50 -50",
-        leavesAtPosition: Possition.Right,
+        leavesAtPosition: Position.Right,
       },
     },
-    [Rotations.bl]: {
-      [Possition.Bottom]: {
+    [Rotations.Bottom]: {
+      [Position.Bottom]: {
         path: "M 50 100 q 0 -50 -50 -50",
-        leavesAtPosition: Possition.Left,
+        leavesAtPosition: Position.Left,
       },
-      [Possition.Left]: {
+      [Position.Left]: {
         path: "M  0  50 q 50  0  50  50",
-        leavesAtPosition: Possition.Bottom,
+        leavesAtPosition: Position.Bottom,
       },
     },
-    [Rotations.lt]: {
-      [Possition.Left]: {
+    [Rotations.Left]: {
+      [Position.Left]: {
         path: " M 0 50 q 50 0 50 -50",
-        leavesAtPosition: Possition.Top,
+        leavesAtPosition: Position.Top,
       },
-      [Possition.Top]: {
+      [Position.Top]: {
         path: "M 50 0 q 0 50 -50 50",
-        leavesAtPosition: Possition.Left,
+        leavesAtPosition: Position.Left,
       },
     },
   };
-
-  created() {
-    this.currentRotation = this.$props.tile.rotation;
-  }
 
   rotate() {
     this.currentRotation++;
-    if (this.currentRotation > Rotations.lt) {
-      this.currentRotation = Rotations.tr;
+    if (this.currentRotation > Rotations.Left) {
+      this.currentRotation = Rotations.Top;
     }
-  }
-
-  // Helper (TODO extract)
-  getRelativeCoordinatesOfNextTile(leavingPosition: Possition) {
-    switch (leavingPosition) {
-    case Possition.Top:
-      return { x: 0, y: -1 };
-    case Possition.Right:
-      return { x: 1, y: 0 };
-    case Possition.Bottom:
-      return { x: 0, y: 1 };
-    case Possition.Left:
-      return { x: -1, y: 0 };
-    default:
-      return { x: 0, y: 0 };
-    }
-  }
-
-  // Helper (TODO extract)
-  getIncomingTrainLocation(trainObject: TrainObject | null) {
-    if (trainObject === null) return null;
-
-    switch (trainObject.direction) {
-    case TrainDirection.Down:
-      return Possition.Top;
-    case TrainDirection.Left:
-      return Possition.Right;
-    case TrainDirection.Up:
-      return Possition.Bottom;
-    case TrainDirection.Right:
-      return Possition.Left;
-    default:
-      return Possition.Top;
-    }
-  }
-
-  get incomingTrainPosition() {
-    return this.getIncomingTrainLocation(this.tile.train || null);
   }
 
   animateTrain(trainObject: TrainObject, train: HTMLElement) {
     // Identify route
-    if (this.incomingTrainPosition !== null) {
-      const route = this.possibleRoutes[this.currentRotation][
-        this.incomingTrainPosition
-      ];
-      const coordinatesChange = this.getRelativeCoordinatesOfNextTile(
-        route.leavesAtPosition
-      );
-
+    if (this.trainRoute) {
       // Define tile exit
-      trainObject.x += coordinatesChange.x;
-      trainObject.y += coordinatesChange.y;
+      trainObject.x += this.getLeavingTrainCoordinates.x;
+      trainObject.y += this.getLeavingTrainCoordinates.y;
 
       // Animate
       gsap.to(train, {
-        onComplete: () => this.trainLeavesTile(trainObject),
-        duration: 2,
         ease: "none",
+        duration: 2,
         motionPath: {
           align: "self",
-          autoRotate: -90, // TODO: some need 90, others -90! Make it set on the route
-          path: route.path,
+          autoRotate: 90,
+          path: this.trainRoute.path,
           curviness: 2,
         },
+        onComplete: () => this.trainLeavesTile(trainObject),
       });
     }
   }

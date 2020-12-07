@@ -4,6 +4,7 @@
     class="train"
     :style="[defaultStyle, initialPosition]"
   >
+    <div class="train-front"></div>
     <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
   </div>
 </template>
@@ -40,8 +41,8 @@ export default class Train extends Vue {
 
 <style scoped>
 .train {
-  background-color: blue;
-  border-radius: 25%;
+  background-color: #1f38c5;
+  border-radius: 50% 50% 0 0;
   width: 40px;
   height: 100px;
   position: absolute;
@@ -50,5 +51,8 @@ export default class Train extends Vue {
 }
 .train-debug {
   font-size: 14px;
+  position: absolute;
+  bottom: 0;
+  left: 0;
 }
 </style>

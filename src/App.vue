@@ -16,9 +16,12 @@
           height: $root.tileSize + 'px',
         }"
       >
+        <div v-if="$root.debug" class="debug">
+          <div class="debug-coordinates" v-text="`x${tile.x}y${tile.y}`"></div>
+        </div>
         <component
           :is="tile.component"
-          :key="tile.id"
+          :key="`${tile.x},${tile.y}`"
           class="tile-component"
           :tile="tile"
           @trainLeavesTile="trainLeavesTile($event, tile)"
@@ -58,32 +61,68 @@ export default class App extends Vue {
       y: 2,
       direction: TrainDirection.Up,
     },
+    trainCircle1: {
+      id: "trainCircle1",
+      x: 4,
+      y: 1,
+      direction: TrainDirection.Down,
+    },
+    trainCircle2: {
+      id: "trainCircle2",
+      x: 5,
+      y: 0,
+      direction: TrainDirection.Up,
+    },
   };
 
   level: { [index: string]: TileObject } = {
     "0,0": {
-      id: "0,0",
       component: "",
       x: 0,
       y: 0,
       train: null,
     },
     "1,0": {
-      id: "1,0",
       component: "TileStraight",
       x: 1,
       y: 0,
       train: null,
     },
     "2,0": {
-      id: "2,0",
       component: "TileStraight",
       x: 2,
       y: 0,
       train: null,
     },
+    "3,0": {
+      component: "TileCurve",
+      x: 3,
+      y: 0,
+      train: null,
+      rotation: 1,
+    },
+    "4,0": {
+      component: "TileCurve",
+      x: 4,
+      y: 0,
+      train: null,
+      rotation: 2,
+    },
+    "5,0": {
+      component: "TileCurve",
+      x: 5,
+      y: 0,
+      train: null,
+      rotation: 1,
+    },
+    "6,0": {
+      component: "TileCurve",
+      x: 6,
+      y: 0,
+      train: null,
+      rotation: 2,
+    },
     "0,1": {
-      id: "0,1",
       component: "TileCurve",
       x: 0,
       y: 1,
@@ -91,7 +130,6 @@ export default class App extends Vue {
       rotation: 1,
     },
     "1,1": {
-      id: "1,1",
       component: "TileCurve",
       x: 1,
       y: 1,
@@ -99,30 +137,78 @@ export default class App extends Vue {
       rotation: 3,
     },
     "2,1": {
-      id: "2,1",
       component: "TileStraight",
       x: 2,
       y: 1,
       train: null,
     },
+    "3,1": {
+      component: "TileCurve",
+      x: 3,
+      y: 1,
+      train: null,
+      rotation: 0,
+    },
+    "4,1": {
+      component: "TileCurve",
+      x: 4,
+      y: 1,
+      train: null,
+      rotation: 3,
+    },
+    "5,1": {
+      component: "TileCurve",
+      x: 5,
+      y: 1,
+      train: null,
+      rotation: 0,
+    },
+    "6,1": {
+      component: "TileCurve",
+      x: 6,
+      y: 1,
+      train: null,
+      rotation: 3,
+    },
     "0,2": {
-      id: "0,2",
       component: "TileStraight",
       x: 0,
       y: 2,
       train: null,
     },
     "1,2": {
-      id: "1,2",
       component: "",
       x: 1,
       y: 2,
       train: null,
     },
     "2,2": {
-      id: "2,2",
       component: "TileStraight",
       x: 2,
+      y: 2,
+      train: null,
+    },
+    "3,2": {
+      component: "",
+      x: 3,
+      y: 2,
+      train: null,
+    },
+    "4,2": {
+      component: "",
+      x: 4,
+      y: 2,
+      train: null,
+    },
+    "5,2": {
+      component: "",
+      x: 5,
+      y: 2,
+      train: null,
+    },
+    "6,2": {
+      component: "",
+      x: 6,
       y: 2,
       train: null,
     },
@@ -146,7 +232,8 @@ export default class App extends Vue {
     this.updateTrain(train);
     this.trainEntersTile(train);
     // TODO delete the leaving train on the old tile (but only this train)
-    // this.level[this.getCoordinatesId(tile)].train = null;
+    // Currently we can only have 1 train
+    this.level[this.getCoordinatesId(tile)].train = {} as any; // TODO fix also type
   }
 
   updateTrain(train: TrainObject) {
@@ -161,17 +248,17 @@ export default class App extends Vue {
     const directionCode = this.getCoordinatesId({ x, y });
     console.log("train direction", { x, y }, directionCode);
     switch (directionCode) {
-    case "0,1":
-      return TrainDirection.Down;
-    case "-1,0":
-      return TrainDirection.Left;
-    case "0,-1":
-      return TrainDirection.Up;
-    case "1,0":
-        return TrainDirection.Right;
-    default:
-      console.error("getTrainDirection: failed");
-      return TrainDirection.Down;
+      case "0,1":
+        return TrainDirection.Down;
+      case "-1,0":
+        return TrainDirection.Left;
+      case "0,-1":
+        return TrainDirection.Up;
+      case "1,0":
+      return TrainDirection.Right;
+      default:
+        console.error("getTrainDirection: failed");
+        return TrainDirection.Down;
     }
   }
 
@@ -209,8 +296,32 @@ pre {
   flex: 0 0 auto;
 }
 .debug {
-  position: absolute;
+  font-size: 12px;
   z-index: 1;
   text-align: left;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+}
+.debug-coordinates {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+}
+.debug-arrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+.clickable {
+  cursor: pointer;
+  transition: background-color 0.4s ease;
+  &:hover {
+    background-color: pink !important;
+  }
 }
 </style>
