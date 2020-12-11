@@ -39,7 +39,13 @@
 import { Component, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
-import { TrainObject, TileObject, TrainDirection } from "@/types";
+import {
+  TrainObject,
+  TileObject,
+  TrainDirection,
+  ActiveIntersection,
+  Rotations,
+} from "@/types";
 
 @Component({
   components: {
@@ -57,9 +63,9 @@ export default class App extends Vue {
     },
     train2: {
       id: "train2",
-      x: 2,
+      x: 3,
       y: 2,
-      direction: TrainDirection.Up,
+      direction: TrainDirection.Right,
     },
     trainCircle1: {
       id: "trainCircle1",
@@ -137,10 +143,11 @@ export default class App extends Vue {
       rotation: 3,
     },
     "2,1": {
-      component: "TileStraight",
+      component: "",
       x: 2,
       y: 1,
       train: null,
+      rotation: 2,
     },
     "3,1": {
       component: "TileCurve",
@@ -171,46 +178,106 @@ export default class App extends Vue {
       rotation: 3,
     },
     "0,2": {
-      component: "TileStraight",
+      component: "TileIntersection",
       x: 0,
       y: 2,
       train: null,
+      rotation: 2,
+      activeRoute: ActiveIntersection.Right,
     },
     "1,2": {
-      component: "",
+      component: "TileCurve",
       x: 1,
       y: 2,
       train: null,
+      rotation: 2,
     },
     "2,2": {
-      component: "TileStraight",
+      component: "TileCurve",
       x: 2,
       y: 2,
       train: null,
+      rotation: 1,
     },
     "3,2": {
-      component: "",
+      component: "TileStraight",
       x: 3,
       y: 2,
       train: null,
+      rotation: 1,
     },
     "4,2": {
-      component: "",
+      component: "TileCurve",
       x: 4,
       y: 2,
       train: null,
+      rotation: 2,
     },
     "5,2": {
-      component: "",
+      component: "TileCurve",
       x: 5,
       y: 2,
       train: null,
+      rotation: 1,
     },
     "6,2": {
-      component: "",
+      component: "TileCurve",
       x: 6,
       y: 2,
       train: null,
+      rotation: 2,
+    },
+    "0,3": {
+      component: "TileCurve",
+      x: 0,
+      y: 3,
+      train: null,
+    },
+    "1,3": {
+      component: "TileIntersection",
+      x: 1,
+      y: 3,
+      train: null,
+      rotation: 1,
+      activeRoute: ActiveIntersection.Right,
+    },
+    "2,3": {
+      component: "TileIntersection",
+      x: 2,
+      y: 3,
+      train: null,
+      rotation: 3,
+      activeRoute: ActiveIntersection.Left,
+    },
+    "3,3": {
+      component: "TileStraight",
+      x: 3,
+      y: 3,
+      train: null,
+      rotation: 1,
+    },
+    "4,3": {
+      component: "TileIntersection",
+      x: 4,
+      y: 3,
+      train: null,
+      rotation: 1,
+      activeRoute: ActiveIntersection.Straight,
+    },
+    "5,3": {
+      component: "TileIntersection",
+      x: 5,
+      y: 3,
+      train: null,
+      rotation: 3,
+      activeRoute: ActiveIntersection.Straight,
+    },
+    "6,3": {
+      component: "TileCurve",
+      x: 6,
+      y: 3,
+      train: null,
+      rotation: 3,
     },
   };
 
@@ -311,6 +378,9 @@ pre {
   left: 0;
 }
 .debug-arrow {
+  z-index: 200;
+  width: 100px;
+  height: 100px;
   position: absolute;
   top: 0;
   left: 0;

@@ -4,7 +4,9 @@
       <div>R: {{ currentRotation }}</div>
       <div>T enter: {{ incomingTrainPosition }}</div>
       <div v-if="trainRoute" class="">T Route:<br />{{ trainRoute.path }}</div>
-      <debug-show-routes :routes="allPossibleRoutesWithCurrentRotation" />
+      <debug-show-routes
+        :possible-routes="allPossibleRoutesWithCurrentRotation"
+      />
     </div>
   </div>
 </template>

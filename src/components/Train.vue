@@ -24,16 +24,30 @@ export default class Train extends Vue {
   }
 
   setInitialPosition() {
-    const pushToTileBottom =
-      this.trainObject.direction === TrainDirection.Up
-        ? this.$root.tileSize
-        : 0;
+    let tilePositionX = 0;
+    let tilePositionY = 0;
+
+    switch (this.trainObject.direction) {
+    case TrainDirection.Up:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = this.$root.tileSize;
+      break;
+    case TrainDirection.Right:
+        tilePositionX = 0;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
+    case TrainDirection.Down:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = 0;
+      break;
+    case TrainDirection.Left:
+        tilePositionX = this.$root.tileSize;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
+    }
     this.initialPosition = {
-      left:
-        this.trainObject.x * this.$root.tileSize +
-        this.$root.tileSize / 2 +
-        "px",
-      top: this.trainObject.y * this.$root.tileSize + pushToTileBottom + "px",
+      left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
+      top: this.trainObject.y * this.$root.tileSize + tilePositionY + "px",
     };
   }
 }

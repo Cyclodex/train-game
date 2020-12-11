@@ -61,16 +61,16 @@ export default class TileBase extends Vue {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-      case TrainDirection.Down:
-        return Position.Top;
-      case TrainDirection.Left:
-        return Position.Right;
-      case TrainDirection.Up:
-        return Position.Bottom;
-      case TrainDirection.Right:
-        return Position.Left;
-      default:
-        return Position.Top;
+    case TrainDirection.Down:
+      return Position.Top;
+    case TrainDirection.Left:
+      return Position.Right;
+    case TrainDirection.Up:
+      return Position.Bottom;
+    case TrainDirection.Right:
+      return Position.Left;
+    default:
+      return Position.Top;
     }
   }
 
@@ -85,16 +85,16 @@ export default class TileBase extends Vue {
 
   getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
     switch (leavingPosition) {
-      case Position.Top:
-        return { x: 0, y: -1 };
-      case Position.Right:
-        return { x: 1, y: 0 };
-      case Position.Bottom:
-        return { x: 0, y: 1 };
-      case Position.Left:
-        return { x: -1, y: 0 };
-      default:
-        return { x: 0, y: 0 };
+    case Position.Top:
+      return { x: 0, y: -1 };
+    case Position.Right:
+      return { x: 1, y: 0 };
+    case Position.Bottom:
+      return { x: 0, y: 1 };
+    case Position.Left:
+      return { x: -1, y: 0 };
+    default:
+      return { x: 0, y: 0 };
     }
   }
 

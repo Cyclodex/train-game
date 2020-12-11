@@ -12,6 +12,8 @@ import Train from "@/components/Train.vue";
 Vue.component("Train", Train);
 import DebugShowRoutes from "@/components/DebugShowRoutes.vue";
 Vue.component("DebugShowRoutes", DebugShowRoutes);
+import TileIntersection from "@/components/TileIntersection.vue";
+Vue.component("TileIntersection", TileIntersection);
 
 new Vue({
   data: {

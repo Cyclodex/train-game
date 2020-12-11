@@ -13,10 +13,10 @@ export enum TrainDirection {
 }
 
 export enum Position {
-  "Top" = "T",
-  "Right" = "R",
-  "Bottom" = "B",
-  "Left" = "L",
+  "Top",
+  "Right",
+  "Bottom",
+  "Left",
 }
 
 export enum Rotations {
@@ -26,16 +26,24 @@ export enum Rotations {
   "Left",
 }
 
+export enum ActiveIntersection {
+  "Left",
+  "Straight",
+  "Right",
+}
+
 export interface PossibleRoutesPerRotation {
   [index: number]: PossibleRoutes;
 }
 
 export interface PossibleRoutes {
-  [index: string]: {
-    path: string;
-    leavesAtPosition: Position;
-    rotate?: number;
-  };
+  [index: string]: Route;
+}
+
+export interface Route {
+  path: string;
+  leavesAtPosition: Position;
+  rotate?: number;
 }
 
 export interface TileObject {
@@ -43,5 +51,7 @@ export interface TileObject {
   x: number;
   y: number;
   train?: TrainObject | null;
-  rotation?: Rotations;
+  rotation?: Position;
+  activeRoute?: number;
+  disabledRoutes?: number[];
 }
