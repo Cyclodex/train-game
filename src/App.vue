@@ -45,6 +45,7 @@ import {
   TrainDirection,
   ActiveIntersection,
   Rotations,
+  TrafficLight,
 } from "@/types";
 
 @Component({
@@ -205,6 +206,7 @@ export default class App extends Vue {
       y: 2,
       train: null,
       rotation: 1,
+      trafficLight: TrafficLight.Red,
     },
     "4,2": {
       component: "TileCurve",
@@ -255,6 +257,7 @@ export default class App extends Vue {
       y: 3,
       train: null,
       rotation: 1,
+      trafficLight: TrafficLight.Red,
     },
     "4,3": {
       component: "TileIntersection",
@@ -315,17 +318,17 @@ export default class App extends Vue {
     const directionCode = this.getCoordinatesId({ x, y });
     console.log("train direction", { x, y }, directionCode);
     switch (directionCode) {
-      case "0,1":
-        return TrainDirection.Down;
-      case "-1,0":
-        return TrainDirection.Left;
-      case "0,-1":
-        return TrainDirection.Up;
-      case "1,0":
-      return TrainDirection.Right;
-      default:
-        console.error("getTrainDirection: failed");
-        return TrainDirection.Down;
+    case "0,1":
+      return TrainDirection.Down;
+    case "-1,0":
+      return TrainDirection.Left;
+    case "0,-1":
+      return TrainDirection.Up;
+    case "1,0":
+        return TrainDirection.Right;
+    default:
+      console.error("getTrainDirection: failed");
+      return TrainDirection.Down;
     }
   }
 
