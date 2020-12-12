@@ -45,7 +45,8 @@ import {
   TrainDirection,
   ActiveIntersection,
   Rotations,
-  TrafficLight,
+  TrafficLightSignal,
+  TrafficLightDirection,
 } from "@/types";
 
 @Component({
@@ -205,8 +206,17 @@ export default class App extends Vue {
       x: 3,
       y: 2,
       train: null,
-      rotation: 1,
-      trafficLight: TrafficLight.Red,
+      rotation: Rotations.Right,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "4,2": {
       component: "TileCurve",
@@ -256,8 +266,17 @@ export default class App extends Vue {
       x: 3,
       y: 3,
       train: null,
-      rotation: 1,
-      trafficLight: TrafficLight.Red,
+      rotation: Rotations.Right,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "4,3": {
       component: "TileIntersection",

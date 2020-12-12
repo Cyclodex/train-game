@@ -32,7 +32,18 @@ export enum ActiveIntersection {
   "Right",
 }
 
-export enum TrafficLight {
+export interface TrafficLight {
+  direction: TrafficLightDirection;
+  signal: TrafficLightSignal;
+}
+
+export enum TrafficLightDirection {
+  "Disabled",
+  "Forward",
+  "Backward",
+}
+
+export enum TrafficLightSignal {
   "Disabled",
   "Red",
   "Green",
@@ -50,6 +61,7 @@ export interface Route {
   path: string;
   leavesAtPosition: Position;
   rotate?: number;
+  trafficLight?: TrafficLight;
 }
 
 export interface TileObject {
@@ -57,8 +69,8 @@ export interface TileObject {
   x: number;
   y: number;
   train?: TrainObject | null;
-  rotation?: Position;
+  rotation?: Rotations;
   activeRoute?: number;
   disabledRoutes?: number[];
-  trafficLight?: number;
+  trafficLights?: TrafficLight[];
 }

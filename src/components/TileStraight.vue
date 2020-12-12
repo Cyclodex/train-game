@@ -1,16 +1,26 @@
 <template>
   <div class="tile tile-straight clickable" @click="rotate">
-    <svg
-      v-if="trafficLight"
-      class="traffic-light"
-      width="16"
-      height="30"
-      :class="trafficLightStatus"
-      @click.stop="changeTrafficLight"
-    >
-      <circle class="bulb--red" cx="8" cy="8" r="6" />
-      <circle class="bulb--green" cx="8" cy="22" r="6" />
-    </svg>
+    <template v-if="trafficLights">
+      <template v-for="trafficLight in trafficLights">
+        <svg
+          v-if="trafficLight"
+          :key="trafficLight.direction"
+          class="traffic-light"
+          width="16"
+          height="30"
+          :class="{
+            'signal--forward': trafficLight.direction === 1,
+            'signal--backward': trafficLight.direction === 2,
+            'signal--red': trafficLight.signal === 1,
+            'signal--green': trafficLight.signal === 2,
+          }"
+          @click.stop="changeTrafficLight(trafficLight)"
+        >
+          <circle class="bulb--red" cx="8" cy="8" r="6" />
+          <circle class="bulb--green" cx="8" cy="22" r="6" />
+        </svg>
+      </template>
+    </template>
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
       <div>T enter: {{ incomingTrainPosition }}</div>
@@ -30,37 +40,45 @@ import {
   PossibleRoutesPerRotation,
   Rotations,
   TrafficLight,
+  TrafficLightDirection,
+  TrafficLightSignal,
   TrainObject,
 } from "@/types";
 import TileBase from "./TileBase.vue";
 
 @Component
 export default class TileStraight extends TileBase {
-  trafficLight: TrafficLight = TrafficLight.Disabled;
+  trafficLights: TrafficLight[] = [];
 
   created() {
-    if (this.$props.tile.trafficLight !== undefined) {
-      this.trafficLight = this.$props.tile.trafficLight;
+    if (this.$props.tile.trafficLights !== undefined) {
+      this.trafficLights = this.$props.tile.trafficLights;
+      if (this.trafficLights) {
+        this.trafficLights.map(trafficLight => {
+          let position;
+          if (
+            Number(trafficLight.direction) ===
+            Number(TrafficLightDirection.Forward)
+          ) {
+            position = this.currentRotation;
+          } else {
+            position = this.currentRotation + 2;
+          }
+          this.possibleRoutes[this.currentRotation][
+            position
+          ].trafficLight = trafficLight;
+        });
+      }
     }
   }
 
-  get trafficLightStatus() {
-    if (this.trafficLight === TrafficLight.Red) {
-      return "red";
-    }
-    if (this.trafficLight === TrafficLight.Green) {
-      return "green";
-    }
-    return "";
-  }
-
-  changeTrafficLight() {
-    if (this.trafficLight === TrafficLight.Red) {
-      this.trafficLight = TrafficLight.Green;
+  changeTrafficLight(trafficLight: TrafficLight) {
+    if (trafficLight.signal === TrafficLightSignal.Red) {
+      trafficLight.signal = TrafficLightSignal.Green;
       // TODO: Animation should not start, when train is not stopped yet
       this.animateTrainFromTrafficLight();
     } else {
-      this.trafficLight = TrafficLight.Red;
+      trafficLight.signal = TrafficLightSignal.Red;
     }
   }
 
@@ -101,7 +119,7 @@ export default class TileStraight extends TileBase {
       trainObject.x += this.getLeavingTrainCoordinates.x;
       trainObject.y += this.getLeavingTrainCoordinates.y;
 
-      if (this.trafficLight === TrafficLight.Red) {
+      if (this.trainRoute.trafficLight?.signal === TrafficLightSignal.Red) {
         // Animate
         gsap.to(train, {
           ease: "power1.out",
@@ -131,6 +149,7 @@ export default class TileStraight extends TileBase {
 
   animateTrainFromTrafficLight() {
     const trainObject = this.tile.train;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const train = document.getElementById(trainObject!.id);
     if (train && this.trainRoute) {
       // Animate away from traffic light
@@ -143,6 +162,7 @@ export default class TileStraight extends TileBase {
           path: this.trainRoute.path,
           end: 0.5,
         },
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         onComplete: () => this.trainLeavesTile(trainObject!),
       });
     }
@@ -157,18 +177,26 @@ export default class TileStraight extends TileBase {
     z-index: 10;
     background-color: #999;
     position: absolute;
-    top: 4px;
-    right: 4px;
+
+    &.signal--backward {
+      bottom: 52%;
+      right: 0;
+    }
+
+    &.signal--forward {
+      top: 52%;
+      left: 0;
+    }
 
     ::v-deep circle {
       transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
     }
 
-    &.red ::v-deep .bulb--red {
+    &.signal--red ::v-deep .bulb--red {
       fill: red;
     }
 
-    &.green ::v-deep .bulb--green {
+    &.signal--green ::v-deep .bulb--green {
       fill: green;
     }
   }
