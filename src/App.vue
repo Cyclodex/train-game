@@ -59,9 +59,9 @@ export default class App extends Vue {
   trains: { [index: string]: TrainObject } = {
     train1: {
       id: "train1",
-      x: 1,
+      x: 0,
       y: 0,
-      direction: TrainDirection.Down,
+      direction: TrainDirection.Right,
     },
     train2: {
       id: "train2",
@@ -85,22 +85,32 @@ export default class App extends Vue {
 
   level: { [index: string]: TileObject } = {
     "0,0": {
-      component: "",
+      component: "TileStraight",
       x: 0,
       y: 0,
       train: null,
+      rotation: 1,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Green,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "1,0": {
-      component: "TileStraight",
+      component: "TileIntersection",
       x: 1,
       y: 0,
       train: null,
+      rotation: 1,
+      activeRoute: ActiveIntersection.Left,
     },
     "2,0": {
-      component: "TileStraight",
+      component: "TileCurve",
       x: 2,
       y: 0,
       train: null,
+      rotation: 2,
     },
     "3,0": {
       component: "TileCurve",
@@ -145,11 +155,21 @@ export default class App extends Vue {
       rotation: 3,
     },
     "2,1": {
-      component: "",
+      component: "TileStraight",
       x: 2,
       y: 1,
       train: null,
-      rotation: 2,
+      rotation: 0,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "3,1": {
       component: "TileCurve",
@@ -195,7 +215,7 @@ export default class App extends Vue {
       rotation: 2,
     },
     "2,2": {
-      component: "TileCurve",
+      component: "TileIntersection",
       x: 2,
       y: 2,
       train: null,

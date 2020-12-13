@@ -12,29 +12,38 @@
       >
         <polygon points="0 0, 5 2.5, 0 5" fill="black" />
       </marker>
+      <marker
+        id="midarrow"
+        markerWidth="5"
+        markerHeight="5"
+        refX="5"
+        refY="2.5"
+        orient="auto"
+        markerUnits="0.1"
+      >
+        <polygon points="0 0, 5 2.5, 0 5" fill="black" />
+      </marker>
     </defs>
 
-    <template v-for="route in possibleRoutes">
+    <template v-for="(route, key) in possibleRoutes">
       <path
-        :key="route.path"
+        :key="key + route.path"
         :d="route.path"
         stroke="black"
         stroke-width="1"
         fill="transparent"
         marker-end="url(#endarrow)"
       />
-      <!-- marker-start="url(#startarrow)" -->
     </template>
-    <template v-for="route in switchableRoutes">
+    <template v-for="(route, key) in switchableRoutes">
       <path
-        :key="route.path"
+        :key="key + route.path"
         :d="route.path"
         stroke="red"
         stroke-width="2"
         fill="transparent"
         marker-end="url(#endarrow)"
       />
-      <!-- marker-start="url(#startarrow)" -->
     </template>
     <template v-if="activeRoute">
       <path
@@ -44,6 +53,7 @@
         stroke-width="4"
         fill="transparent"
         marker-end="url(#endarrow)"
+        marker-mid="url(#midarrow)"
       />
     </template>
   </svg>

@@ -1,5 +1,12 @@
 <template>
-  <div class="tile tile-straight clickable" @click="rotate">
+  <div
+    class="tile tile-straight clickable"
+    :class="{
+      'tile-rotation--top-down': currentRotation === 0,
+      'tile-rotation--left-right': currentRotation === 1,
+    }"
+    @click="rotate"
+  >
     <template v-if="trafficLights">
       <template v-for="trafficLight in trafficLights">
         <svg
@@ -173,20 +180,34 @@ export default class TileStraight extends TileBase {
 <style lang="scss" scoped>
 .tile-straight {
   position: relative;
-  .traffic-light {
-    z-index: 10;
-    background-color: #999;
-    position: absolute;
 
-    &.signal--backward {
+  &.tile-rotation--left-right {
+    .signal--backward {
       bottom: 52%;
       right: 0;
     }
 
-    &.signal--forward {
+    .signal--forward {
       top: 52%;
       left: 0;
     }
+  }
+  &.tile-rotation--top-down {
+    .signal--backward {
+      right: 52%;
+      top: 0;
+    }
+
+    .signal--forward {
+      bottom: 0;
+      left: 52%;
+    }
+  }
+
+  .traffic-light {
+    z-index: 10;
+    background-color: #999;
+    position: absolute;
 
     ::v-deep circle {
       transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
