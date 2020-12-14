@@ -22,9 +22,11 @@
         <component
           :is="tile.component"
           :key="`${tile.x},${tile.y}`"
+          :ref="`${tile.x},${tile.y}`"
           class="tile-component"
           :tile="tile"
           @trainLeavesTile="trainLeavesTile($event, tile)"
+          @checkRouteAhead="checkRouteAhead($event, tile)"
         ></component>
       </div>
     </div>
@@ -47,7 +49,13 @@ import {
   Rotations,
   TrafficLightSignal,
   TrafficLightDirection,
+  Coordinates,
+  Position,
+  CheckStatusFeedback,
+  TileStatus,
 } from "@/types";
+import Train from "./components/Train.vue";
+import { RefSelector } from "@vue/test-utils";
 
 @Component({
   components: {
@@ -92,7 +100,7 @@ export default class App extends Vue {
       rotation: 1,
       trafficLights: [
         {
-          signal: TrafficLightSignal.Green,
+          signal: TrafficLightSignal.Red,
           direction: TrafficLightDirection.Backward,
         },
       ],
@@ -336,15 +344,6 @@ export default class App extends Vue {
     return `${options.x},${options.y}`;
   }
 
-  trainLeavesTile(train: TrainObject, tile: TileObject) {
-    console.log("trainLeavesTile", train, tile);
-    this.updateTrain(train);
-    this.trainEntersTile(train);
-    // TODO delete the leaving train on the old tile (but only this train)
-    // Currently we can only have 1 train
-    this.level[this.getCoordinatesId(tile)].train = {} as any; // TODO fix also type
-  }
-
   updateTrain(train: TrainObject) {
     train.direction = this.getTrainDirection(train);
     this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
@@ -357,24 +356,103 @@ export default class App extends Vue {
     const directionCode = this.getCoordinatesId({ x, y });
     console.log("train direction", { x, y }, directionCode);
     switch (directionCode) {
-    case "0,1":
-      return TrainDirection.Down;
-    case "-1,0":
-      return TrainDirection.Left;
-    case "0,-1":
-      return TrainDirection.Up;
-    case "1,0":
-        return TrainDirection.Right;
-    default:
-      console.error("getTrainDirection: failed");
-      return TrainDirection.Down;
+      case "0,1":
+        return TrainDirection.Down;
+      case "-1,0":
+        return TrainDirection.Left;
+      case "0,-1":
+        return TrainDirection.Up;
+      case "1,0":
+      return TrainDirection.Right;
+      default:
+        console.error("getTrainDirection: failed");
+        return TrainDirection.Down;
     }
+  }
+
+  getTileEntrancePosition(
+    nextTileCoordinates: Coordinates,
+    originCoordinates: Coordinates
+  ) {
+    const x = nextTileCoordinates.x - originCoordinates.x;
+    const y = nextTileCoordinates.y - originCoordinates.y;
+    const directionCode = this.getCoordinatesId({ x, y });
+    console.log("getTileEntrancePosition", { x, y }, directionCode);
+    switch (directionCode) {
+      case "0,1":
+        return Position.Top;
+      case "-1,0":
+        return Position.Right;
+      case "0,-1":
+        return Position.Bottom;
+      case "1,0":
+      return Position.Left;
+      default:
+        console.error("getTileEntrancePosition: failed");
+        return Position.Top;
+    }
+  }
+
+  trainLeavesTile(train: TrainObject, tile: TileObject) {
+    console.log("trainLeavesTile", train, tile);
+    this.updateTrain(train);
+    this.trainEntersTile(train);
+    // TODO delete the leaving train on the old tile (but only this train)
+    // Currently we can only have 1 train
+    this.level[this.getCoordinatesId(tile)].train = {} as any; // TODO fix also type
   }
 
   trainEntersTile(train: TrainObject) {
     const tilePosition: string = this.getCoordinatesId(train);
     if (this.level[tilePosition]) {
       this.level[tilePosition].train = { ...train };
+    }
+  }
+
+  checkRouteAhead(nextTileCoordinates: Coordinates, tile: TileObject) {
+    const status = this.checkStatusOnNextTile(nextTileCoordinates, {
+      x: tile.x,
+      y: tile.y,
+    });
+    debugger;
+    if (Number(status) > TileStatus.Free) {
+      // Route blocked, do nothing
+      tile.trafficLights![0].signal = TrafficLightSignal.Red;
+      tile.trafficLights![1].signal = TrafficLightSignal.Red;
+      debugger;
+    } else {
+      // Route free, reserve path and give go
+      // TODO: Reserve the path for the train!
+      tile.trafficLights![0].signal = TrafficLightSignal.Green;
+      tile.trafficLights![1].signal = TrafficLightSignal.Green;
+    }
+  }
+
+  checkStatusOnNextTile(
+    nextTileCoordinates: Coordinates,
+    originCoordinates: Coordinates
+  ): any {
+    let status: number;
+    const tilePosition: string = this.getCoordinatesId(nextTileCoordinates);
+    const tileEntrancePosition = this.getTileEntrancePosition(
+      nextTileCoordinates,
+      originCoordinates
+    );
+    if (this.level[tilePosition]) {
+      const tileStatus: CheckStatusFeedback = (this.$refs[
+        tilePosition
+      ] as any)[0].checkStatus(tileEntrancePosition);
+      if (tileStatus.hasTrafficLight) {
+        return tileStatus.status;
+      } else {
+        // Call next tile, as long as we don't have any traffic light on the route
+        status = this.checkStatusOnNextTile(
+          tileStatus.nextCoordinates,
+          nextTileCoordinates
+        );
+      }
+      debugger;
+      return status + tileStatus.status;
     }
   }
 }

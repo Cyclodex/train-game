@@ -20,6 +20,7 @@ new Vue({
     tileSize: 100,
     levelSizeX: 7,
     debug: true,
+    automaticTrafficLights: true,
   },
   store,
   render: h => h(App),

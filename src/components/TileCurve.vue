@@ -1,5 +1,9 @@
 <template>
-  <div class="tile tile-curve clickable" @click="rotate">
+  <div
+    class="tile tile-curve clickable"
+    :class="tileStatusStyle"
+    @click="rotate"
+  >
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
       <div class="">T enter: {{ incomingTrainPosition }}</div>
@@ -103,8 +107,4 @@ export default class TileCurve extends TileBase {
 }
 </script>
 
-<style scoped>
-.tile-curve {
-  background-color: yellow;
-}
-</style>
+<style scoped></style>

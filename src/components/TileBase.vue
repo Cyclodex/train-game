@@ -1,5 +1,5 @@
 <template>
-  <div class="tile">
+  <div class="tile" :class="tileStatusStyle">
     <debug-show-routes :routes="allPossibleRoutesWithCurrentRotation" />
   </div>
 </template>
@@ -8,10 +8,12 @@
 import { Component, Emit, Prop, Vue, Watch } from "vue-property-decorator";
 import { gsap } from "gsap";
 import {
+  CheckStatusFeedback,
   Position,
   PossibleRoutesPerRotation,
   Rotations,
   TileObject,
+  TileStatus,
   TrainDirection,
   TrainObject,
 } from "@/types";
@@ -22,11 +24,45 @@ export default class TileBase extends Vue {
   tileSize = this.$root.tileSize;
   currentRotation: Rotations = Rotations.Top;
   possibleRoutes!: PossibleRoutesPerRotation;
+  status: TileStatus = TileStatus.Free;
 
   created() {
     if (this.$props.tile.rotation) {
       this.currentRotation = this.$props.tile.rotation;
     }
+  }
+
+  get tileStatusStyle() {
+    switch (this.status) {
+      case TileStatus.Free:
+        return "tile-status--free";
+      case TileStatus.Reserved:
+        return "tile-status--reserved";
+      case TileStatus.Blocked:
+        return "tile-status--blocked";
+      default:
+        return "";
+    }
+  }
+
+  getRouteFromEntrancePosition(entrancePosition: Position) {
+    return this.possibleRoutes[this.currentRotation][entrancePosition];
+  }
+
+  checkStatus(entrancePosition: Position): CheckStatusFeedback {
+    const route = this.getRouteFromEntrancePosition(entrancePosition);
+    const routeHasTrafficLight = !!route.trafficLight;
+    const leaving = this.getRelativeCoordinatesOfNextTile(
+      route.leavesAtPosition
+    );
+    return {
+      status: this.status,
+      hasTrafficLight: routeHasTrafficLight,
+      nextCoordinates: {
+        x: this.tile.x + leaving.x,
+        y: this.tile.y + leaving.y,
+      },
+    };
   }
 
   @Watch("tile.train", { immediate: true, deep: false })
@@ -35,6 +71,7 @@ export default class TileBase extends Vue {
       const train = document.getElementById(incomingTrainObject.id);
       if (train) {
         this.animateTrain(incomingTrainObject, train);
+        this.status = TileStatus.Blocked;
       }
     }
   }
@@ -112,7 +149,10 @@ export default class TileBase extends Vue {
 
   @Emit("trainLeavesTile")
   trainLeavesTile(trainObject: TrainObject) {
-    console.log(trainObject);
+    // Clear Tile Status after a while
+    setTimeout(() => {
+      this.status = TileStatus.Free;
+    }, 1000);
     return { ...trainObject };
   }
 }
@@ -120,8 +160,20 @@ export default class TileBase extends Vue {
 
 <style>
 .tile {
-  background-color: lightgreen;
   width: 100%;
   height: 100%;
+}
+
+.tile-status--unknown {
+  background-color: white;
+}
+.tile-status--free {
+  background-color: green;
+}
+.tile-status--reserved {
+  background-color: yellow;
+}
+.tile-status--blocked {
+  background-color: red;
 }
 </style>

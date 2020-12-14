@@ -1,10 +1,13 @@
 <template>
   <div
     class="tile tile-straight clickable"
-    :class="{
-      'tile-rotation--top-down': currentRotation === 0,
-      'tile-rotation--left-right': currentRotation === 1,
-    }"
+    :class="[
+      {
+        'tile-rotation--top-down': currentRotation === 0,
+        'tile-rotation--left-right': currentRotation === 1,
+      },
+      tileStatusStyle,
+    ]"
     @click="rotate"
   >
     <template v-if="trafficLights">
@@ -25,6 +28,15 @@
         >
           <circle class="bulb--red" cx="8" cy="8" r="6" />
           <circle class="bulb--green" cx="8" cy="22" r="6" />
+          <text
+            v-if="automaticTrafficLights"
+            id="automatic"
+            x="3"
+            y="20"
+            style="fill: white"
+          >
+            A
+          </text>
         </svg>
       </template>
     </template>
@@ -40,9 +52,10 @@
 </template>
 
 <script lang="ts">
-import { Component } from "vue-property-decorator";
+import { Component, Emit } from "vue-property-decorator";
 import { gsap } from "gsap";
 import {
+  Coordinates,
   Position,
   PossibleRoutesPerRotation,
   Rotations,
@@ -56,26 +69,34 @@ import TileBase from "./TileBase.vue";
 @Component
 export default class TileStraight extends TileBase {
   trafficLights: TrafficLight[] = [];
+  automaticTrafficLights = false;
 
   created() {
     if (this.$props.tile.trafficLights !== undefined) {
-      this.trafficLights = this.$props.tile.trafficLights;
-      if (this.trafficLights) {
-        this.trafficLights.map(trafficLight => {
-          let position;
-          if (
-            Number(trafficLight.direction) ===
-            Number(TrafficLightDirection.Forward)
-          ) {
-            position = this.currentRotation;
-          } else {
-            position = this.currentRotation + 2;
-          }
-          this.possibleRoutes[this.currentRotation][
-            position
-          ].trafficLight = trafficLight;
-        });
+      this.positionTrafficLights();
+      if (this.$root.automaticTrafficLights) {
+        this.automaticTrafficLights = this.$root.automaticTrafficLights;
       }
+    }
+  }
+
+  positionTrafficLights() {
+    this.trafficLights = this.$props.tile.trafficLights;
+    if (this.trafficLights) {
+      this.trafficLights.map(trafficLight => {
+        let position;
+        if (
+          Number(trafficLight.direction) ===
+          Number(TrafficLightDirection.Forward)
+        ) {
+          position = this.currentRotation;
+        } else {
+          position = this.currentRotation + 2;
+        }
+        this.possibleRoutes[this.currentRotation][
+          position
+        ].trafficLight = trafficLight;
+      });
     }
   }
 
@@ -119,7 +140,21 @@ export default class TileStraight extends TileBase {
     }
   }
 
+  // TODO: Why not let this function do the checking?
+  @Emit("checkRouteAhead")
+  checkRouteAhead(coordinates: Coordinates) {
+    return coordinates;
+  }
+
   animateTrain(trainObject: TrainObject, train: HTMLElement) {
+    // Automatic Traffic Light Checks
+    if (this.automaticTrafficLights) {
+      this.checkRouteAhead({
+        x: this.tile.x + this.getLeavingTrainCoordinates.x,
+        y: this.tile.y + this.getLeavingTrainCoordinates.y,
+      });
+    }
+
     // Identify route
     if (this.trainRoute) {
       // Define tile exit
@@ -148,7 +183,7 @@ export default class TileStraight extends TileBase {
             autoRotate: 90,
             path: this.trainRoute.path,
           },
-          onComplete: () => this.trainLeavesTile(trainObject),
+          onComplete: () => this.trainLeavesTrafficLight(trainObject),
         });
       }
     }
@@ -170,9 +205,19 @@ export default class TileStraight extends TileBase {
           end: 0.5,
         },
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        onComplete: () => this.trainLeavesTile(trainObject!),
+        onComplete: () => this.trainLeavesTrafficLight(trainObject!),
       });
     }
+  }
+
+  trainLeavesTrafficLight(trainObject: TrainObject) {
+    if (this.automaticTrafficLights) {
+      // TODO: We make all red for now, we need to know which traffic light...
+      this.trafficLights.map(
+        trafficLight => (trafficLight.signal = TrafficLightSignal.Red)
+      );
+    }
+    this.trainLeavesTile(trainObject);
   }
 }
 </script>

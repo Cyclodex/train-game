@@ -1,7 +1,10 @@
-export interface TrainObject {
-  id: string;
+export interface Coordinates {
   x: number;
   y: number;
+}
+
+export interface TrainObject extends Coordinates {
+  id: string;
   direction?: TrainDirection;
 }
 
@@ -64,13 +67,23 @@ export interface Route {
   trafficLight?: TrafficLight;
 }
 
-export interface TileObject {
+export interface TileObject extends Coordinates {
   component: string;
-  x: number;
-  y: number;
   train?: TrainObject | null;
   rotation?: Rotations;
   activeRoute?: number;
   disabledRoutes?: number[];
   trafficLights?: TrafficLight[];
+}
+
+export interface CheckStatusFeedback {
+  status: number;
+  nextCoordinates: Coordinates;
+  hasTrafficLight: boolean;
+}
+
+export enum TileStatus {
+  "Free",
+  "Reserved",
+  "Blocked",
 }

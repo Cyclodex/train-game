@@ -1,6 +1,7 @@
 <template>
   <div
     class="tile tile-curve clickable"
+    :class="tileStatusStyle"
     @click.exact="rotate"
     @click.ctrl="changeSwitch"
   >
@@ -44,6 +45,15 @@ export default class TileIntersection extends TileBase {
     if (this.$props.tile.activeRoute) {
       this.intersectionSwitch = this.$props.tile.activeRoute;
     }
+  }
+
+  getRouteFromEntrancePosition(entrancePosition: Position) {
+    if (Number(entrancePosition) === Number(this.currentRotation)) {
+      return this.possibleRoutes[this.currentRotation][entrancePosition][
+        this.intersectionSwitch
+      ];
+    }
+    return this.possibleRoutes[this.currentRotation][entrancePosition];
   }
 
   get allSwitchableRoutes() {
@@ -222,8 +232,4 @@ export default class TileIntersection extends TileBase {
 }
 </script>
 
-<style scoped>
-.tile-curve {
-  background-color: rgb(245, 173, 17);
-}
-</style>
+<style scoped></style>
