@@ -354,19 +354,19 @@ export default class App extends Vue {
     const x = train.x - trainOrigin.x;
     const y = train.y - trainOrigin.y;
     const directionCode = this.getCoordinatesId({ x, y });
-    console.log("train direction", { x, y }, directionCode);
     switch (directionCode) {
-      case "0,1":
-        return TrainDirection.Down;
-      case "-1,0":
-        return TrainDirection.Left;
-      case "0,-1":
-        return TrainDirection.Up;
-      case "1,0":
-      return TrainDirection.Right;
-      default:
-        console.error("getTrainDirection: failed");
-        return TrainDirection.Down;
+    case "0,1":
+      return TrainDirection.Down;
+    case "-1,0":
+      return TrainDirection.Left;
+    case "0,-1":
+      return TrainDirection.Up;
+    case "1,0":
+        return TrainDirection.Right;
+    default:
+      console.error("getTrainDirection: failed");
+      debugger;
+      return TrainDirection.Down;
     }
   }
 
@@ -377,24 +377,23 @@ export default class App extends Vue {
     const x = nextTileCoordinates.x - originCoordinates.x;
     const y = nextTileCoordinates.y - originCoordinates.y;
     const directionCode = this.getCoordinatesId({ x, y });
-    console.log("getTileEntrancePosition", { x, y }, directionCode);
     switch (directionCode) {
-      case "0,1":
-        return Position.Top;
-      case "-1,0":
-        return Position.Right;
-      case "0,-1":
-        return Position.Bottom;
-      case "1,0":
-      return Position.Left;
-      default:
-        console.error("getTileEntrancePosition: failed");
-        return Position.Top;
+    case "0,1":
+      return Position.Top;
+    case "-1,0":
+      return Position.Right;
+    case "0,-1":
+      return Position.Bottom;
+    case "1,0":
+        return Position.Left;
+    default:
+      console.error("getTileEntrancePosition: failed");
+      debugger;
+      return Position.Top;
     }
   }
 
   trainLeavesTile(train: TrainObject, tile: TileObject) {
-    console.log("trainLeavesTile", train, tile);
     this.updateTrain(train);
     this.trainEntersTile(train);
     // TODO delete the leaving train on the old tile (but only this train)
@@ -409,20 +408,19 @@ export default class App extends Vue {
     }
   }
 
+  // TODO Maybe we should move this into tileStraight / traffic light function
+  // TODO: Use the correct signal, not both!
   checkRouteAhead(nextTileCoordinates: Coordinates, tile: TileObject) {
     const status = this.checkStatusOnNextTile(nextTileCoordinates, {
       x: tile.x,
       y: tile.y,
     });
-    debugger;
     if (Number(status) > TileStatus.Free) {
       // Route blocked, do nothing
       tile.trafficLights![0].signal = TrafficLightSignal.Red;
       tile.trafficLights![1].signal = TrafficLightSignal.Red;
-      debugger;
     } else {
       // Route free, reserve path and give go
-      // TODO: Reserve the path for the train!
       tile.trafficLights![0].signal = TrafficLightSignal.Green;
       tile.trafficLights![1].signal = TrafficLightSignal.Green;
     }
@@ -442,7 +440,14 @@ export default class App extends Vue {
       const tileStatus: CheckStatusFeedback = (this.$refs[
         tilePosition
       ] as any)[0].checkStatus(tileEntrancePosition);
-      if (tileStatus.hasTrafficLight) {
+      // If Status is not free = The route is block, dont progress
+      if (tileStatus.status !== TileStatus.Free) {
+        return tileStatus.status;
+      } else if (tileStatus.hasTrafficLight) {
+        // If it has trafficLight, reserve it and return the status, the route is complete
+        if (tileStatus.status === TileStatus.Free) {
+          (this.$refs[tilePosition] as any)[0].reserveTile();
+        }
         return tileStatus.status;
       } else {
         // Call next tile, as long as we don't have any traffic light on the route
@@ -451,7 +456,10 @@ export default class App extends Vue {
           nextTileCoordinates
         );
       }
-      debugger;
+      // If route is free, reserve every tile
+      if (status === TileStatus.Free) {
+        (this.$refs[tilePosition] as any)[0].reserveTile();
+      }
       return status + tileStatus.status;
     }
   }

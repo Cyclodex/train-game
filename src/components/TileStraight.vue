@@ -70,6 +70,7 @@ import TileBase from "./TileBase.vue";
 export default class TileStraight extends TileBase {
   trafficLights: TrafficLight[] = [];
   automaticTrafficLights = false;
+  checkRouteInterval: any;
 
   created() {
     if (this.$props.tile.trafficLights !== undefined) {
@@ -102,6 +103,10 @@ export default class TileStraight extends TileBase {
 
   changeTrafficLight(trafficLight: TrafficLight) {
     if (trafficLight.signal === TrafficLightSignal.Red) {
+      // Check route before making green
+      // TODO: right now we enforce the train to go, but we could later check that when route is blocked, don't let him go.
+      // TODO: or ask user to verify an override
+      this.checkAutomaticTrafficLight();
       trafficLight.signal = TrafficLightSignal.Green;
       // TODO: Animation should not start, when train is not stopped yet
       this.animateTrainFromTrafficLight();
@@ -140,13 +145,15 @@ export default class TileStraight extends TileBase {
     }
   }
 
-  // TODO: Why not let this function do the checking?
+  // TODO: Why not let this component do the checking? lets not emit to outside app
+  // TODO We need access to level in here.
   @Emit("checkRouteAhead")
   checkRouteAhead(coordinates: Coordinates) {
     return coordinates;
   }
 
-  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+  checkAutomaticTrafficLight() {
+    console.log("checkAutomaticTrafficLight");
     // Automatic Traffic Light Checks
     if (this.automaticTrafficLights) {
       this.checkRouteAhead({
@@ -154,6 +161,10 @@ export default class TileStraight extends TileBase {
         y: this.tile.y + this.getLeavingTrainCoordinates.y,
       });
     }
+  }
+
+  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+    this.checkAutomaticTrafficLight();
 
     // Identify route
     if (this.trainRoute) {
@@ -173,6 +184,11 @@ export default class TileStraight extends TileBase {
             end: 0.5,
           },
         });
+        // TODO: recheck every x to continue travel
+        this.checkRouteInterval = setInterval(
+          this.checkAutomaticTrafficLight,
+          2000
+        );
       } else {
         // Animate
         gsap.to(train, {
@@ -190,6 +206,9 @@ export default class TileStraight extends TileBase {
   }
 
   animateTrainFromTrafficLight() {
+    // Make sure that interval is canceled when train leaves
+    clearInterval(this.checkRouteInterval);
+
     const trainObject = this.tile.train;
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const train = document.getElementById(trainObject!.id);
