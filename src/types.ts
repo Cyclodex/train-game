@@ -3,9 +3,21 @@ export interface Coordinates {
   y: number;
 }
 
+export interface TrainsDefinition {
+  [index: string]: TrainObject;
+}
+
 export interface TrainObject extends Coordinates {
   id: string;
   direction?: TrainDirection;
+  status: TrainStatus;
+}
+
+export enum TrainStatus {
+  "Stopping",
+  "Stopped",
+  "Started",
+  "Running",
 }
 
 export enum TrainDirection {
@@ -65,6 +77,10 @@ export interface Route {
   leavesAtPosition: Position;
   rotate?: number;
   trafficLight?: TrafficLight;
+}
+
+export interface LevelDefinition {
+  [index: string]: TileObject;
 }
 
 export interface TileObject extends Coordinates {

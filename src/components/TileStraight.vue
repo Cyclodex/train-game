@@ -24,7 +24,8 @@
             'signal--red': trafficLight.signal === 1,
             'signal--green': trafficLight.signal === 2,
           }"
-          @click.stop="changeTrafficLight(trafficLight)"
+          @click.exact.stop="changeTrafficLight(trafficLight)"
+          @click.ctrl.stop="forceGreenTrafficLight(trafficLight)"
         >
           <circle class="bulb--red" cx="8" cy="8" r="6" />
           <circle class="bulb--green" cx="8" cy="22" r="6" />
@@ -52,19 +53,23 @@
 </template>
 
 <script lang="ts">
-import { Component, Emit } from "vue-property-decorator";
+import { Component } from "vue-property-decorator";
 import { gsap } from "gsap";
 import {
+  CheckStatusFeedback,
   Coordinates,
   Position,
   PossibleRoutesPerRotation,
   Rotations,
+  TileStatus,
   TrafficLight,
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
+  TrainStatus,
 } from "@/types";
 import TileBase from "./TileBase.vue";
+import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
 
 @Component
 export default class TileStraight extends TileBase {
@@ -81,8 +86,26 @@ export default class TileStraight extends TileBase {
     }
   }
 
+  updateTrafficLight(trafficLightUpdate: TrafficLight) {
+    debugger;
+    this.trafficLights.map((trafficLight, index) => {
+      if (trafficLight.direction === trafficLightUpdate.direction) {
+        this.trafficLights[index] = trafficLightUpdate;
+      }
+    });
+  }
+
+  get getActiveTrafficLight() {
+    return (
+      this.trafficLights.find(
+        trafficLight => trafficLight.direction === this.trafficLightDirection
+      ) || { signal: null }
+    );
+  }
+
   positionTrafficLights() {
     this.trafficLights = this.$props.tile.trafficLights;
+    // Put traffic light also into the routes, to help other tiles with it.
     if (this.trafficLights) {
       this.trafficLights.map(trafficLight => {
         let position;
@@ -103,16 +126,19 @@ export default class TileStraight extends TileBase {
 
   changeTrafficLight(trafficLight: TrafficLight) {
     if (trafficLight.signal === TrafficLightSignal.Red) {
-      // Check route before making green
-      // TODO: right now we enforce the train to go, but we could later check that when route is blocked, don't let him go.
-      // TODO: or ask user to verify an override
-      this.checkAutomaticTrafficLight();
-      trafficLight.signal = TrafficLightSignal.Green;
       // TODO: Animation should not start, when train is not stopped yet
-      this.animateTrainFromTrafficLight();
+      this.checkAutomaticTrafficLight();
     } else {
       trafficLight.signal = TrafficLightSignal.Red;
     }
+  }
+
+  forceGreenTrafficLight(trafficLight: TrafficLight) {
+    this.updateTrafficLight({
+      direction: trafficLight.direction,
+      signal: TrafficLightSignal.Green,
+    });
+    this.animateTrainFromTrafficLight();
   }
 
   possibleRoutes: PossibleRoutesPerRotation = {
@@ -145,22 +171,89 @@ export default class TileStraight extends TileBase {
     }
   }
 
-  // TODO: Why not let this component do the checking? lets not emit to outside app
-  // TODO We need access to level in here.
-  @Emit("checkRouteAhead")
-  checkRouteAhead(coordinates: Coordinates) {
-    return coordinates;
+  // TODO: Use the correct signal, not both!
+  checkRouteAhead() {
+    const nextTileCoordinates = {
+      x: this.tile.x + this.getLeavingTrainCoordinates.x,
+      y: this.tile.y + this.getLeavingTrainCoordinates.y,
+    };
+
+    const status = this.checkStatusOnNextTile(nextTileCoordinates, {
+      x: this.tile.x,
+      y: this.tile.y,
+    });
+
+    return status;
+  }
+
+  checkStatusOnNextTile(
+    nextTileCoordinates: Coordinates,
+    originCoordinates: Coordinates
+  ): any {
+    let status: number;
+    const tilePosition: string = getCoordinatesId(nextTileCoordinates);
+    const tileEntrancePosition = getTileEntrancePosition(
+      nextTileCoordinates,
+      originCoordinates
+    );
+    if (this.level[tilePosition]) {
+      const tileStatus: CheckStatusFeedback = (this.$parent.$refs[
+        tilePosition
+      ] as any)[0].checkStatus(tileEntrancePosition);
+      // If Status is not free = The route is block, dont progress
+      if (tileStatus.status !== TileStatus.Free) {
+        return tileStatus.status;
+      } else if (tileStatus.hasTrafficLight) {
+        // If it has trafficLight, reserve it and return the status, the route is complete
+        if (tileStatus.status === TileStatus.Free) {
+          (this.$parent.$refs[tilePosition] as any)[0].reserveTile();
+        }
+        return tileStatus.status;
+      } else {
+        // Call next tile, as long as we don't have any traffic light on the route
+        status = this.checkStatusOnNextTile(
+          tileStatus.nextCoordinates,
+          nextTileCoordinates
+        );
+      }
+      // If route is free, reserve every tile
+      if (status === TileStatus.Free) {
+        (this.$parent.$refs[tilePosition] as any)[0].reserveTile();
+      }
+      return status + tileStatus.status;
+    }
   }
 
   checkAutomaticTrafficLight() {
+    // TODO: check if there is a traffic light on this route ?!
+    // TODO: What if there is no train?
     console.log("checkAutomaticTrafficLight");
     // Automatic Traffic Light Checks
     if (this.automaticTrafficLights) {
-      this.checkRouteAhead({
-        x: this.tile.x + this.getLeavingTrainCoordinates.x,
-        y: this.tile.y + this.getLeavingTrainCoordinates.y,
-      });
+      const routeStatus = this.checkRouteAhead();
+      if (routeStatus > TileStatus.Free) {
+        // Route reserved or blocked, stop train
+        this.updateTrafficLight({
+          direction: this.trafficLightDirection,
+          signal: TrafficLightSignal.Red,
+        });
+      } else {
+        // Route free, reserve path and give go
+        this.updateTrafficLight({
+          direction: this.trafficLightDirection,
+          signal: TrafficLightSignal.Green,
+        });
+
+        // TODO: Green light not visible, reactivity issue, fix it.
+        if (this.currentTrain.status === TrainStatus.Stopped) {
+          this.animateTrainFromTrafficLight();
+        }
+      }
     }
+  }
+
+  get trafficLightDirection() {
+    return this.trainRoute!.trafficLight!.direction;
   }
 
   animateTrain(trainObject: TrainObject, train: HTMLElement) {
@@ -172,8 +265,9 @@ export default class TileStraight extends TileBase {
       trainObject.x += this.getLeavingTrainCoordinates.x;
       trainObject.y += this.getLeavingTrainCoordinates.y;
 
-      if (this.trainRoute.trafficLight?.signal === TrafficLightSignal.Red) {
-        // Animate
+      if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
+        // Stop the train
+        this.trainStopping();
         gsap.to(train, {
           ease: "power1.out",
           duration: 2,
@@ -183,14 +277,10 @@ export default class TileStraight extends TileBase {
             path: this.trainRoute.path,
             end: 0.5,
           },
+          onComplete: () => this.trainOnRedTrafficLight(),
         });
-        // TODO: recheck every x to continue travel
-        this.checkRouteInterval = setInterval(
-          this.checkAutomaticTrafficLight,
-          2000
-        );
       } else {
-        // Animate
+        // Animate train through tile, no stop
         gsap.to(train, {
           ease: "none",
           duration: 2,
@@ -206,10 +296,15 @@ export default class TileStraight extends TileBase {
   }
 
   animateTrainFromTrafficLight() {
+    this.trainStarted();
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
 
-    const trainObject = this.tile.train;
+    // TODO: Move to function
+    const trainObject = { ...this.currentTrain };
+    trainObject.x += this.getLeavingTrainCoordinates.x;
+    trainObject.y += this.getLeavingTrainCoordinates.y;
+
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const train = document.getElementById(trainObject!.id);
     if (train && this.trainRoute) {
@@ -224,17 +319,27 @@ export default class TileStraight extends TileBase {
           end: 0.5,
         },
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        onComplete: () => this.trainLeavesTrafficLight(trainObject!),
+        onComplete: () => this.trainLeavesTrafficLight(trainObject),
       });
     }
   }
 
+  // Check every 2 seconds to continue travel if route is ok
+  trainOnRedTrafficLight() {
+    this.trainStopped();
+    this.checkRouteInterval = setInterval(
+      this.checkAutomaticTrafficLight,
+      2000
+    );
+  }
+
   trainLeavesTrafficLight(trainObject: TrainObject) {
+    this.trainRunning();
     if (this.automaticTrafficLights) {
-      // TODO: We make all red for now, we need to know which traffic light...
-      this.trafficLights.map(
-        trafficLight => (trafficLight.signal = TrafficLightSignal.Red)
-      );
+      this.updateTrafficLight({
+        direction: this.trafficLightDirection,
+        signal: TrafficLightSignal.Red,
+      });
     }
     this.trainLeavesTile(trainObject);
   }

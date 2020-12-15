@@ -8,7 +8,6 @@
         refX="5"
         refY="2.5"
         orient="auto"
-        markerUnits="0.1"
       >
         <polygon points="0 0, 5 2.5, 0 5" fill="black" />
       </marker>
@@ -19,7 +18,6 @@
         refX="5"
         refY="2.5"
         orient="auto"
-        markerUnits="0.1"
       >
         <polygon points="0 0, 5 2.5, 0 5" fill="black" />
       </marker>

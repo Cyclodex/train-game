@@ -5,10 +5,18 @@
 </template>
 
 <script lang="ts">
-import { Component, Emit, Prop, Vue, Watch } from "vue-property-decorator";
+import {
+  Component,
+  Emit,
+  InjectReactive,
+  Prop,
+  Vue,
+  Watch,
+} from "vue-property-decorator";
 import { gsap } from "gsap";
 import {
   CheckStatusFeedback,
+  LevelDefinition,
   Position,
   PossibleRoutesPerRotation,
   Rotations,
@@ -16,10 +24,15 @@ import {
   TileStatus,
   TrainDirection,
   TrainObject,
+  TrainsDefinition,
+  TrainStatus,
 } from "@/types";
 
 @Component
 export default class TileBase extends Vue {
+  @InjectReactive() level!: LevelDefinition;
+  @InjectReactive() trains!: TrainsDefinition;
+
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
   tileSize = this.$root.tileSize;
   currentRotation: Rotations = Rotations.Top;
@@ -34,14 +47,14 @@ export default class TileBase extends Vue {
 
   get tileStatusStyle() {
     switch (this.status) {
-    case TileStatus.Free:
-      return "tile-status--free";
-    case TileStatus.Reserved:
-      return "tile-status--reserved";
-    case TileStatus.Blocked:
-      return "tile-status--blocked";
-    default:
-      return "";
+      case TileStatus.Free:
+        return "tile-status--free";
+      case TileStatus.Reserved:
+        return "tile-status--reserved";
+      case TileStatus.Blocked:
+        return "tile-status--blocked";
+      default:
+        return "";
     }
   }
 
@@ -102,16 +115,16 @@ export default class TileBase extends Vue {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-      case TrainDirection.Down:
-        return Position.Top;
-      case TrainDirection.Left:
-        return Position.Right;
-      case TrainDirection.Up:
-        return Position.Bottom;
-      case TrainDirection.Right:
-        return Position.Left;
-      default:
-        return Position.Top;
+    case TrainDirection.Down:
+      return Position.Top;
+    case TrainDirection.Left:
+      return Position.Right;
+    case TrainDirection.Up:
+      return Position.Bottom;
+    case TrainDirection.Right:
+      return Position.Left;
+    default:
+      return Position.Top;
     }
   }
 
@@ -126,19 +139,20 @@ export default class TileBase extends Vue {
 
   getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
     switch (leavingPosition) {
-      case Position.Top:
-        return { x: 0, y: -1 };
-      case Position.Right:
-        return { x: 1, y: 0 };
-      case Position.Bottom:
-        return { x: 0, y: 1 };
-      case Position.Left:
-        return { x: -1, y: 0 };
-      default:
-        return { x: 0, y: 0 };
+    case Position.Top:
+      return { x: 0, y: -1 };
+    case Position.Right:
+      return { x: 1, y: 0 };
+    case Position.Bottom:
+      return { x: 0, y: 1 };
+    case Position.Left:
+      return { x: -1, y: 0 };
+    default:
+      return { x: 0, y: 0 };
     }
   }
 
+  // Only example function, tiles need to override this logic
   animateTrain(trainObject: TrainObject, train: HTMLElement) {
     // Define tile exit
     trainObject.y += 1;
@@ -149,6 +163,30 @@ export default class TileBase extends Vue {
       y: `+=${this.tileSize}`,
       onComplete: () => this.trainLeavesTile(trainObject),
     });
+  }
+
+  get currentTrain() {
+    return this.trains[this.tile.train!.id]!;
+  }
+
+  @Emit("updateTrain")
+  trainStopping() {
+    return { id: this.currentTrain.id, status: TrainStatus.Stopping };
+  }
+
+  @Emit("updateTrain")
+  trainStopped() {
+    return { id: this.currentTrain.id, status: TrainStatus.Stopped };
+  }
+
+  @Emit("updateTrain")
+  trainStarted() {
+    return { id: this.currentTrain.id, status: TrainStatus.Started };
+  }
+
+  @Emit("updateTrain")
+  trainRunning() {
+    return { id: this.currentTrain.id, status: TrainStatus.Running };
   }
 
   @Emit("trainLeavesTile")
@@ -172,7 +210,7 @@ export default class TileBase extends Vue {
   background-color: white;
 }
 .tile-status--free {
-  background-color: green;
+  background-color: rgb(104, 185, 104);
 }
 .tile-status--reserved {
   background-color: yellow;

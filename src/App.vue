@@ -26,7 +26,7 @@
           class="tile-component"
           :tile="tile"
           @trainLeavesTile="trainLeavesTile($event, tile)"
-          @checkRouteAhead="checkRouteAhead($event, tile)"
+          @updateTrain="updateTrain"
         ></component>
       </div>
     </div>
@@ -38,7 +38,7 @@
 </template>
 
 <script lang="ts">
-import { Component, Vue } from "vue-property-decorator";
+import { Component, ProvideReactive, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
 import {
@@ -49,13 +49,12 @@ import {
   Rotations,
   TrafficLightSignal,
   TrafficLightDirection,
-  Coordinates,
-  Position,
-  CheckStatusFeedback,
-  TileStatus,
+  TrainsDefinition,
+  LevelDefinition,
+  TrainStatus,
 } from "@/types";
-import Train from "./components/Train.vue";
-import { RefSelector } from "@vue/test-utils";
+import { getCoordinatesId } from "@/utils/tileHelpers";
+import { getTrainDirection } from "@/utils/trainHelpers";
 
 @Component({
   components: {
@@ -64,34 +63,38 @@ import { RefSelector } from "@vue/test-utils";
   },
 })
 export default class App extends Vue {
-  trains: { [index: string]: TrainObject } = {
+  @ProvideReactive() trains: TrainsDefinition = {
     train1: {
       id: "train1",
       x: 0,
       y: 0,
       direction: TrainDirection.Right,
+      status: TrainStatus.Running,
     },
     train2: {
       id: "train2",
       x: 3,
       y: 2,
       direction: TrainDirection.Right,
+      status: TrainStatus.Running,
     },
-    trainCircle1: {
-      id: "trainCircle1",
-      x: 4,
-      y: 1,
-      direction: TrainDirection.Down,
-    },
-    trainCircle2: {
-      id: "trainCircle2",
-      x: 5,
-      y: 0,
-      direction: TrainDirection.Up,
-    },
+    // trainCircle1: {
+    //   id: "trainCircle1",
+    //   x: 4,
+    //   y: 1,
+    //   direction: TrainDirection.Down,
+    //   status: TrainStatus.Running,
+    // },
+    // trainCircle2: {
+    //   id: "trainCircle2",
+    //   x: 5,
+    //   y: 0,
+    //   direction: TrainDirection.Up,
+    //   status: TrainStatus.Running,
+    // },
   };
 
-  level: { [index: string]: TileObject } = {
+  @ProvideReactive() level: LevelDefinition = {
     "0,0": {
       component: "TileStraight",
       x: 0,
@@ -99,6 +102,10 @@ export default class App extends Vue {
       train: null,
       rotation: 1,
       trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
         {
           signal: TrafficLightSignal.Red,
           direction: TrafficLightDirection.Backward,
@@ -213,7 +220,7 @@ export default class App extends Vue {
       y: 2,
       train: null,
       rotation: 2,
-      activeRoute: ActiveIntersection.Right,
+      activeRoute: ActiveIntersection.Straight,
     },
     "1,2": {
       component: "TileCurve",
@@ -279,7 +286,7 @@ export default class App extends Vue {
       y: 3,
       train: null,
       rotation: 1,
-      activeRoute: ActiveIntersection.Right,
+      activeRoute: ActiveIntersection.Straight,
     },
     "2,3": {
       component: "TileIntersection",
@@ -333,134 +340,29 @@ export default class App extends Vue {
 
   mounted() {
     Object.values(this.trains).map(train => {
-      this.level[this.getCoordinatesId(train)].train = { ...train };
+      this.level[getCoordinatesId(train)].train = { ...train };
     });
   }
 
-  // Helper funtion TODO: extract
-  getCoordinatesId(
-    options: TrainObject | TileObject | { x: number; y: number }
-  ) {
-    return `${options.x},${options.y}`;
-  }
-
+  // TODO: Train - move functions?
   updateTrain(train: TrainObject) {
-    train.direction = this.getTrainDirection(train);
     this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
   }
 
-  getTrainDirection(train: TrainObject) {
-    const trainOrigin = this.trains[train.id];
-    const x = train.x - trainOrigin.x;
-    const y = train.y - trainOrigin.y;
-    const directionCode = this.getCoordinatesId({ x, y });
-    switch (directionCode) {
-    case "0,1":
-      return TrainDirection.Down;
-    case "-1,0":
-      return TrainDirection.Left;
-    case "0,-1":
-      return TrainDirection.Up;
-    case "1,0":
-        return TrainDirection.Right;
-    default:
-      console.error("getTrainDirection: failed");
-      debugger;
-      return TrainDirection.Down;
-    }
-  }
-
-  getTileEntrancePosition(
-    nextTileCoordinates: Coordinates,
-    originCoordinates: Coordinates
-  ) {
-    const x = nextTileCoordinates.x - originCoordinates.x;
-    const y = nextTileCoordinates.y - originCoordinates.y;
-    const directionCode = this.getCoordinatesId({ x, y });
-    switch (directionCode) {
-    case "0,1":
-      return Position.Top;
-    case "-1,0":
-      return Position.Right;
-    case "0,-1":
-      return Position.Bottom;
-    case "1,0":
-        return Position.Left;
-    default:
-      console.error("getTileEntrancePosition: failed");
-      debugger;
-      return Position.Top;
-    }
-  }
-
   trainLeavesTile(train: TrainObject, tile: TileObject) {
+    train.direction = getTrainDirection(train, this.trains[train.id]);
     this.updateTrain(train);
-    this.trainEntersTile(train);
+    // Important that we take the newest train from the train object, not just the one from the leaves function
+    this.trainEntersTile(this.trains[train.id]);
     // TODO delete the leaving train on the old tile (but only this train)
     // Currently we can only have 1 train
-    this.level[this.getCoordinatesId(tile)].train = {} as any; // TODO fix also type
+    this.level[getCoordinatesId(tile)].train = {} as any; // TODO fix also type
   }
 
   trainEntersTile(train: TrainObject) {
-    const tilePosition: string = this.getCoordinatesId(train);
+    const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
       this.level[tilePosition].train = { ...train };
-    }
-  }
-
-  // TODO Maybe we should move this into tileStraight / traffic light function
-  // TODO: Use the correct signal, not both!
-  checkRouteAhead(nextTileCoordinates: Coordinates, tile: TileObject) {
-    const status = this.checkStatusOnNextTile(nextTileCoordinates, {
-      x: tile.x,
-      y: tile.y,
-    });
-    if (Number(status) > TileStatus.Free) {
-      // Route blocked, do nothing
-      tile.trafficLights![0].signal = TrafficLightSignal.Red;
-      tile.trafficLights![1].signal = TrafficLightSignal.Red;
-    } else {
-      // Route free, reserve path and give go
-      tile.trafficLights![0].signal = TrafficLightSignal.Green;
-      tile.trafficLights![1].signal = TrafficLightSignal.Green;
-    }
-  }
-
-  checkStatusOnNextTile(
-    nextTileCoordinates: Coordinates,
-    originCoordinates: Coordinates
-  ): any {
-    let status: number;
-    const tilePosition: string = this.getCoordinatesId(nextTileCoordinates);
-    const tileEntrancePosition = this.getTileEntrancePosition(
-      nextTileCoordinates,
-      originCoordinates
-    );
-    if (this.level[tilePosition]) {
-      const tileStatus: CheckStatusFeedback = (this.$refs[
-        tilePosition
-      ] as any)[0].checkStatus(tileEntrancePosition);
-      // If Status is not free = The route is block, dont progress
-      if (tileStatus.status !== TileStatus.Free) {
-        return tileStatus.status;
-      } else if (tileStatus.hasTrafficLight) {
-        // If it has trafficLight, reserve it and return the status, the route is complete
-        if (tileStatus.status === TileStatus.Free) {
-          (this.$refs[tilePosition] as any)[0].reserveTile();
-        }
-        return tileStatus.status;
-      } else {
-        // Call next tile, as long as we don't have any traffic light on the route
-        status = this.checkStatusOnNextTile(
-          tileStatus.nextCoordinates,
-          nextTileCoordinates
-        );
-      }
-      // If route is free, reserve every tile
-      if (status === TileStatus.Free) {
-        (this.$refs[tilePosition] as any)[0].reserveTile();
-      }
-      return status + tileStatus.status;
     }
   }
 }
