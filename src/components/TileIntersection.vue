@@ -81,15 +81,15 @@ export default class TileIntersection extends TileBase {
     [Rotations.Top]: {
       [Position.Top]: {
         [ActiveIntersection.Left]: {
-          path: "M 50 0 q 0 50 50 50",
+          path: this.getPathCurve("T", "R"),
           leavesAtPosition: Position.Right,
         },
         [ActiveIntersection.Straight]: {
-          path: "M 50 0 V 100",
+          path: this.getPathStraight("T", "B"),
           leavesAtPosition: Position.Bottom,
         },
         [ActiveIntersection.Right]: {
-          path: "M 50 0 q 0 50 -50 50",
+          path: this.getPathCurve("T", "L"),
           leavesAtPosition: Position.Left,
         },
       },
@@ -115,15 +115,15 @@ export default class TileIntersection extends TileBase {
     [Rotations.Right]: {
       [Position.Right]: {
         [ActiveIntersection.Left]: {
-          path: "M 100 50 q -50 0 -50 50",
+          path: this.getPathCurve("R", "B"),
           leavesAtPosition: Position.Bottom,
         },
         [ActiveIntersection.Straight]: {
-          path: "M 100 50 H 0",
+          path: this.getPathStraight("R", "L"),
           leavesAtPosition: Position.Left,
         },
         [ActiveIntersection.Right]: {
-          path: "M 100 50 q -50 0 -50 -50",
+          path: this.getPathCurve("R", "T"),
           leavesAtPosition: Position.Top,
         },
       },
@@ -149,15 +149,15 @@ export default class TileIntersection extends TileBase {
     [Rotations.Bottom]: {
       [Position.Bottom]: {
         [ActiveIntersection.Left]: {
-          path: "M 50 100 q 0 -50 -50 -50",
+          path: this.getPathCurve("B", "L"),
           leavesAtPosition: Position.Left,
         },
         [ActiveIntersection.Straight]: {
-          path: "M 50 100 V 0",
+          path: this.getPathStraight("B", "T"),
           leavesAtPosition: Position.Top,
         },
         [ActiveIntersection.Right]: {
-          path: "M 50 100 q 0 -50 50 -50",
+          path: this.getPathCurve("B", "R"),
           leavesAtPosition: Position.Right,
         },
       },
@@ -183,15 +183,15 @@ export default class TileIntersection extends TileBase {
     [Rotations.Left]: {
       [Position.Left]: {
         [ActiveIntersection.Left]: {
-          path: " M 0 50 q 50 0 50 -50",
+          path: this.getPathCurve("L", "T"),
           leavesAtPosition: Position.Top,
         },
         [ActiveIntersection.Straight]: {
-          path: "M 0 50 H 100",
+          path: this.getPathStraight("L", "R"),
           leavesAtPosition: Position.Right,
         },
         [ActiveIntersection.Right]: {
-          path: "M  0  50 q 50  0  50  50",
+          path: this.getPathCurve("L", "B"),
           leavesAtPosition: Position.Bottom,
         },
       },

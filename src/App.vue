@@ -1,9 +1,10 @@
 <template>
   <div id="app">
+    <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
     <div
       class="level"
       :style="{
-        maxWidth: $root.tileSize * $root.levelSizeX + 'px',
+        width: $root.tileSize * $root.levelSizeX + 'px',
       }"
     >
       <Train v-for="train in trains" :key="train.id" :train-object="train" />
@@ -365,6 +366,10 @@ export default class App extends Vue {
       this.level[tilePosition].train = { ...train };
     }
   }
+
+  switchDebugMode() {
+    this.$root.debug = !this.$root.debug;
+  }
 }
 </script>
 
@@ -423,5 +428,11 @@ pre {
   &:hover {
     background-color: pink !important;
   }
+}
+.debug-button {
+  position: fixed;
+  z-index: 100;
+  top: 0;
+  left: 0;
 }
 </style>

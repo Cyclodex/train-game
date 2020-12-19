@@ -111,5 +111,3 @@ export default class TileCurve extends TileBase {
   }
 }
 </script>
-
-<style scoped></style>

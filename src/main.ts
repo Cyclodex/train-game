@@ -19,7 +19,7 @@ Vue.component("TileIntersection", TileIntersection);
 
 new Vue({
   data: {
-    tileSize: 100,
+    tileSize: 200,
     levelSizeX: 7,
     debug: true,
     automaticTrafficLights: true,

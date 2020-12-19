@@ -42,3 +42,10 @@ export default class TileRail extends Vue {
   }
 }
 </script>
+
+<style lang="scss" scoped>
+.tile-rail {
+  width: 100%;
+  height: 100%;
+}
+</style>
