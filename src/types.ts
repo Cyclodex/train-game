@@ -74,6 +74,7 @@ export interface PossibleRoutes {
 
 export interface Route {
   path: string;
+  rails?: string[];
   leavesAtPosition: Position;
   rotate?: number;
   trafficLight?: TrafficLight;

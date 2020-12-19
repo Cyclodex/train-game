@@ -5,6 +5,7 @@
     @click.exact="rotate"
     @click.ctrl="changeSwitch"
   >
+    <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
       <div class="">T enter: {{ incomingTrainPosition }}</div>
@@ -26,6 +27,7 @@ import {
   Position,
   PossibleRoutesPerRotation,
   Rotations,
+  Route,
   TrainObject,
 } from "@/types";
 import TileBase from "./TileBase.vue";
@@ -60,6 +62,16 @@ export default class TileIntersection extends TileBase {
     return this.possibleRoutes[this.currentRotation][this.currentRotation];
   }
 
+  get allDrawableRailRoutes() {
+    // Take the same rotation as position
+    const routes = this.possibleRoutes[this.currentRotation] as Route[];
+    const routesIteratable = Object.values(routes);
+    const drawableRoutes: Route[] = routesIteratable.filter(
+      route => !!route.path
+    );
+    return drawableRoutes;
+  }
+
   get activeSwitchRoute() {
     return this.allSwitchableRoutes[this.intersectionSwitch];
   }
@@ -82,15 +94,21 @@ export default class TileIntersection extends TileBase {
         },
       },
       [Position.Right]: {
-        path: "M 100 50 q -50 0 -50 -50",
+        path: this.getPathCurve("R", "T"),
+        rails: [this.getRailCurve("R-", "T+"), this.getRailCurve("R+", "T-")],
         leavesAtPosition: Position.Top,
       },
       [Position.Bottom]: {
-        path: "M 50 100 V 0",
+        path: this.getPathStraight("B", "T"),
+        rails: [
+          this.getRailStraight("B-", "T-"),
+          this.getRailStraight("B+", "T+"),
+        ],
         leavesAtPosition: Position.Top,
       },
       [Position.Left]: {
-        path: " M 0 50 q 50 0 50 -50",
+        path: this.getPathCurve("L", "T"),
+        rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
         leavesAtPosition: Position.Top,
       },
     },
@@ -110,15 +128,21 @@ export default class TileIntersection extends TileBase {
         },
       },
       [Position.Bottom]: {
-        path: "M 50 100 q 0 -50 50 -50",
+        path: this.getPathCurve("B", "R"),
+        rails: [this.getRailCurve("B-", "R-"), this.getRailCurve("B+", "R+")],
         leavesAtPosition: Position.Right,
       },
       [Position.Left]: {
-        path: "M 0 50 H 100",
+        path: this.getPathStraight("L", "R"),
+        rails: [
+          this.getRailStraight("L-", "R-"),
+          this.getRailStraight("L+", "R+"),
+        ],
         leavesAtPosition: Position.Right,
       },
       [Position.Top]: {
-        path: "M 50 0 q 0 50 50 50",
+        path: this.getPathCurve("T", "R"),
+        rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
         leavesAtPosition: Position.Right,
       },
     },
@@ -138,15 +162,21 @@ export default class TileIntersection extends TileBase {
         },
       },
       [Position.Left]: {
-        path: "M  0  50 q 50  0  50  50",
+        path: this.getPathCurve("L", "B"),
+        rails: [this.getRailCurve("L-", "B+"), this.getRailCurve("L+", "B-")],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Top]: {
-        path: "M 50 0 V 100",
+        path: this.getPathStraight("T", "B"),
+        rails: [
+          this.getRailStraight("T-", "B-"),
+          this.getRailStraight("T+", "B+"),
+        ],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Right]: {
-        path: "M 100 50 q -50 0 -50 50",
+        path: this.getPathCurve("R", "B"),
+        rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
         leavesAtPosition: Position.Bottom,
       },
     },
@@ -166,15 +196,21 @@ export default class TileIntersection extends TileBase {
         },
       },
       [Position.Top]: {
-        path: "M 50 0 q 0 50 -50 50",
+        path: this.getPathCurve("T", "L"),
+        rails: [this.getRailCurve("T-", "L-"), this.getRailCurve("T+", "L+")],
         leavesAtPosition: Position.Left,
       },
       [Position.Right]: {
-        path: "M 100 50 H 0",
+        path: this.getPathStraight("R", "L"),
+        rails: [
+          this.getRailStraight("R-", "L-"),
+          this.getRailStraight("R+", "L+"),
+        ],
         leavesAtPosition: Position.Left,
       },
       [Position.Bottom]: {
-        path: "M 50 100 q 0 -50 -50 -50",
+        path: this.getPathCurve("B", "L"),
+        rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
         leavesAtPosition: Position.Left,
       },
     },

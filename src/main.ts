@@ -4,6 +4,8 @@ import store from "./store";
 
 Vue.config.productionTip = false;
 
+import TileRail from "@/components/TileRail.vue";
+Vue.component("TileRail", TileRail);
 import TileStraight from "@/components/TileStraight.vue";
 Vue.component("TileStraight", TileStraight);
 import TileCurve from "@/components/TileCurve.vue";
@@ -21,6 +23,7 @@ new Vue({
     levelSizeX: 7,
     debug: true,
     automaticTrafficLights: true,
+    railDistanceFromPath: 7,
   },
   store,
   render: h => h(App),

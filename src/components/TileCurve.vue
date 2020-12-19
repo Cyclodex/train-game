@@ -4,6 +4,7 @@
     :class="tileStatusStyle"
     @click="rotate"
   >
+    <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
       <div class="">T enter: {{ incomingTrainPosition }}</div>
@@ -37,41 +38,45 @@ export default class TileCurve extends TileBase {
   possibleRoutes: PossibleRoutesPerRotation = {
     [Rotations.Top]: {
       [Position.Top]: {
-        path: "M 50 0 q 0 50 50 50",
+        path: this.getPathCurve("T", "R"),
+        rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
         leavesAtPosition: Position.Right,
       },
       [Position.Right]: {
-        path: "M 100 50 q -50 0 -50 -50",
+        path: this.getPathCurve("R", "T"),
         leavesAtPosition: Position.Top,
       },
     },
     [Rotations.Right]: {
       [Position.Right]: {
-        path: "M 100 50 q -50 0 -50 50",
+        path: this.getPathCurve("R", "B"),
+        rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Bottom]: {
-        path: "M 50 100 q 0 -50 50 -50",
+        path: this.getPathCurve("B", "R"),
         leavesAtPosition: Position.Right,
       },
     },
     [Rotations.Bottom]: {
       [Position.Bottom]: {
-        path: "M 50 100 q 0 -50 -50 -50",
+        path: this.getPathCurve("B", "L"),
+        rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
         leavesAtPosition: Position.Left,
       },
       [Position.Left]: {
-        path: "M  0  50 q 50  0  50  50",
+        path: this.getPathCurve("L", "B"),
         leavesAtPosition: Position.Bottom,
       },
     },
     [Rotations.Left]: {
       [Position.Left]: {
-        path: " M 0 50 q 50 0 50 -50",
+        path: this.getPathCurve("L", "T"),
+        rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
         leavesAtPosition: Position.Top,
       },
       [Position.Top]: {
-        path: "M 50 0 q 0 50 -50 50",
+        path: this.getPathCurve("T", "L"),
         leavesAtPosition: Position.Left,
       },
     },

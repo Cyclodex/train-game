@@ -10,6 +10,7 @@
     ]"
     @click="rotate"
   >
+    <TileRail :possible-routes="allDrawableRailRoutes" />
     <template v-if="trafficLights">
       <template v-for="trafficLight in trafficLights">
         <svg
@@ -87,7 +88,6 @@ export default class TileStraight extends TileBase {
   }
 
   updateTrafficLight(trafficLightUpdate: TrafficLight) {
-    debugger;
     this.trafficLights.map((trafficLight, index) => {
       if (trafficLight.direction === trafficLightUpdate.direction) {
         this.trafficLights[index] = trafficLightUpdate;
@@ -144,21 +144,29 @@ export default class TileStraight extends TileBase {
   possibleRoutes: PossibleRoutesPerRotation = {
     [Rotations.Top]: {
       [Position.Top]: {
-        path: "M 50 0 V 100",
+        path: this.getPathStraight("T", "B"),
+        rails: [
+          this.getRailStraight("T-", "B-"),
+          this.getRailStraight("T+", "B+"),
+        ],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Bottom]: {
-        path: "M 50 100 V 0",
+        path: this.getPathStraight("B", "T"),
         leavesAtPosition: Position.Top,
       },
     },
     [Rotations.Right]: {
       [Position.Right]: {
-        path: "M 100 50 H 0",
+        path: this.getPathStraight("R", "L"),
+        rails: [
+          this.getRailStraight("R-", "L-"),
+          this.getRailStraight("R+", "L+"),
+        ],
         leavesAtPosition: Position.Left,
       },
       [Position.Left]: {
-        path: "M 0 50 H 100",
+        path: this.getPathStraight("L", "R"),
         leavesAtPosition: Position.Right,
       },
     },

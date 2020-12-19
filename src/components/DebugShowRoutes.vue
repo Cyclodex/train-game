@@ -33,7 +33,7 @@
         marker-end="url(#endarrow)"
       />
     </template>
-    <template v-for="(route, key) in switchableRoutes">
+    <!-- <template v-for="(route, key) in switchableRoutes">
       <path
         :key="key + route.path"
         :d="route.path"
@@ -42,7 +42,7 @@
         fill="transparent"
         marker-end="url(#endarrow)"
       />
-    </template>
+    </template> -->
     <template v-if="activeRoute">
       <path
         :key="activeRoute.path"

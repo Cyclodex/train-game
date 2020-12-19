@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!-- Beams on all routes -->
+  <path d="M 50 0 V 100" stroke="#693b3b" stroke-width="20" stroke-dasharray="5 7" stroke-linecap="but" />
+  <path d="M 50 0 q 0 50 50 50" stroke="#693b3b" stroke-width="20" stroke-dasharray="5 7" stroke-linecap="butt"
+    fill="transparent" />
+  <path d="M 50 0 q 0 50 -50 50" stroke="#693b3b" stroke-width="20" stroke-dasharray="5 7" stroke-linecap="butt"
+    fill="transparent" />
+
+  <!-- Top-Right rails -->
+  <!--    "M 50 0 q 0 50 50 50" -->
+  <!--       -7 0 q 0 +7 +7 +7  -->
+  <path d="M 43 0 q 0 57 57 57" stroke="gray" stroke-width="1" fill="transparent" />
+  <!--       +7 0 q 0 -7 -7 -7  -->
+  <path d="M 57 0 q 0 43 43 43" stroke="gray" stroke-width="1" fill="transparent" />
+  <!-- Top-Bottom rails -->
+  <path d="M 43 0 V 100" stroke="gray" stroke-width="1" />
+  <path d="M 57 0 V 100" stroke="gray" stroke-width="1" />
+  <!-- Top-Left rails -->
+  <!--     M 0 50 q 50 0 50 -50 -->
+  <!--     M 50 0 q 0 50 -50 50 -->
+  <!--     M -7 0 q 0 -7  +7 -7 -->
+  <path d="M 43 0 q 0 43 -43 43" stroke="gray" stroke-width="1" fill="transparent" />
+  <!--       +7 0 q 0 -7 -7 -7  -->
+  <path d="M 57 0 q 0 57 -57 57" stroke="gray" stroke-width="1" fill="transparent" />
+</svg>
