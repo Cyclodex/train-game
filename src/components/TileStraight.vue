@@ -54,7 +54,7 @@
 </template>
 
 <script lang="ts">
-import { Component } from "vue-property-decorator";
+import { Vue, Component } from "vue-property-decorator";
 import { gsap } from "gsap";
 import {
   CheckStatusFeedback,
@@ -90,7 +90,8 @@ export default class TileStraight extends TileBase {
   updateTrafficLight(trafficLightUpdate: TrafficLight) {
     this.trafficLights.map((trafficLight, index) => {
       if (trafficLight.direction === trafficLightUpdate.direction) {
-        this.trafficLights[index] = trafficLightUpdate;
+        // Reactivity!
+        Vue.set(this.trafficLights, index, trafficLightUpdate);
       }
     });
   }

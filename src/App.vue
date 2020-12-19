@@ -1,5 +1,5 @@
 <template>
-  <div id="app">
+  <div id="app" :class="{ debug: $root.debug }">
     <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
     <div
       class="level"
@@ -394,8 +394,10 @@ pre {
 }
 .level-tile {
   position: relative;
-  outline: 1px solid red;
   flex: 0 0 auto;
+  .debug & {
+    outline: 1px solid red;
+  }
 }
 .debug {
   font-size: 12px;
