@@ -47,6 +47,19 @@ export default class TileIntersection extends TileBase {
     if (this.$props.tile.activeRoute) {
       this.intersectionSwitch = this.$props.tile.activeRoute;
     }
+    // TODO: should be re-called when rotating the tile
+    if (this.$props.tile.disabledRoutes) {
+      this.$props.tile.disabledRoutes.map((disableRouteIndex: number) => {
+        const disableRoute: Route = this.possibleRoutes[this.currentRotation][
+          this.currentRotation
+        ][disableRouteIndex];
+        disableRoute.disabled = true;
+        // Disable also the return route
+        this.possibleRoutes[this.currentRotation][
+          disableRoute.leavesAtPosition
+        ].disabled = true;
+      });
+    }
   }
 
   getRouteFromEntrancePosition(entrancePosition: Position) {
@@ -64,12 +77,14 @@ export default class TileIntersection extends TileBase {
 
   get allDrawableRailRoutes() {
     // Take the same rotation as position
-    const routes = this.possibleRoutes[this.currentRotation] as Route[];
+    const routes = this.possibleRoutes[this.currentRotation][
+      this.currentRotation
+    ] as Route[];
     const routesIteratable = Object.values(routes);
-    const drawableRoutes: Route[] = routesIteratable.filter(
-      route => !!route.path
+    const enabledRoutes: Route[] = routesIteratable.filter(
+      route => !!route.path && !route.disabled
     );
-    return drawableRoutes;
+    return enabledRoutes;
   }
 
   get activeSwitchRoute() {
@@ -82,33 +97,33 @@ export default class TileIntersection extends TileBase {
       [Position.Top]: {
         [ActiveIntersection.Left]: {
           path: this.getPathCurve("T", "R"),
+          rails: [this.getRailCurve("R-", "T+"), this.getRailCurve("R+", "T-")],
           leavesAtPosition: Position.Right,
         },
         [ActiveIntersection.Straight]: {
           path: this.getPathStraight("T", "B"),
+          rails: [
+            this.getRailStraight("B-", "T-"),
+            this.getRailStraight("B+", "T+"),
+          ],
           leavesAtPosition: Position.Bottom,
         },
         [ActiveIntersection.Right]: {
           path: this.getPathCurve("T", "L"),
+          rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
           leavesAtPosition: Position.Left,
         },
       },
       [Position.Right]: {
         path: this.getPathCurve("R", "T"),
-        rails: [this.getRailCurve("R-", "T+"), this.getRailCurve("R+", "T-")],
         leavesAtPosition: Position.Top,
       },
       [Position.Bottom]: {
         path: this.getPathStraight("B", "T"),
-        rails: [
-          this.getRailStraight("B-", "T-"),
-          this.getRailStraight("B+", "T+"),
-        ],
         leavesAtPosition: Position.Top,
       },
       [Position.Left]: {
         path: this.getPathCurve("L", "T"),
-        rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
         leavesAtPosition: Position.Top,
       },
     },
@@ -116,33 +131,34 @@ export default class TileIntersection extends TileBase {
       [Position.Right]: {
         [ActiveIntersection.Left]: {
           path: this.getPathCurve("R", "B"),
+          rails: [this.getRailCurve("B-", "R-"), this.getRailCurve("B+", "R+")],
           leavesAtPosition: Position.Bottom,
         },
         [ActiveIntersection.Straight]: {
           path: this.getPathStraight("R", "L"),
+          rails: [
+            this.getRailStraight("L-", "R-"),
+            this.getRailStraight("L+", "R+"),
+          ],
           leavesAtPosition: Position.Left,
         },
         [ActiveIntersection.Right]: {
           path: this.getPathCurve("R", "T"),
+          rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
+
           leavesAtPosition: Position.Top,
         },
       },
       [Position.Bottom]: {
         path: this.getPathCurve("B", "R"),
-        rails: [this.getRailCurve("B-", "R-"), this.getRailCurve("B+", "R+")],
         leavesAtPosition: Position.Right,
       },
       [Position.Left]: {
         path: this.getPathStraight("L", "R"),
-        rails: [
-          this.getRailStraight("L-", "R-"),
-          this.getRailStraight("L+", "R+"),
-        ],
         leavesAtPosition: Position.Right,
       },
       [Position.Top]: {
         path: this.getPathCurve("T", "R"),
-        rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
         leavesAtPosition: Position.Right,
       },
     },
@@ -150,33 +166,35 @@ export default class TileIntersection extends TileBase {
       [Position.Bottom]: {
         [ActiveIntersection.Left]: {
           path: this.getPathCurve("B", "L"),
+          rails: [this.getRailCurve("L-", "B+"), this.getRailCurve("L+", "B-")],
+
           leavesAtPosition: Position.Left,
         },
         [ActiveIntersection.Straight]: {
           path: this.getPathStraight("B", "T"),
+          rails: [
+            this.getRailStraight("T-", "B-"),
+            this.getRailStraight("T+", "B+"),
+          ],
           leavesAtPosition: Position.Top,
         },
         [ActiveIntersection.Right]: {
           path: this.getPathCurve("B", "R"),
+          rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
+
           leavesAtPosition: Position.Right,
         },
       },
       [Position.Left]: {
         path: this.getPathCurve("L", "B"),
-        rails: [this.getRailCurve("L-", "B+"), this.getRailCurve("L+", "B-")],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Top]: {
         path: this.getPathStraight("T", "B"),
-        rails: [
-          this.getRailStraight("T-", "B-"),
-          this.getRailStraight("T+", "B+"),
-        ],
         leavesAtPosition: Position.Bottom,
       },
       [Position.Right]: {
         path: this.getPathCurve("R", "B"),
-        rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
         leavesAtPosition: Position.Bottom,
       },
     },
@@ -184,33 +202,34 @@ export default class TileIntersection extends TileBase {
       [Position.Left]: {
         [ActiveIntersection.Left]: {
           path: this.getPathCurve("L", "T"),
+          rails: [this.getRailCurve("T-", "L-"), this.getRailCurve("T+", "L+")],
           leavesAtPosition: Position.Top,
         },
         [ActiveIntersection.Straight]: {
           path: this.getPathStraight("L", "R"),
+          rails: [
+            this.getRailStraight("R-", "L-"),
+            this.getRailStraight("R+", "L+"),
+          ],
           leavesAtPosition: Position.Right,
         },
         [ActiveIntersection.Right]: {
           path: this.getPathCurve("L", "B"),
+          rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
           leavesAtPosition: Position.Bottom,
         },
       },
       [Position.Top]: {
         path: this.getPathCurve("T", "L"),
-        rails: [this.getRailCurve("T-", "L-"), this.getRailCurve("T+", "L+")],
         leavesAtPosition: Position.Left,
       },
       [Position.Right]: {
         path: this.getPathStraight("R", "L"),
-        rails: [
-          this.getRailStraight("R-", "L-"),
-          this.getRailStraight("R+", "L+"),
-        ],
+
         leavesAtPosition: Position.Left,
       },
       [Position.Bottom]: {
         path: this.getPathCurve("B", "L"),
-        rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
         leavesAtPosition: Position.Left,
       },
     },
@@ -227,6 +246,15 @@ export default class TileIntersection extends TileBase {
     this.intersectionSwitch++;
     if (this.intersectionSwitch > ActiveIntersection.Right) {
       this.intersectionSwitch = ActiveIntersection.Left;
+    }
+    // If route is disabled, jump to next route
+    if (
+      this.possibleRoutes[this.currentRotation][this.currentRotation][
+        this.intersectionSwitch
+      ].disabled
+    ) {
+      this.changeSwitch();
+      return;
     }
   }
 

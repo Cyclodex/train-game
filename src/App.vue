@@ -120,6 +120,7 @@ export default class App extends Vue {
       train: null,
       rotation: 1,
       activeRoute: ActiveIntersection.Left,
+      disabledRoutes: [ActiveIntersection.Right],
     },
     "2,0": {
       component: "TileCurve",
@@ -222,6 +223,7 @@ export default class App extends Vue {
       train: null,
       rotation: 2,
       activeRoute: ActiveIntersection.Straight,
+      disabledRoutes: [ActiveIntersection.Left],
     },
     "1,2": {
       component: "TileCurve",
@@ -236,6 +238,7 @@ export default class App extends Vue {
       y: 2,
       train: null,
       rotation: 1,
+      disabledRoutes: [ActiveIntersection.Straight],
     },
     "3,2": {
       component: "TileStraight",
@@ -288,6 +291,7 @@ export default class App extends Vue {
       train: null,
       rotation: 1,
       activeRoute: ActiveIntersection.Straight,
+      disabledRoutes: [ActiveIntersection.Left],
     },
     "2,3": {
       component: "TileIntersection",
@@ -296,6 +300,7 @@ export default class App extends Vue {
       train: null,
       rotation: 3,
       activeRoute: ActiveIntersection.Left,
+      disabledRoutes: [ActiveIntersection.Right],
     },
     "3,3": {
       component: "TileStraight",
@@ -321,6 +326,7 @@ export default class App extends Vue {
       train: null,
       rotation: 1,
       activeRoute: ActiveIntersection.Straight,
+      disabledRoutes: [ActiveIntersection.Left],
     },
     "5,3": {
       component: "TileIntersection",
@@ -329,6 +335,7 @@ export default class App extends Vue {
       train: null,
       rotation: 3,
       activeRoute: ActiveIntersection.Straight,
+      disabledRoutes: [ActiveIntersection.Right],
     },
     "6,3": {
       component: "TileCurve",
@@ -414,16 +421,7 @@ pre {
   bottom: 0;
   left: 0;
 }
-.debug-arrow {
-  z-index: 200;
-  width: 100px;
-  height: 100px;
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-}
+
 .clickable {
   cursor: pointer;
   transition: background-color 0.4s ease;

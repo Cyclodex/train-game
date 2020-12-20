@@ -78,6 +78,7 @@ export interface Route {
   leavesAtPosition: Position;
   rotate?: number;
   trafficLight?: TrafficLight;
+  disabled?: boolean;
 }
 
 export interface LevelDefinition {

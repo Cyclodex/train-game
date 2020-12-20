@@ -4,7 +4,7 @@
   <path d="M 50 0 q 0 50 50 50" stroke="#693b3b" stroke-width="20" stroke-dasharray="5 7" stroke-linecap="butt"
     fill="transparent" />
   <path d="M 50 0 q 0 50 -50 50" stroke="#693b3b" stroke-width="20" stroke-dasharray="5 7" stroke-linecap="butt"
-    fill="transparent" />
+    stroke-dashoffset="" fill="transparent" />
 
   <!-- Top-Right rails -->
   <!--    "M 50 0 q 0 50 50 50" -->
