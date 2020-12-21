@@ -1,6 +1,14 @@
 <template>
   <div id="app" :class="{ debug: $root.debug }">
-    <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
+    <div class="control-buttons">
+      <button class="debug-button" @click="switchDebugMode">
+        Debug Mode
+      </button>
+      <!-- TODO: Restarting doesnt work as expected. It will brake the animations.
+      <button class="timeline-button" @click="startStopAnimations">
+        Start/Stop
+      </button> -->
+    </div>
     <div
       class="level"
       :style="{
@@ -31,15 +39,20 @@
         ></component>
       </div>
     </div>
-    <pre>
+    <!-- <pre>
       {{ trains }}
       {{ level }}
-    </pre>
+    </pre> -->
   </div>
 </template>
 
 <script lang="ts">
-import { Component, ProvideReactive, Vue } from "vue-property-decorator";
+import {
+  Component,
+  Provide,
+  ProvideReactive,
+  Vue,
+} from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
 import {
@@ -56,6 +69,9 @@ import {
 } from "@/types";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { getTrainDirection } from "@/utils/trainHelpers";
+import { gsap } from "gsap";
+import { MotionPathPlugin } from "gsap/MotionPathPlugin";
+gsap.registerPlugin(MotionPathPlugin);
 
 @Component({
   components: {
@@ -64,6 +80,8 @@ import { getTrainDirection } from "@/utils/trainHelpers";
   },
 })
 export default class App extends Vue {
+  timeScale = 1;
+  globalAnimations!: any;
   @ProvideReactive() trains: TrainsDefinition = {
     train1: {
       id: "train1",
@@ -79,20 +97,20 @@ export default class App extends Vue {
       direction: TrainDirection.Right,
       status: TrainStatus.Running,
     },
-    // trainCircle1: {
-    //   id: "trainCircle1",
-    //   x: 4,
-    //   y: 1,
-    //   direction: TrainDirection.Down,
-    //   status: TrainStatus.Running,
-    // },
-    // trainCircle2: {
-    //   id: "trainCircle2",
-    //   x: 5,
-    //   y: 0,
-    //   direction: TrainDirection.Up,
-    //   status: TrainStatus.Running,
-    // },
+    trainCircle1: {
+      id: "trainCircle1",
+      x: 4,
+      y: 1,
+      direction: TrainDirection.Down,
+      status: TrainStatus.Running,
+    },
+    trainCircle2: {
+      id: "trainCircle2",
+      x: 5,
+      y: 0,
+      direction: TrainDirection.Up,
+      status: TrainStatus.Running,
+    },
   };
 
   @ProvideReactive() level: LevelDefinition = {
@@ -368,6 +386,7 @@ export default class App extends Vue {
   }
 
   trainEntersTile(train: TrainObject) {
+    debugger;
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
       this.level[tilePosition].train = { ...train };
@@ -376,6 +395,16 @@ export default class App extends Vue {
 
   switchDebugMode() {
     this.$root.debug = !this.$root.debug;
+  }
+
+  startStopAnimations() {
+    this.timeScale = this.timeScale === 1 ? 0 : 1;
+    if (this.timeScale === 0) {
+      this.globalAnimations = gsap.exportRoot();
+      gsap.to(this.globalAnimations, 2, { timeScale: this.timeScale });
+    } else {
+      gsap.to(this.globalAnimations, 2, { timeScale: this.timeScale });
+    }
   }
 }
 </script>
@@ -429,10 +458,16 @@ pre {
     background-color: pink !important;
   }
 }
-.debug-button {
+.control-buttons {
   position: fixed;
   z-index: 100;
   top: 0;
   left: 0;
+
+  > button {
+    display: block;
+    padding: 15px;
+    min-width: 150px;
+  }
 }
 </style>

@@ -11,6 +11,7 @@ export interface TrainObject extends Coordinates {
   id: string;
   direction?: TrainDirection;
   status: TrainStatus;
+  animation?: any;
 }
 
 export enum TrainStatus {

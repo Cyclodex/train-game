@@ -41,9 +41,6 @@ export default class TileRail extends Vue {
   switchableRoutes!: PossibleRoutes;
   @Prop({ type: Object, default: () => ({}) })
   activeRoute!: Route;
-  created() {
-    console.log(this.possibleRoutes);
-  }
 }
 </script>
 

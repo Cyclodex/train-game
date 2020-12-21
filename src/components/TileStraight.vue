@@ -277,7 +277,7 @@ export default class TileStraight extends TileBase {
       if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
         // Stop the train
         this.trainStopping();
-        gsap.to(train, {
+        trainObject.animation.to(train, {
           ease: "power1.out",
           duration: 2,
           motionPath: {
@@ -290,7 +290,7 @@ export default class TileStraight extends TileBase {
         });
       } else {
         // Animate train through tile, no stop
-        gsap.to(train, {
+        trainObject.animation.to(train, {
           ease: "none",
           duration: 2,
           motionPath: {
@@ -318,7 +318,7 @@ export default class TileStraight extends TileBase {
     const train = document.getElementById(trainObject!.id);
     if (train && this.trainRoute) {
       // Animate away from traffic light
-      gsap.to(train, {
+      trainObject.animation.to(train, {
         ease: "power1.in",
         duration: 2,
         motionPath: {

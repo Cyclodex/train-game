@@ -1,8 +1,9 @@
 <template>
   <div
     :id="trainObject.id"
-    class="train"
+    class="train clickable"
     :style="[defaultStyle, initialPosition, image]"
+    @click.stop="startStopTrain"
   >
     <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
   </div>
@@ -10,6 +11,7 @@
 
 <script lang="ts">
 import { TrainDirection, TrainObject } from "@/types";
+import gsap from "gsap";
 import { Component, Prop, Vue } from "vue-property-decorator";
 
 @Component
@@ -17,12 +19,26 @@ export default class Train extends Vue {
   @Prop({ type: Object, default: {} }) trainObject!: TrainObject;
   defaultStyle = { color: "white" };
   initialPosition = {};
+  timeScale = 1;
   image = {
     backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
   };
 
   created() {
     this.setInitialPosition();
+    const trainTimeline = gsap
+      .timeline({ id: this.trainObject.id })
+      .addLabel(this.trainObject.id);
+    this.trainObject.animation = trainTimeline;
+  }
+
+  startStopTrain() {
+    this.timeScale = this.timeScale === 1 ? 0 : 1;
+    if (this.timeScale === 0) {
+      this.trainObject.animation.pause();
+    } else {
+      this.trainObject.animation.resume();
+    }
   }
 
   setInitialPosition() {

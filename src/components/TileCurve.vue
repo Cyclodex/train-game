@@ -26,10 +26,6 @@ import {
 } from "@/types";
 import TileBase from "./TileBase.vue";
 
-import { gsap } from "gsap";
-import { MotionPathPlugin } from "gsap/MotionPathPlugin";
-gsap.registerPlugin(MotionPathPlugin);
-
 // Info
 // t=top, r=rigth, b=bottom, l=left
 
@@ -97,7 +93,7 @@ export default class TileCurve extends TileBase {
       trainObject.y += this.getLeavingTrainCoordinates.y;
 
       // Animate
-      gsap.to(train, {
+      trainObject.animation.to(train, {
         ease: "none",
         duration: 2,
         motionPath: {

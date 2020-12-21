@@ -8,6 +8,7 @@
 import {
   Component,
   Emit,
+  Inject,
   InjectReactive,
   Prop,
   Vue,
@@ -31,6 +32,7 @@ import {
 
 @Component
 export default class TileBase extends Vue {
+  @Inject() timelines!: any;
   @InjectReactive() level!: LevelDefinition;
   @InjectReactive() trains!: TrainsDefinition;
 
@@ -86,7 +88,7 @@ export default class TileBase extends Vue {
 
   @Watch("tile.train", { immediate: true, deep: false })
   incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
-    if (incomingTrainObject?.id !== oldTrain?.id) {
+    if (incomingTrainObject?.id !== oldTrain?.id && incomingTrainObject?.id) {
       const train = document.getElementById(incomingTrainObject.id);
       if (train) {
         this.animateTrain(incomingTrainObject, train);
@@ -168,7 +170,7 @@ export default class TileBase extends Vue {
     trainObject.y += 1;
 
     // Animate
-    gsap.to(train, {
+    trainObject.animation.to(train, {
       duration: 2,
       y: `+=${this.tileSize}`,
       onComplete: () => this.trainLeavesTile(trainObject),
@@ -272,6 +274,10 @@ export default class TileBase extends Vue {
     to: "T-" | "T+" | "R-" | "R+" | "B-" | "B+" | "L-" | "L+"
   ) {
     return this.getCoordinates(`M ${from} ${to}`);
+  }
+
+  get getTrainId() {
+    return this.tile.train!.id;
   }
 }
 </script>
