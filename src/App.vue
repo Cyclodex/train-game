@@ -386,7 +386,6 @@ export default class App extends Vue {
   }
 
   trainEntersTile(train: TrainObject) {
-    debugger;
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
       this.level[tilePosition].train = { ...train };

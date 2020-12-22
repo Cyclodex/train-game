@@ -18,12 +18,7 @@
 
 <script lang="ts">
 import { Component } from "vue-property-decorator";
-import {
-  Position,
-  PossibleRoutesPerRotation,
-  Rotations,
-  TrainObject,
-} from "@/types";
+import { Position, Rotations, TrainObject } from "@/types";
 import TileBase from "./TileBase.vue";
 
 // Info
@@ -31,52 +26,58 @@ import TileBase from "./TileBase.vue";
 
 @Component
 export default class TileCurve extends TileBase {
-  possibleRoutes: PossibleRoutesPerRotation = {
-    [Rotations.Top]: {
-      [Position.Top]: {
-        path: this.getPathCurve("T", "R"),
-        rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
-        leavesAtPosition: Position.Right,
+  created() {
+    this.initRoutes();
+  }
+
+  initRoutes(): void {
+    this.possibleRoutes = {
+      [Rotations.Top]: {
+        [Position.Top]: {
+          path: this.getPathCurve("T", "R"),
+          rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
+          leavesAtPosition: Position.Right,
+        },
+        [Position.Right]: {
+          path: this.getPathCurve("R", "T"),
+          leavesAtPosition: Position.Top,
+        },
       },
-      [Position.Right]: {
-        path: this.getPathCurve("R", "T"),
-        leavesAtPosition: Position.Top,
+      [Rotations.Right]: {
+        [Position.Right]: {
+          path: this.getPathCurve("R", "B"),
+          rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
+          leavesAtPosition: Position.Bottom,
+        },
+        [Position.Bottom]: {
+          path: this.getPathCurve("B", "R"),
+          leavesAtPosition: Position.Right,
+        },
       },
-    },
-    [Rotations.Right]: {
-      [Position.Right]: {
-        path: this.getPathCurve("R", "B"),
-        rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
-        leavesAtPosition: Position.Bottom,
+      [Rotations.Bottom]: {
+        [Position.Bottom]: {
+          path: this.getPathCurve("B", "L"),
+          rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
+          leavesAtPosition: Position.Left,
+        },
+        [Position.Left]: {
+          path: this.getPathCurve("L", "B"),
+          leavesAtPosition: Position.Bottom,
+        },
       },
-      [Position.Bottom]: {
-        path: this.getPathCurve("B", "R"),
-        leavesAtPosition: Position.Right,
+      [Rotations.Left]: {
+        [Position.Left]: {
+          path: this.getPathCurve("L", "T"),
+          rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
+          leavesAtPosition: Position.Top,
+        },
+        [Position.Top]: {
+          path: this.getPathCurve("T", "L"),
+          leavesAtPosition: Position.Left,
+        },
       },
-    },
-    [Rotations.Bottom]: {
-      [Position.Bottom]: {
-        path: this.getPathCurve("B", "L"),
-        rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
-        leavesAtPosition: Position.Left,
-      },
-      [Position.Left]: {
-        path: this.getPathCurve("L", "B"),
-        leavesAtPosition: Position.Bottom,
-      },
-    },
-    [Rotations.Left]: {
-      [Position.Left]: {
-        path: this.getPathCurve("L", "T"),
-        rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
-        leavesAtPosition: Position.Top,
-      },
-      [Position.Top]: {
-        path: this.getPathCurve("T", "L"),
-        leavesAtPosition: Position.Left,
-      },
-    },
-  };
+    };
+  }
 
   rotate() {
     this.currentRotation++;

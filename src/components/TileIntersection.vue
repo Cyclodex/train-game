@@ -39,8 +39,11 @@ import { gsap } from "gsap";
 @Component
 export default class TileIntersection extends TileBase {
   intersectionSwitch: ActiveIntersection = ActiveIntersection.Left;
+  possibleRoutes!: PossibleRoutesPerRotation | any;
 
   created() {
+    this.initRoutes();
+
     if (this.$props.tile.activeRoute) {
       this.intersectionSwitch = this.$props.tile.activeRoute;
     }
@@ -88,149 +91,174 @@ export default class TileIntersection extends TileBase {
     return this.allSwitchableRoutes[this.intersectionSwitch];
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  possibleRoutes: PossibleRoutesPerRotation | any = {
-    [Rotations.Top]: {
-      [Position.Top]: {
-        [ActiveIntersection.Left]: {
-          path: this.getPathCurve("T", "R"),
-          rails: [this.getRailCurve("R-", "T+"), this.getRailCurve("R+", "T-")],
-          leavesAtPosition: Position.Right,
+  initRoutes(): void {
+    this.possibleRoutes = {
+      [Rotations.Top]: {
+        [Position.Top]: {
+          [ActiveIntersection.Left]: {
+            path: this.getPathCurve("T", "R"),
+            rails: [
+              this.getRailCurve("R-", "T+"),
+              this.getRailCurve("R+", "T-"),
+            ],
+            leavesAtPosition: Position.Right,
+          },
+          [ActiveIntersection.Straight]: {
+            path: this.getPathStraight("T", "B"),
+            rails: [
+              this.getRailStraight("B-", "T-"),
+              this.getRailStraight("B+", "T+"),
+            ],
+            leavesAtPosition: Position.Bottom,
+          },
+          [ActiveIntersection.Right]: {
+            path: this.getPathCurve("T", "L"),
+            rails: [
+              this.getRailCurve("L-", "T-"),
+              this.getRailCurve("L+", "T+"),
+            ],
+            leavesAtPosition: Position.Left,
+          },
         },
-        [ActiveIntersection.Straight]: {
-          path: this.getPathStraight("T", "B"),
-          rails: [
-            this.getRailStraight("B-", "T-"),
-            this.getRailStraight("B+", "T+"),
-          ],
-          leavesAtPosition: Position.Bottom,
-        },
-        [ActiveIntersection.Right]: {
-          path: this.getPathCurve("T", "L"),
-          rails: [this.getRailCurve("L-", "T-"), this.getRailCurve("L+", "T+")],
-          leavesAtPosition: Position.Left,
-        },
-      },
-      [Position.Right]: {
-        path: this.getPathCurve("R", "T"),
-        leavesAtPosition: Position.Top,
-      },
-      [Position.Bottom]: {
-        path: this.getPathStraight("B", "T"),
-        leavesAtPosition: Position.Top,
-      },
-      [Position.Left]: {
-        path: this.getPathCurve("L", "T"),
-        leavesAtPosition: Position.Top,
-      },
-    },
-    [Rotations.Right]: {
-      [Position.Right]: {
-        [ActiveIntersection.Left]: {
-          path: this.getPathCurve("R", "B"),
-          rails: [this.getRailCurve("B-", "R-"), this.getRailCurve("B+", "R+")],
-          leavesAtPosition: Position.Bottom,
-        },
-        [ActiveIntersection.Straight]: {
-          path: this.getPathStraight("R", "L"),
-          rails: [
-            this.getRailStraight("L-", "R-"),
-            this.getRailStraight("L+", "R+"),
-          ],
-          leavesAtPosition: Position.Left,
-        },
-        [ActiveIntersection.Right]: {
+        [Position.Right]: {
           path: this.getPathCurve("R", "T"),
-          rails: [this.getRailCurve("T-", "R+"), this.getRailCurve("T+", "R-")],
-
           leavesAtPosition: Position.Top,
         },
-      },
-      [Position.Bottom]: {
-        path: this.getPathCurve("B", "R"),
-        leavesAtPosition: Position.Right,
-      },
-      [Position.Left]: {
-        path: this.getPathStraight("L", "R"),
-        leavesAtPosition: Position.Right,
-      },
-      [Position.Top]: {
-        path: this.getPathCurve("T", "R"),
-        leavesAtPosition: Position.Right,
-      },
-    },
-    [Rotations.Bottom]: {
-      [Position.Bottom]: {
-        [ActiveIntersection.Left]: {
-          path: this.getPathCurve("B", "L"),
-          rails: [this.getRailCurve("L-", "B+"), this.getRailCurve("L+", "B-")],
-
-          leavesAtPosition: Position.Left,
-        },
-        [ActiveIntersection.Straight]: {
+        [Position.Bottom]: {
           path: this.getPathStraight("B", "T"),
-          rails: [
-            this.getRailStraight("T-", "B-"),
-            this.getRailStraight("T+", "B+"),
-          ],
           leavesAtPosition: Position.Top,
         },
-        [ActiveIntersection.Right]: {
-          path: this.getPathCurve("B", "R"),
-          rails: [this.getRailCurve("R-", "B-"), this.getRailCurve("R+", "B+")],
-
-          leavesAtPosition: Position.Right,
-        },
-      },
-      [Position.Left]: {
-        path: this.getPathCurve("L", "B"),
-        leavesAtPosition: Position.Bottom,
-      },
-      [Position.Top]: {
-        path: this.getPathStraight("T", "B"),
-        leavesAtPosition: Position.Bottom,
-      },
-      [Position.Right]: {
-        path: this.getPathCurve("R", "B"),
-        leavesAtPosition: Position.Bottom,
-      },
-    },
-    [Rotations.Left]: {
-      [Position.Left]: {
-        [ActiveIntersection.Left]: {
+        [Position.Left]: {
           path: this.getPathCurve("L", "T"),
-          rails: [this.getRailCurve("T-", "L-"), this.getRailCurve("T+", "L+")],
           leavesAtPosition: Position.Top,
         },
-        [ActiveIntersection.Straight]: {
-          path: this.getPathStraight("L", "R"),
-          rails: [
-            this.getRailStraight("R-", "L-"),
-            this.getRailStraight("R+", "L+"),
-          ],
+      },
+      [Rotations.Right]: {
+        [Position.Right]: {
+          [ActiveIntersection.Left]: {
+            path: this.getPathCurve("R", "B"),
+            rails: [
+              this.getRailCurve("B-", "R-"),
+              this.getRailCurve("B+", "R+"),
+            ],
+            leavesAtPosition: Position.Bottom,
+          },
+          [ActiveIntersection.Straight]: {
+            path: this.getPathStraight("R", "L"),
+            rails: [
+              this.getRailStraight("L-", "R-"),
+              this.getRailStraight("L+", "R+"),
+            ],
+            leavesAtPosition: Position.Left,
+          },
+          [ActiveIntersection.Right]: {
+            path: this.getPathCurve("R", "T"),
+            rails: [
+              this.getRailCurve("T-", "R+"),
+              this.getRailCurve("T+", "R-"),
+            ],
+
+            leavesAtPosition: Position.Top,
+          },
+        },
+        [Position.Bottom]: {
+          path: this.getPathCurve("B", "R"),
           leavesAtPosition: Position.Right,
         },
-        [ActiveIntersection.Right]: {
+        [Position.Left]: {
+          path: this.getPathStraight("L", "R"),
+          leavesAtPosition: Position.Right,
+        },
+        [Position.Top]: {
+          path: this.getPathCurve("T", "R"),
+          leavesAtPosition: Position.Right,
+        },
+      },
+      [Rotations.Bottom]: {
+        [Position.Bottom]: {
+          [ActiveIntersection.Left]: {
+            path: this.getPathCurve("B", "L"),
+            rails: [
+              this.getRailCurve("L-", "B+"),
+              this.getRailCurve("L+", "B-"),
+            ],
+
+            leavesAtPosition: Position.Left,
+          },
+          [ActiveIntersection.Straight]: {
+            path: this.getPathStraight("B", "T"),
+            rails: [
+              this.getRailStraight("T-", "B-"),
+              this.getRailStraight("T+", "B+"),
+            ],
+            leavesAtPosition: Position.Top,
+          },
+          [ActiveIntersection.Right]: {
+            path: this.getPathCurve("B", "R"),
+            rails: [
+              this.getRailCurve("R-", "B-"),
+              this.getRailCurve("R+", "B+"),
+            ],
+
+            leavesAtPosition: Position.Right,
+          },
+        },
+        [Position.Left]: {
           path: this.getPathCurve("L", "B"),
-          rails: [this.getRailCurve("B-", "L+"), this.getRailCurve("B+", "L-")],
+          leavesAtPosition: Position.Bottom,
+        },
+        [Position.Top]: {
+          path: this.getPathStraight("T", "B"),
+          leavesAtPosition: Position.Bottom,
+        },
+        [Position.Right]: {
+          path: this.getPathCurve("R", "B"),
           leavesAtPosition: Position.Bottom,
         },
       },
-      [Position.Top]: {
-        path: this.getPathCurve("T", "L"),
-        leavesAtPosition: Position.Left,
-      },
-      [Position.Right]: {
-        path: this.getPathStraight("R", "L"),
+      [Rotations.Left]: {
+        [Position.Left]: {
+          [ActiveIntersection.Left]: {
+            path: this.getPathCurve("L", "T"),
+            rails: [
+              this.getRailCurve("T-", "L-"),
+              this.getRailCurve("T+", "L+"),
+            ],
+            leavesAtPosition: Position.Top,
+          },
+          [ActiveIntersection.Straight]: {
+            path: this.getPathStraight("L", "R"),
+            rails: [
+              this.getRailStraight("R-", "L-"),
+              this.getRailStraight("R+", "L+"),
+            ],
+            leavesAtPosition: Position.Right,
+          },
+          [ActiveIntersection.Right]: {
+            path: this.getPathCurve("L", "B"),
+            rails: [
+              this.getRailCurve("B-", "L+"),
+              this.getRailCurve("B+", "L-"),
+            ],
+            leavesAtPosition: Position.Bottom,
+          },
+        },
+        [Position.Top]: {
+          path: this.getPathCurve("T", "L"),
+          leavesAtPosition: Position.Left,
+        },
+        [Position.Right]: {
+          path: this.getPathStraight("R", "L"),
 
-        leavesAtPosition: Position.Left,
+          leavesAtPosition: Position.Left,
+        },
+        [Position.Bottom]: {
+          path: this.getPathCurve("B", "L"),
+          leavesAtPosition: Position.Left,
+        },
       },
-      [Position.Bottom]: {
-        path: this.getPathCurve("B", "L"),
-        leavesAtPosition: Position.Left,
-      },
-    },
-  };
+    };
+  }
 
   rotate() {
     this.currentRotation++;

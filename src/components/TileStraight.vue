@@ -77,8 +77,44 @@ export default class TileStraight extends TileBase {
   trafficLights: TrafficLight[] = [];
   automaticTrafficLights = false;
   checkRouteInterval: any;
+  possibleRoutes!: PossibleRoutesPerRotation;
+
+  initRoutes(): void {
+    this.possibleRoutes = {
+      [Rotations.Top]: {
+        [Position.Top]: {
+          path: this.getPathStraight("T", "B"),
+          rails: [
+            this.getRailStraight("T-", "B-"),
+            this.getRailStraight("T+", "B+"),
+          ],
+          leavesAtPosition: Position.Bottom,
+        },
+        [Position.Bottom]: {
+          path: this.getPathStraight("B", "T"),
+          leavesAtPosition: Position.Top,
+        },
+      },
+      [Rotations.Right]: {
+        [Position.Right]: {
+          path: this.getPathStraight("R", "L"),
+          rails: [
+            this.getRailStraight("R-", "L-"),
+            this.getRailStraight("R+", "L+"),
+          ],
+          leavesAtPosition: Position.Left,
+        },
+        [Position.Left]: {
+          path: this.getPathStraight("L", "R"),
+          leavesAtPosition: Position.Right,
+        },
+      },
+    };
+  }
 
   created() {
+    this.initRoutes();
+
     if (this.$props.tile.trafficLights !== undefined) {
       this.positionTrafficLights();
       if (this.$root.automaticTrafficLights) {
@@ -141,37 +177,6 @@ export default class TileStraight extends TileBase {
     });
     this.animateTrainFromTrafficLight();
   }
-
-  possibleRoutes: PossibleRoutesPerRotation = {
-    [Rotations.Top]: {
-      [Position.Top]: {
-        path: this.getPathStraight("T", "B"),
-        rails: [
-          this.getRailStraight("T-", "B-"),
-          this.getRailStraight("T+", "B+"),
-        ],
-        leavesAtPosition: Position.Bottom,
-      },
-      [Position.Bottom]: {
-        path: this.getPathStraight("B", "T"),
-        leavesAtPosition: Position.Top,
-      },
-    },
-    [Rotations.Right]: {
-      [Position.Right]: {
-        path: this.getPathStraight("R", "L"),
-        rails: [
-          this.getRailStraight("R-", "L-"),
-          this.getRailStraight("R+", "L+"),
-        ],
-        leavesAtPosition: Position.Left,
-      },
-      [Position.Left]: {
-        path: this.getPathStraight("L", "R"),
-        leavesAtPosition: Position.Right,
-      },
-    },
-  };
 
   rotate() {
     this.currentRotation++;

@@ -32,17 +32,17 @@ import {
 
 @Component
 export default class TileBase extends Vue {
-  @Inject() timelines!: any;
   @InjectReactive() level!: LevelDefinition;
   @InjectReactive() trains!: TrainsDefinition;
 
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
-  tileSize = this.$root.tileSize;
+  tileSize!: number;
   currentRotation: Rotations = Rotations.Top;
   possibleRoutes!: PossibleRoutesPerRotation;
   status: TileStatus = TileStatus.Free;
 
   created() {
+    this.tileSize = this.$root.tileSize;
     if (this.$props.tile.rotation) {
       this.currentRotation = this.$props.tile.rotation;
     }
@@ -215,8 +215,8 @@ export default class TileBase extends Vue {
     xChange: "-" | "+" | string = "",
     yChange: "-" | "+" | string = ""
   ) {
-    const center = this.$root.tileSize / 2;
-    const full = this.$root.tileSize;
+    const center = this.tileSize / 2;
+    const full = this.tileSize;
     const distance = this.$root.railDistanceFromPath;
     const centerX = Number(xChange + this.$root.railDistanceFromPath);
     const centerY = Number(yChange + this.$root.railDistanceFromPath);
