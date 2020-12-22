@@ -39,10 +39,9 @@
         ></component>
       </div>
     </div>
-    <!-- <pre>
-      {{ trains }}
-      {{ level }}
-    </pre> -->
+    <pre>
+      <!-- {{ level }} -->
+    </pre>
   </div>
 </template>
 
@@ -89,6 +88,7 @@ export default class App extends Vue {
       y: 0,
       direction: TrainDirection.Right,
       status: TrainStatus.Running,
+      wagons: [{ id: 1, type: "people" }],
     },
     train2: {
       id: "train2",
@@ -365,7 +365,12 @@ export default class App extends Vue {
   };
 
   mounted() {
+    // Init trains and move to first tile
     Object.values(this.trains).map(train => {
+      // Initialize "visual" dom mapper for animations
+      this.trains[train.id].visual = document.getElementById(train.id);
+
+      // Move train to first tile
       this.level[getCoordinatesId(train)].train = { ...train };
     });
   }

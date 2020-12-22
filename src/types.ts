@@ -12,6 +12,16 @@ export interface TrainObject extends Coordinates {
   direction?: TrainDirection;
   status: TrainStatus;
   animation?: any;
+  wagons?: Wagon[];
+  visual?: HTMLElement | null;
+}
+
+export interface Wagon {
+  id: number;
+  type: string;
+  weight?: number;
+  units?: number;
+  animation?: any;
 }
 
 export enum TrainStatus {

@@ -51,14 +51,14 @@ export default class TileBase extends Vue {
   get tileStatusStyle() {
     if (!this.$root.debug) return "";
     switch (this.status) {
-      case TileStatus.Free:
-        return "tile-status--free";
-      case TileStatus.Reserved:
-        return "tile-status--reserved";
-      case TileStatus.Blocked:
-        return "tile-status--blocked";
-      default:
-        return "";
+    case TileStatus.Free:
+      return "tile-status--free";
+    case TileStatus.Reserved:
+      return "tile-status--reserved";
+    case TileStatus.Blocked:
+      return "tile-status--blocked";
+    default:
+      return "";
     }
   }
 
@@ -89,9 +89,8 @@ export default class TileBase extends Vue {
   @Watch("tile.train", { immediate: true, deep: false })
   incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
     if (incomingTrainObject?.id !== oldTrain?.id && incomingTrainObject?.id) {
-      const train = document.getElementById(incomingTrainObject.id);
-      if (train) {
-        this.animateTrain(incomingTrainObject, train);
+      if (incomingTrainObject.visual) {
+        this.animateTrain(incomingTrainObject);
         this.status = TileStatus.Blocked;
       }
     }
@@ -127,16 +126,16 @@ export default class TileBase extends Vue {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-    case TrainDirection.Down:
-      return Position.Top;
-    case TrainDirection.Left:
-      return Position.Right;
-    case TrainDirection.Up:
-      return Position.Bottom;
-    case TrainDirection.Right:
-      return Position.Left;
-    default:
-      return Position.Top;
+      case TrainDirection.Down:
+        return Position.Top;
+      case TrainDirection.Left:
+        return Position.Right;
+      case TrainDirection.Up:
+        return Position.Bottom;
+      case TrainDirection.Right:
+        return Position.Left;
+      default:
+        return Position.Top;
     }
   }
 
@@ -151,26 +150,26 @@ export default class TileBase extends Vue {
 
   getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
     switch (leavingPosition) {
-    case Position.Top:
-      return { x: 0, y: -1 };
-    case Position.Right:
-      return { x: 1, y: 0 };
-    case Position.Bottom:
-      return { x: 0, y: 1 };
-    case Position.Left:
-      return { x: -1, y: 0 };
-    default:
-      return { x: 0, y: 0 };
+      case Position.Top:
+        return { x: 0, y: -1 };
+      case Position.Right:
+        return { x: 1, y: 0 };
+      case Position.Bottom:
+        return { x: 0, y: 1 };
+      case Position.Left:
+        return { x: -1, y: 0 };
+      default:
+        return { x: 0, y: 0 };
     }
   }
 
   // Only example function, tiles need to override this logic
-  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+  animateTrain(trainObject: TrainObject) {
     // Define tile exit
     trainObject.y += 1;
 
     // Animate
-    trainObject.animation.to(train, {
+    trainObject.animation.to(trainObject.visual, {
       duration: 2,
       y: `+=${this.tileSize}`,
       onComplete: () => this.trainLeavesTile(trainObject),

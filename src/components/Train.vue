@@ -1,27 +1,40 @@
 <template>
-  <div
-    :id="trainObject.id"
-    class="train clickable"
-    :style="[defaultStyle, initialPosition, image]"
-    @click.stop="startStopTrain"
-  >
-    <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
+  <div class="train-composition">
+    <div
+      :id="trainObject.id"
+      class="train loco clickable"
+      :style="[initialPosition, trainVisuals.loco]"
+      @click.stop="startStopTrain"
+    >
+      <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
+    </div>
+    <template v-if="trainObject.wagons">
+      <div
+        v-for="wagon in trainObject.wagons"
+        :key="wagon.id"
+        class="train wagon"
+        :style="[initialPosition, trainVisuals.loco]"
+      ></div>
+    </template>
   </div>
 </template>
 
 <script lang="ts">
-import { TrainDirection, TrainObject } from "@/types";
+import { TrainDirection, TrainObject, TrainsDefinition } from "@/types";
 import gsap from "gsap";
-import { Component, Prop, Vue } from "vue-property-decorator";
+import { Component, InjectReactive, Prop, Vue } from "vue-property-decorator";
 
 @Component
 export default class Train extends Vue {
+  @InjectReactive() trains!: TrainsDefinition;
+
   @Prop({ type: Object, default: {} }) trainObject!: TrainObject;
-  defaultStyle = { color: "white" };
   initialPosition = {};
   timeScale = 1;
-  image = {
-    backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
+  trainVisuals = {
+    loco: {
+      backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
+    },
   };
 
   created() {
@@ -46,22 +59,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-      case TrainDirection.Up:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = this.$root.tileSize;
-        break;
-      case TrainDirection.Right:
-      tilePositionX = 0;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
-      case TrainDirection.Down:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = 0;
-        break;
-      case TrainDirection.Left:
-      tilePositionX = this.$root.tileSize;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
+    case TrainDirection.Up:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = this.$root.tileSize;
+      break;
+    case TrainDirection.Right:
+        tilePositionX = 0;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
+    case TrainDirection.Down:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = 0;
+      break;
+    case TrainDirection.Left:
+        tilePositionX = this.$root.tileSize;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
@@ -84,8 +97,12 @@ export default class Train extends Vue {
 }
 .train-debug {
   font-size: 14px;
+  font-weight: bold;
   position: absolute;
-  bottom: 0;
-  left: 0;
+  color: black;
+  width: 100%;
+  transform: rotate(-90deg) translate(30%, -70%);
+  top: 50%;
+  left: 50%;
 }
 </style>

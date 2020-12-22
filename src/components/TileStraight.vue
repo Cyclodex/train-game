@@ -270,7 +270,7 @@ export default class TileStraight extends TileBase {
     return this.trainRoute!.trafficLight!.direction;
   }
 
-  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+  animateTrain(trainObject: TrainObject) {
     this.checkAutomaticTrafficLight();
 
     // Identify route
@@ -282,7 +282,7 @@ export default class TileStraight extends TileBase {
       if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
         // Stop the train
         this.trainStopping();
-        trainObject.animation.to(train, {
+        trainObject.animation.to(trainObject.visual, {
           ease: "power1.out",
           duration: 2,
           motionPath: {
@@ -295,7 +295,7 @@ export default class TileStraight extends TileBase {
         });
       } else {
         // Animate train through tile, no stop
-        trainObject.animation.to(train, {
+        trainObject.animation.to(trainObject.visual, {
           ease: "none",
           duration: 2,
           motionPath: {
@@ -323,7 +323,7 @@ export default class TileStraight extends TileBase {
     const train = document.getElementById(trainObject!.id);
     if (train && this.trainRoute) {
       // Animate away from traffic light
-      trainObject.animation.to(train, {
+      trainObject.animation.to(trainObject.visual, {
         ease: "power1.in",
         duration: 2,
         motionPath: {

@@ -298,7 +298,7 @@ export default class TileIntersection extends TileBase {
     return null;
   }
 
-  animateTrain(trainObject: TrainObject, train: HTMLElement) {
+  animateTrain(trainObject: TrainObject) {
     // Identify route
     if (this.trainRoute) {
       // Define tile exit
@@ -306,7 +306,7 @@ export default class TileIntersection extends TileBase {
       trainObject.y += this.getLeavingTrainCoordinates.y;
 
       // Animate
-      trainObject.animation.to(train, {
+      trainObject.animation.to(trainObject.visual, {
         ease: "none",
         duration: 2,
         motionPath: {
