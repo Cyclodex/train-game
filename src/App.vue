@@ -85,10 +85,15 @@ export default class App extends Vue {
     train1: {
       id: "train1",
       x: 0,
-      y: 0,
+      y: 4,
       direction: TrainDirection.Right,
       status: TrainStatus.Running,
-      wagons: [{ id: 1, type: "people" }],
+      wagons: [
+        { id: "wagon1", type: "people" },
+        { id: "wagon2", type: "people" },
+        { id: "wagon3", type: "people" },
+        { id: "wagon4", type: "people" },
+      ],
     },
     train2: {
       id: "train2",
@@ -115,8 +120,15 @@ export default class App extends Vue {
 
   @ProvideReactive() level: LevelDefinition = {
     "0,0": {
-      component: "TileStraight",
+      component: "TileCurve",
       x: 0,
+      y: 0,
+      train: null,
+      rotation: 1,
+    },
+    "1,0": {
+      component: "TileStraight",
+      x: 1,
       y: 0,
       train: null,
       rotation: 1,
@@ -131,15 +143,15 @@ export default class App extends Vue {
         },
       ],
     },
-    "1,0": {
-      component: "TileIntersection",
-      x: 1,
-      y: 0,
-      train: null,
-      rotation: 1,
-      activeRoute: ActiveIntersection.Left,
-      disabledRoutes: [ActiveIntersection.Right],
-    },
+    // "1,0": {
+    //   component: "TileIntersection",
+    //   x: 1,
+    //   y: 0,
+    //   train: null,
+    //   rotation: 1,
+    //   activeRoute: ActiveIntersection.Left,
+    //   disabledRoutes: [ActiveIntersection.Right],
+    // },
     "2,0": {
       component: "TileCurve",
       x: 2,
@@ -176,11 +188,11 @@ export default class App extends Vue {
       rotation: 2,
     },
     "0,1": {
-      component: "TileCurve",
+      component: "TileStraight",
       x: 0,
       y: 1,
       train: null,
-      rotation: 1,
+      rotation: 0,
     },
     "1,1": {
       component: "TileCurve",
@@ -235,13 +247,11 @@ export default class App extends Vue {
       rotation: 3,
     },
     "0,2": {
-      component: "TileIntersection",
+      component: "TileStraight",
       x: 0,
       y: 2,
       train: null,
-      rotation: 2,
-      activeRoute: ActiveIntersection.Straight,
-      disabledRoutes: [ActiveIntersection.Left],
+      rotation: 0,
     },
     "1,2": {
       component: "TileCurve",
@@ -362,6 +372,65 @@ export default class App extends Vue {
       train: null,
       rotation: 3,
     },
+    "0,4": {
+      component: "TileStraight",
+      x: 0,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
+    "1,4": {
+      component: "TileStraight",
+      x: 1,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
+    "2,4": {
+      component: "TileStraight",
+      x: 2,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
+    "3,4": {
+      component: "TileStraight",
+      x: 3,
+      y: 4,
+      train: null,
+      rotation: 1,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
+    },
+    "4,4": {
+      component: "TileStraight",
+      x: 4,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
+    "5,4": {
+      component: "TileStraight",
+      x: 5,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
+    "6,4": {
+      component: "TileStraight",
+      x: 6,
+      y: 4,
+      train: null,
+      rotation: 1,
+    },
   };
 
   mounted() {
@@ -369,6 +438,12 @@ export default class App extends Vue {
     Object.values(this.trains).map(train => {
       // Initialize "visual" dom mapper for animations
       this.trains[train.id].visual = document.getElementById(train.id);
+      if (this.trains[train.id].wagons !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        this.trains[train.id].wagons!.map(wagon => {
+          wagon.visual = document.getElementById(wagon.id);
+        });
+      }
 
       // Move train to first tile
       this.level[getCoordinatesId(train)].train = { ...train };
@@ -382,7 +457,13 @@ export default class App extends Vue {
 
   trainLeavesTile(train: TrainObject, tile: TileObject) {
     train.direction = getTrainDirection(train, this.trains[train.id]);
-    this.updateTrain(train);
+    this.updateTrain({
+      id: train.id,
+      x: train.x,
+      y: train.y,
+      status: train.status,
+      direction: train.direction,
+    });
     // Important that we take the newest train from the train object, not just the one from the leaves function
     this.trainEntersTile(this.trains[train.id]);
     // TODO delete the leaving train on the old tile (but only this train)

@@ -10,18 +10,19 @@ export interface TrainsDefinition {
 export interface TrainObject extends Coordinates {
   id: string;
   direction?: TrainDirection;
-  status: TrainStatus;
+  status?: TrainStatus;
   animation?: any;
   wagons?: Wagon[];
   visual?: HTMLElement | null;
 }
 
 export interface Wagon {
-  id: number;
+  id: string;
   type: string;
   weight?: number;
   units?: number;
   animation?: any;
+  visual?: HTMLElement | null;
 }
 
 export enum TrainStatus {
