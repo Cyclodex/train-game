@@ -18,6 +18,7 @@
       <Train
         v-for="train in trains"
         :key="train.id"
+        :ref="train.id"
         :train-object.sync="train"
       />
       <div
@@ -43,20 +44,11 @@
         ></component>
       </div>
     </div>
-    <pre>
-      <!-- {{ level }} -->
-      {{ trains }}
-    </pre>
   </div>
 </template>
 
 <script lang="ts">
-import {
-  Component,
-  Provide,
-  ProvideReactive,
-  Vue,
-} from "vue-property-decorator";
+import { Component, ProvideReactive, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
 import {
@@ -90,15 +82,12 @@ export default class App extends Vue {
     train1: {
       id: "train1",
       x: 0,
-      y: 3,
-      test: "",
-      direction: TrainDirection.Left,
+      y: 2,
+      direction: TrainDirection.Up,
       status: TrainStatus.Running,
       wagons: [
         { id: "wagon1", type: "people" },
         { id: "wagon2", type: "people" },
-        { id: "wagon3", type: "people" },
-        { id: "wagon4", type: "people" },
       ],
     },
     train2: {
@@ -460,7 +449,7 @@ export default class App extends Vue {
   }
 
   trainLeavesTile(train: TrainObject, tile: TileObject) {
-    train.direction = getTrainDirection(train, this.trains[train.id]);
+    train.direction = getTrainDirection(train, { x: tile.x, y: tile.y });
     this.updateTrain({
       id: train.id,
       x: train.x,

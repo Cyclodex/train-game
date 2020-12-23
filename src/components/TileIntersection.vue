@@ -315,16 +315,44 @@ export default class TileIntersection extends TileBase {
       trainObject.y += this.getLeavingTrainCoordinates().y;
 
       // Animate
-      trainObject.animation.to(trainObject.visual, {
-        ease: "none",
-        duration: 2,
-        motionPath: {
-          align: "self",
-          autoRotate: 90,
-          path: trainRoute.path,
-        },
-        onComplete: () => this.trainLeavesTile(trainObject),
-      });
+      const trainPath = trainRoute.path;
+      trainObject.animation
+        .to(
+          trainObject.visual,
+          {
+            ease: "none",
+            duration: 2,
+            motionPath: {
+              align: "self",
+              autoRotate: 90,
+              path: trainPath,
+            },
+            onComplete: () => this.trainLeavesTile(trainObject),
+          },
+          trainObject.id
+        )
+        .addLabel(trainObject.id, ">");
+      // Wagon trial
+      if (trainObject.wagons) {
+        trainObject.wagons!.map((wagon, index) => {
+          trainObject.animation
+            .to(
+              wagon.visual,
+              {
+                ease: "none",
+                duration: 2,
+                motionPath: {
+                  align: "self",
+                  autoRotate: 90,
+                  path: trainPath,
+                },
+                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
+              },
+              wagon.id
+            )
+            .addLabel(wagon.id, ">");
+        });
+      }
     }
   }
 }

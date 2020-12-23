@@ -42,26 +42,35 @@ export default class Train extends Vue {
 
   created() {
     this.setInitialPosition();
-    const trainTimeline = gsap
-      .timeline({ id: this.trainObject.id })
-      .addLabel(this.trainObject.id);
+    const trainTimeline = gsap.timeline({ id: this.trainObject.id });
     this.trainObject.animation = trainTimeline;
-
-    if (this.trainObject.wagons) {
-      this.trainObject.wagons.map(wagon => {
-        const wagonTimeline = gsap.timeline({ id: wagon.id });
-        wagon.animation = wagonTimeline;
-        // trainTimeline.add(wagon.animation);
-      });
-    }
+    // if (this.trainObject.wagons) {
+    //   this.trainObject.wagons!.map((wagon, index) => {
+    //     this.trainObject.animation
+    //       .set(
+    //         wagon.visual,
+    //         {
+    //           bottom: -100,
+    //           left: 100,
+    //           opacity: 0.5,
+    //         },
+    //         0
+    //       )
+    //       .addLabel(wagon.id, ">");
+    //   });
+    // }
   }
 
   startStopTrain() {
     this.timeScale = this.timeScale === 1 ? 0 : 1;
     if (this.timeScale === 0) {
-      this.trainObject.animation.pause();
+      gsap.to(this.trainObject.animation, 4, {
+        timeScale: 0,
+      });
     } else {
-      this.trainObject.animation.resume();
+      gsap.to(this.trainObject.animation, 10, {
+        timeScale: 1,
+      });
     }
   }
 
@@ -70,22 +79,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-      case TrainDirection.Up:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = this.$root.tileSize;
-        break;
-      case TrainDirection.Right:
-      tilePositionX = 0;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
-      case TrainDirection.Down:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = 0;
-        break;
-      case TrainDirection.Left:
-      tilePositionX = this.$root.tileSize;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
+    case TrainDirection.Up:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = this.$root.tileSize;
+      break;
+    case TrainDirection.Right:
+        tilePositionX = 0;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
+    case TrainDirection.Down:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = 0;
+      break;
+    case TrainDirection.Left:
+        tilePositionX = this.$root.tileSize;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",

@@ -96,17 +96,46 @@ export default class TileCurve extends TileBase {
       trainObject.x += this.getLeavingTrainCoordinates().x;
       trainObject.y += this.getLeavingTrainCoordinates().y;
 
+      const trainPath = trainRoute.path;
       // Animate
-      trainObject.animation.to(trainObject.visual, {
-        ease: "none",
-        duration: 2,
-        motionPath: {
-          align: "self",
-          autoRotate: 90,
-          path: trainRoute.path,
-        },
-        onComplete: () => this.trainLeavesTile(trainObject),
-      });
+      trainObject.animation
+        .to(
+          trainObject.visual,
+          {
+            ease: "none",
+            duration: 2,
+            motionPath: {
+              align: "self",
+              autoRotate: 90,
+              path: trainPath,
+            },
+            onComplete: () => this.trainLeavesTile(trainObject),
+          },
+          trainObject.id
+        )
+        .addLabel(trainObject.id, ">");
+      // Wagon trial
+      if (trainObject.wagons) {
+        trainObject.wagons!.map((wagon, index) => {
+          trainObject.animation
+            .to(
+              wagon.visual,
+              {
+                ease: "none",
+                duration: 2,
+                motionPath: {
+                  align: "self",
+                  autoRotate: 90,
+                  path: trainPath,
+                },
+                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
+              },
+              wagon.id
+              // (index + 1) * 1
+            )
+            .addLabel(wagon.id, ">");
+        });
+      }
     }
   }
 }

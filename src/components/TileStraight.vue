@@ -265,7 +265,6 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Green,
         });
 
-        // TODO: Green light not visible, reactivity issue, fix it.
         if (this.currentTrain.status === TrainStatus.Stopped) {
           this.animateTrainFromTrafficLight();
         }
@@ -287,52 +286,29 @@ export default class TileStraight extends TileBase {
       trainObject.x += this.getLeavingTrainCoordinates().x;
       trainObject.y += this.getLeavingTrainCoordinates().y;
 
-      if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
-        // Stop the train
-        this.trainStopping();
-        this.trains[this.train.id].test = "test";
-        debugger;
-        this.train.animation.to(trainObject.visual, {
-          ease: "power1.out",
-          duration: 2,
-          motionPath: {
-            align: "self",
-            autoRotate: 90,
-            path: trainRoute.path,
-            end: 0.5,
+      const trainPath = trainRoute.path;
+      // Animate train through tile, no stop
+      trainObject.animation
+        .to(
+          trainObject.visual,
+          {
+            ease: "none",
+            duration: 2,
+            motionPath: {
+              align: "self",
+              autoRotate: 90,
+              path: trainPath,
+            },
+            onComplete: () => this.trainLeavesTrafficLight(trainObject),
           },
-          onComplete: () => this.trainOnRedTrafficLight(),
-        });
-      } else {
-        const trainPath = trainRoute.path;
-        // Animate train through tile, no stop
-        trainObject.animation.to(trainObject.visual, {
-          ease: "none",
-          duration: 2,
-          motionPath: {
-            align: "self",
-            autoRotate: 90,
-            path: trainRoute.path,
-          },
-          onComplete: () => this.trainLeavesTrafficLight(trainObject),
-        });
-        // .to(
-        //   ".wagon",
-        //   {
-        //     ease: "none",
-        //     duration: 2,
-        //     motionPath: {
-        //       align: "self",
-        //       autoRotate: 90,
-        //       path: this.trainRoute.path,
-        //     },
-        //   },
-        //   "1"
-        // );
-        // Wagon trial
-        if (trainObject.wagons) {
-          trainObject.wagons!.map((wagon, index) => {
-            wagon.animation.to(
+          trainObject.id
+        )
+        .addLabel(trainObject.id, ">");
+      // Wagon trial
+      if (trainObject.wagons) {
+        trainObject.wagons!.map((wagon, index) => {
+          trainObject.animation
+            .to(
               wagon.visual,
               {
                 ease: "none",
@@ -344,10 +320,18 @@ export default class TileStraight extends TileBase {
                 },
                 // onComplete: () => this.trainLeavesTrafficLight(trainObject),
               },
-              (index + 1) * 1
-            );
-          });
-        }
+              wagon.id
+            )
+            .addLabel(wagon.id, ">");
+        });
+      }
+
+      if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
+        // Stop the train
+        // TODO: move stopping etc to train:
+        this.trainStopping();
+        (this.$parent.$refs[trainObject.id] as any)[0].startStopTrain();
+        this.trainOnRedTrafficLight();
       }
     }
   }
@@ -357,29 +341,30 @@ export default class TileStraight extends TileBase {
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
 
-    // TODO: Move to function
-    const trainObject = { ...this.currentTrain };
-    trainObject.x += this.getLeavingTrainCoordinates().x;
-    trainObject.y += this.getLeavingTrainCoordinates().y;
+    (this.$parent.$refs[this.currentTrain.id] as any)[0].startStopTrain();
+    // // TODO: Move to function
+    // const trainObject = { ...this.currentTrain };
+    // trainObject.x += this.getLeavingTrainCoordinates().x;
+    // trainObject.y += this.getLeavingTrainCoordinates().y;
 
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const train = document.getElementById(trainObject!.id);
-    const trainRoute = this.getTrainRoute();
-    if (train && trainRoute) {
-      // Animate away from traffic light
-      trainObject.animation.to(trainObject.visual, {
-        ease: "power1.in",
-        duration: 2,
-        motionPath: {
-          align: "self",
-          autoRotate: 90,
-          path: trainRoute.path,
-          end: 0.5,
-        },
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        onComplete: () => this.trainLeavesTrafficLight(trainObject),
-      });
-    }
+    // // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    // const train = document.getElementById(trainObject!.id);
+    // const trainRoute = this.getTrainRoute();
+    // if (train && trainRoute) {
+    //   // Animate away from traffic light
+    //   trainObject.animation.to(trainObject.visual, {
+    //     ease: "power1.in",
+    //     duration: 2,
+    //     motionPath: {
+    //       align: "self",
+    //       autoRotate: 90,
+    //       path: trainRoute.path,
+    //       end: 0.5,
+    //     },
+    //     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    //     onComplete: () => this.trainLeavesTrafficLight(trainObject),
+    //   });
+    // }
   }
 
   // Check every 2 seconds to continue travel if route is ok
