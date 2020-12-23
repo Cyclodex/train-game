@@ -97,13 +97,15 @@ export default class TileCurve extends TileBase {
       trainObject.y += this.getLeavingTrainCoordinates().y;
 
       const trainPath = trainRoute.path;
+      // Different duration, because the rail is not same distance as straight
+      const duration = 1.7;
       // Animate
       trainObject.animation
         .to(
           trainObject.visual,
           {
             ease: "none",
-            duration: 2,
+            duration: duration,
             motionPath: {
               align: "self",
               autoRotate: 90,
@@ -122,16 +124,14 @@ export default class TileCurve extends TileBase {
               wagon.visual,
               {
                 ease: "none",
-                duration: 2,
+                duration: duration,
                 motionPath: {
                   align: "self",
                   autoRotate: 90,
                   path: trainPath,
                 },
-                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
               },
               wagon.id
-              // (index + 1) * 1
             )
             .addLabel(wagon.id, ">");
         });

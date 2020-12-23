@@ -31,6 +31,7 @@ export enum TrainStatus {
   "Stopped",
   "Started",
   "Running",
+  "Init",
 }
 
 export enum TrainDirection {

@@ -42,33 +42,24 @@ export default class Train extends Vue {
 
   created() {
     this.setInitialPosition();
-    const trainTimeline = gsap.timeline({ id: this.trainObject.id });
+    const trainTimeline = gsap
+      .timeline({
+        id: this.trainObject.id,
+      })
+      .timeScale(0);
     this.trainObject.animation = trainTimeline;
-    // if (this.trainObject.wagons) {
-    //   this.trainObject.wagons!.map((wagon, index) => {
-    //     this.trainObject.animation
-    //       .set(
-    //         wagon.visual,
-    //         {
-    //           bottom: -100,
-    //           left: 100,
-    //           opacity: 0.5,
-    //         },
-    //         0
-    //       )
-    //       .addLabel(wagon.id, ">");
-    //   });
-    // }
   }
 
   startStopTrain() {
     this.timeScale = this.timeScale === 1 ? 0 : 1;
     if (this.timeScale === 0) {
-      gsap.to(this.trainObject.animation, 4, {
+      gsap.to(this.trainObject.animation, {
+        duration: 4,
         timeScale: 0,
       });
     } else {
-      gsap.to(this.trainObject.animation, 10, {
+      gsap.to(this.trainObject.animation, {
+        duration: 10,
         timeScale: 1,
       });
     }

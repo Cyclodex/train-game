@@ -277,6 +277,12 @@ export default class TileStraight extends TileBase {
   }
 
   animateTrain(trainObject: TrainObject) {
+    // Start of long trains(with wagons)
+    if (trainObject.status === TrainStatus.Init) {
+      this.initTrain();
+      return;
+    }
+
     this.checkAutomaticTrafficLight();
 
     // Identify route
@@ -318,7 +324,6 @@ export default class TileStraight extends TileBase {
                   autoRotate: 90,
                   path: trainPath,
                 },
-                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
               },
               wagon.id
             )
@@ -336,35 +341,65 @@ export default class TileStraight extends TileBase {
     }
   }
 
+  initTrain() {
+    this.trainStarted();
+    const trainObject = { ...this.currentTrain };
+    const trainRoute = this.getTrainRoute();
+    if (trainRoute) {
+      trainObject.x += this.getLeavingTrainCoordinates().x;
+      trainObject.y += this.getLeavingTrainCoordinates().y;
+
+      const trainPath = trainRoute.path;
+      // Animate train out of the box, and add all wagons accordingly
+      trainObject.animation
+        .to(
+          trainObject.visual,
+          {
+            ease: "none",
+            duration: 2,
+            motionPath: {
+              align: "self",
+              autoRotate: 90,
+              path: trainPath,
+            },
+            onComplete: () => this.trainLeavesTrafficLight(trainObject),
+          },
+          trainObject.id
+        )
+        .addLabel(trainObject.id, ">");
+      // Wagon trial
+      if (trainObject.wagons) {
+        trainObject.wagons!.map((wagon, index) => {
+          trainObject.animation
+            .to(
+              wagon.visual,
+              {
+                ease: "none",
+                duration: 2,
+                motionPath: {
+                  align: "self",
+                  autoRotate: 90,
+                  path: trainPath,
+                },
+              },
+              (index + 1) * 0.95
+            )
+            .addLabel(wagon.id, ">");
+        });
+      }
+      // Start the whole timeline scale from 0 to 1
+      gsap.to(trainObject.animation, {
+        duration: 10,
+        timeScale: 1,
+      });
+    }
+  }
+
   animateTrainFromTrafficLight() {
     this.trainStarted();
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-
     (this.$parent.$refs[this.currentTrain.id] as any)[0].startStopTrain();
-    // // TODO: Move to function
-    // const trainObject = { ...this.currentTrain };
-    // trainObject.x += this.getLeavingTrainCoordinates().x;
-    // trainObject.y += this.getLeavingTrainCoordinates().y;
-
-    // // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    // const train = document.getElementById(trainObject!.id);
-    // const trainRoute = this.getTrainRoute();
-    // if (train && trainRoute) {
-    //   // Animate away from traffic light
-    //   trainObject.animation.to(trainObject.visual, {
-    //     ease: "power1.in",
-    //     duration: 2,
-    //     motionPath: {
-    //       align: "self",
-    //       autoRotate: 90,
-    //       path: trainRoute.path,
-    //       end: 0.5,
-    //     },
-    //     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    //     onComplete: () => this.trainLeavesTrafficLight(trainObject),
-    //   });
-    // }
   }
 
   // Check every 2 seconds to continue travel if route is ok

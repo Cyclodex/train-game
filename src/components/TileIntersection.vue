@@ -309,6 +309,7 @@ export default class TileIntersection extends TileBase {
   animateTrain(trainObject: TrainObject) {
     // Identify route
     const trainRoute = this.getTrainRoute();
+    console.warn("animateTrain", trainObject.id);
     if (trainRoute) {
       // Define tile exit
       trainObject.x += this.getLeavingTrainCoordinates().x;

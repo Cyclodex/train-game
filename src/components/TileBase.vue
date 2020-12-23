@@ -85,6 +85,7 @@ export default class TileBase extends Vue {
   }
 
   incomingTrain(trainId: string) {
+    console.log("incoming train: ", trainId);
     this.train = this.trains[trainId];
     if (this.train.visual) {
       this.animateTrain({ ...this.train });
@@ -139,7 +140,7 @@ export default class TileBase extends Vue {
       return this.getRelativeCoordinatesOfNextTile(trainRoute.leavesAtPosition);
     }
     console.error("getLeavingTrainCoordinates: no route");
-    debugger;
+    // debugger;
     return { x: 0, y: 0 };
   }
 
