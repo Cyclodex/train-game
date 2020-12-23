@@ -40,6 +40,7 @@ export default class TileBase extends Vue {
   currentRotation: Rotations = Rotations.Top;
   possibleRoutes!: PossibleRoutesPerRotation;
   status: TileStatus = TileStatus.Free;
+  train!: TrainObject;
 
   created() {
     this.tileSize = this.$root.tileSize;
@@ -51,14 +52,14 @@ export default class TileBase extends Vue {
   get tileStatusStyle() {
     if (!this.$root.debug) return "";
     switch (this.status) {
-    case TileStatus.Free:
-      return "tile-status--free";
-    case TileStatus.Reserved:
-      return "tile-status--reserved";
-    case TileStatus.Blocked:
-      return "tile-status--blocked";
-    default:
-      return "";
+      case TileStatus.Free:
+        return "tile-status--free";
+      case TileStatus.Reserved:
+        return "tile-status--reserved";
+      case TileStatus.Blocked:
+        return "tile-status--blocked";
+      default:
+        return "";
     }
   }
 
@@ -86,13 +87,11 @@ export default class TileBase extends Vue {
     this.status = TileStatus.Reserved;
   }
 
-  @Watch("tile.train", { immediate: true, deep: false })
-  incomingTrain(incomingTrainObject: TrainObject, oldTrain: TrainObject) {
-    if (incomingTrainObject?.id !== oldTrain?.id && incomingTrainObject?.id) {
-      if (incomingTrainObject.visual) {
-        this.animateTrain(incomingTrainObject);
-        this.status = TileStatus.Blocked;
-      }
+  incomingTrain(trainId: string) {
+    this.train = this.trains[trainId];
+    if (this.train.visual) {
+      this.animateTrain({ ...this.train });
+      this.status = TileStatus.Blocked;
     }
   }
 
@@ -118,48 +117,60 @@ export default class TileBase extends Vue {
     return null;
   }
 
+  getTrainRoute() {
+    const trainPosition = this.getIncomingTrainPosition();
+    if (trainPosition !== null) {
+      return this.possibleRoutes[this.currentRotation][trainPosition];
+    }
+    return null;
+  }
+
   get incomingTrainPosition() {
-    return this.getIncomingTrainLocation(this.tile.train || null);
+    return this.getIncomingTrainLocation(this.train || null);
+  }
+
+  getIncomingTrainPosition() {
+    return this.getIncomingTrainLocation(this.train || null);
   }
 
   getIncomingTrainLocation(trainObject: TrainObject | null) {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-      case TrainDirection.Down:
-        return Position.Top;
-      case TrainDirection.Left:
-        return Position.Right;
-      case TrainDirection.Up:
-        return Position.Bottom;
-      case TrainDirection.Right:
-        return Position.Left;
-      default:
-        return Position.Top;
+    case TrainDirection.Down:
+      return Position.Top;
+    case TrainDirection.Left:
+      return Position.Right;
+    case TrainDirection.Up:
+      return Position.Bottom;
+    case TrainDirection.Right:
+      return Position.Left;
+    default:
+      return Position.Top;
     }
   }
 
-  get getLeavingTrainCoordinates() {
-    if (this.trainRoute) {
-      return this.getRelativeCoordinatesOfNextTile(
-        this.trainRoute.leavesAtPosition
-      );
+  getLeavingTrainCoordinates() {
+    const trainRoute = this.getTrainRoute();
+    if (trainRoute) {
+      return this.getRelativeCoordinatesOfNextTile(trainRoute.leavesAtPosition);
     }
+    console.error("getLeavingTrainCoordinates: no route");
     return { x: 0, y: 0 };
   }
 
   getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
     switch (leavingPosition) {
-      case Position.Top:
-        return { x: 0, y: -1 };
-      case Position.Right:
-        return { x: 1, y: 0 };
-      case Position.Bottom:
-        return { x: 0, y: 1 };
-      case Position.Left:
-        return { x: -1, y: 0 };
-      default:
-        return { x: 0, y: 0 };
+    case Position.Top:
+      return { x: 0, y: -1 };
+    case Position.Right:
+      return { x: 1, y: 0 };
+    case Position.Bottom:
+      return { x: 0, y: 1 };
+    case Position.Left:
+      return { x: -1, y: 0 };
+    default:
+      return { x: 0, y: 0 };
     }
   }
 
@@ -177,7 +188,7 @@ export default class TileBase extends Vue {
   }
 
   get currentTrain() {
-    return this.trains[this.tile.train!.id]!;
+    return this.trains[this.train!.id] || null;
   }
 
   @Emit("updateTrain")

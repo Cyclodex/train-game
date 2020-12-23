@@ -7,8 +7,10 @@
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
-      <div class="">T enter: {{ incomingTrainPosition }}</div>
-      <div v-if="trainRoute" class="">T Route:<br />{{ trainRoute.path }}</div>
+      <div class="">T enter: {{ getIncomingTrainPosition() }}</div>
+      <div v-if="getTrainRoute()" class="">
+        T Route:<br />{{ getTrainRoute().path }}
+      </div>
       <debug-show-routes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
       />
@@ -88,10 +90,11 @@ export default class TileCurve extends TileBase {
 
   animateTrain(trainObject: TrainObject) {
     // Identify route
-    if (this.trainRoute) {
+    const trainRoute = this.getTrainRoute();
+    if (trainRoute) {
       // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates.x;
-      trainObject.y += this.getLeavingTrainCoordinates.y;
+      trainObject.x += this.getLeavingTrainCoordinates().x;
+      trainObject.y += this.getLeavingTrainCoordinates().y;
 
       // Animate
       trainObject.animation.to(trainObject.visual, {
@@ -100,7 +103,7 @@ export default class TileCurve extends TileBase {
         motionPath: {
           align: "self",
           autoRotate: 90,
-          path: this.trainRoute.path,
+          path: trainRoute.path,
         },
         onComplete: () => this.trainLeavesTile(trainObject),
       });

@@ -45,7 +45,9 @@
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
       <div>T enter: {{ incomingTrainPosition }}</div>
-      <div v-if="trainRoute" class="">T Route:<br />{{ trainRoute.path }}</div>
+      <div v-if="getTrainRoute()" class="">
+        T Route:<br />{{ getTrainRoute().path }}
+      </div>
       <debug-show-routes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
       />
@@ -135,7 +137,8 @@ export default class TileStraight extends TileBase {
   get getActiveTrafficLight() {
     return (
       this.trafficLights.find(
-        trafficLight => trafficLight.direction === this.trafficLightDirection
+        trafficLight =>
+          trafficLight.direction === this.getTrafficLightDirection()
       ) || { signal: null }
     );
   }
@@ -188,8 +191,8 @@ export default class TileStraight extends TileBase {
   // TODO: Use the correct signal, not both!
   checkRouteAhead() {
     const nextTileCoordinates = {
-      x: this.tile.x + this.getLeavingTrainCoordinates.x,
-      y: this.tile.y + this.getLeavingTrainCoordinates.y,
+      x: this.tile.x + this.getLeavingTrainCoordinates().x,
+      y: this.tile.y + this.getLeavingTrainCoordinates().y,
     };
 
     const status = this.checkStatusOnNextTile(nextTileCoordinates, {
@@ -248,13 +251,13 @@ export default class TileStraight extends TileBase {
       if (routeStatus > TileStatus.Free) {
         // Route reserved or blocked, stop train
         this.updateTrafficLight({
-          direction: this.trafficLightDirection,
+          direction: this.getTrafficLightDirection(),
           signal: TrafficLightSignal.Red,
         });
       } else {
         // Route free, reserve path and give go
         this.updateTrafficLight({
-          direction: this.trafficLightDirection,
+          direction: this.getTrafficLightDirection(),
           signal: TrafficLightSignal.Green,
         });
 
@@ -270,14 +273,19 @@ export default class TileStraight extends TileBase {
     return this.trainRoute!.trafficLight!.direction;
   }
 
+  getTrafficLightDirection() {
+    return this.getTrainRoute()!.trafficLight!.direction;
+  }
+
   animateTrain(trainObject: TrainObject) {
     this.checkAutomaticTrafficLight();
 
     // Identify route
-    if (this.trainRoute) {
+    const trainRoute = this.getTrainRoute();
+    if (trainRoute) {
       // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates.x;
-      trainObject.y += this.getLeavingTrainCoordinates.y;
+      trainObject.x += this.getLeavingTrainCoordinates().x;
+      trainObject.y += this.getLeavingTrainCoordinates().y;
 
       if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
         // Stop the train
@@ -288,7 +296,7 @@ export default class TileStraight extends TileBase {
           motionPath: {
             align: "self",
             autoRotate: 90,
-            path: this.trainRoute.path,
+            path: trainRoute.path,
             end: 0.5,
           },
           onComplete: () => this.trainOnRedTrafficLight(),
@@ -301,7 +309,7 @@ export default class TileStraight extends TileBase {
           motionPath: {
             align: "self",
             autoRotate: 90,
-            path: this.trainRoute.path,
+            path: trainRoute.path,
           },
           onComplete: () => this.trainLeavesTrafficLight(trainObject),
         });
@@ -316,12 +324,13 @@ export default class TileStraight extends TileBase {
 
     // TODO: Move to function
     const trainObject = { ...this.currentTrain };
-    trainObject.x += this.getLeavingTrainCoordinates.x;
-    trainObject.y += this.getLeavingTrainCoordinates.y;
+    trainObject.x += this.getLeavingTrainCoordinates().x;
+    trainObject.y += this.getLeavingTrainCoordinates().y;
 
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const train = document.getElementById(trainObject!.id);
-    if (train && this.trainRoute) {
+    const trainRoute = this.getTrainRoute();
+    if (train && trainRoute) {
       // Animate away from traffic light
       trainObject.animation.to(trainObject.visual, {
         ease: "power1.in",
@@ -329,7 +338,7 @@ export default class TileStraight extends TileBase {
         motionPath: {
           align: "self",
           autoRotate: 90,
-          path: this.trainRoute.path,
+          path: trainRoute.path,
           end: 0.5,
         },
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -351,7 +360,7 @@ export default class TileStraight extends TileBase {
     this.trainRunning();
     if (this.automaticTrafficLights) {
       this.updateTrafficLight({
-        direction: this.trafficLightDirection,
+        direction: this.getTrafficLightDirection(),
         signal: TrafficLightSignal.Red,
       });
     }

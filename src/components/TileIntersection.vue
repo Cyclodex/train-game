@@ -8,9 +8,11 @@
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
-      <div class="">T enter: {{ incomingTrainPosition }}</div>
+      <div class="">T enter: {{ getIncomingTrainPosition() }}</div>
       <div class="">Switch: {{ intersectionSwitch }}</div>
-      <div v-if="trainRoute" class="">T Route:<br />{{ trainRoute.path }}</div>
+      <div v-if="getTrainRoute()" class="">
+        T Route:<br />{{ getTrainRoute().path }}
+      </div>
       <DebugShowRoutes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
         :switchable-routes="allSwitchableRoutes"
@@ -60,35 +62,6 @@ export default class TileIntersection extends TileBase {
         ].disabled = true;
       });
     }
-  }
-
-  getRouteFromEntrancePosition(entrancePosition: Position) {
-    if (Number(entrancePosition) === Number(this.currentRotation)) {
-      return this.possibleRoutes[this.currentRotation][entrancePosition][
-        this.intersectionSwitch
-      ];
-    }
-    return this.possibleRoutes[this.currentRotation][entrancePosition];
-  }
-
-  get allSwitchableRoutes() {
-    return this.possibleRoutes[this.currentRotation][this.currentRotation];
-  }
-
-  get allDrawableRailRoutes() {
-    // Take the same rotation as position
-    const routes = this.possibleRoutes[this.currentRotation][
-      this.currentRotation
-    ] as Route[];
-    const routesIteratable = Object.values(routes);
-    const enabledRoutes: Route[] = routesIteratable.filter(
-      route => !!route.path && !route.disabled
-    );
-    return enabledRoutes;
-  }
-
-  get activeSwitchRoute() {
-    return this.allSwitchableRoutes[this.intersectionSwitch];
   }
 
   initRoutes(): void {
@@ -260,6 +233,35 @@ export default class TileIntersection extends TileBase {
     };
   }
 
+  getRouteFromEntrancePosition(entrancePosition: Position) {
+    if (Number(entrancePosition) === Number(this.currentRotation)) {
+      return this.possibleRoutes[this.currentRotation][entrancePosition][
+        this.intersectionSwitch
+      ];
+    }
+    return this.possibleRoutes[this.currentRotation][entrancePosition];
+  }
+
+  get allSwitchableRoutes() {
+    return this.possibleRoutes[this.currentRotation][this.currentRotation];
+  }
+
+  get allDrawableRailRoutes() {
+    // Take the same rotation as position
+    const routes = this.possibleRoutes[this.currentRotation][
+      this.currentRotation
+    ] as Route[];
+    const routesIteratable = Object.values(routes);
+    const enabledRoutes: Route[] = routesIteratable.filter(
+      route => !!route.path && !route.disabled
+    );
+    return enabledRoutes;
+  }
+
+  get activeSwitchRoute() {
+    return this.allSwitchableRoutes[this.intersectionSwitch];
+  }
+
   rotate() {
     this.currentRotation++;
     if (this.currentRotation > Rotations.Left) {
@@ -283,27 +285,44 @@ export default class TileIntersection extends TileBase {
     }
   }
 
-  get trainRoute() {
-    // TODO: This could return nothing -> Train crashes because no route attached
-    if (this.incomingTrainPosition !== null) {
-      if (Number(this.incomingTrainPosition) === Number(this.currentRotation)) {
-        return this.possibleRoutes[this.currentRotation][
-          this.incomingTrainPosition
-        ][this.intersectionSwitch];
+  // get trainRoute() {
+  //   // TODO: This could return nothing -> Train crashes because no route attached
+  //   if (this.incomingTrainPosition !== null) {
+  //     if (Number(this.incomingTrainPosition) === Number(this.currentRotation)) {
+  //       return this.possibleRoutes[this.currentRotation][
+  //         this.incomingTrainPosition
+  //       ][this.intersectionSwitch];
+  //     }
+  //     return this.possibleRoutes[this.currentRotation][
+  //       this.incomingTrainPosition
+  //     ];
+  //   }
+  //   return null;
+  // }
+
+  getTrainRoute() {
+    const trainPosition = this.getIncomingTrainPosition();
+    if (trainPosition !== null) {
+      // TODO: This could return nothing -> Train crashes because no route attached
+      if (this.getIncomingTrainPosition() !== null) {
+        if (Number(trainPosition) === Number(this.currentRotation)) {
+          return this.possibleRoutes[this.currentRotation][trainPosition][
+            this.intersectionSwitch
+          ];
+        }
+        return this.possibleRoutes[this.currentRotation][trainPosition];
       }
-      return this.possibleRoutes[this.currentRotation][
-        this.incomingTrainPosition
-      ];
     }
     return null;
   }
 
   animateTrain(trainObject: TrainObject) {
     // Identify route
-    if (this.trainRoute) {
+    const trainRoute = this.getTrainRoute();
+    if (trainRoute) {
       // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates.x;
-      trainObject.y += this.getLeavingTrainCoordinates.y;
+      trainObject.x += this.getLeavingTrainCoordinates().x;
+      trainObject.y += this.getLeavingTrainCoordinates().y;
 
       // Animate
       trainObject.animation.to(trainObject.visual, {
@@ -312,7 +331,7 @@ export default class TileIntersection extends TileBase {
         motionPath: {
           align: "self",
           autoRotate: 90,
-          path: this.trainRoute.path,
+          path: trainRoute.path,
         },
         onComplete: () => this.trainLeavesTile(trainObject),
       });

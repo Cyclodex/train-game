@@ -85,8 +85,8 @@ export default class App extends Vue {
     train1: {
       id: "train1",
       x: 0,
-      y: 4,
-      direction: TrainDirection.Right,
+      y: 3,
+      direction: TrainDirection.Left,
       status: TrainStatus.Running,
       wagons: [
         { id: "wagon1", type: "people" },
@@ -195,11 +195,10 @@ export default class App extends Vue {
       rotation: 0,
     },
     "1,1": {
-      component: "TileCurve",
+      component: "",
       x: 1,
       y: 1,
       train: null,
-      rotation: 3,
     },
     "2,1": {
       component: "TileStraight",
@@ -254,11 +253,10 @@ export default class App extends Vue {
       rotation: 0,
     },
     "1,2": {
-      component: "TileCurve",
+      component: "",
       x: 1,
       y: 2,
       train: null,
-      rotation: 2,
     },
     "2,2": {
       component: "TileIntersection",
@@ -313,13 +311,11 @@ export default class App extends Vue {
       train: null,
     },
     "1,3": {
-      component: "TileIntersection",
+      component: "TileStraight",
       x: 1,
       y: 3,
       train: null,
       rotation: 1,
-      activeRoute: ActiveIntersection.Straight,
-      disabledRoutes: [ActiveIntersection.Left],
     },
     "2,3": {
       component: "TileIntersection",
@@ -446,7 +442,8 @@ export default class App extends Vue {
       }
 
       // Move train to first tile
-      this.level[getCoordinatesId(train)].train = { ...train };
+      (this.$refs[getCoordinatesId(train)] as any)[0].incomingTrain(train.id);
+      // this.level[getCoordinatesId(train)].train = { ...train };
     });
   }
 
@@ -474,7 +471,8 @@ export default class App extends Vue {
   trainEntersTile(train: TrainObject) {
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
-      this.level[tilePosition].train = { ...train };
+      // this.level[tilePosition].train = { ...train };
+      (this.$refs[getCoordinatesId(train)] as any)[0].incomingTrain(train.id);
     }
   }
 
