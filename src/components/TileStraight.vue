@@ -44,7 +44,7 @@
     </template>
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
-      <div>T enter: {{ incomingTrainPosition }}</div>
+      <div>T enter: {{ getIncomingTrainPosition() }}</div>
       <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
       </div>
@@ -116,7 +116,10 @@ export default class TileStraight extends TileBase {
 
   created() {
     this.initRoutes();
+    this.initTrafficLIghts();
+  }
 
+  initTrafficLIghts() {
     if (this.$props.tile.trafficLights !== undefined) {
       this.positionTrafficLights();
       if (this.$root.automaticTrafficLights) {
@@ -186,6 +189,7 @@ export default class TileStraight extends TileBase {
     if (this.currentRotation > Rotations.Right) {
       this.currentRotation = Rotations.Top;
     }
+    this.initTrafficLIghts();
   }
 
   // TODO: Use the correct signal, not both!
@@ -267,10 +271,6 @@ export default class TileStraight extends TileBase {
         }
       }
     }
-  }
-
-  get trafficLightDirection() {
-    return this.trainRoute!.trafficLight!.direction;
   }
 
   getTrafficLightDirection() {

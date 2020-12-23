@@ -49,6 +49,10 @@ export default class TileIntersection extends TileBase {
     if (this.$props.tile.activeRoute) {
       this.intersectionSwitch = this.$props.tile.activeRoute;
     }
+    this.initIntersection();
+  }
+
+  initIntersection() {
     // TODO: should be re-called when rotating the tile
     if (this.$props.tile.disabledRoutes) {
       this.$props.tile.disabledRoutes.map((disableRouteIndex: number) => {
@@ -267,6 +271,7 @@ export default class TileIntersection extends TileBase {
     if (this.currentRotation > Rotations.Left) {
       this.currentRotation = Rotations.Top;
     }
+    this.initIntersection();
   }
 
   changeSwitch() {
@@ -284,21 +289,6 @@ export default class TileIntersection extends TileBase {
       return;
     }
   }
-
-  // get trainRoute() {
-  //   // TODO: This could return nothing -> Train crashes because no route attached
-  //   if (this.incomingTrainPosition !== null) {
-  //     if (Number(this.incomingTrainPosition) === Number(this.currentRotation)) {
-  //       return this.possibleRoutes[this.currentRotation][
-  //         this.incomingTrainPosition
-  //       ][this.intersectionSwitch];
-  //     }
-  //     return this.possibleRoutes[this.currentRotation][
-  //       this.incomingTrainPosition
-  //     ];
-  //   }
-  //   return null;
-  // }
 
   getTrainRoute() {
     const trainPosition = this.getIncomingTrainPosition();
