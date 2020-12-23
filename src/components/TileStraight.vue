@@ -302,6 +302,7 @@ export default class TileStraight extends TileBase {
           onComplete: () => this.trainOnRedTrafficLight(),
         });
       } else {
+        const trainPath = this.trainRoute.path;
         // Animate train through tile, no stop
         trainObject.animation.to(trainObject.visual, {
           ease: "none",
@@ -313,6 +314,38 @@ export default class TileStraight extends TileBase {
           },
           onComplete: () => this.trainLeavesTrafficLight(trainObject),
         });
+        // .to(
+        //   ".wagon",
+        //   {
+        //     ease: "none",
+        //     duration: 2,
+        //     motionPath: {
+        //       align: "self",
+        //       autoRotate: 90,
+        //       path: this.trainRoute.path,
+        //     },
+        //   },
+        //   "1"
+        // );
+        // Wagon trial
+        if (trainObject.wagons) {
+          trainObject.wagons!.map((wagon, index) => {
+            wagon.animation.to(
+              wagon.visual,
+              {
+                ease: "none",
+                duration: 2,
+                motionPath: {
+                  align: "self",
+                  autoRotate: 90,
+                  path: trainPath,
+                },
+                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
+              },
+              (index + 1) * 1
+            );
+          });
+        }
       }
     }
   }

@@ -11,10 +11,13 @@
     <template v-if="trainObject.wagons">
       <div
         v-for="wagon in trainObject.wagons"
+        :id="wagon.id"
         :key="wagon.id"
         class="train wagon"
         :style="[initialPosition, trainVisuals.loco]"
-      ></div>
+      >
+        <span class="train-debug">{{ wagon.id }}</span>
+      </div>
     </template>
   </div>
 </template>
@@ -43,6 +46,14 @@ export default class Train extends Vue {
       .timeline({ id: this.trainObject.id })
       .addLabel(this.trainObject.id);
     this.trainObject.animation = trainTimeline;
+
+    if (this.trainObject.wagons) {
+      this.trainObject.wagons.map(wagon => {
+        const wagonTimeline = gsap.timeline({ id: wagon.id });
+        wagon.animation = wagonTimeline;
+        // trainTimeline.add(wagon.animation);
+      });
+    }
   }
 
   startStopTrain() {
@@ -59,22 +70,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-    case TrainDirection.Up:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = this.$root.tileSize;
-      break;
-    case TrainDirection.Right:
-        tilePositionX = 0;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
-    case TrainDirection.Down:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = 0;
-      break;
-    case TrainDirection.Left:
-        tilePositionX = this.$root.tileSize;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
+      case TrainDirection.Up:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = this.$root.tileSize;
+        break;
+      case TrainDirection.Right:
+      tilePositionX = 0;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
+      case TrainDirection.Down:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = 0;
+        break;
+      case TrainDirection.Left:
+      tilePositionX = this.$root.tileSize;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
