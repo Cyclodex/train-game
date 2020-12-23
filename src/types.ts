@@ -8,6 +8,7 @@ export interface TrainsDefinition {
 }
 
 export interface TrainObject extends Coordinates {
+  test?: string;
   id: string;
   direction?: TrainDirection;
   status?: TrainStatus;

@@ -290,7 +290,9 @@ export default class TileStraight extends TileBase {
       if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
         // Stop the train
         this.trainStopping();
-        trainObject.animation.to(trainObject.visual, {
+        this.trains[this.train.id].test = "test";
+        debugger;
+        this.train.animation.to(trainObject.visual, {
           ease: "power1.out",
           duration: 2,
           motionPath: {
@@ -302,7 +304,7 @@ export default class TileStraight extends TileBase {
           onComplete: () => this.trainOnRedTrafficLight(),
         });
       } else {
-        const trainPath = this.trainRoute.path;
+        const trainPath = trainRoute.path;
         // Animate train through tile, no stop
         trainObject.animation.to(trainObject.visual, {
           ease: "none",

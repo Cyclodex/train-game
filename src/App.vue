@@ -15,7 +15,11 @@
         width: $root.tileSize * $root.levelSizeX + 'px',
       }"
     >
-      <Train v-for="train in trains" :key="train.id" :train-object="train" />
+      <Train
+        v-for="train in trains"
+        :key="train.id"
+        :train-object.sync="train"
+      />
       <div
         v-for="(tile, key) in level"
         :key="key"
@@ -41,6 +45,7 @@
     </div>
     <pre>
       <!-- {{ level }} -->
+      {{ trains }}
     </pre>
   </div>
 </template>
@@ -86,6 +91,7 @@ export default class App extends Vue {
       id: "train1",
       x: 0,
       y: 3,
+      test: "",
       direction: TrainDirection.Left,
       status: TrainStatus.Running,
       wagons: [
@@ -99,6 +105,7 @@ export default class App extends Vue {
       id: "train2",
       x: 3,
       y: 2,
+      test: "",
       direction: TrainDirection.Right,
       status: TrainStatus.Running,
     },
@@ -463,15 +470,11 @@ export default class App extends Vue {
     });
     // Important that we take the newest train from the train object, not just the one from the leaves function
     this.trainEntersTile(this.trains[train.id]);
-    // TODO delete the leaving train on the old tile (but only this train)
-    // Currently we can only have 1 train
-    this.level[getCoordinatesId(tile)].train = {} as any; // TODO fix also type
   }
 
   trainEntersTile(train: TrainObject) {
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
-      // this.level[tilePosition].train = { ...train };
       (this.$refs[getCoordinatesId(train)] as any)[0].incomingTrain(train.id);
     }
   }
@@ -488,6 +491,13 @@ export default class App extends Vue {
     } else {
       gsap.to(this.globalAnimations, 2, { timeScale: this.timeScale });
     }
+  }
+
+  get debugTrains() {
+    const debugTrains = { ...this.trains };
+    return Object.values(debugTrains).map(train => {
+      return Object.assign({}, train, { animation: undefined });
+    });
   }
 }
 </script>
