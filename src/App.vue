@@ -62,6 +62,7 @@ import {
   TrainsDefinition,
   LevelDefinition,
   TrainStatus,
+  Position,
 } from "@/types";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { getTrainDirection } from "@/utils/trainHelpers";
@@ -181,13 +182,30 @@ export default class App extends Vue {
       rotation: 2,
     },
     "0,1": {
-      component: "TileIntersection",
+      component: "TileIntersectionComplete",
       x: 0,
       y: 1,
       train: null,
       rotation: 0,
-      activeRoute: ActiveIntersection.Straight,
-      disabledRoutes: [ActiveIntersection.Right],
+      activeRoutes: {
+        [Position.Top]: ActiveIntersection.Straight,
+        [Position.Right]: ActiveIntersection.Right,
+        [Position.Bottom]: ActiveIntersection.Straight,
+        [Position.Left]: ActiveIntersection.Straight,
+      },
+      disabledRoutes: {
+        [Position.Top]: [ActiveIntersection.Right],
+        [Position.Right]: [ActiveIntersection.Straight],
+        [Position.Bottom]: [
+          ActiveIntersection.Straight,
+          ActiveIntersection.Left,
+        ],
+        [Position.Left]: [
+          ActiveIntersection.Straight,
+          ActiveIntersection.Left,
+          ActiveIntersection.Right,
+        ],
+      },
     },
     "1,1": {
       component: "TileStraight",
@@ -256,11 +274,17 @@ export default class App extends Vue {
       rotation: 1,
     },
     "2,2": {
-      component: "TileIntersection",
+      component: "TileIntersectionComplete",
       x: 2,
       y: 2,
       train: null,
-      rotation: 1,
+      rotation: 0,
+      activeRoutes: {
+        0: ActiveIntersection.Straight,
+        1: ActiveIntersection.Straight,
+        2: ActiveIntersection.Straight,
+        3: ActiveIntersection.Straight,
+      },
     },
     "3,2": {
       component: "TileStraight",
@@ -306,7 +330,6 @@ export default class App extends Vue {
       y: 3,
       train: null,
       rotation: 1,
-      disabledRoutes: [ActiveIntersection.Straight],
       activeRoute: ActiveIntersection.Right,
     },
     "1,3": {
@@ -323,7 +346,6 @@ export default class App extends Vue {
       train: null,
       rotation: 3,
       activeRoute: ActiveIntersection.Left,
-      disabledRoutes: [ActiveIntersection.Right],
     },
     "3,3": {
       component: "TileStraight",
@@ -349,7 +371,6 @@ export default class App extends Vue {
       train: null,
       rotation: 1,
       activeRoute: ActiveIntersection.Straight,
-      disabledRoutes: [ActiveIntersection.Left],
     },
     "5,3": {
       component: "TileIntersection",
@@ -358,7 +379,6 @@ export default class App extends Vue {
       train: null,
       rotation: 3,
       activeRoute: ActiveIntersection.Left,
-      disabledRoutes: [ActiveIntersection.Right],
     },
     "6,3": {
       component: "TileIntersection",
@@ -366,7 +386,6 @@ export default class App extends Vue {
       y: 3,
       train: null,
       rotation: 0,
-      disabledRoutes: [ActiveIntersection.Left],
       activeRoute: ActiveIntersection.Straight,
     },
     "0,4": {

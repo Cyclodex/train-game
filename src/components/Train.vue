@@ -6,7 +6,9 @@
       :style="[initialPosition, trainVisuals.loco]"
       @click.stop="startStopTrain"
     >
-      <span class="train-debug">{{ trainObject.x }}, {{ trainObject.y }}</span>
+      <span v-if="$root.debug" class="train-debug"
+        >{{ trainObject.x }}, {{ trainObject.y }}</span
+      >
     </div>
     <template v-if="trainObject.wagons">
       <div
@@ -16,7 +18,7 @@
         class="train wagon"
         :style="[initialPosition, trainVisuals.loco]"
       >
-        <span class="train-debug">{{ wagon.id }}</span>
+        <span v-if="$root.debug" class="train-debug">{{ wagon.id }}</span>
       </div>
     </template>
   </div>

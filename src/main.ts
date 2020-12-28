@@ -16,6 +16,8 @@ import DebugShowRoutes from "@/components/DebugShowRoutes.vue";
 Vue.component("DebugShowRoutes", DebugShowRoutes);
 import TileIntersection from "@/components/TileIntersection.vue";
 Vue.component("TileIntersection", TileIntersection);
+import TileIntersectionComplete from "@/components/TileIntersectionComplete.vue";
+Vue.component("TileIntersectionComplete", TileIntersectionComplete);
 
 new Vue({
   data: {

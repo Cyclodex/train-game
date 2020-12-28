@@ -54,6 +54,13 @@ export enum Rotations {
   "Bottom",
   "Left",
 }
+export interface ActiveIntersectionPerPosition {
+  [index: number]: ActiveIntersection;
+}
+
+export interface DisabledIntersectionsPerPosition {
+  [index: number]: ActiveIntersection[];
+}
 
 export enum ActiveIntersection {
   "Left",
@@ -104,7 +111,8 @@ export interface TileObject extends Coordinates {
   train?: TrainObject | null;
   rotation?: Rotations;
   activeRoute?: number;
-  disabledRoutes?: number[];
+  activeRoutes?: ActiveIntersectionPerPosition;
+  disabledRoutes?: DisabledIntersectionsPerPosition;
   trafficLights?: TrafficLight[];
 }
 
