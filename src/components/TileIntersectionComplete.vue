@@ -5,26 +5,42 @@
     @click.exact="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
-    <svg
-      v-for="(n, i) in 4"
-      :key="n"
-      :class="[
-        `switch-box switch-box--${i}`,
-        {
-          'signal--left': intersectionSwitch[i] === 0,
-          'signal--straight': intersectionSwitch[i] === 1,
-          'signal--right': intersectionSwitch[i] === 2,
-        },
-      ]"
-      width="24"
-      height="18"
-      @click.stop="changeSwitch(i)"
-    >
-      <circle class="bulb--base" cx="12" cy="13" r="3" />
-      <circle class="bulp--direction bulb--straight" cx="12" cy="5" r="3" />
-      <circle class="bulp--direction bulb--left" cx="4" cy="13" r="3" />
-      <circle class="bulp--direction bulb--right" cx="20" cy="13" r="3" />
-    </svg>
+    <template v-for="(n, i) in 4">
+      <svg
+        v-if="isIntersectionRouteEnabled(i)"
+        :key="i"
+        :class="`switch-box switch-box--${i}`"
+        width="24"
+        height="18"
+        @click.stop="changeSwitch(i)"
+      >
+        <circle class="bulb--base" cx="12" cy="13" r="3" />
+        <circle
+          v-if="isIntersectionRouteEnabled(i, 0)"
+          class="bulp--direction bulb--left"
+          :class="{ 'bulb--active': intersectionSwitch[i] === 0 }"
+          cx="4"
+          cy="13"
+          r="3"
+        />
+        <circle
+          v-if="isIntersectionRouteEnabled(i, 1)"
+          class="bulp--direction bulb--straight"
+          :class="{ 'bulb--active': intersectionSwitch[i] === 1 }"
+          cx="12"
+          cy="5"
+          r="3"
+        />
+        <circle
+          v-if="isIntersectionRouteEnabled(i, 2)"
+          class="bulp--direction bulb--right"
+          :class="{ 'bulb--active': intersectionSwitch[i] === 2 }"
+          cx="20"
+          cy="13"
+          r="3"
+        />
+      </svg>
+    </template>
     <div>
       Switch
     </div>
@@ -36,8 +52,8 @@
         T Route:<br />{{ getTrainRoute().path }}
       </div>
       <DebugShowRoutes
-        :possible-routes="allSwitchableRoutes"
-        :switchable-routes="allSwitchableRoutes"
+        :possible-routes="possibleRoutes"
+        :switchable-routes="possibleRoutes"
         :active-routes="activeSwitchRoutes"
       />
     </div>
@@ -82,6 +98,26 @@ export default class TileIntersectionComplete extends TileBase {
     this.initIntersection();
   }
 
+  positionRotation(position: Position) {
+    let positionRotated = Number(position) + Number(this.currentRotation);
+    if (positionRotated > Position.Left) {
+      positionRotated -= 4;
+    }
+    return positionRotated;
+  }
+
+  getOppositeRouteIndex(
+    intersectionRoute: ActiveIntersection
+  ): ActiveIntersection {
+    console.log(Number(intersectionRoute), Number(ActiveIntersection.Right));
+    if (Number(intersectionRoute) == Number(ActiveIntersection.Left))
+      return ActiveIntersection.Right;
+    if (Number(intersectionRoute) == Number(ActiveIntersection.Right))
+      return ActiveIntersection.Left;
+    // No conversation for straight
+    return intersectionRoute;
+  }
+
   initIntersection() {
     // TODO: should be re-called when rotating the tile
     if (this.$props.tile.disabledRoutes) {
@@ -94,18 +130,18 @@ export default class TileIntersectionComplete extends TileBase {
       Object.entries(
         this.$props.tile.disabledRoutes as ActiveIntersectionPerPosition
       ).map((entry: any) => {
-        const position = entry[0];
+        const position = Number(entry[0]);
         const disabledRoutes = entry[1];
         disabledRoutes.map((disableRouteIndex: number) => {
           const disableRoute: Route = this.possibleRoutes[this.currentRotation][
-            position
+            this.positionRotation(position)
           ][disableRouteIndex];
           disableRoute.disabled = true;
           // TODO Disable also the return route ?
           // Would need further logic (Left -> right)
-          // this.possibleRoutes[this.currentRotation][position][
-          //   disableRoute.leavesAtPosition
-          // ].disabled = true;
+          this.possibleRoutes[this.currentRotation][
+            disableRoute.leavesAtPosition
+          ][this.getOppositeRouteIndex(disableRouteIndex)].disabled = true;
         });
       });
     }
@@ -198,10 +234,10 @@ export default class TileIntersectionComplete extends TileBase {
       },
     };
     this.possibleRoutes = {
-      [Position.Top]: allRoutes,
-      [Position.Right]: allRoutes,
-      [Position.Bottom]: allRoutes,
-      [Position.Left]: allRoutes,
+      [Rotations.Top]: JSON.parse(JSON.stringify(allRoutes)),
+      [Rotations.Right]: JSON.parse(JSON.stringify(allRoutes)),
+      [Rotations.Bottom]: JSON.parse(JSON.stringify(allRoutes)),
+      [Rotations.Left]: JSON.parse(JSON.stringify(allRoutes)),
     };
   }
 
@@ -209,10 +245,6 @@ export default class TileIntersectionComplete extends TileBase {
     return this.possibleRoutes[this.currentRotation][entrancePosition][
       this.intersectionSwitch[entrancePosition]
     ];
-  }
-
-  get allSwitchableRoutes() {
-    return this.possibleRoutes;
   }
 
   get allDrawableRailRoutes() {
@@ -223,30 +255,65 @@ export default class TileIntersectionComplete extends TileBase {
       const routesPerPosition = Object.values(position);
       routes.push(routesPerPosition.flat());
     });
-    const routesIteratable = routes.flat();
     // Flat all position arrays
-    routesIteratable.filter(route => !!route.path && !route.disabled);
+    const routesIteratable = routes.flat();
     const enabledRoutes: Route[] = routesIteratable.filter(
       route => !!route.path && !route.disabled
     );
     return enabledRoutes;
   }
 
+  isIntersectionRouteEnabled(
+    position: Position,
+    intersectionRouteIndex: ActiveIntersection | null = null
+  ) {
+    if (intersectionRouteIndex !== null) {
+      // Check specific intersection route
+      const route = this.possibleRoutes[this.currentRotation][position][
+        intersectionRouteIndex
+      ];
+      return !!route.path && !route.disabled;
+    } else {
+      // Check signal in general (has any route)
+      const routes: Route[] = this.possibleRoutes[this.currentRotation][
+        position
+      ];
+      const routeFindIndex = Object.values(routes).findIndex(
+        route => !!route.path && !route.disabled
+      );
+      return routeFindIndex === -1 ? false : true;
+    }
+  }
+
   get activeSwitchRoutes() {
-    return Object.values(this.allSwitchableRoutes).map((routes, position) => {
+    return Object.values(this.possibleRoutes).map((routes, position) => {
       this.intersectionSwitch[position];
     });
   }
 
   activeSwitchRoute(position: Position) {
-    return this.allSwitchableRoutes[this.intersectionSwitch[position]];
+    return this.possibleRoutes[this.intersectionSwitch[position]];
   }
 
   rotate() {
+    // Update current Rotation
     this.currentRotation++;
     if (this.currentRotation > Rotations.Left) {
       this.currentRotation = Rotations.Top;
     }
+
+    // Update intersections
+    const oldIntersectionSwitch = { ...this.intersectionSwitch };
+    this.intersectionSwitch[Position.Top] =
+      oldIntersectionSwitch[Position.Left];
+    this.intersectionSwitch[Position.Right] =
+      oldIntersectionSwitch[Position.Top];
+    this.intersectionSwitch[Position.Bottom] =
+      oldIntersectionSwitch[Position.Right];
+    this.intersectionSwitch[Position.Left] =
+      oldIntersectionSwitch[Position.Bottom];
+
+    // Update routes
     this.initIntersection();
   }
 
@@ -374,22 +441,11 @@ export default class TileIntersectionComplete extends TileBase {
     transform: rotate(90deg);
   }
 
-  ::v-deep .bulp--direction {
-    opacity: 0.4;
-  }
-
-  &.signal--straight {
-    ::v-deep .bulb--straight {
-      opacity: 1;
+  ::v-deep {
+    .bulp--direction {
+      opacity: 0.4;
     }
-  }
-  &.signal--right {
-    ::v-deep .bulb--right {
-      opacity: 1;
-    }
-  }
-  &.signal--left {
-    ::v-deep .bulb--left {
+    .bulb--active {
       opacity: 1;
     }
   }

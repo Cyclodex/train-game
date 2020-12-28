@@ -194,15 +194,9 @@ export default class App extends Vue {
         [Position.Left]: ActiveIntersection.Straight,
       },
       disabledRoutes: {
-        [Position.Top]: [ActiveIntersection.Right],
-        [Position.Right]: [ActiveIntersection.Straight],
-        [Position.Bottom]: [
-          ActiveIntersection.Straight,
-          ActiveIntersection.Left,
-        ],
         [Position.Left]: [
-          ActiveIntersection.Straight,
           ActiveIntersection.Left,
+          ActiveIntersection.Straight,
           ActiveIntersection.Right,
         ],
       },
