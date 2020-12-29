@@ -366,6 +366,12 @@ export default class TileIntersectionComplete extends TileBase {
     return 2;
   }
 
+  animateTrainOptions(trainObject: TrainObject) {
+    return {
+      duration: this.animationDuration(trainObject),
+    };
+  }
+
   // animateTrain(trainObject: TrainObject) {
   //   // Identify route
   //   const trainRoute = this.getTrainRoute(trainObject);

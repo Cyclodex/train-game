@@ -255,29 +255,33 @@ export default class Train extends Vue {
       const tile = (this.$parent.$refs[tilePosition] as any)[0];
       tile.incomingTrain(this.id);
       this.route = tile.getTrainRoute(this.trainObject);
-      const animationOptions = tile.animateTrainOptions();
+      const animationOptions = tile.animateTrainOptions(this.trainObject);
 
       // Animate the train!
       this.animateTrain(this.route!, animationOptions);
     }
   }
 
-  animateTrain(route: Route, options?: object) {
+  animateTrain(route: Route, tileAnimationOptions?: object) {
     // Animate
     const trainPath = route.path;
+    const animationOptions = Object.assign(
+      {},
+      {
+        ease: "none",
+        duration: 2,
+        motionPath: {
+          align: "self",
+          autoRotate: 90,
+          path: trainPath,
+        },
+      },
+      tileAnimationOptions
+    );
     this.trainObject.animation
       .to(
         this.visual,
-        {
-          ease: "none",
-          duration: 2, //this.animationDuration(trainObject),
-          motionPath: {
-            align: "self",
-            autoRotate: 90,
-            path: trainPath,
-          },
-          onComplete: () => this.trainLeavesTile(),
-        },
+        { ...animationOptions, onComplete: () => this.trainLeavesTile() },
         this.trainObject.id
       )
       .addLabel(this.trainObject.id, ">");
@@ -285,20 +289,7 @@ export default class Train extends Vue {
     if (this.trainObject.wagons) {
       this.trainObject.wagons!.map((wagon, index) => {
         this.trainObject.animation
-          .to(
-            wagon.visual,
-            {
-              ease: "none",
-              duration: 2, //this.animationDuration(),
-              motionPath: {
-                align: "self",
-                autoRotate: 90,
-                path: trainPath,
-              },
-              // onComplete: () => this.trainLeavesTrafficLight(trainObject),
-            },
-            wagon.id
-          )
+          .to(wagon.visual, animationOptions, wagon.id)
           .addLabel(wagon.id, ">");
       });
     }
