@@ -130,22 +130,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-    case TrainDirection.Up:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = this.$root.tileSize;
-      break;
-    case TrainDirection.Right:
-        tilePositionX = 0;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
-    case TrainDirection.Down:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = 0;
-      break;
-    case TrainDirection.Left:
-        tilePositionX = this.$root.tileSize;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
+      case TrainDirection.Up:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = this.$root.tileSize;
+        break;
+      case TrainDirection.Right:
+      tilePositionX = 0;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
+      case TrainDirection.Down:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = 0;
+        break;
+      case TrainDirection.Left:
+      tilePositionX = this.$root.tileSize;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
@@ -225,6 +225,10 @@ export default class Train extends Vue {
   }
 
   trainLeavesTile(train: TrainObject = this.trainObject) {
+    const tilePosition: string = getCoordinatesId(train);
+    const tile = (this.$parent.$refs[tilePosition] as any)[0];
+    tile.trainLeavesTile(train);
+
     const nextTileCoordinates = getLeavingTrainCoordinates(this.route!, {
       x: train.x,
       y: train.y,

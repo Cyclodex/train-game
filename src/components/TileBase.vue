@@ -50,14 +50,14 @@ export default class TileBase extends Vue {
   get tileStatusStyle() {
     if (!this.$root.debug) return "";
     switch (this.status) {
-      case TileStatus.Free:
-        return "tile-status--free";
-      case TileStatus.Reserved:
-        return "tile-status--reserved";
-      case TileStatus.Blocked:
-        return "tile-status--blocked";
-      default:
-        return "";
+    case TileStatus.Free:
+      return "tile-status--free";
+    case TileStatus.Reserved:
+      return "tile-status--reserved";
+    case TileStatus.Blocked:
+      return "tile-status--blocked";
+    default:
+      return "";
     }
   }
 
@@ -86,10 +86,7 @@ export default class TileBase extends Vue {
   incomingTrain(trainId: string) {
     console.log("incoming train: ", trainId);
     this.train = this.trains[trainId];
-    if (this.train.visual) {
-      // this.animateTrain({ ...this.train });
-      this.status = TileStatus.Blocked;
-    }
+    this.status = TileStatus.Blocked;
   }
 
   get allPossibleRoutesWithCurrentRotation() {
@@ -116,16 +113,16 @@ export default class TileBase extends Vue {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-    case TrainDirection.Down:
-      return Position.Top;
-    case TrainDirection.Left:
-      return Position.Right;
-    case TrainDirection.Up:
-      return Position.Bottom;
-    case TrainDirection.Right:
-      return Position.Left;
-    default:
-      return Position.Top;
+      case TrainDirection.Down:
+        return Position.Top;
+      case TrainDirection.Left:
+        return Position.Right;
+      case TrainDirection.Up:
+        return Position.Bottom;
+      case TrainDirection.Right:
+        return Position.Left;
+      default:
+        return Position.Top;
     }
   }
 
@@ -150,13 +147,11 @@ export default class TileBase extends Vue {
     return this.trains[this.train!.id] || null;
   }
 
-  @Emit("trainLeavesTile")
   trainLeavesTile(trainObject: TrainObject) {
     // Clear Tile Status after a while
     setTimeout(() => {
       this.status = TileStatus.Free;
     }, 1000);
-    return { ...trainObject };
   }
 
   getCoordinates(

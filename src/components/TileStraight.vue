@@ -203,10 +203,6 @@ export default class TileStraight extends TileBase {
         y: this.tile.y,
       }
     );
-    // const nextTileCoordinates = {
-    //   x: this.tile.x + this.getLeavingTrainCoordinates().x,
-    //   y: this.tile.y + this.getLeavingTrainCoordinates().y,
-    // };
 
     const status = this.checkStatusOnNextTile(nextTileCoordinates, {
       x: this.tile.x,
