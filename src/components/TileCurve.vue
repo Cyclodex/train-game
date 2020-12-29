@@ -7,10 +7,9 @@
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
-      <div class="">T enter: {{ getIncomingTrainPosition() }}</div>
-      <div v-if="getTrainRoute()" class="">
+      <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
-      </div>
+      </div> -->
       <debug-show-routes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
       />
@@ -88,55 +87,55 @@ export default class TileCurve extends TileBase {
     }
   }
 
-  animateTrain(trainObject: TrainObject) {
-    // Identify route
-    const trainRoute = this.getTrainRoute();
-    if (trainRoute) {
-      // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates().x;
-      trainObject.y += this.getLeavingTrainCoordinates().y;
+  // animateTrain(trainObject: TrainObject) {
+  //   // Identify route
+  //   const trainRoute = this.getTrainRoute(trainObject);
+  //   if (trainRoute) {
+  //     // Define tile exit
+  //     trainObject.x += this.getLeavingTrainCoordinates().x;
+  //     trainObject.y += this.getLeavingTrainCoordinates().y;
 
-      const trainPath = trainRoute.path;
-      // Different duration, because the rail is not same distance as straight
-      const duration = 1.7;
-      // Animate
-      trainObject.animation
-        .to(
-          trainObject.visual,
-          {
-            ease: "none",
-            duration: duration,
-            motionPath: {
-              align: "self",
-              autoRotate: 90,
-              path: trainPath,
-            },
-            onComplete: () => this.trainLeavesTile(trainObject),
-          },
-          trainObject.id
-        )
-        .addLabel(trainObject.id, ">");
-      // Wagon trial
-      if (trainObject.wagons) {
-        trainObject.wagons!.map((wagon, index) => {
-          trainObject.animation
-            .to(
-              wagon.visual,
-              {
-                ease: "none",
-                duration: duration,
-                motionPath: {
-                  align: "self",
-                  autoRotate: 90,
-                  path: trainPath,
-                },
-              },
-              wagon.id
-            )
-            .addLabel(wagon.id, ">");
-        });
-      }
-    }
-  }
+  //     const trainPath = trainRoute.path;
+  //     // Different duration, because the rail is not same distance as straight
+  //     const duration = 1.7;
+  //     // Animate
+  //     trainObject.animation
+  //       .to(
+  //         trainObject.visual,
+  //         {
+  //           ease: "none",
+  //           duration: duration,
+  //           motionPath: {
+  //             align: "self",
+  //             autoRotate: 90,
+  //             path: trainPath,
+  //           },
+  //           onComplete: () => this.trainLeavesTile(trainObject),
+  //         },
+  //         trainObject.id
+  //       )
+  //       .addLabel(trainObject.id, ">");
+  //     // Wagon trial
+  //     if (trainObject.wagons) {
+  //       trainObject.wagons!.map((wagon, index) => {
+  //         trainObject.animation
+  //           .to(
+  //             wagon.visual,
+  //             {
+  //               ease: "none",
+  //               duration: duration,
+  //               motionPath: {
+  //                 align: "self",
+  //                 autoRotate: 90,
+  //                 path: trainPath,
+  //               },
+  //             },
+  //             wagon.id
+  //           )
+  //           .addLabel(wagon.id, ">");
+  //       });
+  //     }
+  //   }
+  // }
 }
 </script>

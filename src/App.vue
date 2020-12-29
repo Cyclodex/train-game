@@ -39,8 +39,6 @@
           :ref="`${tile.x},${tile.y}`"
           class="tile-component"
           :tile="tile"
-          @trainLeavesTile="trainLeavesTile($event, tile)"
-          @updateTrain="updateTrain"
         ></component>
       </div>
     </div>
@@ -52,8 +50,6 @@ import { Component, ProvideReactive, Vue } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
 import {
-  TrainObject,
-  TileObject,
   TrainDirection,
   ActiveIntersection,
   Rotations,
@@ -64,8 +60,6 @@ import {
   TrainStatus,
   Position,
 } from "@/types";
-import { getCoordinatesId } from "@/utils/tileHelpers";
-import { getTrainDirection } from "@/utils/trainHelpers";
 import { gsap } from "gsap";
 import { MotionPathPlugin } from "gsap/MotionPathPlugin";
 gsap.registerPlugin(MotionPathPlugin);
@@ -527,49 +521,6 @@ export default class App extends Vue {
       rotation: 3,
     },
   };
-
-  mounted() {
-    // Init trains and move to first tile
-    Object.values(this.trains).map(train => {
-      // Initialize "visual" dom mapper for animations
-      this.trains[train.id].visual = document.getElementById(train.id);
-      if (this.trains[train.id].wagons !== undefined) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        this.trains[train.id].wagons!.map(wagon => {
-          wagon.visual = document.getElementById(wagon.id);
-        });
-      }
-
-      // Move train to first tile
-      (this.$refs[getCoordinatesId(train)] as any)[0].incomingTrain(train.id);
-      // this.level[getCoordinatesId(train)].train = { ...train };
-    });
-  }
-
-  // TODO: Train - move functions?
-  updateTrain(train: TrainObject) {
-    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
-  }
-
-  trainLeavesTile(train: TrainObject, tile: TileObject) {
-    train.direction = getTrainDirection(train, { x: tile.x, y: tile.y });
-    this.updateTrain({
-      id: train.id,
-      x: train.x,
-      y: train.y,
-      status: train.status,
-      direction: train.direction,
-    });
-    // Important that we take the newest train from the train object, not just the one from the leaves function
-    this.trainEntersTile(this.trains[train.id]);
-  }
-
-  trainEntersTile(train: TrainObject) {
-    const tilePosition: string = getCoordinatesId(train);
-    if (this.level[tilePosition]) {
-      (this.$refs[getCoordinatesId(train)] as any)[0].incomingTrain(train.id);
-    }
-  }
 
   switchDebugMode() {
     this.$root.debug = !this.$root.debug;

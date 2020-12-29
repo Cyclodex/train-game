@@ -26,6 +26,7 @@ import {
   TrainsDefinition,
   TrainStatus,
 } from "@/types";
+import { getRelativeCoordinatesOfNextTile } from "@/utils/tileHelpers";
 
 @Component
 export default class TileBase extends Vue {
@@ -67,9 +68,7 @@ export default class TileBase extends Vue {
   checkStatus(entrancePosition: Position): CheckStatusFeedback {
     const route = this.getRouteFromEntrancePosition(entrancePosition);
     const routeHasTrafficLight = !!route.trafficLight;
-    const leaving = this.getRelativeCoordinatesOfNextTile(
-      route.leavesAtPosition
-    );
+    const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
     return {
       status: this.status,
       hasTrafficLight: routeHasTrafficLight,
@@ -88,7 +87,7 @@ export default class TileBase extends Vue {
     console.log("incoming train: ", trainId);
     this.train = this.trains[trainId];
     if (this.train.visual) {
-      this.animateTrain({ ...this.train });
+      // this.animateTrain({ ...this.train });
       this.status = TileStatus.Blocked;
     }
   }
@@ -105,19 +104,15 @@ export default class TileBase extends Vue {
     return Array(route);
   }
 
-  getTrainRoute() {
-    const trainPosition = this.getIncomingTrainPosition();
+  getTrainRoute(trainObject: TrainObject) {
+    const trainPosition = this.getIncomingTrainLocation(trainObject);
     if (trainPosition !== null) {
       return this.possibleRoutes[this.currentRotation][trainPosition];
     }
     return null;
   }
 
-  getIncomingTrainPosition(): Position | null {
-    return this.getIncomingTrainLocation(this.train || null);
-  }
-
-  getIncomingTrainLocation(trainObject: TrainObject = this.train) {
+  getIncomingTrainLocation(trainObject: TrainObject) {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
@@ -134,29 +129,8 @@ export default class TileBase extends Vue {
     }
   }
 
-  getLeavingTrainCoordinates() {
-    const trainRoute = this.getTrainRoute();
-    if (trainRoute) {
-      return this.getRelativeCoordinatesOfNextTile(trainRoute.leavesAtPosition);
-    }
-    console.error("getLeavingTrainCoordinates: no route");
-    // debugger;
-    return { x: 0, y: 0 };
-  }
-
-  getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
-    switch (leavingPosition) {
-    case Position.Top:
-      return { x: 0, y: -1 };
-    case Position.Right:
-      return { x: 1, y: 0 };
-    case Position.Bottom:
-      return { x: 0, y: 1 };
-    case Position.Left:
-      return { x: -1, y: 0 };
-    default:
-      return { x: 0, y: 0 };
-    }
+  animateTrainOptions() {
+    return {};
   }
 
   // Only example function, tiles need to override this logic
@@ -174,26 +148,6 @@ export default class TileBase extends Vue {
 
   get currentTrain() {
     return this.trains[this.train!.id] || null;
-  }
-
-  @Emit("updateTrain")
-  trainStopping() {
-    return { id: this.currentTrain.id, status: TrainStatus.Stopping };
-  }
-
-  @Emit("updateTrain")
-  trainStopped() {
-    return { id: this.currentTrain.id, status: TrainStatus.Stopped };
-  }
-
-  @Emit("updateTrain")
-  trainStarted() {
-    return { id: this.currentTrain.id, status: TrainStatus.Started };
-  }
-
-  @Emit("updateTrain")
-  trainRunning() {
-    return { id: this.currentTrain.id, status: TrainStatus.Running };
   }
 
   @Emit("trainLeavesTile")

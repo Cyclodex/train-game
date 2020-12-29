@@ -8,11 +8,10 @@
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <div v-if="$root.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
-      <div class="">T enter: {{ getIncomingTrainPosition() }}</div>
       <div class="">Switch: {{ intersectionSwitch }}</div>
-      <div v-if="getTrainRoute()" class="">
+      <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
-      </div>
+      </div> -->
       <DebugShowRoutes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
         :switchable-routes="allSwitchableRoutes"
@@ -290,72 +289,70 @@ export default class TileIntersection extends TileBase {
     }
   }
 
-  getTrainRoute() {
-    const trainPosition = this.getIncomingTrainPosition();
+  getTrainRoute(trainObject: TrainObject) {
+    const trainPosition = this.getIncomingTrainLocation(trainObject);
     if (trainPosition !== null) {
       // TODO: This could return nothing -> Train crashes because no route attached
-      if (this.getIncomingTrainPosition() !== null) {
-        if (Number(trainPosition) === Number(this.currentRotation)) {
-          return this.possibleRoutes[this.currentRotation][trainPosition][
-            this.intersectionSwitch
-          ];
-        }
-        return this.possibleRoutes[this.currentRotation][trainPosition];
+      if (Number(trainPosition) === Number(this.currentRotation)) {
+        return this.possibleRoutes[this.currentRotation][trainPosition][
+          this.intersectionSwitch
+        ];
       }
+      return this.possibleRoutes[this.currentRotation][trainPosition];
     }
     return null;
   }
 
-  animateTrain(trainObject: TrainObject) {
-    // Identify route
-    const trainRoute = this.getTrainRoute();
-    console.warn("animateTrain", trainObject.id);
-    if (trainRoute) {
-      // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates().x;
-      trainObject.y += this.getLeavingTrainCoordinates().y;
+  // animateTrain(trainObject: TrainObject) {
+  //   // Identify route
+  //   const trainRoute = this.getTrainRoute(trainObject);
+  //   console.warn("animateTrain", trainObject.id);
+  //   if (trainRoute) {
+  //     // Define tile exit
+  //     trainObject.x += this.getLeavingTrainCoordinates().x;
+  //     trainObject.y += this.getLeavingTrainCoordinates().y;
 
-      // Animate
-      const trainPath = trainRoute.path;
-      trainObject.animation
-        .to(
-          trainObject.visual,
-          {
-            ease: "none",
-            duration: 2,
-            motionPath: {
-              align: "self",
-              autoRotate: 90,
-              path: trainPath,
-            },
-            onComplete: () => this.trainLeavesTile(trainObject),
-          },
-          trainObject.id
-        )
-        .addLabel(trainObject.id, ">");
-      // Wagon trial
-      if (trainObject.wagons) {
-        trainObject.wagons!.map((wagon, index) => {
-          trainObject.animation
-            .to(
-              wagon.visual,
-              {
-                ease: "none",
-                duration: 2,
-                motionPath: {
-                  align: "self",
-                  autoRotate: 90,
-                  path: trainPath,
-                },
-                // onComplete: () => this.trainLeavesTrafficLight(trainObject),
-              },
-              wagon.id
-            )
-            .addLabel(wagon.id, ">");
-        });
-      }
-    }
-  }
+  //     // Animate
+  //     const trainPath = trainRoute.path;
+  //     trainObject.animation
+  //       .to(
+  //         trainObject.visual,
+  //         {
+  //           ease: "none",
+  //           duration: 2,
+  //           motionPath: {
+  //             align: "self",
+  //             autoRotate: 90,
+  //             path: trainPath,
+  //           },
+  //           onComplete: () => this.trainLeavesTile(trainObject),
+  //         },
+  //         trainObject.id
+  //       )
+  //       .addLabel(trainObject.id, ">");
+  //     // Wagon trial
+  //     if (trainObject.wagons) {
+  //       trainObject.wagons!.map((wagon, index) => {
+  //         trainObject.animation
+  //           .to(
+  //             wagon.visual,
+  //             {
+  //               ease: "none",
+  //               duration: 2,
+  //               motionPath: {
+  //                 align: "self",
+  //                 autoRotate: 90,
+  //                 path: trainPath,
+  //               },
+  //               // onComplete: () => this.trainLeavesTrafficLight(trainObject),
+  //             },
+  //             wagon.id
+  //           )
+  //           .addLabel(wagon.id, ">");
+  //       });
+  //     }
+  //   }
+  // }
 }
 </script>
 

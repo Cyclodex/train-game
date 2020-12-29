@@ -44,10 +44,9 @@
     </template>
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
-      <div>T enter: {{ getIncomingTrainPosition() }}</div>
-      <div v-if="getTrainRoute()" class="">
+      <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
-      </div>
+      </div> -->
       <debug-show-routes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
       />
@@ -73,6 +72,8 @@ import {
 } from "@/types";
 import TileBase from "./TileBase.vue";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
+import Train from "./Train.vue";
+import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 @Component
 export default class TileStraight extends TileBase {
@@ -137,14 +138,15 @@ export default class TileStraight extends TileBase {
     });
   }
 
-  get getActiveTrafficLight() {
-    return (
-      this.trafficLights.find(
-        trafficLight =>
-          trafficLight.direction === this.getTrafficLightDirection()
-      ) || { signal: null }
-    );
-  }
+  // TODO TOFIX
+  // get getActiveTrafficLight() {
+  //   return (
+  //     this.trafficLights.find(
+  //       trafficLight =>
+  //         trafficLight.direction === this.getTrafficLightDirection()
+  //     ) || { signal: null }
+  //   );
+  // }
 
   positionTrafficLights() {
     this.trafficLights = this.$props.tile.trafficLights;
@@ -193,11 +195,18 @@ export default class TileStraight extends TileBase {
   }
 
   // TODO: Use the correct signal, not both!
-  checkRouteAhead() {
-    const nextTileCoordinates = {
-      x: this.tile.x + this.getLeavingTrainCoordinates().x,
-      y: this.tile.y + this.getLeavingTrainCoordinates().y,
-    };
+  checkRouteAhead(trainObject: TrainObject) {
+    const nextTileCoordinates = getLeavingTrainCoordinates(
+      this.getTrainRoute(trainObject)!,
+      {
+        x: this.tile.x,
+        y: this.tile.y,
+      }
+    );
+    // const nextTileCoordinates = {
+    //   x: this.tile.x + this.getLeavingTrainCoordinates().x,
+    //   y: this.tile.y + this.getLeavingTrainCoordinates().y,
+    // };
 
     const status = this.checkStatusOnNextTile(nextTileCoordinates, {
       x: this.tile.x,
@@ -245,23 +254,23 @@ export default class TileStraight extends TileBase {
     }
   }
 
-  checkAutomaticTrafficLight() {
+  checkAutomaticTrafficLight(trainObject: TrainObject = this.train) {
     // TODO: check if there is a traffic light on this route ?!
     // TODO: What if there is no train?
     console.log("checkAutomaticTrafficLight");
     // Automatic Traffic Light Checks
     if (this.automaticTrafficLights) {
-      const routeStatus = this.checkRouteAhead();
+      const routeStatus = this.checkRouteAhead(trainObject);
       if (routeStatus > TileStatus.Free) {
         // Route reserved or blocked, stop train
         this.updateTrafficLight({
-          direction: this.getTrafficLightDirection(),
+          direction: this.getTrafficLightDirection(trainObject),
           signal: TrafficLightSignal.Red,
         });
       } else {
         // Route free, reserve path and give go
         this.updateTrafficLight({
-          direction: this.getTrafficLightDirection(),
+          direction: this.getTrafficLightDirection(trainObject),
           signal: TrafficLightSignal.Green,
         });
 
@@ -272,139 +281,76 @@ export default class TileStraight extends TileBase {
     }
   }
 
-  getTrafficLightDirection() {
-    return this.getTrainRoute()!.trafficLight!.direction;
+  getTrafficLightDirection(trainObject: TrainObject) {
+    return this.getTrainRoute(trainObject)!.trafficLight!.direction;
   }
 
-  animateTrain(trainObject: TrainObject) {
-    // Start of long trains(with wagons)
-    if (trainObject.status === TrainStatus.Init) {
-      this.initTrain();
-      return;
-    }
+  // animateTrain(trainObject: TrainObject) {
+  //   this.checkAutomaticTrafficLight();
 
-    this.checkAutomaticTrafficLight();
+  //   // Identify route
+  //   const trainRoute = this.getTrainRoute();
+  //   if (trainRoute) {
+  //     // Define tile exit
+  //     trainObject.x += this.getLeavingTrainCoordinates().x;
+  //     trainObject.y += this.getLeavingTrainCoordinates().y;
 
-    // Identify route
-    const trainRoute = this.getTrainRoute();
-    if (trainRoute) {
-      // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates().x;
-      trainObject.y += this.getLeavingTrainCoordinates().y;
+  //     const trainPath = trainRoute.path;
+  //     // Animate train through tile, no stop
+  //     trainObject.animation
+  //       .to(
+  //         trainObject.visual,
+  //         {
+  //           ease: "none",
+  //           duration: 2,
+  //           motionPath: {
+  //             align: "self",
+  //             autoRotate: 90,
+  //             path: trainPath,
+  //           },
+  //           onComplete: () => this.trainLeavesTrafficLight(trainObject),
+  //         },
+  //         trainObject.id
+  //       )
+  //       .addLabel(trainObject.id, ">");
+  //     // Wagon trial
+  //     if (trainObject.wagons) {
+  //       trainObject.wagons!.map((wagon, index) => {
+  //         trainObject.animation
+  //           .to(
+  //             wagon.visual,
+  //             {
+  //               ease: "none",
+  //               duration: 2,
+  //               motionPath: {
+  //                 align: "self",
+  //                 autoRotate: 90,
+  //                 path: trainPath,
+  //               },
+  //             },
+  //             wagon.id
+  //           )
+  //           .addLabel(wagon.id, ">");
+  //       });
+  //     }
 
-      const trainPath = trainRoute.path;
-      // Animate train through tile, no stop
-      trainObject.animation
-        .to(
-          trainObject.visual,
-          {
-            ease: "none",
-            duration: 2,
-            motionPath: {
-              align: "self",
-              autoRotate: 90,
-              path: trainPath,
-            },
-            onComplete: () => this.trainLeavesTrafficLight(trainObject),
-          },
-          trainObject.id
-        )
-        .addLabel(trainObject.id, ">");
-      // Wagon trial
-      if (trainObject.wagons) {
-        trainObject.wagons!.map((wagon, index) => {
-          trainObject.animation
-            .to(
-              wagon.visual,
-              {
-                ease: "none",
-                duration: 2,
-                motionPath: {
-                  align: "self",
-                  autoRotate: 90,
-                  path: trainPath,
-                },
-              },
-              wagon.id
-            )
-            .addLabel(wagon.id, ">");
-        });
-      }
-
-      if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
-        // Stop the train
-        // TODO: move stopping etc to train:
-        this.trainStopping();
-        (this.$parent.$refs[trainObject.id] as any)[0].startStopTrain();
-        this.trainOnRedTrafficLight();
-      }
-    }
-  }
-
-  initTrain() {
-    this.trainStarted();
-    const trainObject = { ...this.currentTrain };
-    const trainRoute = this.getTrainRoute();
-    if (trainRoute) {
-      trainObject.x += this.getLeavingTrainCoordinates().x;
-      trainObject.y += this.getLeavingTrainCoordinates().y;
-
-      const trainPath = trainRoute.path;
-      // Animate train out of the box, and add all wagons accordingly
-      trainObject.animation
-        .to(
-          trainObject.visual,
-          {
-            ease: "none",
-            duration: 2,
-            motionPath: {
-              align: "self",
-              autoRotate: 90,
-              path: trainPath,
-            },
-            onComplete: () => this.trainLeavesTrafficLight(trainObject),
-          },
-          trainObject.id
-        )
-        .addLabel(trainObject.id, ">");
-      // Wagon trial
-      if (trainObject.wagons) {
-        trainObject.wagons!.map((wagon, index) => {
-          trainObject.animation
-            .to(
-              wagon.visual,
-              {
-                ease: "none",
-                duration: 2,
-                motionPath: {
-                  align: "self",
-                  autoRotate: 90,
-                  path: trainPath,
-                },
-              },
-              (index + 1) * 0.95
-            )
-            .addLabel(wagon.id, ">");
-        });
-      }
-      // Start the whole timeline scale from 0 to 1
-      gsap.to(trainObject.animation, {
-        duration: 10,
-        timeScale: 1,
-      });
-    }
-  }
+  //     if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
+  //       // Stop the train
+  //       // TODO: move stopping etc to train:
+  //       (this.$parent.$refs[trainObject.id] as any)[0].stopTrain();
+  //       this.trainOnRedTrafficLight();
+  //     }
+  //   }
+  // }
 
   animateTrainFromTrafficLight() {
-    this.trainStarted();
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-    (this.$parent.$refs[this.currentTrain.id] as any)[0].startStopTrain();
+    (this.$parent.$refs[this.currentTrain.id] as any)[0].startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok
-  trainOnRedTrafficLight() {
-    this.trainStopped();
+  trainOnRedTrafficLight(trainObject: TrainObject) {
     this.checkRouteInterval = setInterval(
       this.checkAutomaticTrafficLight,
       2000
@@ -412,10 +358,9 @@ export default class TileStraight extends TileBase {
   }
 
   trainLeavesTrafficLight(trainObject: TrainObject) {
-    this.trainRunning();
     if (this.automaticTrafficLights) {
       this.updateTrafficLight({
-        direction: this.getTrafficLightDirection(),
+        direction: this.getTrafficLightDirection(trainObject),
         signal: TrafficLightSignal.Red,
       });
     }

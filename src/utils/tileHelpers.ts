@@ -28,3 +28,18 @@ export function getTileEntrancePosition(
     return Position.Top;
   }
 }
+
+export function getRelativeCoordinatesOfNextTile(leavingPosition: Position) {
+  switch (leavingPosition) {
+  case Position.Top:
+    return { x: 0, y: -1 };
+  case Position.Right:
+    return { x: 1, y: 0 };
+  case Position.Bottom:
+    return { x: 0, y: 1 };
+  case Position.Left:
+    return { x: -1, y: 0 };
+  default:
+    return { x: 0, y: 0 };
+  }
+}
