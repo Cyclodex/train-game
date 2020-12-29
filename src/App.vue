@@ -147,32 +147,60 @@ export default class App extends Vue {
       ],
     },
     "2,0": {
-      component: "TileCurve",
+      component: "TileIntersectionComplete",
       x: 2,
       y: 0,
       train: null,
-      rotation: 2,
+      disabledRoutes: {
+        [Position.Top]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Right]: ActiveIntersection.Left,
+      },
     },
     "3,0": {
-      component: "TileCurve",
+      component: "TileIntersectionComplete",
       x: 3,
+      y: 0,
+      train: null,
+      disabledRoutes: {
+        [Position.Top]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Bottom]: ActiveIntersection.Left,
+      },
+    },
+    "4,0": {
+      component: "TileStraight",
+      x: 4,
       y: 0,
       train: null,
       rotation: 1,
     },
-    "4,0": {
-      component: "TileCurve",
-      x: 4,
-      y: 0,
-      train: null,
-      rotation: 2,
-    },
     "5,0": {
-      component: "TileCurve",
+      component: "TileStraight",
       x: 5,
       y: 0,
       train: null,
       rotation: 1,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "6,0": {
       component: "TileCurve",
@@ -233,25 +261,44 @@ export default class App extends Vue {
       rotation: 0,
     },
     "4,1": {
-      component: "TileCurve",
+      component: "TileStraight",
       x: 4,
       y: 1,
       train: null,
-      rotation: 3,
+      rotation: 1,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
     },
     "5,1": {
-      component: "TileCurve",
+      component: "TileStraight",
       x: 5,
       y: 1,
       train: null,
-      rotation: 0,
+      rotation: 1,
     },
     "6,1": {
-      component: "TileCurve",
+      component: "TileIntersectionComplete",
       x: 6,
       y: 1,
       train: null,
-      rotation: 3,
+      disabledRoutes: {
+        [Position.Right]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Bottom]: ActiveIntersection.Left,
+      },
     },
     "0,2": {
       component: "TileStraight",
@@ -274,10 +321,9 @@ export default class App extends Vue {
       train: null,
       rotation: 0,
       activeRoutes: {
-        0: ActiveIntersection.Straight,
-        1: ActiveIntersection.Straight,
-        2: ActiveIntersection.Straight,
-        3: ActiveIntersection.Straight,
+        [Position.Bottom]: ActiveIntersection.Right,
+        [Position.Right]: ActiveIntersection.Left,
+        [Position.Top]: ActiveIntersection.Left,
       },
     },
     "3,2": {
@@ -286,6 +332,13 @@ export default class App extends Vue {
       y: 2,
       train: null,
       rotation: Rotations.Right,
+    },
+    "4,2": {
+      component: "TileStraight",
+      x: 4,
+      y: 2,
+      train: null,
+      rotation: 1,
       trafficLights: [
         {
           signal: TrafficLightSignal.Red,
@@ -297,34 +350,41 @@ export default class App extends Vue {
         },
       ],
     },
-    "4,2": {
-      component: "TileCurve",
-      x: 4,
-      y: 2,
-      train: null,
-      rotation: 2,
-    },
     "5,2": {
-      component: "TileCurve",
+      component: "TileStraight",
       x: 5,
       y: 2,
       train: null,
       rotation: 1,
     },
     "6,2": {
-      component: "TileCurve",
+      component: "TileIntersectionComplete",
       x: 6,
       y: 2,
       train: null,
-      rotation: 2,
+      disabledRoutes: {
+        [Position.Right]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Left]: ActiveIntersection.Left,
+      },
     },
     "0,3": {
-      component: "TileIntersection",
+      component: "TileIntersectionComplete",
       x: 0,
       y: 3,
       train: null,
-      rotation: 1,
-      activeRoute: ActiveIntersection.Right,
+      disabledRoutes: {
+        [Position.Left]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
     },
     "1,3": {
       component: "TileStraight",
@@ -334,12 +394,21 @@ export default class App extends Vue {
       rotation: 1,
     },
     "2,3": {
-      component: "TileIntersection",
+      component: "TileIntersectionComplete",
       x: 2,
       y: 3,
       train: null,
-      rotation: 3,
-      activeRoute: ActiveIntersection.Left,
+      disabledRoutes: {
+        [Position.Bottom]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Top]: ActiveIntersection.Left,
+        [Position.Left]: ActiveIntersection.Left,
+      },
     },
     "3,3": {
       component: "TileStraight",
@@ -347,6 +416,13 @@ export default class App extends Vue {
       y: 3,
       train: null,
       rotation: Rotations.Right,
+    },
+    "4,3": {
+      component: "TileStraight",
+      x: 4,
+      y: 3,
+      train: null,
+      rotation: 1,
       trafficLights: [
         {
           signal: TrafficLightSignal.Red,
@@ -358,29 +434,28 @@ export default class App extends Vue {
         },
       ],
     },
-    "4,3": {
-      component: "TileIntersection",
-      x: 4,
-      y: 3,
-      train: null,
-      rotation: 1,
-      activeRoute: ActiveIntersection.Straight,
-    },
     "5,3": {
-      component: "TileIntersection",
+      component: "TileStraight",
       x: 5,
       y: 3,
       train: null,
-      rotation: 3,
-      activeRoute: ActiveIntersection.Left,
+      rotation: 1,
     },
     "6,3": {
-      component: "TileIntersection",
+      component: "TileIntersectionComplete",
       x: 6,
       y: 3,
       train: null,
-      rotation: 0,
-      activeRoute: ActiveIntersection.Straight,
+      disabledRoutes: {
+        [Position.Right]: [
+          ActiveIntersection.Left,
+          ActiveIntersection.Straight,
+          ActiveIntersection.Right,
+        ],
+      },
+      activeRoutes: {
+        [Position.Top]: ActiveIntersection.Right,
+      },
     },
     "0,4": {
       component: "TileCurve",

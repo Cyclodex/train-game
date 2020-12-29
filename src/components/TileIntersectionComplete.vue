@@ -91,11 +91,21 @@ export default class TileIntersectionComplete extends TileBase {
 
   created() {
     this.initRoutes();
-
-    if (this.$props.tile.activeRoutes) {
-      this.intersectionSwitch = this.$props.tile.activeRoutes;
-    }
     this.initIntersection();
+
+    // Switch at least once, to have enabled route selected
+    for (let position = 0; position < 4; position++) {
+      if (this.isIntersectionRouteEnabled(position)) {
+        this.changeSwitch(position);
+      }
+    }
+    // Set Preconfigured intersections
+    if (this.$props.tile.activeRoutes) {
+      this.intersectionSwitch = {
+        ...this.intersectionSwitch,
+        ...this.$props.tile.activeRoutes,
+      };
+    }
   }
 
   positionRotation(position: Position) {
