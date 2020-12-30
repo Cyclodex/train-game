@@ -56,7 +56,6 @@
 
 <script lang="ts">
 import { Vue, Component } from "vue-property-decorator";
-import { gsap } from "gsap";
 import {
   CheckStatusFeedback,
   Coordinates,
@@ -68,11 +67,9 @@ import {
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
-  TrainStatus,
 } from "@/types";
 import TileBase from "./TileBase.vue";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
-import Train from "./Train.vue";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 @Component
@@ -138,7 +135,6 @@ export default class TileStraight extends TileBase {
     });
   }
 
-  // TODO TOFIX
   getActiveTrafficLight(trainObject: TrainObject) {
     return (
       this.trafficLights.find(
@@ -291,64 +287,6 @@ export default class TileStraight extends TileBase {
       this.trainOnRedTrafficLight(this.train);
     }
   }
-
-  // animateTrain(trainObject: TrainObject) {
-  //   this.checkAutomaticTrafficLight();
-
-  //   // Identify route
-  //   const trainRoute = this.getTrainRoute();
-  //   if (trainRoute) {
-  //     // Define tile exit
-  //     trainObject.x += this.getLeavingTrainCoordinates().x;
-  //     trainObject.y += this.getLeavingTrainCoordinates().y;
-
-  //     const trainPath = trainRoute.path;
-  //     // Animate train through tile, no stop
-  //     trainObject.animation
-  //       .to(
-  //         trainObject.visual,
-  //         {
-  //           ease: "none",
-  //           duration: 2,
-  //           motionPath: {
-  //             align: "self",
-  //             autoRotate: 90,
-  //             path: trainPath,
-  //           },
-  //           onComplete: () => this.trainLeavesTrafficLight(trainObject),
-  //         },
-  //         trainObject.id
-  //       )
-  //       .addLabel(trainObject.id, ">");
-  //     // Wagon trial
-  //     if (trainObject.wagons) {
-  //       trainObject.wagons!.map((wagon, index) => {
-  //         trainObject.animation
-  //           .to(
-  //             wagon.visual,
-  //             {
-  //               ease: "none",
-  //               duration: 2,
-  //               motionPath: {
-  //                 align: "self",
-  //                 autoRotate: 90,
-  //                 path: trainPath,
-  //               },
-  //             },
-  //             wagon.id
-  //           )
-  //           .addLabel(wagon.id, ">");
-  //       });
-  //     }
-
-  //     if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
-  //       // Stop the train
-  //       // TODO: move stopping etc to train:
-  //       (this.$parent.$refs[trainObject.id] as any)[0].stopTrain();
-  //       this.trainOnRedTrafficLight();
-  //     }
-  //   }
-  // }
 
   animateTrainFromTrafficLight() {
     // Make sure that interval is canceled when train leaves
