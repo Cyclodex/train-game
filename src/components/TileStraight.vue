@@ -139,14 +139,14 @@ export default class TileStraight extends TileBase {
   }
 
   // TODO TOFIX
-  // get getActiveTrafficLight() {
-  //   return (
-  //     this.trafficLights.find(
-  //       trafficLight =>
-  //         trafficLight.direction === this.getTrafficLightDirection()
-  //     ) || { signal: null }
-  //   );
-  // }
+  getActiveTrafficLight(trainObject: TrainObject) {
+    return (
+      this.trafficLights.find(
+        trafficLight =>
+          trafficLight.direction === this.getTrafficLightDirection(trainObject)
+      ) || { signal: null }
+    );
+  }
 
   positionTrafficLights() {
     this.trafficLights = this.$props.tile.trafficLights;
@@ -270,15 +270,26 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Green,
         });
 
-        if (this.currentTrain.status === TrainStatus.Stopped) {
-          this.animateTrainFromTrafficLight();
-        }
+        this.animateTrainFromTrafficLight();
       }
     }
   }
 
   getTrafficLightDirection(trainObject: TrainObject) {
     return this.getTrainRoute(trainObject)!.trafficLight!.direction;
+  }
+
+  incomingTrain(trainId: string) {
+    this.train = this.trains[trainId];
+    this.checkAutomaticTrafficLight();
+
+    if (
+      this.getActiveTrafficLight(this.train).signal === TrafficLightSignal.Red
+    ) {
+      // Stop the train
+      (this.$parent.$refs[trainId] as any)[0].stopTrain();
+      this.trainOnRedTrafficLight(this.train);
+    }
   }
 
   // animateTrain(trainObject: TrainObject) {
@@ -353,6 +364,14 @@ export default class TileStraight extends TileBase {
     );
   }
 
+  trainLeavesTile(trainObject: TrainObject) {
+    // Clear Tile Status after a while
+    this.trainLeavesTrafficLight(trainObject);
+    setTimeout(() => {
+      this.status = TileStatus.Free;
+    }, 1000);
+  }
+
   trainLeavesTrafficLight(trainObject: TrainObject) {
     if (this.automaticTrafficLights) {
       this.updateTrafficLight({
@@ -360,7 +379,6 @@ export default class TileStraight extends TileBase {
         signal: TrafficLightSignal.Red,
       });
     }
-    this.trainLeavesTile(trainObject);
   }
 }
 </script>
