@@ -8,6 +8,7 @@ export interface TrainsDefinition {
 }
 
 export interface TrainObject extends Coordinates {
+  test?: string;
   id: string;
   direction?: TrainDirection;
   status?: TrainStatus;
@@ -30,6 +31,7 @@ export enum TrainStatus {
   "Stopped",
   "Started",
   "Running",
+  "Init",
 }
 
 export enum TrainDirection {
@@ -51,6 +53,13 @@ export enum Rotations {
   "Right",
   "Bottom",
   "Left",
+}
+export interface ActiveIntersectionPerPosition {
+  [index: number]: ActiveIntersection;
+}
+
+export interface DisabledIntersectionsPerPosition {
+  [index: number]: ActiveIntersection[];
 }
 
 export enum ActiveIntersection {
@@ -102,7 +111,8 @@ export interface TileObject extends Coordinates {
   train?: TrainObject | null;
   rotation?: Rotations;
   activeRoute?: number;
-  disabledRoutes?: number[];
+  activeRoutes?: ActiveIntersectionPerPosition;
+  disabledRoutes?: DisabledIntersectionsPerPosition;
   trafficLights?: TrafficLight[];
 }
 

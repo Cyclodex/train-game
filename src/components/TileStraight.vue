@@ -44,10 +44,9 @@
     </template>
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
-      <div>T enter: {{ getIncomingTrainPosition() }}</div>
-      <div v-if="getTrainRoute()" class="">
+      <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
-      </div>
+      </div> -->
       <debug-show-routes
         :possible-routes="allPossibleRoutesWithCurrentRotation"
       />
@@ -57,7 +56,6 @@
 
 <script lang="ts">
 import { Vue, Component } from "vue-property-decorator";
-import { gsap } from "gsap";
 import {
   CheckStatusFeedback,
   Coordinates,
@@ -69,10 +67,10 @@ import {
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
-  TrainStatus,
 } from "@/types";
 import TileBase from "./TileBase.vue";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
+import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 @Component
 export default class TileStraight extends TileBase {
@@ -137,11 +135,11 @@ export default class TileStraight extends TileBase {
     });
   }
 
-  get getActiveTrafficLight() {
+  getActiveTrafficLight(trainObject: TrainObject) {
     return (
       this.trafficLights.find(
         trafficLight =>
-          trafficLight.direction === this.getTrafficLightDirection()
+          trafficLight.direction === this.getTrafficLightDirection(trainObject)
       ) || { signal: null }
     );
   }
@@ -193,11 +191,14 @@ export default class TileStraight extends TileBase {
   }
 
   // TODO: Use the correct signal, not both!
-  checkRouteAhead() {
-    const nextTileCoordinates = {
-      x: this.tile.x + this.getLeavingTrainCoordinates().x,
-      y: this.tile.y + this.getLeavingTrainCoordinates().y,
-    };
+  checkRouteAhead(trainObject: TrainObject) {
+    const nextTileCoordinates = getLeavingTrainCoordinates(
+      this.getTrainRoute(trainObject)!,
+      {
+        x: this.tile.x,
+        y: this.tile.y,
+      }
+    );
 
     const status = this.checkStatusOnNextTile(nextTileCoordinates, {
       x: this.tile.x,
@@ -245,126 +246,77 @@ export default class TileStraight extends TileBase {
     }
   }
 
-  checkAutomaticTrafficLight() {
+  checkAutomaticTrafficLight(trainObject: TrainObject = this.train) {
     // TODO: check if there is a traffic light on this route ?!
     // TODO: What if there is no train?
     console.log("checkAutomaticTrafficLight");
     // Automatic Traffic Light Checks
     if (this.automaticTrafficLights) {
-      const routeStatus = this.checkRouteAhead();
+      const routeStatus = this.checkRouteAhead(trainObject);
       if (routeStatus > TileStatus.Free) {
         // Route reserved or blocked, stop train
         this.updateTrafficLight({
-          direction: this.getTrafficLightDirection(),
+          direction: this.getTrafficLightDirection(trainObject),
           signal: TrafficLightSignal.Red,
         });
       } else {
         // Route free, reserve path and give go
         this.updateTrafficLight({
-          direction: this.getTrafficLightDirection(),
+          direction: this.getTrafficLightDirection(trainObject),
           signal: TrafficLightSignal.Green,
         });
 
-        // TODO: Green light not visible, reactivity issue, fix it.
-        if (this.currentTrain.status === TrainStatus.Stopped) {
-          this.animateTrainFromTrafficLight();
-        }
+        this.animateTrainFromTrafficLight();
       }
     }
   }
 
-  getTrafficLightDirection() {
-    return this.getTrainRoute()!.trafficLight!.direction;
+  getTrafficLightDirection(trainObject: TrainObject) {
+    return this.getTrainRoute(trainObject)!.trafficLight!.direction;
   }
 
-  animateTrain(trainObject: TrainObject) {
+  incomingTrain(trainId: string) {
+    this.train = this.trains[trainId];
     this.checkAutomaticTrafficLight();
 
-    // Identify route
-    const trainRoute = this.getTrainRoute();
-    if (trainRoute) {
-      // Define tile exit
-      trainObject.x += this.getLeavingTrainCoordinates().x;
-      trainObject.y += this.getLeavingTrainCoordinates().y;
-
-      if (this.getActiveTrafficLight.signal === TrafficLightSignal.Red) {
-        // Stop the train
-        this.trainStopping();
-        trainObject.animation.to(trainObject.visual, {
-          ease: "power1.out",
-          duration: 2,
-          motionPath: {
-            align: "self",
-            autoRotate: 90,
-            path: trainRoute.path,
-            end: 0.5,
-          },
-          onComplete: () => this.trainOnRedTrafficLight(),
-        });
-      } else {
-        // Animate train through tile, no stop
-        trainObject.animation.to(trainObject.visual, {
-          ease: "none",
-          duration: 2,
-          motionPath: {
-            align: "self",
-            autoRotate: 90,
-            path: trainRoute.path,
-          },
-          onComplete: () => this.trainLeavesTrafficLight(trainObject),
-        });
-      }
+    if (
+      this.getActiveTrafficLight(this.train).signal === TrafficLightSignal.Red
+    ) {
+      // Stop the train
+      (this.$parent.$refs[trainId] as any)[0].stopTrain();
+      this.trainOnRedTrafficLight(this.train);
     }
   }
 
   animateTrainFromTrafficLight() {
-    this.trainStarted();
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-
-    // TODO: Move to function
-    const trainObject = { ...this.currentTrain };
-    trainObject.x += this.getLeavingTrainCoordinates().x;
-    trainObject.y += this.getLeavingTrainCoordinates().y;
-
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const train = document.getElementById(trainObject!.id);
-    const trainRoute = this.getTrainRoute();
-    if (train && trainRoute) {
-      // Animate away from traffic light
-      trainObject.animation.to(trainObject.visual, {
-        ease: "power1.in",
-        duration: 2,
-        motionPath: {
-          align: "self",
-          autoRotate: 90,
-          path: trainRoute.path,
-          end: 0.5,
-        },
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        onComplete: () => this.trainLeavesTrafficLight(trainObject),
-      });
-    }
+    (this.$parent.$refs[this.currentTrain.id] as any)[0].startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok
-  trainOnRedTrafficLight() {
-    this.trainStopped();
+  trainOnRedTrafficLight(trainObject: TrainObject) {
     this.checkRouteInterval = setInterval(
       this.checkAutomaticTrafficLight,
       2000
     );
   }
 
+  trainLeavesTile(trainObject: TrainObject) {
+    // Clear Tile Status after a while
+    this.trainLeavesTrafficLight(trainObject);
+    setTimeout(() => {
+      this.status = TileStatus.Free;
+    }, 1000);
+  }
+
   trainLeavesTrafficLight(trainObject: TrainObject) {
-    this.trainRunning();
     if (this.automaticTrafficLights) {
       this.updateTrafficLight({
-        direction: this.getTrafficLightDirection(),
+        direction: this.getTrafficLightDirection(trainObject),
         signal: TrafficLightSignal.Red,
       });
     }
-    this.trainLeavesTile(trainObject);
   }
 }
 </script>
