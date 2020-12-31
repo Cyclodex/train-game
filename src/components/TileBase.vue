@@ -24,9 +24,9 @@ import {
   TrainDirection,
   TrainObject,
   TrainsDefinition,
-  TrainStatus,
 } from "@/types";
 import { getRelativeCoordinatesOfNextTile } from "@/utils/tileHelpers";
+import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 @Component
 export default class TileBase extends Vue {
@@ -50,14 +50,14 @@ export default class TileBase extends Vue {
   get tileStatusStyle() {
     if (!this.$root.debug) return "";
     switch (this.status) {
-      case TileStatus.Free:
-        return "tile-status--free";
-      case TileStatus.Reserved:
-        return "tile-status--reserved";
-      case TileStatus.Blocked:
-        return "tile-status--blocked";
-      default:
-        return "";
+    case TileStatus.Free:
+      return "tile-status--free";
+    case TileStatus.Reserved:
+      return "tile-status--reserved";
+    case TileStatus.Blocked:
+      return "tile-status--blocked";
+    default:
+      return "";
     }
   }
 
@@ -65,10 +65,34 @@ export default class TileBase extends Vue {
     return this.possibleRoutes[this.currentRotation][entrancePosition];
   }
 
-  checkStatus(entrancePosition: Position): CheckStatusFeedback {
+  getAllRoutesFromEntrancePosition(
+    entrancePosition: Position
+  ): Route | Route[] | any {
+    return this.possibleRoutes[this.currentRotation][entrancePosition];
+  }
+
+  checkStatus(entrancePosition: Position): CheckStatusFeedback | false {
     const route = this.getRouteFromEntrancePosition(entrancePosition);
+    if (!route) {
+      // There seems to be no connected route! Ups!
+      return false;
+    }
     const routeHasTrafficLight = !!route.trafficLight;
     const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
+    let possibleRoutes = this.getAllRoutesFromEntrancePosition(
+      entrancePosition
+    );
+    if (!possibleRoutes.path) {
+      possibleRoutes = Object.values(
+        this.getAllRoutesFromEntrancePosition(entrancePosition)
+      ) as any;
+      possibleRoutes.map((route: any) => {
+        route.nextCoordinates = getLeavingTrainCoordinates(route, {
+          x: this.tile.x,
+          y: this.tile.y,
+        });
+      });
+    }
     return {
       status: this.status,
       hasTrafficLight: routeHasTrafficLight,
@@ -76,6 +100,7 @@ export default class TileBase extends Vue {
         x: this.tile.x + leaving.x,
         y: this.tile.y + leaving.y,
       },
+      possibleRoutes: possibleRoutes,
     };
   }
 
@@ -113,16 +138,16 @@ export default class TileBase extends Vue {
     if (trainObject === null) return null;
 
     switch (trainObject.direction) {
-    case TrainDirection.Down:
-      return Position.Top;
-    case TrainDirection.Left:
-      return Position.Right;
-    case TrainDirection.Up:
-      return Position.Bottom;
-    case TrainDirection.Right:
-      return Position.Left;
-    default:
-      return Position.Top;
+      case TrainDirection.Down:
+        return Position.Top;
+      case TrainDirection.Left:
+        return Position.Right;
+      case TrainDirection.Up:
+        return Position.Bottom;
+      case TrainDirection.Right:
+        return Position.Left;
+      default:
+        return Position.Top;
     }
   }
 

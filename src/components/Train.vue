@@ -26,16 +26,19 @@
 
 <script lang="ts">
 import {
+  CheckStatusFeedback,
+  CheckStatusPossibleRoutes,
+  Coordinates,
   LevelDefinition,
-  Position,
   Route,
+  RouteDestinations,
   TrainDirection,
   TrainObject,
   TrainsDefinition,
   TrainStatus,
   Wagon,
 } from "@/types";
-import { getCoordinatesId } from "@/utils/tileHelpers";
+import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
 import {
   getLeavingTrainCoordinates,
   getTrainDirection,
@@ -60,10 +63,12 @@ export default class Train extends Vue {
   visual!: HTMLElement | null;
   wagons?: Wagon[];
   route?: Route;
+  routeDestinations?: RouteDestinations[];
 
   created() {
     this.id = this.trainObject.id;
     this.wagons = this.trainObject.wagons;
+    this.routeDestinations = this.trainObject.routeDestinations;
 
     this.setInitialPosition();
 
@@ -87,15 +92,135 @@ export default class Train extends Vue {
       });
     }
 
-    // Move train to first tile
-    // TODO: Get route of tile
     const coordId = getCoordinatesId(this.trainObject);
     const tile = (this.$parent.$refs[coordId] as any)[0];
-    tile.incomingTrain(this.id);
     this.route = tile.getTrainRoute(this.trainObject);
+
+    // Check for planned Destination
+    this.doRoutePlanning();
+
+    // Move train to first tile
+    tile.incomingTrain(this.id);
+
     // Start of long trains(with wagons)
     if (this.trainObject.status === TrainStatus.Init) {
       this.initTrain();
+    }
+  }
+
+  doRoutePlanning() {
+    if (this.trainObject.routeDestinations) {
+      const originCoordinates = {
+        x: this.trainObject.x,
+        y: this.trainObject.y,
+      };
+      const nextTileCoordinates = getLeavingTrainCoordinates(
+        this.route!,
+        originCoordinates
+      );
+
+      this.trainObject.routeDestinations.map(routeToNextDestination => {
+        const destination = routeToNextDestination.to;
+        const result = this.checkRoutesOnNextTile(
+          nextTileCoordinates,
+          originCoordinates,
+          destination
+        );
+        console.log(result);
+
+        // TODO: Remove all that do not end on the destination
+        debugger;
+      });
+    }
+  }
+
+  checkRoutesOnNextTile(
+    nextTileCoordinates: Coordinates,
+    originCoordinates: Coordinates,
+    destination: string,
+    checkedRoutes: any = [],
+    currentRouteIndex = 0
+  ): any {
+    let status: number;
+    const tilePosition: string = getCoordinatesId(nextTileCoordinates);
+    const tileEntrancePosition = getTileEntrancePosition(
+      nextTileCoordinates,
+      originCoordinates
+    );
+
+    if (!checkedRoutes[currentRouteIndex]) {
+      checkedRoutes.push([""]);
+    }
+
+    if (this.level[tilePosition]) {
+      const tile = (this.$parent.$refs[tilePosition] as any)[0];
+      const tileStatus = tile.checkStatus(tileEntrancePosition) as
+        | CheckStatusFeedback
+        | false;
+
+      let tileAlreadyVisited = false;
+      if (checkedRoutes[currentRouteIndex].length > 0) {
+        const alreadyVisited = checkedRoutes[currentRouteIndex].indexOf(
+          tilePosition
+        );
+        if (alreadyVisited !== -1) {
+          tileAlreadyVisited = true;
+        }
+      }
+
+      // If Status is not free = The route is block, dont progress
+      if (
+        tilePosition === destination ||
+        tileAlreadyVisited ||
+        tileStatus === false
+      ) {
+        checkedRoutes[currentRouteIndex].push(tilePosition);
+        return "done";
+      } else if (!tileStatus.possibleRoutes.path) {
+        // No direct path, so multiple paths are possible:
+        const iterableRoutes = Object.values(tileStatus.possibleRoutes).filter(
+          route => !!route.path && !route.disabled
+        );
+
+        checkedRoutes[currentRouteIndex].push(tilePosition);
+
+        // Create coppies of current path for possible routes
+        let i = currentRouteIndex;
+        iterableRoutes.map(route => {
+          if (i > currentRouteIndex) {
+            //TODO check if this really works as expected
+            checkedRoutes[i] = checkedRoutes[currentRouteIndex].slice();
+          }
+          i++;
+        });
+
+        i = 0;
+        iterableRoutes.map(route => {
+          if (i > 0) {
+            currentRouteIndex++;
+          }
+          status = this.checkRoutesOnNextTile(
+            route.nextCoordinates,
+            nextTileCoordinates,
+            destination,
+            checkedRoutes,
+            currentRouteIndex
+          );
+          i++;
+        });
+      } else {
+        // Call next tile
+        checkedRoutes[currentRouteIndex].push(tilePosition);
+
+        status = this.checkRoutesOnNextTile(
+          tileStatus.nextCoordinates,
+          nextTileCoordinates,
+          destination,
+          checkedRoutes,
+          currentRouteIndex
+        );
+      }
+      return checkedRoutes;
     }
   }
 
@@ -130,22 +255,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-      case TrainDirection.Up:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = this.$root.tileSize;
-        break;
-      case TrainDirection.Right:
-      tilePositionX = 0;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
-      case TrainDirection.Down:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = 0;
-        break;
-      case TrainDirection.Left:
-      tilePositionX = this.$root.tileSize;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
+    case TrainDirection.Up:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = this.$root.tileSize;
+      break;
+    case TrainDirection.Right:
+        tilePositionX = 0;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
+    case TrainDirection.Down:
+        tilePositionX = this.$root.tileSize / 2;
+        tilePositionY = 0;
+      break;
+    case TrainDirection.Left:
+        tilePositionX = this.$root.tileSize;
+        tilePositionY = this.$root.tileSize / 2;
+      break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",

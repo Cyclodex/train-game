@@ -91,13 +91,24 @@ export default class App extends Vue {
       id: "train2",
       x: 1,
       y: 2,
-      test: "",
       direction: TrainDirection.Right,
       status: TrainStatus.Init,
       wagons: [
         { id: "wagonB1", type: "people" },
         { id: "wagonB2", type: "people" },
       ],
+    },
+    train3: {
+      id: "train3",
+      x: 1,
+      y: 4,
+      direction: TrainDirection.Right,
+      status: TrainStatus.Init,
+      wagons: [
+        { id: "wagonC1", type: "people" },
+        { id: "wagonC2", type: "people" },
+      ],
+      routeDestinations: [{ to: "4,3" }],
     },
     // trainCircle1: {
     //   id: "trainCircle1",

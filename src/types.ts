@@ -15,6 +15,13 @@ export interface TrainObject extends Coordinates {
   animation?: any;
   wagons?: Wagon[];
   visual?: HTMLElement | null;
+  routeDestinations?: RouteDestinations[];
+}
+
+export interface RouteDestinations {
+  to: string;
+  routes?: string[];
+  selectedRoute?: number;
 }
 
 export interface Wagon {
@@ -120,6 +127,14 @@ export interface CheckStatusFeedback {
   status: number;
   nextCoordinates: Coordinates;
   hasTrafficLight: boolean;
+  possibleRoutes: CheckStatusPossibleRoutes;
+}
+
+export interface CheckStatusPossibleRoutes {
+  [index: string]: CheckStatusRoute;
+}
+export interface CheckStatusRoute extends Route {
+  nextCoordinates: Coordinates;
 }
 
 export enum TileStatus {
