@@ -20,8 +20,9 @@ export interface TrainObject extends Coordinates {
 
 export interface RouteDestinations {
   to: string;
-  routes?: string[];
-  selectedRoute?: number;
+  routes?: CheckedRoutesString | CheckedRoutesObject;
+  selectedRouteIndex?: number;
+  selectedRoute?: CheckedRoutesString | CheckedRoutesObject;
 }
 
 export interface Wagon {
@@ -135,6 +136,19 @@ export interface CheckStatusPossibleRoutes {
 }
 export interface CheckStatusRoute extends Route {
   nextCoordinates: Coordinates;
+}
+
+export interface CheckedRoutesString {
+  [index: string]: string[];
+}
+
+export interface CheckedRoutesObject {
+  [index: string]: CheckedRoutesPossiblePath[];
+}
+
+export interface CheckedRoutesPossiblePath {
+  entrancePosition: Position;
+  leavesAtPosition: Position;
 }
 
 export enum TileStatus {

@@ -249,7 +249,6 @@ export default class TileStraight extends TileBase {
   checkAutomaticTrafficLight(trainObject: TrainObject = this.train) {
     // TODO: check if there is a traffic light on this route ?!
     // TODO: What if there is no train?
-    console.log("checkAutomaticTrafficLight");
     // Automatic Traffic Light Checks
     if (this.automaticTrafficLights) {
       const routeStatus = this.checkRouteAhead(trainObject);

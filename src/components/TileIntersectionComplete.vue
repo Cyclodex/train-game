@@ -118,7 +118,6 @@ export default class TileIntersectionComplete extends TileBase {
   getOppositeRouteIndex(
     intersectionRoute: ActiveIntersection
   ): ActiveIntersection {
-    console.log(Number(intersectionRoute), Number(ActiveIntersection.Right));
     if (Number(intersectionRoute) == Number(ActiveIntersection.Left))
       return ActiveIntersection.Right;
     if (Number(intersectionRoute) == Number(ActiveIntersection.Right))
@@ -128,14 +127,7 @@ export default class TileIntersectionComplete extends TileBase {
   }
 
   initIntersection() {
-    // TODO: should be re-called when rotating the tile
     if (this.$props.tile.disabledRoutes) {
-      console.log(
-        Object.entries(
-          this.$props.tile.disabledRoutes as ActiveIntersectionPerPosition
-        )
-      );
-
       Object.entries(
         this.$props.tile.disabledRoutes as ActiveIntersectionPerPosition
       ).map((entry: any) => {

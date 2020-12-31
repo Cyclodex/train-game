@@ -26,8 +26,9 @@
 
 <script lang="ts">
 import {
+  CheckedRoutesObject,
+  CheckedRoutesString,
   CheckStatusFeedback,
-  CheckStatusPossibleRoutes,
   Coordinates,
   LevelDefinition,
   Route,
@@ -59,11 +60,11 @@ export default class Train extends Vue {
       backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
     },
   };
-  id!: string;
+  id = "";
   visual!: HTMLElement | null;
-  wagons?: Wagon[];
+  wagons?: Wagon[] = [];
   route?: Route;
-  routeDestinations?: RouteDestinations[];
+  routeDestinations?: RouteDestinations[] = [];
 
   created() {
     this.id = this.trainObject.id;
@@ -121,98 +122,126 @@ export default class Train extends Vue {
 
       this.trainObject.routeDestinations.map(routeToNextDestination => {
         const destination = routeToNextDestination.to;
-        const result = this.checkRoutesOnNextTile(
+        const possibleRoutes = this.checkRoutesOnNextTile(
           nextTileCoordinates,
           originCoordinates,
           destination
         );
-        console.log(result);
+        // Remove all routes that do not end on the destination
+        const possibleRoutesWithDestinationMatch: any = Object.values(
+          possibleRoutes
+        ).filter((route: any) => route[route.length - 1] === destination);
 
-        // TODO: Remove all that do not end on the destination
+        // Get the shortes route
+        const shortest = possibleRoutesWithDestinationMatch.reduce(
+          function(p: any, c: any) {
+            return p.length > c.length ? c : p;
+          },
+          { length: Infinity }
+        );
+
+        routeToNextDestination.routes = possibleRoutesWithDestinationMatch;
+        routeToNextDestination.selectedRoute = shortest;
         debugger;
       });
     }
   }
 
+  currentRouteIndex = 0;
+
   checkRoutesOnNextTile(
     nextTileCoordinates: Coordinates,
     originCoordinates: Coordinates,
     destination: string,
-    checkedRoutes: any = [],
-    currentRouteIndex = 0
+    checkedRoutes: CheckedRoutesString | CheckedRoutesObject | any = {},
+    currentRouteIndex = ""
   ): any {
-    let status: number;
     const tilePosition: string = getCoordinatesId(nextTileCoordinates);
     const tileEntrancePosition = getTileEntrancePosition(
       nextTileCoordinates,
       originCoordinates
     );
+    let tileAlreadyVisited = false;
 
+    // Create route array for new RouteIndex
     if (!checkedRoutes[currentRouteIndex]) {
-      checkedRoutes.push([""]);
+      checkedRoutes[currentRouteIndex] = [];
+    }
+    // Check if it already has route elements
+    if (checkedRoutes[currentRouteIndex].length > 0) {
+      const alreadyVisited = checkedRoutes[currentRouteIndex].indexOf(
+        tilePosition
+      );
+      if (alreadyVisited !== -1) {
+        tileAlreadyVisited = true;
+      }
     }
 
+    // Check on tile
     if (this.level[tilePosition]) {
       const tile = (this.$parent.$refs[tilePosition] as any)[0];
+      // Check tile status
       const tileStatus = tile.checkStatus(tileEntrancePosition) as
         | CheckStatusFeedback
         | false;
 
-      let tileAlreadyVisited = false;
-      if (checkedRoutes[currentRouteIndex].length > 0) {
-        const alreadyVisited = checkedRoutes[currentRouteIndex].indexOf(
-          tilePosition
-        );
-        if (alreadyVisited !== -1) {
-          tileAlreadyVisited = true;
-        }
-      }
-
-      // If Status is not free = The route is block, dont progress
+      // Stop if destination matches, is already visited or status is false (broken connection)
+      // TODO: we might not stop when tile was visited, but the exact path!
       if (
         tilePosition === destination ||
         tileAlreadyVisited ||
         tileStatus === false
       ) {
+        // Add current tile to route
         checkedRoutes[currentRouteIndex].push(tilePosition);
-        return "done";
+        return;
       } else if (!tileStatus.possibleRoutes.path) {
-        // No direct path, so multiple paths are possible:
+        // No direct path
+        // Check multiple paths and remove disabled ones:
         const iterableRoutes = Object.values(tileStatus.possibleRoutes).filter(
           route => !!route.path && !route.disabled
         );
 
-        checkedRoutes[currentRouteIndex].push(tilePosition);
-
-        // Create coppies of current path for possible routes
-        let i = currentRouteIndex;
+        // Create copies of current path for possible routes
         iterableRoutes.map(route => {
-          if (i > currentRouteIndex) {
-            //TODO check if this really works as expected
-            checkedRoutes[i] = checkedRoutes[currentRouteIndex].slice();
-          }
-          i++;
-        });
+          // Index = x,y-P1,P2
+          const newRouteIndex =
+            getCoordinatesId(nextTileCoordinates) +
+            "-" +
+            tileEntrancePosition +
+            "," +
+            route.leavesAtPosition;
 
-        i = 0;
-        iterableRoutes.map(route => {
-          if (i > 0) {
-            currentRouteIndex++;
+          // If this exact path was already visited and checked, dont do it again
+          if (checkedRoutes[newRouteIndex]) {
+            return false;
           }
-          status = this.checkRoutesOnNextTile(
+
+          // Add current tile to route
+          checkedRoutes[currentRouteIndex].push({
+            [tilePosition]: {
+              entrancePosition: tileEntrancePosition,
+              leavesAtPosition: route.leavesAtPosition,
+            },
+          });
+          // Make copy of current path, as base for the new splitted route
+          checkedRoutes[newRouteIndex] = checkedRoutes[
+            currentRouteIndex
+          ].slice();
+
+          this.checkRoutesOnNextTile(
             route.nextCoordinates,
             nextTileCoordinates,
             destination,
             checkedRoutes,
-            currentRouteIndex
+            newRouteIndex
           );
-          i++;
         });
       } else {
-        // Call next tile
+        // Add current tile to route
         checkedRoutes[currentRouteIndex].push(tilePosition);
-
-        status = this.checkRoutesOnNextTile(
+        // Call next tile
+        this.checkRoutesOnNextTile(
           tileStatus.nextCoordinates,
           nextTileCoordinates,
           destination,
