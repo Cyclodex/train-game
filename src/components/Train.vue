@@ -65,6 +65,7 @@ export default class Train extends Vue {
   wagons?: Wagon[] = [];
   route?: Route;
   routeDestinations?: RouteDestinations[] = [];
+  currentRouteDestination = 0;
 
   created() {
     this.id = this.trainObject.id;
@@ -82,7 +83,7 @@ export default class Train extends Vue {
     this.trainObject.animation = trainTimeline;
   }
 
-  mounted() {
+  async mounted() {
     // Init train and move to first tile
     // Initialize "visual" dom mapper for animations
     this.visual = document.getElementById(this.id);
@@ -98,7 +99,7 @@ export default class Train extends Vue {
     this.route = tile.getTrainRoute(this.trainObject);
 
     // Check for planned Destination
-    this.doRoutePlanning();
+    await this.doRoutePlanning();
 
     // Move train to first tile
     tile.incomingTrain(this.id);
@@ -110,41 +111,43 @@ export default class Train extends Vue {
   }
 
   doRoutePlanning() {
-    if (this.trainObject.routeDestinations) {
-      const originCoordinates = {
-        x: this.trainObject.x,
-        y: this.trainObject.y,
-      };
-      const nextTileCoordinates = getLeavingTrainCoordinates(
-        this.route!,
-        originCoordinates
-      );
-
-      this.trainObject.routeDestinations.map(routeToNextDestination => {
-        const destination = routeToNextDestination.to;
-        const possibleRoutes = this.checkRoutesOnNextTile(
-          nextTileCoordinates,
-          originCoordinates,
-          destination
-        );
-        // Remove all routes that do not end on the destination
-        const possibleRoutesWithDestinationMatch: any = Object.values(
-          possibleRoutes
-        ).filter((route: any) => route[route.length - 1] === destination);
-
-        // Get the shortes route
-        const shortest = possibleRoutesWithDestinationMatch.reduce(
-          function(p: any, c: any) {
-            return p.length > c.length ? c : p;
-          },
-          { length: Infinity }
+    return new Promise<void>((resolve, reject) => {
+      if (this.trainObject.routeDestinations) {
+        const originCoordinates = {
+          x: this.trainObject.x,
+          y: this.trainObject.y,
+        };
+        const nextTileCoordinates = getLeavingTrainCoordinates(
+          this.route!,
+          originCoordinates
         );
 
-        routeToNextDestination.routes = possibleRoutesWithDestinationMatch;
-        routeToNextDestination.selectedRoute = shortest;
-        debugger;
-      });
-    }
+        this.trainObject.routeDestinations.map(routeToNextDestination => {
+          const destination = routeToNextDestination.to;
+          const possibleRoutes = this.checkRoutesOnNextTile(
+            nextTileCoordinates,
+            originCoordinates,
+            destination
+          );
+          // Remove all routes that do not end on the destination
+          const possibleRoutesWithDestinationMatch: any = Object.values(
+            possibleRoutes
+          ).filter((route: any) => route[route.length - 1] === destination);
+
+          // Get the shortes route
+          const shortest = possibleRoutesWithDestinationMatch.reduce(
+            function(p: any, c: any) {
+              return p.length > c.length ? c : p;
+            },
+            { length: Infinity }
+          );
+
+          routeToNextDestination.routes = possibleRoutesWithDestinationMatch;
+          routeToNextDestination.selectedRoute = shortest;
+        });
+      }
+      resolve();
+    });
   }
 
   currentRouteIndex = 0;
@@ -161,6 +164,7 @@ export default class Train extends Vue {
       nextTileCoordinates,
       originCoordinates
     );
+    const routeTileId = tilePosition + "-" + tileEntrancePosition;
     let tileAlreadyVisited = false;
 
     // Create route array for new RouteIndex
@@ -217,17 +221,18 @@ export default class Train extends Vue {
             return false;
           }
 
-          // Add current tile to route
-          checkedRoutes[currentRouteIndex].push({
-            [tilePosition]: {
-              entrancePosition: tileEntrancePosition,
-              leavesAtPosition: route.leavesAtPosition,
-            },
-          });
           // Make copy of current path, as base for the new splitted route
           checkedRoutes[newRouteIndex] = checkedRoutes[
             currentRouteIndex
           ].slice();
+
+          // Add current tile to route
+          checkedRoutes[newRouteIndex].push({
+            routeTileId: routeTileId,
+            entrancePosition: tileEntrancePosition,
+            leavesAtPosition: route.leavesAtPosition,
+            intersectionSwitchPosition: route.intersectionSwitchPosition,
+          });
 
           this.checkRoutesOnNextTile(
             route.nextCoordinates,

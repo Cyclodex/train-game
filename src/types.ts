@@ -16,6 +16,7 @@ export interface TrainObject extends Coordinates {
   wagons?: Wagon[];
   visual?: HTMLElement | null;
   routeDestinations?: RouteDestinations[];
+  currentRouteDestination?: number;
 }
 
 export interface RouteDestinations {
@@ -136,6 +137,7 @@ export interface CheckStatusPossibleRoutes {
 }
 export interface CheckStatusRoute extends Route {
   nextCoordinates: Coordinates;
+  intersectionSwitchPosition: ActiveIntersection;
 }
 
 export interface CheckedRoutesString {

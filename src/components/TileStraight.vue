@@ -67,10 +67,12 @@ import {
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
+  TrainStatus,
 } from "@/types";
 import TileBase from "./TileBase.vue";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
+import Train from "./Train.vue";
 
 @Component
 export default class TileStraight extends TileBase {
@@ -200,17 +202,22 @@ export default class TileStraight extends TileBase {
       }
     );
 
-    const status = this.checkStatusOnNextTile(nextTileCoordinates, {
-      x: this.tile.x,
-      y: this.tile.y,
-    });
+    const status = this.checkStatusOnNextTile(
+      nextTileCoordinates,
+      {
+        x: this.tile.x,
+        y: this.tile.y,
+      },
+      trainObject
+    );
 
     return status;
   }
 
   checkStatusOnNextTile(
     nextTileCoordinates: Coordinates,
-    originCoordinates: Coordinates
+    originCoordinates: Coordinates,
+    trainObject: TrainObject
   ): any {
     let status: number;
     const tilePosition: string = getCoordinatesId(nextTileCoordinates);
@@ -221,7 +228,7 @@ export default class TileStraight extends TileBase {
     if (this.level[tilePosition]) {
       const tileStatus: CheckStatusFeedback = (this.$parent.$refs[
         tilePosition
-      ] as any)[0].checkStatus(tileEntrancePosition);
+      ] as any)[0].checkStatus(tileEntrancePosition, trainObject);
       // If Status is not free = The route is block, dont progress
       if (tileStatus.status !== TileStatus.Free) {
         return tileStatus.status;
@@ -235,12 +242,16 @@ export default class TileStraight extends TileBase {
         // Call next tile, as long as we don't have any traffic light on the route
         status = this.checkStatusOnNextTile(
           tileStatus.nextCoordinates,
-          nextTileCoordinates
+          nextTileCoordinates,
+          trainObject
         );
       }
       // If route is free, reserve every tile
       if (status === TileStatus.Free) {
-        (this.$parent.$refs[tilePosition] as any)[0].reserveTile();
+        (this.$parent.$refs[tilePosition] as any)[0].reserveTile(
+          tileEntrancePosition,
+          trainObject
+        );
       }
       return status + tileStatus.status;
     }
@@ -265,7 +276,9 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Green,
         });
 
-        this.animateTrainFromTrafficLight();
+        if (this.currentTrain.status === TrainStatus.Stopped) {
+          this.animateTrainFromTrafficLight();
+        }
       }
     }
   }

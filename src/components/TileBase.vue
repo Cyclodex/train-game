@@ -13,6 +13,7 @@ import {
   Vue,
 } from "vue-property-decorator";
 import {
+  ActiveIntersection,
   CheckStatusFeedback,
   LevelDefinition,
   Position,
@@ -25,7 +26,10 @@ import {
   TrainObject,
   TrainsDefinition,
 } from "@/types";
-import { getRelativeCoordinatesOfNextTile } from "@/utils/tileHelpers";
+import {
+  getCoordinatesId,
+  getRelativeCoordinatesOfNextTile,
+} from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 @Component
@@ -61,7 +65,7 @@ export default class TileBase extends Vue {
     }
   }
 
-  getRouteFromEntrancePosition(entrancePosition: Position) {
+  getRouteFromEntrancePosition(entrancePosition: Position, ...args: any) {
     return this.possibleRoutes[this.currentRotation][entrancePosition];
   }
 
@@ -71,7 +75,36 @@ export default class TileBase extends Vue {
     return this.possibleRoutes[this.currentRotation][entrancePosition];
   }
 
-  checkStatus(entrancePosition: Position): CheckStatusFeedback | false {
+  getCurrentTileInPlannedRoute(
+    entrancePosition: Position,
+    trainObject: TrainObject
+  ) {
+    if (
+      trainObject &&
+      trainObject.currentRouteDestination !== undefined &&
+      trainObject.routeDestinations
+    ) {
+      if (trainObject.routeDestinations[trainObject.currentRouteDestination]) {
+        const routeDestinationObject =
+          trainObject.routeDestinations[trainObject.currentRouteDestination];
+
+        if (routeDestinationObject.selectedRoute) {
+          const plannedRoute: any = routeDestinationObject.selectedRoute;
+          const tileId = getCoordinatesId(this.tile) + "-" + entrancePosition;
+          const currentTileInPlannedRoute = plannedRoute.find(
+            (tile: any) => tile.routeTileId === tileId
+          );
+
+          return currentTileInPlannedRoute;
+        }
+      }
+    }
+  }
+
+  checkStatus(
+    entrancePosition: Position,
+    trainObject?: TrainObject
+  ): CheckStatusFeedback | false {
     const route = this.getRouteFromEntrancePosition(entrancePosition);
     if (!route) {
       // There seems to be no connected route! Ups!
@@ -104,7 +137,7 @@ export default class TileBase extends Vue {
     };
   }
 
-  reserveTile() {
+  reserveTile(...args: any) {
     this.status = TileStatus.Reserved;
   }
 
