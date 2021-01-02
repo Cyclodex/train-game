@@ -417,10 +417,6 @@ export default class App extends Vue {
         [Position.Top]: [ActiveIntersection.Left, ActiveIntersection.Right],
         [Position.Bottom]: [ActiveIntersection.Left, ActiveIntersection.Right],
       },
-      activeRoutes: {
-        [Position.Top]: ActiveIntersection.Left,
-        [Position.Left]: ActiveIntersection.Left,
-      },
     },
     "3,3": {
       component: "TileStraight",
@@ -500,6 +496,11 @@ export default class App extends Vue {
           ActiveIntersection.Right,
           ActiveIntersection.Straight,
         ],
+      },
+      activeRoutes: {
+        [Position.Right]: ActiveIntersection.Right,
+        [Position.Top]: ActiveIntersection.Left,
+        [Position.Left]: ActiveIntersection.Left,
       },
     },
     "3,4": {

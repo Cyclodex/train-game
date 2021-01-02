@@ -33,27 +33,6 @@
         marker-end="url(#endarrow)"
       />
     </template>
-    <!-- <template v-for="(route, key) in switchableRoutes">
-      <path
-        :key="key + route.path"
-        :d="route.path"
-        stroke="red"
-        stroke-width="2"
-        fill="transparent"
-        marker-end="url(#endarrow)"
-      />
-    </template> -->
-    <template v-if="activeRoute">
-      <path
-        :key="activeRoute.path"
-        :d="activeRoute.path"
-        stroke="green"
-        stroke-width="4"
-        fill="transparent"
-        marker-end="url(#endarrow)"
-        marker-mid="url(#midarrow)"
-      />
-    </template>
   </svg>
 </template>
 

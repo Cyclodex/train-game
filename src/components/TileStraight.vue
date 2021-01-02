@@ -169,18 +169,23 @@ export default class TileStraight extends TileBase {
 
   changeTrafficLight(trafficLight: TrafficLight) {
     if (trafficLight.signal === TrafficLightSignal.Red) {
-      // TODO: Animation should not start, when train is not stopped yet
       this.checkAutomaticTrafficLight();
     } else {
       trafficLight.signal = TrafficLightSignal.Red;
     }
   }
 
-  forceGreenTrafficLight(trafficLight: TrafficLight) {
+  forceGreenTrafficLight(
+    trafficLight: TrafficLight,
+    trainObject: TrainObject = this.train
+  ) {
     this.updateTrafficLight({
       direction: trafficLight.direction,
       signal: TrafficLightSignal.Green,
     });
+    // Force path reservation
+    this.checkRouteAhead(trainObject, true);
+    //Force go train
     this.animateTrainFromTrafficLight();
   }
 
@@ -193,7 +198,7 @@ export default class TileStraight extends TileBase {
   }
 
   // TODO: Use the correct signal, not both!
-  checkRouteAhead(trainObject: TrainObject) {
+  checkRouteAhead(trainObject: TrainObject, forced = false) {
     const nextTileCoordinates = getLeavingTrainCoordinates(
       this.getTrainRoute(trainObject)!,
       {
@@ -208,7 +213,8 @@ export default class TileStraight extends TileBase {
         x: this.tile.x,
         y: this.tile.y,
       },
-      trainObject
+      trainObject,
+      forced
     );
 
     return status;
@@ -217,7 +223,8 @@ export default class TileStraight extends TileBase {
   checkStatusOnNextTile(
     nextTileCoordinates: Coordinates,
     originCoordinates: Coordinates,
-    trainObject: TrainObject
+    trainObject: TrainObject,
+    forced = false
   ): any {
     let status: number;
     const tilePosition: string = getCoordinatesId(nextTileCoordinates);
@@ -230,7 +237,7 @@ export default class TileStraight extends TileBase {
         tilePosition
       ] as any)[0].checkStatus(tileEntrancePosition, trainObject);
       // If Status is not free = The route is block, dont progress
-      if (tileStatus.status !== TileStatus.Free) {
+      if (tileStatus.status !== TileStatus.Free && !forced) {
         return tileStatus.status;
       } else if (tileStatus.hasTrafficLight) {
         // If it has trafficLight, reserve it and return the status, the route is complete
@@ -243,11 +250,12 @@ export default class TileStraight extends TileBase {
         status = this.checkStatusOnNextTile(
           tileStatus.nextCoordinates,
           nextTileCoordinates,
-          trainObject
+          trainObject,
+          forced
         );
       }
       // If route is free, reserve every tile
-      if (status === TileStatus.Free) {
+      if (status === TileStatus.Free || forced) {
         (this.$parent.$refs[tilePosition] as any)[0].reserveTile(
           tileEntrancePosition,
           trainObject
@@ -270,7 +278,7 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Red,
         });
       } else {
-        // Route free, reserve path and give go
+        // Route free, give go
         this.updateTrafficLight({
           direction: this.getTrafficLightDirection(trainObject),
           signal: TrafficLightSignal.Green,
@@ -308,10 +316,9 @@ export default class TileStraight extends TileBase {
 
   // Check every 2 seconds to continue travel if route is ok
   trainOnRedTrafficLight(trainObject: TrainObject) {
-    this.checkRouteInterval = setInterval(
-      this.checkAutomaticTrafficLight,
-      2000
-    );
+    this.checkRouteInterval = setInterval(() => {
+      this.checkAutomaticTrafficLight(trainObject);
+    }, 2000);
   }
 
   trainLeavesTile(trainObject: TrainObject) {

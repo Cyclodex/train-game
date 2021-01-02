@@ -32,10 +32,6 @@ import {
   TrainObject,
 } from "@/types";
 import TileBase from "./TileBase.vue";
-import { gsap } from "gsap";
-
-// Info
-// t=top, r=rigth, b=bottom, l=left
 
 @Component
 export default class TileIntersection extends TileBase {
