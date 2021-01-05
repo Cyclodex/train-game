@@ -1,29 +1,3 @@
-<template>
-  <div class="train-composition">
-    <div
-      :id="trainObject.id"
-      class="train loco clickable"
-      :style="[initialPosition, trainVisuals.loco]"
-      @click.stop="startStopTrain"
-    >
-      <span v-if="$root.debug" class="train-debug"
-        >{{ trainObject.x }}, {{ trainObject.y }}</span
-      >
-    </div>
-    <template v-if="trainObject.wagons">
-      <div
-        v-for="wagon in trainObject.wagons"
-        :id="wagon.id"
-        :key="wagon.id"
-        class="train wagon"
-        :style="[initialPosition, trainVisuals.loco]"
-      >
-        <span v-if="$root.debug" class="train-debug">{{ wagon.id }}</span>
-      </div>
-    </template>
-  </div>
-</template>
-
 <script lang="ts">
 import {
   CheckedRoutesObject,
@@ -56,8 +30,34 @@ export default class Train extends Vue {
   initialPosition = {};
   timeScale = 1;
   trainVisuals = {
-    loco: {
-      backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
+    locos: {
+      people: {
+        backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
+      },
+      fraight: {
+        backgroundImage: `url(${require("@/assets/locomotiveFraight.png")})`,
+      },
+    },
+    wagons: {
+      people: {
+        wagonPeople: {
+          backgroundImage: `url(${require("@/assets/wagonPeople.png")})`,
+        },
+      },
+      fraight: {
+        wagonFraight1: {
+          backgroundImage: `url(${require("@/assets/wagonFraight1.png")})`,
+        },
+        wagonFraight2: {
+          backgroundImage: `url(${require("@/assets/wagonFraight2.png")})`,
+        },
+        wagonFraight3: {
+          backgroundImage: `url(${require("@/assets/wagonFraight3.png")})`,
+        },
+        wagonFraight4: {
+          backgroundImage: `url(${require("@/assets/wagonFraight4.png")})`,
+        },
+      },
     },
   };
   id = "";
@@ -66,10 +66,16 @@ export default class Train extends Vue {
   route?: Route;
   routeDestinations?: RouteDestinations[] = [];
   currentRouteDestination = 0;
+  type: "people" | "fraight" = "people";
+  wagonAnimationDistance = 0.95;
 
   created() {
     this.id = this.trainObject.id;
     this.wagons = this.trainObject.wagons;
+    this.type = this.trainObject.type;
+    if (this.type === "fraight") {
+      this.wagonAnimationDistance = 0.8;
+    }
     this.routeDestinations = this.trainObject.routeDestinations;
 
     this.setInitialPosition();
@@ -289,22 +295,22 @@ export default class Train extends Vue {
     let tilePositionY = 0;
 
     switch (this.trainObject.direction) {
-    case TrainDirection.Up:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = this.$root.tileSize;
-      break;
-    case TrainDirection.Right:
-        tilePositionX = 0;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
-    case TrainDirection.Down:
-        tilePositionX = this.$root.tileSize / 2;
-        tilePositionY = 0;
-      break;
-    case TrainDirection.Left:
-        tilePositionX = this.$root.tileSize;
-        tilePositionY = this.$root.tileSize / 2;
-      break;
+      case TrainDirection.Up:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = this.$root.tileSize;
+        break;
+      case TrainDirection.Right:
+      tilePositionX = 0;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
+      case TrainDirection.Down:
+      tilePositionX = this.$root.tileSize / 2;
+      tilePositionY = 0;
+        break;
+      case TrainDirection.Left:
+      tilePositionX = this.$root.tileSize;
+      tilePositionY = this.$root.tileSize / 2;
+        break;
     }
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
@@ -350,7 +356,7 @@ export default class Train extends Vue {
                   path: trainPath,
                 },
               },
-              (index + 1) * 0.95
+              (index + 1) * this.wagonAnimationDistance
             )
             .addLabel(wagon.id, ">");
         });
@@ -453,10 +459,59 @@ export default class Train extends Vue {
       });
     }
   }
+
+  getRandom(list: any[]) {
+    return list[Math.floor(Math.random() * list.length)];
+  }
+
+  get getWagonImage() {
+    if (this.type === "people") {
+      return this.trainVisuals.wagons.people.wagonPeople;
+    } else {
+      const wagons = Object.values(this.trainVisuals.wagons.fraight);
+      return this.getRandom(wagons);
+    }
+  }
+
+  get locoImage() {
+    if (this.type === "people") {
+      return this.trainVisuals.locos.people;
+    } else if (this.type === "fraight") {
+      return this.trainVisuals.locos.fraight;
+    }
+    return this.trainVisuals.locos.fraight;
+  }
 }
 </script>
 
-<style scoped>
+<template>
+  <div class="train-composition">
+    <div
+      :id="trainObject.id"
+      class="train train-locomotive clickable"
+      :style="[initialPosition, locoImage]"
+      @click.stop="startStopTrain"
+    >
+      <span v-if="$root.debug" class="train-debug"
+        >{{ trainObject.x }}, {{ trainObject.y }}</span
+      >
+    </div>
+    <template v-if="trainObject.wagons">
+      <div
+        v-for="wagon in trainObject.wagons"
+        :id="wagon.id"
+        :key="wagon.id"
+        class="train train-wagon"
+        :class="`train-wagon--${type}`"
+        :style="[initialPosition, getWagonImage]"
+      >
+        <span v-if="$root.debug" class="train-debug">{{ wagon.id }}</span>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style lang="scss" scoped>
 .train {
   width: 26px;
   height: 100px;
@@ -466,7 +521,18 @@ export default class Train extends Vue {
   background-size: contain;
   background-position: center center;
   background-repeat: no-repeat;
+
+  &.train-wagon--people {
+    width: 30px;
+    height: 100px;
+  }
+
+  &.train-wagon--fraight {
+    width: 30px;
+    height: 81px;
+  }
 }
+
 .train-debug {
   font-size: 14px;
   font-weight: bold;

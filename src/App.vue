@@ -80,6 +80,7 @@ export default class App extends Vue {
       y: 1,
       direction: TrainDirection.Left,
       status: TrainStatus.Init,
+      type: "people",
       wagons: [
         { id: "wagonA1", type: "people" },
         { id: "wagonA2", type: "people" },
@@ -95,9 +96,10 @@ export default class App extends Vue {
       y: 2,
       direction: TrainDirection.Right,
       status: TrainStatus.Init,
+      type: "fraight",
       wagons: [
-        { id: "wagonB1", type: "people" },
-        { id: "wagonB2", type: "people" },
+        { id: "wagonB1", type: "fraight" },
+        { id: "wagonB2", type: "fraight" },
       ],
       routeDestinations: [{ to: "3,4" }],
       currentRouteDestination: 0,
@@ -108,9 +110,10 @@ export default class App extends Vue {
       y: 4,
       direction: TrainDirection.Right,
       status: TrainStatus.Init,
+      type: "fraight",
       wagons: [
-        { id: "wagonC1", type: "people" },
-        { id: "wagonC2", type: "people" },
+        { id: "wagonC1", type: "fraight" },
+        { id: "wagonC2", type: "fraight" },
       ],
       routeDestinations: [{ to: "4,2" }],
       currentRouteDestination: 0,

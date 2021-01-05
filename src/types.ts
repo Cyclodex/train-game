@@ -17,6 +17,7 @@ export interface TrainObject extends Coordinates {
   visual?: HTMLElement | null;
   routeDestinations?: RouteDestinations[];
   currentRouteDestination?: number;
+  type: "people" | "fraight";
 }
 
 export interface RouteDestinations {
