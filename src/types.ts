@@ -56,6 +56,7 @@ export enum Position {
   "Right",
   "Bottom",
   "Left",
+  "Center",
 }
 
 export enum Rotations {

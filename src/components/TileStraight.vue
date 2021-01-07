@@ -131,7 +131,6 @@ export default class TileStraight extends TileBase {
   updateTrafficLight(trafficLightUpdate: TrafficLight) {
     this.trafficLights.map((trafficLight, index) => {
       if (trafficLight.direction === trafficLightUpdate.direction) {
-        // Reactivity!
         Vue.set(this.trafficLights, index, trafficLightUpdate);
       }
     });

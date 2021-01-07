@@ -5,6 +5,7 @@ import {
   CheckStatusFeedback,
   Coordinates,
   LevelDefinition,
+  Rotations,
   Route,
   RouteDestinations,
   TrainDirection,
@@ -68,6 +69,8 @@ export default class Train extends Vue {
   currentRouteDestination = 0;
   type: "people" | "fraight" = "people";
   wagonAnimationDistance = 0.95;
+  initialRotation = 0;
+  trainInitialyVertical = false;
 
   created() {
     this.id = this.trainObject.id;
@@ -103,6 +106,14 @@ export default class Train extends Vue {
     const coordId = getCoordinatesId(this.trainObject);
     const tile = (this.$parent.$refs[coordId] as any)[0];
     this.route = tile.getTrainRoute(this.trainObject);
+
+    this.initialRotation = tile.currentRotation;
+    this.trainInitialyVertical =
+      this.initialRotation === Rotations.Top ||
+      this.initialRotation === Rotations.Bottom
+        ? true
+        : false;
+    debugger;
 
     // Check for planned Destination
     await this.doRoutePlanning();
@@ -290,28 +301,18 @@ export default class Train extends Vue {
     });
   }
 
-  setInitialPosition() {
-    let tilePositionX = 0;
-    let tilePositionY = 0;
+  stopTrainInDepot() {
+    this.trainStopping();
+    gsap.to(this.trainObject.animation, {
+      duration: 10,
+      timeScale: 0.2,
+      onComplete: () => this.trainStopped(),
+    });
+  }
 
-    switch (this.trainObject.direction) {
-      case TrainDirection.Up:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = this.$root.tileSize;
-        break;
-      case TrainDirection.Right:
-      tilePositionX = 0;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
-      case TrainDirection.Down:
-      tilePositionX = this.$root.tileSize / 2;
-      tilePositionY = 0;
-        break;
-      case TrainDirection.Left:
-      tilePositionX = this.$root.tileSize;
-      tilePositionY = this.$root.tileSize / 2;
-        break;
-    }
+  setInitialPosition() {
+    const tilePositionX = this.$root.tileSize / 2;
+    const tilePositionY = this.$root.tileSize / 2;
     this.initialPosition = {
       left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
       top: this.trainObject.y * this.$root.tileSize + tilePositionY + "px",
@@ -330,10 +331,10 @@ export default class Train extends Vue {
           this.visual,
           {
             ease: "none",
-            duration: 2,
+            duration: 1,
             motionPath: {
               align: "self",
-              autoRotate: 90,
+              autoRotate: "auto",
               path: trainPath,
             },
             onComplete: () => this.trainLeavesTile(),
@@ -349,10 +350,10 @@ export default class Train extends Vue {
               wagon.visual,
               {
                 ease: "none",
-                duration: 2,
+                duration: 1,
                 motionPath: {
                   align: "self",
-                  autoRotate: 90,
+                  autoRotate: "auto",
                   path: trainPath,
                 },
               },
@@ -363,7 +364,7 @@ export default class Train extends Vue {
       }
       // Start the whole timeline scale from 0 to 1
       gsap.to(trainObject.animation, {
-        duration: 10,
+        duration: 20,
         timeScale: 1,
       });
     }
@@ -437,7 +438,7 @@ export default class Train extends Vue {
         duration: 2,
         motionPath: {
           align: "self",
-          autoRotate: 90,
+          autoRotate: "auto",
           path: trainPath,
         },
       },
@@ -489,6 +490,7 @@ export default class Train extends Vue {
     <div
       :id="trainObject.id"
       class="train train-locomotive clickable"
+      :class="{ 'init-vertical': trainInitialyVertical }"
       :style="[initialPosition, locoImage]"
       @click.stop="startStopTrain"
     >
@@ -502,7 +504,10 @@ export default class Train extends Vue {
         :id="wagon.id"
         :key="wagon.id"
         class="train train-wagon"
-        :class="`train-wagon--${type}`"
+        :class="[
+          `train-wagon--${type}`,
+          { 'init-vertical': trainInitialyVertical },
+        ]"
         :style="[initialPosition, getWagonImage]"
       >
         <span v-if="$root.debug" class="train-debug">{{ wagon.id }}</span>
@@ -513,8 +518,6 @@ export default class Train extends Vue {
 
 <style lang="scss" scoped>
 .train {
-  width: 26px;
-  height: 100px;
   position: absolute;
   z-index: 10;
   transform: translate(-50%, -50%);
@@ -522,9 +525,17 @@ export default class Train extends Vue {
   background-position: center center;
   background-repeat: no-repeat;
 
+  &.init-vertical {
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+
+  &.train-locomotive {
+    width: 100px;
+    height: 26px;
+  }
   &.train-wagon--people {
-    width: 30px;
-    height: 100px;
+    width: 100px;
+    height: 30px;
   }
 
   &.train-wagon--fraight {
@@ -539,7 +550,7 @@ export default class Train extends Vue {
   position: absolute;
   color: black;
   width: 100%;
-  transform: rotate(-90deg) translate(30%, -70%);
+  transform: translate(-50%, -50%);
   top: 50%;
   left: 50%;
 }

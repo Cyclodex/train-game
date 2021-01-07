@@ -8,6 +8,8 @@ import TileRail from "@/components/TileRail.vue";
 Vue.component("TileRail", TileRail);
 import TileStraight from "@/components/TileStraight.vue";
 Vue.component("TileStraight", TileStraight);
+import TileDepot from "@/components/TileDepot.vue";
+Vue.component("TileDepot", TileDepot);
 import TileCurve from "@/components/TileCurve.vue";
 Vue.component("TileCurve", TileCurve);
 import Train from "@/components/Train.vue";

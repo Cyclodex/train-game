@@ -110,7 +110,8 @@ export default class TileBase extends Vue {
       // There seems to be no connected route! Ups!
       return false;
     }
-    const routeHasTrafficLight = !!route.trafficLight;
+    const routeHasTrafficLight =
+      !!route.trafficLight || route.leavesAtPosition === Position.Center;
     const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
     let possibleRoutes = this.getAllRoutesFromEntrancePosition(
       entrancePosition
@@ -169,7 +170,6 @@ export default class TileBase extends Vue {
 
   getIncomingTrainLocation(trainObject: TrainObject) {
     if (trainObject === null) return null;
-
     switch (trainObject.direction) {
       case TrainDirection.Down:
         return Position.Top;
@@ -180,7 +180,7 @@ export default class TileBase extends Vue {
       case TrainDirection.Right:
         return Position.Left;
       default:
-        return Position.Top;
+        return Position.Center;
     }
   }
 
@@ -236,7 +236,11 @@ export default class TileBase extends Vue {
     coordinates = coordinates.replaceAll("L-", `0 ${center - distance}`);
     coordinates = coordinates.replaceAll("L+", `0 ${center + distance}`);
     coordinates = coordinates.replaceAll("L", `0 ${center}`);
+    coordinates = coordinates.replaceAll("CX-", `${center - distance}`);
+    coordinates = coordinates.replaceAll("CX+", `${center + distance}`);
     coordinates = coordinates.replaceAll("CX", `${center + centerX}`);
+    coordinates = coordinates.replaceAll("CY-", `${center - distance}`);
+    coordinates = coordinates.replaceAll("CY+", `${center + distance}`);
     coordinates = coordinates.replaceAll("CY", `${center + centerY}`);
     coordinates = coordinates.replaceAll("C", `${center} ${center}`);
     return coordinates;
@@ -246,7 +250,10 @@ export default class TileBase extends Vue {
   getPathCurve(from: "T" | "R" | "B" | "L", to: "T" | "R" | "B" | "L") {
     return this.getCoordinates(`M ${from} Q C ${to}`);
   }
-  getPathStraight(from: "T" | "R" | "B" | "L", to: "T" | "R" | "B" | "L") {
+  getPathStraight(
+    from: "T" | "R" | "B" | "L" | "C",
+    to: "T" | "R" | "B" | "L" | "C"
+  ) {
     return this.getCoordinates(`M ${from} ${to}`);
   }
 
@@ -272,8 +279,8 @@ export default class TileBase extends Vue {
   }
 
   getRailStraight(
-    from: "T-" | "T+" | "R-" | "R+" | "B-" | "B+" | "L-" | "L+",
-    to: "T-" | "T+" | "R-" | "R+" | "B-" | "B+" | "L-" | "L+"
+    from: "T-" | "T+" | "R-" | "R+" | "B-" | "B+" | "L-" | "L+" | string,
+    to: "T-" | "T+" | "R-" | "R+" | "B-" | "B+" | "L-" | "L+" | string
   ) {
     return this.getCoordinates(`M ${from} ${to}`);
   }
