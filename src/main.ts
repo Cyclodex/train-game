@@ -27,6 +27,7 @@ new Vue({
     levelSizeX: 7,
     debug: true,
     automaticTrafficLights: true,
+    automaticRoutePlanning: false,
     railDistanceFromPath: 7,
   },
   store,

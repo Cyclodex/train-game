@@ -6,6 +6,7 @@ declare module "vue/types/vue" {
     levelSizeX: number;
     debug: boolean;
     automaticTrafficLights: boolean;
+    automaticRoutePlanning: boolean;
     railDistanceFromPath: number;
     checkStatus(entrancePosition: Position): CheckStatusFeedback;
   }

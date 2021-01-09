@@ -54,14 +54,14 @@ export default class TileBase extends Vue {
   get tileStatusStyle() {
     if (!this.$root.debug) return "";
     switch (this.status) {
-    case TileStatus.Free:
-      return "tile-status--free";
-    case TileStatus.Reserved:
-      return "tile-status--reserved";
-    case TileStatus.Blocked:
-      return "tile-status--blocked";
-    default:
-      return "";
+      case TileStatus.Free:
+        return "tile-status--free";
+      case TileStatus.Reserved:
+        return "tile-status--reserved";
+      case TileStatus.Blocked:
+        return "tile-status--blocked";
+      default:
+        return "";
     }
   }
 
@@ -143,7 +143,6 @@ export default class TileBase extends Vue {
   }
 
   incomingTrain(trainId: string) {
-    console.log("incoming train: ", trainId);
     this.train = this.trains[trainId];
     this.status = TileStatus.Blocked;
   }
@@ -171,16 +170,16 @@ export default class TileBase extends Vue {
   getIncomingTrainLocation(trainObject: TrainObject) {
     if (trainObject === null) return null;
     switch (trainObject.direction) {
-      case TrainDirection.Down:
-        return Position.Top;
-      case TrainDirection.Left:
-        return Position.Right;
-      case TrainDirection.Up:
-        return Position.Bottom;
-      case TrainDirection.Right:
-        return Position.Left;
-      default:
-        return Position.Center;
+    case TrainDirection.Down:
+      return Position.Top;
+    case TrainDirection.Left:
+      return Position.Right;
+    case TrainDirection.Up:
+      return Position.Bottom;
+    case TrainDirection.Right:
+      return Position.Left;
+    default:
+      return Position.Center;
     }
   }
 

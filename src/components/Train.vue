@@ -113,10 +113,11 @@ export default class Train extends Vue {
       this.initialRotation === Rotations.Bottom
         ? true
         : false;
-    debugger;
 
     // Check for planned Destination
-    await this.doRoutePlanning();
+    if (this.$root.automaticRoutePlanning) {
+      await this.doRoutePlanning();
+    }
 
     // Move train to first tile
     tile.incomingTrain(this.id);
@@ -391,6 +392,7 @@ export default class Train extends Vue {
   }
 
   trainLeavesTile(train: TrainObject = this.trainObject) {
+    // TODO: Train direction when stopped / depot?
     const tilePosition: string = getCoordinatesId(train);
     const tile = (this.$parent.$refs[tilePosition] as any)[0];
     tile.trainLeavesTile(train);
@@ -539,8 +541,8 @@ export default class Train extends Vue {
   }
 
   &.train-wagon--fraight {
-    width: 30px;
-    height: 81px;
+    width: 81px;
+    height: 30px;
   }
 }
 

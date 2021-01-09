@@ -67,12 +67,10 @@ import {
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
-  TrainStatus,
 } from "@/types";
 import TileBase from "./TileBase.vue";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
-import Train from "./Train.vue";
 
 @Component
 export default class TileStraight extends TileBase {
@@ -283,15 +281,19 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Green,
         });
 
-        if (this.currentTrain.status === TrainStatus.Stopped) {
-          this.animateTrainFromTrafficLight();
-        }
+        // if (this.currentTrain.status === TrainStatus.Stopped) {
+        //   this.animateTrainFromTrafficLight();
+        // }
+        this.animateTrainFromTrafficLight();
       }
     }
   }
 
   getTrafficLightDirection(trainObject: TrainObject) {
-    return this.getTrainRoute(trainObject)!.trafficLight!.direction;
+    return (
+      this.getTrainRoute(trainObject)?.trafficLight?.direction ||
+      TrafficLightDirection.Disabled
+    );
   }
 
   incomingTrain(trainId: string) {
