@@ -44,7 +44,8 @@
       </template>
     </template>
 
-    <img class="depot" src="@/assets/depot.png" />
+    <img class="depot-building" src="@/assets/depot.png" />
+    <div class="depot-interaction" :style="depotColorStyle" />
 
     <div v-if="$root.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
@@ -66,8 +67,10 @@ import {
   TrafficLightDirection,
   TrafficLightSignal,
   TrainObject,
+  TrainStatus,
 } from "@/types";
 import TileStraight from "./TileStraight.vue";
+import { Colors, getRandom } from "@/utils/globalHelpers";
 
 @Component
 export default class TileDepot extends TileStraight {
@@ -75,6 +78,7 @@ export default class TileDepot extends TileStraight {
   automaticTrafficLights = false;
   checkRouteInterval: any;
   possibleRoutes: PossibleRoutesPerRotation = {};
+  depotColor = "";
 
   initRoutes(): void {
     this.possibleRoutes = {
@@ -144,7 +148,7 @@ export default class TileDepot extends TileStraight {
   }
 
   initDepot() {
-    // todo
+    this.depotColor = getRandom(Colors);
   }
 
   positionTrafficLights() {
@@ -181,13 +185,25 @@ export default class TileDepot extends TileStraight {
   }
 
   incomingTrain(trainId: string) {
+    this.status = TileStatus.Blocked;
     this.train = this.trains[trainId];
     this.checkAutomaticTrafficLight();
 
-    // Stop the train
-    (this.$parent.$refs[trainId] as any)[0].stopTrainInDepot();
-    // TODO: Do something when train is depot
-    // this.trainInDepot(this.train);
+    if (
+      this.train.status! === TrainStatus.Running ||
+      this.train.status! === TrainStatus.Started
+    ) {
+      // Stop the train
+      (this.$parent.$refs[trainId] as any)[0].stopTrainInDepot();
+    }
+  }
+
+  trainInDepot(trainObject: TrainObject) {
+    if (trainObject.trainColor === this.depotColor) {
+      alert("yey");
+    } else {
+      (this.$parent.$refs[trainObject.id] as any)[0].startTrainFromDepot();
+    }
   }
 
   animateTrainOptions(trainObject: TrainObject) {
@@ -210,11 +226,17 @@ export default class TileDepot extends TileStraight {
   }
 
   trainLeavesTile(trainObject: TrainObject) {
-    // Clear Tile Status after a while
-    this.trainLeavesTrafficLight(trainObject);
-    setTimeout(() => {
-      this.status = TileStatus.Free;
-    }, 1000);
+    if (trainObject.status !== TrainStatus.EnteringDepot) {
+      // TODO There is no traffic light yet
+      this.trainLeavesTrafficLight(trainObject);
+      // Clear Tile Status after a while
+      setTimeout(() => {
+        this.status = TileStatus.Free;
+      }, 1000);
+      return true;
+    }
+    // Train does not leave
+    return false;
   }
 
   trainLeavesTrafficLight(trainObject: TrainObject) {
@@ -224,6 +246,10 @@ export default class TileDepot extends TileStraight {
         signal: TrafficLightSignal.Red,
       });
     }
+  }
+
+  get depotColorStyle() {
+    return { backgroundColor: this.depotColor };
   }
 }
 </script>
@@ -263,29 +289,41 @@ export default class TileDepot extends TileStraight {
     }
   }
 
-  .depot {
+  .depot-building {
     position: absolute;
     height: 70px;
     z-index: 10;
   }
+
+  .depot-interaction {
+    position: absolute;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    z-index: 1000;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border: 2px solid black;
+  }
 }
 // TODO :::: correct values
-.tile-rotation--top .depot {
+.tile-rotation--top .depot-building {
   bottom: 0;
   left: 50%;
   transform: translate(-45%, -60%) rotate(-90deg);
 }
-.tile-rotation--right .depot {
+.tile-rotation--right .depot-building {
   top: 50%;
   left: 0;
   transform: translate(0, -40%);
 }
-.tile-rotation--bottom .depot {
+.tile-rotation--bottom .depot-building {
   top: 0;
   left: 50%;
   transform: translate(-45%, 60%) rotate(-90deg);
 }
-.tile-rotation--left .depot {
+.tile-rotation--left .depot-building {
   top: 50%;
   right: 0;
   transform: translate(0, -40%);

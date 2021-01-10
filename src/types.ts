@@ -18,6 +18,7 @@ export interface TrainObject extends Coordinates {
   routeDestinations?: RouteDestinations[];
   currentRouteDestination?: number;
   type: "people" | "fraight";
+  trainColor?: string;
 }
 
 export interface RouteDestinations {
@@ -42,9 +43,12 @@ export enum TrainStatus {
   "Started",
   "Running",
   "Init",
+  "EnteringDepot",
+  "LeavingDepot",
 }
 
 export enum TrainDirection {
+  "None" = "N",
   "Up" = "U",
   "Right" = "R",
   "Down" = "D",

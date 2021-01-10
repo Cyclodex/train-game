@@ -8,7 +8,6 @@ import {
   Rotations,
   Route,
   RouteDestinations,
-  TrainDirection,
   TrainObject,
   TrainsDefinition,
   TrainStatus,
@@ -21,6 +20,7 @@ import {
 } from "@/utils/trainHelpers";
 import gsap from "gsap";
 import { Component, InjectReactive, Prop, Vue } from "vue-property-decorator";
+import { Colors, getRandom } from "@/utils/globalHelpers";
 
 @Component
 export default class Train extends Vue {
@@ -71,11 +71,16 @@ export default class Train extends Vue {
   wagonAnimationDistance = 0.95;
   initialRotation = 0;
   trainInitialyVertical = false;
+  trainColor = "";
 
   created() {
     this.id = this.trainObject.id;
     this.wagons = this.trainObject.wagons;
     this.type = this.trainObject.type;
+
+    // Random color generater
+    this.trainColor = this.trainObject.trainColor = getRandom(Colors);
+
     if (this.type === "fraight") {
       this.wagonAnimationDistance = 0.8;
     }
@@ -122,10 +127,16 @@ export default class Train extends Vue {
     // Move train to first tile
     tile.incomingTrain(this.id);
 
-    // Start of long trains(with wagons)
-    if (this.trainObject.status === TrainStatus.Init) {
-      this.initTrain();
+    // Start train from depot
+    if (this.trainObject.status === TrainStatus.LeavingDepot) {
+      this.startTrainFromDepot();
+    } else if (this.trainObject.status === TrainStatus.Init) {
+      this.trainReadyOnDepot();
     }
+  }
+
+  trainReadyOnDepot() {
+    // do soemthing
   }
 
   doRoutePlanning() {
@@ -303,11 +314,11 @@ export default class Train extends Vue {
   }
 
   stopTrainInDepot() {
-    this.trainStopping();
+    this.trainStoppingInDepot();
     gsap.to(this.trainObject.animation, {
       duration: 10,
-      timeScale: 0.2,
-      onComplete: () => this.trainStopped(),
+      timeScale: 0.5,
+      onComplete: () => this.trainStoppedInDepot(),
     });
   }
 
@@ -320,14 +331,15 @@ export default class Train extends Vue {
     };
   }
 
-  initTrain() {
+  // TODO Check if this can be done with animateTrain()
+  startTrainFromDepot() {
     this.trainStarted();
-    const trainObject = { ...this.trainObject };
+    // const trainObject = { ...this.trainObject };
     const trainRoute = this.route;
     if (trainRoute) {
       const trainPath = trainRoute.path;
       // Animate train out of the box, and add all wagons accordingly
-      trainObject.animation
+      this.trainObject.animation
         .to(
           this.visual,
           {
@@ -340,13 +352,13 @@ export default class Train extends Vue {
             },
             onComplete: () => this.trainLeavesTile(),
           },
-          trainObject.id
+          this.trainObject.id
         )
-        .addLabel(trainObject.id, ">");
+        .addLabel(this.trainObject.id, ">");
       // Wagon trial
-      if (trainObject.wagons) {
-        trainObject.wagons!.map((wagon, index) => {
-          trainObject.animation
+      if (this.trainObject.wagons) {
+        this.trainObject.wagons!.map((wagon, index) => {
+          this.trainObject.animation
             .to(
               wagon.visual,
               {
@@ -364,7 +376,7 @@ export default class Train extends Vue {
         });
       }
       // Start the whole timeline scale from 0 to 1
-      gsap.to(trainObject.animation, {
+      gsap.to(this.trainObject.animation, {
         duration: 20,
         timeScale: 1,
       });
@@ -372,15 +384,29 @@ export default class Train extends Vue {
   }
 
   updateTrain(train: TrainObject | any) {
-    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+    // this.trains[this.id] = Object.assign({}, this.trains[this.id], train);
+    this.$emit("update", train);
   }
 
   trainStopping() {
     this.updateTrain({ id: this.id, status: TrainStatus.Stopping });
   }
 
+  trainStoppingInDepot() {
+    this.updateTrain({ id: this.id, status: TrainStatus.EnteringDepot });
+  }
+
   trainStopped() {
     this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
+  }
+  trainStoppedInDepot() {
+    this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
+    const tilePosition: string = getCoordinatesId(this.trainObject);
+    const tile = (this.$parent.$refs[tilePosition] as any)[0];
+    this.route = tile.getTrainRoute(this.trainObject);
+
+    this.trainObject.animation.clear();
+    tile.trainInDepot(this.trainObject);
   }
 
   trainStarted() {
@@ -392,10 +418,9 @@ export default class Train extends Vue {
   }
 
   trainLeavesTile(train: TrainObject = this.trainObject) {
-    // TODO: Train direction when stopped / depot?
     const tilePosition: string = getCoordinatesId(train);
     const tile = (this.$parent.$refs[tilePosition] as any)[0];
-    tile.trainLeavesTile(train);
+    const trainLeavesTile = tile.trainLeavesTile(train);
 
     const nextTileCoordinates = getLeavingTrainCoordinates(this.route!, {
       x: train.x,
@@ -413,11 +438,13 @@ export default class Train extends Vue {
       direction: train.direction,
     });
 
-    // CHECK Important that we take the newest train from the train object, not just the one from the leaves function
-    this.trainEntersTile(this.trains[train.id]);
+    // Don't forward train to next tile, if entering depot
+    if (trainLeavesTile) {
+      this.trainEntersNextTile(this.trains[train.id]);
+    }
   }
 
-  trainEntersTile(train: TrainObject) {
+  trainEntersNextTile(train: TrainObject) {
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
       const tile = (this.$parent.$refs[tilePosition] as any)[0];
@@ -463,16 +490,12 @@ export default class Train extends Vue {
     }
   }
 
-  getRandom(list: any[]) {
-    return list[Math.floor(Math.random() * list.length)];
-  }
-
   get getWagonImage() {
     if (this.type === "people") {
       return this.trainVisuals.wagons.people.wagonPeople;
     } else {
       const wagons = Object.values(this.trainVisuals.wagons.fraight);
-      return this.getRandom(wagons);
+      return getRandom(wagons);
     }
   }
 
@@ -484,6 +507,10 @@ export default class Train extends Vue {
     }
     return this.trainVisuals.locos.fraight;
   }
+
+  get trainColorStyle() {
+    return { backgroundColor: this.trainColor };
+  }
 }
 </script>
 
@@ -492,13 +519,11 @@ export default class Train extends Vue {
     <div
       :id="trainObject.id"
       class="train train-locomotive clickable"
-      :class="{ 'init-vertical': trainInitialyVertical }"
+      :class="[trainColor, { 'init-vertical': trainInitialyVertical }]"
       :style="[initialPosition, locoImage]"
       @click.stop="startStopTrain"
     >
-      <span v-if="$root.debug" class="train-debug"
-        >{{ trainObject.x }}, {{ trainObject.y }}</span
-      >
+      <span v-if="$root.debug" class="train-debug">{{ trainObject.id }}</span>
     </div>
     <template v-if="trainObject.wagons">
       <div
@@ -534,6 +559,33 @@ export default class Train extends Vue {
   &.train-locomotive {
     width: 100px;
     height: 26px;
+    z-index: 3;
+
+    &.green {
+      filter: grayscale(100%) brightness(40%) sepia(100%) hue-rotate(50deg)
+        saturate(1000%) contrast(0.8);
+    }
+    &.yellow {
+      filter: grayscale(100%) brightness(120%) sepia(90%) hue-rotate(5deg)
+        saturate(500%) contrast(0.7);
+    }
+    &.red {
+      filter: grayscale(100%) brightness(40%) sepia(100%) hue-rotate(-50deg)
+        saturate(600%) contrast(0.8);
+    }
+    &.blue {
+      filter: grayscale(100%) brightness(30%) sepia(100%) hue-rotate(-180deg)
+        saturate(700%) contrast(0.8);
+    }
+    &.grey {
+      filter: grayscale(100%) brightness(110%) contrast(0.9);
+    }
+    &.black {
+      filter: invert(30%) grayscale(100%) brightness(70%) contrast(4);
+    }
+  }
+  &.train-wagon {
+    z-index: 2;
   }
   &.train-wagon--people {
     width: 100px;

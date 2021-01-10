@@ -16,10 +16,11 @@
       }"
     >
       <Train
-        v-for="train in trains"
-        :key="train.id"
-        :ref="train.id"
-        :train-object.sync="train"
+        v-for="trainObject in trains"
+        :key="trainObject.id"
+        :ref="trainObject.id"
+        :train-object="trainObject"
+        @update="onUpdateTrain"
       />
       <div
         v-for="(tile, key) in level"
@@ -46,11 +47,10 @@
 </template>
 
 <script lang="ts">
-import { Component, ProvideReactive, Vue } from "vue-property-decorator";
+import { Component, ProvideReactive, Vue, Watch } from "vue-property-decorator";
 import HelloWorld from "./components/HelloWorld.vue";
 import Counter from "@/modules/counterExample/views/Counter.vue";
 import {
-  TrainDirection,
   ActiveIntersection,
   Rotations,
   TrafficLightSignal,
@@ -59,6 +59,7 @@ import {
   LevelDefinition,
   TrainStatus,
   Position,
+  TrainObject,
 } from "@/types";
 import { gsap } from "gsap";
 import { MotionPathPlugin } from "gsap/MotionPathPlugin";
@@ -73,12 +74,13 @@ gsap.registerPlugin(MotionPathPlugin);
 export default class App extends Vue {
   timeScale = 1;
   globalAnimations!: any;
+
   @ProvideReactive() trains: TrainsDefinition = {
     train1: {
       id: "train1",
       x: 1,
       y: 1,
-      status: TrainStatus.Init,
+      status: TrainStatus.LeavingDepot,
       type: "people",
       wagons: [
         { id: "wagonA1", type: "people" },
@@ -93,7 +95,7 @@ export default class App extends Vue {
       id: "train2",
       x: 1,
       y: 2,
-      status: TrainStatus.Init,
+      status: TrainStatus.LeavingDepot,
       type: "fraight",
       wagons: [
         { id: "wagonB1", type: "fraight" },
@@ -104,9 +106,9 @@ export default class App extends Vue {
     },
     train3: {
       id: "train3",
-      x: 0,
+      x: 5,
       y: 4,
-      status: TrainStatus.Init,
+      status: TrainStatus.LeavingDepot,
       type: "fraight",
       wagons: [
         { id: "wagonC1", type: "fraight" },
@@ -119,7 +121,7 @@ export default class App extends Vue {
       id: "train4",
       x: 6,
       y: 0,
-      status: TrainStatus.Init,
+      status: TrainStatus.LeavingDepot,
       type: "fraight",
       wagons: [
         { id: "wagonD1", type: "fraight" },
@@ -398,6 +400,9 @@ export default class App extends Vue {
       component: "TileIntersectionComplete",
       x: 5,
       y: 3,
+      activeRoutes: {
+        [Position.Bottom]: ActiveIntersection.Left,
+      },
       disabledRoutes: {
         [Position.Top]: [
           ActiveIntersection.Left,
@@ -480,6 +485,10 @@ export default class App extends Vue {
       y: 4,
     },
   };
+
+  onUpdateTrain(train: TrainObject) {
+    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+  }
 
   switchDebugMode() {
     this.$root.debug = !this.$root.debug;

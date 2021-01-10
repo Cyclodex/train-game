@@ -187,19 +187,6 @@ export default class TileBase extends Vue {
     return {};
   }
 
-  // Only example function, tiles need to override this logic
-  animateTrain(trainObject: TrainObject) {
-    // Define tile exit
-    trainObject.y += 1;
-
-    // Animate
-    trainObject.animation.to(trainObject.visual, {
-      duration: 2,
-      y: `+=${this.tileSize}`,
-      onComplete: () => this.trainLeavesTile(trainObject),
-    });
-  }
-
   get currentTrain() {
     return this.trains[this.train!.id] || null;
   }
@@ -209,6 +196,7 @@ export default class TileBase extends Vue {
     setTimeout(() => {
       this.status = TileStatus.Free;
     }, 1000);
+    return true;
   }
 
   getCoordinates(

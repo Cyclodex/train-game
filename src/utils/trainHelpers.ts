@@ -18,9 +18,7 @@ export function getTrainDirection(next: Coordinates, origin: Coordinates) {
   case "1,0":
       return TrainDirection.Right;
   default:
-    console.error("getTrainDirection: failed");
-    debugger;
-    return TrainDirection.Down;
+    return TrainDirection.None;
   }
 }
 

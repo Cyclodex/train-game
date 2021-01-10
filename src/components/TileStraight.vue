@@ -2,11 +2,11 @@
   <div
     class="tile tile-straight clickable"
     :class="[
+      tileStatusStyle,
       {
         'tile-rotation--top-down': currentRotation === 0,
         'tile-rotation--left-right': currentRotation === 1,
       },
-      tileStatusStyle,
     ]"
     @click="rotate"
   >
@@ -281,9 +281,6 @@ export default class TileStraight extends TileBase {
           signal: TrafficLightSignal.Green,
         });
 
-        // if (this.currentTrain.status === TrainStatus.Stopped) {
-        //   this.animateTrainFromTrafficLight();
-        // }
         this.animateTrainFromTrafficLight();
       }
     }
@@ -297,6 +294,7 @@ export default class TileStraight extends TileBase {
   }
 
   incomingTrain(trainId: string) {
+    this.status = TileStatus.Blocked;
     this.train = this.trains[trainId];
     this.checkAutomaticTrafficLight();
 
@@ -328,6 +326,7 @@ export default class TileStraight extends TileBase {
     setTimeout(() => {
       this.status = TileStatus.Free;
     }, 1000);
+    return true;
   }
 
   trainLeavesTrafficLight(trainObject: TrainObject) {
