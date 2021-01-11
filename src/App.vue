@@ -4,10 +4,12 @@
       <button class="debug-button" @click="switchDebugMode">
         Debug Mode
       </button>
-      <!-- TODO: Restarting doesnt work as expected. It will brake the animations.
-      <button class="timeline-button" @click="startStopAnimations">
-        Start/Stop
-      </button> -->
+      <button class="timeline-button" @click="pausePlayGame">
+        {{ paused ? "Start" : "Pause" }}
+      </button>
+      <button class="timeline-button" @click="changeGlobalTimeScale">
+        {{ globalTimeScale }} x Speed
+      </button>
     </div>
     <div
       class="level"
@@ -72,8 +74,10 @@ gsap.registerPlugin(MotionPathPlugin);
   },
 })
 export default class App extends Vue {
-  timeScale = 1;
+  paused = false;
   globalAnimations!: any;
+  globalTimeScale = 1;
+  speeds = [1, 2, 4];
 
   @ProvideReactive() trains: TrainsDefinition = {
     train1: {
@@ -494,21 +498,24 @@ export default class App extends Vue {
     this.$root.debug = !this.$root.debug;
   }
 
-  startStopAnimations() {
-    this.timeScale = this.timeScale === 1 ? 0 : 1;
-    if (this.timeScale === 0) {
-      this.globalAnimations = gsap.exportRoot();
-      gsap.to(this.globalAnimations, 2, { timeScale: this.timeScale });
+  pausePlayGame() {
+    this.paused = !this.paused;
+    if (this.paused) {
+      gsap.globalTimeline.pause();
     } else {
-      gsap.to(this.globalAnimations, 2, { timeScale: this.timeScale });
+      gsap.globalTimeline.play();
     }
   }
 
-  get debugTrains() {
-    const debugTrains = { ...this.trains };
-    return Object.values(debugTrains).map(train => {
-      return Object.assign({}, train, { animation: undefined });
-    });
+  changeGlobalTimeScale() {
+    const currentSpeed = this.globalTimeScale;
+    const currentIndex = this.speeds.indexOf(currentSpeed);
+    let newSpeedIndex = currentIndex + 1;
+    if (newSpeedIndex === this.speeds.length) {
+      newSpeedIndex = 0;
+    }
+    this.globalTimeScale = this.speeds[newSpeedIndex];
+    gsap.globalTimeline.timeScale(this.globalTimeScale);
   }
 }
 </script>
