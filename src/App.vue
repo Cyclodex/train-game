@@ -82,8 +82,8 @@ export default class App extends Vue {
   @ProvideReactive() trains: TrainsDefinition = {
     train1: {
       id: "train1",
-      x: 1,
-      y: 1,
+      x: 0,
+      y: 4,
       status: TrainStatus.LeavingDepot,
       type: "people",
       wagons: [
@@ -105,39 +105,39 @@ export default class App extends Vue {
         { id: "wagonB1", type: "fraight" },
         { id: "wagonB2", type: "fraight" },
       ],
-      routeDestinations: [{ to: "3,4" }],
+      routeDestinations: [{ to: "5,4" }],
       currentRouteDestination: 0,
     },
-    train3: {
-      id: "train3",
-      x: 5,
-      y: 4,
-      status: TrainStatus.LeavingDepot,
-      type: "fraight",
-      wagons: [
-        { id: "wagonC1", type: "fraight" },
-        { id: "wagonC2", type: "fraight" },
-      ],
-      routeDestinations: [{ to: "4,2" }],
-      currentRouteDestination: 0,
-    },
-    train4: {
-      id: "train4",
-      x: 6,
-      y: 0,
-      status: TrainStatus.LeavingDepot,
-      type: "fraight",
-      wagons: [
-        { id: "wagonD1", type: "fraight" },
-        { id: "wagonD2", type: "fraight" },
-        { id: "wagonD3", type: "fraight" },
-        { id: "wagonD4", type: "fraight" },
-        { id: "wagonD5", type: "fraight" },
-        { id: "wagonD6", type: "fraight" },
-      ],
-      routeDestinations: [{ to: "6,0" }],
-      currentRouteDestination: 0,
-    },
+    // train3: {
+    //   id: "train3",
+    //   x: 5,
+    //   y: 4,
+    //   status: TrainStatus.LeavingDepot,
+    //   type: "fraight",
+    //   wagons: [
+    //     { id: "wagonC1", type: "fraight" },
+    //     { id: "wagonC2", type: "fraight" },
+    //   ],
+    //   routeDestinations: [{ to: "4,2" }],
+    //   currentRouteDestination: 0,
+    // },
+    // train4: {
+    //   id: "train4",
+    //   x: 6,
+    //   y: 0,
+    //   status: TrainStatus.LeavingDepot,
+    //   type: "fraight",
+    //   wagons: [
+    //     { id: "wagonD1", type: "fraight" },
+    //     { id: "wagonD2", type: "fraight" },
+    //     { id: "wagonD3", type: "fraight" },
+    //     { id: "wagonD4", type: "fraight" },
+    //     { id: "wagonD5", type: "fraight" },
+    //     { id: "wagonD6", type: "fraight" },
+    //   ],
+    //   routeDestinations: [{ to: "6,0" }],
+    //   currentRouteDestination: 0,
+    // },
   };
 
   @ProvideReactive() level: LevelDefinition = {
@@ -236,6 +236,7 @@ export default class App extends Vue {
       x: 1,
       y: 1,
       rotation: 3,
+      enableTrafficLight: true,
     },
     "2,1": {
       component: "TileStraight",
@@ -359,7 +360,7 @@ export default class App extends Vue {
         ],
       },
       activeRoutes: {
-        [Position.Left]: ActiveIntersection.Left,
+        [Position.Left]: ActiveIntersection.Right,
       },
     },
     "0,3": {
@@ -427,7 +428,7 @@ export default class App extends Vue {
         ],
       },
       activeRoutes: {
-        [Position.Top]: ActiveIntersection.Right,
+        [Position.Top]: ActiveIntersection.Straight,
       },
     },
     "0,4": {
@@ -435,34 +436,23 @@ export default class App extends Vue {
       x: 0,
       y: 4,
       rotation: 1,
+      enableTrafficLight: true,
     },
     "1,4": {
       component: "TileStraight",
       x: 1,
       y: 4,
       rotation: 1,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
-      ],
     },
     "2,4": {
       component: "TileIntersectionComplete",
       x: 2,
       y: 4,
-      disabledRoutes: {
-        [Position.Bottom]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Right,
-          ActiveIntersection.Straight,
-        ],
-      },
       activeRoutes: {
         [Position.Right]: ActiveIntersection.Right,
         [Position.Top]: ActiveIntersection.Left,
         [Position.Left]: ActiveIntersection.Left,
+        [Position.Bottom]: ActiveIntersection.Straight,
       },
     },
     "3,4": {
@@ -487,6 +477,56 @@ export default class App extends Vue {
       component: "TileStraight",
       x: 6,
       y: 4,
+    },
+    "0,5": {
+      component: "",
+      x: 0,
+      y: 5,
+      rotation: 1,
+    },
+    "1,5": {
+      component: "",
+      x: 1,
+      y: 5,
+    },
+    "2,5": {
+      component: "TileCurve",
+      x: 2,
+      y: 5,
+    },
+    "3,5": {
+      component: "TileStraight",
+      x: 3,
+      y: 5,
+      rotation: 1,
+      trafficLights: [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Backward,
+        },
+      ],
+    },
+    "4,5": {
+      component: "TileStraight",
+      x: 4,
+      y: 5,
+      rotation: 1,
+    },
+    "5,5": {
+      component: "TileStraight",
+      x: 5,
+      y: 5,
+      rotation: 1,
+    },
+    "6,5": {
+      component: "TileCurve",
+      x: 6,
+      y: 5,
+      rotation: 3,
     },
   };
 
