@@ -129,6 +129,7 @@ export interface TileObject extends Coordinates {
   activeRoutes?: ActiveIntersectionPerPosition;
   disabledRoutes?: DisabledIntersectionsPerPosition;
   trafficLights?: TrafficLight[];
+  enableTrafficLight?: boolean;
 }
 
 export interface CheckStatusFeedback {

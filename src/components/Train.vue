@@ -109,7 +109,7 @@ export default class Train extends Vue {
     }
 
     const coordId = getCoordinatesId(this.trainObject);
-    const tile = (this.$parent.$refs[coordId] as any)[0];
+    const tile = (this.$parent!.$refs[coordId] as any)[0];
     this.route = tile.getTrainRoute(this.trainObject);
 
     this.initialRotation = tile.currentRotation;
@@ -212,7 +212,7 @@ export default class Train extends Vue {
 
     // Check on tile
     if (this.level[tilePosition]) {
-      const tile = (this.$parent.$refs[tilePosition] as any)[0];
+      const tile = (this.$parent!.$refs[tilePosition] as any)[0];
       // Check tile status
       const tileStatus = tile.checkStatus(tileEntrancePosition) as
         | CheckStatusFeedback
@@ -402,7 +402,7 @@ export default class Train extends Vue {
   trainStoppedInDepot() {
     this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
     const tilePosition: string = getCoordinatesId(this.trainObject);
-    const tile = (this.$parent.$refs[tilePosition] as any)[0];
+    const tile = (this.$parent!.$refs[tilePosition] as any)[0];
     this.route = tile.getTrainRoute(this.trainObject);
 
     this.trainObject.animation.clear();
@@ -419,7 +419,7 @@ export default class Train extends Vue {
 
   trainLeavesTile(train: TrainObject = this.trainObject) {
     const tilePosition: string = getCoordinatesId(train);
-    const tile = (this.$parent.$refs[tilePosition] as any)[0];
+    const tile = (this.$parent!.$refs[tilePosition] as any)[0];
     const trainLeavesTile = tile.trainLeavesTile(train);
 
     const nextTileCoordinates = getLeavingTrainCoordinates(this.route!, {
@@ -447,7 +447,7 @@ export default class Train extends Vue {
   trainEntersNextTile(train: TrainObject) {
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
-      const tile = (this.$parent.$refs[tilePosition] as any)[0];
+      const tile = (this.$parent!.$refs[tilePosition] as any)[0];
       tile.incomingTrain(this.id);
       this.route = tile.getTrainRoute(this.trainObject);
       const animationOptions = tile.animateTrainOptions(this.trainObject);

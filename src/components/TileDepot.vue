@@ -57,7 +57,7 @@
 </template>
 
 <script lang="ts">
-import { Component } from "vue-property-decorator";
+import { Component, Prop } from "vue-property-decorator";
 import {
   Position,
   PossibleRoutesPerRotation,
@@ -74,7 +74,7 @@ import { Colors, getRandom } from "@/utils/globalHelpers";
 
 @Component
 export default class TileDepot extends TileStraight {
-  trafficLights: TrafficLight[] = [];
+  @Prop({ type: Boolean, default: true }) enableTrafficLight!: boolean;
   automaticTrafficLights = false;
   checkRouteInterval: any;
   possibleRoutes: PossibleRoutesPerRotation = {};
@@ -144,6 +144,7 @@ export default class TileDepot extends TileStraight {
   created() {
     this.initDepot();
     this.initRoutes();
+    this.setTrafficLights();
     this.initTrafficLIghts();
   }
 
@@ -151,15 +152,24 @@ export default class TileDepot extends TileStraight {
     this.depotColor = getRandom(Colors);
   }
 
+  setTrafficLights() {
+    if (this.enableTrafficLight) {
+      this.tile.trafficLights = [
+        {
+          signal: TrafficLightSignal.Red,
+          direction: TrafficLightDirection.Forward,
+        },
+      ];
+    }
+  }
+
   positionTrafficLights() {
-    this.trafficLights = this.$props.tile.trafficLights;
     // Put traffic light also into the routes, to help other tiles with it.
-    if (this.trafficLights) {
+    if (this.tile.trafficLights) {
       this.trafficLights.map(trafficLight => {
         const position = this.currentRotation;
         if (this.possibleRoutes[this.currentRotation][position] === undefined) {
           // TO CHECK: Depot has [Position.Center]: not opposite...
-          debugger;
         } else {
           this.possibleRoutes[this.currentRotation][
             position
@@ -194,7 +204,7 @@ export default class TileDepot extends TileStraight {
       this.train.status! === TrainStatus.Started
     ) {
       // Stop the train
-      (this.$parent.$refs[trainId] as any)[0].stopTrainInDepot();
+      (this.$parent!.$refs[trainId] as any)[0].stopTrainInDepot();
     }
   }
 
@@ -202,7 +212,7 @@ export default class TileDepot extends TileStraight {
     if (trainObject.trainColor === this.depotColor) {
       alert("yey");
     } else {
-      (this.$parent.$refs[trainObject.id] as any)[0].startTrainFromDepot();
+      (this.$parent!.$refs[trainObject.id] as any)[0].startTrainFromDepot();
     }
   }
 
@@ -215,7 +225,7 @@ export default class TileDepot extends TileStraight {
   animateTrainFromTrafficLight() {
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-    (this.$parent.$refs[this.currentTrain.id] as any)[0].startTrain();
+    (this.$parent!.$refs[this.currentTrain.id] as any)[0].startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok
@@ -258,16 +268,29 @@ export default class TileDepot extends TileStraight {
 .tile-depot {
   position: relative;
 
+  &.tile-rotation--right {
+    .signal--forward {
+      bottom: 52%;
+      right: 0;
+    }
+  }
+
   &.tile-rotation--left {
     .signal--forward {
       top: 52%;
       left: 0;
     }
   }
-  &.tile-rotation--top {
+  &.tile-rotation--bottom {
     .signal--forward {
       bottom: 0;
       left: 52%;
+    }
+  }
+  &.tile-rotation--top {
+    .signal--forward {
+      right: 52%;
+      top: 0;
     }
   }
 

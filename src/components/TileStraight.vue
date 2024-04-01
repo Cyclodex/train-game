@@ -77,7 +77,6 @@ export default class TileStraight extends TileBase {
   trafficLights: TrafficLight[] = [];
   automaticTrafficLights = false;
   checkRouteInterval: any;
-  possibleRoutes!: PossibleRoutesPerRotation;
 
   initRoutes(): void {
     this.possibleRoutes = {
@@ -119,6 +118,9 @@ export default class TileStraight extends TileBase {
 
   initTrafficLIghts() {
     if (this.$props.tile.trafficLights !== undefined) {
+      this.trafficLights = this.$props.tile.trafficLights;
+    }
+    if (this.trafficLights !== undefined) {
       this.positionTrafficLights();
       if (this.$root.automaticTrafficLights) {
         this.automaticTrafficLights = this.$root.automaticTrafficLights;
@@ -144,7 +146,6 @@ export default class TileStraight extends TileBase {
   }
 
   positionTrafficLights() {
-    this.trafficLights = this.$props.tile.trafficLights;
     // Put traffic light also into the routes, to help other tiles with it.
     if (this.trafficLights) {
       this.trafficLights.map(trafficLight => {
@@ -230,7 +231,7 @@ export default class TileStraight extends TileBase {
       originCoordinates
     );
     if (this.level[tilePosition]) {
-      const tileStatus: CheckStatusFeedback = (this.$parent.$refs[
+      const tileStatus: CheckStatusFeedback = (this.$parent!.$refs[
         tilePosition
       ] as any)[0].checkStatus(tileEntrancePosition, trainObject);
       // If Status is not free = The route is block, dont progress
@@ -239,7 +240,7 @@ export default class TileStraight extends TileBase {
       } else if (tileStatus.hasTrafficLight) {
         // If it has trafficLight, reserve it and return the status, the route is complete
         if (tileStatus.status === TileStatus.Free) {
-          (this.$parent.$refs[tilePosition] as any)[0].reserveTile();
+          (this.$parent!.$refs[tilePosition] as any)[0].reserveTile();
         }
         return tileStatus.status;
       } else {
@@ -253,7 +254,7 @@ export default class TileStraight extends TileBase {
       }
       // If route is free, reserve every tile
       if (status === TileStatus.Free || forced) {
-        (this.$parent.$refs[tilePosition] as any)[0].reserveTile(
+        (this.$parent!.$refs[tilePosition] as any)[0].reserveTile(
           tileEntrancePosition,
           trainObject
         );
@@ -302,7 +303,7 @@ export default class TileStraight extends TileBase {
       this.getActiveTrafficLight(this.train).signal === TrafficLightSignal.Red
     ) {
       // Stop the train
-      (this.$parent.$refs[trainId] as any)[0].stopTrain();
+      (this.$parent!.$refs[trainId] as any)[0].stopTrain();
       this.trainOnRedTrafficLight(this.train);
     }
   }
@@ -310,7 +311,7 @@ export default class TileStraight extends TileBase {
   animateTrainFromTrafficLight() {
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-    (this.$parent.$refs[this.currentTrain.id] as any)[0].startTrain();
+    (this.$parent!.$refs[this.currentTrain.id] as any)[0].startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok

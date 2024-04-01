@@ -151,12 +151,12 @@ export default class TileBase extends Vue {
     return this.possibleRoutes[this.currentRotation];
   }
 
-  get allDrawableRailRoutes(): Route[] {
+  get allDrawableRailRoutes(): Route[] | undefined {
     // Take the same rotation as position
-    const route = this.possibleRoutes[this.currentRotation][
-      this.currentRotation
-    ];
-    return Array(route);
+    const route =
+      this.possibleRoutes[this.currentRotation][this.currentRotation] ??
+      undefined;
+    return route ? Array(route) : [];
   }
 
   getTrainRoute(trainObject: TrainObject) {
@@ -170,16 +170,16 @@ export default class TileBase extends Vue {
   getIncomingTrainLocation(trainObject: TrainObject) {
     if (trainObject === null) return null;
     switch (trainObject.direction) {
-    case TrainDirection.Down:
-      return Position.Top;
-    case TrainDirection.Left:
-      return Position.Right;
-    case TrainDirection.Up:
-      return Position.Bottom;
-    case TrainDirection.Right:
-      return Position.Left;
-    default:
-      return Position.Center;
+      case TrainDirection.Down:
+        return Position.Top;
+      case TrainDirection.Left:
+        return Position.Right;
+      case TrainDirection.Up:
+        return Position.Bottom;
+      case TrainDirection.Right:
+        return Position.Left;
+      default:
+        return Position.Center;
     }
   }
 
