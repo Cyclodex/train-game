@@ -22,19 +22,25 @@ describe("simulation movement", () => {
           color: "red",
           type: "people",
           wagonCount: 0,
-          speed: 1, // tiles per second
+          speed: 1, // cruise speed (tiles/sec); the train ramps up to it
         },
       ],
     });
 
     expect(sim.trainTileId("t1")).toBe("0,0");
-    sim.step(1);
-    expect(sim.trainTileId("t1")).toBe("1,0");
-    sim.step(1);
+    // Drive it along the corridor; it ramps up but still passes through the
+    // tiles in order and ends held at the far map edge.
+    const visited: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      sim.step(0.5);
+      const tile = sim.trainTileId("t1");
+      if (visited[visited.length - 1] !== tile) visited.push(tile);
+    }
+    expect(visited).toEqual(["0,0", "1,0", "2,0"]); // strictly in order
     expect(sim.trainTileId("t1")).toBe("2,0");
   });
 
-  it("exposes fractional progress within the current tile", () => {
+  it("exposes fractional progress within the current tile as it ramps up", () => {
     const sim = createSimulation({
       level: corridor(3),
       trains: [
@@ -51,7 +57,11 @@ describe("simulation movement", () => {
     });
     sim.step(0.5);
     expect(sim.trainTileId("t1")).toBe("0,0");
-    expect(sim.trainProgress("t1")).toBeCloseTo(0.5, 5);
+    const p = sim.trainProgress("t1");
+    // Accelerating from rest, so it has moved but covered less than the
+    // constant-speed distance (1 tile/sec * 0.5s = 0.5).
+    expect(p).toBeGreaterThan(0);
+    expect(p).toBeLessThan(0.5);
   });
 });
 
@@ -756,5 +766,151 @@ describe("simulation reservation visibility (drives the switch-lock UI)", () => 
     }
     expect(everOccupied).toBe(true);
     expect(reservedNotYetOccupiedAhead).toBe(true);
+  });
+});
+
+describe("simulation momentum (acceleration / braking)", () => {
+  it("accelerates from rest instead of snapping to full speed", () => {
+    const sim = createSimulation({
+      level: corridor(30),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2, // cruise (tiles/sec)
+          accel: 1, // tiles/sec²
+          brake: 2, // tiles/sec²
+        },
+      ],
+    });
+
+    expect(sim.trainVelocity("t1")).toBe(0);
+
+    sim.step(0.5);
+    const v1 = sim.trainVelocity("t1");
+    // After 0.5s of accel=1 it is moving but nowhere near cruise (2).
+    expect(v1).toBeGreaterThan(0);
+    expect(v1).toBeLessThan(2);
+    // The first half-second covered far less than constant-cruise (2*0.5 = 1).
+    expect(sim.trainProgress("t1")).toBeLessThan(0.5);
+
+    sim.step(0.5);
+    expect(sim.trainVelocity("t1")).toBeGreaterThan(v1); // still ramping up
+
+    // Given enough open track it saturates at maxSpeed and holds there.
+    for (let i = 0; i < 6; i++) sim.step(0.5);
+    expect(sim.trainVelocity("t1")).toBeCloseTo(2, 5);
+  });
+
+  it("brakes smoothly to a stop at a red signal rather than halting in one tick", () => {
+    const sim = createSimulation({
+      level: corridor(12),
+      signalTiles: ["6,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2,
+          accel: 1,
+          brake: 2,
+        },
+      ],
+    });
+    sim.toggleHold("6,0", Position.Right); // hold the signal at 6,0 to Stop
+
+    const velocities: number[] = [];
+    for (let i = 0; i < 120; i++) {
+      sim.step(0.25);
+      velocities.push(sim.trainVelocity("t1"));
+      if (i > 5 && sim.trainVelocity("t1") === 0) break;
+    }
+
+    // It comes to rest held at the signal tile (never crosses into 7,0).
+    expect(sim.trainTileId("t1")).toBe("6,0");
+    expect(sim.trainVelocity("t1")).toBe(0);
+
+    // It actually cruised first...
+    expect(Math.max(...velocities)).toBeGreaterThan(1);
+    // ...then decelerated over several ticks while still rolling (smooth stop,
+    // not a single-tick clamp from cruise to zero).
+    let decelTicks = 0;
+    for (let i = 1; i < velocities.length; i++) {
+      if (velocities[i] < velocities[i - 1] && velocities[i] > 0) decelTicks++;
+    }
+    expect(decelTicks).toBeGreaterThanOrEqual(3);
+  });
+
+  it("coasts to rest into a depot and still registers the arrival", () => {
+    const depotLevel: LevelDefinition = {
+      "0,0": { x: 0, y: 0, component: "TileStraight", rotation: 1 },
+      "1,0": { x: 1, y: 0, component: "TileDepot", rotation: 3 }, // opening Left
+    };
+    const sim = createSimulation({
+      level: depotLevel,
+      depotColors: { "1,0": "red" },
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2,
+          accel: 1,
+          brake: 2,
+        },
+      ],
+    });
+
+    const arrivals: any[] = [];
+    for (let i = 0; i < 60; i++) {
+      for (const e of sim.step(0.25)) if (e.type === "arrived") arrivals.push(e);
+      if (sim.trainState("t1") === "parked") break;
+    }
+
+    expect(arrivals).toHaveLength(1);
+    expect(arrivals[0]).toMatchObject({ tileId: "1,0", matched: true });
+    expect(sim.trainState("t1")).toBe("parked");
+    expect(sim.trainVelocity("t1")).toBe(0);
+  });
+
+  it("a heavier (lower-accel) train pulls away more slowly than a light one", () => {
+    const make = (id: string, accel: number) =>
+      createSimulation({
+        level: corridor(30),
+        trains: [
+          {
+            id,
+            coord: { x: 0, y: 0 },
+            entryPort: Position.Left,
+            color: "red",
+            type: "people",
+            wagonCount: 0,
+            speed: 3,
+            accel,
+            brake: 2,
+          },
+        ],
+      });
+    const light = make("light", 1.2);
+    const heavy = make("heavy", 0.4);
+
+    for (let i = 0; i < 4; i++) {
+      light.step(0.25);
+      heavy.step(0.25);
+    }
+    // Same elapsed time, same cruise cap: the lighter train is further along.
+    expect(light.trainVelocity("light")).toBeGreaterThan(
+      heavy.trainVelocity("heavy")
+    );
   });
 });
