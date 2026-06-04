@@ -8,6 +8,7 @@ import {
   createSimulation,
   Simulation,
   SampledUnit,
+  UnitChord,
   SimEvent,
 } from "@/sim/simulation";
 import { segmentPathD } from "@/sim/pathGeometry";
@@ -96,7 +97,7 @@ export interface Game {
   cycleSignal(tileId: string, exitPort: Position): void;
   // The manual override state of a signal, for the renderer's indicator.
   signalOverride(tileId: string, exitPort: Position): "auto" | "green" | "red";
-  positionUnit(unit: SampledUnit): { x: number; y: number; angle: number };
+  positionUnit(body: UnitChord): { x: number; y: number; angle: number };
 }
 
 export function createGame(
@@ -193,18 +194,34 @@ export function createGame(
     return p;
   }
 
-  function positionUnit(unit: SampledUnit) {
-    const exit = unit.exitPort ?? unit.entryPort;
-    const path = pathFor(segmentPathD(unit.entryPort, exit, tileSize));
+  // World point + path tangent for a single sampled coupler point.
+  function sampleWorld(s: SampledUnit) {
+    const exit = s.exitPort ?? s.entryPort;
+    const path = pathFor(segmentPathD(s.entryPort, exit, tileSize));
     const len = path.getTotalLength();
-    const at = path.getPointAtLength(unit.t * len);
-    const ahead = path.getPointAtLength(Math.min(len, unit.t * len + 1));
-    const angle = (Math.atan2(ahead.y - at.y, ahead.x - at.x) * 180) / Math.PI;
+    const d = s.t * len;
+    const at = path.getPointAtLength(d);
+    const ahead = path.getPointAtLength(Math.min(len, d + 1));
     return {
-      x: unit.coord.x * tileSize + at.x,
-      y: unit.coord.y * tileSize + at.y,
-      angle,
+      x: s.coord.x * tileSize + at.x,
+      y: s.coord.y * tileSize + at.y,
+      tangent: (Math.atan2(ahead.y - at.y, ahead.x - at.x) * 180) / Math.PI,
     };
+  }
+
+  // Draw a car as the chord between its two coupler points: centre at their
+  // midpoint, angle along the chord. This keeps rigid sprites sitting correctly
+  // on curves (the body leans into the curve) instead of overlapping. When the
+  // chord collapses (a unit bunched at a depot exit before the train extends),
+  // fall back to the front point's tangent to avoid an atan2(0,0) flip.
+  function positionUnit(body: UnitChord) {
+    const f = sampleWorld(body.front);
+    const r = sampleWorld(body.rear);
+    const dx = f.x - r.x;
+    const dy = f.y - r.y;
+    const chord = Math.hypot(dx, dy);
+    const angle = chord > 0.5 ? (Math.atan2(dy, dx) * 180) / Math.PI : f.tangent;
+    return { x: (f.x + r.x) / 2, y: (f.y + r.y) / 2, angle };
   }
 
   function renderTrains() {

@@ -66,7 +66,12 @@ describe("simulation movement", () => {
 });
 
 describe("simulation body sampling", () => {
-  it("samples the loco and wagons trailing along the recent path", () => {
+  // Along-track position (in tiles) of a sampled coupler point on a straight
+  // corridor, where x maps directly to along-track distance and t is the 0..1
+  // progress within the tile.
+  const along = (u: { coord: { x: number }; t: number }) => u.coord.x + u.t;
+
+  it("samples each unit as a front/rear coupler pair trailing along the path", () => {
     const sim = createSimulation({
       level: corridor(6),
       trains: [
@@ -85,24 +90,50 @@ describe("simulation body sampling", () => {
 
     const body = sim.sampleTrain("t1");
     expect(body).toHaveLength(3); // loco + 2 wagons
-    const x = (u: { coord: { x: number } }) => u.coord.x;
-    // Loco leads; each wagon trails behind the previous one.
-    expect(x(body[0])).toBeGreaterThanOrEqual(x(body[1]));
-    expect(x(body[1])).toBeGreaterThanOrEqual(x(body[2]));
-    // The trailing wagon is at least one tile behind the loco.
-    expect(x(body[0]) - x(body[2])).toBeGreaterThanOrEqual(1);
+    // Each unit has a front (toward the head) and a rear coupler point.
+    for (const u of body) {
+      expect(u.front).toBeDefined();
+      expect(u.rear).toBeDefined();
+      expect(along(u.front)).toBeGreaterThanOrEqual(along(u.rear)); // front leads
+    }
+    // Units are ordered head -> tail: each unit's front is behind the previous
+    // unit's rear (or equal, when coupled with no gap).
+    for (let i = 1; i < body.length; i++) {
+      expect(along(body[i].front)).toBeLessThanOrEqual(along(body[i - 1].rear));
+    }
+    // The trailing wagon's rear is at least one tile behind the loco's front.
+    expect(along(body[0].front) - along(body[2].rear)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("places the loco's front coupler at the train head", () => {
+    const sim = createSimulation({
+      level: corridor(6),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 1,
+          speed: 1,
+        },
+      ],
+    });
+    for (let i = 0; i < 5; i++) sim.step(0.5);
+    const head =
+      sim.trains["t1"].headIndex + sim.trains["t1"].headProgress;
+    const front = sim.sampleTrain("t1")[0].front;
+    expect(along(front)).toBeCloseTo(head, 5);
   });
 });
 
 describe("simulation per-unit spacing", () => {
-  // Position (in tiles) of a sampled unit centre along a straight corridor,
-  // where x maps directly to along-track distance and t is the 0..1 progress
-  // within the tile.
   const along = (u: { coord: { x: number }; t: number }) => u.coord.x + u.t;
 
-  it("spaces consecutive units by half each length + coupling gap", () => {
-    const lengthsLoco = 0.5; // loco half a tile
-    const lengthsWagon = 0.4; // wagons shorter than the loco
+  it("makes adjacent units meet at a shared coupler (gap = coupling)", () => {
+    const lengthsLoco = 0.5;
+    const lengthsWagon = 0.4;
     const coupling = 0.05;
     const sim = createSimulation({
       level: corridor(8),
@@ -120,17 +151,42 @@ describe("simulation per-unit spacing", () => {
         },
       ],
     });
-    for (let i = 0; i < 10; i++) sim.step(0.5); // well along the corridor
+    for (let i = 0; i < 10; i++) sim.step(0.5);
 
     const body = sim.sampleTrain("t1");
     expect(body).toHaveLength(3);
 
-    // loco-center -> wagon1-center = half loco + gap + half wagon
-    const d01 = along(body[0]) - along(body[1]);
-    expect(d01).toBeCloseTo(lengthsLoco / 2 + coupling + lengthsWagon / 2, 5);
-    // wagon1-center -> wagon2-center = half wagon + gap + half wagon
-    const d12 = along(body[1]) - along(body[2]);
-    expect(d12).toBeCloseTo(lengthsWagon / 2 + coupling + lengthsWagon / 2, 5);
+    // Each unit spans its own length between its couplers.
+    expect(along(body[0].front) - along(body[0].rear)).toBeCloseTo(lengthsLoco, 5);
+    expect(along(body[1].front) - along(body[1].rear)).toBeCloseTo(lengthsWagon, 5);
+    // Consecutive units are separated only by the coupling gap: rear of i to
+    // front of i+1 == coupling. (With coupling 0 they would share a point.)
+    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(coupling, 5);
+    expect(along(body[1].rear) - along(body[2].front)).toBeCloseTo(coupling, 5);
+  });
+
+  it("shares the exact coupler point between cars when coupling is 0", () => {
+    const sim = createSimulation({
+      level: corridor(8),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "fraight",
+          wagonCount: 2,
+          speed: 1,
+          unitLengths: [0.5, 0.4, 0.4],
+          coupling: 0,
+        },
+      ],
+    });
+    for (let i = 0; i < 10; i++) sim.step(0.5);
+    const body = sim.sampleTrain("t1");
+    // rear of unit i and front of unit i+1 are the same along-track point.
+    expect(along(body[0].rear)).toBeCloseTo(along(body[1].front), 5);
+    expect(along(body[1].rear)).toBeCloseTo(along(body[2].front), 5);
   });
 
   it("reports a body footprint equal to the sum of unit lengths plus gaps", () => {

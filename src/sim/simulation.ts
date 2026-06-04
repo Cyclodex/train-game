@@ -115,6 +115,15 @@ export interface SampledUnit {
   t: number; // 0..1 progress within the tile segment
 }
 
+// A unit (loco or wagon) sampled as its two coupler points on the path: `front`
+// toward the loco head, `rear` toward the tail. The renderer draws the car as
+// the chord between them (midpoint + chord angle) so rigid sprites sit correctly
+// on curves and adjacent cars meet at their shared couplers.
+export interface UnitChord {
+  front: SampledUnit;
+  rear: SampledUnit;
+}
+
 export interface Simulation {
   trains: Record<string, SimTrain>;
   step(dt: number): SimEvent[];
@@ -124,9 +133,9 @@ export interface Simulation {
   // Current speed of a train in tiles/sec (0 when stopped). Exposed for tests
   // and future speed-aware signalling.
   trainVelocity(id: string): number;
-  // Positions of the loco (index 0) and each wagon along the recent path,
-  // for the renderer to map to screen points.
-  sampleTrain(id: string): SampledUnit[];
+  // The loco (index 0) and each wagon sampled as front/rear coupler points along
+  // the recent path, for the renderer to draw each car as a chord.
+  sampleTrain(id: string): UnitChord[];
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -501,9 +510,17 @@ export function createSimulation(config: SimConfig): Simulation {
           t,
         };
       };
-      // Each unit's centre trails the loco head by its precomputed offset, so
-      // spacing reflects real sprite lengths (+ coupling gap), not a constant.
-      return train.unitOffsets.map(offset => sampleAt(headDistance - offset));
+      // Each unit is sampled as its two coupler points: front at (centre offset
+      // − half its length) back from the head, rear at (offset + half length).
+      // Distances reflect real sprite lengths (+ coupling gap), so consecutive
+      // cars meet at shared couplers and the renderer can draw each as a chord.
+      return train.unitOffsets.map((offset, i) => {
+        const half = train.unitLengths[i] / 2;
+        return {
+          front: sampleAt(headDistance - (offset - half)),
+          rear: sampleAt(headDistance - (offset + half)),
+        };
+      });
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);
