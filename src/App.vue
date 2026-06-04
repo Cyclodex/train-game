@@ -48,6 +48,26 @@
         ></component>
       </div>
     </div>
+    <div v-if="config.debug" class="event-log">
+      <div class="event-log-title">Activity log</div>
+      <ul class="event-log-list">
+        <li v-if="recentLog.length === 0" class="event-log-empty">
+          No events yet…
+        </li>
+        <li
+          v-for="entry in recentLog"
+          :key="entry.id"
+          class="event-log-entry"
+          :class="`log-${entry.kind}`"
+        >
+          <span class="log-time">{{ entry.time.toFixed(1) }}s</span>
+          <span class="log-train" :style="{ color: trainColor(entry.trainId) }">
+            {{ entry.trainId }}
+          </span>
+          <span class="log-text">{{ entry.text }}</span>
+        </li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -571,6 +591,16 @@ class App extends Vue {
     return this.game.deliveries.value;
   }
 
+  // The most recent activity-log entries, newest first, for the debug panel.
+  get recentLog() {
+    return this.game.eventLog.slice(-60).reverse();
+  }
+
+  // Colour a train id in the log to match its sprite.
+  trainColor(id: string): string {
+    return this.game.trainColors[id] ?? "inherit";
+  }
+
   switchDebugMode() {
     this.config.debug = !this.config.debug;
   }
@@ -667,5 +697,76 @@ pre {
     padding: 15px;
     min-width: 150px;
   }
+}
+
+.event-log {
+  position: fixed;
+  z-index: 100;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  max-height: 45vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 24, 28, 0.92);
+  color: #d7dde3;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  border-top-left-radius: 6px;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
+}
+.event-log-title {
+  padding: 6px 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8fa3b3;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.event-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+.event-log-empty {
+  padding: 8px 10px;
+  color: #6b7782;
+  font-style: italic;
+}
+.event-log-entry {
+  display: flex;
+  gap: 6px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  border-left: 3px solid transparent;
+  text-align: left;
+
+  &.log-blocked {
+    border-left-color: #e0564b;
+  }
+  &.log-proceeding {
+    border-left-color: #4caf78;
+  }
+  &.log-reserved {
+    border-left-color: #5b8dd6;
+  }
+  &.log-arrived {
+    border-left-color: #d6b14c;
+  }
+}
+.log-time {
+  color: #6b7782;
+  flex: 0 0 auto;
+  min-width: 38px;
+}
+.log-train {
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+.log-text {
+  color: #d7dde3;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

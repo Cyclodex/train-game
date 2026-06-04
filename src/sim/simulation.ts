@@ -58,7 +58,51 @@ export interface ArrivedEvent {
   matched: boolean;
 }
 
-export type SimEvent = ArrivedEvent;
+// A train claimed a block (the route up to the next signal). `tiles` are the
+// tile ids it reserved on this crossing.
+export interface ReservedEvent {
+  type: "reserved";
+  trainId: string;
+  tiles: string[];
+}
+
+// Why a train is held at a tile boundary.
+//  - "signal-hold": the player forced this signal to Stop.
+//  - "reservation": the block ahead is reserved/occupied by another train.
+//  - "occupancy":   the very next tile is physically occupied (backstop).
+export type BlockReason = "signal-hold" | "reservation" | "occupancy";
+
+// A train transitioned from moving to held (edge-triggered: emitted once when
+// it becomes blocked, not every tick it stays blocked). `blockedBy` is the
+// other train responsible, when there is one.
+export interface BlockedEvent {
+  type: "blocked";
+  trainId: string;
+  tileId: string;
+  reason: BlockReason;
+  blockedBy?: string;
+}
+
+// A previously-blocked train started moving again (edge-triggered).
+export interface ProceedingEvent {
+  type: "proceeding";
+  trainId: string;
+  tileId: string;
+}
+
+export type SimEvent =
+  | ArrivedEvent
+  | ReservedEvent
+  | BlockedEvent
+  | ProceedingEvent;
+
+// Internal record of why a train is currently held, used to edge-trigger the
+// blocked/proceeding events (only emit on a change of state).
+interface BlockInfo {
+  reason: BlockReason;
+  tileId: string;
+  blockedBy?: string;
+}
 
 // Fallbacks when a train doesn't supply real per-unit dimensions: a unit sprite
 // is ~half a tile wide, with a small coupling gap. The renderer passes true
@@ -146,6 +190,10 @@ export function createSimulation(config: SimConfig): Simulation {
   // A forced-green signal overrides the reservation-based red; the occupancy
   // backstop still applies. Mutually exclusive with `manualHold`.
   const manualProceed = new Set<string>();
+
+  // trainId -> why it is currently held (or absent if it is moving). Used to
+  // edge-trigger blocked/proceeding events so they fire once per state change.
+  const blockStates = new Map<string, BlockInfo>();
 
   const isSignalTile = (tileId: string) => signalTiles.has(tileId);
   function isBoundary(tileId: string): boolean {
@@ -275,9 +323,61 @@ export function createSimulation(config: SimConfig): Simulation {
     train.state = "running";
   }
 
+  // The other train responsible for a tile not being free for `selfId`: its
+  // reserver if reserved by someone else, otherwise whoever occupies it.
+  function blockerOf(tileId: string, selfId: string): string | undefined {
+    const owner = reservations.get(tileId);
+    if (owner !== undefined && owner !== selfId) return owner;
+    return occupantOf(tileId);
+  }
+
+  // Record that a train is held this tick. Edge-triggered: emits a `blocked`
+  // event only when the train newly becomes blocked or the cause changes.
+  function noteBlocked(
+    train: SimTrain,
+    info: BlockInfo,
+    events: SimEvent[]
+  ): void {
+    const prev = blockStates.get(train.id);
+    if (
+      !prev ||
+      prev.reason !== info.reason ||
+      prev.tileId !== info.tileId ||
+      prev.blockedBy !== info.blockedBy
+    ) {
+      blockStates.set(train.id, info);
+      events.push({
+        type: "blocked",
+        trainId: train.id,
+        tileId: info.tileId,
+        reason: info.reason,
+        blockedBy: info.blockedBy,
+      });
+    }
+  }
+
+  // Record that a train is moving freely this tick. Edge-triggered: emits a
+  // `proceeding` event only if it was previously blocked.
+  function noteProceeding(
+    train: SimTrain,
+    events: SimEvent[]
+  ): void {
+    if (blockStates.has(train.id)) {
+      blockStates.delete(train.id);
+      events.push({
+        type: "proceeding",
+        trainId: train.id,
+        tileId: getCoordinatesId(train.path[train.headIndex].coord),
+      });
+    }
+  }
+
   function advance(train: SimTrain, dt: number, events: SimEvent[]): void {
     if (train.state === "parked") return;
     train.headProgress += train.speed * dt;
+    // Why the train is held at the end of this tick, if it is. Stays null while
+    // the train keeps moving; set just before a traffic break below.
+    let blockInfo: BlockInfo | null = null;
     while (train.headProgress >= 1) {
       const head = train.path[train.headIndex];
       const t = traverse(level, getSwitch, head.coord, head.entryPort);
@@ -308,6 +408,7 @@ export function createSimulation(config: SimConfig): Simulation {
         isSignalTile(headTileId) &&
         manualHold.has(`${headTileId}:${t.exitPort}`)
       ) {
+        blockInfo = { reason: "signal-hold", tileId: headTileId };
         train.headProgress = 1;
         break;
       }
@@ -336,19 +437,37 @@ export function createSimulation(config: SimConfig): Simulation {
           block.length > 0 &&
           block.every(tid => tileFreeForTrain(tid, train.id));
         if (!reservable && !forcedGreen) {
+          const taken = block.find(tid => !tileFreeForTrain(tid, train.id));
+          blockInfo = {
+            reason: "reservation",
+            tileId: headTileId,
+            blockedBy: taken ? blockerOf(taken, train.id) : undefined,
+          };
           train.headProgress = 1;
           break;
         }
         // Reserve whatever we can (tiles free for us); under a forced green some
         // tiles may be reserved by another train — we do not steal those, we
         // just proceed, and the occupancy backstop guards each step.
+        const claimed: string[] = [];
         for (const tid of block) {
-          if (tileFreeForTrain(tid, train.id)) reservations.set(tid, train.id);
+          if (tileFreeForTrain(tid, train.id)) {
+            reservations.set(tid, train.id);
+            claimed.push(tid);
+          }
+        }
+        if (claimed.length > 0) {
+          events.push({ type: "reserved", trainId: train.id, tiles: claimed });
         }
       }
 
       // Occupancy backstop (covers unsignalled adjacency).
       if (isTileOccupiedByOther(nextTileId, train.id)) {
+        blockInfo = {
+          reason: "occupancy",
+          tileId: headTileId,
+          blockedBy: occupantOf(nextTileId),
+        };
         train.headProgress = 1;
         break;
       }
@@ -366,6 +485,10 @@ export function createSimulation(config: SimConfig): Simulation {
       train.headIndex += 1;
       train.headProgress -= 1;
     }
+
+    // Edge-trigger the blocked/proceeding events from this tick's outcome.
+    if (blockInfo) noteBlocked(train, blockInfo, events);
+    else noteProceeding(train, events);
   }
 
   return {

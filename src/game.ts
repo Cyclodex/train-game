@@ -15,6 +15,7 @@ import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { makeRng } from "@/utils/globalHelpers";
 import { assignColors } from "@/utils/colorAssignment";
+import { GameLogEntry, toLogEntry } from "@/gameLog";
 
 export interface TrainDef {
   id: string;
@@ -84,6 +85,9 @@ export interface Game {
   reservations: Record<string, string>;
   // tileId -> trainId physically on it right now (switch lock).
   occupied: Record<string, string>;
+  // Newest-last activity log of decision-level simulation events (reservations,
+  // holds, deliveries) for the debug panel. Capped to the most recent entries.
+  eventLog: GameLogEntry[];
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
@@ -255,10 +259,19 @@ export function createGame(
     }
   }
 
+  // Activity log: newest-last, capped to the most recent MAX_LOG entries so it
+  // can't grow without bound over a long session.
+  const MAX_LOG = 200;
+  const eventLog = reactive([]) as GameLogEntry[];
+  let logSeq = 0;
+  let clock = 0; // accumulated sim time in seconds
+
   function handleEvents(events: SimEvent[]) {
     for (const e of events) {
       if (e.type === "arrived" && e.matched) deliveries.value += 1;
+      eventLog.push(toLogEntry(e, logSeq++, clock));
     }
+    if (eventLog.length > MAX_LOG) eventLog.splice(0, eventLog.length - MAX_LOG);
   }
 
   const paused = ref(false);
@@ -271,7 +284,9 @@ export function createGame(
     const dt = last ? (now - last) / 1000 : 0;
     last = now;
     if (!paused.value) {
-      handleEvents(sim.step(dt * speed.value));
+      const scaled = dt * speed.value;
+      clock += scaled;
+      handleEvents(sim.step(scaled));
     }
     renderTrains();
     updateSignalAspects();
@@ -290,6 +305,7 @@ export function createGame(
     signalOverrides,
     reservations,
     occupied,
+    eventLog,
     paused,
     speed,
     deliveries,
