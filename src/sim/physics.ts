@@ -13,7 +13,9 @@ export type TrainKind = "people" | "fraight";
 // light train reaches a typical cruise speed in ~1 second and brakes over a
 // similar distance, while the heaviest enabled train still feels responsive.
 export const BASE_ACCEL = 0.8; // tiles/sec²
-export const BASE_BRAKE = 1.0; // tiles/sec²
+// Gentler than acceleration so trains glide to a stop rather than stopping
+// sharply — a lower value lengthens the braking distance / time.
+export const BASE_BRAKE = 0.5; // tiles/sec²
 
 // How much each unit of "weight" softens the rates. massK = 1 + (weight-1)*S.
 export const MASS_SENSITIVITY = 0.12;
