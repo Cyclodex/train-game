@@ -89,6 +89,11 @@ travel.
   unique `v-for` refs in arrays the way Vue 2 did, so every lookup is funnelled
   through `resolveRef()` (handles both shapes).
 - Reactive state mutates in place (Vue 3 deep proxies) — no `Vue.set`.
+- **GSAP objects and DOM nodes must be `markRaw()`-ed** before being stored in
+  reactive state (e.g. `trainObject.animation`, `this.visual`, `wagon.visual` in
+  `Train.vue`). Vue 3 otherwise wraps them in a Proxy, which breaks GSAP's
+  identity-based ticker/`onComplete` scheduling — the classic symptom is a train
+  animating out of its depot once and then never advancing.
 - Lifecycle hooks merge across the inheritance chain (base `created` runs before
   the subclass), same as Vue 2's mixin merge — several tiles rely on this.
 
