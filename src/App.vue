@@ -543,7 +543,12 @@ class App extends Vue {
   // markRaw so Vue does not deep-proxy the game: its refs must stay refs (not be
   // auto-unwrapped) and its simulation must keep object identity.
   @Provide("game") game: Game = markRaw(
-    createGame(this.level, buildTrainDefs(this.trains), gameConfig.tileSize)
+    createGame(
+      this.level,
+      buildTrainDefs(this.trains),
+      gameConfig.tileSize,
+      gameConfig.colorSeed
+    )
   );
 
   mounted() {

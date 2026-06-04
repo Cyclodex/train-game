@@ -13,7 +13,8 @@ import {
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { Colors, getRandom } from "@/utils/globalHelpers";
+import { makeRng } from "@/utils/globalHelpers";
+import { assignColors } from "@/utils/colorAssignment";
 
 export interface TrainDef {
   id: string;
@@ -102,7 +103,8 @@ export interface Game {
 export function createGame(
   level: LevelDefinition,
   trainDefs: TrainDef[],
-  tileSize: number
+  tileSize: number,
+  colorSeed = 1
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -142,13 +144,14 @@ export function createGame(
   const occupied = reactive({}) as Record<string, string>;
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
-  // logic and the rendered colours always agree.
-  const depotColors: Record<string, string> = {};
-  for (const [id, tile] of Object.entries(level)) {
-    if (tile.component === "TileDepot") depotColors[id] = getRandom(Colors);
-  }
-  const trainColors: Record<string, string> = {};
-  for (const def of trainDefs) trainColors[def.id] = getRandom(Colors);
+  // logic and the rendered colours always agree. A seeded RNG keeps the
+  // assignment deterministic, and `assignColors` guarantees every train has a
+  // reachable matching depot (see colorAssignment.ts).
+  const { depotColors, trainColors } = assignColors(
+    level,
+    trainDefs,
+    makeRng(colorSeed)
+  );
 
   const sim = createSimulation({
     level,

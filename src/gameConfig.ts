@@ -22,6 +22,8 @@ export interface GameConfig {
   automaticRoutePlanning: boolean;
   railDistanceFromPath: number;
   switchLockMode: SwitchLockMode;
+  // Seed for deterministic depot/train colour assignment (see colorAssignment.ts).
+  colorSeed: number;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -34,4 +36,5 @@ export const gameConfig: GameConfig = reactive({
   automaticRoutePlanning: false,
   railDistanceFromPath: 7,
   switchLockMode: "off",
+  colorSeed: 1,
 });
