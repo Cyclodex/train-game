@@ -63,20 +63,13 @@ import { Component, Prop, toNative } from "vue-facing-decorator";
 import {
   ActiveIntersection,
   ActiveIntersectionPerPosition,
-  CheckStatusFeedback,
   Position,
   PossibleRoutesPerRotation,
   Rotations,
   Route,
-  TileStatus,
-  TrainObject,
 } from "@/types";
 import TileBase from "./TileBase";
-import {
-  getCoordinatesId,
-  getRelativeCoordinatesOfNextTile,
-} from "@/utils/tileHelpers";
-import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // Info
 // t=top, r=rigth, b=bottom, l=left
@@ -255,22 +248,6 @@ class TileIntersectionComplete extends TileBase {
     };
   }
 
-  getRouteFromEntrancePosition(
-    entrancePosition: Position,
-    intersectionRouteIndex: ActiveIntersection | null = null
-  ) {
-    if (intersectionRouteIndex !== null) {
-      // Check specific intersection route
-      return this.possibleRoutes[this.currentRotation][entrancePosition][
-        intersectionRouteIndex
-      ];
-    } else {
-      return this.possibleRoutes[this.currentRotation][entrancePosition][
-        this.intersectionSwitch[entrancePosition]
-      ];
-    }
-  }
-
   get allDrawableRailRoutes() {
     const routes: any[] = [];
     const possibleRoutes = this.possibleRoutes[this.currentRotation] as any[];
@@ -313,10 +290,6 @@ class TileIntersectionComplete extends TileBase {
     return Object.values(this.possibleRoutes).map(
       (routes, position) => this.intersectionSwitch[position]
     );
-  }
-
-  activeSwitchRoute(position: Position) {
-    return this.possibleRoutes[this.intersectionSwitch[position]];
   }
 
   rotate() {
@@ -366,114 +339,6 @@ class TileIntersectionComplete extends TileBase {
       return;
     }
     this.publishSwitches();
-  }
-
-  checkStatus(
-    entrancePosition: Position,
-    trainObject?: TrainObject
-  ): CheckStatusFeedback | false {
-    let route: any;
-    if (trainObject) {
-      const currentTileInPlannedRoute: any = this.getCurrentTileInPlannedRoute(
-        entrancePosition,
-        trainObject!
-      );
-
-      if (
-        currentTileInPlannedRoute &&
-        currentTileInPlannedRoute.intersectionSwitchPosition !== undefined
-      ) {
-        route = this.getRouteFromEntrancePosition(
-          entrancePosition,
-          currentTileInPlannedRoute.intersectionSwitchPosition
-        );
-      } else {
-        route = this.getRouteFromEntrancePosition(entrancePosition);
-      }
-    } else {
-      route = this.getRouteFromEntrancePosition(entrancePosition);
-    }
-
-    if (!route) {
-      // There seems to be no connected route! Ups!
-      return false;
-    }
-    const routeHasTrafficLight = !!route.trafficLight;
-    const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
-    let possibleRoutes = this.getAllRoutesFromEntrancePosition(
-      entrancePosition
-    );
-    if (!possibleRoutes.path) {
-      let intersectionSwitchPosition = 0;
-
-      possibleRoutes = Object.values(
-        this.getAllRoutesFromEntrancePosition(entrancePosition)
-      ) as any;
-
-      possibleRoutes.map((route: any) => {
-        route.intersectionSwitchPosition = intersectionSwitchPosition;
-        intersectionSwitchPosition++;
-        route.nextCoordinates = getLeavingTrainCoordinates(route, {
-          x: this.tile.x,
-          y: this.tile.y,
-        });
-      });
-    }
-    return {
-      status: this.status,
-      hasTrafficLight: routeHasTrafficLight,
-      nextCoordinates: {
-        x: this.tile.x + leaving.x,
-        y: this.tile.y + leaving.y,
-      },
-      possibleRoutes: possibleRoutes,
-    };
-  }
-
-  reserveTile(entrancePosition: Position, trainObject?: TrainObject) {
-    // Move this to intersectin tile
-    const currentTileInPlannedRoute: any = this.getCurrentTileInPlannedRoute(
-      entrancePosition,
-      trainObject!
-    );
-    if (currentTileInPlannedRoute) {
-      this.changeSwitch!(
-        entrancePosition,
-        currentTileInPlannedRoute.intersectionSwitchPosition
-      );
-    }
-
-    this.status = TileStatus.Reserved;
-  }
-
-  getTrainRoute(trainObject: TrainObject) {
-    const trainPosition = this.getIncomingTrainLocation(trainObject);
-    if (trainPosition !== null) {
-      return this.possibleRoutes[this.currentRotation][trainPosition][
-        this.intersectionSwitch[trainPosition]
-      ];
-    }
-    return null;
-  }
-
-  animationDuration(trainObject: TrainObject) {
-    const trainPosition = this.getIncomingTrainLocation(trainObject);
-    if (trainPosition !== null) {
-      if (
-        this.intersectionSwitch[trainPosition] === ActiveIntersection.Straight
-      ) {
-        return 2;
-      } else {
-        return 1.7;
-      }
-    }
-    return 2;
-  }
-
-  animateTrainOptions(trainObject: TrainObject) {
-    return {
-      duration: this.animationDuration(trainObject),
-    };
   }
 }
 

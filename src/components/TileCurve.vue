@@ -19,7 +19,7 @@
 
 <script lang="ts">
 import { Component, toNative } from "vue-facing-decorator";
-import { Position, Rotations, TrainObject } from "@/types";
+import { Position, Rotations } from "@/types";
 import TileBase from "./TileBase";
 
 // Info
@@ -85,12 +85,7 @@ class TileCurve extends TileBase {
     if (this.currentRotation > Rotations.Left) {
       this.currentRotation = Rotations.Top;
     }
-  }
-
-  animateTrainOptions(trainObject: TrainObject) {
-    return {
-      duration: 1.7,
-    };
+    this.tile.rotation = this.currentRotation;
   }
 }
 

@@ -108,7 +108,7 @@ Key files:
 - `src/types.ts` — all enums/interfaces (TrainStatus, TrafficLight, Position,
   Route, Rotations, etc.). Read this first to understand the domain.
 - `src/utils/tileHelpers.ts`, `trainHelpers.ts`, `globalHelpers.ts` — coordinate
-  math, direction/position conversions, colour list, `resolveRef`.
+  math, direction/position conversions, colour list.
 
 Coordinate system: `x` increases right, `y` increases down. `Position`
 (Top/Right/Bottom/Left/Center) and `TrainDirection` (U/R/D/L/N) are converted via
@@ -128,9 +128,10 @@ travel.
   refs. This is the same hazard that broke the old GSAP timeline (a reactive
   Proxy breaks identity-based scheduling — a train would leave its depot once and
   then never advance).
-- Legacy note: the old tile components still contain dead, imperative
-  `$parent.$refs[id]` movement code (and the `resolveRef` shim) from before the
-  simulation existed. It is no longer called — removing it is a clean follow-up.
+- Tiles are pure views: they draw rails/rotation/switches/signals, handle clicks
+  (rotate, toggle switch/signal), and publish their live rotation/switch state
+  into the game so the simulation routes through it. No cross-component `$refs`
+  or movement logic lives in them any more.
 - Lifecycle hooks merge across the inheritance chain (base `created` runs before
   the subclass), same as Vue 2's mixin merge — several tiles rely on this.
 

@@ -2,56 +2,32 @@ import { Component, Inject, Prop, Vue } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
 import {
-  CheckStatusFeedback,
-  LevelDefinition,
-  Position,
   PossibleRoutesPerRotation,
   Rotations,
   Route,
   TileObject,
   TileStatus,
-  TrainDirection,
-  TrainObject,
-  TrainsDefinition,
 } from "@/types";
-import {
-  getCoordinatesId,
-  getRelativeCoordinatesOfNextTile,
-} from "@/utils/tileHelpers";
-import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // Shared base class for every tile component. It is never registered or
 // rendered on its own (each concrete tile provides its own <template>), so it
 // lives as a plain `.ts` class: a Vue SFC default export gets wrapped into a
 // component options object, which cannot be used as the target of `extends`.
+//
+// Tiles are pure views: they draw rails/rotation/switches/signals and publish
+// their live state into the game. Movement is owned by the simulation
+// (src/sim) and the render loop (src/game.ts), not by the tiles.
 @Component
 export default class TileBase extends Vue {
-  @Inject() level!: LevelDefinition;
-  @Inject() trains!: TrainsDefinition;
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Inject({ from: "game" }) game!: Game;
-
-  // The simulation-backed traffic signal for this tile (manual; default green).
-  get signalColor(): string {
-    return this.game.signals[getCoordinatesId(this.tile)] === "red"
-      ? "red"
-      : "green";
-  }
-
-  get hasSignal(): boolean {
-    return !!this.tile.trafficLights || !!this.tile.enableTrafficLight;
-  }
-
-  toggleSignal() {
-    this.game.toggleSignal(getCoordinatesId(this.tile));
-  }
 
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
   tileSize!: number;
   currentRotation: Rotations = Rotations.Top;
   possibleRoutes!: PossibleRoutesPerRotation;
   status: TileStatus = TileStatus.Free;
-  train!: TrainObject;
 
   created() {
     this.tileSize = this.config.tileSize;
@@ -74,84 +50,19 @@ export default class TileBase extends Vue {
     }
   }
 
-  getRouteFromEntrancePosition(entrancePosition: Position, ...args: any) {
-    return this.possibleRoutes[this.currentRotation][entrancePosition];
+  // The simulation-backed traffic signal for this tile (manual; default green).
+  get signalColor(): string {
+    return this.game.signals[getCoordinatesId(this.tile)] === "red"
+      ? "red"
+      : "green";
   }
 
-  getAllRoutesFromEntrancePosition(
-    entrancePosition: Position
-  ): Route | Route[] | any {
-    return this.possibleRoutes[this.currentRotation][entrancePosition];
+  get hasSignal(): boolean {
+    return !!this.tile.trafficLights || !!this.tile.enableTrafficLight;
   }
 
-  getCurrentTileInPlannedRoute(
-    entrancePosition: Position,
-    trainObject: TrainObject
-  ) {
-    if (
-      trainObject &&
-      trainObject.currentRouteDestination !== undefined &&
-      trainObject.routeDestinations
-    ) {
-      if (trainObject.routeDestinations[trainObject.currentRouteDestination]) {
-        const routeDestinationObject =
-          trainObject.routeDestinations[trainObject.currentRouteDestination];
-
-        if (routeDestinationObject.selectedRoute) {
-          const plannedRoute: any = routeDestinationObject.selectedRoute;
-          const tileId = getCoordinatesId(this.tile) + "-" + entrancePosition;
-          const currentTileInPlannedRoute = plannedRoute.find(
-            (tile: any) => tile.routeTileId === tileId
-          );
-
-          return currentTileInPlannedRoute;
-        }
-      }
-    }
-  }
-
-  checkStatus(
-    entrancePosition: Position,
-    trainObject?: TrainObject
-  ): CheckStatusFeedback | false {
-    const route = this.getRouteFromEntrancePosition(entrancePosition);
-    if (!route) {
-      // There seems to be no connected route! Ups!
-      return false;
-    }
-    const routeHasTrafficLight =
-      !!route.trafficLight || route.leavesAtPosition === Position.Center;
-    const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
-    let possibleRoutes = this.getAllRoutesFromEntrancePosition(entrancePosition);
-    if (!possibleRoutes.path) {
-      possibleRoutes = Object.values(
-        this.getAllRoutesFromEntrancePosition(entrancePosition)
-      ) as any;
-      possibleRoutes.map((route: any) => {
-        route.nextCoordinates = getLeavingTrainCoordinates(route, {
-          x: this.tile.x,
-          y: this.tile.y,
-        });
-      });
-    }
-    return {
-      status: this.status,
-      hasTrafficLight: routeHasTrafficLight,
-      nextCoordinates: {
-        x: this.tile.x + leaving.x,
-        y: this.tile.y + leaving.y,
-      },
-      possibleRoutes: possibleRoutes,
-    };
-  }
-
-  reserveTile(...args: any) {
-    this.status = TileStatus.Reserved;
-  }
-
-  incomingTrain(trainId: string) {
-    this.train = this.trains[trainId];
-    this.status = TileStatus.Blocked;
+  toggleSignal() {
+    this.game.toggleSignal(getCoordinatesId(this.tile));
   }
 
   get allPossibleRoutesWithCurrentRotation() {
@@ -164,46 +75,6 @@ export default class TileBase extends Vue {
       this.possibleRoutes[this.currentRotation][this.currentRotation] ??
       undefined;
     return route ? Array(route) : [];
-  }
-
-  getTrainRoute(trainObject: TrainObject) {
-    const trainPosition = this.getIncomingTrainLocation(trainObject);
-    if (trainPosition !== null) {
-      return this.possibleRoutes[this.currentRotation][trainPosition];
-    }
-    return null;
-  }
-
-  getIncomingTrainLocation(trainObject: TrainObject) {
-    if (trainObject === null) return null;
-    switch (trainObject.direction) {
-      case TrainDirection.Down:
-        return Position.Top;
-      case TrainDirection.Left:
-        return Position.Right;
-      case TrainDirection.Up:
-        return Position.Bottom;
-      case TrainDirection.Right:
-        return Position.Left;
-      default:
-        return Position.Center;
-    }
-  }
-
-  animateTrainOptions(trainObject: TrainObject) {
-    return {};
-  }
-
-  get currentTrain() {
-    return this.trains[this.train!.id] || null;
-  }
-
-  trainLeavesTile(trainObject: TrainObject) {
-    // Clear Tile Status after a while
-    setTimeout(() => {
-      this.status = TileStatus.Free;
-    }, 1000);
-    return true;
   }
 
   getCoordinates(

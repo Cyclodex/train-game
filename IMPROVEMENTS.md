@@ -14,10 +14,14 @@ The architecture was rebuilt around an authoritative, deterministic simulation
 - Game logic is **headless and unit-tested**; the renderer just draws it.
 - A **delivery counter** scores matching-colour depot arrivals.
 
-Remaining from the list below: deadlock resolution (#3), level loading (#6),
-removing the now-dead imperative `$refs` code from the tile components, and
+The dead imperative `$refs` movement code has been removed from the tile
+components — they are now pure views (draw + publish their rotation/switch state).
+
+Remaining from the list below: deadlock resolution (#3), level loading (#6), and
 re-adding **automatic** signals (the sim already supports `getSignal`; signals
-are currently a manual, default-green tool since occupancy handles safety).
+are currently a manual, default-green tool since occupancy handles safety). Minor
+polish: wagon spacing is measured in tile-fractions, so couplings look slightly
+tighter on curves than on straights — making it pixel-uniform is a nice-to-have.
 
 ## How the game plays today
 

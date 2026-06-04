@@ -43,8 +43,9 @@ export interface ArrivedEvent {
 
 export type SimEvent = ArrivedEvent;
 
-// Wagons sit a little under one tile apart, matching the rendered spacing.
-const WAGON_SPACING = 0.9;
+// Spacing between coupled units (loco + wagons), in tiles. A unit sprite is
+// ~half a tile wide, so ~0.5 keeps them coupled rather than strung far apart.
+const WAGON_SPACING = 0.5;
 
 // Resolves a traffic signal gating a train leaving `coordId` through `exitPort`.
 // "red" blocks; "green"/undefined allow.
