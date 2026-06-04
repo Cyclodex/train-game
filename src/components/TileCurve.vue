@@ -5,7 +5,7 @@
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
-    <div v-if="$root.debug" class="debug">
+    <div v-if="config.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
       <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
@@ -18,15 +18,15 @@
 </template>
 
 <script lang="ts">
-import { Component } from "vue-property-decorator";
+import { Component, toNative } from "vue-facing-decorator";
 import { Position, Rotations, TrainObject } from "@/types";
-import TileBase from "./TileBase.vue";
+import TileBase from "./TileBase";
 
 // Info
 // t=top, r=rigth, b=bottom, l=left
 
 @Component
-export default class TileCurve extends TileBase {
+class TileCurve extends TileBase {
   created() {
     this.initRoutes();
   }
@@ -93,4 +93,6 @@ export default class TileCurve extends TileBase {
     };
   }
 }
+
+export default toNative(TileCurve);
 </script>

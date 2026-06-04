@@ -1,2 +1,23 @@
 // This is more for a quick test or fall back.
 // Always style within the components!
+
+// Shared tile styles (previously the unscoped <style> block of TileBase.vue,
+// which is now a plain .ts class).
+.tile {
+  width: 100%;
+  height: 100%;
+  background-color: rgb(104, 185, 104);
+}
+
+.tile-status--unknown {
+  background-color: white;
+}
+.tile-status--free {
+  background-color: rgb(104, 185, 104);
+}
+.tile-status--reserved {
+  background-color: yellow;
+}
+.tile-status--blocked {
+  background-color: red;
+}

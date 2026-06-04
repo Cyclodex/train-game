@@ -14,10 +14,9 @@
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <template v-if="trafficLights">
-      <template v-for="trafficLight in trafficLights">
+      <template v-for="trafficLight in trafficLights" :key="trafficLight.direction">
         <svg
           v-if="trafficLight"
-          :key="trafficLight.direction"
           class="traffic-light"
           width="16"
           height="30"
@@ -44,10 +43,10 @@
       </template>
     </template>
 
-    <img class="depot-building" src="@/assets/depot.png" />
+    <img class="depot-building" :src="depotBuildingImg" />
     <div class="depot-interaction" :style="depotColorStyle" />
 
-    <div v-if="$root.debug" class="debug">
+    <div v-if="config.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
       <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
@@ -57,7 +56,7 @@
 </template>
 
 <script lang="ts">
-import { Component, Prop } from "vue-property-decorator";
+import { Component, Prop, toNative } from "vue-facing-decorator";
 import {
   Position,
   PossibleRoutesPerRotation,
@@ -69,16 +68,18 @@ import {
   TrainObject,
   TrainStatus,
 } from "@/types";
-import TileStraight from "./TileStraight.vue";
-import { Colors, getRandom } from "@/utils/globalHelpers";
+import { TileStraight } from "./TileStraight.vue";
+import { Colors, getRandom, resolveRef } from "@/utils/globalHelpers";
+import depotBuildingImg from "@/assets/depot.png";
 
 @Component
-export default class TileDepot extends TileStraight {
+class TileDepot extends TileStraight {
   @Prop({ type: Boolean, default: true }) enableTrafficLight!: boolean;
   automaticTrafficLights = false;
   checkRouteInterval: any;
   possibleRoutes: PossibleRoutesPerRotation = {};
   depotColor = "";
+  depotBuildingImg = depotBuildingImg;
 
   initRoutes(): void {
     this.possibleRoutes = {
@@ -204,15 +205,21 @@ export default class TileDepot extends TileStraight {
       this.train.status! === TrainStatus.Started
     ) {
       // Stop the train
-      (this.$parent!.$refs[trainId] as any)[0].stopTrainInDepot();
+      resolveRef(this.$parent!.$refs[trainId]).stopTrainInDepot();
     }
   }
 
   trainInDepot(trainObject: TrainObject) {
     if (trainObject.trainColor === this.depotColor) {
-      alert("yey");
+      // Matching colour: successful delivery. (A blocking `alert` used to live
+      // here, which also froze automated browser tests.)
+      console.log(
+        `Train ${trainObject.id} delivered to matching ${this.depotColor} depot!`
+      );
     } else {
-      (this.$parent!.$refs[trainObject.id] as any)[0].startTrainFromDepot();
+      resolveRef(
+        this.$parent!.$refs[trainObject.id]
+      ).startTrainFromDepot();
     }
   }
 
@@ -225,7 +232,7 @@ export default class TileDepot extends TileStraight {
   animateTrainFromTrafficLight() {
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-    (this.$parent!.$refs[this.currentTrain.id] as any)[0].startTrain();
+    resolveRef(this.$parent!.$refs[this.currentTrain.id]).startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok
@@ -262,6 +269,8 @@ export default class TileDepot extends TileStraight {
     return { backgroundColor: this.depotColor };
   }
 }
+
+export default toNative(TileDepot);
 </script>
 
 <style lang="scss" scoped>
@@ -299,15 +308,15 @@ export default class TileDepot extends TileStraight {
     background-color: #999;
     position: absolute;
 
-    ::v-deep circle {
+    :deep(circle) {
       transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
     }
 
-    &.signal--red ::v-deep .bulb--red {
+    &.signal--red :deep(.bulb--red) {
       fill: red;
     }
 
-    &.signal--green ::v-deep .bulb--green {
+    &.signal--green :deep(.bulb--green) {
       fill: green;
     }
   }

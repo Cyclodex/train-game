@@ -23,9 +23,8 @@
       </marker>
     </defs>
 
-    <template v-for="(route, key) in possibleRoutes">
+    <template v-for="(route, key) in possibleRoutes" :key="key">
       <path
-        :key="key + route.path"
         :d="route.path"
         :stroke="route.disabled ? 'red' : 'black'"
         stroke-width="1"
@@ -37,17 +36,19 @@
 </template>
 
 <script lang="ts">
-import { Vue, Component, Prop } from "vue-property-decorator";
+import { Vue, Component, Prop, toNative } from "vue-facing-decorator";
 import { PossibleRoutes, Route } from "@/types";
 
 @Component
-export default class DebugShowRoutes extends Vue {
+class DebugShowRoutes extends Vue {
   @Prop({ type: Object, default: () => ({}) }) possibleRoutes!: PossibleRoutes;
   @Prop({ type: Object, default: () => ({}) })
   switchableRoutes!: PossibleRoutes;
   @Prop({ type: Object, default: () => ({}) })
   activeRoute!: Route;
 }
+
+export default toNative(DebugShowRoutes);
 </script>
 
 <style lang="scss" scoped>

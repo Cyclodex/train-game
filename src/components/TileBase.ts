@@ -1,19 +1,6 @@
-<template>
-  <div class="tile" :class="tileStatusStyle">
-    <debug-show-routes :routes="allPossibleRoutesWithCurrentRotation" />
-  </div>
-</template>
-
-<script lang="ts">
+import { Component, Inject, Prop, Vue } from "vue-facing-decorator";
+import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import {
-  Component,
-  Emit,
-  InjectReactive,
-  Prop,
-  Vue,
-} from "vue-property-decorator";
-import {
-  ActiveIntersection,
   CheckStatusFeedback,
   LevelDefinition,
   Position,
@@ -32,10 +19,15 @@ import {
 } from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
+// Shared base class for every tile component. It is never registered or
+// rendered on its own (each concrete tile provides its own <template>), so it
+// lives as a plain `.ts` class: a Vue SFC default export gets wrapped into a
+// component options object, which cannot be used as the target of `extends`.
 @Component
 export default class TileBase extends Vue {
-  @InjectReactive() level!: LevelDefinition;
-  @InjectReactive() trains!: TrainsDefinition;
+  @Inject() level!: LevelDefinition;
+  @Inject() trains!: TrainsDefinition;
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
 
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
   tileSize!: number;
@@ -45,14 +37,14 @@ export default class TileBase extends Vue {
   train!: TrainObject;
 
   created() {
-    this.tileSize = this.$root.tileSize;
-    if (this.$props.tile.rotation) {
-      this.currentRotation = this.$props.tile.rotation;
+    this.tileSize = this.config.tileSize;
+    if (this.tile.rotation) {
+      this.currentRotation = this.tile.rotation;
     }
   }
 
   get tileStatusStyle() {
-    if (!this.$root.debug) return "";
+    if (!this.config.debug) return "";
     switch (this.status) {
       case TileStatus.Free:
         return "tile-status--free";
@@ -113,9 +105,7 @@ export default class TileBase extends Vue {
     const routeHasTrafficLight =
       !!route.trafficLight || route.leavesAtPosition === Position.Center;
     const leaving = getRelativeCoordinatesOfNextTile(route.leavesAtPosition);
-    let possibleRoutes = this.getAllRoutesFromEntrancePosition(
-      entrancePosition
-    );
+    let possibleRoutes = this.getAllRoutesFromEntrancePosition(entrancePosition);
     if (!possibleRoutes.path) {
       possibleRoutes = Object.values(
         this.getAllRoutesFromEntrancePosition(entrancePosition)
@@ -206,9 +196,9 @@ export default class TileBase extends Vue {
   ) {
     const center = this.tileSize / 2;
     const full = this.tileSize;
-    const distance = this.$root.railDistanceFromPath;
-    const centerX = Number(xChange + this.$root.railDistanceFromPath);
-    const centerY = Number(yChange + this.$root.railDistanceFromPath);
+    const distance = this.config.railDistanceFromPath;
+    const centerX = Number(xChange + this.config.railDistanceFromPath);
+    const centerY = Number(yChange + this.config.railDistanceFromPath);
 
     let coordinates;
     coordinates = simplePath.replaceAll("T-", `${center - distance} 0`);
@@ -272,25 +262,3 @@ export default class TileBase extends Vue {
     return this.getCoordinates(`M ${from} ${to}`);
   }
 }
-</script>
-
-<style>
-.tile {
-  width: 100%;
-  height: 100%;
-  background-color: rgb(104, 185, 104);
-}
-
-.tile-status--unknown {
-  background-color: white;
-}
-.tile-status--free {
-  background-color: rgb(104, 185, 104);
-}
-.tile-status--reserved {
-  background-color: yellow;
-}
-.tile-status--blocked {
-  background-color: red;
-}
-</style>
