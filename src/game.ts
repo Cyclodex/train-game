@@ -1,9 +1,6 @@
 import { reactive, ref, Ref } from "vue";
-import {
-  LevelDefinition,
-  Position,
-  ActiveIntersection,
-} from "@/types";
+import { Position, ActiveIntersection } from "@/types";
+import { Level, partnersOf, armExit, portsOf } from "@/tiles/model";
 import {
   createSimulation,
   Simulation,
@@ -36,33 +33,27 @@ const ENTRY_PORTS = [
   Position.Left,
 ];
 
-// Initial intersection switch state, derived from the level's activeRoutes /
-// disabledRoutes (mirrors TileIntersectionComplete's created() defaults).
+// Default switch arm per entry port of every junction tile: the first arm whose
+// geometric exit is an actual connection of that tile. Non-junction tiles need
+// no switch entry. (Player clicks and interlocking mutate this map later.)
 function initialSwitches(
-  level: LevelDefinition
+  level: Level
 ): Record<string, Record<number, ActiveIntersection>> {
   const out: Record<string, Record<number, ActiveIntersection>> = {};
   for (const [id, tile] of Object.entries(level)) {
-    if (tile.component !== "TileIntersectionComplete") continue;
-    const disabled = (tile.disabledRoutes ?? {}) as Record<
-      number,
-      ActiveIntersection[]
-    >;
-    const active = (tile.activeRoutes ?? {}) as Record<
-      number,
-      ActiveIntersection
-    >;
     const switches: Record<number, ActiveIntersection> = {};
+    let isJunction = false;
     for (const port of ENTRY_PORTS) {
-      const off = disabled[port] ?? [];
-      if (active[port] !== undefined && !off.includes(active[port])) {
-        switches[port] = active[port];
-      } else {
-        const arm = ALL_ARMS.find(a => !off.includes(a));
-        if (arm !== undefined) switches[port] = arm;
-      }
+      const partners = partnersOf(tile.connections, port);
+      if (partners.length <= 1) continue; // straight/curve/depot entry
+      isJunction = true;
+      const arm = ALL_ARMS.find(a => {
+        const exit = armExit(port, a);
+        return exit !== null && partners.includes(exit);
+      });
+      if (arm !== undefined) switches[port] = arm;
     }
-    out[id] = switches;
+    if (isJunction) out[id] = switches;
   }
   return out;
 }
@@ -101,7 +92,7 @@ export interface Game {
 }
 
 export function createGame(
-  level: LevelDefinition,
+  level: Level,
   trainDefs: TrainDef[],
   tileSize: number,
   colorSeed = 1
@@ -111,9 +102,9 @@ export function createGame(
     Record<number, ActiveIntersection>
   >;
 
-  // Tiles that carry a signal (block boundaries) — from the level's trafficLights.
+  // Tiles that carry a signal (block boundaries) — from the cell's signals flag.
   const signalTiles = Object.entries(level)
-    .filter(([, tile]) => tile.trafficLights)
+    .filter(([, tile]) => tile.signals)
     .map(([id]) => id);
 
   // Reactive signal aspects for rendering, keyed `${tileId}:${exitPort}`. The
@@ -223,12 +214,13 @@ export function createGame(
     }
   }
 
-  // The two exit ports of a (straight) signal tile, from its live rotation.
+  // The exit ports of a signal tile = the ports its connections use (a straight
+  // has exactly two). Signals only sit on straights, so this yields the two
+  // directions of travel.
   function signalExits(tileId: string): Position[] {
-    const rotation = level[tileId]?.rotation ?? 0;
-    return rotation % 2 === 0
-      ? [Position.Top, Position.Bottom]
-      : [Position.Right, Position.Left];
+    const tile = level[tileId];
+    if (!tile) return [];
+    return portsOf(tile.connections).filter(p => p !== Position.Center);
   }
 
   function updateSignalAspects() {

@@ -1,18 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { traverse, routeToNextSignal } from "@/sim/network";
-import {
-  LevelDefinition,
-  Position,
-  ActiveIntersection,
-} from "@/types";
+import { Position, ActiveIntersection } from "@/types";
+import { Level } from "@/tiles/model";
+import { AuthorKind, expandKind } from "@/tiles/kinds";
 
 const noSwitches = () => undefined;
 
-function level(tiles: Array<[string, string, number?]>): LevelDefinition {
-  const out: LevelDefinition = {};
+// Map legacy component names used in these fixtures to the new authoring kinds.
+const KIND: Record<string, AuthorKind> = {
+  TileStraight: "straight",
+  TileCurve: "curve",
+  TileDepot: "depot",
+  TileIntersectionComplete: "cross",
+};
+
+function level(tiles: Array<[string, string, number?]>): Level {
+  const out: Level = {};
   for (const [key, component, rotation] of tiles) {
-    const [x, y] = key.split(",").map(Number);
-    out[key] = { x, y, component, rotation: rotation ?? 0 };
+    out[key] = expandKind(KIND[component], rotation ?? 0);
   }
   return out;
 }

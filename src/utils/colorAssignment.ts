@@ -1,4 +1,4 @@
-import { LevelDefinition } from "@/types";
+import { Level } from "@/tiles/model";
 import { Colors, pickRandom } from "@/utils/globalHelpers";
 
 export interface ColorAssignment {
@@ -30,12 +30,12 @@ export interface TrainStart {
  * unit-testable results.
  */
 export function assignColors(
-  level: LevelDefinition,
+  level: Level,
   trains: TrainStart[],
   rand: () => number = Math.random
 ): ColorAssignment {
   const depotIds = Object.entries(level)
-    .filter(([, tile]) => tile.component === "TileDepot")
+    .filter(([, tile]) => tile.role === "depot")
     .map(([id]) => id);
 
   const depotColors: Record<string, string> = {};

@@ -1,11 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { createSimulation } from "@/sim/simulation";
-import { LevelDefinition, Position, ActiveIntersection } from "@/types";
+import { Position, ActiveIntersection } from "@/types";
+import { Level } from "@/tiles/model";
+import { AuthorKind, expandKind } from "@/tiles/kinds";
 
-function corridor(n: number): LevelDefinition {
-  const lvl: LevelDefinition = {};
+// Legacy component names used in these fixtures -> new authoring kinds.
+const KIND: Record<string, AuthorKind> = {
+  TileStraight: "straight",
+  TileCurve: "curve",
+  TileDepot: "depot",
+  TileIntersectionComplete: "cross",
+};
+const cell = (component: string, rotation = 0) =>
+  expandKind(KIND[component], rotation);
+
+function corridor(n: number): Level {
+  const lvl: Level = {};
   for (let x = 0; x < n; x++) {
-    lvl[`${x},0`] = { x, y: 0, component: "TileStraight", rotation: 1 };
+    lvl[`${x},0`] = cell("TileStraight", 1);
   }
   return lvl;
 }
@@ -218,12 +230,12 @@ describe("simulation manual signal hold", () => {
 describe("simulation path reservation at a junction", () => {
   // A + crossing: train "a" goes Top->Bottom, train "b" goes Left->Right, both
   // through the intersection 1,1. Their paths cross on that one tile.
-  const crossLevel: LevelDefinition = {
-    "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 }, // a's signal
-    "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-    "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 },
-    "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // b's signal
-    "2,1": { x: 2, y: 1, component: "TileStraight", rotation: 1 },
+  const crossLevel: Level = {
+    "1,0": cell("TileStraight", 0), // a's signal
+    "1,1": cell("TileIntersectionComplete", 0),
+    "1,2": cell("TileStraight", 0),
+    "0,1": cell("TileStraight", 1), // b's signal
+    "2,1": cell("TileStraight", 1),
   };
   // Intersection goes straight for both approaches.
   const getSwitch = (coordId: string, entryPort: Position) => {
@@ -302,9 +314,9 @@ describe("simulation signal aspect", () => {
 });
 
 describe("simulation depots", () => {
-  const depotLevel: LevelDefinition = {
-    "0,0": { x: 0, y: 0, component: "TileStraight", rotation: 1 },
-    "1,0": { x: 1, y: 0, component: "TileDepot", rotation: 3 }, // opening on the Left
+  const depotLevel: Level = {
+    "0,0": cell("TileStraight", 1),
+    "1,0": cell("TileDepot", 3), // opening on the Left
   };
 
   it("parks and emits a delivery when a train reaches a matching depot", () => {
@@ -342,11 +354,11 @@ describe("simulation depots", () => {
     // A corridor 0,0..2,0 leading into a Left-opening depot at 3,0. The train is
     // long enough (loco + 2 wagons => bodyLength 1.5) that, parked with the loco
     // at the depot centre, its tail would otherwise sit on the approach tile.
-    const level: LevelDefinition = {
-      "0,0": { x: 0, y: 0, component: "TileStraight", rotation: 1 },
-      "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 1 },
-      "2,0": { x: 2, y: 0, component: "TileStraight", rotation: 1 },
-      "3,0": { x: 3, y: 0, component: "TileDepot", rotation: 3 },
+    const level: Level = {
+      "0,0": cell("TileStraight", 1),
+      "1,0": cell("TileStraight", 1),
+      "2,0": cell("TileStraight", 1),
+      "3,0": cell("TileDepot", 3),
     };
     const sim = createSimulation({
       level,
@@ -518,11 +530,11 @@ describe("simulation re-evaluates a blocked train when a switch changes", () => 
   // With the switch on Straight the route ahead is occupied, so t1 holds at its
   // signal. Flipping the switch to Right opens a free path; t1 must re-evaluate
   // and proceed without being commanded again.
-  const junctionLevel: LevelDefinition = {
-    "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 }, // t1 signal
-    "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-    "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 }, // blocked branch
-    "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // free branch
+  const junctionLevel: Level = {
+    "1,0": cell("TileStraight", 0), // t1 signal
+    "1,1": cell("TileIntersectionComplete", 0),
+    "1,2": cell("TileStraight", 0), // blocked branch
+    "0,1": cell("TileStraight", 1), // free branch
   };
 
   function makeJunctionSim(arm: { value: ActiveIntersection }) {
@@ -578,11 +590,11 @@ describe("simulation re-evaluates a blocked train when a switch changes", () => 
     // through the junction, flip the switch to Right so live traverse() would
     // send it to 0,1 instead — a tile reserved/occupied by another train. The
     // safety invariant: t1 must never end up on a tile occupied by another train.
-    const lvl: LevelDefinition = {
-      "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 },
-      "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-      "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 }, // straight branch (free)
-      "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // right branch (occupied)
+    const lvl: Level = {
+      "1,0": cell("TileStraight", 0),
+      "1,1": cell("TileIntersectionComplete", 0),
+      "1,2": cell("TileStraight", 0), // straight branch (free)
+      "0,1": cell("TileStraight", 1), // right branch (occupied)
     };
     const arm = { value: ActiveIntersection.Straight };
     const sim = createSimulation({
@@ -631,11 +643,11 @@ describe("simulation re-evaluates a blocked train when a switch changes", () => 
     // proceeds; then flip to the Straight branch which is occupied. The aspect
     // must flip to stop. This guards that aspect() reads the switch live in BOTH
     // directions, not just from blocked->free.
-    const lvl: LevelDefinition = {
-      "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 },
-      "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-      "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 }, // straight branch (occupied)
-      "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // right branch (free)
+    const lvl: Level = {
+      "1,0": cell("TileStraight", 0),
+      "1,1": cell("TileIntersectionComplete", 0),
+      "1,2": cell("TileStraight", 0), // straight branch (occupied)
+      "0,1": cell("TileStraight", 1), // right branch (free)
     };
     const arm = { value: ActiveIntersection.Right }; // free branch first
     const sim = createSimulation({
@@ -673,11 +685,11 @@ describe("simulation re-evaluates a blocked train when a switch changes", () => 
     // Both onward branches start blocked; the train holds at its signal. Free
     // one branch by flipping the switch and confirm it actually clears the
     // signal tile within a bounded number of ticks (no permanent deadlock).
-    const lvl: LevelDefinition = {
-      "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 },
-      "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-      "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 }, // straight branch
-      "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // right branch (free)
+    const lvl: Level = {
+      "1,0": cell("TileStraight", 0),
+      "1,1": cell("TileIntersectionComplete", 0),
+      "1,2": cell("TileStraight", 0), // straight branch
+      "0,1": cell("TileStraight", 1), // right branch (free)
     };
     const arm = { value: ActiveIntersection.Straight };
     const sim = createSimulation({
@@ -723,10 +735,10 @@ describe("simulation reservation visibility (drives the switch-lock UI)", () => 
   // fed from sim.reservedBy. This guards that an intersection tile a train is
   // committed through is reported as reserved (so the UI can lock its switch),
   // and is released again once the train clears it.
-  const lvl: LevelDefinition = {
-    "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 },
-    "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
-    "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 },
+  const lvl: Level = {
+    "1,0": cell("TileStraight", 0),
+    "1,1": cell("TileIntersectionComplete", 0),
+    "1,2": cell("TileStraight", 0),
   };
 
   it("reports an intersection tile as reserved while a train is committed through it", () => {
