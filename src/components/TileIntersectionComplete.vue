@@ -72,7 +72,10 @@ import {
   TrainObject,
 } from "@/types";
 import TileBase from "./TileBase";
-import { getRelativeCoordinatesOfNextTile } from "@/utils/tileHelpers";
+import {
+  getCoordinatesId,
+  getRelativeCoordinatesOfNextTile,
+} from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
 // Info
@@ -108,6 +111,15 @@ class TileIntersectionComplete extends TileBase {
         ...this.tile.activeRoutes,
       };
     }
+    this.publishSwitches();
+  }
+
+  // Mirror the live switch state into the game so the simulation routes trains
+  // according to what the player sees (and changes by clicking).
+  publishSwitches() {
+    this.game.switches[getCoordinatesId(this.tile)] = {
+      ...this.intersectionSwitch,
+    };
   }
 
   positionRotation(position: Position) {
@@ -327,6 +339,7 @@ class TileIntersectionComplete extends TileBase {
 
     // Update routes
     this.initIntersection();
+    this.publishSwitches();
   }
 
   changeSwitch(
@@ -352,6 +365,7 @@ class TileIntersectionComplete extends TileBase {
       this.changeSwitch(position);
       return;
     }
+    this.publishSwitches();
   }
 
   checkStatus(

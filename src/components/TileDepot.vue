@@ -13,36 +13,6 @@
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
-    <template v-if="trafficLights">
-      <template v-for="trafficLight in trafficLights" :key="trafficLight.direction">
-        <svg
-          v-if="trafficLight"
-          class="traffic-light"
-          width="16"
-          height="30"
-          :class="{
-            'signal--forward': trafficLight.direction === 1,
-            'signal--red': trafficLight.signal === 1,
-            'signal--green': trafficLight.signal === 2,
-          }"
-          @click.exact.stop="changeTrafficLight(trafficLight)"
-          @click.ctrl.stop="forceGreenTrafficLight(trafficLight)"
-        >
-          <circle class="bulb--red" cx="8" cy="8" r="6" />
-          <circle class="bulb--green" cx="8" cy="22" r="6" />
-          <text
-            v-if="automaticTrafficLights"
-            id="automatic"
-            x="3"
-            y="20"
-            style="fill: white"
-          >
-            A
-          </text>
-        </svg>
-      </template>
-    </template>
-
     <img class="depot-building" :src="depotBuildingImg" />
     <div class="depot-interaction" :style="depotColorStyle" />
 
@@ -70,6 +40,7 @@ import {
 } from "@/types";
 import { TileStraight } from "./TileStraight.vue";
 import { Colors, getRandom, resolveRef } from "@/utils/globalHelpers";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 import depotBuildingImg from "@/assets/depot.png";
 
 @Component
@@ -266,7 +237,9 @@ class TileDepot extends TileStraight {
   }
 
   get depotColorStyle() {
-    return { backgroundColor: this.depotColor };
+    return {
+      backgroundColor: this.game.depotColors[getCoordinatesId(this.tile)],
+    };
   }
 }
 

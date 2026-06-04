@@ -36,9 +36,7 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
-  test("trains advance past their starting tile (timeline onComplete fires)", async ({
-    page,
-  }) => {
+  test("trains advance tile to tile under the simulation", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator(".train-locomotive")).toHaveCount(2);
 
@@ -67,5 +65,36 @@ test.describe("Train game", () => {
         { timeout: 15000, intervals: [500] }
       )
       .toBe(true);
+  });
+
+  test("a train held at a red signal never advances past it", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await expect(page.locator(".train-locomotive")).toHaveCount(2);
+
+    // Put a red signal on train1's current tile (blocks it from leaving).
+    const heldTile = await page.evaluate(() => {
+      const game = (document.getElementById("app") as any).__vue_app__._instance
+        .proxy.game;
+      game.paused.value = true;
+      const tile = game.sim.trainTileId("train1");
+      game.signals[tile] = "red";
+      game.paused.value = false;
+      return tile as string;
+    });
+
+    const tileOf = () =>
+      page.evaluate(
+        () =>
+          (document.getElementById("app") as any).__vue_app__._instance.proxy
+            .game.sim.trainTileId("train1") as string
+      );
+
+    // It may roll to the tile boundary, but it must never cross onto a new tile.
+    for (let i = 0; i < 8; i++) {
+      await page.waitForTimeout(400);
+      expect(await tileOf()).toBe(heldTile);
+    }
   });
 });

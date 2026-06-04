@@ -4,6 +4,21 @@ A prioritised, actionable list of ways to move the train game forward. Ordered
 roughly by value-for-effort. Each item notes the rough approach and the main
 files involved.
 
+## Recently landed (the model/view refactor)
+
+The architecture was rebuilt around an authoritative, deterministic simulation
+(`src/sim/*`) rendered by a `requestAnimationFrame` loop (`src/game.ts`):
+
+- **Collisions** can't happen — a train never enters an occupied tile.
+- **Trains never move on a red signal** — gated centrally each tick (unit + e2e).
+- Game logic is **headless and unit-tested**; the renderer just draws it.
+- A **delivery counter** scores matching-colour depot arrivals.
+
+Remaining from the list below: deadlock resolution (#3), level loading (#6),
+removing the now-dead imperative `$refs` code from the tile components, and
+re-adding **automatic** signals (the sim already supports `getSignal`; signals
+are currently a manual, default-green tool since occupancy handles safety).
+
 ## How the game plays today
 
 - A 7×6 grid of track tiles is hardcoded in `App.vue`. Two trains (`train1`

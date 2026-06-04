@@ -11,36 +11,15 @@
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
-    <template v-if="trafficLights">
-      <template v-for="trafficLight in trafficLights" :key="trafficLight.direction">
-        <svg
-          v-if="trafficLight"
-          class="traffic-light"
-          width="16"
-          height="30"
-          :class="{
-            'signal--forward': trafficLight.direction === 1,
-            'signal--backward': trafficLight.direction === 2,
-            'signal--red': trafficLight.signal === 1,
-            'signal--green': trafficLight.signal === 2,
-          }"
-          @click.exact.stop="changeTrafficLight(trafficLight)"
-          @click.ctrl.stop="forceGreenTrafficLight(trafficLight)"
-        >
-          <circle class="bulb--red" cx="8" cy="8" r="6" />
-          <circle class="bulb--green" cx="8" cy="22" r="6" />
-          <text
-            v-if="automaticTrafficLights"
-            id="automatic"
-            x="3"
-            y="20"
-            style="fill: white"
-          >
-            A
-          </text>
-        </svg>
-      </template>
-    </template>
+    <svg
+      v-if="hasSignal"
+      class="signal-light"
+      width="18"
+      height="18"
+      @click.stop="toggleSignal"
+    >
+      <circle cx="9" cy="9" r="7" :fill="signalColor" stroke="#222" />
+    </svg>
     <div v-if="config.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
       <!-- <div v-if="getTrainRoute()" class="">
@@ -349,6 +328,13 @@ export default toNative(TileStraight);
 </script>
 
 <style lang="scss" scoped>
+.signal-light {
+  position: absolute;
+  z-index: 12;
+  top: 4px;
+  right: 4px;
+  cursor: pointer;
+}
 .tile-straight {
   position: relative;
 

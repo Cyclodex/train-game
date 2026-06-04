@@ -13,7 +13,6 @@ import {
 import { segmentPathD } from "@/sim/pathGeometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { Colors, getRandom } from "@/utils/globalHelpers";
-import { Port } from "@/sim/topology";
 
 export interface TrainDef {
   id: string;
@@ -74,13 +73,15 @@ export interface Game {
   depotColors: Record<string, string>;
   trainColors: Record<string, string>;
   switches: Record<string, Record<number, ActiveIntersection>>;
-  signals: Record<string, "red" | "green">; // key: `${coordId}:${exitPort}`
+  signals: Record<string, "red" | "green">; // key: coordId; a red light stops a
+  // train leaving that tile. Empty/green allows it (collisions are handled by
+  // the simulation's occupancy gate, not by signals).
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
   start(): void;
   stop(): void;
-  toggleSignal(coordId: string, exitPort: Port): void;
+  toggleSignal(coordId: string): void;
   positionUnit(unit: SampledUnit): { x: number; y: number; angle: number };
 }
 
@@ -116,7 +117,7 @@ export function createGame(
       wagonCount: def.wagonIds.length,
     })),
     getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
-    getSignal: (coordId, exitPort) => signals[`${coordId}:${exitPort}`],
+    getSignal: coordId => signals[coordId],
   });
 
   const unitIds: Record<string, string[]> = {};
@@ -212,9 +213,8 @@ export function createGame(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     },
-    toggleSignal(coordId: string, exitPort: Port) {
-      const key = `${coordId}:${exitPort}`;
-      signals[key] = signals[key] === "red" ? "green" : "red";
+    toggleSignal(coordId: string) {
+      signals[coordId] = signals[coordId] === "red" ? "green" : "red";
     },
     positionUnit,
   };

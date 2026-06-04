@@ -1,5 +1,6 @@
 import { Component, Inject, Prop, Vue } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import type { Game } from "@/game";
 import {
   CheckStatusFeedback,
   LevelDefinition,
@@ -28,6 +29,22 @@ export default class TileBase extends Vue {
   @Inject() level!: LevelDefinition;
   @Inject() trains!: TrainsDefinition;
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
+  @Inject({ from: "game" }) game!: Game;
+
+  // The simulation-backed traffic signal for this tile (manual; default green).
+  get signalColor(): string {
+    return this.game.signals[getCoordinatesId(this.tile)] === "red"
+      ? "red"
+      : "green";
+  }
+
+  get hasSignal(): boolean {
+    return !!this.tile.trafficLights || !!this.tile.enableTrafficLight;
+  }
+
+  toggleSignal() {
+    this.game.toggleSignal(getCoordinatesId(this.tile));
+  }
 
   @Prop({ type: Object, default: () => ({}) }) tile!: TileObject;
   tileSize!: number;

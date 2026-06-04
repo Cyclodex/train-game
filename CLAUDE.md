@@ -6,9 +6,10 @@ Guidance for working in this repository.
 
 A browser-based **train simulation game** built with **Vue 3 + TypeScript**. A
 grid of track tiles (straights, curves, intersections, depots) is laid out, and
-trains made of a locomotive plus wagons pathfind from depot to depot, obeying
-traffic lights and switchable intersection routes. Movement is animated with
-**GSAP** (MotionPathPlugin) along SVG paths defined per tile.
+trains made of a locomotive plus wagons travel from depot to depot, obeying
+traffic signals and switchable intersection routes. A deterministic simulation
+moves the trains; the renderer draws each loco/wagon at its sampled point along
+the per-tile SVG path.
 
 It started life as the Emergency Room team's `vue-base` starter (see README).
 The starter scaffolding (the `counterExample` Vuex module, `HelloWorld.vue`, the
@@ -20,10 +21,11 @@ unused `TileIntersection.vue` variant) has been removed.
   successor to `vue-property-decorator`; supports class inheritance, which the
   tile hierarchy relies on).
 - TypeScript 5.
-- GSAP 3 for animation.
+- A hand-written `requestAnimationFrame` loop drives movement (GSAP was removed
+  when the simulation took over).
 - **Vite 6** build, **Vitest** for unit tests, **Playwright** for e2e, ESLint +
-  Prettier. There is no Vuex — game state lives in `App.vue` and a small provided
-  `gameConfig`.
+  Prettier. There is no Vuex — game state lives in the simulation + `App.vue` and
+  a small provided `gameConfig`.
 
 ## Dev commands
 
@@ -44,13 +46,44 @@ not auto-downloaded — run `npx playwright install chromium` once before
 
 ## Architecture
 
-Game state is held reactively in `src/App.vue` and pushed to children via
-`@Provide()` / `@Inject()`:
+The game is split into an **authoritative, headless simulation** (`src/sim/*`,
+plain TS, no Vue/DOM) and a **thin rendering layer** (Vue components + a
+`requestAnimationFrame` loop in `src/game.ts`). The simulation owns game state and
+advances on a deterministic `step(dt)` tick; the renderer just draws the current
+state. Movement decisions (stop/go, collisions, red signals) live in the model,
+not in animation callbacks — this is what makes it stable and unit-testable.
+
+### Simulation (`src/sim/`)
+
+- `topology.ts` — pure tile graph: exit port per tile kind/rotation/switch,
+  neighbour math.
+- `network.ts` — `traverse()`: from a tile + entry port, the exit port and the
+  next tile/entry.
+- `simulation.ts` — `createSimulation()` + `step(dt)`. Trains advance along the
+  graph as `(segment, progress)`; entering a tile is gated on occupancy (no
+  collisions) and signals (**never crosses a red**); depots park on a colour
+  match or bounce on a mismatch and emit events. `sampleTrain()` returns
+  loco+wagon positions for rendering.
+- `pathGeometry.ts` — `segmentPathD()`: the SVG path a train follows across a
+  tile, derived purely from its entry+exit ports.
+
+### Renderer
+
+- `src/game.ts` — `createGame()` owns the sim, the switch/signal/colour state,
+  and the rAF loop (pause/speed scale `dt`). Each frame it ticks the sim and
+  writes loco/wagon transforms straight to the DOM (positions sampled from the
+  segment path). `App.vue` creates/provides it (`markRaw` — never proxy the sim).
+- Components are views: `Train.vue` is a pure sprite renderer; tiles draw rails,
+  rotation, switches, signals and publish their live rotation/switch state into
+  the game so the sim routes accordingly. Traffic signals are a manual tool
+  (default green); collisions are handled by the occupancy gate, not signals.
+
+Game state still seeded in `src/App.vue` via `@Provide()` / `@Inject()`:
 
 - `level: LevelDefinition` — a map keyed by `"x,y"` describing every tile
   (component name, rotation, traffic lights, intersection active/disabled routes).
-- `trains: TrainsDefinition` — each train's position, type (`people` | `fraight`
-  [sic]), wagons, and `routeDestinations`.
+- `trains: TrainsDefinition` — each train's starting depot, type (`people` |
+  `fraight` [sic]), and wagons (the simulation owns live position).
 
 Global config is a reactive object in `src/gameConfig.ts`, provided once at the
 app level in `src/main.ts` and injected into components as `config`: `tileSize`
@@ -62,13 +95,16 @@ Key files:
 
 - `src/main.ts` — `createApp`, provides `gameConfig`, registers the tile/train
   components globally.
-- `src/App.vue` — level + train definitions, pause/play, speed control (1x/2x/4x
-  via `gsap.globalTimeline.timeScale`), main layout.
+- `src/App.vue` — level + train definitions, creates/provides the game, pause/play
+  and speed (1x/2x/4x scale the loop's `dt`), delivery count, main layout.
+- `src/game.ts` — the `createGame()` controller + rAF render loop (see above).
+- `src/sim/*` — the headless simulation (see the Simulation section).
 - `src/components/TileBase.ts` — the shared base **class** (a plain `.ts`, never
   rendered: every concrete tile provides its own `<template>`). Concrete tiles
   inherit from it: `TileStraight` → `TileDepot`, plus `TileCurve` and
   `TileIntersectionComplete` (the full intersection logic).
-- `src/components/Train.vue` — train rendering and GSAP motion along tile paths.
+- `src/components/Train.vue` — pure loco/wagon sprite renderer (positioned by the
+  game loop).
 - `src/types.ts` — all enums/interfaces (TrainStatus, TrafficLight, Position,
   Route, Rotations, etc.). Read this first to understand the domain.
 - `src/utils/tileHelpers.ts`, `trainHelpers.ts`, `globalHelpers.ts` — coordinate
@@ -85,15 +121,16 @@ travel.
   **extended** (e.g. `TileStraight`) also exports the raw class as a named export
   for its subclass to `extends`; `TileBase` is a plain `.ts` class (a Vue SFC
   default export is wrapped into an options object and cannot be `extends`-ed).
-- Cross-component lookups go through `this.$parent.$refs[id]`. Vue 3 does not wrap
-  unique `v-for` refs in arrays the way Vue 2 did, so every lookup is funnelled
-  through `resolveRef()` (handles both shapes).
 - Reactive state mutates in place (Vue 3 deep proxies) — no `Vue.set`.
-- **GSAP objects and DOM nodes must be `markRaw()`-ed** before being stored in
-  reactive state (e.g. `trainObject.animation`, `this.visual`, `wagon.visual` in
-  `Train.vue`). Vue 3 otherwise wraps them in a Proxy, which breaks GSAP's
-  identity-based ticker/`onComplete` scheduling — the classic symptom is a train
-  animating out of its depot once and then never advancing.
+- **Plain controllers/DOM objects must be `markRaw()`-ed** before being stored in
+  reactive state. The `game` object (which holds the simulation and its refs) is
+  provided with `markRaw` so Vue does not deep-proxy the sim or auto-unwrap its
+  refs. This is the same hazard that broke the old GSAP timeline (a reactive
+  Proxy breaks identity-based scheduling — a train would leave its depot once and
+  then never advance).
+- Legacy note: the old tile components still contain dead, imperative
+  `$parent.$refs[id]` movement code (and the `resolveRef` shim) from before the
+  simulation existed. It is no longer called — removing it is a clean follow-up.
 - Lifecycle hooks merge across the inheritance chain (base `created` runs before
   the subclass), same as Vue 2's mixin merge — several tiles rely on this.
 
