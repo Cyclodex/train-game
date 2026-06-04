@@ -1,28 +1,9 @@
 <script lang="ts">
-import {
-  CheckedRoutesObject,
-  CheckedRoutesString,
-  CheckStatusFeedback,
-  Coordinates,
-  LevelDefinition,
-  Rotations,
-  Route,
-  RouteDestinations,
-  TrainObject,
-  TrainsDefinition,
-  TrainStatus,
-  Wagon,
-} from "@/types";
-import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
-import {
-  getLeavingTrainCoordinates,
-  getTrainDirection,
-} from "@/utils/trainHelpers";
-import gsap from "gsap";
-import { markRaw } from "vue";
+import { TrainObject } from "@/types";
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
-import { Colors, getRandom, resolveRef } from "@/utils/globalHelpers";
+import type { Game } from "@/game";
+import { getRandom } from "@/utils/globalHelpers";
 import locomotivePeople from "@/assets/locomotivePeople.png";
 import locomotiveFraight from "@/assets/locomotiveFraight.png";
 import wagonPeople from "@/assets/wagonPeople.png";
@@ -31,504 +12,50 @@ import wagonFraight2 from "@/assets/wagonFraight2.png";
 import wagonFraight3 from "@/assets/wagonFraight3.png";
 import wagonFraight4 from "@/assets/wagonFraight4.png";
 
-@Component({ emits: ["update"] })
+// Train is now a pure renderer: it draws the locomotive + wagon sprites and the
+// game loop (see game.ts) positions them each frame from the simulation. It owns
+// no movement, animation, or pathfinding logic.
+@Component
 class Train extends Vue {
-  @Inject() trains!: TrainsDefinition;
-  @Inject() level!: LevelDefinition;
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
+  @Inject({ from: "game" }) game!: Game;
+  @Prop({ type: Object, default: () => ({}) }) trainObject!: TrainObject;
 
-  @Prop({ type: Object, default: {} }) trainObject!: TrainObject;
-  initialPosition = {};
-  timeScale = 1;
   trainVisuals = {
     locos: {
-      people: {
-        backgroundImage: `url(${locomotivePeople})`,
-      },
-      fraight: {
-        backgroundImage: `url(${locomotiveFraight})`,
-      },
+      people: { backgroundImage: `url(${locomotivePeople})` },
+      fraight: { backgroundImage: `url(${locomotiveFraight})` },
     },
     wagons: {
-      people: {
-        wagonPeople: {
-          backgroundImage: `url(${wagonPeople})`,
-        },
-      },
+      people: { wagonPeople: { backgroundImage: `url(${wagonPeople})` } },
       fraight: {
-        wagonFraight1: {
-          backgroundImage: `url(${wagonFraight1})`,
-        },
-        wagonFraight2: {
-          backgroundImage: `url(${wagonFraight2})`,
-        },
-        wagonFraight3: {
-          backgroundImage: `url(${wagonFraight3})`,
-        },
-        wagonFraight4: {
-          backgroundImage: `url(${wagonFraight4})`,
-        },
+        wagonFraight1: { backgroundImage: `url(${wagonFraight1})` },
+        wagonFraight2: { backgroundImage: `url(${wagonFraight2})` },
+        wagonFraight3: { backgroundImage: `url(${wagonFraight3})` },
+        wagonFraight4: { backgroundImage: `url(${wagonFraight4})` },
       },
     },
   };
-  id = "";
-  visual!: HTMLElement | null;
-  wagons?: Wagon[] = [];
-  route?: Route;
-  routeDestinations?: RouteDestinations[] = [];
-  currentRouteDestination = 0;
-  type: "people" | "fraight" = "people";
-  wagonAnimationDistance = 0.95;
-  initialRotation = 0;
-  trainInitialyVertical = false;
-  trainColor = "";
 
-  created() {
-    this.id = this.trainObject.id;
-    this.wagons = this.trainObject.wagons;
-    this.type = this.trainObject.type;
-
-    // Random color generater
-    this.trainColor = this.trainObject.trainColor = getRandom(Colors);
-
-    if (this.type === "fraight") {
-      this.wagonAnimationDistance = 0.8;
-    }
-    this.routeDestinations = this.trainObject.routeDestinations;
-
-    this.setInitialPosition();
-
-    // Creating the trains animation timeline.
-    // markRaw keeps Vue 3 from wrapping the GSAP timeline in a reactive Proxy:
-    // GSAP relies on object identity and direct property access for its ticker
-    // and onComplete callbacks, which a Proxy silently breaks (the train would
-    // animate out of the depot once and then never advance to the next tile).
-    const trainTimeline = markRaw(
-      gsap
-        .timeline({
-          id: this.trainObject.id,
-        })
-        .timeScale(0)
-    );
-    this.trainObject.animation = trainTimeline;
+  get type(): "people" | "fraight" {
+    return this.trainObject.type;
   }
 
-  async mounted() {
-    // Init train and move to first tile
-    // Initialize "visual" dom mapper for animations
-    // DOM nodes handed to GSAP must also stay raw (non-reactive) for the same
-    // reason as the timeline above.
-    const loco = document.getElementById(this.id);
-    this.visual = loco ? markRaw(loco) : null;
-    if (this.trainObject.wagons !== undefined) {
-      this.wagons!.map(wagon => {
-        const wagonEl = document.getElementById(wagon.id);
-        wagon.visual = wagonEl ? markRaw(wagonEl) : null;
-      });
-    }
-
-    const coordId = getCoordinatesId(this.trainObject);
-    const tile = resolveRef(this.$parent!.$refs[coordId]);
-    this.route = tile.getTrainRoute(this.trainObject);
-
-    this.initialRotation = tile.currentRotation;
-    this.trainInitialyVertical =
-      this.initialRotation === Rotations.Top ||
-      this.initialRotation === Rotations.Bottom
-        ? true
-        : false;
-
-    // Check for planned Destination
-    if (this.config.automaticRoutePlanning) {
-      await this.doRoutePlanning();
-    }
-
-    // Move train to first tile
-    tile.incomingTrain(this.id);
-
-    // Start train from depot
-    if (this.trainObject.status === TrainStatus.LeavingDepot) {
-      this.startTrainFromDepot();
-    } else if (this.trainObject.status === TrainStatus.Init) {
-      this.trainReadyOnDepot();
-    }
+  get trainColor(): string {
+    return this.game.trainColors[this.trainObject.id] ?? "grey";
   }
 
-  trainReadyOnDepot() {
-    // do soemthing
-  }
-
-  doRoutePlanning() {
-    return new Promise<void>((resolve, reject) => {
-      if (this.trainObject.routeDestinations) {
-        const originCoordinates = {
-          x: this.trainObject.x,
-          y: this.trainObject.y,
-        };
-        const nextTileCoordinates = getLeavingTrainCoordinates(
-          this.route!,
-          originCoordinates
-        );
-
-        this.trainObject.routeDestinations.map(routeToNextDestination => {
-          const destination = routeToNextDestination.to;
-          const possibleRoutes = this.checkRoutesOnNextTile(
-            nextTileCoordinates,
-            originCoordinates,
-            destination
-          );
-          // Remove all routes that do not end on the destination
-          const possibleRoutesWithDestinationMatch: any = Object.values(
-            possibleRoutes
-          ).filter((route: any) => route[route.length - 1] === destination);
-
-          // Get the shortes route
-          const shortest = possibleRoutesWithDestinationMatch.reduce(
-            function(p: any, c: any) {
-              return p.length > c.length ? c : p;
-            },
-            { length: Infinity }
-          );
-
-          routeToNextDestination.routes = possibleRoutesWithDestinationMatch;
-          routeToNextDestination.selectedRoute = shortest;
-        });
-      }
-      resolve();
-    });
-  }
-
-  currentRouteIndex = 0;
-
-  checkRoutesOnNextTile(
-    nextTileCoordinates: Coordinates,
-    originCoordinates: Coordinates,
-    destination: string,
-    checkedRoutes: CheckedRoutesString | CheckedRoutesObject | any = {},
-    currentRouteIndex = ""
-  ): any {
-    const tilePosition: string = getCoordinatesId(nextTileCoordinates);
-    const tileEntrancePosition = getTileEntrancePosition(
-      nextTileCoordinates,
-      originCoordinates
-    );
-    const routeTileId = tilePosition + "-" + tileEntrancePosition;
-    let tileAlreadyVisited = false;
-
-    // Create route array for new RouteIndex
-    if (!checkedRoutes[currentRouteIndex]) {
-      checkedRoutes[currentRouteIndex] = [];
-    }
-    // Check if it already has route elements
-    if (checkedRoutes[currentRouteIndex].length > 0) {
-      const alreadyVisited = checkedRoutes[currentRouteIndex].indexOf(
-        tilePosition
-      );
-      if (alreadyVisited !== -1) {
-        tileAlreadyVisited = true;
-      }
-    }
-
-    // Check on tile
-    if (this.level[tilePosition]) {
-      const tile = resolveRef(this.$parent!.$refs[tilePosition]);
-      // Check tile status
-      const tileStatus = tile.checkStatus(tileEntrancePosition) as
-        | CheckStatusFeedback
-        | false;
-
-      // Stop if destination matches, is already visited or status is false (broken connection)
-      // TODO: we might not stop when tile was visited, but the exact path!
-      if (
-        tilePosition === destination ||
-        tileAlreadyVisited ||
-        tileStatus === false
-      ) {
-        // Add current tile to route
-        checkedRoutes[currentRouteIndex].push(tilePosition);
-        return;
-      } else if (!tileStatus.possibleRoutes.path) {
-        // No direct path
-        // Check multiple paths and remove disabled ones:
-        const iterableRoutes = Object.values(tileStatus.possibleRoutes).filter(
-          route => !!route.path && !route.disabled
-        );
-
-        // Create copies of current path for possible routes
-        iterableRoutes.map(route => {
-          // Index = x,y-P1,P2
-          const newRouteIndex =
-            getCoordinatesId(nextTileCoordinates) +
-            "-" +
-            tileEntrancePosition +
-            "," +
-            route.leavesAtPosition;
-
-          // If this exact path was already visited and checked, dont do it again
-          if (checkedRoutes[newRouteIndex]) {
-            return false;
-          }
-
-          // Make copy of current path, as base for the new splitted route
-          checkedRoutes[newRouteIndex] = checkedRoutes[
-            currentRouteIndex
-          ].slice();
-
-          // Add current tile to route
-          checkedRoutes[newRouteIndex].push({
-            routeTileId: routeTileId,
-            entrancePosition: tileEntrancePosition,
-            leavesAtPosition: route.leavesAtPosition,
-            intersectionSwitchPosition: route.intersectionSwitchPosition,
-          });
-
-          this.checkRoutesOnNextTile(
-            route.nextCoordinates,
-            nextTileCoordinates,
-            destination,
-            checkedRoutes,
-            newRouteIndex
-          );
-        });
-      } else {
-        // Add current tile to route
-        checkedRoutes[currentRouteIndex].push(tilePosition);
-        // Call next tile
-        this.checkRoutesOnNextTile(
-          tileStatus.nextCoordinates,
-          nextTileCoordinates,
-          destination,
-          checkedRoutes,
-          currentRouteIndex
-        );
-      }
-      return checkedRoutes;
-    }
-  }
-
-  startStopTrain() {
-    this.timeScale = this.timeScale === 1 ? 0 : 1;
-    if (this.timeScale === 0) {
-      this.stopTrain();
-    } else {
-      this.startTrain();
-    }
-  }
-
-  startTrain() {
-    this.trainStarted();
-    gsap.to(this.trainObject.animation, {
-      duration: 10,
-      timeScale: 1,
-    });
-  }
-
-  stopTrain() {
-    this.trainStopping();
-    gsap.to(this.trainObject.animation, {
-      duration: 4,
-      timeScale: 0,
-      onComplete: () => this.trainStopped(),
-    });
-  }
-
-  stopTrainInDepot() {
-    this.trainStoppingInDepot();
-    gsap.to(this.trainObject.animation, {
-      duration: (this.wagons?.length ?? 0) + 2,
-      timeScale: 1, // Maybe no time scale and less buggy stopping (0.5)
-      onComplete: () => this.trainStoppedInDepot(),
-    });
-  }
-
-  setInitialPosition() {
-    const tilePositionX = this.config.tileSize / 2;
-    const tilePositionY = this.config.tileSize / 2;
-    this.initialPosition = {
-      left: this.trainObject.x * this.config.tileSize + tilePositionX + "px",
-      top: this.trainObject.y * this.config.tileSize + tilePositionY + "px",
-    };
-  }
-
-  // TODO Check if this can be done with animateTrain()
-  startTrainFromDepot() {
-    this.trainStarted();
-    // const trainObject = { ...this.trainObject };
-    const trainRoute = this.route;
-    if (trainRoute) {
-      const trainPath = trainRoute.path;
-      // Animate train out of the box, and add all wagons accordingly
-      this.trainObject.animation
-        .to(
-          this.visual,
-          {
-            ease: "none",
-            duration: 1,
-            motionPath: {
-              align: "self",
-              autoRotate: "auto",
-              path: trainPath,
-            },
-            onComplete: () => this.trainLeavesTile(),
-          },
-          this.trainObject.id
-        )
-        .addLabel(this.trainObject.id, ">");
-      // Wagon trial
-      if (this.trainObject.wagons) {
-        this.trainObject.wagons!.map((wagon, index) => {
-          this.trainObject.animation
-            .to(
-              wagon.visual,
-              {
-                ease: "none",
-                duration: 1,
-                motionPath: {
-                  align: "self",
-                  autoRotate: "auto",
-                  path: trainPath,
-                },
-              },
-              (index + 1) * this.wagonAnimationDistance
-            )
-            .addLabel(wagon.id, ">");
-        });
-      }
-      // Start the whole timeline scale from 0 to 1
-      gsap.to(this.trainObject.animation, {
-        duration: 20,
-        timeScale: 1,
-      });
-    }
-  }
-
-  updateTrain(train: TrainObject | any) {
-    // this.trains[this.id] = Object.assign({}, this.trains[this.id], train);
-    this.$emit("update", train);
-  }
-
-  trainStopping() {
-    this.updateTrain({ id: this.id, status: TrainStatus.Stopping });
-  }
-
-  trainStoppingInDepot() {
-    this.updateTrain({ id: this.id, status: TrainStatus.EnteringDepot });
-  }
-
-  trainStopped() {
-    this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
-  }
-  trainStoppedInDepot() {
-    this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
-    const tilePosition: string = getCoordinatesId(this.trainObject);
-    const tile = resolveRef(this.$parent!.$refs[tilePosition]);
-    this.route = tile.getTrainRoute(this.trainObject);
-
-    this.trainObject.animation.clear();
-    tile.trainInDepot(this.trainObject);
-  }
-
-  trainStarted() {
-    this.updateTrain({ id: this.id, status: TrainStatus.Started });
-  }
-
-  trainRunning() {
-    this.updateTrain({ id: this.id, status: TrainStatus.Running });
-  }
-
-  trainLeavesTile(train: TrainObject = this.trainObject) {
-    const tilePosition: string = getCoordinatesId(train);
-    const tile = resolveRef(this.$parent!.$refs[tilePosition]);
-    const trainLeavesTile = tile.trainLeavesTile(train);
-
-    const nextTileCoordinates = getLeavingTrainCoordinates(this.route!, {
-      x: train.x,
-      y: train.y,
-    });
-    train.direction = getTrainDirection(nextTileCoordinates, {
-      x: train.x,
-      y: train.y,
-    });
-    this.updateTrain({
-      id: train.id,
-      x: nextTileCoordinates.x,
-      y: nextTileCoordinates.y,
-      status: train.status,
-      direction: train.direction,
-    });
-
-    // Don't forward train to next tile, if entering depot
-    if (trainLeavesTile) {
-      this.trainEntersNextTile(this.trains[train.id]);
-    }
-  }
-
-  trainEntersNextTile(train: TrainObject) {
-    const tilePosition: string = getCoordinatesId(train);
-    if (this.level[tilePosition]) {
-      const tile = resolveRef(this.$parent!.$refs[tilePosition]);
-      tile.incomingTrain(this.id);
-      this.route = tile.getTrainRoute(this.trainObject);
-      const animationOptions = tile.animateTrainOptions(this.trainObject);
-
-      // Animate the train!
-      this.animateTrain(this.route!, animationOptions);
-    }
-  }
-
-  animateTrain(route: Route, tileAnimationOptions?: object) {
-    // Animate
-    const trainPath = route.path;
-    const animationOptions = Object.assign(
-      {},
-      {
-        ease: "none",
-        duration: 2,
-        motionPath: {
-          align: "self",
-          autoRotate: "auto",
-          path: trainPath,
-        },
-      },
-      tileAnimationOptions
-    );
-    this.trainObject.animation
-      .to(
-        this.visual,
-        { ...animationOptions, onComplete: () => this.trainLeavesTile() },
-        this.trainObject.id
-      )
-      .addLabel(this.trainObject.id, ">");
-    // Wagon animation
-    if (this.trainObject.wagons) {
-      this.trainObject.wagons!.map((wagon, index) => {
-        this.trainObject.animation
-          .to(wagon.visual, animationOptions, wagon.id)
-          .addLabel(wagon.id, ">");
-      });
-    }
+  get locoImage() {
+    return this.type === "people"
+      ? this.trainVisuals.locos.people
+      : this.trainVisuals.locos.fraight;
   }
 
   get getWagonImage() {
     if (this.type === "people") {
       return this.trainVisuals.wagons.people.wagonPeople;
-    } else {
-      const wagons = Object.values(this.trainVisuals.wagons.fraight);
-      return getRandom(wagons);
     }
-  }
-
-  get locoImage() {
-    if (this.type === "people") {
-      return this.trainVisuals.locos.people;
-    } else if (this.type === "fraight") {
-      return this.trainVisuals.locos.fraight;
-    }
-    return this.trainVisuals.locos.fraight;
-  }
-
-  get trainColorStyle() {
-    return { backgroundColor: this.trainColor };
+    return getRandom(Object.values(this.trainVisuals.wagons.fraight));
   }
 }
 
@@ -539,10 +66,9 @@ export default toNative(Train);
   <div class="train-composition">
     <div
       :id="trainObject.id"
-      class="train train-locomotive clickable"
-      :class="[trainColor, { 'init-vertical': trainInitialyVertical }]"
-      :style="[initialPosition, locoImage]"
-      @click.stop="startStopTrain"
+      class="train train-locomotive"
+      :class="trainColor"
+      :style="locoImage"
     >
       <span v-if="config.debug" class="train-debug">{{ trainObject.id }}</span>
     </div>
@@ -552,11 +78,8 @@ export default toNative(Train);
         :id="wagon.id"
         :key="wagon.id"
         class="train train-wagon"
-        :class="[
-          `train-wagon--${type}`,
-          { 'init-vertical': trainInitialyVertical },
-        ]"
-        :style="[initialPosition, getWagonImage]"
+        :class="`train-wagon--${type}`"
+        :style="getWagonImage"
       >
         <span v-if="config.debug" class="train-debug">{{ wagon.id }}</span>
       </div>
@@ -568,14 +91,13 @@ export default toNative(Train);
 .train {
   position: absolute;
   z-index: 10;
+  top: 0;
+  left: 0;
   transform: translate(-50%, -50%);
   background-size: contain;
   background-position: center center;
   background-repeat: no-repeat;
-
-  &.init-vertical {
-    transform: translate(-50%, -50%) rotate(90deg);
-  }
+  will-change: transform;
 
   &.train-locomotive {
     width: 100px;
@@ -612,7 +134,6 @@ export default toNative(Train);
     width: 100px;
     height: 30px;
   }
-
   &.train-wagon--fraight {
     width: 81px;
     height: 30px;

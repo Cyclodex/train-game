@@ -42,13 +42,14 @@ test.describe("Train game", () => {
     await page.goto("/");
     await expect(page.locator(".train-locomotive")).toHaveCount(2);
 
-    // Read each train's tile coordinate straight from the live Vue state.
+    // Read each train's tile coordinate straight from the live simulation.
     const readPositions = () =>
       page.evaluate(() => {
-        const trains = (document.getElementById("app") as any).__vue_app__
-          ._instance.proxy.trains;
+        const game = (document.getElementById("app") as any).__vue_app__
+          ._instance.proxy.game;
+        const ids = Object.keys(game.sim.trains);
         return Object.fromEntries(
-          Object.keys(trains).map(id => [id, `${trains[id].x},${trains[id].y}`])
+          ids.map(id => [id, game.sim.trainTileId(id)])
         ) as Record<string, string>;
       });
 

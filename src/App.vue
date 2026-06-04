@@ -10,6 +10,7 @@
       <button class="timeline-button" @click="changeGlobalTimeScale">
         {{ globalTimeScale }} x Speed
       </button>
+      <div class="delivered-count">Delivered: {{ delivered }}</div>
     </div>
     <div
       class="level"
@@ -20,9 +21,7 @@
       <Train
         v-for="trainObject in trains"
         :key="trainObject.id"
-        :ref="trainObject.id"
         :train-object="trainObject"
-        @update="onUpdateTrain"
       />
       <div
         v-for="(tile, key) in level"
@@ -50,8 +49,9 @@
 </template>
 
 <script lang="ts">
+import { markRaw } from "vue";
 import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import {
   ActiveIntersection,
   Rotations,
@@ -61,18 +61,22 @@ import {
   LevelDefinition,
   TrainStatus,
   Position,
-  TrainObject,
 } from "@/types";
-import { gsap } from "gsap";
-import { MotionPathPlugin } from "gsap/MotionPathPlugin";
-gsap.registerPlugin(MotionPathPlugin);
+import { createGame, Game, TrainDef } from "@/game";
+
+function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
+  return Object.values(trains).map(t => ({
+    id: t.id,
+    x: t.x,
+    y: t.y,
+    type: t.type,
+    wagonIds: (t.wagons ?? []).map(w => w.id),
+  }));
+}
 
 @Component
 class App extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
-  paused = false;
-  globalAnimations!: any;
-  globalTimeScale = 1;
   speeds = [1, 2, 4];
 
   @Provide() trains: TrainsDefinition = {
@@ -526,8 +530,32 @@ class App extends Vue {
     },
   };
 
-  onUpdateTrain(train: TrainObject) {
-    this.trains[train.id] = Object.assign({}, this.trains[train.id], train);
+  // The authoritative game model + render loop (see game.ts), provided to the
+  // train/tile components.
+  // markRaw so Vue does not deep-proxy the game: its refs must stay refs (not be
+  // auto-unwrapped) and its simulation must keep object identity.
+  @Provide("game") game: Game = markRaw(
+    createGame(this.level, buildTrainDefs(this.trains), gameConfig.tileSize)
+  );
+
+  mounted() {
+    this.game.start();
+  }
+
+  beforeUnmount() {
+    this.game.stop();
+  }
+
+  get paused(): boolean {
+    return this.game.paused.value;
+  }
+
+  get globalTimeScale(): number {
+    return this.game.speed.value;
+  }
+
+  get delivered(): number {
+    return this.game.deliveries.value;
   }
 
   switchDebugMode() {
@@ -535,23 +563,13 @@ class App extends Vue {
   }
 
   pausePlayGame() {
-    this.paused = !this.paused;
-    if (this.paused) {
-      gsap.globalTimeline.pause();
-    } else {
-      gsap.globalTimeline.play();
-    }
+    this.game.paused.value = !this.game.paused.value;
   }
 
   changeGlobalTimeScale() {
-    const currentSpeed = this.globalTimeScale;
-    const currentIndex = this.speeds.indexOf(currentSpeed);
-    let newSpeedIndex = currentIndex + 1;
-    if (newSpeedIndex === this.speeds.length) {
-      newSpeedIndex = 0;
-    }
-    this.globalTimeScale = this.speeds[newSpeedIndex];
-    gsap.globalTimeline.timeScale(this.globalTimeScale);
+    const currentIndex = this.speeds.indexOf(this.game.speed.value);
+    this.game.speed.value =
+      this.speeds[(currentIndex + 1) % this.speeds.length];
   }
 }
 
