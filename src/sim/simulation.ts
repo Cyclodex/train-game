@@ -79,6 +79,13 @@ export type SimEvent = ArrivedEvent;
 const DEFAULT_UNIT_LENGTH = 0.5;
 const DEFAULT_COUPLING = 0;
 
+// Each car is positioned/angled on two anchor points (its "bogies") set in from
+// the body ends by this fraction of the car's length, like real wheels. Anchoring
+// at the very tips made long sprites swing off the rail on tight curves; insetting
+// the anchors lets the body hug the track (with a natural overhang at the ends).
+// Visual only — tune to taste; 0 = anchor at the tips (old behaviour).
+export const BOGIE_INSET_FRAC = 0.2;
+
 // Per-unit centre offsets (from the loco head) and the head-to-tail body length,
 // all in tiles. The loco head sits at the train's headDistance; unit i's centre
 // trails by half the loco + (full lengths + gaps of the units between) + half
@@ -116,10 +123,11 @@ export interface SampledUnit {
   t: number; // 0..1 progress within the tile segment
 }
 
-// A unit (loco or wagon) sampled as its two coupler points on the path: `front`
-// toward the loco head, `rear` toward the tail. The renderer draws the car as
-// the chord between them (midpoint + chord angle) so rigid sprites sit correctly
-// on curves and adjacent cars meet at their shared couplers.
+// A unit (loco or wagon) sampled as its two anchor ("bogie") points on the path:
+// `front` toward the loco head, `rear` toward the tail, each set in from the body
+// ends by BOGIE_INSET_FRAC. The renderer draws the car centred on their midpoint
+// and angled along their chord (full sprite length, overhanging the anchors), so a
+// rigid sprite hugs the rail on curves like a real car on its wheels.
 export interface UnitChord {
   front: SampledUnit;
   rear: SampledUnit;
@@ -525,15 +533,17 @@ export function createSimulation(config: SimConfig): Simulation {
         }
         return point(0, 0); // before the start of the recorded path
       };
-      // Each unit is sampled as its two coupler points: front at (centre offset
-      // − half its length) of arc behind the head, rear at (offset + half).
-      // Spacing is in real arc length, so consecutive cars meet at shared
-      // couplers and the renderer can draw each as a chord.
+      // Each unit is sampled as its two bogie anchor points, set in from the body
+      // ends by BOGIE_INSET_FRAC of its length: front bogie at (offset − half +
+      // inset) of arc behind the head, rear bogie at (offset + half − inset).
+      // Distances are real arc length, so the anchors (and thus the car centres)
+      // stay correctly spaced on curves; insetting them keeps the body on the rail.
       return train.unitOffsets.map((offset, i) => {
         const half = train.unitLengths[i] / 2;
+        const inset = train.unitLengths[i] * BOGIE_INSET_FRAC;
         return {
-          front: sampleAtArc(offset - half),
-          rear: sampleAtArc(offset + half),
+          front: sampleAtArc(offset - half + inset),
+          rear: sampleAtArc(offset + half - inset),
         };
       });
     },

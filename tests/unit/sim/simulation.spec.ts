@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createSimulation } from "@/sim/simulation";
+import { createSimulation, BOGIE_INSET_FRAC } from "@/sim/simulation";
 import { LevelDefinition, Position, ActiveIntersection } from "@/types";
 
 function corridor(n: number): LevelDefinition {
@@ -105,7 +105,7 @@ describe("simulation body sampling", () => {
     expect(along(body[0].front) - along(body[2].rear)).toBeGreaterThanOrEqual(1);
   });
 
-  it("places the loco's front coupler at the train head", () => {
+  it("anchors the loco's front bogie set back from the head (like real wheels)", () => {
     const sim = createSimulation({
       level: corridor(6),
       trains: [
@@ -121,17 +121,19 @@ describe("simulation body sampling", () => {
       ],
     });
     for (let i = 0; i < 5; i++) sim.step(0.5);
-    const head =
-      sim.trains["t1"].headIndex + sim.trains["t1"].headProgress;
+    const head = sim.trains["t1"].headIndex + sim.trains["t1"].headProgress;
     const front = sim.sampleTrain("t1")[0].front;
-    expect(along(front)).toBeCloseTo(head, 5);
+    // The front anchor is inset from the leading tip by inset = locoLen * frac.
+    const inset = 0.5 * BOGIE_INSET_FRAC; // default loco length 0.5 tile
+    expect(along(front)).toBeCloseTo(head - inset, 5);
+    expect(along(front)).toBeLessThan(head); // set back from the very tip
   });
 });
 
 describe("simulation per-unit spacing", () => {
   const along = (u: { coord: { x: number }; t: number }) => u.coord.x + u.t;
 
-  it("makes adjacent units meet at a shared coupler (gap = coupling)", () => {
+  it("anchors each car on bogies inset from its ends", () => {
     const lengthsLoco = 0.5;
     const lengthsWagon = 0.4;
     const coupling = 0.05;
@@ -156,16 +158,17 @@ describe("simulation per-unit spacing", () => {
     const body = sim.sampleTrain("t1");
     expect(body).toHaveLength(3);
 
-    // Each unit spans its own length between its couplers.
-    expect(along(body[0].front) - along(body[0].rear)).toBeCloseTo(lengthsLoco, 5);
-    expect(along(body[1].front) - along(body[1].rear)).toBeCloseTo(lengthsWagon, 5);
-    // Consecutive units are separated only by the coupling gap: rear of i to
-    // front of i+1 == coupling. (With coupling 0 they would share a point.)
-    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(coupling, 5);
-    expect(along(body[1].rear) - along(body[2].front)).toBeCloseTo(coupling, 5);
+    // Each unit's two bogies span (length − 2*inset) of its length.
+    const span = (len: number) => len * (1 - 2 * BOGIE_INSET_FRAC);
+    expect(along(body[0].front) - along(body[0].rear)).toBeCloseTo(span(lengthsLoco), 5);
+    expect(along(body[1].front) - along(body[1].rear)).toBeCloseTo(span(lengthsWagon), 5);
+    // Gap between adjacent bogies = coupling + the two cars' insets (the ends
+    // overhang the bogies, so there is always some bogie gap).
+    const gap = coupling + lengthsLoco * BOGIE_INSET_FRAC + lengthsWagon * BOGIE_INSET_FRAC;
+    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(gap, 5);
   });
 
-  it("shares the exact coupler point between cars when coupling is 0", () => {
+  it("leaves a bogie overhang gap between cars even with zero coupling", () => {
     const sim = createSimulation({
       level: corridor(8),
       trains: [
@@ -184,9 +187,10 @@ describe("simulation per-unit spacing", () => {
     });
     for (let i = 0; i < 10; i++) sim.step(0.5);
     const body = sim.sampleTrain("t1");
-    // rear of unit i and front of unit i+1 are the same along-track point.
-    expect(along(body[0].rear)).toBeCloseTo(along(body[1].front), 5);
-    expect(along(body[1].rear)).toBeCloseTo(along(body[2].front), 5);
+    // With no coupling the bogies are still apart by the two cars' insets.
+    const gap01 = 0.5 * BOGIE_INSET_FRAC + 0.4 * BOGIE_INSET_FRAC;
+    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(gap01, 5);
+    expect(along(body[0].rear) - along(body[1].front)).toBeGreaterThan(0);
   });
 
   it("reports a body footprint equal to the sum of unit lengths plus gaps", () => {
@@ -250,18 +254,20 @@ describe("simulation spaces cars by true arc length across curves", () => {
     sim.trains["t1"].headProgress = 0.2;
 
     const [loco] = sim.sampleTrain("t1");
-    // Front coupler is the head itself.
+    const inset = 0.5 * BOGIE_INSET_FRAC; // loco length 0.5
+    // Front bogie is inset back from the head, still on the straight (1,1).
     expect(loco.front.coord).toEqual({ x: 1, y: 1 });
-    expect(loco.front.t).toBeCloseTo(0.2, 5);
+    expect(loco.front.t).toBeCloseTo(0.2 - inset, 5);
 
-    // Rear coupler is 0.5 tile of ARC behind. 0.2 of that is on the straight
-    // (0.2 of arc), the remaining 0.3 falls on the curve (length ~0.8116), so
-    // rear t = 1 - 0.3/0.8116 = ~0.6304 on the curve tile (0,1) — NOT 0.7, which
-    // is the wrong, normalised-per-tile answer that bunched cars up.
+    // Rear bogie is (0.5 − inset) tile of ARC behind the head: 0.2 of that is on
+    // the straight, the remainder falls on the curve (length ~0.8116). The point
+    // is measured in real arc length, so it sits further back (smaller t) than the
+    // wrong normalised-per-tile answer (0.8) that bunched the cars up.
     const curveLen = 0.8116;
+    const onCurve = 0.5 - inset - 0.2; // arc beyond the straight portion
     expect(loco.rear.coord).toEqual({ x: 0, y: 1 });
-    expect(loco.rear.t).toBeCloseTo(1 - 0.3 / curveLen, 2);
-    expect(loco.rear.t).toBeLessThan(0.7); // arc-correct sits further back than normalised
+    expect(loco.rear.t).toBeCloseTo(1 - onCurve / curveLen, 2);
+    expect(loco.rear.t).toBeLessThan(0.8); // arc-correct, further back than normalised
   });
 });
 
