@@ -800,3 +800,125 @@ describe("simulation reservation visibility (drives the switch-lock UI)", () => 
     expect(reservedNotYetOccupiedAhead).toBe(true);
   });
 });
+
+describe("simulation event log (decision-level events)", () => {
+  function drain(sim: ReturnType<typeof createSimulation>, ticks: number, dt = 0.5) {
+    const events: any[] = [];
+    for (let i = 0; i < ticks; i++) for (const e of sim.step(dt)) events.push(e);
+    return events;
+  }
+
+  it("emits a reserved event listing the block a train claims", () => {
+    const sim = createSimulation({
+      level: corridor(3),
+      signalTiles: ["1,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+
+    const reserved = drain(sim, 8).filter(
+      e => e.type === "reserved" && e.trainId === "t1"
+    );
+    expect(reserved.length).toBeGreaterThan(0);
+    // Every reserved event carries a non-empty list of tile ids.
+    for (const e of reserved) {
+      expect(Array.isArray(e.tiles)).toBe(true);
+      expect(e.tiles.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("emits a single blocked event (reason signal-hold) when a train stops at a held signal, not one per tick", () => {
+    const sim = createSimulation({
+      level: corridor(3),
+      signalTiles: ["1,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+    sim.toggleHold("1,0", Position.Right);
+
+    const blocked = drain(sim, 20).filter(
+      e => e.type === "blocked" && e.trainId === "t1"
+    );
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].reason).toBe("signal-hold");
+    expect(blocked[0].tileId).toBe("1,0");
+  });
+
+  it("emits a proceeding event when a held train is released", () => {
+    const sim = createSimulation({
+      level: corridor(3),
+      signalTiles: ["1,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+    sim.toggleHold("1,0", Position.Right);
+    drain(sim, 10); // settle at the held signal
+    sim.toggleHold("1,0", Position.Right); // release
+
+    const after = drain(sim, 6);
+    expect(
+      after.some(e => e.type === "proceeding" && e.trainId === "t1")
+    ).toBe(true);
+  });
+
+  it("emits a blocked event with reason reservation when the block ahead is taken by another train", () => {
+    const sim = createSimulation({
+      level: corridor(3),
+      signalTiles: ["1,0"],
+      trains: [
+        {
+          id: "lead",
+          coord: { x: 2, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 0, // sits on 2,0, holding the block beyond the 1,0 signal
+        },
+        {
+          id: "follow",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "blue",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+
+    const blocked = drain(sim, 12).filter(
+      e => e.type === "blocked" && e.trainId === "follow"
+    );
+    expect(blocked.length).toBeGreaterThan(0);
+    expect(blocked[0].reason).toBe("reservation");
+    expect(blocked[0].blockedBy).toBe("lead");
+  });
+});
