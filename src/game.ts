@@ -9,7 +9,6 @@ import {
 } from "@/sim/simulation";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
-import { getCoordinatesId } from "@/utils/tileHelpers";
 import { makeRng } from "@/utils/globalHelpers";
 import { assignColors } from "@/utils/colorAssignment";
 
