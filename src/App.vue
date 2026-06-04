@@ -48,9 +48,22 @@
         ></component>
       </div>
     </div>
-    <div v-if="config.debug" class="event-log">
-      <div class="event-log-title">Activity log</div>
-      <ul class="event-log-list">
+    <div
+      v-if="config.debug"
+      class="event-log"
+      :class="{ 'event-log--min': logMinimized }"
+    >
+      <div class="event-log-header">
+        <span class="event-log-title">Activity log</span>
+        <button
+          class="event-log-toggle"
+          :title="logMinimized ? 'Expand' : 'Minimize'"
+          @click="logMinimized = !logMinimized"
+        >
+          {{ logMinimized ? "+" : "–" }}
+        </button>
+      </div>
+      <ul v-show="!logMinimized" class="event-log-list">
         <li v-if="recentLog.length === 0" class="event-log-empty">
           No events yet…
         </li>
@@ -106,6 +119,8 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 class App extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
+  // Whether the debug activity-log panel is collapsed to just its header.
+  logMinimized = false;
 
   @Provide() trains: TrainsDefinition = {
     train1: {
@@ -703,25 +718,58 @@ pre {
   position: fixed;
   z-index: 100;
   right: 0;
-  bottom: 0;
+  top: 0;
   width: 320px;
-  max-height: 45vh;
+  max-height: 60vh;
   display: flex;
   flex-direction: column;
   background: rgba(20, 24, 28, 0.92);
   color: #d7dde3;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 11px;
-  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
 }
+.event-log--min {
+  width: auto;
+}
+.event-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+
+  .event-log--min & {
+    border-bottom: none;
+  }
+}
 .event-log-title {
-  padding: 6px 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #8fa3b3;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.event-log-toggle {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  line-height: 18px;
+  padding: 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d7dde3;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
 }
 .event-log-list {
   list-style: none;
