@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import App from "./App.vue";
+import { router } from "./router";
 import { gameConfig, GAME_CONFIG_KEY } from "./gameConfig";
 
 import TileRail from "@/components/TileRail.vue";
@@ -17,4 +18,5 @@ app.component("Tile", Tile);
 app.component("Train", Train);
 app.component("DebugShowRoutes", DebugShowRoutes);
 
+app.use(router);
 app.mount("#app");
