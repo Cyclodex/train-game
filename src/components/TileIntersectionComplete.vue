@@ -298,9 +298,9 @@ class TileIntersectionComplete extends TileBase {
   }
 
   get activeSwitchRoutes() {
-    return Object.values(this.possibleRoutes).map((routes, position) => {
-      this.intersectionSwitch[position];
-    });
+    return Object.values(this.possibleRoutes).map(
+      (routes, position) => this.intersectionSwitch[position]
+    );
   }
 
   activeSwitchRoute(position: Position) {

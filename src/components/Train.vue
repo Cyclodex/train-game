@@ -111,7 +111,7 @@ class Train extends Vue {
     // Initialize "visual" dom mapper for animations
     this.visual = document.getElementById(this.id);
     if (this.trainObject.wagons !== undefined) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+       
       this.wagons!.map(wagon => {
         wagon.visual = document.getElementById(wagon.id);
       });
