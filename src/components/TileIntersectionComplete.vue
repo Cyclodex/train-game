@@ -8,7 +8,7 @@
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <template v-for="(n, i) in 4" :key="i">
       <svg
-        v-if="isIntersectionRouteEnabled(i)"
+        v-if="isPositionSwitchable(i)"
         :class="[
           `switch-box switch-box--${i}`,
           { 'switch-box--locked': isSwitchLocked },
@@ -288,6 +288,18 @@ class TileIntersectionComplete extends TileBase {
       );
       return routeFindIndex === -1 ? false : true;
     }
+  }
+
+  // A position only deserves a switch box if the player has an actual choice:
+  // two or more enabled routes. A position with a single enabled route (e.g.
+  // every side of a pure X crossing, where the disabled-route cascade leaves
+  // only Straight) has nothing to throw, so we hide its bulbs entirely.
+  isPositionSwitchable(position: Position): boolean {
+    const routes: Route[] = Object.values(
+      this.possibleRoutes[this.currentRotation][position]
+    );
+    const enabled = routes.filter(route => !!route.path && !route.disabled);
+    return enabled.length >= 2;
   }
 
   get activeSwitchRoutes() {
