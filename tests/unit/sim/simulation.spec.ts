@@ -338,6 +338,48 @@ describe("simulation depots", () => {
     expect(sim.trainState("t1")).toBe("parked");
   });
 
+  it("glides the whole body into the depot, freeing the approach tile", () => {
+    // A corridor 0,0..2,0 leading into a Left-opening depot at 3,0. The train is
+    // long enough (loco + 2 wagons => bodyLength 1.5) that, parked with the loco
+    // at the depot centre, its tail would otherwise sit on the approach tile.
+    const level: LevelDefinition = {
+      "0,0": { x: 0, y: 0, component: "TileStraight", rotation: 1 },
+      "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 1 },
+      "2,0": { x: 2, y: 0, component: "TileStraight", rotation: 1 },
+      "3,0": { x: 3, y: 0, component: "TileDepot", rotation: 3 },
+    };
+    const sim = createSimulation({
+      level,
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 2,
+          unitLengths: [0.5, 0.5, 0.5],
+          speed: 1,
+        },
+      ],
+      depotColors: { "3,0": "red" },
+    });
+
+    const states = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      sim.step(0.25);
+      states.add(sim.trainState("t1"));
+    }
+
+    // It went through the transient glide, not straight to a dead stop.
+    expect(states.has("parking")).toBe(true);
+    expect(sim.trainState("t1")).toBe("parked");
+    // Once fully parked the body is inside the depot only; the tile in front of
+    // the depot is free for the next train.
+    expect(sim.occupiedBy("3,0")).toBe("t1");
+    expect(sim.occupiedBy("2,0")).toBeUndefined();
+  });
+
   it("bounces a train back out of a non-matching depot", () => {
     const sim = createSimulation({
       level: depotLevel,

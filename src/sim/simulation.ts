@@ -30,7 +30,10 @@ export interface TrainInit {
   coupling?: number;
 }
 
-export type TrainState = "running" | "parked";
+// "parking" is the transient glide where a train that has matched a depot keeps
+// moving forward so its whole body slides into the depot (clearing the approach
+// tiles) before it freezes as "parked".
+export type TrainState = "running" | "parking" | "parked";
 
 export interface SimTrain {
   id: string;
@@ -181,7 +184,9 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // The set of tile ids a train's body currently covers (head back to tail).
   function bodyTileIds(train: SimTrain): Set<string> {
-    const headDistance = train.headIndex + Math.min(train.headProgress, 1);
+    // While parking, headProgress runs past 1 so the tail advances into the
+    // depot and the approach tiles it used to cover are freed for other trains.
+    const headDistance = train.headIndex + train.headProgress;
     const tailIndex = Math.max(
       0,
       Math.floor(headDistance - train.bodyLength + 1e-9)
@@ -225,7 +230,7 @@ export function createSimulation(config: SimConfig): Simulation {
   // is neither under its body nor in the block still ahead of it.
   function releaseStaleReservations(train: SimTrain): void {
     const keep = bodyTileIds(train);
-    if (train.state !== "parked") {
+    if (train.state === "running") {
       const head = train.path[train.headIndex];
       for (const tid of routeToNextSignal(
         level,
@@ -277,6 +282,19 @@ export function createSimulation(config: SimConfig): Simulation {
 
   function advance(train: SimTrain, dt: number, events: SimEvent[]): void {
     if (train.state === "parked") return;
+    if (train.state === "parking") {
+      // The loco is already at the depot centre. Keep driving the whole consist
+      // forward — sampling clamps every unit to the centre as it catches up —
+      // until the tail has slid off the approach tiles (headProgress reaches the
+      // body length), then freeze. This is what stops the loco from halting at
+      // the entrance and blocking trains behind it.
+      train.headProgress += train.speed * dt;
+      if (train.headProgress >= train.bodyLength) {
+        train.headProgress = train.bodyLength;
+        train.state = "parked";
+      }
+      return;
+    }
     train.headProgress += train.speed * dt;
     while (train.headProgress >= 1) {
       const head = train.path[train.headIndex];
@@ -288,7 +306,9 @@ export function createSimulation(config: SimConfig): Simulation {
           const matched = depotColors[tileId] === train.color;
           events.push({ type: "arrived", trainId: train.id, tileId, matched });
           if (matched) {
-            train.state = "parked";
+            // Loco at the depot centre; glide the rest of the body in (see the
+            // "parking" branch above) instead of stopping dead at the entrance.
+            train.state = "parking";
             train.headProgress = 1;
           } else {
             bounceOutOfDepot(train, head.coord);
