@@ -13,7 +13,33 @@
       <button class="timeline-button" @click="cycleSwitchLock">
         Switch lock: {{ switchLockLabel }}
       </button>
-      <div class="delivered-count">Delivered: {{ delivered }}</div>
+    </div>
+    <div
+      class="score-card"
+      :class="{
+        'score-card--pulse': pulsing,
+        'score-card--complete': levelComplete,
+      }"
+    >
+      <div class="score-head">
+        <span class="score-icon">🚆</span>
+        <span class="score-label">Deliveries</span>
+        <span class="score-count">
+          <span class="score-now">{{ delivered }}</span>
+          <span class="score-sep">/</span>
+          <span class="score-total">{{ totalTrains }}</span>
+          <span v-if="levelComplete" class="score-check">✓</span>
+        </span>
+      </div>
+      <div class="score-bar">
+        <div class="score-bar-fill" :style="{ width: deliveredPct + '%' }"></div>
+        <span class="score-pct">{{ deliveredPct }}%</span>
+      </div>
+      <transition name="score-banner">
+        <div v-if="levelComplete" class="score-complete-banner">
+          ★ Level Complete ★
+        </div>
+      </transition>
     </div>
     <div
       class="level"
@@ -86,7 +112,14 @@
 
 <script lang="ts">
 import { markRaw } from "vue";
-import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
+import {
+  Component,
+  Inject,
+  Provide,
+  Vue,
+  Watch,
+  toNative,
+} from "vue-facing-decorator";
 import {
   GameConfig,
   GAME_CONFIG_KEY,
@@ -606,6 +639,37 @@ class App extends Vue {
     return this.game.deliveries.value;
   }
 
+  // Total trains in the level — the delivery goal, since each train parks once
+  // it reaches its matching depot (so "all trains home" completes the level).
+  get totalTrains(): number {
+    return Object.keys(this.trains).length;
+  }
+
+  get deliveredPct(): number {
+    return this.totalTrains
+      ? Math.round((this.delivered / this.totalTrains) * 100)
+      : 0;
+  }
+
+  get levelComplete(): boolean {
+    return this.totalTrains > 0 && this.delivered >= this.totalTrains;
+  }
+
+  // Pop/glow the score card briefly whenever a new delivery lands.
+  pulsing = false;
+  private pulseTimer = 0;
+
+  @Watch("delivered")
+  onDelivered(now: number, prev: number) {
+    if (now <= prev) return;
+    // Restart the animation even on back-to-back deliveries: clear, then re-set
+    // on the next frame so the CSS keyframes replay.
+    this.pulsing = false;
+    requestAnimationFrame(() => (this.pulsing = true));
+    window.clearTimeout(this.pulseTimer);
+    this.pulseTimer = window.setTimeout(() => (this.pulsing = false), 700);
+  }
+
   // The most recent activity-log entries, newest first, for the debug panel.
   get recentLog() {
     return this.game.eventLog.slice(-60).reverse();
@@ -711,6 +775,153 @@ pre {
     display: block;
     padding: 15px;
     min-width: 150px;
+  }
+}
+
+.score-card {
+  position: fixed;
+  z-index: 100;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 340px;
+  padding: 14px 22px 16px;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.92),
+    rgba(18, 22, 28, 0.92)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+
+  &--pulse {
+    animation: score-pop 0.6s ease;
+  }
+  &--complete {
+    border-color: rgba(224, 188, 92, 0.55);
+    animation: score-breathe 1.8s ease-in-out infinite;
+  }
+}
+.score-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.score-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+.score-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8fa3b3;
+}
+.score-count {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.score-now {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+
+  .score-card--complete & {
+    color: #f0cf72;
+    text-shadow: 0 0 16px rgba(240, 207, 114, 0.6);
+  }
+}
+.score-sep {
+  font-size: 22px;
+  color: #5d6b77;
+}
+.score-total {
+  font-size: 22px;
+  font-weight: 700;
+  color: #9aa7b2;
+}
+.score-check {
+  margin-left: 4px;
+  font-size: 22px;
+  color: #5fd39a;
+}
+.score-bar {
+  position: relative;
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.score-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f9e6b, #5fd39a);
+  box-shadow: 0 0 12px rgba(95, 211, 154, 0.5);
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+
+  .score-card--complete & {
+    background: linear-gradient(90deg, #d6a93c, #f5d97a);
+    box-shadow: 0 0 14px rgba(245, 217, 122, 0.65);
+  }
+}
+.score-pct {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.score-complete-banner {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #f0cf72;
+  text-shadow: 0 0 14px rgba(240, 207, 114, 0.55);
+}
+.score-banner-enter-active {
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.score-banner-enter-from {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+@keyframes score-pop {
+  0% {
+    transform: translateX(-50%) scale(1);
+  }
+  35% {
+    transform: translateX(-50%) scale(1.06);
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+  }
+}
+@keyframes score-breathe {
+  0%,
+  100% {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
+      0 0 16px rgba(224, 188, 92, 0.25);
+  }
+  50% {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
+      0 0 30px rgba(224, 188, 92, 0.5);
   }
 }
 
