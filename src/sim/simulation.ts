@@ -7,7 +7,7 @@ import {
   routeToNextSignal,
 } from "./network";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { trainDynamics, ARRIVAL_EPS } from "./physics";
+import { trainDynamics } from "./physics";
 
 export interface Segment {
   coord: Coordinates;
@@ -384,12 +384,13 @@ export function createSimulation(config: SimConfig): Simulation {
     }
     if (train.velocity < 0) train.velocity = 0;
 
-    // Distance this tick, never past the stop line. Snap onto the line once we
-    // are within a hair of it so braking resolves to a real halt (e.g. arriving
-    // in a depot) instead of approaching it asymptotically.
+    // Distance this tick, never past the stop line. We do NOT snap onto the
+    // line: velocity is held >= sqrt(2*brake*clear) by the cap above, so the
+    // clamp below lands the train on the line within ~2*brake*dt² (sub-pixel)
+    // in finite time. An earlier fixed-distance snap teleported a visible few
+    // pixels on the final frame while the train still carried speed.
     let move = train.velocity * dt;
     if (move > clear) move = clear;
-    if (clear - move < ARRIVAL_EPS) move = clear;
 
     train.headProgress += move;
     while (train.headProgress >= 1) {

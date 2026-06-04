@@ -883,6 +883,51 @@ describe("simulation momentum (acceleration / braking)", () => {
     expect(sim.trainVelocity("t1")).toBe(0);
   });
 
+  it("decelerates smoothly to a stop with no final position jump at 60fps dt", () => {
+    // Regression: a too-large arrival snap teleported the train onto the stop
+    // line in one frame while it still carried speed. It only shows at small
+    // (real 60fps) dt — large-dt tests mask it via the move>clear clamp.
+    const dt = 1 / 60;
+    const sim = createSimulation({
+      level: corridor(10),
+      signalTiles: ["6,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 0.5,
+          accel: 0.8,
+          brake: 0.5,
+        },
+      ],
+    });
+    sim.toggleHold("6,0", Position.Right);
+
+    const moves: number[] = [];
+    const hd = () => sim.trains.t1.headIndex + sim.trains.t1.headProgress;
+    let prev = hd();
+    for (let i = 0; i < 3000; i++) {
+      sim.step(dt);
+      const h = hd();
+      moves.push(h - prev);
+      prev = h;
+      if (sim.trainVelocity("t1") === 0 && sim.trainTileId("t1") === "6,0") break;
+    }
+
+    expect(sim.trainTileId("t1")).toBe("6,0"); // came to rest at the signal
+
+    // The train never advances more in a single frame than it would at full
+    // cruise speed (speed * dt). Acceleration and braking frames are all <=
+    // that; an arrival snap teleports a fixed distance regardless of speed and
+    // so exceeds it — that is the visible end-of-stop jump.
+    const cruiseStep = 0.5 * dt;
+    expect(Math.max(...moves)).toBeLessThanOrEqual(cruiseStep + 1e-9);
+  });
+
   it("a heavier (lower-accel) train pulls away more slowly than a light one", () => {
     const make = (id: string, accel: number) =>
       createSimulation({

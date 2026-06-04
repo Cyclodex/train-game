@@ -25,10 +25,6 @@ export const MASS_SENSITIVITY = 0.12;
 export const PEOPLE_WAGON_WEIGHT = 1.0;
 export const FRAIGHT_WAGON_WEIGHT = 1.6;
 
-// How close (in tiles) the head must be to a stop line before we snap onto it,
-// so braking resolves to a real halt instead of approaching it asymptotically.
-export const ARRIVAL_EPS = 0.02;
-
 // Total "weight" of a train: the loco plus its wagons (heavier per freight wagon).
 function trainWeight(kind: TrainKind, wagonCount: number): number {
   const perWagon =
