@@ -19,6 +19,7 @@ import {
   getTrainDirection,
 } from "@/utils/trainHelpers";
 import gsap from "gsap";
+import { markRaw } from "vue";
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import { Colors, getRandom, resolveRef } from "@/utils/globalHelpers";
@@ -97,23 +98,32 @@ class Train extends Vue {
 
     this.setInitialPosition();
 
-    // Creating the trains animation timeline
-    const trainTimeline = gsap
-      .timeline({
-        id: this.trainObject.id,
-      })
-      .timeScale(0);
+    // Creating the trains animation timeline.
+    // markRaw keeps Vue 3 from wrapping the GSAP timeline in a reactive Proxy:
+    // GSAP relies on object identity and direct property access for its ticker
+    // and onComplete callbacks, which a Proxy silently breaks (the train would
+    // animate out of the depot once and then never advance to the next tile).
+    const trainTimeline = markRaw(
+      gsap
+        .timeline({
+          id: this.trainObject.id,
+        })
+        .timeScale(0)
+    );
     this.trainObject.animation = trainTimeline;
   }
 
   async mounted() {
     // Init train and move to first tile
     // Initialize "visual" dom mapper for animations
-    this.visual = document.getElementById(this.id);
+    // DOM nodes handed to GSAP must also stay raw (non-reactive) for the same
+    // reason as the timeline above.
+    const loco = document.getElementById(this.id);
+    this.visual = loco ? markRaw(loco) : null;
     if (this.trainObject.wagons !== undefined) {
-       
       this.wagons!.map(wagon => {
-        wagon.visual = document.getElementById(wagon.id);
+        const wagonEl = document.getElementById(wagon.id);
+        wagon.visual = wagonEl ? markRaw(wagonEl) : null;
       });
     }
 
