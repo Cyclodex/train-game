@@ -16,6 +16,9 @@ export default defineConfig({
         // Make colour + variable definitions available in every component's
         // <style lang="scss"> block (replaces vue-cli's css.loaderOptions.prependData).
         additionalData: `@import "@/scss/_importIntoComponents.scss";`,
+        // The stylesheets still use `@import`; silence Dart Sass's deprecation
+        // notice until they are migrated to the `@use` module system.
+        silenceDeprecations: ["import"],
       },
     },
   },
