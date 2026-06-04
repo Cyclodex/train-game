@@ -10,6 +10,7 @@
       },
       tileStatusStyle,
     ]"
+    :style="reservationStyle"
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />

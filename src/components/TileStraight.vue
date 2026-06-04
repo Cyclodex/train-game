@@ -8,6 +8,7 @@
         'tile-rotation--left-right': currentRotation === 1,
       },
     ]"
+    :style="reservationStyle"
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
@@ -15,12 +16,40 @@
       v-for="light in signalLights"
       :key="light.exitPort"
       class="signal"
-      :class="`signal--${light.exitPort}`"
+      :class="[
+        `signal--${light.exitPort}`,
+        {
+          'signal--forced-green': light.override === 'green',
+          'signal--forced-red': light.override === 'red',
+        },
+      ]"
       width="12"
       height="20"
-      @click.stop="toggleSignalHold(light.exitPort)"
+      :title="
+        light.override === 'green'
+          ? 'Forced GREEN (click to force red)'
+          : light.override === 'red'
+          ? 'Forced RED (click for auto)'
+          : 'Auto (click to force green)'
+      "
+      @click.stop="cycleSignal(light.exitPort)"
     >
-      <rect width="12" height="20" rx="3" fill="#222" />
+      <!-- A coloured frame marks a manual override: green = forced proceed,
+           red = forced stop. No frame means automatic interlocking. -->
+      <rect
+        width="12"
+        height="20"
+        rx="3"
+        fill="#222"
+        :stroke="
+          light.override === 'green'
+            ? '#34c759'
+            : light.override === 'red'
+            ? '#ff3b30'
+            : 'none'
+        "
+        stroke-width="2"
+      />
       <circle
         cx="6"
         cy="6"
@@ -98,6 +127,7 @@ class TileStraight extends TileBase {
     return exits.map(exitPort => ({
       exitPort,
       aspect: this.signalAspectFor(exitPort),
+      override: this.signalOverrideFor(exitPort),
     }));
   }
 
@@ -126,28 +156,33 @@ export default toNative(TileStraight);
   z-index: 14;
   cursor: pointer;
 }
+// Signals sit beside the track, not on it: each is offset to the right-hand
+// side of its own direction of travel (railway convention), which also places
+// the two signals of a straight tile on opposite sides of the rails.
+$signal-offset: 20px;
+
 .signal--0 {
-  // Top
+  // Top exit (travelling up) -> signal to the right (east) of the track
   top: 2px;
-  left: 50%;
+  left: calc(50% + #{$signal-offset});
   transform: translateX(-50%);
 }
 .signal--1 {
-  // Right
+  // Right exit (travelling right) -> signal below (south) the track
   right: 2px;
-  top: 50%;
+  top: calc(50% + #{$signal-offset});
   transform: translateY(-50%);
 }
 .signal--2 {
-  // Bottom
+  // Bottom exit (travelling down) -> signal to the left (west) of the track
   bottom: 2px;
-  left: 50%;
+  left: calc(50% - #{$signal-offset});
   transform: translateX(-50%);
 }
 .signal--3 {
-  // Left
+  // Left exit (travelling left) -> signal above (north) the track
   left: 2px;
-  top: 50%;
+  top: calc(50% - #{$signal-offset});
   transform: translateY(-50%);
 }
 </style>

@@ -22,6 +22,12 @@ export interface TrainInit {
   type: "people" | "fraight";
   wagonCount: number;
   speed?: number; // tiles per second
+  // Per-unit lengths in tiles: index 0 is the loco, then one entry per wagon.
+  // Derived from sprite pixel widths / tileSize (see trainDimensions.ts). When
+  // omitted, every unit falls back to DEFAULT_UNIT_LENGTH.
+  unitLengths?: number[];
+  // Gap between coupled units, in tiles. Defaults to DEFAULT_COUPLING.
+  coupling?: number;
 }
 
 export type TrainState = "running" | "parked";
@@ -32,7 +38,13 @@ export interface SimTrain {
   type: "people" | "fraight";
   wagonCount: number;
   speed: number;
-  bodyLength: number; // length of loco + wagons, in tiles
+  // Per-unit lengths (loco first, then wagons) and the coupling gap, in tiles.
+  unitLengths: number[];
+  coupling: number;
+  // Center-to-center distance from the loco head to each unit's centre, in
+  // tiles (unitOffsets[0] = half the loco). Precomputed from unitLengths.
+  unitOffsets: number[];
+  bodyLength: number; // head-to-tail length of loco + wagons, in tiles
   state: TrainState;
   path: Segment[];
   headIndex: number;
@@ -48,9 +60,31 @@ export interface ArrivedEvent {
 
 export type SimEvent = ArrivedEvent;
 
-// Spacing between coupled units (loco + wagons), in tiles. A unit sprite is
-// ~half a tile wide, so ~0.5 keeps them coupled rather than strung far apart.
-const WAGON_SPACING = 0.5;
+// Fallbacks when a train doesn't supply real per-unit dimensions: a unit sprite
+// is ~half a tile wide, with a small coupling gap. The renderer passes true
+// lengths derived from the sprite pixel widths (see trainDimensions.ts) so
+// couplings line up regardless of wagon type/width.
+const DEFAULT_UNIT_LENGTH = 0.5;
+const DEFAULT_COUPLING = 0;
+
+// Per-unit centre offsets (from the loco head) and the head-to-tail body length,
+// all in tiles. The loco head sits at the train's headDistance; unit i's centre
+// trails by half the loco + (full lengths + gaps of the units between) + half
+// of unit i. The body length is the head of the loco to the tail of the last
+// unit: sum of all unit lengths plus a coupling gap between each pair.
+function computeBody(unitLengths: number[], coupling: number): {
+  unitOffsets: number[];
+  bodyLength: number;
+} {
+  const unitOffsets: number[] = [];
+  let cursor = 0; // running distance from the loco's head to the current edge
+  for (let i = 0; i < unitLengths.length; i++) {
+    if (i > 0) cursor += coupling;
+    unitOffsets.push(cursor + unitLengths[i] / 2);
+    cursor += unitLengths[i];
+  }
+  return { unitOffsets, bodyLength: cursor };
+}
 
 export type SignalAspect = "stop" | "proceed";
 
@@ -81,9 +115,19 @@ export interface Simulation {
   sampleTrain(id: string): SampledUnit[];
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
+  // The train (if any) that has reserved `tileId` — for the debug overlay.
+  reservedBy(tileId: string): string | undefined;
+  // The train (if any) physically on `tileId` right now — for the switch lock.
+  occupiedBy(tileId: string): string | undefined;
   // Player-forced Stop hold on a signal.
   toggleHold(tileId: string, exitPort: Port): void;
   isHeld(tileId: string, exitPort: Port): boolean;
+  // Player-forced Proceed (green) override on a signal. Bypasses the
+  // reservation-based red so a train can break a reservation standoff, but the
+  // physical occupancy backstop still applies (no driving into another body).
+  // Mutually exclusive with the Stop hold.
+  forceProceed(tileId: string, exitPort: Port): void;
+  isProceedForced(tileId: string, exitPort: Port): boolean;
 }
 
 const DEFAULT_SPEED = 0.5;
@@ -98,6 +142,10 @@ export function createSimulation(config: SimConfig): Simulation {
   const reservations = new Map<string, string>();
   // `${tileId}:${exitPort}` of signals the player has forced to Stop.
   const manualHold = new Set<string>();
+  // `${tileId}:${exitPort}` of signals the player has forced to Proceed (green).
+  // A forced-green signal overrides the reservation-based red; the occupancy
+  // backstop still applies. Mutually exclusive with `manualHold`.
+  const manualProceed = new Set<string>();
 
   const isSignalTile = (tileId: string) => signalTiles.has(tileId);
   function isBoundary(tileId: string): boolean {
@@ -109,13 +157,21 @@ export function createSimulation(config: SimConfig): Simulation {
   const trains: Record<string, SimTrain> = {};
   for (const init of config.trains) {
     const exitPort = resolveExitPort(level, getSwitch, init.coord, init.entryPort);
+    const unitLengths =
+      init.unitLengths ??
+      Array.from({ length: 1 + init.wagonCount }, () => DEFAULT_UNIT_LENGTH);
+    const coupling = init.coupling ?? DEFAULT_COUPLING;
+    const { unitOffsets, bodyLength } = computeBody(unitLengths, coupling);
     trains[init.id] = {
       id: init.id,
       color: init.color,
       type: init.type,
       wagonCount: init.wagonCount,
       speed: init.speed ?? DEFAULT_SPEED,
-      bodyLength: 1 + init.wagonCount * WAGON_SPACING,
+      unitLengths,
+      coupling,
+      unitOffsets,
+      bodyLength,
       state: "running",
       path: [{ coord: init.coord, entryPort: init.entryPort, exitPort }],
       headIndex: 0,
@@ -146,11 +202,16 @@ export function createSimulation(config: SimConfig): Simulation {
     return false;
   }
 
-  function isTileOccupied(tileId: string): boolean {
+  // The train (if any) whose body physically covers a tile right now.
+  function occupantOf(tileId: string): string | undefined {
     for (const id of Object.keys(trains)) {
-      if (bodyTileIds(trains[id]).has(tileId)) return true;
+      if (bodyTileIds(trains[id]).has(tileId)) return id;
     }
-    return false;
+    return undefined;
+  }
+
+  function isTileOccupied(tileId: string): boolean {
+    return occupantOf(tileId) !== undefined;
   }
 
   // A tile is enterable by a train if no other train has reserved or occupies it.
@@ -183,7 +244,11 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // The aspect shown by the signal guarding the block beyond `exitPort`.
   function aspect(tileId: string, exitPort: Port): SignalAspect {
-    if (manualHold.has(`${tileId}:${exitPort}`)) return "stop";
+    const key = `${tileId}:${exitPort}`;
+    if (manualHold.has(key)) return "stop";
+    // Forced green: report proceed even if the block ahead is reserved. (The
+    // sim still refuses to enter a physically occupied tile — see advance.)
+    if (manualProceed.has(key)) return "proceed";
     const tile = level[tileId];
     if (!tile) return "proceed";
     const block = routeToNextSignal(
@@ -247,8 +312,18 @@ export function createSimulation(config: SimConfig): Simulation {
         break;
       }
 
+      // A player-forced green at the signal we're leaving overrides the
+      // reservation-based red: we may enter even if the block is reserved by
+      // another train. The occupancy backstop below still applies.
+      const forcedGreen =
+        t.exitPort !== null &&
+        isSignalTile(headTileId) &&
+        manualProceed.has(`${headTileId}:${t.exitPort}`);
+
       // Entering a tile not already reserved by us means entering a new block:
       // reserve the whole route to the next signal, or hold (the signal is Stop).
+      // We always (re)derive the block from the *current* switch state, so a
+      // switch change re-plans the route even for a train re-checking each tick.
       if (reservations.get(nextTileId) !== train.id) {
         const block = routeToNextSignal(
           level,
@@ -260,11 +335,16 @@ export function createSimulation(config: SimConfig): Simulation {
         const reservable =
           block.length > 0 &&
           block.every(tid => tileFreeForTrain(tid, train.id));
-        if (!reservable) {
+        if (!reservable && !forcedGreen) {
           train.headProgress = 1;
           break;
         }
-        for (const tid of block) reservations.set(tid, train.id);
+        // Reserve whatever we can (tiles free for us); under a forced green some
+        // tiles may be reserved by another train — we do not steal those, we
+        // just proceed, and the occupancy backstop guards each step.
+        for (const tid of block) {
+          if (tileFreeForTrain(tid, train.id)) reservations.set(tid, train.id);
+        }
       }
 
       // Occupancy backstop (covers unsignalled adjacency).
@@ -328,14 +408,18 @@ export function createSimulation(config: SimConfig): Simulation {
           t,
         };
       };
-      const units: SampledUnit[] = [sampleAt(headDistance)];
-      for (let i = 0; i < train.wagonCount; i++) {
-        units.push(sampleAt(headDistance - (i + 1) * WAGON_SPACING));
-      }
-      return units;
+      // Each unit's centre trails the loco head by its precomputed offset, so
+      // spacing reflects real sprite lengths (+ coupling gap), not a constant.
+      return train.unitOffsets.map(offset => sampleAt(headDistance - offset));
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);
+    },
+    reservedBy(tileId: string) {
+      return reservations.get(tileId);
+    },
+    occupiedBy(tileId: string) {
+      return occupantOf(tileId);
     },
     isHeld(tileId: string, exitPort: Port) {
       return manualHold.has(`${tileId}:${exitPort}`);
@@ -343,7 +427,21 @@ export function createSimulation(config: SimConfig): Simulation {
     toggleHold(tileId: string, exitPort: Port) {
       const key = `${tileId}:${exitPort}`;
       if (manualHold.has(key)) manualHold.delete(key);
-      else manualHold.add(key);
+      else {
+        manualHold.add(key);
+        manualProceed.delete(key); // hold and force-green are mutually exclusive
+      }
+    },
+    isProceedForced(tileId: string, exitPort: Port) {
+      return manualProceed.has(`${tileId}:${exitPort}`);
+    },
+    forceProceed(tileId: string, exitPort: Port) {
+      const key = `${tileId}:${exitPort}`;
+      if (manualProceed.has(key)) manualProceed.delete(key);
+      else {
+        manualProceed.add(key);
+        manualHold.delete(key); // force-green and hold are mutually exclusive
+      }
     },
   };
 }

@@ -2,13 +2,17 @@
   <div
     class="tile tile-curve clickable"
     :class="tileStatusStyle"
+    :style="reservationStyle"
     @click.exact="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <template v-for="(n, i) in 4" :key="i">
       <svg
         v-if="isIntersectionRouteEnabled(i)"
-        :class="`switch-box switch-box--${i}`"
+        :class="[
+          `switch-box switch-box--${i}`,
+          { 'switch-box--locked': isSwitchLocked },
+        ]"
         width="24"
         height="18"
         @click.stop="changeSwitch(i)"
@@ -315,10 +319,32 @@ class TileIntersectionComplete extends TileBase {
     this.publishSwitches();
   }
 
+  // Whether this switch is locked, per the active interlocking mode:
+  // - "off":      never locked.
+  // - "reserved": locked while reserved OR occupied by a train.
+  // - "occupied": locked only while a train is physically on the tile.
+  get isSwitchLocked(): boolean {
+    const id = getCoordinatesId(this.tile);
+    switch (this.config.switchLockMode) {
+      case "reserved":
+        return !!this.game.reservations[id] || !!this.game.occupied[id];
+      case "occupied":
+        return !!this.game.occupied[id];
+      default:
+        return false;
+    }
+  }
+
   changeSwitch(
     position: Position,
     activeIntersectionSwitch?: ActiveIntersection
   ) {
+    // Interlocking: refuse to throw a switch under a committed train per the
+    // active lock mode. `activeIntersectionSwitch` is only passed for the
+    // programmatic setup in created(); guard only live player-initiated clicks.
+    if (activeIntersectionSwitch === undefined && this.isSwitchLocked) {
+      return;
+    }
     if (activeIntersectionSwitch !== undefined) {
       // If given specific switch position, assign it
       this.intersectionSwitch[position] = activeIntersectionSwitch;
@@ -381,6 +407,13 @@ export default toNative(TileIntersectionComplete);
   }
   :deep(.bulb--active) {
     opacity: 1;
+  }
+
+  // A reserved/locked switch can't be thrown: show it as not-allowed and ring
+  // the box red so the player sees why their click is refused.
+  &.switch-box--locked {
+    cursor: not-allowed;
+    outline: 2px solid #ff3b30;
   }
 }
 </style>

@@ -2,6 +2,7 @@
   <div
     class="tile tile-curve clickable"
     :class="tileStatusStyle"
+    :style="reservationStyle"
     @click="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />

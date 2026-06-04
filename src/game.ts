@@ -11,6 +11,7 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { segmentPathD } from "@/sim/pathGeometry";
+import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { Colors, getRandom } from "@/utils/globalHelpers";
 
@@ -76,6 +77,12 @@ export interface Game {
   signalTiles: string[];
   // Signal aspects for rendering, keyed `${tileId}:${exitPort}`.
   signalAspects: Record<string, "stop" | "proceed">;
+  // Manual override state per signal, keyed `${tileId}:${exitPort}`.
+  signalOverrides: Record<string, "auto" | "green" | "red">;
+  // tileId -> trainId that currently reserves it (debug overlay).
+  reservations: Record<string, string>;
+  // tileId -> trainId physically on it right now (switch lock).
+  occupied: Record<string, string>;
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
@@ -83,6 +90,12 @@ export interface Game {
   stop(): void;
   toggleHold(tileId: string, exitPort: Position): void;
   isHeld(tileId: string, exitPort: Position): boolean;
+  forceProceed(tileId: string, exitPort: Position): void;
+  isProceedForced(tileId: string, exitPort: Position): boolean;
+  // Cycle a signal's manual state: Auto -> Force Green -> Force Red -> Auto.
+  cycleSignal(tileId: string, exitPort: Position): void;
+  // The manual override state of a signal, for the renderer's indicator.
+  signalOverride(tileId: string, exitPort: Position): "auto" | "green" | "red";
   positionUnit(unit: SampledUnit): { x: number; y: number; angle: number };
 }
 
@@ -105,6 +118,29 @@ export function createGame(
   // game loop refreshes these from the simulation each frame.
   const signalAspects = reactive({}) as Record<string, "stop" | "proceed">;
 
+  // Reactive manual-override state per signal for the renderer's indicator,
+  // refreshed from the simulation each frame alongside the aspects.
+  const signalOverrides = reactive({}) as Record<
+    string,
+    "auto" | "green" | "red"
+  >;
+
+  function overrideState(
+    tileId: string,
+    exitPort: Position
+  ): "auto" | "green" | "red" {
+    if (sim.isProceedForced(tileId, exitPort)) return "green";
+    if (sim.isHeld(tileId, exitPort)) return "red";
+    return "auto";
+  }
+
+  // Reactive reservation map for the debug overlay, refreshed each frame.
+  const reservations = reactive({}) as Record<string, string>;
+
+  // Reactive occupancy map (train physically on a tile) for the switch lock,
+  // refreshed each frame alongside the reservations.
+  const occupied = reactive({}) as Record<string, string>;
+
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree.
   const depotColors: Record<string, string> = {};
@@ -124,6 +160,9 @@ export function createGame(
       color: trainColors[def.id],
       type: def.type,
       wagonCount: def.wagonIds.length,
+      // Real sprite lengths (in tiles) so the sim spaces units to fit them.
+      unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
+      coupling: couplingTiles(tileSize),
     })),
     getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
     signalTiles,
@@ -192,11 +231,24 @@ export function createGame(
   function updateSignalAspects() {
     for (const tileId of signalTiles) {
       for (const exitPort of signalExits(tileId)) {
-        signalAspects[`${tileId}:${exitPort}`] = sim.signalAspect(
-          tileId,
-          exitPort
-        );
+        const key = `${tileId}:${exitPort}`;
+        signalAspects[key] = sim.signalAspect(tileId, exitPort);
+        signalOverrides[key] = overrideState(tileId, exitPort);
       }
+    }
+  }
+
+  function updateReservations() {
+    for (const id of Object.keys(level)) {
+      const owner = sim.reservedBy(id);
+      // Vue's reactive set is no-op when the value is unchanged, so this is
+      // cheap on the frames where reservations don't move.
+      if (owner) reservations[id] = owner;
+      else if (id in reservations) delete reservations[id];
+
+      const on = sim.occupiedBy(id);
+      if (on) occupied[id] = on;
+      else if (id in occupied) delete occupied[id];
     }
   }
 
@@ -220,6 +272,7 @@ export function createGame(
     }
     renderTrains();
     updateSignalAspects();
+    updateReservations();
     raf = requestAnimationFrame(frame);
   }
 
@@ -231,6 +284,9 @@ export function createGame(
     switches,
     signalTiles,
     signalAspects,
+    signalOverrides,
+    reservations,
+    occupied,
     paused,
     speed,
     deliveries,
@@ -248,6 +304,30 @@ export function createGame(
     },
     isHeld(tileId: string, exitPort: Position) {
       return sim.isHeld(tileId, exitPort);
+    },
+    forceProceed(tileId: string, exitPort: Position) {
+      sim.forceProceed(tileId, exitPort);
+    },
+    isProceedForced(tileId: string, exitPort: Position) {
+      return sim.isProceedForced(tileId, exitPort);
+    },
+    signalOverride(tileId: string, exitPort: Position) {
+      return overrideState(tileId, exitPort);
+    },
+    // Tri-state click cycle: Auto -> Force Green -> Force Red -> Auto.
+    // forceProceed/toggleHold are mutually exclusive in the sim, so we drive the
+    // transitions explicitly here to make the cycle deterministic.
+    cycleSignal(tileId: string, exitPort: Position) {
+      const state = overrideState(tileId, exitPort);
+      if (state === "auto") {
+        sim.forceProceed(tileId, exitPort); // -> green
+      } else if (state === "green") {
+        // green -> red: clear the forced green, then apply the stop hold.
+        sim.forceProceed(tileId, exitPort); // toggle off green
+        sim.toggleHold(tileId, exitPort); // -> red
+      } else {
+        sim.toggleHold(tileId, exitPort); // red -> auto
+      }
     },
     positionUnit,
   };

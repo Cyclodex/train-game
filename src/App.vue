@@ -10,6 +10,9 @@
       <button class="timeline-button" @click="changeGlobalTimeScale">
         {{ globalTimeScale }} x Speed
       </button>
+      <button class="timeline-button" @click="cycleSwitchLock">
+        Switch lock: {{ switchLockLabel }}
+      </button>
       <div class="delivered-count">Delivered: {{ delivered }}</div>
     </div>
     <div
@@ -51,7 +54,12 @@
 <script lang="ts">
 import { markRaw } from "vue";
 import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
+import {
+  GameConfig,
+  GAME_CONFIG_KEY,
+  gameConfig,
+  SwitchLockMode,
+} from "@/gameConfig";
 import {
   ActiveIntersection,
   Rotations,
@@ -560,6 +568,24 @@ class App extends Vue {
 
   switchDebugMode() {
     this.config.debug = !this.config.debug;
+  }
+
+  // Switch lock cycles: off -> reserved (reserved+occupied) -> occupied -> off.
+  cycleSwitchLock() {
+    const order: SwitchLockMode[] = ["off", "reserved", "occupied"];
+    const next = (order.indexOf(this.config.switchLockMode) + 1) % order.length;
+    this.config.switchLockMode = order[next];
+  }
+
+  get switchLockLabel(): string {
+    switch (this.config.switchLockMode) {
+      case "reserved":
+        return "reserved";
+      case "occupied":
+        return "on train";
+      default:
+        return "off";
+    }
   }
 
   pausePlayGame() {

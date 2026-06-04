@@ -51,6 +51,18 @@ export default class TileBase extends Vue {
     }
   }
 
+  // Debug overlay: tint a tile with the colour of the train that has reserved
+  // it (its route to the next signal), so the live interlocking is visible.
+  // Per-train colour replaces the old uniform yellow — with two trains you can
+  // see which one owns which block. Rails are SVG children drawn on top, so they
+  // stay legible over the fill.
+  get reservationStyle(): Record<string, string> {
+    if (!this.config.debug) return {};
+    const owner = this.game.reservations[getCoordinatesId(this.tile)];
+    if (!owner) return {};
+    return { backgroundColor: this.game.trainColors[owner] ?? "yellow" };
+  }
+
   // Simulation-backed signals (block boundaries). Only signal tiles render them.
   get isSignalTile(): boolean {
     return !!this.tile.trafficLights;
@@ -65,6 +77,20 @@ export default class TileBase extends Vue {
 
   toggleSignalHold(exitPort: Position) {
     this.game.toggleHold(getCoordinatesId(this.tile), exitPort);
+  }
+
+  // Tri-state manual signal control: Auto -> Force Green -> Force Red -> Auto.
+  cycleSignal(exitPort: Position) {
+    this.game.cycleSignal(getCoordinatesId(this.tile), exitPort);
+  }
+
+  // The signal's manual override state, for the rendered indicator.
+  signalOverrideFor(exitPort: Position): "auto" | "green" | "red" {
+    return (
+      this.game.signalOverrides[
+        `${getCoordinatesId(this.tile)}:${exitPort}`
+      ] ?? "auto"
+    );
   }
 
   get allPossibleRoutesWithCurrentRotation() {

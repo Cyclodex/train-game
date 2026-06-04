@@ -99,6 +99,10 @@ export default toNative(Train);
   background-repeat: no-repeat;
   will-change: transform;
 
+  // NOTE: these sprite widths are the on-screen unit lengths the simulation
+  // uses to space coupled units. They MUST match UNIT_PX in
+  // src/sim/trainDimensions.ts (the single source of truth the sim reads) —
+  // keep the two in sync when changing a sprite size.
   &.train-locomotive {
     width: 100px;
     height: 26px;
