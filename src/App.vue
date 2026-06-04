@@ -780,7 +780,7 @@ pre {
 
 .score-card {
   position: fixed;
-  z-index: 100;
+  z-index: 2000;
   top: 14px;
   left: 50%;
   transform: translateX(-50%);
@@ -927,7 +927,7 @@ pre {
 
 .event-log {
   position: fixed;
-  z-index: 100;
+  z-index: 2000;
   right: 0;
   top: 0;
   width: 320px;
