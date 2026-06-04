@@ -200,9 +200,21 @@ export function createGame(
     const exit = unit.exitPort ?? unit.entryPort;
     const path = pathFor(segmentPathD(unit.entryPort, exit, tileSize));
     const len = path.getTotalLength();
-    const at = path.getPointAtLength(unit.t * len);
-    const ahead = path.getPointAtLength(Math.min(len, unit.t * len + 1));
-    const angle = (Math.atan2(ahead.y - at.y, ahead.x - at.x) * 180) / Math.PI;
+    const here = unit.t * len;
+    const at = path.getPointAtLength(here);
+    const ahead = path.getPointAtLength(Math.min(len, here + 1));
+    let dx = ahead.x - at.x;
+    let dy = ahead.y - at.y;
+    if (dx === 0 && dy === 0) {
+      // At the very end of a path the look-ahead point coincides with `at`, so
+      // the heading would degenerate to 0° (facing east) — this is what made a
+      // loco parked at a depot's dead-end centre appear to turn and look out.
+      // Derive the heading from the point just behind instead.
+      const behind = path.getPointAtLength(Math.max(0, here - 1));
+      dx = at.x - behind.x;
+      dy = at.y - behind.y;
+    }
+    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
     return {
       x: unit.coord.x * tileSize + at.x,
       y: unit.coord.y * tileSize + at.y,
@@ -213,11 +225,20 @@ export function createGame(
   function renderTrains() {
     for (const def of trainDefs) {
       const units = sim.sampleTrain(def.id);
+      const docked = sim.trainState(def.id) !== "running";
       const ids = unitIds[def.id];
       for (let i = 0; i < units.length; i++) {
         const el = document.getElementById(ids[i]);
         if (!el) continue;
-        const { x, y, angle } = positionUnit(units[i]);
+        const unit = units[i];
+        // A docked train's units reach the depot's dead-end centre one by one as
+        // the consist slides in; once a unit is at the centre it has driven fully
+        // into the shed, so hide it (the building "swallows" the train) rather
+        // than leaving sprites stacked on the roof.
+        const inShed =
+          docked && unit.exitPort === Position.Center && unit.t >= 0.999;
+        el.style.visibility = inShed ? "hidden" : "visible";
+        const { x, y, angle } = positionUnit(unit);
         el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${angle}deg)`;
       }
     }

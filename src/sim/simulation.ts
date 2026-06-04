@@ -284,13 +284,16 @@ export function createSimulation(config: SimConfig): Simulation {
     if (train.state === "parked") return;
     if (train.state === "parking") {
       // The loco is already at the depot centre. Keep driving the whole consist
-      // forward — sampling clamps every unit to the centre as it catches up —
-      // until the tail has slid off the approach tiles (headProgress reaches the
-      // body length), then freeze. This is what stops the loco from halting at
-      // the entrance and blocking trains behind it.
+      // forward — sampling clamps every unit to the centre as it catches up, and
+      // the renderer hides each unit once it reaches the centre, so the train
+      // slides into the shed instead of halting (loco-first) at the entrance and
+      // blocking trains behind it. We're fully docked once the *last* unit has
+      // reached the depot centre: headProgress of 1 (loco at centre) plus the
+      // rearmost unit's centre offset behind the head.
+      const dockDistance = 1 + train.unitOffsets[train.unitOffsets.length - 1];
       train.headProgress += train.speed * dt;
-      if (train.headProgress >= train.bodyLength) {
-        train.headProgress = train.bodyLength;
+      if (train.headProgress >= dockDistance) {
+        train.headProgress = dockDistance;
         train.state = "parked";
       }
       return;
