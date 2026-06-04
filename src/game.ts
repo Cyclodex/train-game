@@ -73,15 +73,16 @@ export interface Game {
   depotColors: Record<string, string>;
   trainColors: Record<string, string>;
   switches: Record<string, Record<number, ActiveIntersection>>;
-  signals: Record<string, "red" | "green">; // key: coordId; a red light stops a
-  // train leaving that tile. Empty/green allows it (collisions are handled by
-  // the simulation's occupancy gate, not by signals).
+  signalTiles: string[];
+  // Signal aspects for rendering, keyed `${tileId}:${exitPort}`.
+  signalAspects: Record<string, "stop" | "proceed">;
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
   start(): void;
   stop(): void;
-  toggleSignal(coordId: string): void;
+  toggleHold(tileId: string, exitPort: Position): void;
+  isHeld(tileId: string, exitPort: Position): boolean;
   positionUnit(unit: SampledUnit): { x: number; y: number; angle: number };
 }
 
@@ -94,7 +95,15 @@ export function createGame(
     string,
     Record<number, ActiveIntersection>
   >;
-  const signals = reactive({}) as Record<string, "red" | "green">;
+
+  // Tiles that carry a signal (block boundaries) — from the level's trafficLights.
+  const signalTiles = Object.entries(level)
+    .filter(([, tile]) => tile.trafficLights)
+    .map(([id]) => id);
+
+  // Reactive signal aspects for rendering, keyed `${tileId}:${exitPort}`. The
+  // game loop refreshes these from the simulation each frame.
+  const signalAspects = reactive({}) as Record<string, "stop" | "proceed">;
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree.
@@ -117,7 +126,7 @@ export function createGame(
       wagonCount: def.wagonIds.length,
     })),
     getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
-    getSignal: coordId => signals[coordId],
+    signalTiles,
   });
 
   const unitIds: Record<string, string[]> = {};
@@ -172,6 +181,25 @@ export function createGame(
     }
   }
 
+  // The two exit ports of a (straight) signal tile, from its live rotation.
+  function signalExits(tileId: string): Position[] {
+    const rotation = level[tileId]?.rotation ?? 0;
+    return rotation % 2 === 0
+      ? [Position.Top, Position.Bottom]
+      : [Position.Right, Position.Left];
+  }
+
+  function updateSignalAspects() {
+    for (const tileId of signalTiles) {
+      for (const exitPort of signalExits(tileId)) {
+        signalAspects[`${tileId}:${exitPort}`] = sim.signalAspect(
+          tileId,
+          exitPort
+        );
+      }
+    }
+  }
+
   function handleEvents(events: SimEvent[]) {
     for (const e of events) {
       if (e.type === "arrived" && e.matched) deliveries.value += 1;
@@ -191,6 +219,7 @@ export function createGame(
       handleEvents(sim.step(dt * speed.value));
     }
     renderTrains();
+    updateSignalAspects();
     raf = requestAnimationFrame(frame);
   }
 
@@ -200,7 +229,8 @@ export function createGame(
     depotColors,
     trainColors,
     switches,
-    signals,
+    signalTiles,
+    signalAspects,
     paused,
     speed,
     deliveries,
@@ -213,8 +243,11 @@ export function createGame(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     },
-    toggleSignal(coordId: string) {
-      signals[coordId] = signals[coordId] === "red" ? "green" : "red";
+    toggleHold(tileId: string, exitPort: Position) {
+      sim.toggleHold(tileId, exitPort);
+    },
+    isHeld(tileId: string, exitPort: Position) {
+      return sim.isHeld(tileId, exitPort);
     },
     positionUnit,
   };

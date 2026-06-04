@@ -1,6 +1,11 @@
 import { LevelDefinition, Coordinates, Position } from "@/types";
-import { Port } from "./topology";
-import { SwitchResolver, resolveExitPort, traverse } from "./network";
+import { Port, oppositePort } from "./topology";
+import {
+  SwitchResolver,
+  resolveExitPort,
+  traverse,
+  routeToNextSignal,
+} from "./network";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
 export interface Segment {
@@ -47,18 +52,14 @@ export type SimEvent = ArrivedEvent;
 // ~half a tile wide, so ~0.5 keeps them coupled rather than strung far apart.
 const WAGON_SPACING = 0.5;
 
-// Resolves a traffic signal gating a train leaving `coordId` through `exitPort`.
-// "red" blocks; "green"/undefined allow.
-export type SignalResolver = (
-  coordId: string,
-  exitPort: Port
-) => "red" | "green" | undefined;
+export type SignalAspect = "stop" | "proceed";
 
 export interface SimConfig {
   level: LevelDefinition;
   trains: TrainInit[];
   getSwitch?: SwitchResolver;
-  getSignal?: SignalResolver;
+  // Tile ids that carry a signal — block boundaries. Depots are boundaries too.
+  signalTiles?: string[];
   depotColors?: Record<string, string>;
 }
 
@@ -78,6 +79,11 @@ export interface Simulation {
   // Positions of the loco (index 0) and each wagon along the recent path,
   // for the renderer to map to screen points.
   sampleTrain(id: string): SampledUnit[];
+  // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
+  signalAspect(tileId: string, exitPort: Port): SignalAspect;
+  // Player-forced Stop hold on a signal.
+  toggleHold(tileId: string, exitPort: Port): void;
+  isHeld(tileId: string, exitPort: Port): boolean;
 }
 
 const DEFAULT_SPEED = 0.5;
@@ -85,8 +91,20 @@ const DEFAULT_SPEED = 0.5;
 export function createSimulation(config: SimConfig): Simulation {
   const { level } = config;
   const getSwitch: SwitchResolver = config.getSwitch ?? (() => undefined);
-  const getSignal: SignalResolver = config.getSignal ?? (() => undefined);
   const depotColors: Record<string, string> = config.depotColors ?? {};
+  const signalTiles = new Set(config.signalTiles ?? []);
+
+  // tileId -> trainId that has reserved it (route/block reservation).
+  const reservations = new Map<string, string>();
+  // `${tileId}:${exitPort}` of signals the player has forced to Stop.
+  const manualHold = new Set<string>();
+
+  const isSignalTile = (tileId: string) => signalTiles.has(tileId);
+  function isBoundary(tileId: string): boolean {
+    if (signalTiles.has(tileId)) return true;
+    const tile = level[tileId];
+    return !!tile && tile.component === "TileDepot";
+  }
 
   const trains: Record<string, SimTrain> = {};
   for (const init of config.trains) {
@@ -128,6 +146,59 @@ export function createSimulation(config: SimConfig): Simulation {
     return false;
   }
 
+  function isTileOccupied(tileId: string): boolean {
+    for (const id of Object.keys(trains)) {
+      if (bodyTileIds(trains[id]).has(tileId)) return true;
+    }
+    return false;
+  }
+
+  // A tile is enterable by a train if no other train has reserved or occupies it.
+  function tileFreeForTrain(tileId: string, selfId: string): boolean {
+    const owner = reservations.get(tileId);
+    if (owner !== undefined && owner !== selfId) return false;
+    return !isTileOccupiedByOther(tileId, selfId);
+  }
+
+  // Release reservations the train no longer needs: anything it has reserved that
+  // is neither under its body nor in the block still ahead of it.
+  function releaseStaleReservations(train: SimTrain): void {
+    const keep = bodyTileIds(train);
+    if (train.state !== "parked") {
+      const head = train.path[train.headIndex];
+      for (const tid of routeToNextSignal(
+        level,
+        getSwitch,
+        isBoundary,
+        head.coord,
+        head.entryPort
+      )) {
+        keep.add(tid);
+      }
+    }
+    for (const [tid, owner] of reservations) {
+      if (owner === train.id && !keep.has(tid)) reservations.delete(tid);
+    }
+  }
+
+  // The aspect shown by the signal guarding the block beyond `exitPort`.
+  function aspect(tileId: string, exitPort: Port): SignalAspect {
+    if (manualHold.has(`${tileId}:${exitPort}`)) return "stop";
+    const tile = level[tileId];
+    if (!tile) return "proceed";
+    const block = routeToNextSignal(
+      level,
+      getSwitch,
+      isBoundary,
+      { x: tile.x, y: tile.y },
+      oppositePort(exitPort)
+    );
+    for (const tid of block) {
+      if (reservations.has(tid) || isTileOccupied(tid)) return "stop";
+    }
+    return "proceed";
+  }
+
   // Restart a train at a depot, heading back out the way it came in.
   function bounceOutOfDepot(train: SimTrain, depotCoord: Coordinates): void {
     const outer = resolveExitPort(level, getSwitch, depotCoord, Position.Center);
@@ -163,17 +234,41 @@ export function createSimulation(config: SimConfig): Simulation {
         train.headProgress = 1;
         break;
       }
+      const headTileId = getCoordinatesId(head.coord);
+      const nextTileId = getCoordinatesId(t.next.coord);
+
+      // Manual hold forces a signal to Stop.
       if (
         t.exitPort !== null &&
-        getSignal(getCoordinatesId(head.coord), t.exitPort) === "red"
+        isSignalTile(headTileId) &&
+        manualHold.has(`${headTileId}:${t.exitPort}`)
       ) {
-        // Red signal on this tile's exit: stop at the boundary, never cross.
         train.headProgress = 1;
         break;
       }
-      const nextTileId = getCoordinatesId(t.next.coord);
+
+      // Entering a tile not already reserved by us means entering a new block:
+      // reserve the whole route to the next signal, or hold (the signal is Stop).
+      if (reservations.get(nextTileId) !== train.id) {
+        const block = routeToNextSignal(
+          level,
+          getSwitch,
+          isBoundary,
+          head.coord,
+          head.entryPort
+        );
+        const reservable =
+          block.length > 0 &&
+          block.every(tid => tileFreeForTrain(tid, train.id));
+        if (!reservable) {
+          train.headProgress = 1;
+          break;
+        }
+        for (const tid of block) reservations.set(tid, train.id);
+      }
+
+      // Occupancy backstop (covers unsignalled adjacency).
       if (isTileOccupiedByOther(nextTileId, train.id)) {
-        // Another train's body is on the next tile: stop at the boundary.
         train.headProgress = 1;
         break;
       }
@@ -200,6 +295,7 @@ export function createSimulation(config: SimConfig): Simulation {
       // Deterministic order so tile reservation between trains is stable.
       for (const id of Object.keys(trains).sort()) {
         advance(trains[id], dt, events);
+        releaseStaleReservations(trains[id]);
       }
       return events;
     },
@@ -237,6 +333,17 @@ export function createSimulation(config: SimConfig): Simulation {
         units.push(sampleAt(headDistance - (i + 1) * WAGON_SPACING));
       }
       return units;
+    },
+    signalAspect(tileId: string, exitPort: Port) {
+      return aspect(tileId, exitPort);
+    },
+    isHeld(tileId: string, exitPort: Port) {
+      return manualHold.has(`${tileId}:${exitPort}`);
+    },
+    toggleHold(tileId: string, exitPort: Port) {
+      const key = `${tileId}:${exitPort}`;
+      if (manualHold.has(key)) manualHold.delete(key);
+      else manualHold.add(key);
     },
   };
 }

@@ -60,10 +60,13 @@ not in animation callbacks — this is what makes it stable and unit-testable.
 - `network.ts` — `traverse()`: from a tile + entry port, the exit port and the
   next tile/entry.
 - `simulation.ts` — `createSimulation()` + `step(dt)`. Trains advance along the
-  graph as `(segment, progress)`; entering a tile is gated on occupancy (no
-  collisions) and signals (**never crosses a red**); depots park on a colour
-  match or bounce on a mismatch and emit events. `sampleTrain()` returns
-  loco+wagon positions for rendering.
+  graph as `(segment, progress)`. **Path reservation / interlocking:** at a signal
+  a train reserves the whole route to the next signal (`routeToNextSignal` in
+  `network.ts`); it only enters if every tile is free, so no other train can enter
+  or cross that path. Signals show `signalAspect()` (Stop/Proceed) and have a
+  manual `toggleHold()`; an occupancy backstop covers unsignalled track. Depots
+  park on a colour match or bounce on a mismatch and emit events. `sampleTrain()`
+  returns loco+wagon positions for rendering. See `docs/signaling-design.md`.
 - `pathGeometry.ts` — `segmentPathD()`: the SVG path a train follows across a
   tile, derived purely from its entry+exit ports.
 

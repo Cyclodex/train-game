@@ -2,6 +2,7 @@ import { Component, Inject, Prop, Vue } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
 import {
+  Position,
   PossibleRoutesPerRotation,
   Rotations,
   Route,
@@ -50,19 +51,20 @@ export default class TileBase extends Vue {
     }
   }
 
-  // The simulation-backed traffic signal for this tile (manual; default green).
-  get signalColor(): string {
-    return this.game.signals[getCoordinatesId(this.tile)] === "red"
-      ? "red"
-      : "green";
+  // Simulation-backed signals (block boundaries). Only signal tiles render them.
+  get isSignalTile(): boolean {
+    return !!this.tile.trafficLights;
   }
 
-  get hasSignal(): boolean {
-    return !!this.tile.trafficLights || !!this.tile.enableTrafficLight;
+  signalAspectFor(exitPort: Position): "stop" | "proceed" {
+    return (
+      this.game.signalAspects[`${getCoordinatesId(this.tile)}:${exitPort}`] ??
+      "proceed"
+    );
   }
 
-  toggleSignal() {
-    this.game.toggleSignal(getCoordinatesId(this.tile));
+  toggleSignalHold(exitPort: Position) {
+    this.game.toggleHold(getCoordinatesId(this.tile), exitPort);
   }
 
   get allPossibleRoutesWithCurrentRotation() {

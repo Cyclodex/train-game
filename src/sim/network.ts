@@ -49,3 +49,36 @@ export function traverse(
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
 }
+
+export type BoundaryCheck = (tileId: string) => boolean;
+
+// Walk forward from a tile (following the train's switches), collecting the tile
+// ids of the block ahead: every tile up to and including the next signal
+// boundary. Stops at a depot / map edge / dead end, and is loop- and
+// length-capped so a signal-less loop can never run forever.
+export function routeToNextSignal(
+  level: LevelDefinition,
+  getSwitch: SwitchResolver,
+  isBoundary: BoundaryCheck,
+  fromCoord: Coordinates,
+  fromEntryPort: Port
+): string[] {
+  const out: string[] = [];
+  const visited = new Set<string>();
+  let coord = fromCoord;
+  let entry = fromEntryPort;
+  const MAX = 100;
+  for (let i = 0; i < MAX; i++) {
+    const t = traverse(level, getSwitch, coord, entry);
+    if (!t.next) break; // depot interior / map edge / dead end
+    const nextId = getCoordinatesId(t.next.coord);
+    out.push(nextId);
+    if (isBoundary(nextId)) break; // reached the next signal (inclusive)
+    const key = `${nextId}:${t.next.entryPort}`;
+    if (visited.has(key)) break; // loop with no signal
+    visited.add(key);
+    coord = t.next.coord;
+    entry = t.next.entryPort;
+  }
+  return out;
+}

@@ -67,34 +67,44 @@ test.describe("Train game", () => {
       .toBe(true);
   });
 
-  test("a train held at a red signal never advances past it", async ({
+  test("no two trains ever occupy the same tile (path reservation)", async ({
     page,
   }) => {
     await page.goto("/");
     await expect(page.locator(".train-locomotive")).toHaveCount(2);
 
-    // Put a red signal on train1's current tile (blocks it from leaving).
-    const heldTile = await page.evaluate(() => {
+    const headTiles = () =>
+      page.evaluate(() => {
+        const game = (document.getElementById("app") as any).__vue_app__
+          ._instance.proxy.game;
+        return Object.keys(game.sim.trains).map((id: string) =>
+          game.sim.trainTileId(id)
+        ) as string[];
+      });
+
+    // Sample repeatedly while the game runs: the two trains must never share a
+    // tile (reservation protects the path through junctions).
+    for (let i = 0; i < 24; i++) {
+      await page.waitForTimeout(300);
+      const tiles = await headTiles();
+      expect(new Set(tiles).size).toBe(tiles.length);
+    }
+  });
+
+  test("signals are drawn and a manual hold turns a signal to Stop", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await expect(page.locator(".signal").first()).toBeVisible();
+
+    const result = await page.evaluate(() => {
       const game = (document.getElementById("app") as any).__vue_app__._instance
         .proxy.game;
-      game.paused.value = true;
-      const tile = game.sim.trainTileId("train1");
-      game.signals[tile] = "red";
-      game.paused.value = false;
-      return tile as string;
+      const tileId = game.signalTiles[0] as string;
+      const exitPort = 1; // any port; a manual hold forces Stop regardless
+      game.toggleHold(tileId, exitPort);
+      return { aspect: game.sim.signalAspect(tileId, exitPort) as string };
     });
-
-    const tileOf = () =>
-      page.evaluate(
-        () =>
-          (document.getElementById("app") as any).__vue_app__._instance.proxy
-            .game.sim.trainTileId("train1") as string
-      );
-
-    // It may roll to the tile boundary, but it must never cross onto a new tile.
-    for (let i = 0; i < 8; i++) {
-      await page.waitForTimeout(400);
-      expect(await tileOf()).toBe(heldTile);
-    }
+    expect(result.aspect).toBe("stop");
   });
 });

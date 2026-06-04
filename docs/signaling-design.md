@@ -1,7 +1,14 @@
 # Signaling & path reservation — design
 
-Status: **agreed for Phase 1** (2026-06-04). Built on the deterministic simulation
-in `src/sim/` and the render loop in `src/game.ts`.
+Status: **Phase 1 implemented** (2026-06-04). Built on the deterministic
+simulation in `src/sim/` and the render loop in `src/game.ts`.
+
+Implementation notes: `routeToNextSignal()` in `network.ts`; reservations,
+`signalAspect()`, and manual `toggleHold()` in `simulation.ts`; `game.ts` derives
+signal tiles from the level, refreshes reactive `signalAspects` each frame, and
+exposes `toggleHold`; `TileStraight.vue` draws a directional red/green signal per
+exit. Covered by unit tests (reservation/junction/hold/aspect) and e2e (no two
+trains share a tile; signals render; a manual hold forces Stop).
 
 ## Goal
 

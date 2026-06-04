@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { traverse } from "@/sim/network";
+import { traverse, routeToNextSignal } from "@/sim/network";
 import {
   LevelDefinition,
   Position,
@@ -63,5 +63,67 @@ describe("traverse", () => {
     const t = traverse(lvl, getSwitch, { x: 1, y: 1 }, Position.Top);
     expect(t.exitPort).toBe(Position.Bottom);
     expect(t.next).toEqual({ coord: { x: 1, y: 2 }, entryPort: Position.Top });
+  });
+});
+
+describe("routeToNextSignal", () => {
+  const noSwitchesFn = () => undefined;
+
+  it("collects the block tiles up to and including the next signal", () => {
+    const lvl = level([
+      ["0,0", "TileStraight", 1],
+      ["1,0", "TileStraight", 1], // signal
+      ["2,0", "TileStraight", 1],
+      ["3,0", "TileStraight", 1], // signal
+      ["4,0", "TileStraight", 1],
+    ]);
+    const isBoundary = (id: string) => id === "1,0" || id === "3,0";
+    // From the signal at 1,0 heading right: the block is 2,0 then the next
+    // signal 3,0 (inclusive).
+    const route = routeToNextSignal(
+      lvl,
+      noSwitchesFn,
+      isBoundary,
+      { x: 1, y: 0 },
+      Position.Left
+    );
+    expect(route).toEqual(["2,0", "3,0"]);
+  });
+
+  it("ends the block at a depot / map edge", () => {
+    const lvl = level([
+      ["0,0", "TileStraight", 1], // signal
+      ["1,0", "TileStraight", 1],
+      ["2,0", "TileDepot", 3], // opening on the Left -> a boundary
+    ]);
+    const isBoundary = (id: string) => id === "0,0" || id === "2,0";
+    const route = routeToNextSignal(
+      lvl,
+      noSwitchesFn,
+      isBoundary,
+      { x: 0, y: 0 },
+      Position.Left
+    );
+    expect(route).toEqual(["1,0", "2,0"]);
+  });
+
+  it("stops on a loop without running forever", () => {
+    // A 2x2 loop of curves with no boundary at all.
+    const lvl = level([
+      ["0,0", "TileCurve", 1], // Right<->Bottom
+      ["1,0", "TileCurve", 2], // Bottom<->Left
+      ["1,1", "TileCurve", 3], // Left<->Top
+      ["0,1", "TileCurve", 0], // Top<->Right
+    ]);
+    const route = routeToNextSignal(
+      lvl,
+      noSwitchesFn,
+      () => false,
+      { x: 0, y: 0 },
+      Position.Right
+    );
+    // No signal anywhere: it walks the loop once and stops (no infinite loop).
+    expect(route.length).toBeGreaterThan(0);
+    expect(route.length).toBeLessThan(20);
   });
 });

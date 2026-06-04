@@ -12,13 +12,27 @@
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <svg
-      v-if="hasSignal"
-      class="signal-light"
-      width="18"
-      height="18"
-      @click.stop="toggleSignal"
+      v-for="light in signalLights"
+      :key="light.exitPort"
+      class="signal"
+      :class="`signal--${light.exitPort}`"
+      width="12"
+      height="20"
+      @click.stop="toggleSignalHold(light.exitPort)"
     >
-      <circle cx="9" cy="9" r="7" :fill="signalColor" stroke="#222" />
+      <rect width="12" height="20" rx="3" fill="#222" />
+      <circle
+        cx="6"
+        cy="6"
+        r="4"
+        :fill="light.aspect === 'stop' ? '#ff3b30' : '#5a1512'"
+      />
+      <circle
+        cx="6"
+        cy="14"
+        r="4"
+        :fill="light.aspect === 'proceed' ? '#34c759' : '#14361d'"
+      />
     </svg>
     <div v-if="config.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
@@ -73,6 +87,20 @@ class TileStraight extends TileBase {
     this.initRoutes();
   }
 
+  // One signal per exit direction of this (straight) tile, coloured by the
+  // simulation's aspect for that direction.
+  get signalLights() {
+    if (!this.isSignalTile) return [];
+    const exits =
+      this.currentRotation % 2 === 0
+        ? [Position.Top, Position.Bottom]
+        : [Position.Right, Position.Left];
+    return exits.map(exitPort => ({
+      exitPort,
+      aspect: this.signalAspectFor(exitPort),
+    }));
+  }
+
   rotate() {
     this.currentRotation++;
     if (this.currentRotation > Rotations.Right) {
@@ -90,14 +118,36 @@ export default toNative(TileStraight);
 </script>
 
 <style lang="scss" scoped>
-.signal-light {
-  position: absolute;
-  z-index: 12;
-  top: 4px;
-  right: 4px;
-  cursor: pointer;
-}
 .tile-straight {
   position: relative;
+}
+.signal {
+  position: absolute;
+  z-index: 14;
+  cursor: pointer;
+}
+.signal--0 {
+  // Top
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.signal--1 {
+  // Right
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.signal--2 {
+  // Bottom
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.signal--3 {
+  // Left
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 </style>

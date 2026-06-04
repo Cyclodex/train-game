@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createSimulation } from "@/sim/simulation";
-import { LevelDefinition, Position } from "@/types";
+import { LevelDefinition, Position, ActiveIntersection } from "@/types";
 
 function corridor(n: number): LevelDefinition {
   const lvl: LevelDefinition = {};
@@ -108,19 +108,19 @@ describe("simulation occupancy / collisions", () => {
           speed: 1,
         },
       ],
+      signalTiles: ["1,0"], // a signal so the block ahead is 1,0 -> 2,0
     });
 
     for (let i = 0; i < 10; i++) sim.step(0.5);
 
     expect(sim.trainTileId("lead")).toBe("2,0");
-    // follow must stop on tile 1 and never reach lead's tile 2.
+    // follow holds at the signal (1,0) — it can't reserve the block holding lead.
     expect(sim.trainTileId("follow")).toBe("1,0");
   });
 });
 
-describe("simulation traffic signals", () => {
-  it("never crosses a red signal, and proceeds once it turns green", () => {
-    const signals: Record<string, "red" | "green"> = { "1,0:1": "red" }; // tile 1, exit Right
+describe("simulation manual signal hold", () => {
+  it("holds a train at a signal and releases it when cleared", () => {
     const sim = createSimulation({
       level: corridor(3),
       trains: [
@@ -134,20 +134,108 @@ describe("simulation traffic signals", () => {
           speed: 1,
         },
       ],
-      getSignal: (coordId, exitPort) => signals[`${coordId}:${exitPort}`],
+      signalTiles: ["1,0"],
     });
+    sim.toggleHold("1,0", Position.Right); // force the signal at 1,0 to Stop
 
-    // While red, the train must reach tile 1 and never pass onto tile 2.
+    // The train reaches the signal and never crosses it while held.
     for (let i = 0; i < 20; i++) {
       sim.step(0.5);
       expect(sim.trainTileId("t1")).not.toBe("2,0");
     }
     expect(sim.trainTileId("t1")).toBe("1,0");
+    expect(sim.signalAspect("1,0", Position.Right)).toBe("stop");
 
-    // Turn the signal green: the train resumes onto tile 2.
-    signals["1,0:1"] = "green";
-    for (let i = 0; i < 5; i++) sim.step(0.5);
+    // Release the hold: it proceeds.
+    sim.toggleHold("1,0", Position.Right);
+    for (let i = 0; i < 6; i++) sim.step(0.5);
     expect(sim.trainTileId("t1")).toBe("2,0");
+  });
+});
+
+describe("simulation path reservation at a junction", () => {
+  // A + crossing: train "a" goes Top->Bottom, train "b" goes Left->Right, both
+  // through the intersection 1,1. Their paths cross on that one tile.
+  const crossLevel: LevelDefinition = {
+    "1,0": { x: 1, y: 0, component: "TileStraight", rotation: 0 }, // a's signal
+    "1,1": { x: 1, y: 1, component: "TileIntersectionComplete", rotation: 0 },
+    "1,2": { x: 1, y: 2, component: "TileStraight", rotation: 0 },
+    "0,1": { x: 0, y: 1, component: "TileStraight", rotation: 1 }, // b's signal
+    "2,1": { x: 2, y: 1, component: "TileStraight", rotation: 1 },
+  };
+  // Intersection goes straight for both approaches.
+  const getSwitch = (coordId: string, entryPort: Position) => {
+    if (coordId !== "1,1") return undefined;
+    return ActiveIntersection.Straight;
+  };
+
+  it("lets one train reserve the crossing while the other waits, never both on it", () => {
+    const sim = createSimulation({
+      level: crossLevel,
+      getSwitch,
+      signalTiles: ["1,0", "0,1"],
+      trains: [
+        {
+          id: "a",
+          coord: { x: 1, y: 0 },
+          entryPort: Position.Top,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+        {
+          id: "b",
+          coord: { x: 0, y: 1 },
+          entryPort: Position.Left,
+          color: "blue",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+
+    let bothOnCrossingEver = false;
+    const aVisited = { v: false };
+    const bVisited = { v: false };
+    for (let i = 0; i < 40; i++) {
+      sim.step(0.25);
+      const aOn = sim.trainTileId("a") === "1,1";
+      const bOn = sim.trainTileId("b") === "1,1";
+      if (aOn && bOn) bothOnCrossingEver = true;
+      if (aOn) aVisited.v = true;
+      if (bOn) bVisited.v = true;
+    }
+
+    expect(bothOnCrossingEver).toBe(false); // never crossing paths at once
+    expect(aVisited.v).toBe(true); // both trains do get through
+    expect(bVisited.v).toBe(true);
+  });
+});
+
+describe("simulation signal aspect", () => {
+  it("shows stop when the block ahead is occupied, proceed when free", () => {
+    const sim = createSimulation({
+      level: corridor(3),
+      signalTiles: ["1,0"],
+      trains: [
+        {
+          id: "blocker",
+          coord: { x: 2, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+    // 'blocker' sits on 2,0 (the block beyond the 1,0 signal, heading Right).
+    sim.step(0); // settle
+    expect(sim.signalAspect("1,0", Position.Right)).toBe("stop");
+    // The opposite direction's block (toward 0,0) is free.
+    expect(sim.signalAspect("1,0", Position.Left)).toBe("proceed");
   });
 });
 

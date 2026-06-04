@@ -17,9 +17,13 @@ The architecture was rebuilt around an authoritative, deterministic simulation
 The dead imperative `$refs` movement code has been removed from the tile
 components — they are now pure views (draw + publish their rotation/switch state).
 
-Remaining from the list below: deadlock resolution (#3), level loading (#6), and
-re-adding **automatic** signals (the sim already supports `getSignal`; signals
-are currently a manual, default-green tool since occupancy handles safety). Minor
+**Signaling & path reservation (Phase 1) is implemented** — block/route
+reservation (interlocking), always-visible directional red/green signals, and a
+manual hold. See `docs/signaling-design.md`. Deferred there: pre-signals / yellow
+aspects + speed signals (Phase 2, need a train momentum/braking model first),
+path-based signaling and deadlock resolution (Phase 3).
+
+Remaining from the list below: deadlock resolution (#3), level loading (#6). Minor
 polish: wagon spacing is measured in tile-fractions, so couplings look slightly
 tighter on curves than on straights — making it pixel-uniform is a nice-to-have.
 
