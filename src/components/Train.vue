@@ -19,13 +19,22 @@ import {
   getTrainDirection,
 } from "@/utils/trainHelpers";
 import gsap from "gsap";
-import { Component, InjectReactive, Prop, Vue } from "vue-property-decorator";
-import { Colors, getRandom } from "@/utils/globalHelpers";
+import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
+import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { Colors, getRandom, resolveRef } from "@/utils/globalHelpers";
+import locomotivePeople from "@/assets/locomotivePeople.png";
+import locomotiveFraight from "@/assets/locomotiveFraight.png";
+import wagonPeople from "@/assets/wagonPeople.png";
+import wagonFraight1 from "@/assets/wagonFraight1.png";
+import wagonFraight2 from "@/assets/wagonFraight2.png";
+import wagonFraight3 from "@/assets/wagonFraight3.png";
+import wagonFraight4 from "@/assets/wagonFraight4.png";
 
-@Component
-export default class Train extends Vue {
-  @InjectReactive() trains!: TrainsDefinition;
-  @InjectReactive() level!: LevelDefinition;
+@Component({ emits: ["update"] })
+class Train extends Vue {
+  @Inject() trains!: TrainsDefinition;
+  @Inject() level!: LevelDefinition;
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
 
   @Prop({ type: Object, default: {} }) trainObject!: TrainObject;
   initialPosition = {};
@@ -33,30 +42,30 @@ export default class Train extends Vue {
   trainVisuals = {
     locos: {
       people: {
-        backgroundImage: `url(${require("@/assets/locomotivePeople.png")})`,
+        backgroundImage: `url(${locomotivePeople})`,
       },
       fraight: {
-        backgroundImage: `url(${require("@/assets/locomotiveFraight.png")})`,
+        backgroundImage: `url(${locomotiveFraight})`,
       },
     },
     wagons: {
       people: {
         wagonPeople: {
-          backgroundImage: `url(${require("@/assets/wagonPeople.png")})`,
+          backgroundImage: `url(${wagonPeople})`,
         },
       },
       fraight: {
         wagonFraight1: {
-          backgroundImage: `url(${require("@/assets/wagonFraight1.png")})`,
+          backgroundImage: `url(${wagonFraight1})`,
         },
         wagonFraight2: {
-          backgroundImage: `url(${require("@/assets/wagonFraight2.png")})`,
+          backgroundImage: `url(${wagonFraight2})`,
         },
         wagonFraight3: {
-          backgroundImage: `url(${require("@/assets/wagonFraight3.png")})`,
+          backgroundImage: `url(${wagonFraight3})`,
         },
         wagonFraight4: {
-          backgroundImage: `url(${require("@/assets/wagonFraight4.png")})`,
+          backgroundImage: `url(${wagonFraight4})`,
         },
       },
     },
@@ -102,14 +111,14 @@ export default class Train extends Vue {
     // Initialize "visual" dom mapper for animations
     this.visual = document.getElementById(this.id);
     if (this.trainObject.wagons !== undefined) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+       
       this.wagons!.map(wagon => {
         wagon.visual = document.getElementById(wagon.id);
       });
     }
 
     const coordId = getCoordinatesId(this.trainObject);
-    const tile = (this.$parent!.$refs[coordId] as any)[0];
+    const tile = resolveRef(this.$parent!.$refs[coordId]);
     this.route = tile.getTrainRoute(this.trainObject);
 
     this.initialRotation = tile.currentRotation;
@@ -120,7 +129,7 @@ export default class Train extends Vue {
         : false;
 
     // Check for planned Destination
-    if (this.$root.automaticRoutePlanning) {
+    if (this.config.automaticRoutePlanning) {
       await this.doRoutePlanning();
     }
 
@@ -212,7 +221,7 @@ export default class Train extends Vue {
 
     // Check on tile
     if (this.level[tilePosition]) {
-      const tile = (this.$parent!.$refs[tilePosition] as any)[0];
+      const tile = resolveRef(this.$parent!.$refs[tilePosition]);
       // Check tile status
       const tileStatus = tile.checkStatus(tileEntrancePosition) as
         | CheckStatusFeedback
@@ -323,11 +332,11 @@ export default class Train extends Vue {
   }
 
   setInitialPosition() {
-    const tilePositionX = this.$root.tileSize / 2;
-    const tilePositionY = this.$root.tileSize / 2;
+    const tilePositionX = this.config.tileSize / 2;
+    const tilePositionY = this.config.tileSize / 2;
     this.initialPosition = {
-      left: this.trainObject.x * this.$root.tileSize + tilePositionX + "px",
-      top: this.trainObject.y * this.$root.tileSize + tilePositionY + "px",
+      left: this.trainObject.x * this.config.tileSize + tilePositionX + "px",
+      top: this.trainObject.y * this.config.tileSize + tilePositionY + "px",
     };
   }
 
@@ -402,7 +411,7 @@ export default class Train extends Vue {
   trainStoppedInDepot() {
     this.updateTrain({ id: this.id, status: TrainStatus.Stopped });
     const tilePosition: string = getCoordinatesId(this.trainObject);
-    const tile = (this.$parent!.$refs[tilePosition] as any)[0];
+    const tile = resolveRef(this.$parent!.$refs[tilePosition]);
     this.route = tile.getTrainRoute(this.trainObject);
 
     this.trainObject.animation.clear();
@@ -419,7 +428,7 @@ export default class Train extends Vue {
 
   trainLeavesTile(train: TrainObject = this.trainObject) {
     const tilePosition: string = getCoordinatesId(train);
-    const tile = (this.$parent!.$refs[tilePosition] as any)[0];
+    const tile = resolveRef(this.$parent!.$refs[tilePosition]);
     const trainLeavesTile = tile.trainLeavesTile(train);
 
     const nextTileCoordinates = getLeavingTrainCoordinates(this.route!, {
@@ -447,7 +456,7 @@ export default class Train extends Vue {
   trainEntersNextTile(train: TrainObject) {
     const tilePosition: string = getCoordinatesId(train);
     if (this.level[tilePosition]) {
-      const tile = (this.$parent!.$refs[tilePosition] as any)[0];
+      const tile = resolveRef(this.$parent!.$refs[tilePosition]);
       tile.incomingTrain(this.id);
       this.route = tile.getTrainRoute(this.trainObject);
       const animationOptions = tile.animateTrainOptions(this.trainObject);
@@ -512,6 +521,8 @@ export default class Train extends Vue {
     return { backgroundColor: this.trainColor };
   }
 }
+
+export default toNative(Train);
 </script>
 
 <template>
@@ -523,7 +534,7 @@ export default class Train extends Vue {
       :style="[initialPosition, locoImage]"
       @click.stop="startStopTrain"
     >
-      <span v-if="$root.debug" class="train-debug">{{ trainObject.id }}</span>
+      <span v-if="config.debug" class="train-debug">{{ trainObject.id }}</span>
     </div>
     <template v-if="trainObject.wagons">
       <div
@@ -537,7 +548,7 @@ export default class Train extends Vue {
         ]"
         :style="[initialPosition, getWagonImage]"
       >
-        <span v-if="$root.debug" class="train-debug">{{ wagon.id }}</span>
+        <span v-if="config.debug" class="train-debug">{{ wagon.id }}</span>
       </div>
     </template>
   </div>

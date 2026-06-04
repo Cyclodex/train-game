@@ -5,10 +5,9 @@
     @click.exact="rotate"
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
-    <template v-for="(n, i) in 4">
+    <template v-for="(n, i) in 4" :key="i">
       <svg
         v-if="isIntersectionRouteEnabled(i)"
-        :key="i"
         :class="`switch-box switch-box--${i}`"
         width="24"
         height="18"
@@ -44,7 +43,7 @@
     <div>
       Switch
     </div>
-    <div v-if="$root.debug" class="debug">
+    <div v-if="config.debug" class="debug">
       <div class="">R: {{ currentRotation }}</div>
       <div class="">Switch: {{ intersectionSwitch }}</div>
       <!-- <div v-if="getTrainRoute()" class="">
@@ -60,7 +59,7 @@
 </template>
 
 <script lang="ts">
-import { Component, Prop } from "vue-property-decorator";
+import { Component, Prop, toNative } from "vue-facing-decorator";
 import {
   ActiveIntersection,
   ActiveIntersectionPerPosition,
@@ -72,7 +71,7 @@ import {
   TileStatus,
   TrainObject,
 } from "@/types";
-import TileBase from "./TileBase.vue";
+import TileBase from "./TileBase";
 import { getRelativeCoordinatesOfNextTile } from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 
@@ -80,7 +79,7 @@ import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
 // t=top, r=rigth, b=bottom, l=left
 
 @Component
-export default class TileIntersectionComplete extends TileBase {
+class TileIntersectionComplete extends TileBase {
   @Prop({ type: Object, default: () => ({}) })
   activeRoutes!: ActiveIntersectionPerPosition[];
   intersectionSwitch: ActiveIntersectionPerPosition = {
@@ -103,10 +102,10 @@ export default class TileIntersectionComplete extends TileBase {
       }
     }
     // Set Preconfigured intersections
-    if (this.$props.tile.activeRoutes) {
+    if (this.tile.activeRoutes) {
       this.intersectionSwitch = {
         ...this.intersectionSwitch,
-        ...this.$props.tile.activeRoutes,
+        ...this.tile.activeRoutes,
       };
     }
   }
@@ -131,10 +130,8 @@ export default class TileIntersectionComplete extends TileBase {
   }
 
   initIntersection() {
-    if (this.$props.tile.disabledRoutes) {
-      Object.entries(
-        this.$props.tile.disabledRoutes as ActiveIntersectionPerPosition
-      ).map((entry: any) => {
+    if (this.tile.disabledRoutes) {
+      Object.entries(this.tile.disabledRoutes).map((entry: any) => {
         const position = Number(entry[0]);
         const disabledRoutes = entry[1];
         disabledRoutes.map((disableRouteIndex: number) => {
@@ -301,9 +298,9 @@ export default class TileIntersectionComplete extends TileBase {
   }
 
   get activeSwitchRoutes() {
-    return Object.values(this.possibleRoutes).map((routes, position) => {
-      this.intersectionSwitch[position];
-    });
+    return Object.values(this.possibleRoutes).map(
+      (routes, position) => this.intersectionSwitch[position]
+    );
   }
 
   activeSwitchRoute(position: Position) {
@@ -465,6 +462,8 @@ export default class TileIntersectionComplete extends TileBase {
     };
   }
 }
+
+export default toNative(TileIntersectionComplete);
 </script>
 
 <style lang="scss" scoped>
@@ -473,7 +472,7 @@ export default class TileIntersectionComplete extends TileBase {
   z-index: 20;
   position: absolute;
 
-  ::v-deep circle {
+  :deep(circle) {
     fill: white;
     transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
   }
@@ -498,13 +497,11 @@ export default class TileIntersectionComplete extends TileBase {
     transform: rotate(90deg);
   }
 
-  ::v-deep {
-    .bulp--direction {
-      opacity: 0.4;
-    }
-    .bulb--active {
-      opacity: 1;
-    }
+  :deep(.bulp--direction) {
+    opacity: 0.4;
+  }
+  :deep(.bulb--active) {
+    opacity: 1;
   }
 }
 </style>

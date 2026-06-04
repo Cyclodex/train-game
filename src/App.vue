@@ -1,5 +1,5 @@
 <template>
-  <div id="app" :class="{ debug: $root.debug }">
+  <div id="app" :class="{ debug: config.debug }">
     <div class="control-buttons">
       <button class="debug-button" @click="switchDebugMode">
         Debug Mode
@@ -14,7 +14,7 @@
     <div
       class="level"
       :style="{
-        width: $root.tileSize * $root.levelSizeX + 'px',
+        width: config.tileSize * config.levelSizeX + 'px',
       }"
     >
       <Train
@@ -29,15 +29,16 @@
         :key="key"
         class="level-tile"
         :style="{
-          width: $root.tileSize + 'px',
-          height: $root.tileSize + 'px',
+          width: config.tileSize + 'px',
+          height: config.tileSize + 'px',
         }"
       >
-        <div v-if="$root.debug" class="debug">
+        <div v-if="config.debug" class="debug">
           <div class="debug-coordinates" v-text="`x${tile.x}y${tile.y}`"></div>
         </div>
         <component
           :is="tile.component"
+          v-if="tile.component"
           :key="`${tile.x},${tile.y}`"
           :ref="`${tile.x},${tile.y}`"
           class="tile-component"
@@ -49,9 +50,8 @@
 </template>
 
 <script lang="ts">
-import { Component, ProvideReactive, Vue, Watch } from "vue-property-decorator";
-import HelloWorld from "./components/HelloWorld.vue";
-import Counter from "@/modules/counterExample/views/Counter.vue";
+import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
+import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import {
   ActiveIntersection,
   Rotations,
@@ -67,19 +67,15 @@ import { gsap } from "gsap";
 import { MotionPathPlugin } from "gsap/MotionPathPlugin";
 gsap.registerPlugin(MotionPathPlugin);
 
-@Component({
-  components: {
-    HelloWorld,
-    Counter,
-  },
-})
-export default class App extends Vue {
+@Component
+class App extends Vue {
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   paused = false;
   globalAnimations!: any;
   globalTimeScale = 1;
   speeds = [1, 2, 4];
 
-  @ProvideReactive() trains: TrainsDefinition = {
+  @Provide() trains: TrainsDefinition = {
     train1: {
       id: "train1",
       x: 0,
@@ -140,7 +136,7 @@ export default class App extends Vue {
     // },
   };
 
-  @ProvideReactive() level: LevelDefinition = {
+  @Provide() level: LevelDefinition = {
     "0,0": {
       component: "TileCurve",
       x: 0,
@@ -535,7 +531,7 @@ export default class App extends Vue {
   }
 
   switchDebugMode() {
-    this.$root.debug = !this.$root.debug;
+    this.config.debug = !this.config.debug;
   }
 
   pausePlayGame() {
@@ -558,6 +554,8 @@ export default class App extends Vue {
     gsap.globalTimeline.timeScale(this.globalTimeScale);
   }
 }
+
+export default toNative(App);
 </script>
 
 <style lang="scss">

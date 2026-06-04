@@ -12,10 +12,9 @@
   >
     <TileRail :possible-routes="allDrawableRailRoutes" />
     <template v-if="trafficLights">
-      <template v-for="trafficLight in trafficLights">
+      <template v-for="trafficLight in trafficLights" :key="trafficLight.direction">
         <svg
           v-if="trafficLight"
-          :key="trafficLight.direction"
           class="traffic-light"
           width="16"
           height="30"
@@ -42,7 +41,7 @@
         </svg>
       </template>
     </template>
-    <div v-if="$root.debug" class="debug">
+    <div v-if="config.debug" class="debug">
       <div>R: {{ currentRotation }}</div>
       <!-- <div v-if="getTrainRoute()" class="">
         T Route:<br />{{ getTrainRoute().path }}
@@ -55,7 +54,7 @@
 </template>
 
 <script lang="ts">
-import { Vue, Component } from "vue-property-decorator";
+import { Component, toNative } from "vue-facing-decorator";
 import {
   CheckStatusFeedback,
   Coordinates,
@@ -68,12 +67,13 @@ import {
   TrafficLightSignal,
   TrainObject,
 } from "@/types";
-import TileBase from "./TileBase.vue";
+import TileBase from "./TileBase";
 import { getCoordinatesId, getTileEntrancePosition } from "@/utils/tileHelpers";
 import { getLeavingTrainCoordinates } from "@/utils/trainHelpers";
+import { resolveRef } from "@/utils/globalHelpers";
 
 @Component
-export default class TileStraight extends TileBase {
+class TileStraight extends TileBase {
   trafficLights: TrafficLight[] = [];
   automaticTrafficLights = false;
   checkRouteInterval: any;
@@ -117,13 +117,13 @@ export default class TileStraight extends TileBase {
   }
 
   initTrafficLIghts() {
-    if (this.$props.tile.trafficLights !== undefined) {
-      this.trafficLights = this.$props.tile.trafficLights;
+    if (this.tile.trafficLights !== undefined) {
+      this.trafficLights = this.tile.trafficLights;
     }
     if (this.trafficLights !== undefined) {
       this.positionTrafficLights();
-      if (this.$root.automaticTrafficLights) {
-        this.automaticTrafficLights = this.$root.automaticTrafficLights;
+      if (this.config.automaticTrafficLights) {
+        this.automaticTrafficLights = this.config.automaticTrafficLights;
       }
     }
   }
@@ -131,7 +131,9 @@ export default class TileStraight extends TileBase {
   updateTrafficLight(trafficLightUpdate: TrafficLight) {
     this.trafficLights.map((trafficLight, index) => {
       if (trafficLight.direction === trafficLightUpdate.direction) {
-        Vue.set(this.trafficLights, index, trafficLightUpdate);
+        // Vue 3 arrays are deeply reactive, so a direct index assignment is
+        // tracked (replaces the Vue 2 `Vue.set`).
+        this.trafficLights[index] = trafficLightUpdate;
       }
     });
   }
@@ -231,16 +233,16 @@ export default class TileStraight extends TileBase {
       originCoordinates
     );
     if (this.level[tilePosition]) {
-      const tileStatus: CheckStatusFeedback = (this.$parent!.$refs[
-        tilePosition
-      ] as any)[0].checkStatus(tileEntrancePosition, trainObject);
+      const tileStatus: CheckStatusFeedback = resolveRef(
+        this.$parent!.$refs[tilePosition]
+      ).checkStatus(tileEntrancePosition, trainObject);
       // If Status is not free = The route is block, dont progress
       if (tileStatus.status !== TileStatus.Free && !forced) {
         return tileStatus.status;
       } else if (tileStatus.hasTrafficLight) {
         // If it has trafficLight, reserve it and return the status, the route is complete
         if (tileStatus.status === TileStatus.Free) {
-          (this.$parent!.$refs[tilePosition] as any)[0].reserveTile();
+          resolveRef(this.$parent!.$refs[tilePosition]).reserveTile();
         }
         return tileStatus.status;
       } else {
@@ -254,7 +256,7 @@ export default class TileStraight extends TileBase {
       }
       // If route is free, reserve every tile
       if (status === TileStatus.Free || forced) {
-        (this.$parent!.$refs[tilePosition] as any)[0].reserveTile(
+        resolveRef(this.$parent!.$refs[tilePosition]).reserveTile(
           tileEntrancePosition,
           trainObject
         );
@@ -303,7 +305,7 @@ export default class TileStraight extends TileBase {
       this.getActiveTrafficLight(this.train).signal === TrafficLightSignal.Red
     ) {
       // Stop the train
-      (this.$parent!.$refs[trainId] as any)[0].stopTrain();
+      resolveRef(this.$parent!.$refs[trainId]).stopTrain();
       this.trainOnRedTrafficLight(this.train);
     }
   }
@@ -311,7 +313,7 @@ export default class TileStraight extends TileBase {
   animateTrainFromTrafficLight() {
     // Make sure that interval is canceled when train leaves
     clearInterval(this.checkRouteInterval);
-    (this.$parent!.$refs[this.currentTrain.id] as any)[0].startTrain();
+    resolveRef(this.$parent!.$refs[this.currentTrain.id]).startTrain();
   }
 
   // Check every 2 seconds to continue travel if route is ok
@@ -339,6 +341,11 @@ export default class TileStraight extends TileBase {
     }
   }
 }
+
+// Raw decorated class is exported for `TileDepot` to extend; the native
+// component is the default export used for registration.
+export { TileStraight };
+export default toNative(TileStraight);
 </script>
 
 <style lang="scss" scoped>
@@ -373,15 +380,15 @@ export default class TileStraight extends TileBase {
     background-color: #999;
     position: absolute;
 
-    ::v-deep circle {
+    :deep(circle) {
       transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
     }
 
-    &.signal--red ::v-deep .bulb--red {
+    &.signal--red :deep(.bulb--red) {
       fill: red;
     }
 
-    &.signal--green ::v-deep .bulb--green {
+    &.signal--green :deep(.bulb--green) {
       fill: green;
     }
   }
