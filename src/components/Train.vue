@@ -316,8 +316,8 @@ export default class Train extends Vue {
   stopTrainInDepot() {
     this.trainStoppingInDepot();
     gsap.to(this.trainObject.animation, {
-      duration: 10,
-      timeScale: 0.5,
+      duration: (this.wagons?.length ?? 0) + 2,
+      timeScale: 1, // Maybe no time scale and less buggy stopping (0.5)
       onComplete: () => this.trainStoppedInDepot(),
     });
   }

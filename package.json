@@ -3,14 +3,15 @@
   "version": "0.2.0",
   "private": true,
   "scripts": {
-    "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build",
-    "test:unit": "vue-cli-service test:unit",
+    "serve": "cross-env NODE_OPTIONS=--openssl-legacy-provider vue-cli-service serve --mode development",
+    "build": "cross-env NODE_OPTIONS=--openssl-legacy-provider vue-cli-service build",
+    "test:unit": "cross-env NODE_OPTIONS=--openssl-legacy-provider vue-cli-service test:unit",
     "lint": "vue-cli-service lint",
     "lint:nofix": "vue-cli-service lint --no-fix"
   },
   "dependencies": {
     "core-js": "^3.36.1",
+    "puppeteer": "^23.11.1",
     "sass": "^1.72.0",
     "vue": "^2.7.16",
     "vue-class-component": "^7.2.6",
@@ -38,6 +39,7 @@
     "sass-loader": "^8.0.2",
     "typescript": "~3.9.3",
     "vue-template-compiler": "^2.7.16",
-    "vuex-class": "^0.3.2"
+    "vuex-class": "^0.3.2",
+    "cross-env": "^7.0.3"
   }
 }
