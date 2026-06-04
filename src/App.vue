@@ -27,25 +27,20 @@
         :train-object="trainObject"
       />
       <div
-        v-for="(tile, key) in level"
-        :key="key"
+        v-for="cell in gridCells"
+        :key="cell.key"
         class="level-tile"
         :style="{
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
         }"
       >
-        <div v-if="config.debug" class="debug">
-          <div class="debug-coordinates" v-text="`x${tile.x}y${tile.y}`"></div>
-        </div>
-        <component
-          :is="tile.component"
-          v-if="tile.component"
-          :key="`${tile.x},${tile.y}`"
-          :ref="`${tile.x},${tile.y}`"
+        <Tile
+          v-if="cell.tile"
+          :tile="cell.tile"
+          :coord-id="cell.key"
           class="tile-component"
-          :tile="tile"
-        ></component>
+        />
       </div>
     </div>
   </div>
@@ -60,16 +55,9 @@ import {
   gameConfig,
   SwitchLockMode,
 } from "@/gameConfig";
-import {
-  ActiveIntersection,
-  Rotations,
-  TrafficLightSignal,
-  TrafficLightDirection,
-  TrainsDefinition,
-  LevelDefinition,
-  TrainStatus,
-  Position,
-} from "@/types";
+import { TrainsDefinition, TrainStatus, Position } from "@/types";
+import { Level } from "@/tiles/model";
+import { expandKind } from "@/tiles/kinds";
 import { createGame, Game, TrainDef } from "@/game";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
@@ -148,394 +136,102 @@ class App extends Vue {
     // },
   };
 
-  @Provide() level: LevelDefinition = {
-    "0,0": {
-      component: "TileCurve",
-      x: 0,
-      y: 0,
-      rotation: 1,
-    },
-    "1,0": {
-      component: "TileStraight",
-      x: 1,
-      y: 0,
-      rotation: 1,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Forward,
-        },
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
+  @Provide() level: Level = {
+    "0,0": expandKind("curve", 1),
+    "1,0": expandKind("straight", 1, { signals: true }),
+    "2,0": expandKind("cross", 0, {
+      disable: [
+        [Position.Top, Position.Bottom],
+        [Position.Top, Position.Right],
+        [Position.Left, Position.Top],
       ],
-    },
-    "2,0": {
-      component: "TileIntersectionComplete",
-      x: 2,
-      y: 0,
-      disabledRoutes: {
-        [Position.Top]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-      activeRoutes: {
-        [Position.Right]: ActiveIntersection.Left,
-      },
-    },
-    "3,0": {
-      component: "TileIntersectionComplete",
-      x: 3,
-      y: 0,
-      disabledRoutes: {
-        [Position.Top]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-      activeRoutes: {
-        [Position.Bottom]: ActiveIntersection.Left,
-      },
-    },
-    "4,0": {
-      component: "TileStraight",
-      x: 4,
-      y: 0,
-      rotation: 1,
-    },
-    "5,0": {
-      component: "TileDepot",
-      x: 5,
-      y: 0,
-      rotation: 3,
-    },
-    "6,0": {
-      component: "TileDepot",
-      x: 6,
-      y: 0,
-      rotation: 2,
-    },
-    "0,1": {
-      component: "TileIntersectionComplete",
-      x: 0,
-      y: 1,
-
-      rotation: 0,
-      activeRoutes: {
-        [Position.Top]: ActiveIntersection.Straight,
-        [Position.Right]: ActiveIntersection.Right,
-        [Position.Bottom]: ActiveIntersection.Straight,
-        [Position.Left]: ActiveIntersection.Straight,
-      },
-      disabledRoutes: {
-        [Position.Left]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-    },
-    "1,1": {
-      component: "TileDepot",
-      x: 1,
-      y: 1,
-      rotation: 3,
-      enableTrafficLight: true,
-    },
-    "2,1": {
-      component: "TileStraight",
-      x: 2,
-      y: 1,
-      rotation: 0,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Forward,
-        },
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
+    }),
+    "3,0": expandKind("cross", 0, {
+      disable: [
+        [Position.Top, Position.Bottom],
+        [Position.Top, Position.Right],
+        [Position.Left, Position.Top],
       ],
-    },
-    "3,1": {
-      component: "TileCurve",
-      x: 3,
-      y: 1,
-      rotation: 0,
-    },
-    "4,1": {
-      component: "TileStraight",
-      x: 4,
-      y: 1,
-      rotation: 1,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Forward,
-        },
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
+    }),
+    "4,0": expandKind("straight", 1),
+    "5,0": expandKind("depot", 3),
+    "6,0": expandKind("depot", 2),
+    "0,1": expandKind("cross", 0, {
+      disable: [
+        [Position.Left, Position.Right],
+        [Position.Bottom, Position.Left],
+        [Position.Left, Position.Top],
       ],
-    },
-    "5,1": {
-      component: "TileStraight",
-      x: 5,
-      y: 1,
-      rotation: 1,
-    },
-    "6,1": {
-      component: "TileIntersectionComplete",
-      x: 6,
-      y: 1,
-      disabledRoutes: {
-        [Position.Right]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-      activeRoutes: {
-        [Position.Bottom]: ActiveIntersection.Left,
-      },
-    },
-    "0,2": {
-      component: "TileStraight",
-      x: 0,
-      y: 2,
-      rotation: 0,
-    },
-    "1,2": {
-      component: "TileDepot",
-      x: 1,
-      y: 2,
-      rotation: 1,
-    },
-    "2,2": {
-      component: "TileIntersectionComplete",
-      x: 2,
-      y: 2,
-      rotation: 0,
-      activeRoutes: {
-        [Position.Bottom]: ActiveIntersection.Right,
-        [Position.Right]: ActiveIntersection.Left,
-        [Position.Top]: ActiveIntersection.Left,
-      },
-    },
-    "3,2": {
-      component: "TileStraight",
-      x: 3,
-      y: 2,
-      rotation: Rotations.Right,
-    },
-    "4,2": {
-      component: "TileStraight",
-      x: 4,
-      y: 2,
-      rotation: 1,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Forward,
-        },
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
+    }),
+    "1,1": expandKind("depot", 3),
+    "2,1": expandKind("straight", 0, { signals: true }),
+    "3,1": expandKind("curve", 0),
+    "4,1": expandKind("straight", 1, { signals: true }),
+    "5,1": expandKind("straight", 1),
+    "6,1": expandKind("cross", 0, {
+      disable: [
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Right],
+        [Position.Right, Position.Bottom],
       ],
-    },
-    "5,2": {
-      component: "TileStraight",
-      x: 5,
-      y: 2,
-      rotation: 1,
-    },
-    "6,2": {
-      component: "TileIntersectionComplete",
-      x: 6,
-      y: 2,
-      disabledRoutes: {
-        [Position.Right]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-      activeRoutes: {
-        [Position.Left]: ActiveIntersection.Right,
-      },
-    },
-    "0,3": {
-      component: "TileCurve",
-      x: 0,
-      y: 3,
-    },
-    "1,3": {
-      component: "TileStraight",
-      x: 1,
-      y: 3,
-      rotation: 1,
-    },
-    "2,3": {
-      component: "TileIntersectionComplete",
-      x: 2,
-      y: 3,
-      disabledRoutes: {
-        [Position.Top]: [ActiveIntersection.Left, ActiveIntersection.Right],
-        [Position.Bottom]: [ActiveIntersection.Left, ActiveIntersection.Right],
-      },
-    },
-    "3,3": {
-      component: "TileStraight",
-      x: 3,
-      y: 3,
-      rotation: Rotations.Right,
-    },
-    "4,3": {
-      component: "TileIntersectionComplete",
-      x: 4,
-      y: 3,
-      disabledRoutes: {
-        [Position.Top]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Right,
-          ActiveIntersection.Straight,
-        ],
-      },
-    },
-    "5,3": {
-      component: "TileIntersectionComplete",
-      x: 5,
-      y: 3,
-      activeRoutes: {
-        [Position.Bottom]: ActiveIntersection.Left,
-      },
-      disabledRoutes: {
-        [Position.Top]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Right,
-          ActiveIntersection.Straight,
-        ],
-      },
-    },
-    "6,3": {
-      component: "TileIntersectionComplete",
-      x: 6,
-      y: 3,
-      disabledRoutes: {
-        [Position.Right]: [
-          ActiveIntersection.Left,
-          ActiveIntersection.Straight,
-          ActiveIntersection.Right,
-        ],
-      },
-      activeRoutes: {
-        [Position.Top]: ActiveIntersection.Straight,
-      },
-    },
-    "0,4": {
-      component: "TileDepot",
-      x: 0,
-      y: 4,
-      rotation: 1,
-      enableTrafficLight: true,
-    },
-    "1,4": {
-      component: "TileStraight",
-      x: 1,
-      y: 4,
-      rotation: 1,
-    },
-    "2,4": {
-      component: "TileIntersectionComplete",
-      x: 2,
-      y: 4,
-      activeRoutes: {
-        [Position.Right]: ActiveIntersection.Right,
-        [Position.Top]: ActiveIntersection.Left,
-        [Position.Left]: ActiveIntersection.Left,
-        [Position.Bottom]: ActiveIntersection.Straight,
-      },
-    },
-    "3,4": {
-      component: "TileStraight",
-      x: 3,
-      y: 4,
-      rotation: 1,
-    },
-    "4,4": {
-      component: "TileCurve",
-      x: 4,
-      y: 4,
-      rotation: 3,
-    },
-    "5,4": {
-      component: "TileDepot",
-      x: 5,
-      y: 4,
-      rotation: 0,
-    },
-    "6,4": {
-      component: "TileStraight",
-      x: 6,
-      y: 4,
-    },
-    "0,5": {
-      component: "",
-      x: 0,
-      y: 5,
-      rotation: 1,
-    },
-    "1,5": {
-      component: "",
-      x: 1,
-      y: 5,
-    },
-    "2,5": {
-      component: "TileCurve",
-      x: 2,
-      y: 5,
-    },
-    "3,5": {
-      component: "TileStraight",
-      x: 3,
-      y: 5,
-      rotation: 1,
-      trafficLights: [
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Forward,
-        },
-        {
-          signal: TrafficLightSignal.Red,
-          direction: TrafficLightDirection.Backward,
-        },
+    }),
+    "0,2": expandKind("straight", 0),
+    "1,2": expandKind("depot", 1),
+    "2,2": expandKind("cross", 0),
+    "3,2": expandKind("straight", 1),
+    "4,2": expandKind("straight", 1, { signals: true }),
+    "5,2": expandKind("straight", 1),
+    "6,2": expandKind("cross", 0, {
+      disable: [
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Right],
+        [Position.Right, Position.Bottom],
       ],
-    },
-    "4,5": {
-      component: "TileStraight",
-      x: 4,
-      y: 5,
-      rotation: 1,
-    },
-    "5,5": {
-      component: "TileStraight",
-      x: 5,
-      y: 5,
-      rotation: 1,
-    },
-    "6,5": {
-      component: "TileCurve",
-      x: 6,
-      y: 5,
-      rotation: 3,
-    },
+    }),
+    "0,3": expandKind("curve", 0),
+    "1,3": expandKind("straight", 1),
+    "2,3": expandKind("cross", 0, {
+      disable: [
+        [Position.Top, Position.Right],
+        [Position.Left, Position.Top],
+        [Position.Bottom, Position.Left],
+        [Position.Right, Position.Bottom],
+      ],
+    }),
+    "3,3": expandKind("straight", 1),
+    "4,3": expandKind("cross", 0, {
+      disable: [
+        [Position.Top, Position.Bottom],
+        [Position.Top, Position.Right],
+        [Position.Left, Position.Top],
+      ],
+    }),
+    "5,3": expandKind("cross", 0, {
+      disable: [
+        [Position.Top, Position.Bottom],
+        [Position.Top, Position.Right],
+        [Position.Left, Position.Top],
+      ],
+    }),
+    "6,3": expandKind("cross", 0, {
+      disable: [
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Right],
+        [Position.Right, Position.Bottom],
+      ],
+    }),
+    "0,4": expandKind("depot", 1),
+    "1,4": expandKind("straight", 1),
+    "2,4": expandKind("cross", 0),
+    "3,4": expandKind("straight", 1),
+    "4,4": expandKind("curve", 3),
+    "5,4": expandKind("depot", 0),
+    "6,4": expandKind("straight", 0),
+    "2,5": expandKind("curve", 0),
+    "3,5": expandKind("straight", 1, { signals: true }),
+    "4,5": expandKind("straight", 1),
+    "5,5": expandKind("straight", 1),
+    "6,5": expandKind("curve", 3),
   };
 
   // The authoritative game model + render loop (see game.ts), provided to the
@@ -558,6 +254,21 @@ class App extends Vue {
   beforeUnmount() {
     this.game.stop();
   }
+
+  // The full rectangular grid (row-major), so empty coords still occupy a cell
+  // and the flex-wrap layout keeps its shape even where the level has gaps.
+  get gridCells(): { key: string; tile: Level[string] | null }[] {
+    const out: { key: string; tile: Level[string] | null }[] = [];
+    for (let y = 0; y < this.levelSizeY; y++) {
+      for (let x = 0; x < this.config.levelSizeX; x++) {
+        const key = `${x},${y}`;
+        out.push({ key, tile: this.level[key] ?? null });
+      }
+    }
+    return out;
+  }
+
+  levelSizeY = 6;
 
   get paused(): boolean {
     return this.game.paused.value;
