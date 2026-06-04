@@ -212,6 +212,59 @@ describe("simulation per-unit spacing", () => {
   });
 });
 
+describe("simulation spaces cars by true arc length across curves", () => {
+  // A straight, a curve, then a straight. A curve tile's path is only ~0.81x as
+  // long as a straight, so spacing measured in normalised per-tile progress would
+  // bunch cars up (and overlap them) on curves. The sim must instead space them by
+  // real arc length: a coupler 0.5 tile of *arc* behind the head must sit further
+  // back (smaller t) on a curve segment than a normalised 0.5 would.
+  const curveLevel: LevelDefinition = {
+    "0,0": { x: 0, y: 0, component: "TileStraight", rotation: 0 }, // vertical Top<->Bottom
+    "0,1": { x: 0, y: 1, component: "TileCurve", rotation: 0 }, // Top<->Right
+    "1,1": { x: 1, y: 1, component: "TileStraight", rotation: 1 }, // horizontal Left<->Right
+    "2,1": { x: 2, y: 1, component: "TileStraight", rotation: 1 },
+  };
+
+  it("samples a coupler at its true arc distance behind the head, even over a curve", () => {
+    const sim = createSimulation({
+      level: curveLevel,
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Top,
+          color: "red",
+          type: "people",
+          wagonCount: 0, // loco only, length 0.5 tile, coupling 0
+          speed: 2,
+        },
+      ],
+    });
+
+    // Build the path through the curve onto the second straight (1,1).
+    for (let i = 0; i < 60 && sim.trains["t1"].path.length < 3; i++) sim.step(0.25);
+    expect(sim.trains["t1"].path.length).toBeGreaterThanOrEqual(3);
+
+    // Park the head deterministically 0.2 into the straight at (1,1).
+    sim.trains["t1"].headIndex = 2;
+    sim.trains["t1"].headProgress = 0.2;
+
+    const [loco] = sim.sampleTrain("t1");
+    // Front coupler is the head itself.
+    expect(loco.front.coord).toEqual({ x: 1, y: 1 });
+    expect(loco.front.t).toBeCloseTo(0.2, 5);
+
+    // Rear coupler is 0.5 tile of ARC behind. 0.2 of that is on the straight
+    // (0.2 of arc), the remaining 0.3 falls on the curve (length ~0.8116), so
+    // rear t = 1 - 0.3/0.8116 = ~0.6304 on the curve tile (0,1) — NOT 0.7, which
+    // is the wrong, normalised-per-tile answer that bunched cars up.
+    const curveLen = 0.8116;
+    expect(loco.rear.coord).toEqual({ x: 0, y: 1 });
+    expect(loco.rear.t).toBeCloseTo(1 - 0.3 / curveLen, 2);
+    expect(loco.rear.t).toBeLessThan(0.7); // arc-correct sits further back than normalised
+  });
+});
+
 describe("simulation occupancy / collisions", () => {
   it("never lets a train enter a tile occupied by another train", () => {
     const sim = createSimulation({

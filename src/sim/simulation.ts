@@ -7,6 +7,7 @@ import {
   routeToNextSignal,
 } from "./network";
 import { getCoordinatesId } from "@/utils/tileHelpers";
+import { segmentLength } from "./pathGeometry";
 import { trainDynamics } from "./physics";
 
 export interface Segment {
@@ -493,32 +494,46 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     sampleTrain(id: string) {
       const train = trains[id];
-      const headDistance = train.headIndex + train.headProgress;
-      const sampleAt = (distance: number): SampledUnit => {
-        const clamped = Math.max(0, Math.min(distance, headDistance));
-        let idx = Math.floor(clamped);
-        let t = clamped - idx;
-        if (idx >= train.path.length) {
-          idx = train.path.length - 1;
-          t = 1;
-        }
+      const segLen = (idx: number): number => {
+        const s = train.path[idx];
+        return segmentLength(s.entryPort, s.exitPort ?? s.entryPort, 1);
+      };
+      const point = (idx: number, t: number): SampledUnit => {
         const seg = train.path[idx];
-        return {
-          coord: seg.coord,
-          entryPort: seg.entryPort,
-          exitPort: seg.exitPort,
-          t,
-        };
+        return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t };
+      };
+      // Sample the point that lies `arcBack` of *true path arc length* behind the
+      // head, walking segment by segment and subtracting each segment's real
+      // length. Curve tiles are ~0.81× a straight, so this keeps coupled cars the
+      // intended pixel distance apart instead of bunching up on curves (which
+      // happened when distance was counted in normalised per-tile units).
+      const sampleAtArc = (arcBack: number): SampledUnit => {
+        let idx = train.headIndex;
+        // Arc length from the current segment's start up to the head.
+        const withinHead = train.headProgress * segLen(idx);
+        let remaining = Math.max(0, arcBack);
+        if (remaining <= withinHead) {
+          return point(idx, (withinHead - remaining) / segLen(idx));
+        }
+        remaining -= withinHead;
+        idx -= 1;
+        while (idx >= 0) {
+          const L = segLen(idx);
+          if (remaining <= L) return point(idx, 1 - remaining / L);
+          remaining -= L;
+          idx -= 1;
+        }
+        return point(0, 0); // before the start of the recorded path
       };
       // Each unit is sampled as its two coupler points: front at (centre offset
-      // − half its length) back from the head, rear at (offset + half length).
-      // Distances reflect real sprite lengths (+ coupling gap), so consecutive
-      // cars meet at shared couplers and the renderer can draw each as a chord.
+      // − half its length) of arc behind the head, rear at (offset + half).
+      // Spacing is in real arc length, so consecutive cars meet at shared
+      // couplers and the renderer can draw each as a chord.
       return train.unitOffsets.map((offset, i) => {
         const half = train.unitLengths[i] / 2;
         return {
-          front: sampleAt(headDistance - (offset - half)),
-          rear: sampleAt(headDistance - (offset + half)),
+          front: sampleAtArc(offset - half),
+          rear: sampleAtArc(offset + half),
         };
       });
     },
