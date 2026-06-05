@@ -1,6 +1,6 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection } from "@/types";
-import { Level, partnersOf, armExit } from "@/tiles/model";
+import { Level, partnersOf, armExit, parseCoordId } from "@/tiles/model";
 import {
   createSimulation,
   Simulation,
@@ -8,6 +8,7 @@ import {
   UnitChord,
   SimEvent,
 } from "@/sim/simulation";
+import { createRoadSim, roadEntries } from "@/sim/road";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
@@ -61,6 +62,14 @@ function initialSwitches(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+// A road-traffic car sampled to a world position for rendering.
+export interface RoadCar {
+  id: string;
+  x: number;
+  y: number;
+  angle: number;
+}
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -76,6 +85,8 @@ export interface Game {
   reservations: Record<string, string>;
   // tileId -> trainId physically on it right now (switch lock).
   occupied: Record<string, string>;
+  // Road-traffic cars, sampled to world positions each frame for rendering.
+  roadCars: RoadCar[];
   // Newest-last activity log of decision-level simulation events (reservations,
   // holds, deliveries) for the debug panel. Capped to the most recent entries.
   eventLog: GameLogEntry[];
@@ -165,6 +176,31 @@ export function createGame(
     getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
     signalTiles,
   });
+
+  // Road traffic: a deterministic car simulation over the level's `road` layer,
+  // running alongside the train sim. Cars spawn one-way (from Bottom/Left
+  // openings only) so a single-lane road can't head-on deadlock until a road
+  // direction model exists. The crossing gate is the train reservation/occupancy
+  // on that tile — no new interlocking.
+  let roadW = 0;
+  let roadH = 0;
+  for (const id of Object.keys(level)) {
+    const { x, y } = parseCoordId(id);
+    roadW = Math.max(roadW, x + 1);
+    roadH = Math.max(roadH, y + 1);
+  }
+  const allRoadEntries = roadEntries(level, roadW, roadH);
+  const oneWayEntries = allRoadEntries.filter(
+    e => e.entryPort === Position.Bottom || e.entryPort === Position.Left
+  );
+  const roadSim = createRoadSim({
+    level,
+    width: roadW,
+    height: roadH,
+    seed: colorSeed,
+    spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
+  });
+  const roadCars = reactive([]) as RoadCar[];
 
   const unitIds: Record<string, string[]> = {};
   for (const def of trainDefs) unitIds[def.id] = [def.id, ...def.wagonIds];
@@ -285,6 +321,28 @@ export function createGame(
     }
   }
 
+  // Sample each live car to a world position (reusing the train chord placement)
+  // and reconcile the reactive list by id so Vue reuses the car DOM nodes.
+  function updateRoadCars() {
+    const samples = roadSim.sample();
+    const seen = new Set<string>();
+    for (const s of samples) {
+      seen.add(s.id);
+      const { x, y, angle } = positionUnit(s as unknown as UnitChord);
+      const existing = roadCars.find(c => c.id === s.id);
+      if (existing) {
+        existing.x = x;
+        existing.y = y;
+        existing.angle = angle;
+      } else {
+        roadCars.push({ id: s.id, x, y, angle });
+      }
+    }
+    for (let i = roadCars.length - 1; i >= 0; i--) {
+      if (!seen.has(roadCars[i].id)) roadCars.splice(i, 1);
+    }
+  }
+
   // Activity log: newest-last, capped to the most recent MAX_LOG entries so it
   // can't grow without bound over a long session.
   const MAX_LOG = 200;
@@ -313,8 +371,11 @@ export function createGame(
       const scaled = dt * speed.value;
       clock += scaled;
       handleEvents(sim.step(scaled));
+      // A crossing is closed while a train reserves or sits on that tile.
+      roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
     }
     renderTrains();
+    updateRoadCars();
     updateSignalAspects();
     updateReservations();
     raf = requestAnimationFrame(frame);
@@ -331,6 +392,7 @@ export function createGame(
     signalOverrides,
     reservations,
     occupied,
+    roadCars,
     eventLog,
     paused,
     speed,

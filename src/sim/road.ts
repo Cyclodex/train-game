@@ -147,6 +147,11 @@ export interface RoadSimConfig {
   carLength?: number;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
   maxCars?: number;
+  // Spawn only from these entries instead of every map-edge road opening. Used to
+  // make a single-lane road effectively one-way (spawn from one end only), which
+  // avoids a head-on deadlock on a shared straight road until a direction model
+  // exists. Defaults to all auto-detected entries.
+  spawnEntries?: RoadEntry[];
 }
 
 export interface RoadSim {
@@ -169,7 +174,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
   const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
 
-  const entries = roadEntries(level, width, height);
+  const entries = config.spawnEntries ?? roadEntries(level, width, height);
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;

@@ -88,15 +88,19 @@ export const DEFAULT_LEVEL: Level = {
     ],
   }),
   "0,4": expandKind("depot", 1),
-  "1,4": expandKind("straight", 1),
+  // Level crossing (Bahnübergang): horizontal rail on train1's route, with a
+  // vertical road crossing it. The road continues down into the road-only tile
+  // 1,5 so cars approach and queue from below; the gate derives from the train
+  // reservation on this tile.
+  "1,4": { ...expandKind("straight", 1), road: [[Position.Top, Position.Bottom]] },
   "2,4": expandKind("cross", 0),
-  // Level crossing (Bahnübergang) stub: horizontal rail (on train1's route)
-  // with a vertical road crossing it. The road layer is the shared seam
-  // (`road?: PortPair[]`); PlayView overlays the crossing furniture + cars.
-  "3,4": { ...expandKind("straight", 1), road: [[Position.Top, Position.Bottom]] },
+  "3,4": expandKind("straight", 1),
   "4,4": expandKind("curve", 3),
   "5,4": expandKind("depot", 0),
   "6,4": expandKind("straight", 0),
+  // Road-only tile feeding the level crossing at 1,4 from below (cars approach
+  // and queue here). No rail, so it is plain road, not a crossing.
+  "1,5": { connections: [], road: [[Position.Top, Position.Bottom]] },
   "2,5": expandKind("curve", 0),
   "3,5": expandKind("straight", 1, { signals: true }),
   "4,5": expandKind("straight", 1),

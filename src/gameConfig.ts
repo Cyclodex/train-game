@@ -44,6 +44,6 @@ export const gameConfig: GameConfig = reactive({
   railDistanceFromPath: 7,
   switchLockMode: "off",
   colorSeed: 1,
-  roads: false,
+  roads: true,
   roadScoring: false,
 });
