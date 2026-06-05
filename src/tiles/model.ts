@@ -20,6 +20,13 @@ export interface TileCell {
   role?: "depot";
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
+  // Road layer: port pairs describing a road crossing this cell, in the SAME
+  // port space as rail `connections` but on a separate, non-connecting layer.
+  // A cell may carry road without rail (a plain road tile) or both (a level
+  // crossing). Cars traverse `road`; trains traverse `connections`; the two only
+  // interact at a crossing via the gate (derived from rail reservation). See
+  // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
+  road?: PortPair[];
 }
 
 export type Level = Record<string, TileCell>;
@@ -141,4 +148,24 @@ export function kindOf(cell: TileCell): TileKind {
     return a === oppositePort(b) ? "straight" : "curve";
   }
   return "tjunction";
+}
+
+// --- Road layer helpers ------------------------------------------------------
+// The road layer reuses the same Port space and rotation helpers as rail; these
+// are the small derivations both the crossing stub and the full road system
+// share. Keep routing/geometry derived from `road` the same way rail derives
+// from `connections`.
+
+// True when the cell carries any road. A pure road tile has connections:[] and a
+// non-empty road; a level crossing has both.
+export function hasRoad(cell: TileCell): boolean {
+  return (cell.road?.length ?? 0) > 0;
+}
+
+// True when rail and road both pass through this cell — i.e. a level crossing.
+// Rail must be real edge track (not just a Center stub) and road must exist.
+export function isLevelCrossing(cell: TileCell): boolean {
+  if (!hasRoad(cell)) return false;
+  const railEdges = portsOf(cell.connections).filter(p => p !== Position.Center);
+  return railEdges.length > 0;
 }

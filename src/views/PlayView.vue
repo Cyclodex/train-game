@@ -65,6 +65,12 @@
           class="tile-component"
         />
       </div>
+      <Crossing
+        v-for="c in crossings"
+        :key="`crossing-${c.key}`"
+        :coord-id="c.key"
+        :cell="c.cell"
+      />
     </div>
     <div
       v-if="config.debug"
@@ -119,10 +125,11 @@ import {
   SwitchLockMode,
 } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
-import { Level } from "@/tiles/model";
+import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
+import Crossing from "@/components/Crossing.vue";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -134,7 +141,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   }));
 }
 
-@Component
+@Component({ components: { Crossing } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -181,6 +188,14 @@ class PlayView extends Vue {
       }
     }
     return out;
+  }
+
+  // Level-crossing cells (rail + road on the same tile) — overlaid with the
+  // crossing furniture + cars. Derived from the shared `road?` seam.
+  get crossings(): { key: string; cell: TileCell }[] {
+    return Object.entries(this.level)
+      .filter(([, cell]) => isLevelCrossing(cell))
+      .map(([key, cell]) => ({ key, cell }));
   }
 
   get paused(): boolean {

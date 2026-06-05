@@ -90,7 +90,10 @@ export const DEFAULT_LEVEL: Level = {
   "0,4": expandKind("depot", 1),
   "1,4": expandKind("straight", 1),
   "2,4": expandKind("cross", 0),
-  "3,4": expandKind("straight", 1),
+  // Level crossing (Bahnübergang) stub: horizontal rail (on train1's route)
+  // with a vertical road crossing it. The road layer is the shared seam
+  // (`road?: PortPair[]`); PlayView overlays the crossing furniture + cars.
+  "3,4": { ...expandKind("straight", 1), road: [[Position.Top, Position.Bottom]] },
   "4,4": expandKind("curve", 3),
   "5,4": expandKind("depot", 0),
   "6,4": expandKind("straight", 0),

@@ -4,6 +4,27 @@
     :class="[kindClass, { 'tile-depot': isDepot }, isDepot ? depotFacingClass : '']"
     :style="reservationStyle"
   >
+    <!-- Road layer (under the rails): paved surface + dashed lane marking,
+         derived from the cell's `road` pairs. Only when roads are enabled. -->
+    <svg
+      v-if="config.roads && roadPaths.length"
+      class="road-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path
+        v-for="(r, i) in roadPaths"
+        :key="'rs' + i"
+        :d="r.surface"
+        class="road-surface"
+      />
+      <path
+        v-for="(r, i) in roadPaths"
+        :key="'rm' + i"
+        :d="r.marking"
+        class="road-marking"
+      />
+    </svg>
+
     <TileRail :possible-routes="railRoutes" />
 
     <!-- Signals (straights only) -->
@@ -117,6 +138,7 @@ import {
 } from "@/tiles/model";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
+import { roadSurfacePath, roadMarkingPath } from "@/tiles/roadGeometry";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -152,6 +174,16 @@ class Tile extends Vue {
       path: segmentPathD(a, b, size),
       rails: railPathsFor(a, b, size, off),
       leavesAtPosition: b,
+    }));
+  }
+
+  // Road surface + lane-marking paths for every road pair on the cell, derived
+  // from `road` the same way railRoutes derives from `connections`.
+  get roadPaths(): { surface: string; marking: string }[] {
+    const size = this.config.tileSize;
+    return (this.tile.road ?? []).map(([a, b]) => ({
+      surface: roadSurfacePath(a, b, size),
+      marking: roadMarkingPath(a, b, size),
     }));
   }
 
@@ -250,6 +282,32 @@ export default toNative(Tile);
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+/* --- road layer (under the rails) --- */
+.road-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1; // under TileRail; the rails cross over the road at a crossing
+  pointer-events: none;
+  overflow: visible;
+}
+.road-surface {
+  fill: none;
+  stroke: #4a4a4a;
+  // A wide paved ribbon. ~28% of a tile reads as a two-lane road next to the
+  // rail gauge; with butt caps the surface stops cleanly at the tile edge.
+  stroke-width: 56px;
+  stroke-linecap: butt;
+}
+.road-marking {
+  fill: none;
+  stroke: #f4d35e;
+  stroke-width: 3px;
+  stroke-dasharray: 14 12;
+  stroke-linecap: butt;
 }
 
 /* --- signals (from TileStraight.vue) --- */

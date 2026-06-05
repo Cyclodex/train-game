@@ -1,0 +1,328 @@
+import { Coordinates, Position } from "@/types";
+import { Level, partnersOf } from "@/tiles/model";
+import { Port, neighborCoord, oppositePort } from "./topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
+import { segmentLength } from "./pathGeometry";
+import { makeRng } from "@/utils/globalHelpers";
+
+// --- Road traversal ----------------------------------------------------------
+// Cars walk the road port-graph exactly like trains walk the rail graph
+// (network.ts traverse()), but reading a cell's `road` pairs instead of its
+// `connections`. Roads have no switches in this first cut: a road tile is a
+// straight or a curve (a single partner per entry); where a road port has
+// several partners (a junction) we pick the first deterministically.
+
+export interface RoadTraversal {
+  // The port the car leaves the current tile through, or null if the road has
+  // no pair using the entry port.
+  exitPort: Port | null;
+  // The next tile and the port the car enters it through, or null at a map edge
+  // / road end (the car despawns there).
+  next: { coord: Coordinates; entryPort: Port } | null;
+}
+
+function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port | null {
+  const tile = level[getCoordinatesId(coord)];
+  if (!tile || !tile.road || tile.road.length === 0) return null;
+  const partners = partnersOf(tile.road, entryPort);
+  if (partners.length === 0) return null;
+  // Single partner (straight/curve) — or pick the first for a road junction.
+  return partners[0];
+}
+
+export function roadTraverse(
+  level: Level,
+  coord: Coordinates,
+  entryPort: Port
+): RoadTraversal {
+  const exitPort = roadExitPort(level, coord, entryPort);
+  if (exitPort === null) return { exitPort: null, next: null };
+
+  const nextCoord = neighborCoord(coord, exitPort);
+  if (!nextCoord) return { exitPort, next: null }; // Center has no neighbour
+
+  const nextTile = level[getCoordinatesId(nextCoord)];
+  if (!nextTile || !nextTile.road || nextTile.road.length === 0)
+    return { exitPort, next: null }; // road runs off the map / dead-ends
+  // The next tile must actually carry road back to us, else it's not connected.
+  if (partnersOf(nextTile.road, oppositePort(exitPort)).length === 0)
+    return { exitPort, next: null };
+
+  return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
+}
+
+// --- Spawn points -------------------------------------------------------------
+// A car spawns where a road opens onto the map edge: a road port that points off
+// the grid (no in-grid road neighbour to continue onto). Cars enter there and
+// drive inward.
+
+export interface RoadEntry {
+  coord: Coordinates;
+  entryPort: Port; // the edge the car enters through (an open road port)
+}
+
+const EDGES: Port[] = [
+  Position.Top,
+  Position.Right,
+  Position.Bottom,
+  Position.Left,
+];
+
+export function roadEntries(level: Level, width: number, height: number): RoadEntry[] {
+  const out: RoadEntry[] = [];
+  for (const [id, tile] of Object.entries(level)) {
+    if (!tile.road || tile.road.length === 0) continue;
+    const [xs, ys] = id.split(",").map(Number);
+    const coord = { x: xs, y: ys };
+    for (const port of EDGES) {
+      // `port` is a road port of this tile and points off the grid (no in-grid
+      // road neighbour continuing the road there) -> a spawn entry.
+      if (partnersOf(tile.road, port).length === 0) continue;
+      const n = neighborCoord(coord, port)!;
+      const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
+      const neigh = level[getCoordinatesId(n)];
+      const neighRoad =
+        !offGrid && neigh?.road && partnersOf(neigh.road, oppositePort(port)).length > 0;
+      if (offGrid || !neighRoad) {
+        out.push({ coord, entryPort: port });
+      }
+    }
+  }
+  // Deterministic order (sorted by coord then port) so seeded spawns are stable.
+  out.sort((a, b) => {
+    const ka = `${a.coord.x},${a.coord.y},${a.entryPort}`;
+    const kb = `${b.coord.x},${b.coord.y},${b.entryPort}`;
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  return out;
+}
+
+// --- Cars ---------------------------------------------------------------------
+
+export interface RoadSegment {
+  coord: Coordinates;
+  entryPort: Port;
+  exitPort: Port | null;
+}
+
+export interface Car {
+  id: string;
+  speed: number; // tiles/sec
+  length: number; // body length in tiles (for the front/rear render chord)
+  path: RoadSegment[];
+  headIndex: number;
+  headProgress: number; // 0..1 within path[headIndex]
+}
+
+// A car sampled as its two anchor points along the recent path (front toward the
+// direction of travel, rear behind), mirroring the train UnitChord so the
+// renderer draws + angles it the same way.
+export interface CarSample {
+  coord: Coordinates;
+  entryPort: Port;
+  exitPort: Port | null;
+  t: number; // 0..1 progress within the tile segment
+}
+export interface CarChord {
+  id: string;
+  front: CarSample;
+  rear: CarSample;
+}
+
+// Closed ⇔ this tile is a crossing reserved/occupied by a train. Supplied by the
+// caller (simulation.ts) from the existing rail reservation/occupancy — no new
+// interlocking lives here.
+export type CrossingClosed = (tileId: string) => boolean;
+
+export interface RoadSimConfig {
+  level: Level;
+  width: number;
+  height: number;
+  seed?: number;
+  // Mean seconds between spawn attempts at each entry (a Poisson-ish gate via the
+  // seeded RNG). Smaller = busier roads.
+  spawnInterval?: number;
+  // Car cruise speed in tiles/sec and body length in tiles. Defaults below.
+  carSpeed?: number;
+  carLength?: number;
+  // Cap so a busy junction of entries can't spawn an unbounded number of cars.
+  maxCars?: number;
+}
+
+export interface RoadSim {
+  step(dt: number, closed: CrossingClosed): void;
+  cars(): { id: string; tileId: string; headIndex: number; headProgress: number }[];
+  // Each live car sampled as a front/rear chord for the renderer.
+  sample(): CarChord[];
+}
+
+const DEFAULT_SPAWN_INTERVAL = 2.5;
+const DEFAULT_CAR_SPEED = 0.6;
+const DEFAULT_CAR_LENGTH = 0.4;
+const DEFAULT_MAX_CARS = 40;
+
+export function createRoadSim(config: RoadSimConfig): RoadSim {
+  const { level, width, height } = config;
+  const rng = makeRng(config.seed ?? 1);
+  const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
+  const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
+  const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
+  const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
+
+  const entries = roadEntries(level, width, height);
+  const cars: Car[] = [];
+  let nextId = 0;
+  let spawnClock = 0;
+
+  const tileIdOf = (c: Car): string => getCoordinatesId(c.path[c.headIndex].coord);
+
+  // Tiles a car's body currently covers (head tile back to wherever its tail is).
+  // The body is short (< 1 tile by default), so this is the head tile plus the
+  // previous one while the head is still near the boundary it just crossed.
+  function bodyTileIds(car: Car): Set<string> {
+    const headDistance = car.headIndex + car.headProgress;
+    const tailDistance = headDistance - car.length;
+    const tailIndex = Math.max(0, Math.floor(tailDistance + 1e-9));
+    const ids = new Set<string>();
+    for (let i = tailIndex; i <= car.headIndex; i++) {
+      const seg = car.path[i];
+      if (seg) ids.add(getCoordinatesId(seg.coord));
+    }
+    return ids;
+  }
+
+  function tileOccupiedByOther(tileId: string, self: Car): boolean {
+    for (const c of cars) {
+      if (c === self) continue;
+      if (bodyTileIds(c).has(tileId)) return true;
+    }
+    return false;
+  }
+
+  // Whether `car` may cross out of its head tile into the next road tile. Blocked
+  // by a road end, a closed crossing on the tile being entered, or that tile
+  // being occupied by another car (the occupancy gate — cars wait, never crash).
+  function mayCross(car: Car, closed: CrossingClosed): boolean {
+    const head = car.path[car.headIndex];
+    const t = roadTraverse(level, head.coord, head.entryPort);
+    if (!t.next) return false; // road end / map edge — despawn handled by caller
+    const nextId = getCoordinatesId(t.next.coord);
+    if (closed(nextId)) return false; // closed crossing: hold
+    if (tileOccupiedByOther(nextId, car)) return false; // occupancy gate
+    return true;
+  }
+
+  function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
+    car.headProgress += car.speed * dt;
+    while (car.headProgress >= 1) {
+      const head = car.path[car.headIndex];
+      const t = roadTraverse(level, head.coord, head.entryPort);
+      if (!t.next) {
+        // Reached a road end / map edge: the car has driven its head off the
+        // grid — signal the caller to despawn it.
+        return false;
+      }
+      if (!mayCross(car, closed)) {
+        car.headProgress = 1; // hold at the stop line before the next tile
+        break;
+      }
+      const exit = roadExitPort(level, t.next.coord, t.next.entryPort);
+      car.path.push({
+        coord: t.next.coord,
+        entryPort: t.next.entryPort,
+        exitPort: exit,
+      });
+      car.headIndex += 1;
+      car.headProgress -= 1;
+    }
+    return true;
+  }
+
+  function trySpawn(closed: CrossingClosed): void {
+    if (entries.length === 0 || cars.length >= maxCars) return;
+    // Pick an entry deterministically; only spawn if its tile is free (no car on
+    // it and not a closed crossing) so we never spawn into another car.
+    const entry = entries[Math.floor(rng() * entries.length)];
+    const id = getCoordinatesId(entry.coord);
+    if (closed(id)) return;
+    for (const c of cars) {
+      if (bodyTileIds(c).has(id)) return; // entry tile occupied
+    }
+    const exit = roadExitPort(level, entry.coord, entry.entryPort);
+    cars.push({
+      id: `car${nextId++}`,
+      speed: carSpeed,
+      length: carLength,
+      path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
+      headIndex: 0,
+      headProgress: 0,
+    });
+  }
+
+  function segLen(seg: RoadSegment): number {
+    return segmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
+  }
+
+  function sampleAtArc(car: Car, arcBack: number): CarSample {
+    let idx = car.headIndex;
+    const withinHead = car.headProgress * segLen(car.path[idx]);
+    let remaining = Math.max(0, arcBack);
+    if (remaining <= withinHead) {
+      const seg = car.path[idx];
+      return {
+        coord: seg.coord,
+        entryPort: seg.entryPort,
+        exitPort: seg.exitPort,
+        t: (withinHead - remaining) / segLen(seg),
+      };
+    }
+    remaining -= withinHead;
+    idx -= 1;
+    while (idx >= 0) {
+      const L = segLen(car.path[idx]);
+      const seg = car.path[idx];
+      if (remaining <= L)
+        return {
+          coord: seg.coord,
+          entryPort: seg.entryPort,
+          exitPort: seg.exitPort,
+          t: 1 - remaining / L,
+        };
+      remaining -= L;
+      idx -= 1;
+    }
+    const seg = car.path[0];
+    return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t: 0 };
+  }
+
+  return {
+    step(dt: number, closed: CrossingClosed) {
+      spawnClock += dt;
+      // One spawn attempt per spawnInterval of sim time (deterministic cadence).
+      while (spawnClock >= spawnInterval) {
+        spawnClock -= spawnInterval;
+        trySpawn(closed);
+      }
+      // Advance cars in a stable order; despawn any that drove off the map.
+      for (let i = cars.length - 1; i >= 0; i--) {
+        const alive = advance(cars[i], dt, closed);
+        if (!alive) cars.splice(i, 1);
+      }
+    },
+    cars() {
+      return cars.map(c => ({
+        id: c.id,
+        tileId: tileIdOf(c),
+        headIndex: c.headIndex,
+        headProgress: c.headProgress,
+      }));
+    },
+    sample() {
+      return cars.map(c => ({
+        id: c.id,
+        front: sampleAtArc(c, 0),
+        rear: sampleAtArc(c, c.length),
+      }));
+    },
+  };
+}
