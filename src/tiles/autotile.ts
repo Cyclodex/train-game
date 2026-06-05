@@ -1,7 +1,5 @@
 import { Position } from "@/types";
-import { Level, Port, PortPair, TileCell, parseCoordId } from "@/tiles/model";
-import { neighborCoord } from "@/sim/topology";
-import { getCoordinatesId } from "@/utils/tileHelpers";
+import { Port, PortPair, TileCell } from "@/tiles/model";
 
 // What the player painted onto a cell. Track auto-derives its connections from
 // its connectable neighbours; a depot keeps its explicit facing; empty clears.
@@ -55,70 +53,4 @@ export function deriveConnections(
   if (edges.length === 1) return { connections: [[edges[0], Position.Center]] };
   if (edges.length === 2) return { connections: [[edges[0], edges[1]]] };
   return { connections: allPairs(edges) };
-}
-
-// A painted grid: cell id -> what the player put there. Cells absent from the
-// map are empty.
-export type PaintMap = Record<string, CellInput>;
-
-function edgeToward(from: string, to: string): Port | null {
-  const a = parseCoordId(from);
-  for (const e of EDGES) {
-    const n = neighborCoord(a, e)!;
-    if (getCoordinatesId(n) === to) return e;
-  }
-  return null;
-}
-
-// Build a whole Level from a paint map via auto-tiling. Two passes so depot
-// facings (toward an adjacent track) are known before track cells decide which
-// edges connect to those depots.
-//   - A depot faces the first adjacent track cell (default Top if none).
-//   - A track cell connects to an edge if that neighbour is track, or is a depot
-//     facing back toward this cell.
-export function deriveLevel(paint: PaintMap): Level {
-  const kindAt = (id: string): PaintKind => paint[id]?.paint ?? "empty";
-
-  // Pass 1: depot facings.
-  const facing: Record<string, Port> = {};
-  for (const [id, cell] of Object.entries(paint)) {
-    if (cell.paint !== "depot") continue;
-    let f: Port = cell.facing ?? Position.Top;
-    if (cell.facing === undefined) {
-      const coord = parseCoordId(id);
-      for (const e of EDGES) {
-        const n = getCoordinatesId(neighborCoord(coord, e)!);
-        if (kindAt(n) === "track") {
-          f = e;
-          break;
-        }
-      }
-    }
-    facing[id] = f;
-  }
-
-  // Pass 2: build every cell.
-  const level: Level = {};
-  for (const [id, cell] of Object.entries(paint)) {
-    if (cell.paint === "empty") continue;
-    if (cell.paint === "depot") {
-      level[id] = deriveConnections({ paint: "depot", facing: facing[id] }, {});
-      continue;
-    }
-    // track
-    const coord = parseCoordId(id);
-    const connectable: Connectable = {};
-    for (const e of EDGES) {
-      const nId = getCoordinatesId(neighborCoord(coord, e)!);
-      const nk = kindAt(nId);
-      if (nk === "track") connectable[e] = true;
-      else if (nk === "depot") {
-        // Connect only if the depot faces back toward this cell.
-        const back = edgeToward(nId, id);
-        if (back !== null && facing[nId] === back) connectable[e] = true;
-      }
-    }
-    level[id] = deriveConnections({ paint: "track" }, connectable);
-  }
-  return level;
 }

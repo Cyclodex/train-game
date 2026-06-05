@@ -164,10 +164,7 @@ class Tile extends Vue {
 
   // --- signals ---
   get signalLights() {
-    if (!this.tile.signals) return [];
-    const exits = portsOf(this.tile.connections).filter(
-      p => p !== Position.Center
-    );
+    const exits = this.tile.signals ?? [];
     return exits.map(exitPort => ({
       exitPort,
       aspect:

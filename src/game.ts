@@ -1,6 +1,6 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection } from "@/types";
-import { Level, partnersOf, armExit, portsOf } from "@/tiles/model";
+import { Level, partnersOf, armExit } from "@/tiles/model";
 import {
   createSimulation,
   Simulation,
@@ -101,9 +101,9 @@ export function createGame(
     Record<number, ActiveIntersection>
   >;
 
-  // Tiles that carry a signal (block boundaries) — from the cell's signals flag.
+  // Tiles that carry a signal (block boundaries) — any cell with signal ports.
   const signalTiles = Object.entries(level)
-    .filter(([, tile]) => tile.signals)
+    .filter(([, tile]) => tile.signals && tile.signals.length > 0)
     .map(([id]) => id);
 
   // Reactive signal aspects for rendering, keyed `${tileId}:${exitPort}`. The
@@ -213,13 +213,9 @@ export function createGame(
     }
   }
 
-  // The exit ports of a signal tile = the ports its connections use (a straight
-  // has exactly two). Signals only sit on straights, so this yields the two
-  // directions of travel.
+  // The exit ports a signal tile carries a signal for (per-direction).
   function signalExits(tileId: string): Position[] {
-    const tile = level[tileId];
-    if (!tile) return [];
-    return portsOf(tile.connections).filter(p => p !== Position.Center);
+    return level[tileId]?.signals ?? [];
   }
 
   function updateSignalAspects() {

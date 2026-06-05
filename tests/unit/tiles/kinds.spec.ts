@@ -31,8 +31,13 @@ describe("expandKind", () => {
     expect(expandKind("cross", 0).connections).toHaveLength(6);
   });
 
-  it("signals option sets the flag", () => {
-    expect(expandKind("straight", 1, { signals: true }).signals).toBe(true);
+  it("signals:true puts a signal on both (non-Center) exit ports", () => {
+    const c = expandKind("straight", 1, { signals: true });
+    expect(c.signals?.slice().sort()).toEqual([Right, Left].sort());
+  });
+
+  it("signals accepts an explicit port list", () => {
+    expect(expandKind("straight", 0, { signals: [Top] }).signals).toEqual([Top]);
   });
 
   it("disable removes the named pairs from a cross", () => {

@@ -18,7 +18,8 @@ export type TileKind =
 export interface TileCell {
   connections: PortPair[];
   role?: "depot";
-  signals?: boolean;
+  // Exit ports that carry a signal (per-direction). Empty/undefined = none.
+  signals?: Port[];
 }
 
 export type Level = Record<string, TileCell>;

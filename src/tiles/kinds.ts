@@ -1,7 +1,9 @@
 import { Position } from "@/types";
 import {
+  Port,
   PortPair,
   TileCell,
+  portsOf,
   rotateConnections,
   samePair,
 } from "@/tiles/model";
@@ -34,7 +36,8 @@ const BASE: Record<string, PortPair[]> = {
 export type AuthorKind = keyof typeof BASE;
 
 export interface KindOptions {
-  signals?: boolean;
+  // `true` puts a signal on every (non-Center) exit port; or pass explicit ports.
+  signals?: boolean | Port[];
   disable?: PortPair[]; // pairs (at the final rotation) to remove
 }
 
@@ -55,6 +58,10 @@ export function expandKind(
   }
   const cell: TileCell = { connections };
   if (kind === "depot") cell.role = "depot";
-  if (opts.signals) cell.signals = true;
+  if (opts.signals === true) {
+    cell.signals = portsOf(connections).filter(p => p !== Center);
+  } else if (Array.isArray(opts.signals)) {
+    cell.signals = opts.signals;
+  }
   return cell;
 }

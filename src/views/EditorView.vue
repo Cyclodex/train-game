@@ -3,20 +3,19 @@
     <div class="toolbar">
       <router-link class="nav-link" to="/play">▶ Play</router-link>
       <span class="group">
-        <button :class="{ active: tool === 'track' }" @click="tool = 'track'">
-          Track
-        </button>
-        <button :class="{ active: tool === 'depot' }" @click="tool = 'depot'">
-          Depot
-        </button>
-        <button :class="{ active: tool === 'erase' }" @click="tool = 'erase'">
-          Erase
+        <button
+          v-for="t in tools"
+          :key="t"
+          :class="{ active: tool === t }"
+          @click="tool = t"
+        >
+          {{ t }}
         </button>
       </span>
       <span class="group">
         <button @click="randomMap">🎲 Random</button>
         <button @click="clearAll">Clear</button>
-        <button @click="playThis" :disabled="!canPlay">Play this →</button>
+        <button :disabled="!canPlay" @click="playThis">Play this →</button>
       </span>
       <span class="group">
         <button @click="exportJson">Export</button>
@@ -24,15 +23,17 @@
       </span>
       <span class="status" :class="{ 'status--bad': !valid.ok }">
         {{ valid.ok ? "✓ valid" : valid.issues.length + " issue(s)" }}
-        <template v-if="depotCount"> · {{ depotCount }} depots</template>
+        <template v-if="depotIds.length"> · {{ depotIds.length }} depots</template>
       </span>
     </div>
+
+    <div class="hint">{{ hint }}</div>
 
     <div
       class="level editor-grid"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
-      @mouseleave="painting = false"
-      @mouseup="painting = false"
+      @mouseup="dragFrom = null"
+      @mouseleave="dragFrom = null"
     >
       <div
         v-for="cell in gridCells"
@@ -44,8 +45,7 @@
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
         }"
-        @mousedown="onDown(cell.key)"
-        @mouseenter="onEnter(cell.key)"
+        @click="onCellClick(cell.key)"
       >
         <Tile
           v-if="cell.tile"
@@ -53,6 +53,42 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+
+        <svg
+          class="overlay"
+          :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+        >
+          <!-- Deletable connection hit-paths (connect mode) -->
+          <template v-if="tool === 'connect' && cell.tile">
+            <path
+              v-for="(conn, i) in cell.tile.connections"
+              :key="'c' + i"
+              :d="connPath(conn)"
+              class="conn-hit"
+              @click.stop="deleteConn(cell.key, conn)"
+            />
+          </template>
+
+          <!-- Port dots (connect + signal modes) -->
+          <template v-if="tool === 'connect' || tool === 'signal'">
+            <circle
+              v-for="p in EDGES"
+              :key="'p' + p"
+              :data-port="p"
+              :cx="dot(p).x"
+              :cy="dot(p).y"
+              r="12"
+              class="port"
+              :class="{
+                'port--armed': isArmed(cell.key, p),
+                'port--signal': hasSignal(cell.tile, p),
+              }"
+              @mousedown.stop="onPortDown(cell.key, p)"
+              @mouseup.stop="onPortUp(cell.key, p)"
+              @click.stop="onPortClick(cell.key, p)"
+            />
+          </template>
+        </svg>
       </div>
     </div>
 
@@ -71,18 +107,41 @@ import { markRaw, reactive } from "vue";
 import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
-import { Level } from "@/tiles/model";
-import { PaintMap, deriveLevel } from "@/tiles/autotile";
+import { Position } from "@/types";
+import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
+import {
+  emptyCell,
+  toggleConnection,
+  removeConnection,
+  setDepot,
+  rotateDepot,
+  toggleSignalPort,
+} from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
+import { segmentPathD } from "@/sim/pathGeometry";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
 
-type Tool = "track" | "depot" | "erase";
+type Tool = "connect" | "depot" | "signal" | "erase";
 
-const PAINT_KEY = "train-game:editor-paint";
+const LEVEL_KEY = "train-game:editor-level";
+const EDGES: Port[] = [
+  Position.Top,
+  Position.Right,
+  Position.Bottom,
+  Position.Left,
+];
 
-// A no-op stand-in for the live Game so Tile.vue can render in the editor
-// without a running simulation. Tile only reads these maps + calls cycleSignal.
+const HINTS: Record<Tool, string> = {
+  connect: "Drag between two edge dots to lay a rail. Click a rail to delete it.",
+  depot: "Click a cell to place a depot. Click it again to rotate its facing.",
+  signal: "Click an edge dot to toggle a signal for that direction.",
+  erase: "Click a cell to clear it.",
+};
+
+// A no-op stand-in for the live Game so Tile.vue can render in the editor.
 function stubGame(): Game {
   const empty: Record<string, never> = {};
   return {
@@ -102,15 +161,27 @@ class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Provide("game") game: Game = markRaw(stubGame());
 
+  EDGES = EDGES;
   levelSizeY = 6;
-  tool: Tool = "track";
-  painting = false;
-  paint: PaintMap = reactive(loadPaint());
+  tools: Tool[] = ["connect", "depot", "signal", "erase"];
+  tool: Tool = "connect";
+  level: Level = reactive(loadLevel());
+  dragFrom: { id: string; port: Port } | null = null;
   showIo = false;
   ioText = "";
 
-  get level(): Level {
-    return deriveLevel(this.paint);
+  get hint(): string {
+    return HINTS[this.tool];
+  }
+
+  get routes(): TrainRoute[] {
+    const d = this.depotIds;
+    const out: TrainRoute[] = [];
+    for (let i = 0; i + 1 < d.length; i += 2) out.push({ from: d[i], to: d[i + 1] });
+    return out;
+  }
+  get depotIds(): string[] {
+    return Object.keys(this.level).filter(id => this.level[id].role === "depot");
   }
   get valid(): ValidationResult {
     return validateLevel(this.level, this.routes);
@@ -120,54 +191,107 @@ class EditorView extends Vue {
       this.valid.issues.map(i => i.tileId).filter((x): x is string => !!x)
     );
   }
-  get depotIds(): string[] {
-    return Object.keys(this.level).filter(id => this.level[id].role === "depot");
-  }
-  get depotCount(): number {
-    return this.depotIds.length;
-  }
-  get routes(): TrainRoute[] {
-    const d = this.depotIds;
-    const out: TrainRoute[] = [];
-    for (let i = 0; i + 1 < d.length; i += 2) out.push({ from: d[i], to: d[i + 1] });
-    return out;
-  }
   get canPlay(): boolean {
     return this.routes.length > 0 && this.valid.ok;
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
-    const lvl = this.level;
     const out: { key: string; tile: Level[string] | null }[] = [];
     for (let y = 0; y < this.levelSizeY; y++) {
       for (let x = 0; x < this.config.levelSizeX; x++) {
         const key = `${x},${y}`;
-        out.push({ key, tile: lvl[key] ?? null });
+        const tile = this.level[key];
+        out.push({ key, tile: tile && tile.connections.length ? tile : null });
       }
     }
     return out;
   }
 
-  onDown(id: string) {
-    this.painting = true;
-    this.apply(id);
+  // --- geometry helpers (overlay) ---
+  dot(port: Port): { x: number; y: number } {
+    const size = this.config.tileSize;
+    const c = size / 2;
+    const inset = 16;
+    switch (port) {
+      case Position.Top:
+        return { x: c, y: inset };
+      case Position.Right:
+        return { x: size - inset, y: c };
+      case Position.Bottom:
+        return { x: c, y: size - inset };
+      default:
+        return { x: inset, y: c };
+    }
   }
-  onEnter(id: string) {
-    if (this.painting) this.apply(id);
+  connPath(conn: PortPair): string {
+    return segmentPathD(conn[0], conn[1], this.config.tileSize);
+  }
+  isArmed(id: string, port: Port): boolean {
+    return this.dragFrom?.id === id && this.dragFrom?.port === port;
+  }
+  hasSignal(tile: Level[string] | null, port: Port): boolean {
+    return !!tile?.signals?.includes(port);
   }
 
-  apply(id: string) {
-    if (this.tool === "erase") delete this.paint[id];
-    else if (this.tool === "depot") this.paint[id] = { paint: "depot" };
-    else this.paint[id] = { paint: "track" };
+  cellOf(id: string): Level[string] {
+    return this.level[id] ?? emptyCell();
+  }
+  commit(id: string, cell: Level[string]) {
+    if (cell.connections.length === 0 && !cell.signals?.length) {
+      delete this.level[id];
+    } else {
+      this.level[id] = cell;
+    }
     this.persist();
   }
 
+  // --- connect tool ---
+  onPortDown(id: string, port: Port) {
+    if (this.tool !== "connect") return;
+    this.dragFrom = { id, port };
+  }
+  onPortUp(id: string, port: Port) {
+    if (this.tool !== "connect" || !this.dragFrom) return;
+    if (this.dragFrom.id === id && this.dragFrom.port !== port) {
+      this.commit(id, toggleConnection(this.cellOf(id), this.dragFrom.port, port));
+    }
+    this.dragFrom = null;
+  }
+  deleteConn(id: string, conn: PortPair) {
+    this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
+  }
+
+  // --- signal tool ---
+  onPortClick(id: string, port: Port) {
+    if (this.tool !== "signal") return;
+    this.commit(id, toggleSignalPort(this.cellOf(id), port));
+  }
+
+  // --- depot / erase (cell-level click) ---
+  onCellClick(id: string) {
+    if (this.tool === "depot") {
+      const cur = this.level[id];
+      this.commit(id, cur?.role === "depot" ? rotateDepot(cur) : setDepot(emptyCell(), this.autoFacing(id)));
+    } else if (this.tool === "erase") {
+      delete this.level[id];
+      this.persist();
+    }
+  }
+  // Face the first neighbour that already has track on the shared border.
+  autoFacing(id: string): Port {
+    const coord = parseCoordId(id);
+    for (const e of EDGES) {
+      const n = this.level[getCoordinatesId(neighborCoord(coord, e)!)];
+      if (n && portsOf(n.connections).includes(oppositePort(e))) return e;
+    }
+    return Position.Top;
+  }
+
+  // --- toolbar actions ---
   clearAll() {
-    for (const k of Object.keys(this.paint)) delete this.paint[k];
+    for (const k of Object.keys(this.level)) delete this.level[k];
     this.persist();
   }
-
   randomMap() {
     const seed = Math.floor(Math.random() * 1e9);
     const { level } = generateLevel(seed, {
@@ -175,26 +299,20 @@ class EditorView extends Vue {
       height: this.levelSizeY,
       depotPairs: 2,
     });
-    // Load the generated level back into the paint model (track / depot), then
-    // re-derive — the editor's source of truth stays the paint map.
-    for (const k of Object.keys(this.paint)) delete this.paint[k];
-    for (const [id, c] of Object.entries(level)) {
-      this.paint[id] = c.role === "depot" ? { paint: "depot" } : { paint: "track" };
-    }
+    for (const k of Object.keys(this.level)) delete this.level[k];
+    Object.assign(this.level, level);
     this.persist();
   }
-
   playThis() {
     if (!this.canPlay) return;
     setCustomLevel({
-      level: this.level,
+      level: JSON.parse(JSON.stringify(this.level)),
       trains: trainsFromRoutes(this.routes),
     });
     this.$router.push("/play");
   }
-
   exportJson() {
-    this.ioText = JSON.stringify(this.paint);
+    this.ioText = JSON.stringify(this.level);
     this.showIo = true;
   }
   importJson() {
@@ -207,28 +325,28 @@ class EditorView extends Vue {
       return;
     }
     try {
-      const parsed = JSON.parse(this.ioText) as PaintMap;
-      for (const k of Object.keys(this.paint)) delete this.paint[k];
-      Object.assign(this.paint, parsed);
+      const parsed = JSON.parse(this.ioText) as Level;
+      for (const k of Object.keys(this.level)) delete this.level[k];
+      Object.assign(this.level, parsed);
       this.persist();
+      this.showIo = false;
     } catch {
       // leave the box open so the user can fix invalid JSON
     }
   }
-
   persist() {
     try {
-      localStorage.setItem(PAINT_KEY, JSON.stringify(this.paint));
+      localStorage.setItem(LEVEL_KEY, JSON.stringify(this.level));
     } catch {
       /* ignore */
     }
   }
 }
 
-function loadPaint(): PaintMap {
+function loadLevel(): Level {
   try {
-    const raw = localStorage.getItem(PAINT_KEY);
-    if (raw) return JSON.parse(raw) as PaintMap;
+    const raw = localStorage.getItem(LEVEL_KEY);
+    if (raw) return JSON.parse(raw) as Level;
   } catch {
     /* ignore */
   }
@@ -240,7 +358,7 @@ export default toNative(EditorView);
 
 <style lang="scss" scoped>
 .editor-view {
-  padding-top: 60px;
+  padding-top: 88px;
 }
 .toolbar {
   position: fixed;
@@ -263,6 +381,7 @@ export default toNative(EditorView);
   .nav-link {
     padding: 8px 12px;
     cursor: pointer;
+    text-transform: capitalize;
   }
   .nav-link {
     background: #2c3e50;
@@ -283,6 +402,14 @@ export default toNative(EditorView);
     color: #c62828;
   }
 }
+.hint {
+  position: fixed;
+  top: 52px;
+  left: 12px;
+  z-index: 100;
+  font-size: 12px;
+  color: #555;
+}
 .level {
   display: flex;
   flex-wrap: wrap;
@@ -299,9 +426,40 @@ export default toNative(EditorView);
 .editor-cell--issue {
   outline: 2px solid #ff3b30 !important;
 }
-// Route all pointer events to the paint layer, not Tile's own handlers.
+// Tile is visual only; the overlay handles all interaction.
 .editor-cell :deep(.tile) {
   pointer-events: none;
+}
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 30;
+}
+.port {
+  fill: rgba(66, 184, 131, 0.35);
+  stroke: #2c3e50;
+  stroke-width: 1;
+  cursor: pointer;
+  &:hover {
+    fill: rgba(66, 184, 131, 0.8);
+  }
+}
+.port--armed {
+  fill: #ffb300;
+}
+.port--signal {
+  fill: #ff3b30;
+}
+.conn-hit {
+  stroke: transparent;
+  stroke-width: 24;
+  fill: none;
+  cursor: pointer;
+  &:hover {
+    stroke: rgba(255, 59, 48, 0.4);
+  }
 }
 .io-box {
   position: fixed;
