@@ -40,7 +40,10 @@
         :key="cell.key"
         class="level-tile editor-cell"
         :data-coord="cell.key"
-        :class="{ 'editor-cell--issue': issueIds.has(cell.key) }"
+        :class="{
+          'editor-cell--issue': issueIds.has(cell.key),
+          'editor-cell--dim': armed != null && armed.id !== cell.key,
+        }"
         :style="{
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
@@ -58,6 +61,15 @@
           class="overlay"
           :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
         >
+          <!-- Ghost preview of the rail an armed edge would lay to the hovered
+               edge, so the builder sees what they're about to make. -->
+          <path
+            v-for="(d, i) in previewRails(cell.key)"
+            :key="'pv' + i"
+            :d="d"
+            class="preview-rail"
+          />
+
           <!-- Edge hit-zones: the whole tile is clickable, split into four
                triangles (one per edge) for big, kid-friendly targets. -->
           <template v-if="tool === 'connect' || tool === 'signal'">
@@ -74,9 +86,14 @@
               @mousedown.stop="onZoneDown(cell.key, p)"
               @mouseup.stop="onZoneUp(cell.key, p)"
               @click.stop="onZoneClick(cell.key, p)"
+              @mouseenter="onZoneEnter(cell.key, p)"
+              @mouseleave="onZoneLeave(cell.key, p)"
             />
-            <!-- Visual-only edge markers; the whole triangle around them is the
-                 real target (pointer-events disabled). -->
+          </template>
+
+          <!-- Edge markers (signal mode only): show where a signal sits and its
+               clickable edge. The connect triangles need no dots. -->
+          <template v-if="tool === 'signal'">
             <circle
               v-for="p in EDGES"
               :key="'d' + p"
@@ -84,16 +101,14 @@
               :cy="dot(p).y"
               r="10"
               class="zone-dot"
-              :class="{
-                'zone-dot--armed': isArmed(cell.key, p),
-                'zone-dot--signal': tool === 'signal' && hasSignal(cell.tile, p),
-              }"
+              :class="{ 'zone-dot--signal': hasSignal(cell.tile, p) }"
             />
           </template>
 
-          <!-- Rail-delete handles (connect mode): a tappable ✕ near the middle
-               of each rail, layered above the zones. -->
-          <template v-if="tool === 'connect' && cell.tile">
+          <!-- Rail-delete handles (erase mode): a tappable ✕ near the middle of
+               each rail removes just that connection (clicking elsewhere on the
+               tile erases the whole tile). -->
+          <template v-if="tool === 'erase' && cell.tile">
             <g
               v-for="(conn, i) in cell.tile.connections"
               :key="'x' + i"
@@ -140,6 +155,7 @@ import {
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
+import { railPathsFor } from "@/tiles/geometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
@@ -156,10 +172,10 @@ const EDGES: Port[] = [
 
 const HINTS: Record<Tool, string> = {
   connect:
-    "Click one edge then another (or drag between them) to lay a rail. Tap the ✕ on a rail to delete it.",
+    "Click one edge then another (or drag between them) to lay a rail.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
-  erase: "Click a cell to clear it.",
+  erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -191,6 +207,9 @@ class EditorView extends Vue {
   // picked in the two-click (click → click) connection flow.
   pressFrom: { id: string; port: Port } | null = null;
   armed: { id: string; port: Port } | null = null;
+  // The edge currently hovered, used to ghost-preview the rail an armed edge
+  // would connect to.
+  hoverPort: { id: string; port: Port } | null = null;
   showIo = false;
   ioText = "";
 
@@ -283,6 +302,20 @@ class EditorView extends Vue {
   isArmed(id: string, port: Port): boolean {
     return this.armed?.id === id && this.armed?.port === port;
   }
+  // The ghost rails to draw on `id`: only when an edge here is armed and a
+  // different edge of the same tile is hovered.
+  previewRails(id: string): string[] {
+    const a = this.armed;
+    const h = this.hoverPort;
+    if (this.tool !== "connect" || !a || !h) return [];
+    if (a.id !== id || h.id !== id || a.port === h.port) return [];
+    return railPathsFor(
+      a.port,
+      h.port,
+      this.config.tileSize,
+      this.config.railDistanceFromPath
+    );
+  }
   hasSignal(tile: Level[string] | null, port: Port): boolean {
     return !!tile?.signals?.includes(port);
   }
@@ -333,6 +366,14 @@ class EditorView extends Vue {
       this.armed = { id, port }; // arm this edge (or move the arm to a new tile)
     }
   }
+  onZoneEnter(id: string, port: Port) {
+    if (this.tool === "connect") this.hoverPort = { id, port };
+  }
+  onZoneLeave(id: string, port: Port) {
+    if (this.hoverPort?.id === id && this.hoverPort?.port === port) {
+      this.hoverPort = null;
+    }
+  }
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
   }
@@ -362,6 +403,7 @@ class EditorView extends Vue {
     this.tool = t;
     this.armed = null;
     this.pressFrom = null;
+    this.hoverPort = null;
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];
@@ -497,6 +539,12 @@ export default toNative(EditorView);
   flex: 0 0 auto;
   outline: 1px solid #ddd;
   cursor: crosshair;
+  transition: opacity 0.12s ease;
+}
+// While an edge is armed, fade every other tile so children focus on the one
+// tile they're building (connections are always within a single tile).
+.editor-cell--dim {
+  opacity: 0.28;
 }
 .editor-cell--issue {
   outline: 2px solid #ff3b30 !important;
@@ -537,11 +585,17 @@ export default toNative(EditorView);
   stroke-width: 1;
   pointer-events: none;
 }
-.zone-dot--armed {
-  fill: #ffb300;
-}
 .zone-dot--signal {
   fill: #ff3b30;
+}
+// Translucent ghost of the rail that will be laid, shown on hover while armed.
+.preview-rail {
+  fill: none;
+  stroke: #2c3e50;
+  stroke-width: 4;
+  opacity: 0.35;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 .del {
   cursor: pointer;
