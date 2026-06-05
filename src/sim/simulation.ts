@@ -1,4 +1,5 @@
-import { LevelDefinition, Coordinates, Position } from "@/types";
+import { Coordinates, Position } from "@/types";
+import { Level, parseCoordId } from "@/tiles/model";
 import { Port, oppositePort } from "./topology";
 import {
   SwitchResolver,
@@ -136,7 +137,7 @@ function computeBody(unitLengths: number[], coupling: number): {
 export type SignalAspect = "stop" | "proceed";
 
 export interface SimConfig {
-  level: LevelDefinition;
+  level: Level;
   trains: TrainInit[];
   getSwitch?: SwitchResolver;
   // Tile ids that carry a signal — block boundaries. Depots are boundaries too.
@@ -202,7 +203,7 @@ export function createSimulation(config: SimConfig): Simulation {
   function isBoundary(tileId: string): boolean {
     if (signalTiles.has(tileId)) return true;
     const tile = level[tileId];
-    return !!tile && tile.component === "TileDepot";
+    return !!tile && tile.role === "depot";
   }
 
   const trains: Record<string, SimTrain> = {};
@@ -308,7 +309,7 @@ export function createSimulation(config: SimConfig): Simulation {
       level,
       getSwitch,
       isBoundary,
-      { x: tile.x, y: tile.y },
+      parseCoordId(tileId),
       oppositePort(exitPort)
     );
     for (const tid of block) {

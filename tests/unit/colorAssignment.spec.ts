@@ -1,15 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { assignColors, TrainStart } from "@/utils/colorAssignment";
 import { makeRng, Colors } from "@/utils/globalHelpers";
-import { LevelDefinition } from "@/types";
+import { Level } from "@/tiles/model";
+import { expandKind } from "@/tiles/kinds";
 
 /** A level with `depotCount` depots in a row plus one leading straight tile. */
-function levelWithDepots(depotCount: number): LevelDefinition {
-  const lvl: LevelDefinition = {};
-  lvl["0,0"] = { x: 0, y: 0, component: "TileStraight", rotation: 1 };
+function levelWithDepots(depotCount: number): Level {
+  const lvl: Level = {};
+  lvl["0,0"] = expandKind("straight", 1);
   for (let i = 0; i < depotCount; i++) {
     const x = i + 1;
-    lvl[`${x},0`] = { x, y: 0, component: "TileDepot", rotation: 1 };
+    lvl[`${x},0`] = expandKind("depot", 1);
   }
   return lvl;
 }

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 
 test.describe("Train game", () => {
   test("boots, renders the level and runs trains without console errors", async ({
@@ -43,8 +43,7 @@ test.describe("Train game", () => {
     // Read each train's tile coordinate straight from the live simulation.
     const readPositions = () =>
       page.evaluate(() => {
-        const game = (document.getElementById("app") as any).__vue_app__
-          ._instance.proxy.game;
+        const game = (window as any).__game;
         const ids = Object.keys(game.sim.trains);
         return Object.fromEntries(
           ids.map(id => [id, game.sim.trainTileId(id)])
@@ -75,8 +74,7 @@ test.describe("Train game", () => {
 
     const headTiles = () =>
       page.evaluate(() => {
-        const game = (document.getElementById("app") as any).__vue_app__
-          ._instance.proxy.game;
+        const game = (window as any).__game;
         return Object.keys(game.sim.trains).map((id: string) =>
           game.sim.trainTileId(id)
         ) as string[];
@@ -98,13 +96,80 @@ test.describe("Train game", () => {
     await expect(page.locator(".signal").first()).toBeVisible();
 
     const result = await page.evaluate(() => {
-      const game = (document.getElementById("app") as any).__vue_app__._instance
-        .proxy.game;
+      const game = (window as any).__game;
       const tileId = game.signalTiles[0] as string;
       const exitPort = 1; // any port; a manual hold forces Stop regardless
       game.toggleHold(tileId, exitPort);
       return { aspect: game.sim.signalAspect(tileId, exitPort) as string };
     });
     expect(result.aspect).toBe("stop");
+  });
+});
+
+test.describe("Level editor", () => {
+  const cell = (page: Page, coord: string) =>
+    page.locator(`.editor-cell[data-coord="${coord}"]`);
+  // West=Left=3, East=Right=1.
+  const drawWestEast = async (page: Page, coord: string) => {
+    const west = cell(page, coord).locator('.port[data-port="3"]');
+    const east = cell(page, coord).locator('.port[data-port="1"]');
+    await west.dragTo(east);
+  };
+
+  test("draws a connected line and plays it", async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    await page.goto("/#/editor");
+    await expect(page.locator(".toolbar")).toBeVisible();
+
+    // Connect tool is default: draw a horizontal rail across three cells.
+    for (const c of ["1,1", "2,1", "3,1"]) await drawWestEast(page, c);
+    // Cap both ends with depots.
+    await page.getByRole("button", { name: "depot" }).click();
+    await cell(page, "0,1").click();
+    await cell(page, "4,1").click();
+
+    // The level should validate and Play should be enabled.
+    await expect(page.locator(".status")).toHaveText(/valid/);
+    const play = page.getByRole("button", { name: /Play this/ });
+    await expect(play).toBeEnabled();
+    await play.click();
+
+    // We land on the play view running OUR level: 5 tiles (3 track + 2 depots),
+    // not the 40-tile default — proving the editor->play handoff.
+    await expect(page.locator(".train-locomotive").first()).toBeVisible();
+    await expect(page.locator(".tile")).toHaveCount(5);
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
+  test("a drawn rail can be deleted by clicking it", async ({ page }) => {
+    await page.goto("/#/editor");
+    await drawWestEast(page, "2,2");
+    await expect(cell(page, "2,2").locator(".tile")).toHaveCount(1);
+    // Click the connection hit-path to delete it. force: a horizontal line has a
+    // zero-height bbox so Playwright's visibility heuristic skips it, but the
+    // 24px-wide stroke is hittable in a real browser.
+    await cell(page, "2,2").locator(".conn-hit").click({ force: true });
+    await expect(cell(page, "2,2").locator(".tile")).toHaveCount(0);
+  });
+
+  test("signal tool places a per-direction signal", async ({ page }) => {
+    await page.goto("/#/editor");
+    await drawWestEast(page, "2,2");
+    await page.getByRole("button", { name: "signal" }).click();
+    // Toggle a signal on the East port of the straight.
+    await cell(page, "2,2").locator('.port[data-port="1"]').click();
+    await expect(cell(page, "2,2").locator(".signal")).toHaveCount(1);
+  });
+
+  test("random map generates a valid playable level", async ({ page }) => {
+    await page.goto("/#/editor");
+    await page.getByRole("button", { name: /Random/ }).click();
+    await expect(page.locator(".status")).toHaveText(/valid/);
+    await expect(page.locator(".depot-building").first()).toBeVisible();
   });
 });

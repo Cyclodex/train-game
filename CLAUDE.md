@@ -18,8 +18,9 @@ unused `TileIntersection.vue` variant) has been removed.
 ## Tech stack
 
 - Vue 3.5, class components via **`vue-facing-decorator`** (the maintained Vue 3
-  successor to `vue-property-decorator`; supports class inheritance, which the
-  tile hierarchy relies on).
+  successor to `vue-property-decorator`).
+- **`vue-router`** (hash history) with two routes: `/play` (the game) and
+  `/editor` (the level editor).
 - TypeScript 5.
 - A hand-written `requestAnimationFrame` loop drives movement (GSAP was removed
   when the simulation took over).
@@ -53,12 +54,36 @@ advances on a deterministic `step(dt)` tick; the renderer just draws the current
 state. Movement decisions (stop/go, collisions, red signals) live in the model,
 not in animation callbacks — this is what makes it stable and unit-testable.
 
+### Tile model (`src/tiles/`) — the single source of truth
+
+A tile is **data**, not a class hierarchy. Each grid cell is a `TileCell`
+`{ connections: PortPair[], role?, signals? }`, where `connections` are unordered
+port pairs over N/E/S/W/Center. **Everything is derived from `connections`** —
+the kind label (`kindOf`), the SVG rail geometry (`tiles/geometry.ts`), and the
+simulation's exit-port routing (`connectionsToExitPort`). Both the sim and the
+renderer import this module, so topology is defined exactly once. See
+`docs/superpowers/specs/2026-06-05-data-driven-tiles-design.md`.
+
+- `model.ts` — types + core derivations (`connectionsToExitPort`, `armExit`,
+  `kindOf`, `partnersOf`, `portsOf`, rotation helpers, `parseCoordId`).
+- `kinds.ts` — `expandKind("straight"|"curve"|"cross"|"tjunction"|"depot",
+  rotation, { signals, disable })`: friendly authoring sugar → `TileCell`.
+- `geometry.ts` — `railPathsFor()`: the two rail paths per connection.
+- `autotile.ts` — `deriveConnections()`: derive a cell's connections from its
+  neighbours. Used by the generator (the editor draws connections explicitly).
+- `editOps.ts` — pure single-cell editing reducers (`toggleConnection`,
+  `setDepot`/`rotateDepot`, `toggleSignalPort`) used by the editor.
+- `validate.ts` — `validateLevel()`: connectivity / dangling-track / reachable
+  depots / per-train route checks.
+- `generate.ts` — `generateLevel(seed, opts)`: seeded procedural levels (a track
+  loop + depot spurs), gated by `validateLevel`.
+
 ### Simulation (`src/sim/`)
 
-- `topology.ts` — pure tile graph: exit port per tile kind/rotation/switch,
-  neighbour math.
+- `topology.ts` — `oppositePort` + `neighborCoord` (port/neighbour math). Exit-port
+  resolution now lives in `tiles/model.ts` (`connectionsToExitPort`).
 - `network.ts` — `traverse()`: from a tile + entry port, the exit port and the
-  next tile/entry.
+  next tile/entry (reads `TileCell.connections`).
 - `simulation.ts` — `createSimulation()` + `step(dt)`. Trains advance along the
   graph as `(segment, progress)`. **Path reservation / interlocking:** at a signal
   a train reserves the whole route to the next signal (`routeToNextSignal` in
@@ -75,16 +100,19 @@ not in animation callbacks — this is what makes it stable and unit-testable.
 - `src/game.ts` — `createGame()` owns the sim, the switch/signal/colour state,
   and the rAF loop (pause/speed scale `dt`). Each frame it ticks the sim and
   writes loco/wagon transforms straight to the DOM (positions sampled from the
-  segment path). `App.vue` creates/provides it (`markRaw` — never proxy the sim).
-- Components are views: `Train.vue` is a pure sprite renderer; tiles draw rails,
-  rotation, switches, signals and publish their live rotation/switch state into
-  the game so the sim routes accordingly. Traffic signals are a manual tool
-  (default green); collisions are handled by the occupancy gate, not signals.
+  segment path). `PlayView.vue` creates/provides it (`markRaw` — never proxy the
+  sim).
+- Components are views: `Train.vue` is a pure sprite renderer; the single
+  `Tile.vue` renders *any* cell from its `connections` (rails, signals, junction
+  switches, depot art) and publishes live switch/signal state into the game so the
+  sim routes accordingly. Traffic signals are a manual tool (default green);
+  collisions are handled by the occupancy gate, not signals.
 
-Game state still seeded in `src/App.vue` via `@Provide()` / `@Inject()`:
+Game state is seeded in `src/views/PlayView.vue` via `@Provide()` / `@Inject()`:
 
-- `level: LevelDefinition` — a map keyed by `"x,y"` describing every tile
-  (component name, rotation, traffic lights, intersection active/disabled routes).
+- `level: Level` — a map keyed by `"x,y"` of `TileCell`s (see `src/tiles/`). The
+  default level lives in `src/levels/default.ts`; a level built in the editor or
+  generated is handed over through `src/levelStore.ts` (in-memory + localStorage).
 - `trains: TrainsDefinition` — each train's starting depot, type (`people` |
   `fraight` [sic]), and wagons (the simulation owns live position).
 
@@ -96,16 +124,21 @@ per-tile coordinates and route overlays.
 
 Key files:
 
-- `src/main.ts` — `createApp`, provides `gameConfig`, registers the tile/train
-  components globally.
-- `src/App.vue` — level + train definitions, creates/provides the game, pause/play
-  and speed (1x/2x/4x scale the loop's `dt`), delivery count, main layout.
+- `src/main.ts` — `createApp`, provides `gameConfig`, registers `Tile`/`TileRail`/
+  `Train`/`DebugShowRoutes` globally, installs the router.
+- `src/router.ts` — `/play` (PlayView) + `/editor` (EditorView), hash history.
+- `src/App.vue` — thin shell: `<router-view>`.
+- `src/views/PlayView.vue` — level + train definitions, creates/provides the game,
+  pause/play and speed (1x/2x/4x scale the loop's `dt`), delivery count, layout.
+- `src/views/EditorView.vue` — connect/depot/signal/erase tools. Connect draws
+  rail connections explicitly (drag edge dot → edge dot; click a rail to delete);
+  signals are per-direction (click a port). Live validation, random-map button,
+  export/import, "Play this" hand-off.
 - `src/game.ts` — the `createGame()` controller + rAF render loop (see above).
 - `src/sim/*` — the headless simulation (see the Simulation section).
-- `src/components/TileBase.ts` — the shared base **class** (a plain `.ts`, never
-  rendered: every concrete tile provides its own `<template>`). Concrete tiles
-  inherit from it: `TileStraight` → `TileDepot`, plus `TileCurve` and
-  `TileIntersectionComplete` (the full intersection logic).
+- `src/tiles/*` — the data-driven tile model (see the Tile model section).
+- `src/components/Tile.vue` — the single data-driven tile view (rails, signals,
+  switches, depot), replacing the old per-kind components.
 - `src/components/Train.vue` — pure loco/wagon sprite renderer (positioned by the
   game loop).
 - `src/types.ts` — all enums/interfaces (TrainStatus, TrafficLight, Position,
@@ -120,10 +153,9 @@ travel.
 
 ## Vue 3 / vue-facing-decorator conventions
 
-- Concrete components export `export default toNative(TheClass)`. A class that is
-  **extended** (e.g. `TileStraight`) also exports the raw class as a named export
-  for its subclass to `extends`; `TileBase` is a plain `.ts` class (a Vue SFC
-  default export is wrapped into an options object and cannot be `extends`-ed).
+- Components export `export default toNative(TheClass)`. (The old tile class
+  hierarchy is gone — a single `Tile.vue` now renders every tile from data, so no
+  component `extends` another.)
 - Reactive state mutates in place (Vue 3 deep proxies) — no `Vue.set`.
 - **Plain controllers/DOM objects must be `markRaw()`-ed** before being stored in
   reactive state. The `game` object (which holds the simulation and its refs) is
@@ -131,12 +163,10 @@ travel.
   refs. This is the same hazard that broke the old GSAP timeline (a reactive
   Proxy breaks identity-based scheduling — a train would leave its depot once and
   then never advance).
-- Tiles are pure views: they draw rails/rotation/switches/signals, handle clicks
-  (rotate, toggle switch/signal), and publish their live rotation/switch state
-  into the game so the simulation routes through it. No cross-component `$refs`
-  or movement logic lives in them any more.
-- Lifecycle hooks merge across the inheritance chain (base `created` runs before
-  the subclass), same as Vue 2's mixin merge — several tiles rely on this.
+- `Tile.vue` is a pure view: it draws rails/switches/signals/depot from the cell's
+  `connections`, handles switch/signal clicks, and publishes live switch state
+  into the game so the simulation routes through it. No cross-component `$refs` or
+  movement logic lives in it.
 
 ## Conventions / gotchas
 
