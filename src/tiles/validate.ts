@@ -114,3 +114,44 @@ export function validateLevel(
 
   return { ok: issues.length === 0, issues };
 }
+
+export type RoadIssueType = "dangling-road"; // road points at a tile with no road back
+
+export interface RoadIssue {
+  type: RoadIssueType;
+  tileId: string;
+  detail: string;
+}
+
+// Validate the road layer separately from rail (so a level with no/partial roads
+// doesn't fail rail validation). A road edge port is "dangling" only when it
+// points at a neighbour tile that EXISTS in the level but exposes no matching
+// road back. A road port pointing off the map (no tile at that coord) is a valid
+// map-edge road end — cars enter and leave the level there.
+export function validateRoads(level: Level): {
+  ok: boolean;
+  issues: RoadIssue[];
+} {
+  const issues: RoadIssue[] = [];
+  for (const [id, tile] of Object.entries(level)) {
+    const road = tile.road ?? [];
+    if (road.length === 0) continue;
+    const edges = portsOf(road).filter(p => p !== Position.Center);
+    for (const e of edges) {
+      const n = neighborCoord(parseCoordId(id), e);
+      if (!n) continue;
+      const nid = getCoordinatesId(n);
+      const nt = level[nid];
+      if (!nt) continue; // off-grid: a valid map-edge road end
+      const back = portsOf(nt.road ?? []).includes(oppositePort(e));
+      if (!back) {
+        issues.push({
+          type: "dangling-road",
+          tileId: id,
+          detail: `road port ${Position[e]} of ${id} has no connecting road neighbour`,
+        });
+      }
+    }
+  }
+  return { ok: issues.length === 0, issues };
+}

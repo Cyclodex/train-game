@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
-import { validateLevel } from "@/tiles/validate";
+import { validateLevel, validateRoads } from "@/tiles/validate";
+
+const { Top, Bottom, Left, Right } = Position;
 
 // depot(->Right) - straight - depot(->Left): a clean, fully connected line.
 const goodLevel: Level = {
@@ -38,5 +41,35 @@ describe("validateLevel", () => {
     };
     const res = validateLevel(level, [{ from: "0,0", to: "5,5" }]);
     expect(res.issues.some(i => i.type === "route-disconnected")).toBe(true);
+  });
+});
+
+describe("validateRoads", () => {
+  it("treats a road that runs off the map edge as valid", () => {
+    // A lone road tile; both ends point at off-grid coords -> map-edge ends.
+    const level: Level = { "3,3": { connections: [], road: [[Top, Bottom]] } };
+    expect(validateRoads(level).ok).toBe(true);
+  });
+
+  it("accepts two tiles whose roads join", () => {
+    const level: Level = {
+      "0,0": { connections: [], road: [[Left, Right]] },
+      "1,0": { connections: [], road: [[Left, Right]] },
+    };
+    expect(validateRoads(level).ok).toBe(true);
+  });
+
+  it("flags a road pointing at an existing tile with no road back", () => {
+    const level: Level = {
+      "0,0": { connections: [], road: [[Left, Right]] }, // Right -> 1,0
+      "1,0": expandKind("straight", 1), // exists, rail only, no road
+    };
+    const res = validateRoads(level);
+    expect(res.ok).toBe(false);
+    expect(res.issues.some(i => i.type === "dangling-road")).toBe(true);
+  });
+
+  it("ignores cells that have no road", () => {
+    expect(validateRoads({ "0,0": expandKind("straight", 1) }).ok).toBe(true);
   });
 });

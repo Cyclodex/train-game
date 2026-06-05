@@ -10,11 +10,16 @@ import {
   rotateDepot,
   depotFacing,
   toggleSignalPort,
+  toggleRoad,
+  addRoad,
+  removeRoad,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
 const has = (cell: { connections: [Position, Position][] }, p: [Position, Position]) =>
   cell.connections.some(c => samePair(c, p));
+const hasRoadPair = (cell: { road?: [Position, Position][] }, p: [Position, Position]) =>
+  (cell.road ?? []).some(c => samePair(c, p));
 
 describe("toggleConnection", () => {
   it("adds when absent and removes when present, order-independent", () => {
@@ -104,5 +109,42 @@ describe("toggleSignalPort", () => {
     expect(c.signals).toEqual([Right]);
     c = toggleSignalPort(c, Right);
     expect(c.signals).toEqual([]);
+  });
+});
+
+describe("road ops", () => {
+  it("toggleRoad adds when absent and removes when present, order-independent", () => {
+    let c = emptyCell();
+    c = toggleRoad(c, Top, Bottom);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+    c = toggleRoad(c, Bottom, Top); // reversed pair removes it
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(false);
+  });
+
+  it("road is independent of rail connections on the same cell", () => {
+    let c = toggleConnection(emptyCell(), Left, Right); // rail
+    c = toggleRoad(c, Top, Bottom); // road crossing it -> a level crossing
+    expect(has(c, [Left, Right])).toBe(true);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+  });
+
+  it("addRoad is idempotent and accumulates a road junction", () => {
+    let c = addRoad(emptyCell(), Left, Right);
+    c = addRoad(c, Right, Left); // reversed, already present
+    expect(c.road).toHaveLength(1);
+    c = addRoad(c, Top, Bottom);
+    expect(c.road).toHaveLength(2);
+  });
+
+  it("removeRoad removes a specific pair regardless of order", () => {
+    let c = toggleRoad(emptyCell(), Top, Right);
+    c = removeRoad(c, Right, Top);
+    expect(c.road).toHaveLength(0);
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = emptyCell();
+    toggleRoad(c, Top, Bottom);
+    expect(c.road).toBeUndefined();
   });
 });

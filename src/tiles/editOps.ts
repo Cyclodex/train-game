@@ -68,3 +68,34 @@ export function toggleSignalPort(cell: TileCell, port: Port): TileCell {
     : [...cur, port];
   return { ...cell, signals };
 }
+
+// --- Road layer editing -------------------------------------------------------
+// The road layer (`cell.road`) is edited with the same reducer shape as rail
+// `connections`, on a separate layer. A cell may carry road without rail (a plain
+// road tile) or both (a level crossing).
+
+// Add the road pair if absent, remove it if already present (order-independent).
+export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
+  const pair: PortPair = [a, b];
+  const road = cell.road ?? [];
+  const exists = road.some(c => samePair(c, pair));
+  const next = exists
+    ? road.filter(c => !samePair(c, pair))
+    : [...road, pair];
+  return { ...cell, road: next };
+}
+
+// Ensure a road pair is present without ever removing one (idempotent) — used
+// when dragging a road so re-crossing a tile forms a road junction.
+export function addRoad(cell: TileCell, a: Port, b: Port): TileCell {
+  const pair: PortPair = [a, b];
+  const road = cell.road ?? [];
+  if (road.some(c => samePair(c, pair))) return cell;
+  return { ...cell, road: [...road, pair] };
+}
+
+export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
+  const pair: PortPair = [a, b];
+  const road = cell.road ?? [];
+  return { ...cell, road: road.filter(c => !samePair(c, pair)) };
+}
