@@ -42,7 +42,7 @@
         :data-coord="cell.key"
         :class="{
           'editor-cell--issue': issueIds.has(cell.key),
-          'editor-cell--dim': armed != null && armed.id !== cell.key,
+          'editor-cell--armed': armed != null && armed.id === cell.key,
         }"
         :style="{
           width: config.tileSize + 'px',
@@ -534,17 +534,35 @@ export default toNative(EditorView);
   position: relative;
   border: 1px solid green;
 }
+.editor-grid {
+  // A very light green ground so empty cells read as part of the board rather
+  // than stark white (which made the armed-tile cue invisible on fresh cells).
+  background: #eef7f0;
+}
 .editor-grid .level-tile {
   position: relative;
   flex: 0 0 auto;
   outline: 1px solid #ddd;
   cursor: crosshair;
-  transition: opacity 0.12s ease;
+  transition: box-shadow 0.15s ease;
 }
-// While an edge is armed, fade every other tile so children focus on the one
-// tile they're building (connections are always within a single tile).
-.editor-cell--dim {
-  opacity: 0.28;
+// While an edge is armed, give just that tile a soft, gently pulsing glow so
+// the child sees which one they're building on — no dimming of the rest.
+.editor-cell--armed {
+  z-index: 5;
+  animation: armed-pulse 1.3s ease-in-out infinite alternate;
+}
+@keyframes armed-pulse {
+  from {
+    box-shadow:
+      0 0 0 2px rgba(255, 179, 0, 0.55),
+      0 0 9px 2px rgba(255, 179, 0, 0.28);
+  }
+  to {
+    box-shadow:
+      0 0 0 3px rgba(255, 179, 0, 0.85),
+      0 0 16px 4px rgba(255, 179, 0, 0.5);
+  }
 }
 .editor-cell--issue {
   outline: 2px solid #ff3b30 !important;
