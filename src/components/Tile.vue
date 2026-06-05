@@ -1,7 +1,7 @@
 <template>
   <div
     class="tile clickable"
-    :class="[kindClass, { 'tile-depot': isDepot }]"
+    :class="[kindClass, { 'tile-depot': isDepot }, isDepot ? depotFacingClass : '']"
     :style="reservationStyle"
   >
     <TileRail :possible-routes="railRoutes" />
@@ -91,17 +91,13 @@
 
     <!-- Depot -->
     <template v-if="isDepot">
-      <img
-        class="depot-building"
-        :class="depotFacingClass"
-        :src="depotBuildingImg"
-      />
+      <img class="depot-building" :src="depotBuildingImg" />
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div>{{ kind }}</div>
+      <div class="debug-kind">{{ kind }}</div>
     </div>
   </div>
 </template>
@@ -376,12 +372,18 @@ $signal-offset: 20px;
   z-index: 1;
   text-align: left;
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
+  pointer-events: none;
 }
 .debug-coordinates {
   position: absolute;
   bottom: 0;
   left: 0;
+}
+.debug-kind {
+  position: absolute;
+  top: 0;
+  right: 0;
+  color: #1b3a1b;
 }
 </style>
