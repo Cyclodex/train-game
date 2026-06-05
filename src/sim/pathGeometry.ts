@@ -45,3 +45,56 @@ export function segmentPathD(
   }
   return `M ${a.x} ${a.y} Q ${c.x} ${c.y} ${b.x} ${b.y}`;
 }
+
+// Numerically integrate the arc length of a quadratic Bézier a -> c -> b.
+function quadLength(a: Pt, c: Pt, b: Pt, samples = 64): number {
+  let len = 0;
+  let prev = a;
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples;
+    const u = 1 - t;
+    const p = {
+      x: u * u * a.x + 2 * u * t * c.x + t * t * b.x,
+      y: u * u * a.y + 2 * u * t * c.y + t * t * b.y,
+    };
+    len += Math.hypot(p.x - prev.x, p.y - prev.y);
+    prev = p;
+  }
+  return len;
+}
+
+// All curve segments are the same shape (adjacent ports via the centre), so their
+// length is one constant × size — memoise it (computed once for size 1).
+let curveUnit: number | null = null;
+function curveUnitLength(): number {
+  if (curveUnit === null) {
+    curveUnit = quadLength(
+      portPoint(Position.Left, 1),
+      portPoint(Position.Center, 1),
+      portPoint(Position.Bottom, 1)
+    );
+  }
+  return curveUnit;
+}
+
+// The true arc length of a tile segment, in the same units as `size` (a straight
+// tile = size). Straights and depot-centre links are the line a->b; adjacent
+// ports curve through the centre and are ~0.81× a straight. The simulation uses
+// this to space coupled cars by *real* path length, so they don't bunch up (and
+// overlap) on curves, where normalised per-tile progress would under-count.
+export function segmentLength(
+  entryPort: Port,
+  exitPort: Port,
+  size = 1
+): number {
+  if (
+    entryPort === Position.Center ||
+    exitPort === Position.Center ||
+    oppositePort(entryPort) === exitPort
+  ) {
+    const a = portPoint(entryPort, size);
+    const b = portPoint(exitPort, size);
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return curveUnitLength() * size;
+}

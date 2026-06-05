@@ -29,8 +29,11 @@ later phases below are additive, not a rewrite.
 warn about a danger that can't happen yet):
 
 - **Distant / pre-signals (Vorsignal)** and **yellow / multi-aspect** signals —
-  these warn a driver to start braking for the next signal. They need a **train
-  momentum / braking-distance model** first. (Phase 2.)
+  these warn a driver to start braking for the next signal. The **train momentum /
+  braking-distance model** they need now exists (see
+  `docs/superpowers/specs/2026-06-04-train-momentum-design.md`): trains carry a
+  velocity and brake with look-ahead, so a yellow aspect can key off the same
+  `clearDistanceAhead` / braking-distance maths. (Phase 2.)
 - **Speed signaling** (proceed slowly through a diverging route) — needs
   **variable train speed**. (Phase 2.)
 - **Path-based signaling (PBS)** — share a block when exact paths don't cross, for

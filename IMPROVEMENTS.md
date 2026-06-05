@@ -26,8 +26,14 @@ components — they are now pure views (draw + publish their rotation/switch sta
 **Signaling & path reservation (Phase 1) is implemented** — block/route
 reservation (interlocking), always-visible directional red/green signals, and a
 manual hold. See `docs/signaling-design.md`. Deferred there: pre-signals / yellow
-aspects + speed signals (Phase 2, need a train momentum/braking model first),
-path-based signaling and deadlock resolution (Phase 3).
+aspects + speed signals (Phase 2), path-based signaling and deadlock resolution
+(Phase 3).
+
+**Train momentum (accel/braking) is implemented** — trains carry a velocity,
+accelerate away from a stop, and brake with look-ahead so they coast to rest at
+the next stop line; heavier/freight trains ramp more gently. This was the missing
+Phase-2 prerequisite for yellow/pre-signal aspects. See
+`docs/superpowers/specs/2026-06-04-train-momentum-design.md` and `src/sim/physics.ts`.
 
 Remaining from the list below: deadlock resolution (#3), level loading (#6). Minor
 polish: wagon spacing is measured in tile-fractions, so couplings look slightly

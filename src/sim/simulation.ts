@@ -8,6 +8,8 @@ import {
   routeToNextSignal,
 } from "./network";
 import { getCoordinatesId } from "@/utils/tileHelpers";
+import { segmentLength } from "./pathGeometry";
+import { trainDynamics } from "./physics";
 
 export interface Segment {
   coord: Coordinates;
@@ -22,7 +24,12 @@ export interface TrainInit {
   color: string;
   type: "people" | "fraight";
   wagonCount: number;
-  speed?: number; // tiles per second
+  speed?: number; // cruise (max) speed, tiles per second
+  // Acceleration / braking rates in tiles/sec². When omitted they are derived
+  // from the train's type + wagonCount (heavier trains ramp more gently) via
+  // trainDynamics() in physics.ts.
+  accel?: number;
+  brake?: number;
   // Per-unit lengths in tiles: index 0 is the loco, then one entry per wagon.
   // Derived from sprite pixel widths / tileSize (see trainDimensions.ts). When
   // omitted, every unit falls back to DEFAULT_UNIT_LENGTH.
@@ -41,7 +48,12 @@ export interface SimTrain {
   color: string;
   type: "people" | "fraight";
   wagonCount: number;
-  speed: number;
+  speed: number; // cruise (max) speed, tiles/sec — the velocity cap
+  // Momentum model (all tiles & tiles/sec / tiles/sec²):
+  velocity: number; // current speed, ramps between 0 and `speed`
+  accel: number; // acceleration rate
+  brake: number; // deceleration rate
+  lookAhead: number; // how far ahead to scan for stop points (braking distance + 1)
   // Per-unit lengths (loco first, then wagons) and the coupling gap, in tiles.
   unitLengths: number[];
   coupling: number;
@@ -115,6 +127,13 @@ interface BlockInfo {
 const DEFAULT_UNIT_LENGTH = 0.5;
 const DEFAULT_COUPLING = 0;
 
+// Each car is positioned/angled on two anchor points (its "bogies") set in from
+// the body ends by this fraction of the car's length, like real wheels. Anchoring
+// at the very tips made long sprites swing off the rail on tight curves; insetting
+// the anchors lets the body hug the track (with a natural overhang at the ends).
+// Visual only — tune to taste; 0 = anchor at the tips (old behaviour).
+export const BOGIE_INSET_FRAC = 0.2;
+
 // Per-unit centre offsets (from the loco head) and the head-to-tail body length,
 // all in tiles. The loco head sits at the train's headDistance; unit i's centre
 // trails by half the loco + (full lengths + gaps of the units between) + half
@@ -152,15 +171,28 @@ export interface SampledUnit {
   t: number; // 0..1 progress within the tile segment
 }
 
+// A unit (loco or wagon) sampled as its two anchor ("bogie") points on the path:
+// `front` toward the loco head, `rear` toward the tail, each set in from the body
+// ends by BOGIE_INSET_FRAC. The renderer draws the car centred on their midpoint
+// and angled along their chord (full sprite length, overhanging the anchors), so a
+// rigid sprite hugs the rail on curves like a real car on its wheels.
+export interface UnitChord {
+  front: SampledUnit;
+  rear: SampledUnit;
+}
+
 export interface Simulation {
   trains: Record<string, SimTrain>;
   step(dt: number): SimEvent[];
   trainTileId(id: string): string;
   trainProgress(id: string): number;
   trainState(id: string): TrainState;
-  // Positions of the loco (index 0) and each wagon along the recent path,
-  // for the renderer to map to screen points.
-  sampleTrain(id: string): SampledUnit[];
+  // Current speed of a train in tiles/sec (0 when stopped). Exposed for tests
+  // and future speed-aware signalling.
+  trainVelocity(id: string): number;
+  // The loco (index 0) and each wagon sampled as front/rear coupler points along
+  // the recent path, for the renderer to draw each car as a chord.
+  sampleTrain(id: string): UnitChord[];
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -214,12 +246,25 @@ export function createSimulation(config: SimConfig): Simulation {
       Array.from({ length: 1 + init.wagonCount }, () => DEFAULT_UNIT_LENGTH);
     const coupling = init.coupling ?? DEFAULT_COUPLING;
     const { unitOffsets, bodyLength } = computeBody(unitLengths, coupling);
+    const maxSpeed = init.speed ?? DEFAULT_SPEED;
+    // Per-train accel/brake: explicit if supplied, else derived from mass.
+    const derived = trainDynamics(init.type, init.wagonCount);
+    const accel = init.accel ?? derived.accel;
+    const brake = init.brake ?? derived.brake;
+    // Scan far enough ahead to cover the braking distance from cruise (so a
+    // train never brakes for something beyond where it could matter, and never
+    // brakes spuriously on open track), plus a one-tile margin.
+    const lookAhead = brake > 0 ? maxSpeed ** 2 / (2 * brake) + 1 : 1;
     trains[init.id] = {
       id: init.id,
       color: init.color,
       type: init.type,
       wagonCount: init.wagonCount,
-      speed: init.speed ?? DEFAULT_SPEED,
+      speed: maxSpeed,
+      velocity: 0,
+      accel,
+      brake,
+      lookAhead,
       unitLengths,
       coupling,
       unitOffsets,
@@ -326,6 +371,7 @@ export function createSimulation(config: SimConfig): Simulation {
     ];
     train.headIndex = 0;
     train.headProgress = 0;
+    train.velocity = 0; // it stopped in the depot; accelerate away from rest
     train.state = "running";
   }
 
@@ -364,10 +410,7 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // Record that a train is moving freely this tick. Edge-triggered: emits a
   // `proceeding` event only if it was previously blocked.
-  function noteProceeding(
-    train: SimTrain,
-    events: SimEvent[]
-  ): void {
+  function noteProceeding(train: SimTrain, events: SimEvent[]): void {
     if (blockStates.has(train.id)) {
       blockStates.delete(train.id);
       events.push({
@@ -376,6 +419,121 @@ export function createSimulation(config: SimConfig): Simulation {
         tileId: getCoordinatesId(train.path[train.headIndex].coord),
       });
     }
+  }
+
+  // Whether `train` may cross the boundary leaving the tile at `head` (a path
+  // segment: coord + entryPort) into the next tile. This is the single source of
+  // truth for "can I move on?" — both the look-ahead braking scan and the actual
+  // crossing in advance() consult it, so they can never disagree. A dead end /
+  // map edge / depot arrival, a manual Stop hold, an unreservable block (without
+  // a forced green), or a tile physically occupied by another train all block
+  // the crossing. Pure: it reads state but writes nothing (no reservations).
+  function mayCross(
+    train: SimTrain,
+    head: { coord: Coordinates; entryPort: Port }
+  ): boolean {
+    const t = traverse(level, getSwitch, head.coord, head.entryPort);
+    if (!t.next) return false; // dead end, map edge, or depot arrival
+    const headTileId = getCoordinatesId(head.coord);
+    const nextTileId = getCoordinatesId(t.next.coord);
+
+    if (
+      t.exitPort !== null &&
+      isSignalTile(headTileId) &&
+      manualHold.has(`${headTileId}:${t.exitPort}`)
+    ) {
+      return false;
+    }
+    const forcedGreen =
+      t.exitPort !== null &&
+      isSignalTile(headTileId) &&
+      manualProceed.has(`${headTileId}:${t.exitPort}`);
+
+    if (reservations.get(nextTileId) !== train.id) {
+      const block = routeToNextSignal(
+        level,
+        getSwitch,
+        isBoundary,
+        head.coord,
+        head.entryPort
+      );
+      const reservable =
+        block.length > 0 && block.every(tid => tileFreeForTrain(tid, train.id));
+      if (!reservable && !forcedGreen) return false;
+    }
+    if (isTileOccupiedByOther(nextTileId, train.id)) return false;
+    return true;
+  }
+
+  // When mayCross() refuses a crossing, classify *why* for the activity log,
+  // mirroring mayCross's checks in the same order. Only called once a train is
+  // actually held (the head boundary has a `next`, so the dead-end/depot cases
+  // are handled by the caller before this runs).
+  function blockReason(
+    train: SimTrain,
+    head: { coord: Coordinates; entryPort: Port },
+    t: ReturnType<typeof traverse>
+  ): BlockInfo {
+    const headTileId = getCoordinatesId(head.coord);
+    const nextTileId = t.next ? getCoordinatesId(t.next.coord) : headTileId;
+
+    if (
+      t.exitPort !== null &&
+      isSignalTile(headTileId) &&
+      manualHold.has(`${headTileId}:${t.exitPort}`)
+    ) {
+      return { reason: "signal-hold", tileId: headTileId };
+    }
+    const forcedGreen =
+      t.exitPort !== null &&
+      isSignalTile(headTileId) &&
+      manualProceed.has(`${headTileId}:${t.exitPort}`);
+
+    if (reservations.get(nextTileId) !== train.id) {
+      const block = routeToNextSignal(
+        level,
+        getSwitch,
+        isBoundary,
+        head.coord,
+        head.entryPort
+      );
+      const reservable =
+        block.length > 0 && block.every(tid => tileFreeForTrain(tid, train.id));
+      if (!reservable && !forcedGreen) {
+        const taken = block.find(tid => !tileFreeForTrain(tid, train.id));
+        return {
+          reason: "reservation",
+          tileId: headTileId,
+          blockedBy: taken ? blockerOf(taken, train.id) : undefined,
+        };
+      }
+    }
+    // Otherwise the next tile is physically occupied by another train.
+    return {
+      reason: "occupancy",
+      tileId: headTileId,
+      blockedBy: occupantOf(nextTileId),
+    };
+  }
+
+  // Distance (in tiles) the head may roll before it must stop, scanning forward
+  // along the live route and capped at the train's lookAhead. Read-only: it makes
+  // no reservations (those happen only when the train physically crosses). The
+  // scan accumulates the rest of the current tile plus one tile per crossable
+  // boundary, stopping at the first boundary mayCross() refuses.
+  function clearDistanceAhead(train: SimTrain): number {
+    let dist = 1 - train.headProgress;
+    let head: { coord: Coordinates; entryPort: Port } = train.path[
+      train.headIndex
+    ];
+    while (dist < train.lookAhead) {
+      if (!mayCross(train, head)) break;
+      const t = traverse(level, getSwitch, head.coord, head.entryPort);
+      if (!t.next) break; // defensive: mayCross already returns false here
+      head = { coord: t.next.coord, entryPort: t.next.entryPort };
+      dist += 1;
+    }
+    return Math.min(dist, train.lookAhead);
   }
 
   function advance(train: SimTrain, dt: number, events: SimEvent[]): void {
@@ -393,10 +551,35 @@ export function createSimulation(config: SimConfig): Simulation {
       if (train.headProgress >= dockDistance) {
         train.headProgress = dockDistance;
         train.state = "parked";
+        train.velocity = 0;
       }
       return;
     }
-    train.headProgress += train.speed * dt;
+
+    // How far we may go before the next stop line, and the fastest we may be
+    // travelling now to still brake to rest within it.
+    const clear = clearDistanceAhead(train);
+    const vSafe = Math.sqrt(2 * train.brake * clear);
+    const vCap = Math.min(train.speed, vSafe);
+
+    // Ramp the velocity toward the cap: accelerate below it, brake above it.
+    if (train.velocity < vCap) {
+      train.velocity = Math.min(vCap, train.velocity + train.accel * dt);
+    } else if (train.velocity > vCap) {
+      train.velocity = Math.max(vCap, train.velocity - train.brake * dt);
+    }
+    if (train.velocity < 0) train.velocity = 0;
+
+    // Distance this tick, never past the stop line. We do NOT snap onto the
+    // line: velocity is held >= sqrt(2*brake*clear) by the cap above, so the
+    // clamp below lands the train on the line within ~2*brake*dt² (sub-pixel)
+    // in finite time. An earlier fixed-distance snap teleported a visible few
+    // pixels on the final frame while the train still carried speed.
+    let move = train.velocity * dt;
+    if (move > clear) move = clear;
+
+    train.headProgress += move;
+
     // Why the train is held at the end of this tick, if it is. Stays null while
     // the train keeps moving; set just before a traffic break below.
     let blockInfo: BlockInfo | null = null;
@@ -414,6 +597,7 @@ export function createSimulation(config: SimConfig): Simulation {
             // "parking" branch above) instead of stopping dead at the entrance.
             train.state = "parking";
             train.headProgress = 1;
+            train.velocity = 0;
           } else {
             bounceOutOfDepot(train, head.coord);
           }
@@ -423,32 +607,23 @@ export function createSimulation(config: SimConfig): Simulation {
         train.headProgress = 1;
         break;
       }
-      const headTileId = getCoordinatesId(head.coord);
-      const nextTileId = getCoordinatesId(t.next.coord);
 
-      // Manual hold forces a signal to Stop.
-      if (
-        t.exitPort !== null &&
-        isSignalTile(headTileId) &&
-        manualHold.has(`${headTileId}:${t.exitPort}`)
-      ) {
-        blockInfo = { reason: "signal-hold", tileId: headTileId };
+      // Single crossing gate (see mayCross). It is also the safety backstop:
+      // even if the physics above rounded us a hair past the line, we never
+      // actually cross a boundary mayCross() refuses. When it refuses, classify
+      // *why* for the activity log, clamp at the stop line and stop scanning;
+      // the next tick's clearDistance collapses to ~0 and the velocity brakes.
+      if (!mayCross(train, head)) {
+        blockInfo = blockReason(train, head, t);
         train.headProgress = 1;
         break;
       }
 
-      // A player-forced green at the signal we're leaving overrides the
-      // reservation-based red: we may enter even if the block is reserved by
-      // another train. The occupancy backstop below still applies.
-      const forcedGreen =
-        t.exitPort !== null &&
-        isSignalTile(headTileId) &&
-        manualProceed.has(`${headTileId}:${t.exitPort}`);
-
-      // Entering a tile not already reserved by us means entering a new block:
-      // reserve the whole route to the next signal, or hold (the signal is Stop).
-      // We always (re)derive the block from the *current* switch state, so a
-      // switch change re-plans the route even for a train re-checking each tick.
+      // Crossing into a tile not yet reserved by us claims the whole block ahead
+      // (route to the next signal), re-derived from the live switch state. Under
+      // a forced green some tiles may belong to another train — we take only the
+      // ones free for us; the occupancy check in mayCross guards each step.
+      const nextTileId = getCoordinatesId(t.next.coord);
       if (reservations.get(nextTileId) !== train.id) {
         const block = routeToNextSignal(
           level,
@@ -457,22 +632,10 @@ export function createSimulation(config: SimConfig): Simulation {
           head.coord,
           head.entryPort
         );
-        const reservable =
-          block.length > 0 &&
-          block.every(tid => tileFreeForTrain(tid, train.id));
-        if (!reservable && !forcedGreen) {
-          const taken = block.find(tid => !tileFreeForTrain(tid, train.id));
-          blockInfo = {
-            reason: "reservation",
-            tileId: headTileId,
-            blockedBy: taken ? blockerOf(taken, train.id) : undefined,
-          };
-          train.headProgress = 1;
-          break;
-        }
-        // Reserve whatever we can (tiles free for us); under a forced green some
-        // tiles may be reserved by another train — we do not steal those, we
-        // just proceed, and the occupancy backstop guards each step.
+        // mayCross already verified this block is enterable. Reserve whatever
+        // is free for us; under a forced green some tiles may belong to another
+        // train — we do not steal those, the occupancy check in mayCross guards
+        // each step.
         const claimed: string[] = [];
         for (const tid of block) {
           if (tileFreeForTrain(tid, train.id)) {
@@ -485,16 +648,6 @@ export function createSimulation(config: SimConfig): Simulation {
         }
       }
 
-      // Occupancy backstop (covers unsignalled adjacency).
-      if (isTileOccupiedByOther(nextTileId, train.id)) {
-        blockInfo = {
-          reason: "occupancy",
-          tileId: headTileId,
-          blockedBy: occupantOf(nextTileId),
-        };
-        train.headProgress = 1;
-        break;
-      }
       const nextExit = resolveExitPort(
         level,
         getSwitch,
@@ -536,28 +689,55 @@ export function createSimulation(config: SimConfig): Simulation {
     trainState(id: string) {
       return trains[id].state;
     },
+    trainVelocity(id: string) {
+      return trains[id].velocity;
+    },
     sampleTrain(id: string) {
       const train = trains[id];
-      const headDistance = train.headIndex + train.headProgress;
-      const sampleAt = (distance: number): SampledUnit => {
-        const clamped = Math.max(0, Math.min(distance, headDistance));
-        let idx = Math.floor(clamped);
-        let t = clamped - idx;
-        if (idx >= train.path.length) {
-          idx = train.path.length - 1;
-          t = 1;
-        }
-        const seg = train.path[idx];
-        return {
-          coord: seg.coord,
-          entryPort: seg.entryPort,
-          exitPort: seg.exitPort,
-          t,
-        };
+      const segLen = (idx: number): number => {
+        const s = train.path[idx];
+        return segmentLength(s.entryPort, s.exitPort ?? s.entryPort, 1);
       };
-      // Each unit's centre trails the loco head by its precomputed offset, so
-      // spacing reflects real sprite lengths (+ coupling gap), not a constant.
-      return train.unitOffsets.map(offset => sampleAt(headDistance - offset));
+      const point = (idx: number, t: number): SampledUnit => {
+        const seg = train.path[idx];
+        return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t };
+      };
+      // Sample the point that lies `arcBack` of *true path arc length* behind the
+      // head, walking segment by segment and subtracting each segment's real
+      // length. Curve tiles are ~0.81× a straight, so this keeps coupled cars the
+      // intended pixel distance apart instead of bunching up on curves (which
+      // happened when distance was counted in normalised per-tile units).
+      const sampleAtArc = (arcBack: number): SampledUnit => {
+        let idx = train.headIndex;
+        // Arc length from the current segment's start up to the head.
+        const withinHead = train.headProgress * segLen(idx);
+        let remaining = Math.max(0, arcBack);
+        if (remaining <= withinHead) {
+          return point(idx, (withinHead - remaining) / segLen(idx));
+        }
+        remaining -= withinHead;
+        idx -= 1;
+        while (idx >= 0) {
+          const L = segLen(idx);
+          if (remaining <= L) return point(idx, 1 - remaining / L);
+          remaining -= L;
+          idx -= 1;
+        }
+        return point(0, 0); // before the start of the recorded path
+      };
+      // Each unit is sampled as its two bogie anchor points, set in from the body
+      // ends by BOGIE_INSET_FRAC of its length: front bogie at (offset − half +
+      // inset) of arc behind the head, rear bogie at (offset + half − inset).
+      // Distances are real arc length, so the anchors (and thus the car centres)
+      // stay correctly spaced on curves; insetting them keeps the body on the rail.
+      return train.unitOffsets.map((offset, i) => {
+        const half = train.unitLengths[i] / 2;
+        const inset = train.unitLengths[i] * BOGIE_INSET_FRAC;
+        return {
+          front: sampleAtArc(offset - half + inset),
+          rear: sampleAtArc(offset + half - inset),
+        };
+      });
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);

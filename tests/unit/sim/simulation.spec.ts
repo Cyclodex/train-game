@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createSimulation } from "@/sim/simulation";
+import { createSimulation, BOGIE_INSET_FRAC } from "@/sim/simulation";
 import { Position, ActiveIntersection } from "@/types";
 import { Level } from "@/tiles/model";
 import { AuthorKind, expandKind } from "@/tiles/kinds";
@@ -34,19 +34,25 @@ describe("simulation movement", () => {
           color: "red",
           type: "people",
           wagonCount: 0,
-          speed: 1, // tiles per second
+          speed: 1, // cruise speed (tiles/sec); the train ramps up to it
         },
       ],
     });
 
     expect(sim.trainTileId("t1")).toBe("0,0");
-    sim.step(1);
-    expect(sim.trainTileId("t1")).toBe("1,0");
-    sim.step(1);
+    // Drive it along the corridor; it ramps up but still passes through the
+    // tiles in order and ends held at the far map edge.
+    const visited: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      sim.step(0.5);
+      const tile = sim.trainTileId("t1");
+      if (visited[visited.length - 1] !== tile) visited.push(tile);
+    }
+    expect(visited).toEqual(["0,0", "1,0", "2,0"]); // strictly in order
     expect(sim.trainTileId("t1")).toBe("2,0");
   });
 
-  it("exposes fractional progress within the current tile", () => {
+  it("exposes fractional progress within the current tile as it ramps up", () => {
     const sim = createSimulation({
       level: corridor(3),
       trains: [
@@ -63,12 +69,21 @@ describe("simulation movement", () => {
     });
     sim.step(0.5);
     expect(sim.trainTileId("t1")).toBe("0,0");
-    expect(sim.trainProgress("t1")).toBeCloseTo(0.5, 5);
+    const p = sim.trainProgress("t1");
+    // Accelerating from rest, so it has moved but covered less than the
+    // constant-speed distance (1 tile/sec * 0.5s = 0.5).
+    expect(p).toBeGreaterThan(0);
+    expect(p).toBeLessThan(0.5);
   });
 });
 
 describe("simulation body sampling", () => {
-  it("samples the loco and wagons trailing along the recent path", () => {
+  // Along-track position (in tiles) of a sampled coupler point on a straight
+  // corridor, where x maps directly to along-track distance and t is the 0..1
+  // progress within the tile.
+  const along = (u: { coord: { x: number }; t: number }) => u.coord.x + u.t;
+
+  it("samples each unit as a front/rear coupler pair trailing along the path", () => {
     const sim = createSimulation({
       level: corridor(6),
       trains: [
@@ -87,24 +102,52 @@ describe("simulation body sampling", () => {
 
     const body = sim.sampleTrain("t1");
     expect(body).toHaveLength(3); // loco + 2 wagons
-    const x = (u: { coord: { x: number } }) => u.coord.x;
-    // Loco leads; each wagon trails behind the previous one.
-    expect(x(body[0])).toBeGreaterThanOrEqual(x(body[1]));
-    expect(x(body[1])).toBeGreaterThanOrEqual(x(body[2]));
-    // The trailing wagon is at least one tile behind the loco.
-    expect(x(body[0]) - x(body[2])).toBeGreaterThanOrEqual(1);
+    // Each unit has a front (toward the head) and a rear coupler point.
+    for (const u of body) {
+      expect(u.front).toBeDefined();
+      expect(u.rear).toBeDefined();
+      expect(along(u.front)).toBeGreaterThanOrEqual(along(u.rear)); // front leads
+    }
+    // Units are ordered head -> tail: each unit's front is behind the previous
+    // unit's rear (or equal, when coupled with no gap).
+    for (let i = 1; i < body.length; i++) {
+      expect(along(body[i].front)).toBeLessThanOrEqual(along(body[i - 1].rear));
+    }
+    // The trailing wagon's rear is at least one tile behind the loco's front.
+    expect(along(body[0].front) - along(body[2].rear)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("anchors the loco's front bogie set back from the head (like real wheels)", () => {
+    const sim = createSimulation({
+      level: corridor(6),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 1,
+          speed: 1,
+        },
+      ],
+    });
+    for (let i = 0; i < 5; i++) sim.step(0.5);
+    const head = sim.trains["t1"].headIndex + sim.trains["t1"].headProgress;
+    const front = sim.sampleTrain("t1")[0].front;
+    // The front anchor is inset from the leading tip by inset = locoLen * frac.
+    const inset = 0.5 * BOGIE_INSET_FRAC; // default loco length 0.5 tile
+    expect(along(front)).toBeCloseTo(head - inset, 5);
+    expect(along(front)).toBeLessThan(head); // set back from the very tip
   });
 });
 
 describe("simulation per-unit spacing", () => {
-  // Position (in tiles) of a sampled unit centre along a straight corridor,
-  // where x maps directly to along-track distance and t is the 0..1 progress
-  // within the tile.
   const along = (u: { coord: { x: number }; t: number }) => u.coord.x + u.t;
 
-  it("spaces consecutive units by half each length + coupling gap", () => {
-    const lengthsLoco = 0.5; // loco half a tile
-    const lengthsWagon = 0.4; // wagons shorter than the loco
+  it("anchors each car on bogies inset from its ends", () => {
+    const lengthsLoco = 0.5;
+    const lengthsWagon = 0.4;
     const coupling = 0.05;
     const sim = createSimulation({
       level: corridor(8),
@@ -122,17 +165,44 @@ describe("simulation per-unit spacing", () => {
         },
       ],
     });
-    for (let i = 0; i < 10; i++) sim.step(0.5); // well along the corridor
+    for (let i = 0; i < 10; i++) sim.step(0.5);
 
     const body = sim.sampleTrain("t1");
     expect(body).toHaveLength(3);
 
-    // loco-center -> wagon1-center = half loco + gap + half wagon
-    const d01 = along(body[0]) - along(body[1]);
-    expect(d01).toBeCloseTo(lengthsLoco / 2 + coupling + lengthsWagon / 2, 5);
-    // wagon1-center -> wagon2-center = half wagon + gap + half wagon
-    const d12 = along(body[1]) - along(body[2]);
-    expect(d12).toBeCloseTo(lengthsWagon / 2 + coupling + lengthsWagon / 2, 5);
+    // Each unit's two bogies span (length − 2*inset) of its length.
+    const span = (len: number) => len * (1 - 2 * BOGIE_INSET_FRAC);
+    expect(along(body[0].front) - along(body[0].rear)).toBeCloseTo(span(lengthsLoco), 5);
+    expect(along(body[1].front) - along(body[1].rear)).toBeCloseTo(span(lengthsWagon), 5);
+    // Gap between adjacent bogies = coupling + the two cars' insets (the ends
+    // overhang the bogies, so there is always some bogie gap).
+    const gap = coupling + lengthsLoco * BOGIE_INSET_FRAC + lengthsWagon * BOGIE_INSET_FRAC;
+    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(gap, 5);
+  });
+
+  it("leaves a bogie overhang gap between cars even with zero coupling", () => {
+    const sim = createSimulation({
+      level: corridor(8),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "fraight",
+          wagonCount: 2,
+          speed: 1,
+          unitLengths: [0.5, 0.4, 0.4],
+          coupling: 0,
+        },
+      ],
+    });
+    for (let i = 0; i < 10; i++) sim.step(0.5);
+    const body = sim.sampleTrain("t1");
+    // With no coupling the bogies are still apart by the two cars' insets.
+    const gap01 = 0.5 * BOGIE_INSET_FRAC + 0.4 * BOGIE_INSET_FRAC;
+    expect(along(body[0].rear) - along(body[1].front)).toBeCloseTo(gap01, 5);
+    expect(along(body[0].rear) - along(body[1].front)).toBeGreaterThan(0);
   });
 
   it("reports a body footprint equal to the sum of unit lengths plus gaps", () => {
@@ -155,6 +225,61 @@ describe("simulation per-unit spacing", () => {
     // 4 units, 3 gaps between them.
     const expected = 0.5 + 0.4 * 3 + 0.05 * 3;
     expect(sim.trains["t1"].bodyLength).toBeCloseTo(expected, 5);
+  });
+});
+
+describe("simulation spaces cars by true arc length across curves", () => {
+  // A straight, a curve, then a straight. A curve tile's path is only ~0.81x as
+  // long as a straight, so spacing measured in normalised per-tile progress would
+  // bunch cars up (and overlap them) on curves. The sim must instead space them by
+  // real arc length: a coupler 0.5 tile of *arc* behind the head must sit further
+  // back (smaller t) on a curve segment than a normalised 0.5 would.
+  const curveLevel: Level = {
+    "0,0": cell("TileStraight", 0), // vertical Top<->Bottom
+    "0,1": cell("TileCurve", 0), // Top<->Right
+    "1,1": cell("TileStraight", 1), // horizontal Left<->Right
+    "2,1": cell("TileStraight", 1),
+  };
+
+  it("samples a coupler at its true arc distance behind the head, even over a curve", () => {
+    const sim = createSimulation({
+      level: curveLevel,
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Top,
+          color: "red",
+          type: "people",
+          wagonCount: 0, // loco only, length 0.5 tile, coupling 0
+          speed: 2,
+        },
+      ],
+    });
+
+    // Build the path through the curve onto the second straight (1,1).
+    for (let i = 0; i < 60 && sim.trains["t1"].path.length < 3; i++) sim.step(0.25);
+    expect(sim.trains["t1"].path.length).toBeGreaterThanOrEqual(3);
+
+    // Park the head deterministically 0.2 into the straight at (1,1).
+    sim.trains["t1"].headIndex = 2;
+    sim.trains["t1"].headProgress = 0.2;
+
+    const [loco] = sim.sampleTrain("t1");
+    const inset = 0.5 * BOGIE_INSET_FRAC; // loco length 0.5
+    // Front bogie is inset back from the head, still on the straight (1,1).
+    expect(loco.front.coord).toEqual({ x: 1, y: 1 });
+    expect(loco.front.t).toBeCloseTo(0.2 - inset, 5);
+
+    // Rear bogie is (0.5 − inset) tile of ARC behind the head: 0.2 of that is on
+    // the straight, the remainder falls on the curve (length ~0.8116). The point
+    // is measured in real arc length, so it sits further back (smaller t) than the
+    // wrong normalised-per-tile answer (0.8) that bunched the cars up.
+    const curveLen = 0.8116;
+    const onCurve = 0.5 - inset - 0.2; // arc beyond the straight portion
+    expect(loco.rear.coord).toEqual({ x: 0, y: 1 });
+    expect(loco.rear.t).toBeCloseTo(1 - onCurve / curveLen, 2);
+    expect(loco.rear.t).toBeLessThan(0.8); // arc-correct, further back than normalised
   });
 });
 
@@ -932,5 +1057,196 @@ describe("simulation event log (decision-level events)", () => {
     expect(blocked.length).toBeGreaterThan(0);
     expect(blocked[0].reason).toBe("reservation");
     expect(blocked[0].blockedBy).toBe("lead");
+  });
+});
+
+describe("simulation momentum (acceleration / braking)", () => {
+  it("accelerates from rest instead of snapping to full speed", () => {
+    const sim = createSimulation({
+      level: corridor(30),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2, // cruise (tiles/sec)
+          accel: 1, // tiles/sec²
+          brake: 2, // tiles/sec²
+        },
+      ],
+    });
+
+    expect(sim.trainVelocity("t1")).toBe(0);
+
+    sim.step(0.5);
+    const v1 = sim.trainVelocity("t1");
+    // After 0.5s of accel=1 it is moving but nowhere near cruise (2).
+    expect(v1).toBeGreaterThan(0);
+    expect(v1).toBeLessThan(2);
+    // The first half-second covered far less than constant-cruise (2*0.5 = 1).
+    expect(sim.trainProgress("t1")).toBeLessThan(0.5);
+
+    sim.step(0.5);
+    expect(sim.trainVelocity("t1")).toBeGreaterThan(v1); // still ramping up
+
+    // Given enough open track it saturates at maxSpeed and holds there.
+    for (let i = 0; i < 6; i++) sim.step(0.5);
+    expect(sim.trainVelocity("t1")).toBeCloseTo(2, 5);
+  });
+
+  it("brakes smoothly to a stop at a red signal rather than halting in one tick", () => {
+    const sim = createSimulation({
+      level: corridor(12),
+      signalTiles: ["6,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2,
+          accel: 1,
+          brake: 2,
+        },
+      ],
+    });
+    sim.toggleHold("6,0", Position.Right); // hold the signal at 6,0 to Stop
+
+    const velocities: number[] = [];
+    for (let i = 0; i < 120; i++) {
+      sim.step(0.25);
+      velocities.push(sim.trainVelocity("t1"));
+      if (i > 5 && sim.trainVelocity("t1") === 0) break;
+    }
+
+    // It comes to rest held at the signal tile (never crosses into 7,0).
+    expect(sim.trainTileId("t1")).toBe("6,0");
+    expect(sim.trainVelocity("t1")).toBe(0);
+
+    // It actually cruised first...
+    expect(Math.max(...velocities)).toBeGreaterThan(1);
+    // ...then decelerated over several ticks while still rolling (smooth stop,
+    // not a single-tick clamp from cruise to zero).
+    let decelTicks = 0;
+    for (let i = 1; i < velocities.length; i++) {
+      if (velocities[i] < velocities[i - 1] && velocities[i] > 0) decelTicks++;
+    }
+    expect(decelTicks).toBeGreaterThanOrEqual(3);
+  });
+
+  it("coasts to rest into a depot and still registers the arrival", () => {
+    const depotLevel: Level = {
+      "0,0": cell("TileStraight", 1),
+      "1,0": cell("TileDepot", 3), // opening Left
+    };
+    const sim = createSimulation({
+      level: depotLevel,
+      depotColors: { "1,0": "red" },
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 2,
+          accel: 1,
+          brake: 2,
+        },
+      ],
+    });
+
+    const arrivals: any[] = [];
+    for (let i = 0; i < 60; i++) {
+      for (const e of sim.step(0.25)) if (e.type === "arrived") arrivals.push(e);
+      if (sim.trainState("t1") === "parked") break;
+    }
+
+    expect(arrivals).toHaveLength(1);
+    expect(arrivals[0]).toMatchObject({ tileId: "1,0", matched: true });
+    expect(sim.trainState("t1")).toBe("parked");
+    expect(sim.trainVelocity("t1")).toBe(0);
+  });
+
+  it("decelerates smoothly to a stop with no final position jump at 60fps dt", () => {
+    // Regression: a too-large arrival snap teleported the train onto the stop
+    // line in one frame while it still carried speed. It only shows at small
+    // (real 60fps) dt — large-dt tests mask it via the move>clear clamp.
+    const dt = 1 / 60;
+    const sim = createSimulation({
+      level: corridor(10),
+      signalTiles: ["6,0"],
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 0.5,
+          accel: 0.8,
+          brake: 0.5,
+        },
+      ],
+    });
+    sim.toggleHold("6,0", Position.Right);
+
+    const moves: number[] = [];
+    const hd = () => sim.trains.t1.headIndex + sim.trains.t1.headProgress;
+    let prev = hd();
+    for (let i = 0; i < 3000; i++) {
+      sim.step(dt);
+      const h = hd();
+      moves.push(h - prev);
+      prev = h;
+      if (sim.trainVelocity("t1") === 0 && sim.trainTileId("t1") === "6,0") break;
+    }
+
+    expect(sim.trainTileId("t1")).toBe("6,0"); // came to rest at the signal
+
+    // The train never advances more in a single frame than it would at full
+    // cruise speed (speed * dt). Acceleration and braking frames are all <=
+    // that; an arrival snap teleports a fixed distance regardless of speed and
+    // so exceeds it — that is the visible end-of-stop jump.
+    const cruiseStep = 0.5 * dt;
+    expect(Math.max(...moves)).toBeLessThanOrEqual(cruiseStep + 1e-9);
+  });
+
+  it("a heavier (lower-accel) train pulls away more slowly than a light one", () => {
+    const make = (id: string, accel: number) =>
+      createSimulation({
+        level: corridor(30),
+        trains: [
+          {
+            id,
+            coord: { x: 0, y: 0 },
+            entryPort: Position.Left,
+            color: "red",
+            type: "people",
+            wagonCount: 0,
+            speed: 3,
+            accel,
+            brake: 2,
+          },
+        ],
+      });
+    const light = make("light", 1.2);
+    const heavy = make("heavy", 0.4);
+
+    for (let i = 0; i < 4; i++) {
+      light.step(0.25);
+      heavy.step(0.25);
+    }
+    // Same elapsed time, same cruise cap: the lighter train is further along.
+    expect(light.trainVelocity("light")).toBeGreaterThan(
+      heavy.trainVelocity("heavy")
+    );
   });
 });
