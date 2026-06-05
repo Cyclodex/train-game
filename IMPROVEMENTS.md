@@ -4,6 +4,12 @@ A prioritised, actionable list of ways to move the train game forward. Ordered
 roughly by value-for-effort. Each item notes the rough approach and the main
 files involved.
 
+> **Wider brainstorm:** for a broader (less filtered) exploration of future
+> directions — objectives & game modes, terrain (tunnels, bridges, level
+> crossings, stations, obstacles), trains/cargo/economy, atmosphere, advanced
+> signaling, and the open design questions — see [`docs/brainstorm/`](docs/brainstorm/README.md).
+> Start at [`docs/brainstorm/99-open-questions.md`](docs/brainstorm/99-open-questions.md).
+
 ## Recently landed (the model/view refactor)
 
 The architecture was rebuilt around an authoritative, deterministic simulation
