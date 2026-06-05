@@ -302,15 +302,17 @@ class EditorView extends Vue {
   isArmed(id: string, port: Port): boolean {
     return this.armed?.id === id && this.armed?.port === port;
   }
-  // The ghost rails to draw on `id`: only when an edge here is armed and a
-  // different edge of the same tile is hovered.
+  // The ghost rails to draw on `id`. Anchor on the in-progress drag's start
+  // edge if there is one, otherwise the armed (click → click) edge — so the
+  // preview shows for both gestures whenever a different edge of the same tile
+  // is hovered.
   previewRails(id: string): string[] {
-    const a = this.armed;
+    const anchor = this.pressFrom ?? this.armed;
     const h = this.hoverPort;
-    if (this.tool !== "connect" || !a || !h) return [];
-    if (a.id !== id || h.id !== id || a.port === h.port) return [];
+    if (this.tool !== "connect" || !anchor || !h) return [];
+    if (anchor.id !== id || h.id !== id || anchor.port === h.port) return [];
     return railPathsFor(
-      a.port,
+      anchor.port,
       h.port,
       this.config.tileSize,
       this.config.railDistanceFromPath
