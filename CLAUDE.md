@@ -69,8 +69,10 @@ renderer import this module, so topology is defined exactly once. See
 - `kinds.ts` — `expandKind("straight"|"curve"|"cross"|"tjunction"|"depot",
   rotation, { signals, disable })`: friendly authoring sugar → `TileCell`.
 - `geometry.ts` — `railPathsFor()`: the two rail paths per connection.
-- `autotile.ts` — `deriveConnections()` / `deriveLevel()`: derive a cell's (or a
-  whole painted grid's) connections from neighbours. The editor's brain.
+- `autotile.ts` — `deriveConnections()`: derive a cell's connections from its
+  neighbours. Used by the generator (the editor draws connections explicitly).
+- `editOps.ts` — pure single-cell editing reducers (`toggleConnection`,
+  `setDepot`/`rotateDepot`, `toggleSignalPort`) used by the editor.
 - `validate.ts` — `validateLevel()`: connectivity / dangling-track / reachable
   depots / per-train route checks.
 - `generate.ts` — `generateLevel(seed, opts)`: seeded procedural levels (a track
@@ -128,8 +130,10 @@ Key files:
 - `src/App.vue` — thin shell: `<router-view>`.
 - `src/views/PlayView.vue` — level + train definitions, creates/provides the game,
   pause/play and speed (1x/2x/4x scale the loop's `dt`), delivery count, layout.
-- `src/views/EditorView.vue` — paint/depot/erase tools (auto-tiling), live
-  validation, random-map button, export/import, "Play this" hand-off.
+- `src/views/EditorView.vue` — connect/depot/signal/erase tools. Connect draws
+  rail connections explicitly (drag edge dot → edge dot; click a rail to delete);
+  signals are per-direction (click a port). Live validation, random-map button,
+  export/import, "Play this" hand-off.
 - `src/game.ts` — the `createGame()` controller + rAF render loop (see above).
 - `src/sim/*` — the headless simulation (see the Simulation section).
 - `src/tiles/*` — the data-driven tile model (see the Tile model section).
