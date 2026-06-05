@@ -147,7 +147,7 @@ import { Position } from "@/types";
 import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
 import {
   emptyCell,
-  toggleConnection,
+  addConnection,
   removeConnection,
   setDepot,
   rotateDepot,
@@ -156,6 +156,7 @@ import {
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
+import { planRoute, OpenEnd } from "@/tiles/routePlanner";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
@@ -172,7 +173,7 @@ const EDGES: Port[] = [
 
 const HINTS: Record<Tool, string> = {
   connect:
-    "Click one edge then another (or drag between them) to lay a rail.",
+    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
@@ -206,9 +207,13 @@ class EditorView extends Vue {
   // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
   // picked in the two-click (click → click) connection flow.
   pressFrom: { id: string; port: Port } | null = null;
+  // `armed` is the route head: the open end the track grows from. In route mode
+  // each click extends the route and advances the head; clicking the head edge
+  // again (or Esc) finishes. `routeStarted` becomes true once the route's first
+  // segment is laid, so the start tile is only laid once.
   armed: { id: string; port: Port } | null = null;
-  // The edge currently hovered, used to ghost-preview the rail an armed edge
-  // would connect to.
+  routeStarted = false;
+  // The edge currently hovered, used to ghost-preview the route.
   hoverPort: { id: string; port: Port } | null = null;
   showIo = false;
   ioText = "";
@@ -302,21 +307,40 @@ class EditorView extends Vue {
   isArmed(id: string, port: Port): boolean {
     return this.armed?.id === id && this.armed?.port === port;
   }
-  // The ghost rails to draw on `id`. Anchor on the in-progress drag's start
-  // edge if there is one, otherwise the armed (click → click) edge — so the
-  // preview shows for both gestures whenever a different edge of the same tile
-  // is hovered.
-  previewRails(id: string): string[] {
-    const anchor = this.pressFrom ?? this.armed;
-    const h = this.hoverPort;
-    if (this.tool !== "connect" || !anchor || !h) return [];
-    if (anchor.id !== id || h.id !== id || anchor.port === h.port) return [];
-    return railPathsFor(
-      anchor.port,
-      h.port,
-      this.config.tileSize,
-      this.config.railDistanceFromPath
+  get routeOpts() {
+    // `passable` is left default (everything passable); the future "blocked
+    // tiles" feature plugs in here without touching the router.
+    return { width: this.config.levelSizeX, height: this.levelSizeY };
+  }
+  // Ghost rails for the whole previewed route, keyed by cell id. Anchors on the
+  // in-progress drag start if there is one, otherwise the route head — so the
+  // preview spans every tile for both gestures.
+  get previewByCell(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    const from = this.pressFrom ?? this.armed;
+    const to = this.hoverPort;
+    if (this.tool !== "connect" || !from || !to) return out;
+    const steps = planRoute(
+      { id: from.id, edge: from.port },
+      { id: to.id, edge: to.port },
+      this.routeOpts
     );
+    if (!steps) return out;
+    const size = this.config.tileSize;
+    const off = this.config.railDistanceFromPath;
+    const add = (id: string, a: Port, b: Port) => {
+      (out[id] ??= []).push(...railPathsFor(a, b, size, off));
+    };
+    // The start tile is laid as a straight only for the first segment of a
+    // fresh route (drag is always a one-shot first segment).
+    if ((this.pressFrom || !this.routeStarted) && from.id !== to.id) {
+      add(from.id, oppositePort(from.port), from.port);
+    }
+    for (const s of steps) add(s.id, s.a, s.b);
+    return out;
+  }
+  previewRails(id: string): string[] {
+    return this.previewByCell[id] ?? [];
   }
   hasSignal(tile: Level[string] | null, port: Port): boolean {
     return !!tile?.signals?.includes(port);
@@ -334,10 +358,32 @@ class EditorView extends Vue {
     this.persist();
   }
 
-  // --- connect tool: drag gesture ---
-  // A drag starts here; if it ends on a different edge of the same tile
-  // (onZoneUp) it lays a rail. The browser only fires `click` when down and up
-  // share an element, so a drag never also triggers the click→click flow below.
+  // Lay every connection of the route from `from` to `to`. For the first
+  // segment of a route (and every one-shot drag) the anchor tile is also laid
+  // as a straight in its clicked direction. Returns false if no route fits.
+  commitSegment(from: OpenEnd, to: OpenEnd, layAnchor: boolean): boolean {
+    const steps = planRoute(from, to, this.routeOpts);
+    if (!steps) return false;
+    if (layAnchor && from.id !== to.id) {
+      this.commit(
+        from.id,
+        addConnection(this.cellOf(from.id), oppositePort(from.edge), from.edge)
+      );
+    }
+    for (const s of steps) {
+      this.commit(s.id, addConnection(this.cellOf(s.id), s.a, s.b));
+    }
+    return true;
+  }
+  finishRoute() {
+    this.armed = null;
+    this.routeStarted = false;
+  }
+
+  // --- connect tool: drag gesture (one-shot single route) ---
+  // A drag starts here; if it ends on a different zone (onZoneUp) it lays one
+  // route. The browser only fires `click` when down and up share an element, so
+  // a drag never also triggers the click→click chaining below.
   onZoneDown(id: string, port: Port) {
     if (this.tool !== "connect") return;
     this.pressFrom = { id, port };
@@ -346,26 +392,35 @@ class EditorView extends Vue {
     if (this.tool !== "connect") return;
     const from = this.pressFrom;
     this.pressFrom = null;
-    if (from && from.id === id && from.port !== port) {
-      this.commit(id, toggleConnection(this.cellOf(id), from.port, port));
-      this.armed = null;
+    if (from && (from.id !== id || from.port !== port)) {
+      this.commitSegment({ id: from.id, edge: from.port }, { id, edge: port }, true);
     }
   }
-  // --- connect/signal tool: click ---
+  // --- connect/signal tool: click (route mode chaining) ---
   onZoneClick(id: string, port: Port) {
     if (this.tool === "signal") {
       this.commit(id, toggleSignalPort(this.cellOf(id), port));
       return;
     }
     if (this.tool !== "connect") return;
-    const a = this.armed;
-    if (a && a.id === id && a.port === port) {
-      this.armed = null; // tapping the armed edge again cancels
-    } else if (a && a.id === id) {
-      this.commit(id, toggleConnection(this.cellOf(id), a.port, port));
-      this.armed = null;
-    } else {
-      this.armed = { id, port }; // arm this edge (or move the arm to a new tile)
+    const head = this.armed;
+    if (!head) {
+      this.armed = { id, port }; // start a route at this open end
+      this.routeStarted = false;
+      return;
+    }
+    if (head.id === id && head.port === port) {
+      this.finishRoute(); // clicking the head edge again finishes
+      return;
+    }
+    const ok = this.commitSegment(
+      { id: head.id, edge: head.port },
+      { id, edge: port },
+      !this.routeStarted
+    );
+    if (ok) {
+      this.routeStarted = true;
+      this.armed = { id, port }; // advance the head to the new open end
     }
   }
   onZoneEnter(id: string, port: Port) {
@@ -403,9 +458,18 @@ class EditorView extends Vue {
   // --- toolbar actions ---
   setTool(t: Tool) {
     this.tool = t;
-    this.armed = null;
     this.pressFrom = null;
     this.hoverPort = null;
+    this.finishRoute();
+  }
+  onKeydown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") this.finishRoute();
+  };
+  mounted() {
+    window.addEventListener("keydown", this.onKeydown);
+  }
+  unmounted() {
+    window.removeEventListener("keydown", this.onKeydown);
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];

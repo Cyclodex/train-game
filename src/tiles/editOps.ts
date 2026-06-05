@@ -18,6 +18,14 @@ export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, connections };
 }
 
+// Ensure a connection is present without ever removing one (unlike
+// toggleConnection). Idempotent — used when laying a route so re-crossing a
+// tile forms a junction instead of deleting the rail.
+export function addConnection(cell: TileCell, a: Port, b: Port): TileCell {
+  if (cell.connections.some(c => samePair(c, [a, b]))) return cell;
+  return { ...cell, connections: [...cell.connections, [a, b]] };
+}
+
 export function removeConnection(cell: TileCell, a: Port, b: Port): TileCell {
   return {
     ...cell,

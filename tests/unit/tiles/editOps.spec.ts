@@ -4,6 +4,7 @@ import { samePair } from "@/tiles/model";
 import {
   emptyCell,
   toggleConnection,
+  addConnection,
   removeConnection,
   setDepot,
   rotateDepot,
@@ -36,6 +37,32 @@ describe("toggleConnection", () => {
   it("does not mutate the input cell", () => {
     const c = emptyCell();
     toggleConnection(c, Top, Bottom);
+    expect(c.connections).toHaveLength(0);
+  });
+});
+
+describe("addConnection", () => {
+  it("adds when absent", () => {
+    const c = addConnection(emptyCell(), Top, Bottom);
+    expect(has(c, [Top, Bottom])).toBe(true);
+  });
+
+  it("is idempotent — re-adding the same pair does not remove it", () => {
+    let c = addConnection(emptyCell(), Top, Bottom);
+    c = addConnection(c, Bottom, Top); // reversed, already present
+    expect(has(c, [Top, Bottom])).toBe(true);
+    expect(c.connections).toHaveLength(1);
+  });
+
+  it("accumulates distinct pairs into a junction", () => {
+    let c = addConnection(emptyCell(), Left, Right);
+    c = addConnection(c, Top, Bottom);
+    expect(c.connections).toHaveLength(2);
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = emptyCell();
+    addConnection(c, Top, Bottom);
     expect(c.connections).toHaveLength(0);
   });
 });
