@@ -199,6 +199,9 @@ export function createGame(
     height: roadH,
     seed: colorSeed,
     spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
+    spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
+    carSpeed: 0.5, // tiles/sec — slow enough to read on screen
+    maxCars: 8,
   });
   const roadCars = reactive([]) as RoadCar[];
 
