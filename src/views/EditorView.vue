@@ -7,7 +7,7 @@
           v-for="t in tools"
           :key="t"
           :class="{ active: tool === t }"
-          @click="tool = t"
+          @click="setTool(t)"
         >
           {{ t }}
         </button>
@@ -32,8 +32,8 @@
     <div
       class="level editor-grid"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
-      @mouseup="dragFrom = null"
-      @mouseleave="dragFrom = null"
+      @mouseup="pressFrom = null"
+      @mouseleave="pressFrom = null"
     >
       <div
         v-for="cell in gridCells"
@@ -58,35 +58,56 @@
           class="overlay"
           :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
         >
-          <!-- Deletable connection hit-paths (connect mode) -->
-          <template v-if="tool === 'connect' && cell.tile">
+          <!-- Edge hit-zones: the whole tile is clickable, split into four
+               triangles (one per edge) for big, kid-friendly targets. -->
+          <template v-if="tool === 'connect' || tool === 'signal'">
             <path
-              v-for="(conn, i) in cell.tile.connections"
-              :key="'c' + i"
-              :d="connPath(conn)"
-              class="conn-hit"
-              @click.stop="deleteConn(cell.key, conn)"
+              v-for="p in EDGES"
+              :key="'z' + p"
+              :data-port="p"
+              :d="zonePath(p)"
+              class="zone"
+              :class="{
+                'zone--armed': isArmed(cell.key, p),
+                'zone--signal': tool === 'signal' && hasSignal(cell.tile, p),
+              }"
+              @mousedown.stop="onZoneDown(cell.key, p)"
+              @mouseup.stop="onZoneUp(cell.key, p)"
+              @click.stop="onZoneClick(cell.key, p)"
+            />
+            <!-- Visual-only edge markers; the whole triangle around them is the
+                 real target (pointer-events disabled). -->
+            <circle
+              v-for="p in EDGES"
+              :key="'d' + p"
+              :cx="dot(p).x"
+              :cy="dot(p).y"
+              r="10"
+              class="zone-dot"
+              :class="{
+                'zone-dot--armed': isArmed(cell.key, p),
+                'zone-dot--signal': tool === 'signal' && hasSignal(cell.tile, p),
+              }"
             />
           </template>
 
-          <!-- Port dots (connect + signal modes) -->
-          <template v-if="tool === 'connect' || tool === 'signal'">
-            <circle
-              v-for="p in EDGES"
-              :key="'p' + p"
-              :data-port="p"
-              :cx="dot(p).x"
-              :cy="dot(p).y"
-              r="12"
-              class="port"
-              :class="{
-                'port--armed': isArmed(cell.key, p),
-                'port--signal': hasSignal(cell.tile, p),
-              }"
-              @mousedown.stop="onPortDown(cell.key, p)"
-              @mouseup.stop="onPortUp(cell.key, p)"
-              @click.stop="onPortClick(cell.key, p)"
-            />
+          <!-- Rail-delete handles (connect mode): a tappable ✕ near the middle
+               of each rail, layered above the zones. -->
+          <template v-if="tool === 'connect' && cell.tile">
+            <g
+              v-for="(conn, i) in cell.tile.connections"
+              :key="'x' + i"
+              class="del"
+              @click.stop="deleteConn(cell.key, conn)"
+            >
+              <circle
+                :cx="delPos(conn).x"
+                :cy="delPos(conn).y"
+                r="13"
+                class="del-bg"
+              />
+              <path :d="delMark(conn)" class="del-mark" />
+            </g>
           </template>
         </svg>
       </div>
@@ -119,7 +140,6 @@ import {
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
-import { segmentPathD } from "@/sim/pathGeometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
@@ -135,9 +155,10 @@ const EDGES: Port[] = [
 ];
 
 const HINTS: Record<Tool, string> = {
-  connect: "Drag between two edge dots to lay a rail. Click a rail to delete it.",
+  connect:
+    "Click one edge then another (or drag between them) to lay a rail. Tap the ✕ on a rail to delete it.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
-  signal: "Click an edge dot to toggle a signal for that direction.",
+  signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a cell to clear it.",
 };
 
@@ -166,7 +187,10 @@ class EditorView extends Vue {
   tools: Tool[] = ["connect", "depot", "signal", "erase"];
   tool: Tool = "connect";
   level: Level = reactive(loadLevel());
-  dragFrom: { id: string; port: Port } | null = null;
+  // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
+  // picked in the two-click (click → click) connection flow.
+  pressFrom: { id: string; port: Port } | null = null;
+  armed: { id: string; port: Port } | null = null;
   showIo = false;
   ioText = "";
 
@@ -223,11 +247,41 @@ class EditorView extends Vue {
         return { x: inset, y: c };
     }
   }
-  connPath(conn: PortPair): string {
-    return segmentPathD(conn[0], conn[1], this.config.tileSize);
+  // The triangular hit-zone for one edge: from that edge's two corners to the
+  // tile centre, so every point in the tile maps to exactly one edge.
+  zonePath(port: Port): string {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    switch (port) {
+      case Position.Top:
+        return `M0 0 L${s} 0 L${c} ${c} Z`;
+      case Position.Right:
+        return `M${s} 0 L${s} ${s} L${c} ${c} Z`;
+      case Position.Bottom:
+        return `M${s} ${s} L0 ${s} L${c} ${c} Z`;
+      default:
+        return `M0 ${s} L0 0 L${c} ${c} Z`;
+    }
+  }
+  // A port's reference point: the edge dot, or the tile centre for Center.
+  portPoint(port: Port): { x: number; y: number } {
+    const c = this.config.tileSize / 2;
+    return port === Position.Center ? { x: c, y: c } : this.dot(port);
+  }
+  // Place a rail's delete handle between its two ports, nudged toward the first
+  // port so crossing rails (e.g. a cross tile) get separate, tappable handles.
+  delPos(conn: PortPair): { x: number; y: number } {
+    const a = this.portPoint(conn[0]);
+    const b = this.portPoint(conn[1]);
+    return { x: (a.x + b.x) / 2 + 0.3 * (a.x - b.x) / 2, y: (a.y + b.y) / 2 + 0.3 * (a.y - b.y) / 2 };
+  }
+  delMark(conn: PortPair): string {
+    const { x, y } = this.delPos(conn);
+    const r = 6;
+    return `M${x - r} ${y - r} L${x + r} ${y + r} M${x + r} ${y - r} L${x - r} ${y + r}`;
   }
   isArmed(id: string, port: Port): boolean {
-    return this.dragFrom?.id === id && this.dragFrom?.port === port;
+    return this.armed?.id === id && this.armed?.port === port;
   }
   hasSignal(tile: Level[string] | null, port: Port): boolean {
     return !!tile?.signals?.includes(port);
@@ -245,26 +299,42 @@ class EditorView extends Vue {
     this.persist();
   }
 
-  // --- connect tool ---
-  onPortDown(id: string, port: Port) {
+  // --- connect tool: drag gesture ---
+  // A drag starts here; if it ends on a different edge of the same tile
+  // (onZoneUp) it lays a rail. The browser only fires `click` when down and up
+  // share an element, so a drag never also triggers the click→click flow below.
+  onZoneDown(id: string, port: Port) {
     if (this.tool !== "connect") return;
-    this.dragFrom = { id, port };
+    this.pressFrom = { id, port };
   }
-  onPortUp(id: string, port: Port) {
-    if (this.tool !== "connect" || !this.dragFrom) return;
-    if (this.dragFrom.id === id && this.dragFrom.port !== port) {
-      this.commit(id, toggleConnection(this.cellOf(id), this.dragFrom.port, port));
+  onZoneUp(id: string, port: Port) {
+    if (this.tool !== "connect") return;
+    const from = this.pressFrom;
+    this.pressFrom = null;
+    if (from && from.id === id && from.port !== port) {
+      this.commit(id, toggleConnection(this.cellOf(id), from.port, port));
+      this.armed = null;
     }
-    this.dragFrom = null;
+  }
+  // --- connect/signal tool: click ---
+  onZoneClick(id: string, port: Port) {
+    if (this.tool === "signal") {
+      this.commit(id, toggleSignalPort(this.cellOf(id), port));
+      return;
+    }
+    if (this.tool !== "connect") return;
+    const a = this.armed;
+    if (a && a.id === id && a.port === port) {
+      this.armed = null; // tapping the armed edge again cancels
+    } else if (a && a.id === id) {
+      this.commit(id, toggleConnection(this.cellOf(id), a.port, port));
+      this.armed = null;
+    } else {
+      this.armed = { id, port }; // arm this edge (or move the arm to a new tile)
+    }
   }
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
-  }
-
-  // --- signal tool ---
-  onPortClick(id: string, port: Port) {
-    if (this.tool !== "signal") return;
-    this.commit(id, toggleSignalPort(this.cellOf(id), port));
   }
 
   // --- depot / erase (cell-level click) ---
@@ -288,6 +358,11 @@ class EditorView extends Vue {
   }
 
   // --- toolbar actions ---
+  setTool(t: Tool) {
+    this.tool = t;
+    this.armed = null;
+    this.pressFrom = null;
+  }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];
     this.persist();
@@ -437,29 +512,54 @@ export default toNative(EditorView);
   height: 100%;
   z-index: 30;
 }
-.port {
-  fill: rgba(66, 184, 131, 0.35);
-  stroke: #2c3e50;
+// Edge hit-zones: faint by default so the rail art shows through, brighter on
+// hover, solid amber when armed for the click → click connection flow.
+.zone {
+  fill: rgba(66, 184, 131, 0.06);
+  stroke: rgba(44, 62, 80, 0.18);
   stroke-width: 1;
   cursor: pointer;
+  transition: fill 0.08s;
   &:hover {
-    fill: rgba(66, 184, 131, 0.8);
+    fill: rgba(66, 184, 131, 0.28);
   }
 }
-.port--armed {
+.zone--armed,
+.zone--armed:hover {
+  fill: rgba(255, 179, 0, 0.45);
+}
+.zone--signal {
+  fill: rgba(255, 59, 48, 0.28);
+}
+.zone-dot {
+  fill: rgba(66, 184, 131, 0.9);
+  stroke: #2c3e50;
+  stroke-width: 1;
+  pointer-events: none;
+}
+.zone-dot--armed {
   fill: #ffb300;
 }
-.port--signal {
+.zone-dot--signal {
   fill: #ff3b30;
 }
-.conn-hit {
-  stroke: transparent;
-  stroke-width: 24;
-  fill: none;
+.del {
   cursor: pointer;
-  &:hover {
-    stroke: rgba(255, 59, 48, 0.4);
-  }
+}
+.del-bg {
+  fill: rgba(255, 59, 48, 0.85);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.del:hover .del-bg {
+  fill: #ff3b30;
+}
+.del-mark {
+  stroke: #fff;
+  stroke-width: 2.5;
+  fill: none;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 .io-box {
   position: fixed;
