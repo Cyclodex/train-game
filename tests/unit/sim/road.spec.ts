@@ -414,9 +414,10 @@ describe("createRoadSim — launch reaction delay", () => {
 });
 
 describe("createRoadSim — acceleration ramp", () => {
-  it("ramps a car up from rest instead of snapping to cruise speed", () => {
-    // A single car on an open straight road. It should start slow and work up to
-    // cruise speed over several ticks, not cover a full cruise step immediately.
+  it("enters the map already at cruise speed (no ramp-up from the edge)", () => {
+    // A car drives in from off-screen, so it appears already rolling: its first
+    // movement on the map should be a full cruise step, not a tiny ramp-from-rest
+    // step. speedSpread 0 pins the cruise speed to carSpeed so the step is exact.
     const sim = createRoadSim({
       level: straightRoad(),
       width: 3,
@@ -424,11 +425,12 @@ describe("createRoadSim — acceleration ramp", () => {
       seed: 7,
       spawnInterval: 0.3,
       carSpeed: 0.5,
+      speedSpread: 0,
       maxCars: 1,
     });
     const deltas: number[] = [];
     let prev: number | null = null;
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 40; i++) {
       sim.step(0.05, () => false);
       const c = sim.cars()[0];
       if (!c) {
@@ -441,9 +443,56 @@ describe("createRoadSim — acceleration ramp", () => {
     }
     expect(deltas.length).toBeGreaterThan(5);
     const cruiseStep = 0.5 * 0.05; // speed * dt — the distance at full cruise
-    // The first movement out of rest is a small fraction of a cruise step…
+    // The very first movement after entering is already a full cruise step.
+    expect(deltas[0]).toBeGreaterThan(cruiseStep * 0.9);
+    expect(deltas[0]).toBeLessThan(cruiseStep * 1.1);
+  });
+
+  it("ramps back up from rest after stopping at a closed gate", () => {
+    // The accel ramp still applies when a car has to STOP on the map and get going
+    // again: hold one at a closed crossing, then open it and watch the first
+    // movements come out small and build up toward cruise (not a full step at once).
+    const lvl: Level = {
+      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "1,0": {
+        connections: [[Position.Top, Position.Bottom]],
+        road: [[Position.Left, Position.Right]],
+      },
+      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+    };
+    let closed = true;
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      speedSpread: 0,
+      maxCars: 1,
+    });
+    // Settle the car hard against the closed gate (fully stopped).
+    for (let i = 0; i < 200; i++) sim.step(0.05, id => id === "1,0" && closed);
+    // Open the gate and let the reaction delay elapse, then record the movements.
+    closed = false;
+    const deltas: number[] = [];
+    let prev: number | null = null;
+    for (let i = 0; i < 120; i++) {
+      sim.step(0.05, () => false);
+      const c = sim.cars()[0];
+      if (!c) {
+        prev = null;
+        continue;
+      }
+      const pos = c.headIndex + c.headProgress;
+      if (prev !== null && pos - prev > 1e-9) deltas.push(pos - prev);
+      prev = pos;
+    }
+    expect(deltas.length).toBeGreaterThan(5);
+    const cruiseStep = 0.5 * 0.05;
+    // First movement out of rest is a small fraction of a cruise step…
     expect(deltas[0]).toBeLessThan(cruiseStep * 0.5);
-    // …and the car works up to roughly cruise speed once rolling.
+    // …and it works back up to roughly cruise speed once rolling.
     expect(Math.max(...deltas)).toBeGreaterThan(cruiseStep * 0.9);
   });
 });

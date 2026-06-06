@@ -65,6 +65,12 @@ export interface TrafficConfig {
   spawnInterval?: number; // mean seconds between spawn attempts (smaller = busier)
   mix?: TrafficMix; // relative weights of car/truck/semi
   maxCars?: number; // cap on live vehicles
+  // Spawn cars only from these explicit entries instead of the game's default
+  // map-edge detection. Lets a scenario model directed lanes (e.g. a divided road
+  // where each lane is one-way in opposite directions) or bias one direction by
+  // listing its entry more than once — entries are picked uniformly, so a
+  // duplicated entry spawns proportionally more often.
+  spawnEntries?: RoadEntry[];
 }
 
 // --- Road traversal ----------------------------------------------------------
@@ -592,7 +598,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       id: `car${nextId++}`,
       kind,
       speed,
-      velocity: 0,
+      // Enter the map already at cruise speed — a car drives in from off-screen, so
+      // it's been rolling before it appears, not starting from a standstill at the
+      // edge. (The accel ramp from rest still applies when a car has to STOP on the
+      // map and then get going again — at a queue or a closed crossing.) clearAhead
+      // caps the first step at the available room, so entering at speed can't make
+      // it overrun a car just ahead.
+      velocity: speed,
       accel: DEFAULT_CAR_ACCEL,
       brake: DEFAULT_CAR_BRAKE,
       length,

@@ -239,6 +239,9 @@ export function createGame(
     ...(traffic?.spawnInterval !== undefined && { spawnInterval: traffic.spawnInterval }),
     ...(traffic?.maxCars !== undefined && { maxCars: traffic.maxCars }),
     ...(traffic?.mix !== undefined && { mix: traffic.mix }),
+    // A level may pin exact spawn entries (e.g. a divided road with each lane
+    // one-way in opposite directions), overriding the default edge detection.
+    ...(traffic?.spawnEntries !== undefined && { spawnEntries: traffic.spawnEntries }),
   });
   const roadCars = reactive([]) as RoadCar[];
   // Road-junction tiles a car currently holds (tileId → car id), refreshed each
