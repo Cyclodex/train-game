@@ -507,6 +507,13 @@ export function createGame(
       const obs = handleEvents(sim.step(scaled));
       // A crossing is closed while a train reserves or sits on that tile.
       roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
+      // Fold the road's crossing-flow snapshot into the observation so the
+      // objective layer can score patience + throughput (Crossing Keeper). The
+      // automatic crossing can't produce an incident, so the delta stays 0.
+      const rf = roadSim.frame();
+      obs.maxCarWaitSec = rf.maxCarWaitSec;
+      obs.carsDelivered = rf.carsDelivered;
+      obs.crossingIncidentDelta = 0;
       tracker.observe(obs, scaled);
       refreshObjective();
     }
