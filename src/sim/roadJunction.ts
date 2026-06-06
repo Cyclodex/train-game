@@ -104,8 +104,8 @@ export function movementsConflict(a: Movement, b: Movement): boolean {
  * alphabetically so conflictKey(a,b) === conflictKey(b,a).
  */
 export function conflictKey(a: Movement, b: Movement): string {
-  const ka = `${a.entry}:${a.exit}`;
-  const kb = `${b.entry}:${b.exit}`;
+  const ka = `${Position[a.entry]}:${Position[a.exit]}`;
+  const kb = `${Position[b.entry]}:${Position[b.exit]}`;
   return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 
@@ -123,7 +123,7 @@ export function buildConflictMatrix(road: PortPair[]): Set<string> {
       { entry: a, exit: b },
       { entry: b, exit: a },
     ] as Movement[]) {
-      const k = `${m.entry}:${m.exit}`;
+      const k = `${Position[m.entry]}:${Position[m.exit]}`;
       if (!seen.has(k)) {
         seen.add(k);
         movements.push(m);
@@ -131,7 +131,7 @@ export function buildConflictMatrix(road: PortPair[]): Set<string> {
     }
   }
 
-  // Check every ordered pair once.
+  // Check every unordered pair once.
   const matrix = new Set<string>();
   for (let i = 0; i < movements.length; i++) {
     for (let j = i + 1; j < movements.length; j++) {
