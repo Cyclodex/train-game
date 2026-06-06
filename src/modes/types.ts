@@ -45,9 +45,15 @@ export interface ModeContext {
 }
 
 // Optional per-tick source of new trains/demand (Time Attack / Endless). Puzzle
-// and Sandbox return none. Headless + deterministic, driven by scaled dt.
+// and Sandbox return none. Headless + deterministic, driven by scaled dt: each
+// step advances its own clock by dt and returns the trains that became due this
+// tick (the ids must exist in setup.trains so colours/DOM are already assigned).
+// game.ts performs the actual injection (resolving colour + sprite lengths and
+// calling sim.addTrain), so the spawner stays a pure schedule cursor.
 export interface Spawner {
-  step(dt: number): void;
+  step(dt: number): TrainDef[];
+  // Re-arm to the start of the schedule (called from game.reset()).
+  reset(): void;
 }
 
 export interface GameMode {
@@ -69,3 +75,4 @@ export function objectiveFromSpec(setup: ModeSetup): ObjectiveTracker {
 
 // Re-export the per-tick observation shape so modes/game.ts share one definition.
 export type { Observation };
+export type { TrainDef };

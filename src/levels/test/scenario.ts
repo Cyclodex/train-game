@@ -31,7 +31,10 @@ export function mkTrain(
   y: number,
   type: "people" | "fraight",
   wagonCount: number,
-  to: string
+  to: string,
+  // Time Attack: when set (>0), the train is injected by the mode's spawner at
+  // this sim-time instead of being present from the start (a predefined schedule).
+  spawnAtSec?: number
 ): TrainObject {
   return {
     id,
@@ -45,6 +48,7 @@ export function mkTrain(
     })),
     routeDestinations: [{ to }],
     currentRouteDestination: 0,
+    ...(spawnAtSec !== undefined && { spawnAtSec }),
   };
 }
 

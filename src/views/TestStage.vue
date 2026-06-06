@@ -93,6 +93,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    spawnAtSec: t.spawnAtSec,
   }));
 }
 

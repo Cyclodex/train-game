@@ -24,6 +24,10 @@ export interface TrainDef {
   y: number; // the depot the train starts in
   type: "people" | "fraight";
   wagonIds: string[];
+  // When set (>0), the train is NOT present at init: it is injected by the
+  // mode's spawner at this sim-time, departing its depot then (Time Attack's
+  // predefined schedule). Omitted / 0 → present from the start, as before.
+  spawnAtSec?: number;
 }
 
 const ALL_ARMS = [
@@ -225,21 +229,35 @@ export function createGame(
   // reservation/occupancy on that tile — no new interlocking.
   let sim!: Simulation;
   let roadSim!: ReturnType<typeof createRoadSim>;
+  // The TrainInit for a def, with the colour + real sprite lengths resolved here
+  // (the single place those are known). Used both to seed the sim at init and to
+  // inject a scheduled train mid-run, so a spawned train is byte-for-byte the
+  // same as one present from the start.
+  function trainInit(def: TrainDef) {
+    return {
+      id: def.id,
+      coord: { x: def.x, y: def.y },
+      entryPort: Position.Center, // leaves its depot outward
+      color: trainColors[def.id],
+      type: def.type,
+      wagonCount: def.wagonIds.length,
+      // Real sprite lengths (in tiles) so the sim spaces units to fit them.
+      unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
+      coupling: couplingTiles(tileSize),
+    };
+  }
+
+  // Whether a def is present in the sim from the start (no schedule) or injected
+  // later by the spawner at its spawnAtSec.
+  const isScheduled = (def: TrainDef) => (def.spawnAtSec ?? 0) > 0;
+
   function buildSims() {
     sim = createSimulation({
       level,
       depotColors,
-      trains: trainDefs.map(def => ({
-        id: def.id,
-        coord: { x: def.x, y: def.y },
-        entryPort: Position.Center, // leaves its depot outward
-        color: trainColors[def.id],
-        type: def.type,
-        wagonCount: def.wagonIds.length,
-        // Real sprite lengths (in tiles) so the sim spaces units to fit them.
-        unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
-        coupling: couplingTiles(tileSize),
-      })),
+      // Only init (unscheduled) trains exist at t=0; scheduled trains are added
+      // mid-run by the spawner via injectTrain().
+      trains: trainDefs.filter(def => !isScheduled(def)).map(trainInit),
       getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
       signalTiles,
     });
@@ -358,6 +376,15 @@ export function createGame(
 
   function renderTrains() {
     for (const def of trainDefs) {
+      // A scheduled train has DOM (so colours/sprites exist up front) but is not
+      // in the sim until its spawn time — keep its units hidden until then.
+      if (!sim.trains[def.id]) {
+        for (const uid of unitIds[def.id]) {
+          const el = document.getElementById(uid);
+          if (el) el.style.visibility = "hidden";
+        }
+        continue;
+      }
       const units = sim.sampleTrain(def.id);
       const docked = sim.trainState(def.id) !== "running";
       const ids = unitIds[def.id];
@@ -460,6 +487,17 @@ export function createGame(
   const setup = mode.setup({ level, trains: trainDefs, levelId });
   const tracker = mode.createObjective(setup);
   const spawner = mode.createSpawner?.(setup);
+
+  // Inject a scheduled train into the live sim. The colour/sprite resolution is
+  // identical to the init path (trainInit), so a spawned train departs its depot
+  // exactly like one present at t=0. Guards against a double-spawn (the spawner
+  // is edge-driven, but be defensive across speed changes / reset races).
+  function injectTrain(def: TrainDef) {
+    if (sim.trains[def.id]) return;
+    sim.addTrain(trainInit(def));
+  }
+  const defById: Record<string, TrainDef> = {};
+  for (const def of trainDefs) defById[def.id] = def;
   const objective = reactive(tracker.state()) as ObjectiveState;
   // Live crossing-flow snapshot, refreshed each tick from the road sim (the HUD
   // reads this for the falling-when-released wait readout).
@@ -514,8 +552,18 @@ export function createGame(
     if (!paused.value) {
       const scaled = dt * speed.value;
       clock += scaled;
-      spawner?.step(scaled);
+      // Advance the predefined spawn schedule only while the objective is live,
+      // so the schedule clock aligns with the scored elapsed time (and nothing
+      // spawns on the Ready screen). Each due train is injected into the sim.
+      let spawnedDelta = 0;
+      if (objective.phase === "playing") {
+        for (const def of spawner?.step(scaled) ?? []) {
+          injectTrain(def);
+          spawnedDelta += 1;
+        }
+      }
       const obs = handleEvents(sim.step(scaled));
+      obs.spawnedDelta = spawnedDelta;
       // A crossing is closed while a train reserves or sits on that tile.
       roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
       // Fold the road's crossing-flow snapshot into the observation so the
@@ -573,6 +621,9 @@ export function createGame(
     },
     reset() {
       buildSims();
+      // Re-arm the predefined schedule from the start; injected trains were
+      // dropped by buildSims() (it seeds only the init trains).
+      spawner?.reset();
       deliveries.value = 0;
       manualHoldTotal = 0;
       manualGreenTotal = 0;
