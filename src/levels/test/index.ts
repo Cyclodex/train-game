@@ -16,6 +16,7 @@ import { trucks } from "@/levels/test/scenarios/trucks";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
+import { timeattack } from "@/levels/test/scenarios/timeattack";
 
 // A named group of scenarios in the picker, rendered as an <optgroup>.
 export interface ScenarioGroup {
@@ -46,7 +47,7 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
   {
     id: "objectives",
     label: "Objectives",
-    scenarios: [objectives],
+    scenarios: [objectives, timeattack],
   },
 ];
 
