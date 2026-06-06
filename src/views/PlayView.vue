@@ -188,6 +188,7 @@ import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById } from "@/modes/index";
+import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
 
@@ -201,12 +202,13 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   }));
 }
 
-// Hash history puts the route in location.hash, e.g. "#/play?mode=puzzle".
-function modeIdFromUrl(): string | null {
+// Hash history puts the route's query in location.hash, e.g.
+// "#/play?mode=puzzle&board=objectives".
+function hashParam(name: string): string | null {
   const hash = window.location.hash;
   const q = hash.indexOf("?");
   if (q === -1) return null;
-  return new URLSearchParams(hash.slice(q + 1)).get("mode");
+  return new URLSearchParams(hash.slice(q + 1)).get(name);
 }
 
 @Component({ components: { Crossing } })
@@ -217,18 +219,37 @@ class PlayView extends Vue {
   // Whether the debug activity-log panel is collapsed to just its header.
   logMinimized = false;
 
+  // An optional named board from `?board=<scenarioId>` — lets any test-world
+  // scenario be played as a real game (e.g. a small, deterministic puzzle).
+  // Returns null unless the id matches a registered scenario.
+  private board = (() => {
+    const id = hashParam("board");
+    if (!id) return null;
+    return SCENARIOS.some(s => s.id === id) ? scenarioById(id) : null;
+  })();
+
   // Read per instance (not at module load) so a level built in the editor and
   // handed over right before navigation is picked up on this mount.
-  private custom = takeCustomLevel();
+  private custom = this.board ? null : takeCustomLevel();
 
-  @Provide() trains: TrainsDefinition = this.custom
-    ? this.custom.trains
-    : defaultTrains();
+  @Provide() trains: TrainsDefinition = this.board
+    ? this.board.trains
+    : this.custom
+      ? this.custom.trains
+      : defaultTrains();
 
-  @Provide() level: Level = this.custom ? this.custom.level : DEFAULT_LEVEL;
+  @Provide() level: Level = this.board
+    ? this.board.level
+    : this.custom
+      ? this.custom.level
+      : DEFAULT_LEVEL;
 
-  private mode = modeById(modeIdFromUrl());
-  private levelId = this.custom ? "custom" : "default";
+  private mode = modeById(hashParam("mode"));
+  private levelId = this.board
+    ? `board:${this.board.id}`
+    : this.custom
+      ? "custom"
+      : "default";
   best: BestResult | null = null;
 
   @Provide("game") game: Game = markRaw(
