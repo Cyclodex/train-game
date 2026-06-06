@@ -10,6 +10,7 @@ import {
   specLength,
   CarChord,
 } from "@/sim/road";
+import { movementsConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 
@@ -467,6 +468,83 @@ describe("createRoadSim — four-way cross, cars from all sides", () => {
     // Far more cars completed than the live cap → cars really cycle through, they
     // do not just fill the map once and freeze.
     expect(allIds.size).toBeGreaterThan(12);
+  });
+
+  it("never lets two conflicting movements occupy the centre at once", () => {
+    // The safety counterpart to the liveness test above. With every movement
+    // permitted, the centre carries a mix of conflicting (perpendicular straights,
+    // left turns across oncoming) and non-conflicting (right turns, parallel
+    // straights in separate lanes) movements. The arbiter + conflict-aware
+    // body-point guard must ensure that whenever 2+ cars are on the centre tile at
+    // the same time, NONE of their movements geometrically cross — otherwise that
+    // is a collision course.
+    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
+    const lvl: Level = {
+      "0,2": road([Position.Left, Position.Right]),
+      "1,2": road([Position.Left, Position.Right]),
+      "3,2": road([Position.Left, Position.Right]),
+      "4,2": road([Position.Left, Position.Right]),
+      "2,0": road([Position.Top, Position.Bottom]),
+      "2,1": road([Position.Top, Position.Bottom]),
+      "2,3": road([Position.Top, Position.Bottom]),
+      "2,4": road([Position.Top, Position.Bottom]),
+      "2,2": road(
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Bottom],
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+        [Position.Right, Position.Top],
+        [Position.Right, Position.Bottom],
+      ),
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+
+    // The movement each car is making through the centre tile (2,2), if it is on it.
+    const centreMovements = () => {
+      const out: { entry: Position; exit: Position }[] = [];
+      for (const c of sim.sample()) {
+        for (const u of c.units) {
+          const pt = [u.front, u.rear].find(
+            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
+          );
+          if (pt) {
+            out.push({ entry: pt.entryPort, exit: pt.exitPort as Position });
+            break; // one movement per vehicle
+          }
+        }
+      }
+      return out;
+    };
+
+    let sawCoOccupancy = false;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      const moves = centreMovements();
+      if (moves.length >= 2) sawCoOccupancy = true;
+      for (let a = 0; a < moves.length; a++) {
+        for (let b = a + 1; b < moves.length; b++) {
+          expect(movementsConflict(moves[a], moves[b])).toBe(false);
+        }
+      }
+    }
+    // The centre really did get shared (otherwise the safety check is vacuous):
+    // non-conflicting movements pass through together.
+    expect(sawCoOccupancy).toBe(true);
   });
 });
 
@@ -1011,5 +1089,81 @@ describe("createRoadSim — right-turn-only cross", () => {
       }
     }
     expect(stalled).toBeLessThan(50);
+  });
+});
+
+describe("createRoadSim — no-left-turn cross", () => {
+  it("never performs a banned left turn, and still flows", () => {
+    // A 4-way cross where each approach may go straight or right, but NOT left.
+    // The banned movements are simply absent from the lanes, so the planner can
+    // never route them and the sim never offers them — directed lanes enforcing a
+    // partial turn restriction.
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      // Straight + right only (left turns banned).
+      "2,2": {
+        connections: [],
+        road: [turns(L, [R, B]), turns(R, [L, T]), turns(T, [B, L]), turns(B, [T, R])],
+      },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    // The four banned left-turn movements (screen coords: x→right, y→down).
+    const isLeftTurn = (m: { entry: Position; exit: Position }) =>
+      (m.entry === L && m.exit === T) ||
+      (m.entry === R && m.exit === B) ||
+      (m.entry === T && m.exit === R) ||
+      (m.entry === B && m.exit === L);
+
+    let prev = new Set<string>();
+    let completed = 0;
+    let sawCentreMovement = false;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        for (const u of c.units) {
+          const pt = [u.front, u.rear].find(
+            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
+          );
+          if (pt) {
+            const m = { entry: pt.entryPort, exit: pt.exitPort as Position };
+            expect(isLeftTurn(m)).toBe(false); // no banned left turn, ever
+            sawCentreMovement = true;
+            break;
+          }
+        }
+      }
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed++;
+      prev = now;
+    }
+    expect(sawCentreMovement).toBe(true); // cars really used the junction
+    expect(completed).toBeGreaterThan(8); // and traffic kept flowing
   });
 });
