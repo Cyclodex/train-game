@@ -61,18 +61,18 @@
           class="overlay"
           :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
         >
-          <!-- Ghost preview of the rail an armed edge would lay to the hovered
-               edge, so the builder sees what they're about to make. -->
+          <!-- Ghost preview of the rail/road an armed edge would lay to the
+               hovered edge, so the builder sees what they're about to make. -->
           <path
             v-for="(d, i) in previewRails(cell.key)"
             :key="'pv' + i"
             :d="d"
-            class="preview-rail"
+            :class="previewClass"
           />
 
           <!-- Edge hit-zones: the whole tile is clickable, split into four
                triangles (one per edge) for big, kid-friendly targets. -->
-          <template v-if="tool === 'connect' || tool === 'signal'">
+          <template v-if="tool === 'connect' || tool === 'road' || tool === 'signal'">
             <path
               v-for="p in EDGES"
               :key="'z' + p"
@@ -124,6 +124,21 @@
               />
               <path :d="delMark(conn)" class="del-mark" />
             </g>
+            <!-- Road-delete handles: a ✕ on each road pair removes just it. -->
+            <g
+              v-for="(road, i) in cell.tile.road ?? []"
+              :key="'xr' + i"
+              class="del del--road"
+              @click.stop="deleteRoad(cell.key, road)"
+            >
+              <circle
+                :cx="delPos(road).x"
+                :cy="delPos(road).y"
+                r="13"
+                class="del-bg"
+              />
+              <path :d="delMark(road)" class="del-mark" />
+            </g>
           </template>
         </svg>
       </div>
@@ -145,11 +160,13 @@ import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator"
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
 import { Position } from "@/types";
-import { Level, Port, PortPair, portsOf, parseCoordId, samePair } from "@/tiles/model";
+import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
 import {
   emptyCell,
   addConnection,
   removeConnection,
+  addRoad,
+  removeRoad,
   setDepot,
   rotateDepot,
   toggleSignalPort,
@@ -157,6 +174,7 @@ import {
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
+import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -178,7 +196,7 @@ const HINTS: Record<Tool, string> = {
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
-  road: "Click a tile to add a road (cycles vertical → horizontal → none). A road laid over track becomes a level crossing.",
+  road: "Click an edge, then click tiles to route a road (corner by corner, curves and all). Click the start edge again or press Esc to finish. Drag for a quick single road. A road over track becomes a level crossing.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -326,6 +344,24 @@ class EditorView extends Vue {
     // tiles" feature plugs in here without touching the router.
     return { width: this.config.levelSizeX, height: this.levelSizeY };
   }
+
+  // The layer the route-builder is currently drawing on. `connect` lays rail
+  // `connections`, `road` lays the `road` layer — both share the exact same
+  // edge-zone routing (planRoute, curves, drag/click chaining); only the lay
+  // function and the preview style differ.
+  get drawing(): "rail" | "road" | null {
+    return this.tool === "connect" ? "rail" : this.tool === "road" ? "road" : null;
+  }
+  // Lay a port pair on the active layer, returning the new cell.
+  layPair(cell: Level[string], a: Port, b: Port): Level[string] {
+    return this.drawing === "road"
+      ? addRoad(cell, a, b)
+      : addConnection(cell, a, b);
+  }
+  // The CSS class for the ghost preview, so a road previews as a road ribbon.
+  get previewClass(): string {
+    return this.drawing === "road" ? "preview-road" : "preview-rail";
+  }
   // Ghost rails for the whole previewed route, keyed by cell id. Anchors on the
   // in-progress drag start if there is one, otherwise the route head — so the
   // preview spans every tile for both gestures.
@@ -333,7 +369,7 @@ class EditorView extends Vue {
     const out: Record<string, string[]> = {};
     const from = this.pressFrom ?? this.armed;
     const to = this.hoverPort;
-    if (this.tool !== "connect" || !from || !to) return out;
+    if (!this.drawing || !from || !to) return out;
     const steps = planRoute(
       { id: from.id, edge: from.port },
       { id: to.id, edge: to.port },
@@ -343,7 +379,11 @@ class EditorView extends Vue {
     const size = this.config.tileSize;
     const off = this.config.railDistanceFromPath;
     const add = (id: string, a: Port, b: Port) => {
-      (out[id] ??= []).push(...railPathsFor(a, b, size, off));
+      const paths =
+        this.drawing === "road"
+          ? [roadSurfacePath(a, b, size)]
+          : railPathsFor(a, b, size, off);
+      (out[id] ??= []).push(...paths);
     };
     // The start tile is laid as a straight only for the first segment of a
     // fresh route (drag is always a one-shot first segment).
@@ -390,11 +430,11 @@ class EditorView extends Vue {
     if (layAnchor && from.id !== to.id) {
       this.commit(
         from.id,
-        addConnection(this.cellOf(from.id), oppositePort(from.edge), from.edge)
+        this.layPair(this.cellOf(from.id), oppositePort(from.edge), from.edge)
       );
     }
     for (const s of steps) {
-      this.commit(s.id, addConnection(this.cellOf(s.id), s.a, s.b));
+      this.commit(s.id, this.layPair(this.cellOf(s.id), s.a, s.b));
     }
     const last = steps[steps.length - 1];
     return { id: last.id, edge: last.b };
@@ -409,7 +449,7 @@ class EditorView extends Vue {
       // Lock the still-undecided frontier tile as a plain straight terminus.
       this.commit(
         this.pendingId,
-        addConnection(this.cellOf(this.pendingId), oppositePort(this.armed.port), this.armed.port)
+        this.layPair(this.cellOf(this.pendingId), oppositePort(this.armed.port), this.armed.port)
       );
     }
     this.armed = null;
@@ -422,11 +462,11 @@ class EditorView extends Vue {
   // route. The browser only fires `click` when down and up share an element, so
   // a drag never also triggers the click→click chaining below.
   onZoneDown(id: string, port: Port) {
-    if (this.tool !== "connect") return;
+    if (!this.drawing) return;
     this.pressFrom = { id, port };
   }
   onZoneUp(id: string, port: Port) {
-    if (this.tool !== "connect") return;
+    if (!this.drawing) return;
     const from = this.pressFrom;
     this.pressFrom = null;
     if (from && (from.id !== id || from.port !== port)) {
@@ -439,7 +479,7 @@ class EditorView extends Vue {
       this.commit(id, toggleSignalPort(this.cellOf(id), port));
       return;
     }
-    if (this.tool !== "connect") return;
+    if (!this.drawing) return;
     const head = this.armed;
     if (!head) {
       this.armed = { id, port }; // start a route at this open end
@@ -468,7 +508,7 @@ class EditorView extends Vue {
     if (!this.routeStarted && head.id !== targetId) {
       this.commit(
         head.id,
-        addConnection(this.cellOf(head.id), oppositePort(head.port), head.port)
+        this.layPair(this.cellOf(head.id), oppositePort(head.port), head.port)
       );
     }
     this.routeStarted = true;
@@ -476,7 +516,7 @@ class EditorView extends Vue {
     const uTurn = targetPort === last.a; // pointing at the incoming edge
     const count = uTurn ? steps.length - 1 : steps.length;
     for (let i = 0; i < count; i++) {
-      this.commit(steps[i].id, addConnection(this.cellOf(steps[i].id), steps[i].a, steps[i].b));
+      this.commit(steps[i].id, this.layPair(this.cellOf(steps[i].id), steps[i].a, steps[i].b));
     }
     if (uTurn) {
       const penultId = steps.length >= 2 ? steps[steps.length - 2].id : head.id;
@@ -488,7 +528,7 @@ class EditorView extends Vue {
     }
   }
   onZoneEnter(id: string, port: Port) {
-    if (this.tool === "connect") this.hoverPort = { id, port };
+    if (this.drawing) this.hoverPort = { id, port };
   }
   onZoneLeave(id: string, port: Port) {
     if (this.hoverPort?.id === id && this.hoverPort?.port === port) {
@@ -497,6 +537,9 @@ class EditorView extends Vue {
   }
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
+  }
+  deleteRoad(id: string, road: PortPair) {
+    this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));
   }
 
   // --- depot / erase (cell-level click) ---
@@ -507,16 +550,6 @@ class EditorView extends Vue {
     } else if (this.tool === "erase") {
       delete this.level[id];
       this.persist();
-    } else if (this.tool === "road") {
-      // Cycle the cell's road: none → vertical → horizontal → none. A road over
-      // existing track makes a level crossing.
-      const cur = this.cellOf(id);
-      const v: PortPair = [Position.Top, Position.Bottom];
-      const h: PortPair = [Position.Left, Position.Right];
-      const road = cur.road ?? [];
-      const isV = road.some(p => samePair(p, v));
-      const next: PortPair[] | undefined = road.length === 0 ? [v] : isV ? [h] : undefined;
-      this.commit(id, { ...cur, road: next });
     }
   }
   // Face the first neighbour that already has track on the shared border.
@@ -778,6 +811,15 @@ export default toNative(EditorView);
   stroke-linecap: round;
   pointer-events: none;
 }
+/* A road ghost previews as the wide paved ribbon the route would lay. */
+.preview-road {
+  fill: none;
+  stroke: #3a3f44;
+  stroke-width: 48;
+  opacity: 0.3;
+  stroke-linecap: butt;
+  pointer-events: none;
+}
 .del {
   cursor: pointer;
 }
@@ -785,6 +827,13 @@ export default toNative(EditorView);
   fill: rgba(255, 59, 48, 0.85);
   stroke: #fff;
   stroke-width: 1.5;
+}
+/* Road delete handles use a neutral slate so they read apart from rail ✕. */
+.del--road .del-bg {
+  fill: rgba(58, 63, 68, 0.9);
+}
+.del--road:hover .del-bg {
+  fill: #3a3f44;
 }
 .del:hover .del-bg {
   fill: #ff3b30;
