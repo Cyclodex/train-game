@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { Position } from "@/types";
-import { samePair } from "@/tiles/model";
+import { Position, ActiveIntersection } from "@/types";
+import { samePair, TileCell } from "@/tiles/model";
 import {
   emptyCell,
   toggleConnection,
@@ -13,9 +13,23 @@ import {
   toggleRoad,
   addRoad,
   removeRoad,
+  cycleDefaultArm,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
+const CROSS_FULL: [Position, Position][] = [
+  [Top, Bottom],
+  [Left, Right],
+  [Top, Right],
+  [Right, Bottom],
+  [Bottom, Left],
+  [Left, Top],
+];
+const TJUNCTION: [Position, Position][] = [
+  [Left, Right],
+  [Left, Top],
+  [Right, Top],
+];
 const has = (cell: { connections: [Position, Position][] }, p: [Position, Position]) =>
   cell.connections.some(c => samePair(c, p));
 const hasRoadPair = (cell: { road?: [Position, Position][] }, p: [Position, Position]) =>
@@ -109,6 +123,44 @@ describe("toggleSignalPort", () => {
     expect(c.signals).toEqual([Right]);
     c = toggleSignalPort(c, Right);
     expect(c.signals).toEqual([]);
+  });
+});
+
+describe("cycleDefaultArm", () => {
+  it("from no authored arm, advances past the computed first-valid arm", () => {
+    // Full cross: all three arms valid at Top, computed first-valid is Left.
+    const c = cycleDefaultArm({ connections: CROSS_FULL }, Top);
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Straight);
+  });
+
+  it("advances through valid arms and wraps", () => {
+    let c: TileCell = { connections: CROSS_FULL };
+    c = cycleDefaultArm(c, Top); // -> Straight
+    c = cycleDefaultArm(c, Top); // -> Right
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Right);
+    c = cycleDefaultArm(c, Top); // wraps -> Left
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Left);
+  });
+
+  it("skips arms whose exit is not a real partner", () => {
+    // T-junction Left entry: only Left (->Top) and Straight (->Right) are valid;
+    // Right (->Bottom) is not a partner, so cycling never lands on it.
+    let c: TileCell = { connections: TJUNCTION };
+    c = cycleDefaultArm(c, Left); // computed first-valid Left -> next Straight
+    expect(c.defaultArms?.[Left]).toBe(ActiveIntersection.Straight);
+    c = cycleDefaultArm(c, Left); // Straight -> wraps to Left (Right skipped)
+    expect(c.defaultArms?.[Left]).toBe(ActiveIntersection.Left);
+  });
+
+  it("is a no-op on a non-junction entry", () => {
+    const c = cycleDefaultArm({ connections: [[Top, Bottom]] }, Top);
+    expect(c.defaultArms).toBeUndefined();
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = { connections: CROSS_FULL };
+    cycleDefaultArm(c, Top);
+    expect((c as { defaultArms?: unknown }).defaultArms).toBeUndefined();
   });
 });
 
