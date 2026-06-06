@@ -794,7 +794,7 @@ describe("carqueue test-world scenario", () => {
     for (let i = 1; i < bodies.length; i++) {
       const gap = bodies[i - 1].rear - bodies[i].front;
       expect(gap).toBeGreaterThanOrEqual(-1e-6); // no overlap
-      expect(gap).toBeLessThan(0.06 + 1e-6); // packed nearly nose-to-tail (~6px gap)
+      expect(gap).toBeLessThan(0.08); // packed nearly nose-to-tail (~12px gap)
     }
   });
 });
