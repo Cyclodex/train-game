@@ -14,6 +14,8 @@ import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
+import { GameMode } from "@/modes/types";
+import { ObjectiveState, Observation } from "@/sim/objectives";
 
 export interface TrainDef {
   id: string;
@@ -98,8 +100,15 @@ export interface Game {
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
+  mode: GameMode;
+  // Reactive snapshot of the objective tracker, refreshed each frame.
+  objective: ObjectiveState;
   start(): void;
   stop(): void;
+  // Move Ready -> Playing (the Start button).
+  startObjective(): void;
+  // Win/Lose -> Ready with the same seed, for Retry (a true do-over).
+  reset(): void;
   toggleHold(tileId: string, exitPort: Position): void;
   isHeld(tileId: string, exitPort: Position): boolean;
   forceProceed(tileId: string, exitPort: Position): void;
@@ -115,11 +124,14 @@ export function createGame(
   level: Level,
   trainDefs: TrainDef[],
   tileSize: number,
+  mode: GameMode,
   colorSeed = 1,
   // When provided, these depot/train colours are used verbatim (the test world
   // pins them, e.g. to force a depot colour-mismatch bounce); otherwise the
   // seeded `assignColors` guarantees every train a reachable matching depot.
-  colors?: ColorAssignment
+  colors?: ColorAssignment,
+  // Identifies the board for per-level best-score persistence.
+  levelId = "default"
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -165,29 +177,10 @@ export function createGame(
   const { depotColors, trainColors } =
     colors ?? assignColors(level, trainDefs, makeRng(colorSeed));
 
-  const sim = createSimulation({
-    level,
-    depotColors,
-    trains: trainDefs.map(def => ({
-      id: def.id,
-      coord: { x: def.x, y: def.y },
-      entryPort: Position.Center, // leaves its depot outward
-      color: trainColors[def.id],
-      type: def.type,
-      wagonCount: def.wagonIds.length,
-      // Real sprite lengths (in tiles) so the sim spaces units to fit them.
-      unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
-      coupling: couplingTiles(tileSize),
-    })),
-    getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
-    signalTiles,
-  });
-
-  // Road traffic: a deterministic car simulation over the level's `road` layer,
-  // running alongside the train sim. Cars spawn one-way (from Bottom/Left
-  // openings only) so a single-lane road can't head-on deadlock until a road
-  // direction model exists. The crossing gate is the train reservation/occupancy
-  // on that tile — no new interlocking.
+  // Road traffic geometry (deterministic from the level): grid extents and the
+  // one-way spawn entries. Cars spawn one-way (from Bottom/Left openings only) so
+  // a single-lane road can't head-on deadlock until a road direction model
+  // exists. Computed once; the sims are (re)built from these.
   let roadW = 0;
   let roadH = 0;
   for (const id of Object.keys(level)) {
@@ -199,21 +192,49 @@ export function createGame(
   const oneWayEntries = allRoadEntries.filter(
     e => e.entryPort === Position.Bottom || e.entryPort === Position.Left
   );
-  const roadSim = createRoadSim({
-    level,
-    width: roadW,
-    height: roadH,
-    seed: colorSeed,
-    spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
-    spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
-    carSpeed: 0.5, // tiles/sec — slow enough to read on screen
-    // Match the logical body to the rendered sprite (.road-car is 46px wide in
-    // PlayView/TestStage CSS). If the model body is longer than the sprite, a
-    // queue looks gappy: the bumper gap then sits on top of the invisible extra
-    // body, leaving ~a whole car of air between sprites.
-    carLength: CAR_SPRITE_PX / tileSize,
-    maxCars: 8,
-  });
+
+  // The train + road sims are built together so `reset()` can rebuild both from
+  // the same inputs (the simulation has no in-place reset), giving a true,
+  // deterministic do-over for Retry. They're `let` so the rebuild reassigns them;
+  // every closure below reads the current binding. The crossing gate is the train
+  // reservation/occupancy on that tile — no new interlocking.
+  let sim!: Simulation;
+  let roadSim!: ReturnType<typeof createRoadSim>;
+  function buildSims() {
+    sim = createSimulation({
+      level,
+      depotColors,
+      trains: trainDefs.map(def => ({
+        id: def.id,
+        coord: { x: def.x, y: def.y },
+        entryPort: Position.Center, // leaves its depot outward
+        color: trainColors[def.id],
+        type: def.type,
+        wagonCount: def.wagonIds.length,
+        // Real sprite lengths (in tiles) so the sim spaces units to fit them.
+        unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
+        coupling: couplingTiles(tileSize),
+      })),
+      getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
+      signalTiles,
+    });
+    roadSim = createRoadSim({
+      level,
+      width: roadW,
+      height: roadH,
+      seed: colorSeed,
+      spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
+      spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
+      carSpeed: 0.5, // tiles/sec — slow enough to read on screen
+      // Match the logical body to the rendered sprite (.road-car is 46px wide in
+      // PlayView/TestStage CSS). If the model body is longer than the sprite, a
+      // queue looks gappy: the bumper gap then sits on top of the invisible extra
+      // body, leaving ~a whole car of air between sprites.
+      carLength: CAR_SPRITE_PX / tileSize,
+      maxCars: 8,
+    });
+  }
+  buildSims();
   const roadCars = reactive([]) as RoadCar[];
 
   const unitIds: Record<string, string[]> = {};
@@ -364,12 +385,43 @@ export function createGame(
   let logSeq = 0;
   let clock = 0; // accumulated sim time in seconds
 
-  function handleEvents(events: SimEvent[]) {
+  // The objective tracker for the active mode, driven by the per-tick observation.
+  const setup = mode.setup({ level, trains: trainDefs, levelId });
+  const tracker = mode.createObjective(setup);
+  const spawner = mode.createSpawner?.(setup);
+  const objective = reactive(tracker.state()) as ObjectiveState;
+
+  // Raw running totals of player signal overrides. The loop diffs these against
+  // the last-observed totals to feed the tracker manual-control deltas. They are
+  // incremented in the control handlers below (toggleHold/forceProceed/cycle).
+  let manualHoldTotal = 0;
+  let manualGreenTotal = 0;
+  let lastHoldTotal = 0;
+  let lastGreenTotal = 0;
+
+  function refreshObjective() {
+    Object.assign(objective, tracker.state());
+  }
+
+  // Drain the sim's per-tick events into the log + delivery counter and return
+  // the per-tick Observation (deltas) the objective tracker consumes.
+  function handleEvents(events: SimEvent[]): Observation {
+    let deliveredDelta = 0;
+    let mismatchedDelta = 0;
     for (const e of events) {
-      if (e.type === "arrived" && e.matched) deliveries.value += 1;
+      if (e.type === "arrived") {
+        if (e.matched) deliveredDelta += 1;
+        else mismatchedDelta += 1;
+      }
       eventLog.push(toLogEntry(e, logSeq++, clock));
     }
     if (eventLog.length > MAX_LOG) eventLog.splice(0, eventLog.length - MAX_LOG);
+    const manualHoldDelta = manualHoldTotal - lastHoldTotal;
+    const manualGreenDelta = manualGreenTotal - lastGreenTotal;
+    lastHoldTotal = manualHoldTotal;
+    lastGreenTotal = manualGreenTotal;
+    deliveries.value += deliveredDelta;
+    return { deliveredDelta, mismatchedDelta, manualHoldDelta, manualGreenDelta };
   }
 
   const paused = ref(false);
@@ -384,9 +436,12 @@ export function createGame(
     if (!paused.value) {
       const scaled = dt * speed.value;
       clock += scaled;
-      handleEvents(sim.step(scaled));
+      spawner?.step(scaled);
+      const obs = handleEvents(sim.step(scaled));
       // A crossing is closed while a train reserves or sits on that tile.
       roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
+      tracker.observe(obs, scaled);
+      refreshObjective();
     }
     renderTrains();
     updateRoadCars();
@@ -411,6 +466,8 @@ export function createGame(
     paused,
     speed,
     deliveries,
+    mode,
+    objective,
     start() {
       if (raf) return;
       last = 0;
@@ -420,14 +477,38 @@ export function createGame(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     },
+    startObjective() {
+      tracker.start();
+      refreshObjective();
+    },
+    reset() {
+      buildSims();
+      deliveries.value = 0;
+      manualHoldTotal = 0;
+      manualGreenTotal = 0;
+      lastHoldTotal = 0;
+      lastGreenTotal = 0;
+      clock = 0;
+      eventLog.splice(0, eventLog.length);
+      for (const id of Object.keys(reservations)) delete reservations[id];
+      for (const id of Object.keys(occupied)) delete occupied[id];
+      roadCars.splice(0, roadCars.length);
+      tracker.reset();
+      refreshObjective();
+    },
     toggleHold(tileId: string, exitPort: Position) {
+      const wasHeld = sim.isHeld(tileId, exitPort);
       sim.toggleHold(tileId, exitPort);
+      if (!wasHeld && sim.isHeld(tileId, exitPort)) manualHoldTotal += 1;
     },
     isHeld(tileId: string, exitPort: Position) {
       return sim.isHeld(tileId, exitPort);
     },
     forceProceed(tileId: string, exitPort: Position) {
+      const wasForced = sim.isProceedForced(tileId, exitPort);
       sim.forceProceed(tileId, exitPort);
+      if (!wasForced && sim.isProceedForced(tileId, exitPort))
+        manualGreenTotal += 1;
     },
     isProceedForced(tileId: string, exitPort: Position) {
       return sim.isProceedForced(tileId, exitPort);
@@ -442,10 +523,12 @@ export function createGame(
       const state = overrideState(tileId, exitPort);
       if (state === "auto") {
         sim.forceProceed(tileId, exitPort); // -> green
+        manualGreenTotal += 1;
       } else if (state === "green") {
         // green -> red: clear the forced green, then apply the stop hold.
         sim.forceProceed(tileId, exitPort); // toggle off green
         sim.toggleHold(tileId, exitPort); // -> red
+        manualHoldTotal += 1;
       } else {
         sim.toggleHold(tileId, exitPort); // red -> auto
       }

@@ -35,6 +35,17 @@
         <div class="score-bar-fill" :style="{ width: deliveredPct + '%' }"></div>
         <span class="score-pct">{{ deliveredPct }}%</span>
       </div>
+      <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <div v-if="hud.stars" class="score-stars">
+        <span
+          v-for="s in stars"
+          :key="s.id"
+          class="star-pip"
+          :class="{ 'star-pip--on': s.earned }"
+          :title="s.label"
+          >★</span
+        >
+      </div>
       <transition name="score-banner">
         <div v-if="levelComplete" class="score-complete-banner">
           ★ Level Complete ★
@@ -83,6 +94,41 @@
         :coord-id="c.key"
         :cell="c.cell"
       />
+    </div>
+    <div v-if="hud.startOverlay && phase === 'ready'" class="game-overlay">
+      <div class="overlay-card">
+        <h2 class="overlay-title">{{ game.mode.label }}</h2>
+        <p class="overlay-desc">{{ game.mode.description }}</p>
+        <p v-if="best" class="overlay-best">
+          Best: {{ best.stars }}★ · {{ best.timeSec.toFixed(1) }}s
+        </p>
+        <button class="overlay-btn" @click="startPlaying">Start</button>
+      </div>
+    </div>
+    <div
+      v-if="hud.endOverlay && (phase === 'won' || phase === 'lost')"
+      class="game-overlay"
+    >
+      <div class="overlay-card">
+        <h2 class="overlay-title">
+          {{ phase === "won" ? "You win!" : "Failed" }}
+        </h2>
+        <div v-if="phase === 'won' && hud.stars" class="overlay-stars">
+          <span
+            v-for="s in stars"
+            :key="s.id"
+            class="star-pip star-pip--lg"
+            :class="{ 'star-pip--on': s.earned }"
+            :title="s.label"
+            >★</span
+          >
+        </div>
+        <p v-if="phase === 'won'" class="overlay-desc">
+          {{ earnedStars }}/{{ stars.length }} stars · {{ elapsedLabel }}
+        </p>
+        <p v-else class="overlay-desc">{{ lostReason }}</p>
+        <button class="overlay-btn" @click="retry">Retry</button>
+      </div>
     </div>
     <div
       v-if="config.debug"
@@ -141,6 +187,8 @@ import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
+import { modeById } from "@/modes/index";
+import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
@@ -151,6 +199,14 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
   }));
+}
+
+// Hash history puts the route in location.hash, e.g. "#/play?mode=puzzle".
+function modeIdFromUrl(): string | null {
+  const hash = window.location.hash;
+  const q = hash.indexOf("?");
+  if (q === -1) return null;
+  return new URLSearchParams(hash.slice(q + 1)).get("mode");
 }
 
 @Component({ components: { Crossing } })
@@ -171,20 +227,71 @@ class PlayView extends Vue {
 
   @Provide() level: Level = this.custom ? this.custom.level : DEFAULT_LEVEL;
 
+  private mode = modeById(modeIdFromUrl());
+  private levelId = this.custom ? "custom" : "default";
+  best: BestResult | null = null;
+
   @Provide("game") game: Game = markRaw(
     createGame(
       this.level,
       buildTrainDefs(this.trains),
       gameConfig.tileSize,
-      gameConfig.colorSeed
+      this.mode,
+      gameConfig.colorSeed,
+      undefined,
+      this.levelId
     )
   );
 
   mounted() {
-    this.game.start();
+    this.best = loadBest(this.levelId);
+    this.game.start(); // start the rAF loop (rendering); objective stays Ready
+    if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     // Test hook: expose the live game so e2e can read simulation state without
     // depending on Vue's internal instance shape.
     (window as unknown as { __game?: Game }).__game = this.game;
+  }
+
+  startPlaying() {
+    this.game.startObjective();
+  }
+
+  retry() {
+    this.game.reset();
+    this.game.startObjective();
+  }
+
+  @Watch("phase")
+  onPhase(now: string) {
+    if (now === "won") {
+      const earned = this.game.objective.stars.filter(s => s.earned).length;
+      this.best = recordResult(this.levelId, {
+        stars: earned,
+        timeSec: this.game.objective.counters.elapsedSec,
+      });
+    }
+  }
+
+  get phase(): string {
+    return this.game.objective.phase;
+  }
+  get hud() {
+    return this.game.mode.hud;
+  }
+  get stars() {
+    return this.game.objective.stars;
+  }
+  get elapsedLabel(): string {
+    const t =
+      this.game.objective.timeLeftSec ??
+      this.game.objective.counters.elapsedSec;
+    return t.toFixed(1) + "s";
+  }
+  get earnedStars(): number {
+    return this.stars.filter(s => s.earned).length;
+  }
+  get lostReason(): string {
+    return this.game.objective.lostReason ?? "";
   }
 
   beforeUnmount() {
@@ -504,6 +611,88 @@ export default toNative(PlayView);
   50% {
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
       0 0 30px rgba(224, 188, 92, 0.5);
+  }
+}
+
+.score-timer {
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #cdd7df;
+}
+.score-stars {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+}
+.star-pip {
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.18);
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+  &--on {
+    color: #f0cf72;
+    text-shadow: 0 0 10px rgba(240, 207, 114, 0.6);
+  }
+  &--lg {
+    font-size: 34px;
+  }
+}
+.game-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 11, 15, 0.62);
+  backdrop-filter: blur(4px);
+}
+.overlay-card {
+  min-width: 320px;
+  padding: 28px 34px;
+  text-align: center;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.97),
+    rgba(18, 22, 28, 0.97)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+.overlay-title {
+  margin: 0 0 8px;
+  font-size: 26px;
+}
+.overlay-desc {
+  margin: 8px 0 18px;
+  color: #9aa7b2;
+  max-width: 360px;
+}
+.overlay-best {
+  margin: 0 0 8px;
+  color: #f0cf72;
+  font-weight: 700;
+}
+.overlay-stars {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 8px 0;
+}
+.overlay-btn {
+  padding: 12px 28px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0d1117;
+  background: linear-gradient(90deg, #5fd39a, #2f9e6b);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  &:hover {
+    filter: brightness(1.08);
   }
 }
 
