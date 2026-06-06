@@ -226,6 +226,14 @@ export interface RoadSimConfig {
   // below.
   carSpeed?: number;
   carLength?: number;
+  // Per-car preferred-speed variation, as a fraction of `carSpeed`. Each spawned
+  // car draws its cruise speed uniformly from
+  // `[carSpeed*(1-speedSpread), carSpeed*(1+speedSpread)]` using the seeded RNG,
+  // so some cars are naturally faster than others (a faster car then catches the
+  // slower one ahead and follows it — the gap cap prevents overtaking, so the
+  // slowest car sets the platoon pace). `0` makes every car the same speed (the
+  // original behaviour). Default below is a small, subtle spread.
+  speedSpread?: number;
   // Relative spawn weights per vehicle kind. Default `{ car: 1 }` → all cars.
   mix?: TrafficMix;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
@@ -239,7 +247,14 @@ export interface RoadSimConfig {
 
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
-  cars(): { id: string; tileId: string; headIndex: number; headProgress: number }[];
+  cars(): {
+    id: string;
+    tileId: string;
+    headIndex: number;
+    headProgress: number;
+    speed: number; // this car's preferred (cruise) speed — varies car-to-car
+    velocity: number; // its current speed (capped by the leader when following)
+  }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
   sample(): CarChord[];
@@ -258,6 +273,10 @@ const DEFAULT_CAR_SPEED = 0.6;
 // sync so the simulated body never out-sizes the visible car.
 const DEFAULT_CAR_LENGTH = 0.23;
 const DEFAULT_MAX_CARS = 40;
+// Default per-car preferred-speed spread (fraction of carSpeed). A subtle ±25%
+// so the road feels alive — some cars cruise a little quicker and bunch up behind
+// slower ones into platoons — without any car being conspicuously fast or slow.
+const DEFAULT_SPEED_SPREAD = 0.25;
 // Acceleration / braking rates (tiles/sec²). Cars ramp their velocity toward the
 // cruise speed instead of snapping to it in one tick, and brake smoothly to the
 // next stop line — the same model the train sim uses (simulation.ts). Tuned for a
@@ -311,6 +330,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
+  const speedSpread = Math.max(0, config.speedSpread ?? DEFAULT_SPEED_SPREAD);
   const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
   const mix = config.mix ?? { car: 1 };
 
@@ -546,10 +566,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
+    // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
+    // from the seeded RNG, so the spawn order (and thus which car is the slow
+    // leader of a forming platoon) stays reproducible for a given seed.
+    const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
     cars.push({
       id: `car${nextId++}`,
       kind,
-      speed: carSpeed,
+      speed,
       velocity: 0,
       accel: DEFAULT_CAR_ACCEL,
       brake: DEFAULT_CAR_BRAKE,
@@ -617,6 +641,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         tileId: tileIdOf(c),
         headIndex: c.headIndex,
         headProgress: c.headProgress,
+        speed: c.speed,
+        velocity: c.velocity,
       }));
     },
     sample() {

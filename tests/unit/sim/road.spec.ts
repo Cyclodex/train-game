@@ -448,6 +448,160 @@ describe("createRoadSim — acceleration ramp", () => {
   });
 });
 
+describe("createRoadSim — variable preferred speed", () => {
+  it("draws a spread of per-car cruise speeds within the configured bounds", () => {
+    // Spawn a stream of cars on an open road and read each one's `speed`. With a
+    // speed spread the spawned cruise speeds vary car-to-car (not all the base
+    // value) and every one stays inside [carSpeed*(1-spread), carSpeed*(1+spread)].
+    const carSpeed = 0.5;
+    const spread = 0.4;
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 11,
+      spawnInterval: 0.3,
+      carSpeed,
+      carLength: 0.2,
+      speedSpread: spread,
+      maxCars: 40,
+    });
+    const seen = new Set<number>();
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) seen.add(Math.round(c.speed * 1e6));
+    }
+    const speeds = [...seen].map(s => s / 1e6);
+    expect(speeds.length).toBeGreaterThan(3); // several distinct cars spawned
+    // Not all equal — there's a real spread.
+    expect(new Set(speeds).size).toBeGreaterThan(1);
+    const lo = carSpeed * (1 - spread);
+    const hi = carSpeed * (1 + spread);
+    for (const s of speeds) {
+      expect(s).toBeGreaterThanOrEqual(lo - 1e-9);
+      expect(s).toBeLessThanOrEqual(hi + 1e-9);
+    }
+  });
+
+  it("with zero spread every car keeps the exact base cruise speed", () => {
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 11,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0,
+      maxCars: 40,
+    });
+    for (let i = 0; i < 200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) expect(c.speed).toBeCloseTo(0.5, 9);
+    }
+  });
+
+  it("is deterministic: the same seed yields the same per-car speeds", () => {
+    const run = () => {
+      const sim = createRoadSim({
+        level: straightRoad(),
+        width: 3,
+        height: 1,
+        seed: 23,
+        spawnInterval: 0.3,
+        carSpeed: 0.5,
+        carLength: 0.2,
+        speedSpread: 0.4,
+        maxCars: 40,
+      });
+      const speeds: number[] = [];
+      for (let i = 0; i < 300; i++) {
+        sim.step(0.05, () => false);
+        for (const c of sim.cars())
+          if (!speeds.includes(c.speed)) speeds.push(c.speed);
+      }
+      return speeds.map(s => Math.round(s * 1e6));
+    };
+    expect(run()).toEqual(run());
+  });
+
+  it("a fast car never overtakes a slower leader and matches its pace", () => {
+    // A long one-way straight road. We seed two cars: a slow leader spawned first,
+    // then a faster follower. The follower has the higher preferred speed but the
+    // gap cap must keep it behind the leader's rear, and its velocity must settle
+    // at (not above) the leader's pace — the leader sets the platoon speed.
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {};
+    for (let x = 0; x < 10; x++) lvl[`${x},0`] = { connections: [], road: [road] };
+    // Spawn only from the left edge (one-way), one car per interval, with a wide
+    // spread so the two cars get clearly different cruise speeds. Seed chosen so a
+    // slow car leads a faster one (asserted below; if it ever flips, the no-overtake
+    // invariant still holds, but we want the convergence case specifically).
+    const sim = createRoadSim({
+      level: lvl,
+      width: 10,
+      height: 1,
+      seed: 2,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 2.0, // a clear head start so the follower must catch up
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0.4,
+      maxCars: 2,
+    });
+
+    const worldX = (s: { coord: { x: number }; t: number }) => s.coord.x + s.t;
+    let everTwo = false;
+    for (let i = 0; i < 600; i++) {
+      sim.step(0.05, () => false);
+      const live = sim.cars();
+      if (live.length < 2) continue;
+      everTwo = true;
+      // Identify leader (further along the road) and follower by world position.
+      const samples = sim.sample();
+      const byId = new Map(samples.map(c => [c.id, c]));
+      const sorted = [...live].sort(
+        (a, b) =>
+          worldX(byId.get(b.id)!.units[0].front) -
+          worldX(byId.get(a.id)!.units[0].front)
+      );
+      const leader = sorted[0];
+      const follower = sorted[1];
+      const leaderRear = worldX(byId.get(leader.id)!.units[0].rear);
+      const followerFront = worldX(byId.get(follower.id)!.units[0].front);
+      // No overtake: the follower's nose never crosses the leader's tail.
+      expect(followerFront).toBeLessThanOrEqual(leaderRear + 1e-6);
+    }
+    expect(everTwo).toBe(true); // both cars were on the road together
+
+    // Run on until they form a steady platoon, then assert the follower is the
+    // faster car held to the leader's pace. Drive long enough for the catch-up.
+    let leader = sim.cars()[0];
+    let follower = sim.cars()[0];
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      const live = sim.cars();
+      if (live.length < 2) continue;
+      const samples = sim.sample();
+      const byId = new Map(samples.map(c => [c.id, c]));
+      const sorted = [...live].sort(
+        (a, b) =>
+          worldX(byId.get(b.id)!.units[0].front) -
+          worldX(byId.get(a.id)!.units[0].front)
+      );
+      leader = sorted[0];
+      follower = sorted[1];
+    }
+    // The follower is the one with the higher preferred (cruise) speed.
+    expect(follower.speed).toBeGreaterThan(leader.speed);
+    // Yet it is held to roughly the leader's velocity — it can't run at its own
+    // higher cruise because the leader caps it (it would otherwise overtake).
+    expect(follower.velocity).toBeLessThanOrEqual(leader.velocity + 1e-2);
+    // And it is genuinely capped below its own preferred speed.
+    expect(follower.velocity).toBeLessThan(follower.speed - 1e-3);
+  });
+});
+
 describe("vehicle kinds", () => {
   it("scales each kind's body length from the base car length", () => {
     const base = 0.2;
