@@ -2,6 +2,7 @@
   <div class="play-view" :class="{ debug: config.debug }">
     <div class="control-buttons">
       <router-link class="nav-link" to="/editor">Editor</router-link>
+      <router-link class="nav-link" to="/test">Test world</router-link>
       <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
       <button class="timeline-button" @click="pausePlayGame">
         {{ paused ? "Start" : "Pause" }}

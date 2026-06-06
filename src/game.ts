@@ -12,7 +12,7 @@ import { createRoadSim, roadEntries } from "@/sim/road";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
-import { assignColors } from "@/utils/colorAssignment";
+import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 
 export interface TrainDef {
@@ -110,7 +110,11 @@ export function createGame(
   level: Level,
   trainDefs: TrainDef[],
   tileSize: number,
-  colorSeed = 1
+  colorSeed = 1,
+  // When provided, these depot/train colours are used verbatim (the test world
+  // pins them, e.g. to force a depot colour-mismatch bounce); otherwise the
+  // seeded `assignColors` guarantees every train a reachable matching depot.
+  colors?: ColorAssignment
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -153,11 +157,8 @@ export function createGame(
   // logic and the rendered colours always agree. A seeded RNG keeps the
   // assignment deterministic, and `assignColors` guarantees every train has a
   // reachable matching depot (see colorAssignment.ts).
-  const { depotColors, trainColors } = assignColors(
-    level,
-    trainDefs,
-    makeRng(colorSeed)
-  );
+  const { depotColors, trainColors } =
+    colors ?? assignColors(level, trainDefs, makeRng(colorSeed));
 
   const sim = createSimulation({
     level,
