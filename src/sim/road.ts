@@ -1,5 +1,5 @@
 import { Coordinates, Position } from "@/types";
-import { Level, partnersOf } from "@/tiles/model";
+import { Level, PortPair, partnersOf } from "@/tiles/model";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -112,6 +112,10 @@ export interface Car {
   path: RoadSegment[];
   headIndex: number;
   headProgress: number; // 0..1 within path[headIndex]
+  // Seconds of reaction time still to elapse before a stopped car may roll once
+  // the way ahead has cleared. Re-armed to REACTION_DELAY whenever the car is
+  // fully stopped, so a released queue launches staggered instead of as a block.
+  launchTimer: number;
 }
 
 // A car sampled as its two anchor points along the recent path (front toward the
@@ -179,6 +183,28 @@ const CAR_GAP = 0.03;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
+// Reaction time (seconds) a stopped car waits before it starts moving once the
+// way ahead clears — the "wait a beat after the car in front pulls away" delay.
+// This staggers a queue's release so cars spread out (e.g. don't bunch up nose-
+// to-tail into a curve) instead of accelerating as one rigid block.
+const REACTION_DELAY = 0.6;
+// Below this clear distance (tiles) a car counts as fully stopped — it can't take
+// a meaningful step, so it (re)arms its launch reaction timer.
+const STOP_EPS = 1e-3;
+
+// A road junction tile: two roads cross (or meet) here, so more than the two
+// ports of a plain straight/curve are paved. Cars must claim such a tile
+// exclusively — never roll into one another car already occupies — or two
+// perpendicular streams gridlock in the middle of the intersection.
+function isRoadJunction(road: PortPair[] | undefined): boolean {
+  if (!road || road.length < 2) return false;
+  const ports = new Set<Port>();
+  for (const [a, b] of road) {
+    ports.add(a);
+    ports.add(b);
+  }
+  return ports.size > 2;
+}
 
 export function createRoadSim(config: RoadSimConfig): RoadSim {
   const { level, width, height } = config;
@@ -255,22 +281,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     ];
   }
 
-  // Forward tile-distance from a car's head to a point on its route, or null if
-  // the point's tile is not on the look-ahead route. The point's progress `t` is
-  // measured from `pEntry` (how its car entered that tile); re-orient it to the
-  // direction this car travels the tile so head-on and same-way cars both project
-  // correctly onto a single scalar.
-  function distanceTo(
+  // Project a point on another car's body onto this car's look-ahead route. Null
+  // if the point's tile is not on the route. `d` is the forward tile-distance from
+  // this car's head to the point; `lead` is the distance to that tile's entry
+  // edge; `perpendicular` is true when the occupant crosses our path at right
+  // angles (a junction) rather than sharing our lane. The point's progress `t` is
+  // measured from how its own car entered the tile, so re-orient it to the
+  // direction this car travels the tile before turning it into a scalar.
+  function projectPoint(
     route: Map<string, { lead: number; entry: Port }>,
     p: { tileId: string; entry: Port; t: number }
-  ): number | null {
+  ): { d: number; lead: number; perpendicular: boolean } | null {
     const hit = route.get(p.tileId);
     if (!hit) return null;
     let within: number;
+    let perpendicular = false;
     if (p.entry === hit.entry) within = p.t;
     else if (p.entry === oppositePort(hit.entry)) within = 1 - p.t;
-    else within = 0.5; // perpendicular junction occupant: treat as mid-tile
-    return hit.lead + within;
+    else {
+      within = 0.5; // perpendicular junction occupant: treat as mid-tile
+      perpendicular = true;
+    }
+    return { d: hit.lead + within, lead: hit.lead, perpendicular };
   }
 
   // The clear tile-distance the car's head may advance this tick before it must
@@ -291,8 +323,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     for (const other of cars) {
       if (other === car) continue;
       for (const p of bodyPoints(other)) {
-        const d = distanceTo(route, p);
-        if (d !== null && d >= 0) clear = Math.min(clear, d - CAR_GAP);
+        const proj = projectPoint(route, p);
+        if (!proj || proj.d < 0) continue;
+        if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
+          // The occupant is crossing our path inside a junction. Hold a gap short
+          // of the junction's entry edge instead of rolling in (the mid-tile
+          // projection is what lets two perpendicular streams jam in the middle of
+          // the crossing; stopping *exactly* on the entry would still roll us onto
+          // the boundary the same tick another car claimed it). One car owns the
+          // junction at a time; everyone else waits clear of it.
+          clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+        } else {
+          clear = Math.min(clear, proj.d - CAR_GAP);
+        }
       }
     }
     return Math.max(0, clear);
@@ -300,8 +343,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
     const clear = clearAhead(car, closed);
-    let move = car.speed * dt;
-    if (move > clear) move = clear; // never roll past the stop line / into a car
+    let move: number;
+    if (clear <= STOP_EPS) {
+      // Fully stopped (queue / closed gate / occupied junction ahead): hold, and
+      // arm the launch reaction so the car waits a beat once the way reopens.
+      car.launchTimer = REACTION_DELAY;
+      move = 0;
+    } else if (car.launchTimer > 0) {
+      // The way ahead just cleared but the driver hasn't reacted yet — sit still
+      // while the leader pulls away, so the queue stretches out on release.
+      car.launchTimer = Math.max(0, car.launchTimer - dt);
+      move = 0;
+    } else {
+      move = Math.min(car.speed * dt, clear); // never roll past the stop line
+    }
     car.headProgress += move;
     while (car.headProgress >= 1) {
       const head = car.path[car.headIndex];
@@ -347,6 +402,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
       headIndex: 0,
       headProgress: 0,
+      launchTimer: 0,
     });
   }
 

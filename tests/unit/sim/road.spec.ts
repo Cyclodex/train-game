@@ -7,6 +7,7 @@ import {
   createRoadSim,
 } from "@/sim/road";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
+import { roadcross } from "@/levels/test/scenarios/roadcross";
 
 // A simple straight road across three tiles (Left<->Right), open at both map
 // edges (0,0 enters from the left edge, 2,0 leaves at the right edge).
@@ -234,6 +235,102 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
       if (sim.cars().some(c => c.tileId === "1,0")) enteredCrossing = true;
     }
     expect(enteredCrossing).toBe(true);
+  });
+});
+
+describe("createRoadSim — road junction interlock", () => {
+  it("never lets two perpendicular streams co-occupy the crossing, and both flow", () => {
+    // The roadcross scenario: a 4-way crossing at 2,2. Spawn one-way from the
+    // left (eastbound) and the bottom (northbound) so the two streams meet at the
+    // centre. With the junction interlock exactly one car may occupy 2,2 at a
+    // time — the other waits clear of it — so they take turns instead of jamming.
+    const sim = createRoadSim({
+      level: roadcross.level,
+      width: roadcross.size!.cols,
+      height: roadcross.size!.rows,
+      seed: 4,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
+      ],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+    });
+
+    const onJunction = (c: { coord: { x: number; y: number } }) =>
+      c.coord.x === 2 && c.coord.y === 2;
+    const horizontal = (p: Position) =>
+      p === Position.Left || p === Position.Right;
+    let eastboundPassed = false; // a car reached x>2 (cleared the crossing east)
+    let northboundPassed = false; // a car reached y<2 (cleared the crossing north)
+
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const samples = sim.sample();
+      // Cars touching the junction may follow one another nose-to-tail along one
+      // road, but two *perpendicular* streams must never occupy it at once — that
+      // mixed state is exactly the gridlock the interlock prevents.
+      const axes = new Set<string>();
+      for (const c of samples) {
+        if (onJunction(c.front))
+          axes.add(horizontal(c.front.entryPort) ? "h" : "v");
+        if (onJunction(c.rear))
+          axes.add(horizontal(c.rear.entryPort) ? "h" : "v");
+      }
+      expect(axes.size).toBeLessThanOrEqual(1);
+      for (const c of samples) {
+        if (c.front.coord.x > 2 && c.front.coord.y === 2) eastboundPassed = true;
+        if (c.front.coord.y < 2 && c.front.coord.x === 2) northboundPassed = true;
+      }
+    }
+    // Neither stream is starved: traffic actually crosses both ways (no deadlock).
+    expect(eastboundPassed).toBe(true);
+    expect(northboundPassed).toBe(true);
+  });
+});
+
+describe("createRoadSim — launch reaction delay", () => {
+  it("waits a beat before a stopped car rolls once the gate opens", () => {
+    // One car approaching a closed crossing at 1,0. Once it has stopped at the
+    // gate and the gate opens, the car must not move on the very next tick — it
+    // waits out its reaction time — then accelerates away.
+    const lvl: Level = {
+      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "1,0": {
+        connections: [[Position.Top, Position.Bottom]],
+        road: [[Position.Left, Position.Right]],
+      },
+      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+    };
+    let closed = true;
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 5,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      maxCars: 1,
+    });
+    // Settle a single car hard against the closed gate.
+    for (let i = 0; i < 200; i++) sim.step(0.05, id => id === "1,0" && closed);
+    const stopped = sim.cars()[0];
+    expect(stopped).toBeDefined();
+    const posBefore = stopped.headIndex + stopped.headProgress;
+
+    // Open the gate, step one small tick: the car is still in its reaction time.
+    closed = false;
+    sim.step(0.05, () => false);
+    const justAfter = sim.cars()[0];
+    expect(justAfter.headIndex + justAfter.headProgress).toBeCloseTo(posBefore, 6);
+
+    // After the reaction delay (~0.6s) elapses, the car has rolled forward.
+    for (let i = 0; i < 20; i++) sim.step(0.05, () => false);
+    const later = sim.cars()[0];
+    // It either advanced along its tile or already crossed into the next one.
+    expect(later.headIndex + later.headProgress).toBeGreaterThan(posBefore + 0.05);
   });
 });
 
