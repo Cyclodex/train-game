@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs } from "@/tiles/lanes";
+import { fromPairs, oneWay } from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -896,5 +896,32 @@ describe("carqueue test-world scenario", () => {
       expect(gap).toBeGreaterThanOrEqual(-1e-6); // no overlap
       expect(gap).toBeLessThan(0.06); // packed nearly nose-to-tail (~6px gap)
     }
+  });
+});
+
+describe("createRoadSim — one-way street", () => {
+  it("only ever carries cars in the permitted direction", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "1,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "2,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 5,
+      spawnInterval: 0.3,
+      carLength: 0.2,
+    });
+    let everSeen = false;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        everSeen = true;
+        expect(c.units[0].front.entryPort).toBe(Position.Left);
+      }
+    }
+    expect(everSeen).toBe(true);
   });
 });
