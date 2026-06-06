@@ -145,7 +145,7 @@ import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator"
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
 import { Position } from "@/types";
-import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
+import { Level, Port, PortPair, portsOf, parseCoordId, samePair } from "@/tiles/model";
 import {
   emptyCell,
   addConnection,
@@ -162,7 +162,7 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
 
-type Tool = "connect" | "depot" | "signal" | "erase";
+type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
 const LEVEL_KEY = "train-game:editor-level";
 const EDGES: Port[] = [
@@ -178,6 +178,7 @@ const HINTS: Record<Tool, string> = {
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
+  road: "Click a tile to add a road (cycles vertical → horizontal → none). A road laid over track becomes a level crossing.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -202,7 +203,7 @@ class EditorView extends Vue {
 
   EDGES = EDGES;
   levelSizeY = 6;
-  tools: Tool[] = ["connect", "depot", "signal", "erase"];
+  tools: Tool[] = ["connect", "depot", "signal", "erase", "road"];
   tool: Tool = "connect";
   level: Level = reactive(loadLevel());
   // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
@@ -254,7 +255,8 @@ class EditorView extends Vue {
       for (let x = 0; x < this.config.levelSizeX; x++) {
         const key = `${x},${y}`;
         const tile = this.level[key];
-        out.push({ key, tile: tile && tile.connections.length ? tile : null });
+        const drawable = tile && (tile.connections.length || tile.road?.length);
+        out.push({ key, tile: drawable ? tile : null });
       }
     }
     return out;
@@ -368,7 +370,7 @@ class EditorView extends Vue {
     return this.level[id] ?? emptyCell();
   }
   commit(id: string, cell: Level[string]) {
-    if (cell.connections.length === 0 && !cell.signals?.length) {
+    if (cell.connections.length === 0 && !cell.signals?.length && !cell.road?.length) {
       delete this.level[id];
     } else {
       this.level[id] = cell;
@@ -505,6 +507,16 @@ class EditorView extends Vue {
     } else if (this.tool === "erase") {
       delete this.level[id];
       this.persist();
+    } else if (this.tool === "road") {
+      // Cycle the cell's road: none → vertical → horizontal → none. A road over
+      // existing track makes a level crossing.
+      const cur = this.cellOf(id);
+      const v: PortPair = [Position.Top, Position.Bottom];
+      const h: PortPair = [Position.Left, Position.Right];
+      const road = cur.road ?? [];
+      const isV = road.some(p => samePair(p, v));
+      const next: PortPair[] | undefined = road.length === 0 ? [v] : isV ? [h] : undefined;
+      this.commit(id, { ...cur, road: next });
     }
   }
   // Face the first neighbour that already has track on the shared border.
