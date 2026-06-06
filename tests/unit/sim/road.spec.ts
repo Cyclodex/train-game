@@ -526,22 +526,20 @@ describe("createRoadSim — variable preferred speed", () => {
   });
 
   it("a fast car never overtakes a slower leader and matches its pace", () => {
-    // A long one-way straight road. We seed two cars: a slow leader spawned first,
-    // then a faster follower. The follower has the higher preferred speed but the
-    // gap cap must keep it behind the leader's rear, and its velocity must settle
-    // at (not above) the leader's pace — the leader sets the platoon speed.
+    // A long one-way straight road. Two cars spawn from the left a head start
+    // apart; with a wide speed spread the second car is the faster one and must
+    // reel the slower leader in. The gap cap keeps it behind the leader's rear,
+    // and once it has closed up its velocity is held to the leader's pace, not its
+    // own higher cruise — the slower car sets the platoon speed. Seed 9 yields a
+    // ~0.36 leader and a ~0.58 follower (a clear convergence case).
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {};
-    for (let x = 0; x < 10; x++) lvl[`${x},0`] = { connections: [], road: [road] };
-    // Spawn only from the left edge (one-way), one car per interval, with a wide
-    // spread so the two cars get clearly different cruise speeds. Seed chosen so a
-    // slow car leads a faster one (asserted below; if it ever flips, the no-overtake
-    // invariant still holds, but we want the convergence case specifically).
+    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: [road] };
     const sim = createRoadSim({
       level: lvl,
-      width: 10,
+      width: 40,
       height: 1,
-      seed: 2,
+      seed: 9,
       spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
       spawnInterval: 2.0, // a clear head start so the follower must catch up
       carSpeed: 0.5,
@@ -551,54 +549,67 @@ describe("createRoadSim — variable preferred speed", () => {
     });
 
     const worldX = (s: { coord: { x: number }; t: number }) => s.coord.x + s.t;
-    let everTwo = false;
-    for (let i = 0; i < 600; i++) {
-      sim.step(0.05, () => false);
-      const live = sim.cars();
-      if (live.length < 2) continue;
-      everTwo = true;
-      // Identify leader (further along the road) and follower by world position.
-      const samples = sim.sample();
-      const byId = new Map(samples.map(c => [c.id, c]));
-      const sorted = [...live].sort(
-        (a, b) =>
-          worldX(byId.get(b.id)!.units[0].front) -
-          worldX(byId.get(a.id)!.units[0].front)
-      );
-      const leader = sorted[0];
-      const follower = sorted[1];
-      const leaderRear = worldX(byId.get(leader.id)!.units[0].rear);
-      const followerFront = worldX(byId.get(follower.id)!.units[0].front);
-      // No overtake: the follower's nose never crosses the leader's tail.
-      expect(followerFront).toBeLessThanOrEqual(leaderRear + 1e-6);
-    }
-    expect(everTwo).toBe(true); // both cars were on the road together
 
-    // Run on until they form a steady platoon, then assert the follower is the
-    // faster car held to the leader's pace. Drive long enough for the catch-up.
-    let leader = sim.cars()[0];
-    let follower = sim.cars()[0];
-    for (let i = 0; i < 400; i++) {
+    // Capture the first two cars that share the road and reason only about this
+    // pair, and only while both are still on the lane: maxCars 2 means a car
+    // driving off the right edge would let a fresh, unrelated car spawn in its
+    // place, which would muddy a position-only "leader/follower" read.
+    let ids: string[] = [];
+    for (let i = 0; i < 400 && ids.length < 2; i++) {
       sim.step(0.05, () => false);
       const live = sim.cars();
-      if (live.length < 2) continue;
-      const samples = sim.sample();
-      const byId = new Map(samples.map(c => [c.id, c]));
-      const sorted = [...live].sort(
-        (a, b) =>
-          worldX(byId.get(b.id)!.units[0].front) -
-          worldX(byId.get(a.id)!.units[0].front)
-      );
-      leader = sorted[0];
-      follower = sorted[1];
+      if (live.length >= 2) ids = live.slice(0, 2).map(c => c.id);
     }
-    // The follower is the one with the higher preferred (cruise) speed.
-    expect(follower.speed).toBeGreaterThan(leader.speed);
-    // Yet it is held to roughly the leader's velocity — it can't run at its own
-    // higher cruise because the leader caps it (it would otherwise overtake).
-    expect(follower.velocity).toBeLessThanOrEqual(leader.velocity + 1e-2);
-    // And it is genuinely capped below its own preferred speed.
-    expect(follower.velocity).toBeLessThan(follower.speed - 1e-3);
+    expect(ids.length).toBe(2);
+
+    // The follower closes the gap, then holds a steady following distance where
+    // its braking model balances the leader's pace. Track the pair while both are
+    // alive; assert no-overtake every step, and average the velocities over the
+    // "in contact" phase (a tight gap) so the comparison is robust to the small
+    // oscillation around that equilibrium rather than tied to one instant.
+    let minGap = Infinity;
+    let followerSpeed = 0;
+    let nContact = 0;
+    let sumFollowerV = 0;
+    let sumLeaderV = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const live = sim.cars();
+      const a = live.find(c => c.id === ids[0]);
+      const b = live.find(c => c.id === ids[1]);
+      if (!a || !b) break; // one drove off the lane — stop reasoning about the pair
+      const byId = new Map(sim.sample().map(c => [c.id, c]));
+      const aFront = worldX(byId.get(a.id)!.units[0].front);
+      const bFront = worldX(byId.get(b.id)!.units[0].front);
+      const ahead = aFront >= bFront ? a : b;
+      const behind = ahead === a ? b : a;
+      const leaderRear = worldX(byId.get(ahead.id)!.units[0].rear);
+      const followerFront = worldX(byId.get(behind.id)!.units[0].front);
+      // No overtake, ever: the rear car's nose never crosses the lead car's tail.
+      expect(followerFront).toBeLessThanOrEqual(leaderRear + 1e-6);
+      // The faster car stays the rear one (it can't pass), so the follower always
+      // has the higher preferred speed.
+      expect(behind.speed).toBeGreaterThan(ahead.speed);
+      const gap = leaderRear - followerFront;
+      minGap = Math.min(minGap, gap);
+      if (gap < 0.12) {
+        // In contact: sample the platoon's velocities for the averages below.
+        nContact++;
+        sumFollowerV += behind.velocity;
+        sumLeaderV += ahead.velocity;
+        followerSpeed = behind.speed;
+      }
+    }
+    // The faster car really did catch the slower one and tail it (not just trail at
+    // a distance) — otherwise the velocity comparisons below would be vacuous.
+    expect(minGap).toBeLessThan(0.12);
+    expect(nContact).toBeGreaterThan(50);
+    const avgFollowerV = sumFollowerV / nContact;
+    const avgLeaderV = sumLeaderV / nContact;
+    // While tailing, the follower runs at the leader's pace (within a small band),
+    // not its own higher cruise — the slower leader sets the platoon speed.
+    expect(avgFollowerV).toBeLessThanOrEqual(avgLeaderV + 0.03);
+    expect(avgFollowerV).toBeLessThan(followerSpeed - 0.1);
   });
 });
 
