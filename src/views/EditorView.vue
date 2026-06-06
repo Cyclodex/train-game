@@ -251,8 +251,8 @@ class EditorView extends Vue {
   tool: Tool = "connect";
   // Big, kid-friendly icon + label for each build tool, shown in the dock.
   toolMeta: Record<Tool, { icon: string; label: string }> = {
-    connect: { icon: "🛤", label: "Rail" },
-    road: { icon: "🛣", label: "Road" },
+    connect: { icon: "🚂", label: "Rail" },
+    road: { icon: "🚗", label: "Road" },
     depot: { icon: "🏠", label: "Depot" },
     signal: { icon: "🚦", label: "Signal" },
     erase: { icon: "🧽", label: "Erase" },
