@@ -114,9 +114,59 @@ describe("createRoadSim — spawning + movement", () => {
   });
 });
 
-describe("createRoadSim — occupancy gate", () => {
-  it("a car never enters a tile occupied by another car", () => {
-    // Two-tile road; force two cars onto it and check they never share a tile.
+describe("createRoadSim — car following", () => {
+  // World X of a CarSample on a Left->Right straight road: the tile column plus
+  // the progress across it (entry is Left = t 0, exit Right = t 1).
+  const worldX = (s: { coord: { x: number }; t: number }) => s.coord.x + s.t;
+
+  it("cars queue without overlapping and pack closely behind a stopped car", () => {
+    // A long straight road; a permanently-closed crossing at 2,0 forces a queue.
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {
+      "0,0": { connections: [], road: [road] },
+      "1,0": { connections: [], road: [road] },
+      "2,0": {
+        connections: [[Position.Top, Position.Bottom]],
+        road: [road],
+      },
+      "3,0": { connections: [], road: [road] },
+      "4,0": { connections: [], road: [road] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 1,
+      seed: 3,
+      spawnInterval: 0.3, // spawn often to build a queue
+      carLength: 0.4,
+    });
+    // Build a standing queue behind the closed crossing.
+    for (let i = 0; i < 400; i++) sim.step(0.05, id => id === "2,0");
+
+    const bodies = sim
+      .sample()
+      .map(c => ({ front: worldX(c.front), rear: worldX(c.rear) }))
+      // Order them along the road, leading car first.
+      .sort((a, b) => b.front - a.front);
+    expect(bodies.length).toBeGreaterThan(1); // a real queue formed
+
+    // No two bodies overlap: each follower's front stays behind the leader's rear.
+    for (let i = 1; i < bodies.length; i++) {
+      const leader = bodies[i - 1];
+      const follower = bodies[i];
+      expect(follower.front).toBeLessThanOrEqual(leader.rear + 1e-6);
+    }
+    // And they pack tightly: the closest consecutive gap is small (the old
+    // whole-tile gate left ~0.6 tile between queued cars).
+    const minGap = Math.min(
+      ...bodies.slice(1).map((f, i) => bodies[i].rear - f.front)
+    );
+    expect(minGap).toBeLessThan(0.2);
+  });
+
+  it("never rolls a car onto a tile occupied head-on by an oncoming car", () => {
+    // Two-tile road open at both edges; cars spawn from both ends and must not
+    // pass through each other (they stop nose-to-nose).
     const lvl: Level = {
       "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
       "1,0": { connections: [], road: [[Position.Left, Position.Right]] },
@@ -126,13 +176,25 @@ describe("createRoadSim — occupancy gate", () => {
       width: 2,
       height: 1,
       seed: 3,
-      spawnInterval: 0.2, // spawn often to crowd the road
+      spawnInterval: 0.2,
+      carLength: 0.4,
     });
+    const worldX2 = (s: { coord: { x: number }; entryPort: Position; t: number }) =>
+      s.entryPort === Position.Left ? s.coord.x + s.t : s.coord.x + (1 - s.t);
     for (let i = 0; i < 300; i++) {
       sim.step(0.05, () => false);
-      const tiles = sim.cars().map(c => c.tileId);
-      const unique = new Set(tiles);
-      expect(unique.size).toBe(tiles.length); // no two cars on the same tile
+      const bodies = sim
+        .sample()
+        .map(c => {
+          const a = worldX2(c.front);
+          const b = worldX2(c.rear);
+          return { lo: Math.min(a, b), hi: Math.max(a, b) };
+        })
+        .sort((p, q) => p.lo - q.lo);
+      for (let k = 1; k < bodies.length; k++) {
+        // Each body starts at or after the previous one ends: no overlap.
+        expect(bodies[k].lo).toBeGreaterThanOrEqual(bodies[k - 1].hi - 1e-6);
+      }
     }
   });
 });

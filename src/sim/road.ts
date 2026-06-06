@@ -166,6 +166,15 @@ const DEFAULT_CAR_SPEED = 0.6;
 const DEFAULT_CAR_LENGTH = 0.4;
 const DEFAULT_MAX_CARS = 40;
 
+// Bumper gap a car keeps behind the obstacle ahead (the next car's rear, or an
+// oncoming car's nose), in tiles. Small so a queue at a closed crossing packs
+// tight instead of the old whole-tile occupancy gate leaving ~a full tile of air
+// between stopped cars. ~12px at tileSize 200.
+const CAR_GAP = 0.06;
+// How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
+// are short and slow, so a couple of tiles of look-ahead is plenty.
+const CAR_LOOKAHEAD = 2;
+
 export function createRoadSim(config: RoadSimConfig): RoadSim {
   const { level, width, height } = config;
   const rng = makeRng(config.seed ?? 1);
@@ -196,29 +205,99 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return ids;
   }
 
-  function tileOccupiedByOther(tileId: string, self: Car): boolean {
-    for (const c of cars) {
-      if (c === self) continue;
-      if (bodyTileIds(c).has(tileId)) return true;
+  // The upcoming tiles on a car's route, keyed by tile id, each with `lead` (the
+  // tile-distance from the car's head to that tile's *entry* edge — the head
+  // tile's entry sits headProgress behind the head, so its lead is negative) and
+  // `entry` (the port the car enters that tile through). First occurrence wins,
+  // so a tile a loop revisits is measured at its nearest pass. Used to project
+  // other cars / a closed crossing onto this car's path for car-following.
+  function forwardRoute(car: Car): Map<string, { lead: number; entry: Port }> {
+    const route = new Map<string, { lead: number; entry: Port }>();
+    let coord = car.path[car.headIndex].coord;
+    let entry = car.path[car.headIndex].entryPort;
+    route.set(getCoordinatesId(coord), { lead: -car.headProgress, entry });
+    let lead = 1 - car.headProgress; // head -> the next tile's entry edge
+    while (lead <= CAR_LOOKAHEAD) {
+      const t = roadTraverse(level, coord, entry);
+      if (!t.next) break; // map edge / road end
+      const id = getCoordinatesId(t.next.coord);
+      if (!route.has(id)) route.set(id, { lead, entry: t.next.entryPort });
+      lead += 1;
+      coord = t.next.coord;
+      entry = t.next.entryPort;
     }
-    return false;
+    return route;
   }
 
-  // Whether `car` may cross out of its head tile into the next road tile. Blocked
-  // by a road end, a closed crossing on the tile being entered, or that tile
-  // being occupied by another car (the occupancy gate — cars wait, never crash).
-  function mayCross(car: Car, closed: CrossingClosed): boolean {
+  // A car's head and rear anchor points as { tileId, entry, t } — the two ends of
+  // its body, used as obstacles other cars must not roll into.
+  function bodyPoints(car: Car): { tileId: string; entry: Port; t: number }[] {
     const head = car.path[car.headIndex];
-    const t = roadTraverse(level, head.coord, head.entryPort);
-    if (!t.next) return false; // road end / map edge — despawn handled by caller
-    const nextId = getCoordinatesId(t.next.coord);
-    if (closed(nextId)) return false; // closed crossing: hold
-    if (tileOccupiedByOther(nextId, car)) return false; // occupancy gate
-    return true;
+    const rearDist = Math.max(0, car.headIndex + car.headProgress - car.length);
+    const rearIdx = Math.floor(rearDist + 1e-9);
+    const rear = car.path[rearIdx];
+    return [
+      {
+        tileId: getCoordinatesId(head.coord),
+        entry: head.entryPort,
+        t: car.headProgress,
+      },
+      {
+        tileId: getCoordinatesId(rear.coord),
+        entry: rear.entryPort,
+        t: rearDist - rearIdx,
+      },
+    ];
+  }
+
+  // Forward tile-distance from a car's head to a point on its route, or null if
+  // the point's tile is not on the look-ahead route. The point's progress `t` is
+  // measured from `pEntry` (how its car entered that tile); re-orient it to the
+  // direction this car travels the tile so head-on and same-way cars both project
+  // correctly onto a single scalar.
+  function distanceTo(
+    route: Map<string, { lead: number; entry: Port }>,
+    p: { tileId: string; entry: Port; t: number }
+  ): number | null {
+    const hit = route.get(p.tileId);
+    if (!hit) return null;
+    let within: number;
+    if (p.entry === hit.entry) within = p.t;
+    else if (p.entry === oppositePort(hit.entry)) within = 1 - p.t;
+    else within = 0.5; // perpendicular junction occupant: treat as mid-tile
+    return hit.lead + within;
+  }
+
+  // The clear tile-distance the car's head may advance this tick before it must
+  // stop: short of a closed crossing's entry edge, or a CAR_GAP behind the
+  // nearest point of any other car's body that lies ahead on its route. Capped at
+  // the look-ahead. Read-only. This replaces the old whole-tile occupancy gate so
+  // cars pack bumper-to-bumper instead of stopping a full tile apart.
+  function clearAhead(car: Car, closed: CrossingClosed): number {
+    const route = forwardRoute(car);
+    let clear = CAR_LOOKAHEAD;
+    // Closed crossing ahead: stop at its entry edge (the car is already past the
+    // entry of its own head tile, whose lead is negative, so it is never gated by
+    // a crossing it is currently sitting on).
+    for (const [tileId, { lead }] of route) {
+      if (lead >= 0 && closed(tileId)) clear = Math.min(clear, lead);
+    }
+    // Other cars: stop a gap behind the nearest body point ahead on the route.
+    for (const other of cars) {
+      if (other === car) continue;
+      for (const p of bodyPoints(other)) {
+        const d = distanceTo(route, p);
+        if (d !== null && d >= 0) clear = Math.min(clear, d - CAR_GAP);
+      }
+    }
+    return Math.max(0, clear);
   }
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
-    car.headProgress += car.speed * dt;
+    const clear = clearAhead(car, closed);
+    let move = car.speed * dt;
+    if (move > clear) move = clear; // never roll past the stop line / into a car
+    car.headProgress += move;
     while (car.headProgress >= 1) {
       const head = car.path[car.headIndex];
       const t = roadTraverse(level, head.coord, head.entryPort);
@@ -227,8 +306,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // grid — signal the caller to despawn it.
         return false;
       }
-      if (!mayCross(car, closed)) {
-        car.headProgress = 1; // hold at the stop line before the next tile
+      // Backstop: clearAhead caps movement at a closed crossing's entry, which
+      // can land headProgress exactly on the boundary — never cross onto it.
+      if (closed(getCoordinatesId(t.next.coord))) {
+        car.headProgress = 1;
         break;
       }
       const exit = roadExitPort(level, t.next.coord, t.next.entryPort);
