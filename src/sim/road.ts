@@ -6,7 +6,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
-import { buildConflictMatrix } from "./roadJunction";
+import { buildConflictMatrix, conflictKey } from "./roadJunction";
 import { ActiveMovement, WaitingCar, fcfsWithPriorityArbiter, JunctionArbiter } from "./roadArbiter";
 
 // Re-export so existing importers of isRoadJunction from "@/sim/road" keep working.
@@ -515,14 +515,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
   // means a long trailer that spans a junction tile mid-body still puts a point
   // on it, so a crossing car sees it occupied and holds off the tile.
-  function bodyPoints(car: Car): { tileId: string; entry: Port; t: number }[] {
-    const pts: { tileId: string; entry: Port; t: number }[] = [];
+  function bodyPoints(
+    car: Car
+  ): { tileId: string; entry: Port; exit: Port | null; t: number }[] {
+    const pts: { tileId: string; entry: Port; exit: Port | null; t: number }[] = [];
     for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
       const s = sampleAtArc(car, a);
-      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, t: s.t });
+      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t });
     }
     const tail = sampleAtArc(car, car.length); // always include the exact tail
-    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, t: tail.t });
+    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t });
     return pts;
   }
 
@@ -603,10 +605,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
 
     // Car-following: stop a gap behind other cars' bodies.
-    // For perpendicular junction occupants, hold at the entry edge so only one
-    // stream crosses the junction tile at a time (the arbiter above handles
-    // which stream goes first by movement-level conflict; this guard enforces
-    // the whole-tile exclusion for body points already inside).
     for (const other of cars) {
       if (other === car) continue;
       for (const p of bodyPoints(other)) {
@@ -616,11 +614,31 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // of the dashed centre from ours), so an opposite-direction car never
         // shares our lane and must not gate us. This is what lets two streams flow
         // past each other instead of freezing nose-to-nose on a single centreline.
-        // Conflicting *turns* at a junction are still arbitrated by canEnter()
-        // above (the conflict matrix knows a left turn crosses the oncoming lane).
         if (proj.opposing) continue;
         if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
-          clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+          // A car crossing our path at a junction only blocks us if its movement
+          // actually conflicts with ours (same conflict matrix the arbiter uses).
+          // Two non-conflicting movements — e.g. perpendicular right turns — may
+          // share the junction tile, so a right-turn-only cross never blocks;
+          // genuinely crossing streams (perpendicular straights, a left turn over
+          // oncoming) still hold at the entry edge.
+          const conflictPairs = junctionConflicts.get(p.tileId);
+          const jCoord = parseJunctionCoord(p.tileId);
+          const myEntry = route.get(p.tileId)?.entry;
+          const myExit =
+            myEntry != null ? carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry) : null;
+          const conflicts =
+            conflictPairs != null &&
+            myEntry != null &&
+            myExit !== null &&
+            p.exit !== null &&
+            conflictPairs.has(
+              conflictKey(
+                { entry: myEntry, exit: myExit },
+                { entry: p.entry, exit: p.exit }
+              )
+            );
+          if (conflicts) clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
         } else {
           clear = Math.min(clear, proj.d - CAR_GAP);
         }

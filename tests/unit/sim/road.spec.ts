@@ -965,4 +965,51 @@ describe("createRoadSim — right-turn-only cross", () => {
     }
     expect(completed).toBeGreaterThan(8);
   });
+
+  it("never makes a right-turner yield (non-conflicting movements are not blocked)", () => {
+    // Every movement here is a right turn, and right turns never conflict, so no
+    // car should ever have to stop for the junction — they all flow freely. We
+    // measure stalled car-ticks (a car whose position doesn't advance between
+    // steps). With the old whole-tile exclusion this was in the thousands; with
+    // conflict-aware blocking it is ~0. (A small margin tolerates incidental
+    // same-lane following, though at these speeds there is none.)
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    const posOf = new Map<string, number>();
+    let stalled = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        const pos = c.headIndex + c.headProgress;
+        const prevPos = posOf.get(c.id);
+        if (prevPos !== undefined && Math.abs(pos - prevPos) < 1e-4) stalled++;
+        posOf.set(c.id, pos);
+      }
+    }
+    expect(stalled).toBeLessThan(50);
+  });
 });
