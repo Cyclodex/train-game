@@ -16,6 +16,7 @@ import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
+import { RoadFrame } from "@/sim/road";
 
 export interface TrainDef {
   id: string;
@@ -121,6 +122,9 @@ export interface Game {
   mode: GameMode;
   // Reactive snapshot of the objective tracker, refreshed each frame.
   objective: ObjectiveState;
+  // Reactive live crossing-flow snapshot (the *current* worst car wait, not the
+  // high-water mark the objective scores), for the HUD's live tension readout.
+  roadFrame: RoadFrame;
   start(): void;
   stop(): void;
   // Move Ready -> Playing (the Start button).
@@ -457,6 +461,13 @@ export function createGame(
   const tracker = mode.createObjective(setup);
   const spawner = mode.createSpawner?.(setup);
   const objective = reactive(tracker.state()) as ObjectiveState;
+  // Live crossing-flow snapshot, refreshed each tick from the road sim (the HUD
+  // reads this for the falling-when-released wait readout).
+  const roadFrame = reactive({
+    maxCarWaitSec: 0,
+    carWaitTotalSec: 0,
+    carsDelivered: 0,
+  }) as RoadFrame;
 
   // Raw running totals of player signal overrides. The loop diffs these against
   // the last-observed totals to feed the tracker manual-control deltas. They are
@@ -514,6 +525,9 @@ export function createGame(
       obs.maxCarWaitSec = rf.maxCarWaitSec;
       obs.carsDelivered = rf.carsDelivered;
       obs.crossingIncidentDelta = 0;
+      roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
+      roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
+      roadFrame.carsDelivered = rf.carsDelivered;
       tracker.observe(obs, scaled);
       refreshObjective();
     }
@@ -543,6 +557,7 @@ export function createGame(
     deliveries,
     mode,
     objective,
+    roadFrame,
     start() {
       if (raf) return;
       last = 0;
@@ -568,6 +583,9 @@ export function createGame(
       for (const id of Object.keys(reservations)) delete reservations[id];
       for (const id of Object.keys(occupied)) delete occupied[id];
       roadCars.splice(0, roadCars.length);
+      roadFrame.maxCarWaitSec = 0;
+      roadFrame.carWaitTotalSec = 0;
+      roadFrame.carsDelivered = 0;
       tracker.reset();
       refreshObjective();
     },

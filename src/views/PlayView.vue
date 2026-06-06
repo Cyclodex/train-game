@@ -56,6 +56,14 @@
         <span class="score-pct">{{ deliveredPct }}%</span>
       </div>
       <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <div
+        v-if="showCrossingFlow"
+        class="score-crossing"
+        :class="crossingFlowClass"
+        title="Longest car wait at a crossing"
+      >
+        🚗 {{ crossingWaitLabel }}
+      </div>
       <div v-if="hud.stars" class="score-stars">
         <span
           v-for="s in stars"
@@ -337,6 +345,21 @@ class PlayView extends Vue {
   }
   get earnedStars(): number {
     return this.stars.filter(s => s.earned).length;
+  }
+  // The crossing-flow readout (Crossing Keeper): the live worst car wait. Shown
+  // only when the mode controls the crossing gate, so other modes' HUDs are
+  // unchanged. The colour ramps amber→red as the wait climbs (the live tension).
+  get showCrossingFlow(): boolean {
+    return this.game.mode.controls.crossingGate;
+  }
+  get crossingWaitLabel(): string {
+    return this.game.roadFrame.maxCarWaitSec.toFixed(0) + "s";
+  }
+  get crossingFlowClass(): string {
+    const w = this.game.roadFrame.maxCarWaitSec;
+    if (w >= 18) return "score-crossing--bad";
+    if (w >= 8) return "score-crossing--warn";
+    return "";
   }
   get lostReason(): string {
     return this.game.objective.lostReason ?? "";
@@ -674,6 +697,19 @@ export default toNative(PlayView);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   color: #cdd7df;
+}
+.score-crossing {
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #8fd19e; // calm green while traffic flows
+  transition: color 0.3s ease;
+}
+.score-crossing--warn {
+  color: #e6c34a; // amber as a wait builds
+}
+.score-crossing--bad {
+  color: #e2574c; // red when a car is stuck dangerously long
 }
 .score-stars {
   margin-top: 6px;
