@@ -27,6 +27,12 @@ export interface TileCell {
   // interact at a crossing via the gate (derived from rail reservation). See
   // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
   road?: PortPair[];
+  // Authored starting switch arm per junction entry port (keyed by Port). Absent
+  // entries fall back to the auto-computed first-valid arm. Only meaningful on a
+  // switchable junction (cross / T-junction); ignored elsewhere. Round-trips
+  // through level JSON like `signals`/`road`. See
+  // docs/superpowers/specs/2026-06-06-junction-default-direction-design.md.
+  defaultArms?: Partial<Record<Port, ActiveIntersection>>;
 }
 
 export type Level = Record<string, TileCell>;
@@ -131,6 +137,21 @@ export function connectionsToExitPort(
   if (arm === undefined) return null;
   const want = armExit(entry, arm);
   return want !== null && partners.includes(want) ? want : null;
+}
+
+// The authored starting arm for a junction entry, but only when its geometric
+// exit is still a real partner of that entry. Returns undefined for an
+// unauthored entry OR for a stale arm whose exit was since deleted — so a
+// left-over arm never drives routing to a connection that no longer exists.
+export function defaultArmFor(
+  cell: TileCell,
+  entry: Port
+): ActiveIntersection | undefined {
+  const arm = cell.defaultArms?.[entry];
+  if (arm === undefined) return undefined;
+  const exit = armExit(entry, arm);
+  if (exit === null) return undefined;
+  return partnersOf(cell.connections, entry).includes(exit) ? arm : undefined;
 }
 
 // A human-readable label for the cell's shape. Derived purely from connections

@@ -4,6 +4,7 @@ import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
+import { switchDefault } from "@/levels/test/scenarios/switch-default";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
@@ -21,6 +22,7 @@ export const SCENARIOS: TestScenario[] = [
   depot,
   signals,
   junction,
+  switchDefault,
   cross,
   crossing,
   carfollowing,
