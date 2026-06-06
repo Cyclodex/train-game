@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, isRoadJunction } from "@/tiles/lanes";
+import { exitsFrom, isRoadJunction, laneCount } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -213,6 +213,10 @@ export interface Car {
   // the throughput counter (carsDelivered) only counts cars that actually used a
   // crossing — not cars that drove a road with no rail on it.
   crossedCrossing: boolean;
+  // Physical lane slot this car occupies: 0 = rightmost (kerb-side),
+  // N-1 = innermost (centre-adjacent). Set at spawn; clamped at each tile
+  // boundary when the next tile has fewer lanes.
+  laneIndex: number;
 }
 
 // A car sampled as its two anchor points along the recent path (front toward the
@@ -237,6 +241,8 @@ export interface CarUnit {
 export interface CarChord {
   id: string;
   units: CarUnit[];
+  laneIndex: number;
+  laneCount: number;
 }
 
 // Closed ⇔ this tile is a crossing reserved/occupied by a train. Supplied by the
@@ -551,14 +557,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // on it, so a crossing car sees it occupied and holds off the tile.
   function bodyPoints(
     car: Car
-  ): { tileId: string; entry: Port; exit: Port | null; t: number }[] {
-    const pts: { tileId: string; entry: Port; exit: Port | null; t: number }[] = [];
+  ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] {
+    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] = [];
     for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
       const s = sampleAtArc(car, a);
-      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t });
+      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t, laneIndex: car.laneIndex });
     }
     const tail = sampleAtArc(car, car.length); // always include the exact tail
-    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t });
+    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t, laneIndex: car.laneIndex });
     return pts;
   }
 
@@ -663,6 +669,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // shares our lane and must not gate us. This is what lets two streams flow
         // past each other instead of freezing nose-to-nose on a single centreline.
         if (proj.opposing) continue;
+        // Different lane, same travel direction: cars ride side-by-side and must not
+        // gate each other. Perpendicular junction occupants are handled below.
+        if (!proj.perpendicular && !proj.opposing && p.laneIndex !== car.laneIndex) continue;
         if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
           // A car crossing our path at a junction only blocks us if its movement
           // actually conflicts with ours (same conflict matrix the arbiter uses).
@@ -782,6 +791,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextExit =
         carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry);
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
+      // Clamp lane index when the next tile has fewer lanes than the current one.
+      const nextLaneCount = laneCount(nextTile.road, nextEntry);
+      if (nextLaneCount > 0) car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
       car.headIndex += 1;
       car.headProgress -= 1;
     }
@@ -825,6 +837,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitSeconds: 0,
       waitedSec: 0,
       crossedCrossing: false,
+      laneIndex: 0,
     };
     if (clearAhead(probe, closed).clear <= STOP_EPS) return;
     const kind = pickKind();
@@ -835,6 +848,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // — before route planning consumes any RNG — so the per-car speed sequence is
     // independent of routing (keeps seeded platoon tests stable across changes).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+    // Pick a lane slot: random within the entry tile's lane count for this approach.
+    const entryLaneCount = laneCount(level[getCoordinatesId(entry.coord)]?.road, entry.entryPort);
+    const chosenLane = entryLaneCount > 1 ? Math.floor(rng() * entryLaneCount) : 0;
     // Two-lane (right-hand) roads: oncoming traffic uses the opposite lane, so a
     // car can head for any edge of the map without risking a head-on — routing
     // toward an edge other cars also use is fine. Pick a reachable exit edge
@@ -864,6 +880,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitSeconds: 0,
       waitedSec: 0,
       crossedCrossing: false,
+      laneIndex: chosenLane,
     });
   }
 
@@ -954,7 +971,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           });
           lead += seg.length + spec.gap;
         }
-        return { id: c.id, units };
+        const headSeg = c.path[c.headIndex];
+        const curLaneCount = laneCount(level[getCoordinatesId(headSeg.coord)]?.road, headSeg.entryPort);
+        return { id: c.id, units, laneIndex: c.laneIndex, laneCount: Math.max(1, curLaneCount) };
       });
     },
     junctionOccupancy() {

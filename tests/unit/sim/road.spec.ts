@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs, oneWay, turns } from "@/tiles/lanes";
+import { fromPairs, oneWay, turns, nWayLanes } from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -1273,5 +1273,95 @@ describe("createRoadSim — no-left-turn cross", () => {
     }
     expect(sawCentreMovement).toBe(true); // cars really used the junction
     expect(completed).toBeGreaterThan(8); // and traffic kept flowing
+  });
+});
+
+describe("createRoadSim — per-lane following", () => {
+  function twoLaneRoad(): Level {
+    const road = nWayLanes(Position.Left, Position.Right, 2);
+    return {
+      "0,0": { connections: [], road },
+      "1,0": { connections: [], road },
+      "2,0": { connections: [], road },
+    };
+  }
+
+  it("cars in different lanes of the same direction flow without cross-lane stalling", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.05,
+      carSpeed: 0.5,
+      maxCars: 6,
+    });
+    let stalledTicks = 0;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      if (cars.length >= 2) {
+        const moving = cars.filter(c => c.velocity > 0.01);
+        if (moving.length === 0) stalledTicks++;
+      }
+    }
+    expect(stalledTicks).toBeLessThan(30);
+  });
+
+  it("sample() includes laneIndex and laneCount fields", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      maxCars: 4,
+    });
+    for (let i = 0; i < 100; i++) sim.step(0.1, () => false);
+    const samples = sim.sample();
+    expect(samples.length).toBeGreaterThan(0);
+    for (const s of samples) {
+      expect(typeof s.laneIndex).toBe("number");
+      expect(typeof s.laneCount).toBe("number");
+      expect(s.laneIndex).toBeGreaterThanOrEqual(0);
+      expect(s.laneCount).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
+
+describe("createRoadSim — lane merge (cross-tile continuity)", () => {
+  function mergingRoad(): Level {
+    const twoLane = nWayLanes(Position.Left, Position.Right, 2);
+    const oneLane = fromPairs([[Position.Left, Position.Right]]);
+    return {
+      "0,0": { connections: [], road: twoLane },
+      "1,0": { connections: [], road: twoLane },
+      "2,0": { connections: [], road: oneLane },
+      "3,0": { connections: [], road: oneLane },
+    };
+  }
+
+  it("cars entering the merge point keep flowing (laneIndex clamped to 0)", () => {
+    const sim = createRoadSim({
+      level: mergingRoad(),
+      width: 4,
+      height: 1,
+      seed: 3,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      maxCars: 6,
+    });
+    // Run the sim and ensure no permanent gridlock (not all cars stopped simultaneously).
+    let allStuckTicks = 0;
+    for (let i = 0; i < 600; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      if (cars.length >= 2 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
+    }
+    expect(allStuckTicks).toBeLessThan(50);
   });
 });
