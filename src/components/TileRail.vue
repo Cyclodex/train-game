@@ -47,5 +47,10 @@ export default toNative(TileRail);
 .tile-rail {
   width: 100%;
   height: 100%;
+  /* Lift the rails above the road layer (z1) so the track crosses *over* the
+  road surface at a level crossing. Stays below the crossing furniture (z15),
+  trains (z10), signals (z14) and switches (z20). */
+  position: relative;
+  z-index: 2;
 }
 </style>
