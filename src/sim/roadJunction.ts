@@ -5,6 +5,7 @@ import { Port } from "./topology";
 export interface Movement {
   entry: Port;
   exit: Port;
+  entryIndex?: number; // lane slot (default 0); included in key for multi-lane conflict resolution
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +105,10 @@ export function movementsConflict(a: Movement, b: Movement): boolean {
  * alphabetically so conflictKey(a,b) === conflictKey(b,a).
  */
 export function conflictKey(a: Movement, b: Movement): string {
-  const ka = `${Position[a.entry]}:${Position[a.exit]}`;
-  const kb = `${Position[b.entry]}:${Position[b.exit]}`;
+  const ai = a.entryIndex ?? 0;
+  const bi = b.entryIndex ?? 0;
+  const ka = `${Position[a.entry]}[${ai}]:${Position[a.exit]}`;
+  const kb = `${Position[b.entry]}[${bi}]:${Position[b.exit]}`;
   return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 

@@ -230,6 +230,29 @@ describe("buildConflictMatrix", () => {
 });
 
 // ---------------------------------------------------------------------------
+// conflictKey — lane-indexed
+// ---------------------------------------------------------------------------
+describe("conflictKey — lane-indexed", () => {
+  it("two movements from different entry arms with different lane indices have distinct keys", () => {
+    const ka = conflictKey(
+      { entry: Position.Left, entryIndex: 0, exit: Position.Right },
+      { entry: Position.Top, entryIndex: 1, exit: Position.Bottom },
+    );
+    const kb = conflictKey(
+      { entry: Position.Left, entryIndex: 0, exit: Position.Right },
+      { entry: Position.Top, entryIndex: 0, exit: Position.Bottom },
+    );
+    expect(ka).not.toBe(kb);
+  });
+
+  it("is order-independent (swap a and b gives same key)", () => {
+    const a: Movement = { entry: Position.Left, entryIndex: 1, exit: Position.Right };
+    const b: Movement = { entry: Position.Top, entryIndex: 0, exit: Position.Bottom };
+    expect(conflictKey(a, b)).toBe(conflictKey(b, a));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Right-turn-only cross: cars enter from all four arms and every car turns
 // right. In right-hand traffic each right turn hugs one corner of the tile, so
 // the four turns never cross — the intersection needs no signals and can never

@@ -691,8 +691,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             p.exit !== null &&
             conflictPairs.has(
               conflictKey(
-                { entry: myEntry, exit: myExit },
-                { entry: p.entry, exit: p.exit }
+                { entry: myEntry, entryIndex: car.laneIndex, exit: myExit },
+                { entry: p.entry, entryIndex: p.laneIndex, exit: p.exit }
               )
             );
           if (conflicts) clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
