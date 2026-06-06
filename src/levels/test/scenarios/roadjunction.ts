@@ -4,7 +4,7 @@ import { fromPairs } from "@/tiles/lanes";
 
 // 4-way road intersection where cars can enter from all four arms and take any
 // exit (straight, left turn, right turn). The centre tile has explicit turn
-// connections so that `partnersOf(road, Left)` returns more than just `[Right]`
+// connections so that `exitsFrom(road, Left)` returns more than just `[Right]`
 // and cars actually have choices when routing.
 //
 // There is no rail here — pure road scenario. Cars spawn from all four edges.
