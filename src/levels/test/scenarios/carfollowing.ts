@@ -33,4 +33,9 @@ export const carfollowing: TestScenario = {
   },
   trains: {},
   size: { cols: 8, rows: 1 },
+  // Spawn a bit more briskly than the default so a few cars share the lane at
+  // once — that's what makes the following visible (a faster car needs a slower
+  // leader ahead to catch and tail). Capped so the short lane forms tidy little
+  // platoons instead of a bumper-to-bumper jam.
+  traffic: { spawnInterval: 0.9, maxCars: 6 },
 };
