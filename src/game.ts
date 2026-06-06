@@ -62,6 +62,11 @@ function initialSwitches(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+// Rendered width of a road car in px — must match the `.road-car` CSS width in
+// PlayView/TestStage. The road sim's car body length is set from this so the
+// simulated body matches the visible sprite (keeps queues packing tight).
+const CAR_SPRITE_PX = 46;
+
 // A road-traffic car sampled to a world position for rendering.
 export interface RoadCar {
   id: string;
@@ -202,6 +207,11 @@ export function createGame(
     spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
     spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
     carSpeed: 0.5, // tiles/sec — slow enough to read on screen
+    // Match the logical body to the rendered sprite (.road-car is 46px wide in
+    // PlayView/TestStage CSS). If the model body is longer than the sprite, a
+    // queue looks gappy: the bumper gap then sits on top of the invisible extra
+    // body, leaving ~a whole car of air between sprites.
+    carLength: CAR_SPRITE_PX / tileSize,
     maxCars: 8,
   });
   const roadCars = reactive([]) as RoadCar[];

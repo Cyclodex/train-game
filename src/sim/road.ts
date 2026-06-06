@@ -163,14 +163,19 @@ export interface RoadSim {
 
 const DEFAULT_SPAWN_INTERVAL = 2.5;
 const DEFAULT_CAR_SPEED = 0.6;
-const DEFAULT_CAR_LENGTH = 0.4;
+// Default body length in tiles. Matches the rendered ~46px sprite at the 200px
+// tile size (game.ts passes an exact value derived from CAR_SPRITE_PX); kept in
+// sync so the simulated body never out-sizes the visible car.
+const DEFAULT_CAR_LENGTH = 0.23;
 const DEFAULT_MAX_CARS = 40;
 
 // Bumper gap a car keeps behind the obstacle ahead (the next car's rear, or an
-// oncoming car's nose), in tiles. Small so a queue at a closed crossing packs
-// tight instead of the old whole-tile occupancy gate leaving ~a full tile of air
-// between stopped cars. ~12px at tileSize 200.
-const CAR_GAP = 0.06;
+// oncoming car's nose), in tiles. Tight so a queue at a closed crossing packs
+// nearly nose-to-tail instead of the old whole-tile occupancy gate leaving ~a
+// full tile of air between stopped cars. ~6px at tileSize 200. NB: the body
+// length must match the rendered sprite (see CAR_SPRITE_PX in game.ts) or this
+// gap sits on top of invisible extra body and looks far larger on screen.
+const CAR_GAP = 0.03;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;

@@ -250,7 +250,7 @@ describe("carqueue test-world scenario", () => {
       spawnEntries: [{ coord: { x: 0, y: 3 }, entryPort: Position.Left }],
       spawnInterval: 0.6,
       carSpeed: 0.5,
-      carLength: 0.4,
+      carLength: 46 / 200, // the sprite-matched body the game uses (CAR_SPRITE_PX)
     });
     for (let i = 0; i < 600; i++) sim.step(0.05, id => id === "3,3");
 
@@ -267,7 +267,7 @@ describe("carqueue test-world scenario", () => {
     for (let i = 1; i < bodies.length; i++) {
       const gap = bodies[i - 1].rear - bodies[i].front;
       expect(gap).toBeGreaterThanOrEqual(-1e-6); // no overlap
-      expect(gap).toBeLessThan(0.2); // packed tight (old gate left ~0.6)
+      expect(gap).toBeLessThan(0.06); // packed nearly nose-to-tail (~6px gap)
     }
   });
 });
