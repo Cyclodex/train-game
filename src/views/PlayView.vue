@@ -215,12 +215,13 @@ import {
   setWorldTheme,
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
-import { TrainsDefinition } from "@/types";
+import { TrainsDefinition, TrainStatus } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById } from "@/modes/index";
+import { ModeSetup } from "@/modes/types";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
@@ -246,6 +247,47 @@ function hashParam(name: string): string | null {
   return new URLSearchParams(hash.slice(q + 1)).get(name);
 }
 
+// Modes that generate their own board (e.g. Daily) return a fully-populated
+// ModeSetup from setup(); calling setup() here lets PlayView honour that board
+// for rendering + createGame instead of the default/custom/board context.
+// Other modes' setup() is called again inside createGame — safe because setup()
+// is pure and cheap (no side effects, no DOM).
+function resolveBoard(
+  mode: ReturnType<typeof modeById>,
+  fallbackLevel: Level,
+  fallbackTrains: TrainsDefinition,
+  fallbackLevelId: string
+): { level: Level; trains: TrainsDefinition; levelId: string; setup: ModeSetup } {
+  const trainDefs = buildTrainDefs(fallbackTrains);
+  const setup = mode.setup({
+    level: fallbackLevel,
+    trains: trainDefs,
+    levelId: fallbackLevelId,
+  });
+  // If the mode returned a different level (i.e. it generated its own board),
+  // use that everywhere. Otherwise fall back to the view-resolved board.
+  if (setup.level !== fallbackLevel) {
+    // Reconstruct a TrainsDefinition from the TrainDef[] the mode produced.
+    // The view only uses TrainsDefinition for `totalTrains` (key count) and
+    // for @Provide(); the actual sim is driven from TrainDef[] in createGame.
+    const genTrains: TrainsDefinition = {};
+    for (const def of setup.trains) {
+      genTrains[def.id] = {
+        id: def.id,
+        x: def.x,
+        y: def.y,
+        status: TrainStatus.LeavingDepot,
+        type: def.type,
+        wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
+        routeDestinations: [],
+        currentRouteDestination: 0,
+      };
+    }
+    return { level: setup.level, trains: genTrains, levelId: setup.levelId, setup };
+  }
+  return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
+}
+
 @Component({ components: { Crossing, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
@@ -267,36 +309,48 @@ class PlayView extends Vue {
   // handed over right before navigation is picked up on this mount.
   private custom = this.board ? null : takeCustomLevel();
 
-  @Provide() trains: TrainsDefinition = this.board
-    ? this.board.trains
-    : this.custom
-      ? this.custom.trains
-      : defaultTrains();
-
-  @Provide() level: Level = this.board
-    ? this.board.level
-    : this.custom
-      ? this.custom.level
-      : DEFAULT_LEVEL;
-
   private mode = modeById(hashParam("mode"));
-  private levelId = this.board
-    ? `board:${this.board.id}`
-    : this.custom
-      ? "custom"
-      : "default";
+
+  // Resolve which board the view should use. Modes that generate their own board
+  // (e.g. Daily) return a different level from setup(); resolveBoard detects this
+  // and promotes the generated board so the renderer and sim agree.
+  private _resolved = (() => {
+    const fallbackLevel = this.board
+      ? this.board.level
+      : this.custom
+        ? this.custom.level
+        : DEFAULT_LEVEL;
+    const fallbackTrains = this.board
+      ? this.board.trains
+      : this.custom
+        ? this.custom.trains
+        : defaultTrains();
+    const fallbackLevelId = this.board
+      ? `board:${this.board.id}`
+      : this.custom
+        ? "custom"
+        : "default";
+    return resolveBoard(this.mode, fallbackLevel, fallbackTrains, fallbackLevelId);
+  })();
+
+  @Provide() trains: TrainsDefinition = this._resolved.trains;
+  @Provide() level: Level = this._resolved.level;
+
+  private levelId = this._resolved.levelId;
   best: BestResult | null = null;
 
   @Provide("game") game: Game = markRaw(
     createGame(
-      this.level,
-      buildTrainDefs(this.trains),
+      this._resolved.level,
+      this._resolved.setup.trains,
       gameConfig.tileSize,
       this.mode,
       gameConfig.colorSeed,
-      undefined,
+      // When the mode pinned colours (Daily's deterministic assignment), honour
+      // them so depot/train colours match the generated board exactly.
+      this._resolved.setup.colors,
       DEFAULT_TRAFFIC,
-      this.levelId
+      this._resolved.levelId
     )
   );
 
