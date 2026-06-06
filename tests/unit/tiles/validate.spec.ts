@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs } from "@/tiles/lanes";
+import { fromPairs, turns, oneWay } from "@/tiles/lanes";
 import { expandKind } from "@/tiles/kinds";
 import { validateLevel, validateRoads } from "@/tiles/validate";
 
@@ -72,5 +72,35 @@ describe("validateRoads", () => {
 
   it("ignores cells that have no road", () => {
     expect(validateRoads({ "0,0": expandKind("straight", 1) }).ok).toBe(true);
+  });
+});
+
+describe("validateRoads — lane invariants", () => {
+  const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+
+  it("flags two lanes sharing the same (from, index)", () => {
+    const level = {
+      "0,0": { connections: [], road: [turns(L, [R], 0), turns(L, [B], 0)] },
+    };
+    const { ok, issues } = validateRoads(level);
+    expect(ok).toBe(false);
+    expect(issues.some(i => i.type === "lane-index-clash")).toBe(true);
+  });
+
+  it("flags a junction approach with no permitted exit", () => {
+    const level = {
+      "0,0": { connections: [], road: [turns(L, [], 0)] },
+    };
+    const { ok, issues } = validateRoads(level);
+    expect(ok).toBe(false);
+    expect(issues.some(i => i.type === "lane-no-exit")).toBe(true);
+  });
+
+  it("accepts a well-formed one-way lane", () => {
+    const level = {
+      "0,0": { connections: [], road: [oneWay(L, R)] },
+      "1,0": { connections: [], road: [oneWay(L, R)] },
+    };
+    expect(validateRoads(level).ok).toBe(true);
   });
 });

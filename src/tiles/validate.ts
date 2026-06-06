@@ -116,7 +116,10 @@ export function validateLevel(
   return { ok: issues.length === 0, issues };
 }
 
-export type RoadIssueType = "dangling-road"; // road points at a tile with no road back
+export type RoadIssueType =
+  | "dangling-road" // road points at a tile with no road back
+  | "lane-index-clash" // two lanes from the same approach share an index
+  | "lane-no-exit"; // an approach permits no exit
 
 export interface RoadIssue {
   type: RoadIssueType;
@@ -152,6 +155,29 @@ export function validateRoads(level: Level): {
           detail: `road port ${Position[e]} of ${id} has no connecting road neighbour`,
         });
       }
+    }
+
+    // Lane invariants: unique index per approach; every approach permits an exit.
+    const indexByFrom = new Map<string, Set<number>>();
+    for (const lane of road) {
+      if (lane.to.length === 0) {
+        issues.push({
+          type: "lane-no-exit",
+          tileId: id,
+          detail: `lane entering ${Position[lane.from]} of ${id} permits no exit`,
+        });
+      }
+      const key = String(lane.from);
+      if (!indexByFrom.has(key)) indexByFrom.set(key, new Set());
+      const seen = indexByFrom.get(key)!;
+      if (seen.has(lane.index)) {
+        issues.push({
+          type: "lane-index-clash",
+          tileId: id,
+          detail: `two lanes from ${Position[lane.from]} share index ${lane.index} on ${id}`,
+        });
+      }
+      seen.add(lane.index);
     }
   }
   return { ok: issues.length === 0, issues };
