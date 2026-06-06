@@ -223,6 +223,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
+import { roadEdges as laneEdges } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
@@ -637,17 +638,7 @@ class EditorView extends Vue {
   // Undirected road edges of a cell (one PortPair per a<->b edge the lanes
   // touch), so the editor shows a single delete handle per road segment.
   roadEdges(tile: Level[string]): PortPair[] {
-    const seen = new Set<string>();
-    const out: PortPair[] = [];
-    for (const lane of tile.road ?? []) {
-      for (const to of lane.to) {
-        const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push([lane.from, to]);
-      }
-    }
-    return out;
+    return laneEdges(tile.road);
   }
   deleteRoad(id: string, road: PortPair) {
     this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));

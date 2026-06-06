@@ -96,6 +96,24 @@ export function laneMovements(
   return out;
 }
 
+// The unique undirected edges the road's lanes touch (order-normalised), one per
+// physical road segment. Used by the renderer (one ribbon per edge) and the
+// editor (one delete handle per edge), so the "lanes -> visual edges" rule lives
+// in one place rather than being re-derived in each view.
+export function roadEdges(road: Lane[] | undefined): [Port, Port][] {
+  const seen = new Set<string>();
+  const out: [Port, Port][] = [];
+  for (const lane of road ?? []) {
+    for (const to of lane.to) {
+      const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(lane.from < to ? [lane.from, to] : [to, lane.from]);
+    }
+  }
+  return out;
+}
+
 // A road junction is a tile whose road touches more than two ports (so a car has
 // a real routing choice / streams cross). Straights and one-ways touch exactly
 // two ports.

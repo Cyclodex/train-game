@@ -10,6 +10,7 @@ import {
   exitsFrom,
   roadPortsOf,
   laneMovements,
+  roadEdges,
   isRoadJunction,
 } from "@/tiles/lanes";
 
@@ -75,6 +76,26 @@ describe("lane query helpers", () => {
       { from: L, to: R },
       { from: L, to: B },
     ]);
+  });
+});
+
+describe("roadEdges", () => {
+  it("returns one order-normalised undirected edge per physical segment", () => {
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    // A two-way straight is a single edge despite two lanes (order-normalised by
+    // numeric Position, so R<L here -> [R, L]).
+    const straight = roadEdges(twoWay(L, R));
+    expect(straight).toHaveLength(1);
+    expect([...straight[0]].sort()).toEqual([L, R].sort());
+    // A junction collapses its movements to unique edges.
+    const cross = fromPairs([[L, R], [T, B], [L, T]]);
+    const edges = roadEdges(cross).map(([a, b]) => `${a}-${b}`).sort();
+    // L-R, T-B, L-T (each once, order-normalised L<R etc by numeric Position).
+    expect(edges).toEqual([...new Set(edges)].sort()); // no duplicates
+    expect(roadEdges(cross)).toHaveLength(3);
+  });
+  it("returns [] for undefined", () => {
+    expect(roadEdges(undefined)).toEqual([]);
   });
 });
 

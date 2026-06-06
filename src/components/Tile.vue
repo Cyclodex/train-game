@@ -145,6 +145,7 @@ import {
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath, roadMarkingPath } from "@/tiles/roadGeometry";
+import { roadEdges } from "@/tiles/lanes";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -188,20 +189,10 @@ class Tile extends Vue {
   // renders identically to the old PortPair-based version.
   get roadPaths(): { surface: string; marking: string }[] {
     const size = this.config.tileSize;
-    const seen = new Set<string>();
-    const out: { surface: string; marking: string }[] = [];
-    for (const lane of this.tile.road ?? []) {
-      for (const to of lane.to) {
-        const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({
-          surface: roadSurfacePath(lane.from, to, size),
-          marking: roadMarkingPath(lane.from, to, size),
-        });
-      }
-    }
-    return out;
+    return roadEdges(this.tile.road).map(([a, b]) => ({
+      surface: roadSurfacePath(a, b, size),
+      marking: roadMarkingPath(a, b, size),
+    }));
   }
 
   // Entry ports that are junction entries (need a switch widget).
