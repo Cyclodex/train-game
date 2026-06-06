@@ -2,6 +2,9 @@
 node_modules
 /dist
 
+# Brainstorm / visual-companion mockups (Superpowers)
+.superpowers
+
 # Test artifacts
 /test-results
 /playwright-report

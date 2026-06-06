@@ -1,19 +1,39 @@
 <template>
   <div class="play-view" :class="{ debug: config.debug }">
-    <div class="control-buttons">
-      <router-link class="nav-link" to="/editor">Editor</router-link>
-      <router-link class="nav-link" to="/test">Test world</router-link>
-      <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
-      <button class="timeline-button" @click="pausePlayGame">
-        {{ paused ? "Start" : "Pause" }}
+    <MenuDrawer id="play" title="Menu">
+      <button class="drawer-btn" @click="pausePlayGame">
+        <span>{{ paused ? "▶" : "⏸" }}</span>
+        <span>{{ paused ? "Start" : "Pause" }}</span>
       </button>
-      <button class="timeline-button" @click="changeGlobalTimeScale">
-        {{ globalTimeScale }} x Speed
+      <button class="drawer-btn" @click="changeGlobalTimeScale">
+        <span>⏩</span><span>Speed</span>
+        <span class="drawer-btn__val">{{ globalTimeScale }}×</span>
       </button>
-      <button class="timeline-button" @click="cycleSwitchLock">
-        Switch lock: {{ switchLockLabel }}
+      <button class="drawer-btn" @click="cycleSwitchLock">
+        <span>🔀</span><span>Switch lock</span>
+        <span class="drawer-btn__val">{{ switchLockLabel }}</span>
       </button>
-    </div>
+      <div class="drawer-divider"></div>
+      <button
+        class="drawer-btn"
+        :class="{ on: config.debug }"
+        @click="switchDebugMode"
+      >
+        <span>🐞</span><span>Debug</span>
+        <span class="drawer-btn__val">{{ config.debug ? "on" : "off" }}</span>
+      </button>
+      <button class="drawer-btn" @click="cycleTheme">
+        <span>🎨</span><span>Theme</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <router-link class="drawer-btn" to="/editor">
+        <span>✏️</span><span>Editor</span>
+      </router-link>
+      <router-link class="drawer-btn" to="/test">
+        <span>🧪</span><span>Test world</span>
+      </router-link>
+    </MenuDrawer>
     <div
       class="score-card"
       :class="{
@@ -41,6 +61,7 @@
         </div>
       </transition>
     </div>
+    <div class="world">
     <div
       class="level"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
@@ -84,6 +105,7 @@
         :coord-id="c.key"
         :cell="c.cell"
       />
+    </div>
     </div>
     <div
       v-if="config.debug"
@@ -136,13 +158,16 @@ import {
   GAME_CONFIG_KEY,
   gameConfig,
   SwitchLockMode,
+  setWorldTheme,
 } from "@/gameConfig";
+import { nextTheme, themeMeta } from "@/themes";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import Crossing from "@/components/Crossing.vue";
+import MenuDrawer from "@/components/MenuDrawer.vue";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -154,7 +179,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   }));
 }
 
-@Component({ components: { Crossing } })
+@Component({ components: { Crossing, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -279,6 +304,14 @@ class PlayView extends Vue {
     return this.game.trainColors[id] ?? "inherit";
   }
 
+  // The current world theme's icon, shown compactly on the drawer button.
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
+  }
+  cycleTheme() {
+    setWorldTheme(nextTheme(this.config.worldTheme));
+  }
+
   switchDebugMode() {
     this.config.debug = !this.config.debug;
   }
@@ -362,26 +395,6 @@ export default toNative(PlayView);
   left: 76%;
   width: 13%;
 }
-.control-buttons {
-  position: fixed;
-  z-index: 100;
-  top: 0;
-  left: 0;
-
-  > button,
-  > .nav-link {
-    display: block;
-    padding: 15px;
-    min-width: 150px;
-    box-sizing: border-box;
-  }
-  > .nav-link {
-    background: #2c3e50;
-    color: white;
-    text-decoration: none;
-  }
-}
-
 .score-card {
   position: fixed;
   z-index: 2000;

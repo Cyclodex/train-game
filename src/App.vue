@@ -1,5 +1,5 @@
 <template>
-  <div id="app" :class="{ debug: config.debug }">
+  <div id="app" :class="[`theme-${config.worldTheme}`, { debug: config.debug }]">
     <router-view />
   </div>
 </template>
@@ -19,9 +19,29 @@ export default toNative(App);
 <style lang="scss">
 @import "@/scss/_main.scss";
 
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
 #app {
   text-align: center;
   color: $vueBlack;
+  min-height: 100vh;
+  position: relative;
+}
+
+// A soft fog/vignette pinned to the viewport edges so the playable area reads
+// as the focus, lifted off the themed backdrop. Sits above the board but below
+// the HUD (drawer/dock z 1500, score-card z 2000).
+#app::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  box-shadow: inset 0 0 150px 55px rgba(0, 0, 0, 0.3);
 }
 pre {
   text-align: left;

@@ -1,34 +1,54 @@
 <template>
   <div class="editor-view" :class="{ debug: config.debug }">
-    <div class="toolbar">
-      <router-link class="nav-link" to="/play">▶ Play</router-link>
-      <span class="group">
-        <button
-          v-for="t in tools"
-          :key="t"
-          :class="{ active: tool === t }"
-          @click="setTool(t)"
-        >
-          {{ t }}
-        </button>
-      </span>
-      <span class="group">
-        <button @click="randomMap">🎲 Random</button>
-        <button @click="clearAll">Clear</button>
-        <button :disabled="!canPlay" @click="playThis">Play this →</button>
-      </span>
-      <span class="group">
-        <button @click="exportJson">Export</button>
-        <button @click="importJson">Import</button>
-      </span>
-      <span class="status" :class="{ 'status--bad': !valid.ok }">
+    <MenuDrawer id="editor" title="Editor">
+      <button
+        class="drawer-btn accent"
+        :disabled="!canPlay"
+        @click="playThis"
+      >
+        <span>▶</span><span>Play this</span>
+      </button>
+      <button class="drawer-btn" @click="randomMap">
+        <span>🎲</span><span>Random</span>
+      </button>
+      <button class="drawer-btn" @click="clearAll">
+        <span>🧹</span><span>Clear</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <button class="drawer-btn" @click="exportJson">
+        <span>📤</span><span>Export</span>
+      </button>
+      <button class="drawer-btn" @click="importJson">
+        <span>📥</span><span>Import</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <button class="drawer-btn" @click="cycleTheme">
+        <span>🎨</span><span>Theme</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
+      </button>
+      <router-link class="drawer-btn" to="/play">
+        <span>🎮</span><span>Back to game</span>
+      </router-link>
+      <div class="drawer-status" :class="{ 'drawer-status--bad': !valid.ok }">
         {{ valid.ok ? "✓ valid" : valid.issues.length + " issue(s)" }}
         <template v-if="depotIds.length"> · {{ depotIds.length }} depots</template>
-      </span>
-    </div>
+      </div>
+    </MenuDrawer>
 
-    <div class="hint">{{ hint }}</div>
+    <ToolDock :hint="hint">
+      <button
+        v-for="t in tools"
+        :key="t"
+        class="dock-btn"
+        :class="{ on: tool === t }"
+        @click="setTool(t)"
+      >
+        <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
+        <span>{{ toolMeta[t].label }}</span>
+      </button>
+    </ToolDock>
 
+    <div class="world">
     <div
       class="level editor-grid"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
@@ -140,8 +160,23 @@
               <path :d="delMark(road)" class="del-mark" />
             </g>
           </template>
+
+          <!-- Junction switch zones: one clickable spot over each junction
+               entry's switch widget. Painted after the edge zones so it sits in
+               front and intercepts the click, cycling that entry's authored
+               starting arm. Available in any tool — it only covers the widget. -->
+          <circle
+            v-for="entry in junctionEntries(cell.tile)"
+            :key="'sw' + entry"
+            :cx="switchPoint(entry).x"
+            :cy="switchPoint(entry).y"
+            r="15"
+            class="switch-zone"
+            @click.stop="onSwitchClick(cell.key, entry)"
+          />
         </svg>
       </div>
+    </div>
     </div>
 
     <textarea
@@ -156,11 +191,22 @@
 
 <script lang="ts">
 import { markRaw, reactive } from "vue";
-import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { Component, Inject, Provide, Vue, Watch, toNative } from "vue-facing-decorator";
+import { GameConfig, GAME_CONFIG_KEY, setWorldTheme } from "@/gameConfig";
+import { nextTheme, themeMeta } from "@/themes";
+import MenuDrawer from "@/components/MenuDrawer.vue";
+import ToolDock from "@/components/ToolDock.vue";
 import type { Game } from "@/game";
+import { initialSwitches } from "@/game";
 import { Position } from "@/types";
-import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
+import {
+  Level,
+  Port,
+  PortPair,
+  portsOf,
+  isJunctionEntry,
+  parseCoordId,
+} from "@/tiles/model";
 import {
   emptyCell,
   addConnection,
@@ -170,6 +216,7 @@ import {
   setDepot,
   rotateDepot,
   toggleSignalPort,
+  cycleDefaultArm,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -192,7 +239,7 @@ const EDGES: Port[] = [
 
 const HINTS: Record<Tool, string> = {
   connect:
-    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail.",
+    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail. Click a junction's switch to set its starting direction.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
@@ -214,15 +261,25 @@ function stubGame(): Game {
   } as unknown as Game;
 }
 
-@Component
+@Component({ components: { MenuDrawer, ToolDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Provide("game") game: Game = markRaw(stubGame());
 
   EDGES = EDGES;
   levelSizeY = 6;
-  tools: Tool[] = ["connect", "depot", "signal", "erase", "road"];
+  // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
+  // unaffected by order.
+  tools: Tool[] = ["connect", "road", "depot", "signal", "erase"];
   tool: Tool = "connect";
+  // Big, kid-friendly icon + label for each build tool, shown in the dock.
+  toolMeta: Record<Tool, { icon: string; label: string }> = {
+    connect: { icon: "🚂", label: "Rail" },
+    road: { icon: "🚗", label: "Road" },
+    depot: { icon: "🏠", label: "Depot" },
+    signal: { icon: "🚦", label: "Signal" },
+    erase: { icon: "🧽", label: "Erase" },
+  };
   level: Level = reactive(loadLevel());
   // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
   // picked in the two-click (click → click) connection flow.
@@ -406,6 +463,45 @@ class EditorView extends Vue {
     return !!tile?.signals?.includes(port);
   }
 
+  // --- junction switches (authored starting direction) ---
+  // Entry ports of a junction tile that carry a switch. Empty for plain track.
+  junctionEntries(tile: Level[string] | null): Port[] {
+    if (!tile) return [];
+    return portsOf(tile.connections).filter(p =>
+      isJunctionEntry(tile.connections, p)
+    );
+  }
+  // The centre of an entry's switch widget, in tile (overlay) coordinates, kept
+  // in step with `.switch-box--N` in Tile.vue (a 24×18 box hugging that edge).
+  switchPoint(entry: Port): { x: number; y: number } {
+    const s = this.config.tileSize;
+    const along = 0.57 * s + 12; // box offset (left/top:57%) + half its width
+    switch (entry) {
+      case Position.Top:
+        return { x: along, y: 9 };
+      case Position.Right:
+        return { x: s - 12, y: along };
+      case Position.Bottom:
+        return { x: along, y: s - 9 };
+      default:
+        return { x: 12, y: along }; // Left
+    }
+  }
+  // Clicking a switch zone cycles that entry's authored starting arm and persists.
+  // The zone is painted in front of the edge zones, so it intercepts the click.
+  onSwitchClick(id: string, entry: Port) {
+    this.commit(id, cycleDefaultArm(this.cellOf(id), entry));
+  }
+  // Mirror the level's effective starting arms into the (stub) game so Tile.vue's
+  // switch widget lights the authored bulb — the same seeding play uses.
+  @Watch("level", { deep: true, immediate: true })
+  syncSwitches() {
+    const next = initialSwitches(this.level);
+    const switches = this.game.switches;
+    for (const k of Object.keys(switches)) delete switches[k];
+    Object.assign(switches, next);
+  }
+
   cellOf(id: string): Level[string] {
     return this.level[id] ?? emptyCell();
   }
@@ -562,7 +658,13 @@ class EditorView extends Vue {
     return Position.Top;
   }
 
-  // --- toolbar actions ---
+  // --- drawer / dock actions ---
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
+  }
+  cycleTheme() {
+    setWorldTheme(nextTheme(this.config.worldTheme));
+  }
   setTool(t: Tool) {
     this.tool = t;
     this.pressFrom = null;
@@ -647,59 +749,6 @@ export default toNative(EditorView);
 </script>
 
 <style lang="scss" scoped>
-.editor-view {
-  padding-top: 88px;
-}
-.toolbar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f4f4f4;
-  border-bottom: 1px solid #ccc;
-
-  .group {
-    display: inline-flex;
-    gap: 4px;
-  }
-  button,
-  .nav-link {
-    padding: 8px 12px;
-    cursor: pointer;
-    text-transform: capitalize;
-  }
-  .nav-link {
-    background: #2c3e50;
-    color: #fff;
-    text-decoration: none;
-    border-radius: 3px;
-  }
-  button.active {
-    background: #42b883;
-    color: #fff;
-  }
-  .status {
-    margin-left: auto;
-    font-weight: bold;
-    color: #2e7d32;
-  }
-  .status--bad {
-    color: #c62828;
-  }
-}
-.hint {
-  position: fixed;
-  top: 52px;
-  left: 12px;
-  z-index: 100;
-  font-size: 12px;
-  color: #555;
-}
 .level {
   display: flex;
   flex-wrap: wrap;
@@ -793,6 +842,16 @@ export default toNative(EditorView);
 .zone--signal {
   fill: rgba(255, 59, 48, 0.28);
 }
+// Junction switch zone: an invisible-but-clickable spot over the switch widget
+// (a transparent fill still receives pointer events). A soft amber wash on hover
+// signals it cycles the junction's starting direction.
+.switch-zone {
+  fill: rgba(0, 0, 0, 0);
+  cursor: pointer;
+}
+.switch-zone:hover {
+  fill: rgba(255, 179, 0, 0.4);
+}
 .zone-dot {
   fill: rgba(66, 184, 131, 0.9);
   stroke: #2c3e50;
@@ -847,11 +906,17 @@ export default toNative(EditorView);
 }
 .io-box {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 100px;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(680px, 90vw);
+  height: 150px;
+  z-index: 1600; // above the drawer/dock so Export/Import is usable
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
   font-family: monospace;
   font-size: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 </style>
