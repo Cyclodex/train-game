@@ -16,6 +16,7 @@
         :key="'rs' + i"
         :d="r.surface"
         class="road-surface"
+        :style="{ strokeWidth: r.strokeWidth + 'px' }"
       />
       <path
         v-for="(r, i) in roadPaths"
@@ -145,7 +146,7 @@ import {
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath, roadMarkingPath } from "@/tiles/roadGeometry";
-import { roadEdges } from "@/tiles/lanes";
+import { roadEdges, laneCount } from "@/tiles/lanes";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -187,12 +188,19 @@ class Tile extends Vue {
   // Road surface + lane-marking paths, one per undirected edge the lanes touch
   // (a two-way road is one ribbon, not two). At one lane per direction this
   // renders identically to the old PortPair-based version.
-  get roadPaths(): { surface: string; marking: string }[] {
+  get roadPaths(): { surface: string; marking: string; strokeWidth: number }[] {
     const size = this.config.tileSize;
-    return roadEdges(this.tile.road).map(([a, b]) => ({
-      surface: roadSurfacePath(a, b, size),
-      marking: roadMarkingPath(a, b, size),
-    }));
+    const LANE_WIDTH_PX = size * 0.14; // 28px at 200px tile — matches game.ts LANE_WIDTH_FRAC
+    return roadEdges(this.tile.road).map(([a, b]) => {
+      const lanesA = laneCount(this.tile.road, a);
+      const lanesB = laneCount(this.tile.road, b);
+      const totalLanes = Math.max(lanesA + lanesB, 2); // minimum 2 (1 per direction)
+      return {
+        surface: roadSurfacePath(a, b, size),
+        marking: roadMarkingPath(a, b, size),
+        strokeWidth: totalLanes * LANE_WIDTH_PX,
+      };
+    });
   }
 
   // Entry ports that are junction entries (need a switch widget).
