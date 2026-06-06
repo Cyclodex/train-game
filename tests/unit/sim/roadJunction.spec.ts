@@ -227,3 +227,49 @@ describe("buildConflictMatrix", () => {
     expect(matrix.size).toBeLessThanOrEqual(66); // C(12,2) = 66 max
   });
 });
+
+// ---------------------------------------------------------------------------
+// Right-turn-only cross: cars enter from all four arms and every car turns
+// right. In right-hand traffic each right turn hugs one corner of the tile, so
+// the four turns never cross — the intersection needs no signals and can never
+// block, no matter how many cars arrive from how many sides at once.
+// ---------------------------------------------------------------------------
+describe("right turns from all four arms never conflict", () => {
+  // The right turn from each arm (screen coords: x→right, y→down):
+  //   eastbound  enters Left  → exits Bottom
+  //   northbound enters Bottom → exits Right
+  //   westbound  enters Right → exits Top
+  //   southbound enters Top   → exits Left
+  const rightTurns: Movement[] = [
+    mv(L, B),
+    mv(B, R),
+    mv(R, T),
+    mv(T, L),
+  ];
+
+  it("no pair of right turns conflicts (the pinwheel hugs four separate corners)", () => {
+    for (let i = 0; i < rightTurns.length; i++) {
+      for (let j = i + 1; j < rightTurns.length; j++) {
+        expect(movementsConflict(rightTurns[i], rightTurns[j])).toBe(false);
+      }
+    }
+  });
+
+  it("no right-turn pair appears in the pinwheel tile's conflict matrix", () => {
+    // A tile carrying exactly the four right-turn port pairs. buildConflictMatrix
+    // also enumerates the reverse movements (the left turns), so the matrix may
+    // be non-empty — but none of its entries is a pair of two right turns.
+    const road: [Position, Position][] = [
+      [L, B],
+      [B, R],
+      [R, T],
+      [T, L],
+    ];
+    const matrix = buildConflictMatrix(road);
+    for (let i = 0; i < rightTurns.length; i++) {
+      for (let j = i + 1; j < rightTurns.length; j++) {
+        expect(matrix.has(conflictKey(rightTurns[i], rightTurns[j]))).toBe(false);
+      }
+    }
+  });
+});

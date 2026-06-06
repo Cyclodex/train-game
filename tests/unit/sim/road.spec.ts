@@ -393,6 +393,82 @@ describe("createRoadSim — road junction interlock", () => {
   });
 });
 
+describe("createRoadSim — four-way cross, cars from all sides", () => {
+  it("keeps traffic from all four arms flowing without gridlock", () => {
+    // A 4-way cross whose centre carries every movement (straight + both turns).
+    // Cars spawn from ALL FOUR map edges at once. With two-lane roads (opposing
+    // streams pass) plus the junction arbiter (conflicting turns take turns, and
+    // right turns never conflict at all), the crossing keeps clearing cars from
+    // every arm — it must never lock up into a permanent four-way standstill.
+    const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+    const lvl: Level = {
+      // Horizontal road.
+      "0,2": road([Position.Left, Position.Right]),
+      "1,2": road([Position.Left, Position.Right]),
+      "3,2": road([Position.Left, Position.Right]),
+      "4,2": road([Position.Left, Position.Right]),
+      // Vertical road.
+      "2,0": road([Position.Top, Position.Bottom]),
+      "2,1": road([Position.Top, Position.Bottom]),
+      "2,3": road([Position.Top, Position.Bottom]),
+      "2,4": road([Position.Top, Position.Bottom]),
+      // All-directions centre: straight through both ways + every turn.
+      "2,2": road(
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Bottom],
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+        [Position.Right, Position.Top],
+        [Position.Right, Position.Bottom],
+      ),
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right }, // westbound
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top }, // southbound
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+
+    // A car that was present last tick and is gone now drove off the far edge — a
+    // completed crossing. Count completions in each half of the run: if the cross
+    // ever permanently deadlocked, the second half would see none.
+    let prev = new Set<string>();
+    const allIds = new Set<string>();
+    let firstHalf = 0;
+    let secondHalf = 0;
+    const STEPS = 1600;
+    for (let i = 0; i < STEPS; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of now) allIds.add(id);
+      for (const id of prev) {
+        if (!now.has(id)) {
+          if (i < STEPS / 2) firstHalf++;
+          else secondHalf++;
+        }
+      }
+      prev = now;
+    }
+
+    // Sustained throughput in BOTH halves → the crossing never locked up.
+    expect(firstHalf).toBeGreaterThan(0);
+    expect(secondHalf).toBeGreaterThan(0);
+    // Far more cars completed than the live cap → cars really cycle through, they
+    // do not just fill the map once and freeze.
+    expect(allIds.size).toBeGreaterThan(12);
+  });
+});
+
 describe("createRoadSim — launch reaction delay", () => {
   it("waits a beat before a stopped car rolls once the gate opens", () => {
     // One car approaching a closed crossing at 1,0. Once it has stopped at the
