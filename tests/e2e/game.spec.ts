@@ -12,8 +12,9 @@ test.describe("Train game", () => {
 
     await page.goto("/");
 
-    // The 7x6 grid has 40 track tiles (two cells are intentionally empty).
-    await expect(page.locator(".tile")).toHaveCount(40);
+    // The 7x6 grid has 41 tiles (one cell is intentionally empty); this includes
+    // the road-only feeder tile below the level crossing.
+    await expect(page.locator(".tile")).toHaveCount(41);
 
     // Both trains (the locomotives) are rendered.
     const locomotives = page.locator(".train-locomotive");
