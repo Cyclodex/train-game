@@ -68,6 +68,21 @@ describe("planRoute — turn minimisation", () => {
   });
 });
 
+describe("planRoute — destination edge never forces a detour", () => {
+  it("comes straight in via the shortest approach even when the hovered edge points back toward the head", () => {
+    // head exits Bottom heading straight down; hovering the target's Top edge
+    // (which points back up toward the head) must NOT detour sideways — it
+    // should still come straight down.
+    const r = planRoute(
+      { id: "1,0", edge: Bottom },
+      { id: "1,3", edge: Top },
+      opts({ width: 6, height: 6 })
+    );
+    expect(r).not.toBeNull();
+    expect(r!.map(s => s.id)).toEqual(["1,1", "1,2", "1,3"]);
+  });
+});
+
 describe("planRoute — bounds", () => {
   it("returns null when the start edge leaves the grid", () => {
     expect(planRoute({ id: "0,0", edge: Top }, { id: "0,2", edge: Bottom }, opts())).toBeNull();

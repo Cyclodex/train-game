@@ -177,3 +177,28 @@ export function addConnection(cell: TileCell, a: Port, b: Port): TileCell {
 - Block-tile authoring UI, depot auto-attach at route ends, undo/redo, and any
   change to the running simulation (this is editor-only; it still emits the same
   `TileCell` connections the sim already consumes).
+
+## Revision — as built (2026-06-06)
+
+Interaction refined during implementation. The destination edge is no longer a
+forced "exit" (which could wrap the route around in a loop). Instead:
+
+- **Shortest approach, never forced.** `planRoute` takes the shortest, turn-
+  minimising approach to the target tile regardless of the pointed-at edge.
+- **Per-edge frontier shaping.** The tile under the cursor is drawn
+  `incoming → pointed-at edge` for any of its three *exit* edges (straight or
+  curve). Pointing at the **incoming** edge is a U-turn (impossible in one
+  tile), so that tile is left **blank** and the head trails one tile back,
+  letting your next click decide its shape — both preview and commit "draw only
+  to the last exit node."
+- **Idempotent merge** via `addConnection` so re-crossing forms junctions.
+- **Finish** by clicking the head's open-edge wedge (shown as a distinct red,
+  pulsing "stop" highlight) or pressing `Esc`; the still-pending frontier tile
+  then locks as a plain straight terminus. A one-shot **drag** commits its whole
+  route (no trailing).
+- **Grid clarity.** Wedge (inner-edge) outlines are hidden by default and only
+  revealed on the hovered tile, so the board reads as plain tiles until you work
+  on one.
+
+The pure `planRoute` contract and its unit tests are unchanged; all of the above
+lives in `EditorView.vue`.

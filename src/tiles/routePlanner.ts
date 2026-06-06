@@ -99,21 +99,27 @@ export function planRoute(
     }
   }
 
-  // Cheapest arrival at T, including the final corner (enter dir vs the requested
-  // continue dir). Skip arrivals from the continue side (they'd be degenerate).
+  // Cheapest arrival at T from any side. The hovered edge (`lastDir`) is the
+  // *desired* exit/continue direction, applied after the search — it never
+  // forces a longer approach. When it would coincide with the approach edge
+  // (degenerate), the tile becomes a straight-through instead.
+  const exitFor = (nd: Port): Port => {
+    const entry = oppositePort(nd); // edge the route entered T through
+    return lastDir !== entry ? lastDir : oppositePort(entry);
+  };
   let best: Key | null = null;
   let bestCost = Infinity;
   for (const nd of DIRS) {
-    if (nd === oppositePort(lastDir)) continue;
     const k = skey(T, nd);
     if (!dist.has(k)) continue;
-    const cost = dist.get(k)! + (nd !== lastDir ? TURN : 0);
+    const cost = dist.get(k)! + (nd !== exitFor(nd) ? TURN : 0);
     if (cost < bestCost) {
       bestCost = cost;
       best = k;
     }
   }
   if (!best) return null;
+  const destExit = exitFor(dirOf.get(best)!);
 
   // Reconstruct cell + enterDir from c1 .. T.
   const chain: { c: Coordinates; enter: Port }[] = [];
@@ -129,6 +135,6 @@ export function planRoute(
   return chain.map(({ c, enter }, i) => ({
     id: idOf(c),
     a: oppositePort(enter),
-    b: i + 1 < chain.length ? chain[i + 1].enter : lastDir,
+    b: i + 1 < chain.length ? chain[i + 1].enter : destExit,
   }));
 }

@@ -42,7 +42,7 @@
         :data-coord="cell.key"
         :class="{
           'editor-cell--issue': issueIds.has(cell.key),
-          'editor-cell--armed': armed != null && armed.id === cell.key,
+          'editor-cell--armed': glowId === cell.key,
         }"
         :style="{
           width: config.tileSize + 'px',
@@ -81,6 +81,7 @@
               class="zone"
               :class="{
                 'zone--armed': isArmed(cell.key, p),
+                'zone--finish': isFinish(cell.key, p),
                 'zone--signal': tool === 'signal' && hasSignal(cell.tile, p),
               }"
               @mousedown.stop="onZoneDown(cell.key, p)"
@@ -213,6 +214,10 @@ class EditorView extends Vue {
   // segment is laid, so the start tile is only laid once.
   armed: { id: string; port: Port } | null = null;
   routeStarted = false;
+  // Set only in the U-turn case: the frontier tile is left undecided (blank)
+  // because you're pointing at the edge the track entered through. The head
+  // then trails one tile back, pointing at this pending tile.
+  pendingId: string | null = null;
   // The edge currently hovered, used to ghost-preview the route.
   hoverPort: { id: string; port: Port } | null = null;
   showIo = false;
@@ -305,7 +310,14 @@ class EditorView extends Vue {
     return `M${x - r} ${y - r} L${x + r} ${y + r} M${x + r} ${y - r} L${x - r} ${y + r}`;
   }
   isArmed(id: string, port: Port): boolean {
-    return this.armed?.id === id && this.armed?.port === port;
+    // Only the start edge shows the armed wedge; once routing the glow follows
+    // the pending frontier tile instead.
+    return !this.routeStarted && this.armed?.id === id && this.armed?.port === port;
+  }
+  // The open-end wedge that finishes the route when clicked again — highlighted
+  // distinctly while routing so it's obvious where to stop.
+  isFinish(id: string, port: Port): boolean {
+    return this.routeStarted && this.armed?.id === id && this.armed?.port === port;
   }
   get routeOpts() {
     // `passable` is left default (everything passable); the future "blocked
@@ -336,7 +348,13 @@ class EditorView extends Vue {
     if ((this.pressFrom || !this.routeStarted) && from.id !== to.id) {
       add(from.id, oppositePort(from.port), from.port);
     }
-    for (const s of steps) add(s.id, s.a, s.b);
+    // The pointed-at tile draws `incoming -> hovered edge` for its three exit
+    // edges; it's left blank only when you point at the edge the track enters
+    // through (a U-turn). A one-shot drag always draws its whole route.
+    const last = steps[steps.length - 1];
+    const uTurn = !this.pressFrom && to.port === last.a;
+    const count = uTurn ? steps.length - 1 : steps.length;
+    for (let i = 0; i < count; i++) add(steps[i].id, steps[i].a, steps[i].b);
     return out;
   }
   previewRails(id: string): string[] {
@@ -360,10 +378,13 @@ class EditorView extends Vue {
 
   // Lay every connection of the route from `from` to `to`. For the first
   // segment of a route (and every one-shot drag) the anchor tile is also laid
-  // as a straight in its clicked direction. Returns false if no route fits.
-  commitSegment(from: OpenEnd, to: OpenEnd, layAnchor: boolean): boolean {
+  // as a straight in its clicked direction. Returns the route's new open end
+  // (the last tile + the edge its rail actually exits) so the head can advance
+  // there — which may differ from the clicked edge (e.g. a back-pointing click
+  // becomes a straight-through). Null if no route fits.
+  commitSegment(from: OpenEnd, to: OpenEnd, layAnchor: boolean): OpenEnd | null {
     const steps = planRoute(from, to, this.routeOpts);
-    if (!steps) return false;
+    if (!steps || steps.length === 0) return null;
     if (layAnchor && from.id !== to.id) {
       this.commit(
         from.id,
@@ -373,11 +394,25 @@ class EditorView extends Vue {
     for (const s of steps) {
       this.commit(s.id, addConnection(this.cellOf(s.id), s.a, s.b));
     }
-    return true;
+    const last = steps[steps.length - 1];
+    return { id: last.id, edge: last.b };
+  }
+  // The tile to glow: the pending frontier tile (U-turn case) while routing,
+  // otherwise the head/last tile, else the start.
+  get glowId(): string | null {
+    return this.pendingId ?? this.armed?.id ?? null;
   }
   finishRoute() {
+    if (this.pendingId && this.armed) {
+      // Lock the still-undecided frontier tile as a plain straight terminus.
+      this.commit(
+        this.pendingId,
+        addConnection(this.cellOf(this.pendingId), oppositePort(this.armed.port), this.armed.port)
+      );
+    }
     this.armed = null;
     this.routeStarted = false;
+    this.pendingId = null;
   }
 
   // --- connect tool: drag gesture (one-shot single route) ---
@@ -409,18 +444,45 @@ class EditorView extends Vue {
       this.routeStarted = false;
       return;
     }
-    if (head.id === id && head.port === port) {
-      this.finishRoute(); // clicking the head edge again finishes
+    // Finish: click the start edge again, or click the pending frontier tile.
+    if ((head.id === id && head.port === port) || this.pendingId === id) {
+      this.finishRoute();
       return;
     }
-    const ok = this.commitSegment(
+    this.extendRoute(id, port);
+  }
+  // Plan the route to the clicked tile. The last tile is drawn `incoming ->
+  // clicked edge` for any of its three exit edges; only if you click the edge
+  // the track enters through (a U-turn) is it left blank and the head trails
+  // one tile back so your next click decides its shape.
+  extendRoute(targetId: string, targetPort: Port) {
+    const head = this.armed!;
+    const steps = planRoute(
       { id: head.id, edge: head.port },
-      { id, edge: port },
-      !this.routeStarted
+      { id: targetId, edge: targetPort },
+      this.routeOpts
     );
-    if (ok) {
-      this.routeStarted = true;
-      this.armed = { id, port }; // advance the head to the new open end
+    if (!steps || steps.length === 0) return;
+    if (!this.routeStarted && head.id !== targetId) {
+      this.commit(
+        head.id,
+        addConnection(this.cellOf(head.id), oppositePort(head.port), head.port)
+      );
+    }
+    this.routeStarted = true;
+    const last = steps[steps.length - 1];
+    const uTurn = targetPort === last.a; // pointing at the incoming edge
+    const count = uTurn ? steps.length - 1 : steps.length;
+    for (let i = 0; i < count; i++) {
+      this.commit(steps[i].id, addConnection(this.cellOf(steps[i].id), steps[i].a, steps[i].b));
+    }
+    if (uTurn) {
+      const penultId = steps.length >= 2 ? steps[steps.length - 2].id : head.id;
+      this.armed = { id: penultId, port: oppositePort(last.a) };
+      this.pendingId = last.id; // frontier tile stays undecided
+    } else {
+      this.armed = { id: last.id, port: last.b }; // exit = the clicked edge
+      this.pendingId = null;
     }
   }
   onZoneEnter(id: string, port: Port) {
@@ -647,18 +709,41 @@ export default toNative(EditorView);
 // Edge hit-zones: faint by default so the rail art shows through, brighter on
 // hover, solid amber when armed for the click → click connection flow.
 .zone {
-  fill: rgba(66, 184, 131, 0.06);
-  stroke: rgba(44, 62, 80, 0.18);
-  stroke-width: 1;
+  // Near-invisible fill keeps the wedge clickable; the inner-edge outlines are
+  // hidden by default and only revealed while hovering the tile (below).
+  fill: rgba(66, 184, 131, 0.05);
+  stroke: none;
   cursor: pointer;
   transition: fill 0.08s;
   &:hover {
     fill: rgba(66, 184, 131, 0.28);
   }
 }
+// Show the wedge (inner-edge) outlines only for the tile under the cursor.
+.editor-cell:hover .zone {
+  stroke: rgba(44, 62, 80, 0.25);
+  stroke-width: 1;
+}
 .zone--armed,
 .zone--armed:hover {
   fill: rgba(255, 179, 0, 0.45);
+}
+// The "click again to stop here" wedge: a distinct, gently pulsing red so the
+// finish point stands out from the amber start and green hover.
+.zone--finish,
+.zone--finish:hover {
+  fill: rgba(255, 82, 82, 0.55);
+  stroke: #d32f2f;
+  stroke-width: 2;
+  animation: finish-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes finish-pulse {
+  from {
+    fill: rgba(255, 82, 82, 0.3);
+  }
+  to {
+    fill: rgba(255, 82, 82, 0.65);
+  }
 }
 .zone--signal {
   fill: rgba(255, 59, 48, 0.28);
