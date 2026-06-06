@@ -226,7 +226,7 @@ import { planRoute, OpenEnd } from "@/tiles/routePlanner";
 import { roadEdges as laneEdges } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
+import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 
 type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
@@ -744,7 +744,7 @@ class EditorView extends Vue {
 function loadLevel(): Level {
   try {
     const raw = localStorage.getItem(LEVEL_KEY);
-    if (raw) return JSON.parse(raw) as Level;
+    if (raw) return migrateLevel(JSON.parse(raw) as Level);
   } catch {
     /* ignore */
   }

@@ -28,24 +28,28 @@ export function setCustomLevel(stored: StoredLevel): void {
 // Migrate a level's road tiles from the old PortPair[][] format to Lane[].
 // Old format: road = [[0, 1], [1, 0]] (array of 2-element number arrays)
 // New format: road = [{ from, to[], index }, ...]
-function migrateRoads(stored: StoredLevel): StoredLevel {
-  const migrated: Level = {};
-  for (const [id, tile] of Object.entries(stored.level)) {
+// Safe to call on already-migrated levels: the check is a no-op.
+export function migrateLevel(level: Level): Level {
+  const out: Level = {};
+  for (const [id, tile] of Object.entries(level)) {
     const road = tile.road;
     if (road && road.length > 0 && Array.isArray(road[0])) {
-      migrated[id] = { ...tile, road: fromPairs(road as unknown as [number, number][]) as Lane[] };
+      out[id] = { ...tile, road: fromPairs(road as unknown as [number, number][]) as Lane[] };
     } else {
-      migrated[id] = tile;
+      out[id] = tile;
     }
   }
-  return { ...stored, level: migrated };
+  return out;
 }
 
 export function takeCustomLevel(): StoredLevel | null {
   if (pending) return pending;
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return migrateRoads(JSON.parse(raw) as StoredLevel);
+    if (raw) {
+      const stored = JSON.parse(raw) as StoredLevel;
+      return { ...stored, level: migrateLevel(stored.level) };
+    }
   } catch {
     /* ignore */
   }
