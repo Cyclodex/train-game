@@ -124,7 +124,7 @@ test.describe("Level editor", () => {
     page.on("pageerror", err => consoleErrors.push(err.message));
 
     await page.goto("/#/editor");
-    await expect(page.locator(".toolbar")).toBeVisible();
+    await expect(page.locator(".menu-drawer")).toBeVisible();
 
     // Connect tool is default: draw a horizontal rail across three cells.
     for (const c of ["1,1", "2,1", "3,1"]) await drawWestEast(page, c);
@@ -134,7 +134,7 @@ test.describe("Level editor", () => {
     await cell(page, "4,1").click();
 
     // The level should validate and Play should be enabled.
-    await expect(page.locator(".status")).toHaveText(/valid/);
+    await expect(page.locator(".drawer-status")).toHaveText(/valid/);
     const play = page.getByRole("button", { name: /Play this/ });
     await expect(play).toBeEnabled();
     await play.click();
@@ -169,7 +169,7 @@ test.describe("Level editor", () => {
   test("random map generates a valid playable level", async ({ page }) => {
     await page.goto("/#/editor");
     await page.getByRole("button", { name: /Random/ }).click();
-    await expect(page.locator(".status")).toHaveText(/valid/);
+    await expect(page.locator(".drawer-status")).toHaveText(/valid/);
     await expect(page.locator(".depot-building").first()).toBeVisible();
   });
 });

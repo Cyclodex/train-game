@@ -1,34 +1,54 @@
 <template>
   <div class="editor-view" :class="{ debug: config.debug }">
-    <div class="toolbar">
-      <router-link class="nav-link" to="/play">▶ Play</router-link>
-      <span class="group">
-        <button
-          v-for="t in tools"
-          :key="t"
-          :class="{ active: tool === t }"
-          @click="setTool(t)"
-        >
-          {{ t }}
-        </button>
-      </span>
-      <span class="group">
-        <button @click="randomMap">🎲 Random</button>
-        <button @click="clearAll">Clear</button>
-        <button :disabled="!canPlay" @click="playThis">Play this →</button>
-      </span>
-      <span class="group">
-        <button @click="exportJson">Export</button>
-        <button @click="importJson">Import</button>
-      </span>
-      <span class="status" :class="{ 'status--bad': !valid.ok }">
+    <MenuDrawer id="editor" title="Editor">
+      <button
+        class="drawer-btn accent"
+        :disabled="!canPlay"
+        @click="playThis"
+      >
+        <span>▶</span><span>Play this</span>
+      </button>
+      <button class="drawer-btn" @click="randomMap">
+        <span>🎲</span><span>Random</span>
+      </button>
+      <button class="drawer-btn" @click="clearAll">
+        <span>🧹</span><span>Clear</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <button class="drawer-btn" @click="exportJson">
+        <span>📤</span><span>Export</span>
+      </button>
+      <button class="drawer-btn" @click="importJson">
+        <span>📥</span><span>Import</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <button class="drawer-btn" @click="cycleTheme">
+        <span>🎨</span><span>Theme</span>
+        <span class="drawer-btn__val">{{ themeLabel }}</span>
+      </button>
+      <router-link class="drawer-btn" to="/play">
+        <span>🎮</span><span>Back to game</span>
+      </router-link>
+      <div class="drawer-status" :class="{ 'drawer-status--bad': !valid.ok }">
         {{ valid.ok ? "✓ valid" : valid.issues.length + " issue(s)" }}
         <template v-if="depotIds.length"> · {{ depotIds.length }} depots</template>
-      </span>
-    </div>
+      </div>
+    </MenuDrawer>
 
-    <div class="hint">{{ hint }}</div>
+    <ToolDock :hint="hint">
+      <button
+        v-for="t in tools"
+        :key="t"
+        class="dock-btn"
+        :class="{ on: tool === t }"
+        @click="setTool(t)"
+      >
+        <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
+        <span>{{ toolMeta[t].label }}</span>
+      </button>
+    </ToolDock>
 
+    <div class="world">
     <div
       class="level editor-grid"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
@@ -143,6 +163,7 @@
         </svg>
       </div>
     </div>
+    </div>
 
     <textarea
       v-if="showIo"
@@ -157,7 +178,10 @@
 <script lang="ts">
 import { markRaw, reactive } from "vue";
 import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { GameConfig, GAME_CONFIG_KEY, setWorldTheme } from "@/gameConfig";
+import { nextTheme, themeMeta } from "@/themes";
+import MenuDrawer from "@/components/MenuDrawer.vue";
+import ToolDock from "@/components/ToolDock.vue";
 import type { Game } from "@/game";
 import { Position } from "@/types";
 import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
@@ -214,15 +238,25 @@ function stubGame(): Game {
   } as unknown as Game;
 }
 
-@Component
+@Component({ components: { MenuDrawer, ToolDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Provide("game") game: Game = markRaw(stubGame());
 
   EDGES = EDGES;
   levelSizeY = 6;
-  tools: Tool[] = ["connect", "depot", "signal", "erase", "road"];
+  // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
+  // unaffected by order.
+  tools: Tool[] = ["connect", "road", "depot", "signal", "erase"];
   tool: Tool = "connect";
+  // Big, kid-friendly icon + label for each build tool, shown in the dock.
+  toolMeta: Record<Tool, { icon: string; label: string }> = {
+    connect: { icon: "🛤", label: "Rail" },
+    road: { icon: "🛣", label: "Road" },
+    depot: { icon: "🏠", label: "Depot" },
+    signal: { icon: "🚦", label: "Signal" },
+    erase: { icon: "🧽", label: "Erase" },
+  };
   level: Level = reactive(loadLevel());
   // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
   // picked in the two-click (click → click) connection flow.
@@ -562,7 +596,13 @@ class EditorView extends Vue {
     return Position.Top;
   }
 
-  // --- toolbar actions ---
+  // --- drawer / dock actions ---
+  get themeLabel(): string {
+    return themeMeta(this.config.worldTheme).label;
+  }
+  cycleTheme() {
+    setWorldTheme(nextTheme(this.config.worldTheme));
+  }
   setTool(t: Tool) {
     this.tool = t;
     this.pressFrom = null;
@@ -647,59 +687,6 @@ export default toNative(EditorView);
 </script>
 
 <style lang="scss" scoped>
-.editor-view {
-  padding-top: 88px;
-}
-.toolbar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 8px 12px;
-  background: #f4f4f4;
-  border-bottom: 1px solid #ccc;
-
-  .group {
-    display: inline-flex;
-    gap: 4px;
-  }
-  button,
-  .nav-link {
-    padding: 8px 12px;
-    cursor: pointer;
-    text-transform: capitalize;
-  }
-  .nav-link {
-    background: #2c3e50;
-    color: #fff;
-    text-decoration: none;
-    border-radius: 3px;
-  }
-  button.active {
-    background: #42b883;
-    color: #fff;
-  }
-  .status {
-    margin-left: auto;
-    font-weight: bold;
-    color: #2e7d32;
-  }
-  .status--bad {
-    color: #c62828;
-  }
-}
-.hint {
-  position: fixed;
-  top: 52px;
-  left: 12px;
-  z-index: 100;
-  font-size: 12px;
-  color: #555;
-}
 .level {
   display: flex;
   flex-wrap: wrap;
@@ -847,11 +834,17 @@ export default toNative(EditorView);
 }
 .io-box {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 100px;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(680px, 90vw);
+  height: 150px;
+  z-index: 1600; // above the drawer/dock so Export/Import is usable
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
   font-family: monospace;
   font-size: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 </style>

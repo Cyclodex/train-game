@@ -1,0 +1,54 @@
+// Themable world backdrop. The active theme is a class on #app
+// (`theme-meadow` | `theme-table`) set from `config.worldTheme`. Only the area
+// around the board changes — the glass menus stay consistent across themes.
+//
+// Adding a theme: append an entry in `src/themes.ts` and one `.theme-<id>`
+// block here (plus its `.theme-<id> .level` framing).
+
+// The wrapper around the board grid. Fills the viewport behind the fixed menus
+// and centers the fixed-size grid, leaving room for the score-card (top) and
+// the tool dock (bottom).
+.world {
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 92px 24px 128px;
+}
+
+// ---- Meadow (default) -------------------------------------------------------
+// Rolling green countryside with scattered bushes; the board sits raised on it.
+.theme-meadow {
+  background:
+    radial-gradient(circle, rgba(96, 173, 96, 0.9) 0 7px, transparent 8px) 0 0 /
+      96px 96px,
+    radial-gradient(circle, rgba(84, 160, 84, 0.8) 0 9px, transparent 10px) 52px
+      48px / 132px 132px,
+    radial-gradient(circle, rgba(110, 188, 110, 0.7) 0 5px, transparent 6px) 24px
+      72px / 70px 70px,
+    linear-gradient(160deg, #8ecb8e, #6aac6a);
+}
+.theme-meadow .world .level {
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 10px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+}
+
+// ---- Table (wooden model-railway baseboard) --------------------------------
+// A warm wooden table; the board reads as a raised baseboard with a wood frame.
+.theme-table {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.05) 0 2px,
+      transparent 2px 22px
+    ),
+    linear-gradient(160deg, #c9a36b, #a3793f);
+}
+.theme-table .world .level {
+  border: 7px solid #6f4f25;
+  border-radius: 10px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45),
+    0 0 0 12px rgba(120, 85, 40, 0.35);
+}

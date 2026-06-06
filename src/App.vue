@@ -1,5 +1,5 @@
 <template>
-  <div id="app" :class="{ debug: config.debug }">
+  <div id="app" :class="[`theme-${config.worldTheme}`, { debug: config.debug }]">
     <router-view />
   </div>
 </template>
@@ -22,6 +22,7 @@ export default toNative(App);
 #app {
   text-align: center;
   color: $vueBlack;
+  min-height: 100vh;
 }
 pre {
   text-align: left;
