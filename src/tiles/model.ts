@@ -27,6 +27,8 @@ export interface TileCell {
   // interact at a crossing via the gate (derived from rail reservation). See
   // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
   road?: PortPair[];
+  // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
+  roadPriority?: number;
 }
 
 export type Level = Record<string, TileCell>;
