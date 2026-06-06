@@ -236,6 +236,44 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
     }
     expect(enteredCrossing).toBe(true);
   });
+
+  it("won't roll onto a rail crossing when the road just past it is jammed", () => {
+    // road 0..4; the level crossing is tile 2,0 (rail Top-Bottom + road). Tile 3,0
+    // — immediately past the crossing — is a standing jam (always "closed"). Cars
+    // must queue *before* the crossing, never coming to rest on the tracks, even
+    // though the crossing's own gate is open.
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {
+      "0,0": { connections: [], road: [road] },
+      "1,0": { connections: [], road: [road] },
+      "2,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
+      "3,0": { connections: [], road: [road] },
+      "4,0": { connections: [], road: [road] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 1,
+      seed: 3,
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.3,
+    });
+    // Jam everything from tile 3 on (just past the crossing); the crossing 2,0 is
+    // NOT closed — only the road beyond it is blocked.
+    for (let i = 0; i < 600; i++) sim.step(0.05, id => id === "3,0");
+
+    // A real queue formed, and not one car is resting on the crossing tile.
+    expect(sim.cars().length).toBeGreaterThan(1);
+    const onCrossing = sim
+      .sample()
+      .some(
+        c =>
+          (c.front.coord.x === 2 && c.front.coord.y === 0) ||
+          (c.rear.coord.x === 2 && c.rear.coord.y === 0)
+      );
+    expect(onCrossing).toBe(false);
+  });
 });
 
 describe("createRoadSim — road junction interlock", () => {

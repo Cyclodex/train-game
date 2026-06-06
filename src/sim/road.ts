@@ -1,5 +1,5 @@
 import { Coordinates, Position } from "@/types";
-import { Level, PortPair, partnersOf } from "@/tiles/model";
+import { Level, PortPair, isLevelCrossing, partnersOf } from "@/tiles/model";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -328,7 +328,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // cars pack bumper-to-bumper instead of stopping a full tile apart.
   function clearAhead(car: Car, closed: CrossingClosed): number {
     const route = forwardRoute(car);
-    let clear = CAR_LOOKAHEAD;
+    // Start unbounded and track the nearest real stop (gate / car / junction).
+    // Keeping it unbounded (rather than capped at the look-ahead) lets the
+    // keep-crossing-clear step below tell "an obstacle sits exactly a look-ahead
+    // away" apart from "open road", which matters when a jam is one tile past a
+    // crossing that sits at the edge of the look-ahead.
+    let clear = Number.POSITIVE_INFINITY;
     // Closed crossing ahead: stop at its entry edge (the car is already past the
     // entry of its own head tile, whose lead is negative, so it is never gated by
     // a crossing it is currently sitting on).
@@ -354,7 +359,25 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         }
       }
     }
-    return Math.max(0, clear);
+    // Keep level crossings clear ("don't block the box"): never come to rest with
+    // the body straddling a rail crossing because the road just past it is jammed.
+    // If stopping at `clear` would leave any part of the body on a crossing ahead
+    // (head past its entry but rear not yet past its far edge), hold short of that
+    // crossing's entry instead, so the car waits off the tracks until it can pass
+    // the whole crossing in one go. Only meaningful when a real obstacle bounds us
+    // (clear is finite); on open road the car rolls straight through.
+    if (Number.isFinite(clear)) {
+      for (const [tileId, { lead }] of route) {
+        if (lead < 0) continue; // already on/past this tile — committed, can't undo
+        const cell = level[tileId];
+        if (!cell || !isLevelCrossing(cell)) continue;
+        const farEdge = lead + 1; // the crossing tile spans [lead, lead+1]
+        if (clear > lead && clear - car.length < farEdge) {
+          clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+        }
+      }
+    }
+    return Math.max(0, Math.min(clear, CAR_LOOKAHEAD));
   }
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
