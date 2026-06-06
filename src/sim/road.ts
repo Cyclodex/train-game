@@ -515,18 +515,21 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function projectPoint(
     route: Map<string, { lead: number; entry: Port }>,
     p: { tileId: string; entry: Port; t: number }
-  ): { d: number; lead: number; perpendicular: boolean } | null {
+  ): { d: number; lead: number; perpendicular: boolean; opposing: boolean } | null {
     const hit = route.get(p.tileId);
     if (!hit) return null;
     let within: number;
     let perpendicular = false;
+    let opposing = false;
     if (p.entry === hit.entry) within = p.t;
-    else if (p.entry === oppositePort(hit.entry)) within = 1 - p.t;
-    else {
+    else if (p.entry === oppositePort(hit.entry)) {
+      within = 1 - p.t;
+      opposing = true; // travels this tile head-on to us — i.e. the oncoming lane
+    } else {
       within = 0.5; // perpendicular junction occupant: treat as mid-tile
       perpendicular = true;
     }
-    return { d: hit.lead + within, lead: hit.lead, perpendicular };
+    return { d: hit.lead + within, lead: hit.lead, perpendicular, opposing };
   }
 
   // The clear tile-distance the car's head may advance this tick before it must
@@ -588,6 +591,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       for (const p of bodyPoints(other)) {
         const proj = projectPoint(route, p);
         if (!proj || proj.d < 0) continue;
+        // Oncoming traffic rides its own lane (offset to its right — the far side
+        // of the dashed centre from ours), so an opposite-direction car never
+        // shares our lane and must not gate us. This is what lets two streams flow
+        // past each other instead of freezing nose-to-nose on a single centreline.
+        // Conflicting *turns* at a junction are still arbitrated by canEnter()
+        // above (the conflict matrix knows a left turn crosses the oncoming lane).
+        if (proj.opposing) continue;
         if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
           clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
         } else {
@@ -688,19 +698,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     for (const c of cars) {
       if (bodyTileIds(c).has(id)) return; // entry tile occupied
     }
-    // Route only toward "exit" entries — the complement of spawn entries.
-    // This prevents a car from routing backward onto a road that spawn-direction
-    // cars are already using, which would create head-on conflicts on 1-lane roads.
-    const exitEntries = allMapEntries.filter(
-      e => !entries.some(
-        s => s.coord.x === e.coord.x && s.coord.y === e.coord.y && s.entryPort === e.entryPort,
-      ),
-    );
-    const routePlan = planRoute(
-      level, entry.coord, entry.entryPort,
-      exitEntries.length ? exitEntries : allMapEntries,
-      rng,
-    );
+    // Two-lane (right-hand) roads: oncoming traffic uses the opposite lane, so a
+    // car can head for any edge of the map without risking a head-on — routing
+    // toward an edge other cars also use is fine. Pick a reachable exit edge
+    // (planRoute excludes this car's own spawn opening as a target).
+    const routePlan = planRoute(level, entry.coord, entry.entryPort, allMapEntries, rng);
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);

@@ -175,38 +175,61 @@ describe("createRoadSim — car following", () => {
     expect(minGap).toBeLessThan(0.2);
   });
 
-  it("never rolls a car onto a tile occupied head-on by an oncoming car", () => {
-    // Two-tile road open at both edges; cars spawn from both ends and must not
-    // pass through each other (they stop nose-to-nose).
+  it("lets two opposing streams pass in separate lanes without deadlocking", () => {
+    // Two-lane (right-hand) road open at both edges; cars spawn from both ends —
+    // eastbound enters from the Left edge, westbound from the Right. On the old
+    // single-lane model these froze nose-to-nose; now each rides the lane to the
+    // right of its travel, so the streams pass and the road keeps clearing cars
+    // from BOTH directions.
     const lvl: Level = {
       "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
       "1,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
     };
     const sim = createRoadSim({
       level: lvl,
-      width: 2,
+      width: 3,
       height: 1,
       seed: 3,
-      spawnInterval: 0.2,
+      spawnInterval: 0.4,
       carLength: 0.4,
     });
-    const worldX2 = (s: { coord: { x: number }; entryPort: Position; t: number }) =>
-      s.entryPort === Position.Left ? s.coord.x + s.t : s.coord.x + (1 - s.t);
-    for (let i = 0; i < 300; i++) {
+    // A car's head entered its tile from the Left when travelling east, from the
+    // Right when travelling west — so its head-segment entry port reveals which
+    // way it is going.
+    const dirOf = (c: CarChord): "east" | "west" =>
+      bodyFront(c).entryPort === Position.Left ? "east" : "west";
+
+    const completed = { east: 0, west: 0 };
+    let prev = new Map<string, "east" | "west">();
+    let sawBothPresent = false;
+
+    for (let i = 0; i < 400; i++) {
       sim.step(0.05, () => false);
-      const bodies = sim
-        .sample()
-        .map(c => {
-          const a = worldX2(bodyFront(c));
-          const b = worldX2(bodyRear(c));
-          return { lo: Math.min(a, b), hi: Math.max(a, b) };
-        })
-        .sort((p, q) => p.lo - q.lo);
-      for (let k = 1; k < bodies.length; k++) {
-        // Each body starts at or after the previous one ends: no overlap.
-        expect(bodies[k].lo).toBeGreaterThanOrEqual(bodies[k - 1].hi - 1e-6);
+      const now = new Map<string, "east" | "west">();
+      let east = false;
+      let west = false;
+      for (const c of sim.sample()) {
+        const d = dirOf(c);
+        now.set(c.id, d);
+        if (d === "east") east = true;
+        else west = true;
       }
+      if (east && west) sawBothPresent = true;
+      // A car present last tick but gone now drove off the far edge — a completed
+      // crossing. If the road had deadlocked, completions would stop entirely.
+      for (const [id, d] of prev) {
+        if (!now.has(id)) completed[d]++;
+      }
+      prev = now;
     }
+
+    // Both streams kept flowing — cars from each direction crossed the whole road.
+    expect(completed.east).toBeGreaterThan(0);
+    expect(completed.west).toBeGreaterThan(0);
+    // And both streams shared the road at the same time (they met and passed,
+    // rather than strictly alternating) — direct proof of lane separation.
+    expect(sawBothPresent).toBe(true);
   });
 });
 

@@ -67,10 +67,18 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // simulated body matches the visible sprite (keeps queues packing tight).
 const CAR_SPRITE_PX = 38;
 
-// How far (px at the default 200px tile) to push a car off the road centreline
-// toward its right-hand side, so cars drive in the right lane instead of straddling
-// the dashed centre. The paved ribbon is ~0.28·tile wide (see `.road-surface`),
-// so ~0.07·tile centres the car in the right half. Scaled by the actual tileSize.
+// Right-hand-traffic lane model. A road tile is a single centreline; a car drives
+// in a lane offset to the *right* of its direction of travel, so oncoming traffic
+// rides the opposite side of the dashed centre and the two streams pass instead of
+// meeting head-on. The paved ribbon is ~0.28·tile wide (see `.road-surface`), split
+// into two ~0.14·tile lanes; a car sits at the centre of its lane, ~0.07·tile from
+// the centreline. Scaled by the actual tileSize.
+//
+// Extending to >1 lane per direction later: widen `.road-surface` to
+// `2 · lanesPerDirection` lane-widths and offset a car in lane L (0 = rightmost,
+// nearest the kerb) by `(L + 0.5) · laneWidthFrac`. The sim's lane separation
+// (opposing traffic never shares a lane) already generalises; only lane *assignment*
+// (which of several same-direction lanes a car picks) would be new work.
 const LANE_OFFSET_FRAC = 0.07;
 
 // A single rendered body box of a road vehicle, sampled to a world position. A
@@ -201,10 +209,11 @@ export function createGame(
   });
 
   // Road traffic: a deterministic car simulation over the level's `road` layer,
-  // running alongside the train sim. Cars spawn one-way (from Bottom/Left
-  // openings only) so a single-lane road can't head-on deadlock until a road
-  // direction model exists. The crossing gate is the train reservation/occupancy
-  // on that tile — no new interlocking.
+  // running alongside the train sim. Roads are two-lane (right-hand traffic): cars
+  // can enter from *every* map-edge opening and drive in the lane to the right of
+  // their travel direction, so opposing streams pass instead of deadlocking. The
+  // crossing gate is the train reservation/occupancy on that tile — no new
+  // interlocking; junction turns are arbitrated inside the road sim.
   let roadW = 0;
   let roadH = 0;
   for (const id of Object.keys(level)) {
@@ -213,15 +222,12 @@ export function createGame(
     roadH = Math.max(roadH, y + 1);
   }
   const allRoadEntries = roadEntries(level, roadW, roadH);
-  const oneWayEntries = allRoadEntries.filter(
-    e => e.entryPort === Position.Bottom || e.entryPort === Position.Left
-  );
   const roadSim = createRoadSim({
     level,
     width: roadW,
     height: roadH,
     seed: colorSeed,
-    spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
+    spawnEntries: allRoadEntries,
     spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
     carSpeed: 0.5, // tiles/sec — slow enough to read on screen
     // Match the logical (car) body to the rendered sprite (.road-car is 38px wide
