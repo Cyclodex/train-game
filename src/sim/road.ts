@@ -107,7 +107,10 @@ export interface RoadSegment {
 
 export interface Car {
   id: string;
-  speed: number; // tiles/sec
+  speed: number; // cruise (max) speed, tiles/sec — the velocity cap
+  velocity: number; // current speed, ramps between 0 and `speed`
+  accel: number; // acceleration rate, tiles/sec²
+  brake: number; // deceleration rate, tiles/sec²
   length: number; // body length in tiles (for the front/rear render chord)
   path: RoadSegment[];
   headIndex: number;
@@ -172,6 +175,13 @@ const DEFAULT_CAR_SPEED = 0.6;
 // sync so the simulated body never out-sizes the visible car.
 const DEFAULT_CAR_LENGTH = 0.23;
 const DEFAULT_MAX_CARS = 40;
+// Acceleration / braking rates (tiles/sec²). Cars ramp their velocity toward the
+// cruise speed instead of snapping to it in one tick, and brake smoothly to the
+// next stop line — the same model the train sim uses (simulation.ts). Tuned for a
+// small, quick effect: from rest to a 0.5 tiles/sec cruise in ~0.5s, and a ~20px
+// braking nose-down approaching a queue or closed gate, rather than a hard stop.
+const DEFAULT_CAR_ACCEL = 1.0;
+const DEFAULT_CAR_BRAKE = 1.2;
 
 // Bumper gap a car keeps behind the obstacle ahead (the next car's rear, or an
 // oncoming car's nose), in tiles. Tight so a queue at a closed crossing packs
@@ -348,14 +358,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // Fully stopped (queue / closed gate / occupied junction ahead): hold, and
       // arm the launch reaction so the car waits a beat once the way reopens.
       car.launchTimer = REACTION_DELAY;
+      car.velocity = 0;
       move = 0;
     } else if (car.launchTimer > 0) {
       // The way ahead just cleared but the driver hasn't reacted yet — sit still
       // while the leader pulls away, so the queue stretches out on release.
       car.launchTimer = Math.max(0, car.launchTimer - dt);
+      car.velocity = 0;
       move = 0;
     } else {
-      move = Math.min(car.speed * dt, clear); // never roll past the stop line
+      // Ramp the velocity toward the cap instead of snapping to cruise: accelerate
+      // from rest, and brake smoothly so the car can still stop within `clear`
+      // (vSafe is the fastest speed that still brakes to rest in that distance).
+      // Same model as the train sim (simulation.ts).
+      const vSafe = Math.sqrt(2 * car.brake * clear);
+      const vCap = Math.min(car.speed, vSafe);
+      if (car.velocity < vCap) {
+        car.velocity = Math.min(vCap, car.velocity + car.accel * dt);
+      } else if (car.velocity > vCap) {
+        car.velocity = Math.max(vCap, car.velocity - car.brake * dt);
+      }
+      if (car.velocity < 0) car.velocity = 0;
+      move = Math.min(car.velocity * dt, clear); // never roll past the stop line
     }
     car.headProgress += move;
     while (car.headProgress >= 1) {
@@ -398,6 +422,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     cars.push({
       id: `car${nextId++}`,
       speed: carSpeed,
+      velocity: 0,
+      accel: DEFAULT_CAR_ACCEL,
+      brake: DEFAULT_CAR_BRAKE,
       length: carLength,
       path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
       headIndex: 0,

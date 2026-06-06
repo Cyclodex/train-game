@@ -334,6 +334,41 @@ describe("createRoadSim — launch reaction delay", () => {
   });
 });
 
+describe("createRoadSim — acceleration ramp", () => {
+  it("ramps a car up from rest instead of snapping to cruise speed", () => {
+    // A single car on an open straight road. It should start slow and work up to
+    // cruise speed over several ticks, not cover a full cruise step immediately.
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      maxCars: 1,
+    });
+    const deltas: number[] = [];
+    let prev: number | null = null;
+    for (let i = 0; i < 120; i++) {
+      sim.step(0.05, () => false);
+      const c = sim.cars()[0];
+      if (!c) {
+        prev = null; // the car drove off the end; ignore the gap
+        continue;
+      }
+      const pos = c.headIndex + c.headProgress;
+      if (prev !== null && pos - prev > 1e-9) deltas.push(pos - prev);
+      prev = pos;
+    }
+    expect(deltas.length).toBeGreaterThan(5);
+    const cruiseStep = 0.5 * 0.05; // speed * dt — the distance at full cruise
+    // The first movement out of rest is a small fraction of a cruise step…
+    expect(deltas[0]).toBeLessThan(cruiseStep * 0.5);
+    // …and the car works up to roughly cruise speed once rolling.
+    expect(Math.max(...deltas)).toBeGreaterThan(cruiseStep * 0.9);
+  });
+});
+
 describe("carqueue test-world scenario", () => {
   it("queues cars bumper-to-bumper on the approach to its closed crossing", () => {
     // Drive the actual showcase geometry: cars enter one-way from the left edge
