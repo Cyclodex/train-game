@@ -12,6 +12,8 @@ import {
   laneMovements,
   roadEdges,
   isRoadJunction,
+  laneCount,
+  nWayLanes,
 } from "@/tiles/lanes";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
@@ -110,5 +112,41 @@ describe("isRoadJunction", () => {
   it("is false for undefined / empty", () => {
     expect(isRoadJunction(undefined)).toBe(false);
     expect(isRoadJunction([])).toBe(false);
+  });
+});
+
+describe("laneCount", () => {
+  it("returns 0 for undefined/empty road", () => {
+    expect(laneCount(undefined, Position.Left)).toBe(0);
+    expect(laneCount([], Position.Left)).toBe(0);
+  });
+
+  it("returns 1 for a single-lane approach (index 0 only)", () => {
+    const road = twoWay(Position.Left, Position.Right);
+    expect(laneCount(road, Position.Left)).toBe(1);
+    expect(laneCount(road, Position.Right)).toBe(1);
+    expect(laneCount(road, Position.Top)).toBe(0);
+  });
+
+  it("returns N when indices 0..N-1 are all present", () => {
+    const road = nWayLanes(Position.Left, Position.Right, 3);
+    expect(laneCount(road, Position.Left)).toBe(3);
+    expect(laneCount(road, Position.Right)).toBe(3);
+  });
+});
+
+describe("nWayLanes", () => {
+  it("generates count lanes per direction", () => {
+    const road = nWayLanes(Position.Left, Position.Right, 2);
+    expect(road).toHaveLength(4);
+    expect(road.filter(l => l.from === Position.Left).map(l => l.index).sort()).toEqual([0, 1]);
+    expect(road.filter(l => l.from === Position.Right).map(l => l.index).sort()).toEqual([0, 1]);
+  });
+
+  it("count=1 produces same structure as twoWay", () => {
+    const a = nWayLanes(Position.Left, Position.Right, 1);
+    expect(a).toHaveLength(2);
+    expect(a[0].index).toBe(0);
+    expect(a[1].index).toBe(0);
   });
 });

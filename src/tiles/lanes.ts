@@ -114,6 +114,22 @@ export function roadEdges(road: Lane[] | undefined): [Port, Port][] {
   return out;
 }
 
+// The number of physical lanes for a given approach direction: max(index)+1 across
+// all lanes whose `from` equals `from`. Returns 0 if no lanes enter from that port.
+export function laneCount(road: Lane[] | undefined, from: Port): number {
+  const lanes = lanesFrom(road, from);
+  return lanes.length === 0 ? 0 : Math.max(...lanes.map(l => l.index)) + 1;
+}
+
+// Generate `count` index slots in both directions between ports `a` and `b`.
+// Produces a multi-lane bidirectional road: indices 0..count-1 each way.
+export function nWayLanes(a: Port, b: Port, count: number): Lane[] {
+  return Array.from({ length: count }, (_, i) => [
+    { from: a, to: [b], index: i },
+    { from: b, to: [a], index: i },
+  ]).flat();
+}
+
 // A road junction is a tile whose road touches more than two ports (so a car has
 // a real routing choice / streams cross). Straights and one-ways touch exactly
 // two ports.
