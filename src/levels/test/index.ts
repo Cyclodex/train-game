@@ -7,6 +7,7 @@ import { junction } from "@/levels/test/scenarios/junction";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
+import { objectives } from "@/levels/test/scenarios/objectives";
 
 // The feature test world. One scenario per mechanic; add a new feature by
 // dropping a file in `scenarios/` and appending it here. Order is the picker
@@ -20,6 +21,7 @@ export const SCENARIOS: TestScenario[] = [
   cross,
   crossing,
   carqueue,
+  objectives,
 ];
 
 export function scenarioById(id: string | undefined): TestScenario {
