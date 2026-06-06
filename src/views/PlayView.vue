@@ -24,7 +24,7 @@
       </button>
       <button class="drawer-btn" @click="cycleTheme">
         <span>🎨</span><span>Theme</span>
-        <span class="drawer-btn__val">{{ themeLabel }}</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
       </button>
       <div class="drawer-divider"></div>
       <router-link class="drawer-btn" to="/editor">
@@ -304,9 +304,9 @@ class PlayView extends Vue {
     return this.game.trainColors[id] ?? "inherit";
   }
 
-  // Friendly label for the current world theme (shown on the drawer button).
-  get themeLabel(): string {
-    return themeMeta(this.config.worldTheme).label;
+  // The current world theme's icon, shown compactly on the drawer button.
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
   }
   cycleTheme() {
     setWorldTheme(nextTheme(this.config.worldTheme));

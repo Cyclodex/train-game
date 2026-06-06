@@ -24,7 +24,7 @@
       <div class="drawer-divider"></div>
       <button class="drawer-btn" @click="cycleTheme">
         <span>🎨</span><span>Theme</span>
-        <span class="drawer-btn__val">{{ themeLabel }}</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
       </button>
       <router-link class="drawer-btn" to="/play">
         <span>🎮</span><span>Back to game</span>
@@ -597,8 +597,8 @@ class EditorView extends Vue {
   }
 
   // --- drawer / dock actions ---
-  get themeLabel(): string {
-    return themeMeta(this.config.worldTheme).label;
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
   }
   cycleTheme() {
     setWorldTheme(nextTheme(this.config.worldTheme));

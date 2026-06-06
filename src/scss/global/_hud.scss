@@ -13,7 +13,7 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   left: 14px;
   top: 50%;
   transform: translateY(-50%);
-  width: 182px;
+  width: 196px;
   max-height: calc(100vh - 28px);
   padding: 12px 10px;
   display: flex;
@@ -59,6 +59,9 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   display: flex;
   flex-direction: column;
   gap: 5px;
+  // Never show a horizontal scrollbar; scroll vertically only if the controls
+  // genuinely exceed the viewport height.
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -69,6 +72,7 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   padding: 10px 12px;
   text-decoration: none; // router-links
   white-space: nowrap;
+  overflow: hidden; // clip any rare overflow instead of spilling/scrolling
 
   &.on {
     background: rgba(255, 255, 255, 0.12);
