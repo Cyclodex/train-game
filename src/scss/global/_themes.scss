@@ -14,7 +14,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 92px 24px 128px;
+  padding: 180px 24px 128px;
 }
 
 // ---- Meadow (default) -------------------------------------------------------
@@ -27,15 +27,24 @@
   background-color: #6aac6a;
   background-image:
     var(--meadow-trees),
-    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.06), transparent 60%),
+    radial-gradient(
+      circle at 30% 20%,
+      rgba(255, 255, 255, 0.06),
+      transparent 60%
+    ),
     linear-gradient(160deg, #8ecb8e, #6aac6a);
-  background-size: 680px 680px, 100% 100%, 100% 100%;
-  background-position: 0 0, 0 0, 0 0;
+  background-size:
+    680px 680px,
+    100% 100%,
+    100% 100%;
+  background-position:
+    0 0,
+    0 0,
+    0 0;
 }
 .theme-meadow .world .level {
-  border: 2px solid rgba(255, 255, 255, 0.4);
   border-radius: 10px;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+  box-shadow: 0px 0px 20px 20px rgb(31 69 29);
 }
 
 // ---- Table (wooden model-railway baseboard) --------------------------------
@@ -65,5 +74,7 @@
       rgba(255, 255, 255, 0.04) 0 2px,
       transparent 2px 30px
     );
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.5), 0 0 0 12px rgba(95, 66, 32, 0.4);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.5),
+    0 0 0 12px rgba(95, 66, 32, 0.4);
 }
