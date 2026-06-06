@@ -555,15 +555,33 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   function trySpawn(closed: CrossingClosed): void {
     if (entries.length === 0 || cars.length >= maxCars) return;
-    // Pick an entry deterministically; only spawn if its tile is free (no car on
-    // it and not a closed crossing) so we never spawn into another car.
+    // Pick an entry deterministically.
     const entry = entries[Math.floor(rng() * entries.length)];
     const id = getCoordinatesId(entry.coord);
     if (closed(id)) return;
-    for (const c of cars) {
-      if (bodyTileIds(c).has(id)) return; // entry tile occupied
-    }
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
+    // Spawn only if a car entering here would have clear road ahead. We probe with
+    // a zero-length car sitting at the entry edge and reuse clearAhead: it returns
+    // ~0 when another car's body is right at the entry (so we don't spawn on top of
+    // it) and the lookahead on open road otherwise. This replaces the old "the
+    // whole entry tile must be vacant" rule, which forced a full tile of air between
+    // cars — so on a single-lane road only one car could be on the entry tile at a
+    // time. Now cars enter in a steady stream a bumper-gap apart and pack into
+    // platoons, while clearAhead still guarantees they never overlap.
+    const probe: Car = {
+      id: "",
+      kind: "car",
+      speed: 0,
+      velocity: 0,
+      accel: 0,
+      brake: 0,
+      length: 0,
+      path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
+      headIndex: 0,
+      headProgress: 0,
+      launchTimer: 0,
+    };
+    if (clearAhead(probe, closed) <= STOP_EPS) return;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
