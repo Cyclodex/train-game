@@ -13,6 +13,7 @@ import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadtwolane } from "@/levels/test/scenarios/roadtwolane";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import { roadjunction } from "@/levels/test/scenarios/roadjunction";
+import { rightturncross } from "@/levels/test/scenarios/rightturncross";
 import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { trucks } from "@/levels/test/scenarios/trucks";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
@@ -35,6 +36,7 @@ export const SCENARIOS: TestScenario[] = [
   roadtwolane,
   roadcross,
   roadjunction,
+  rightturncross,
   roadpriority,
   trucks,
   keepcrossingclear,

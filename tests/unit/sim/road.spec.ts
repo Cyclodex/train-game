@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs, oneWay } from "@/tiles/lanes";
+import { fromPairs, oneWay, turns } from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -923,5 +923,46 @@ describe("createRoadSim — one-way street", () => {
       }
     }
     expect(everSeen).toBe(true);
+  });
+});
+
+describe("createRoadSim — right-turn-only cross", () => {
+  it("lets all four arms flow simultaneously without gridlock", () => {
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      // Right-turn-only centre: Left->Bottom, Bottom->Right, Right->Top, Top->Left.
+      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    let prev = new Set<string>();
+    let completed = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed++;
+      prev = now;
+    }
+    expect(completed).toBeGreaterThan(8);
   });
 });
