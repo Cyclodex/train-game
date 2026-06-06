@@ -90,7 +90,9 @@ const CAR_SPRITE_PX = 38;
 // nearest the kerb) by `(L + 0.5) · laneWidthFrac`. The sim's lane separation
 // (opposing traffic never shares a lane) already generalises; only lane *assignment*
 // (which of several same-direction lanes a car picks) would be new work.
-const LANE_OFFSET_FRAC = 0.07;
+// Physical width of one lane as a fraction of tile size. At 200px this is 28px.
+// Single-lane (count=1, index=0): offset = (1-0.5-0) × LANE_WIDTH_FRAC = 0.07 — same as before.
+const LANE_WIDTH_FRAC = 0.14;
 
 // A single rendered body box of a road vehicle, sampled to a world position. A
 // car/truck contributes one; a semi two (cab + trailer). The id is
@@ -446,8 +448,8 @@ export function createGame(
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
-    const laneOffset = tileSize * LANE_OFFSET_FRAC;
     for (const s of samples) {
+      const laneOffset = (s.laneCount - 0.5 - s.laneIndex) * tileSize * LANE_WIDTH_FRAC;
       for (let u = 0; u < s.units.length; u++) {
         const unit = s.units[u];
         const id = `${s.id}#${u}`;
