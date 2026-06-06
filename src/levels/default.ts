@@ -1,6 +1,13 @@
 import { Position, TrainsDefinition, TrainStatus } from "@/types";
 import { Level } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
+import { TrafficConfig } from "@/sim/road";
+
+// Road traffic for the default level: mostly cars, the occasional truck, and a
+// rare semi — real-traffic feel without the roads being dominated by big rigs.
+export const DEFAULT_TRAFFIC: TrafficConfig = {
+  mix: { car: 6, truck: 2, semi: 1 },
+};
 
 // The original hand-authored level, now expressed in the connection model.
 export const DEFAULT_LEVEL: Level = {

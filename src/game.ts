@@ -8,7 +8,7 @@ import {
   UnitChord,
   SimEvent,
 } from "@/sim/simulation";
-import { createRoadSim, roadEntries } from "@/sim/road";
+import { createRoadSim, roadEntries, TrafficConfig } from "@/sim/road";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
@@ -73,12 +73,17 @@ const CAR_SPRITE_PX = 38;
 // so ~0.07·tile centres the car in the right half. Scaled by the actual tileSize.
 const LANE_OFFSET_FRAC = 0.07;
 
-// A road-traffic car sampled to a world position for rendering.
+// A single rendered body box of a road vehicle, sampled to a world position. A
+// car/truck contributes one; a semi two (cab + trailer). The id is
+// `${carId}#${segmentIndex}` so Vue reuses DOM nodes per box; `widthPx` sizes
+// the sprite to the segment's length and `part` selects its style.
 export interface RoadCar {
   id: string;
   x: number;
   y: number;
   angle: number;
+  widthPx: number;
+  part: string;
 }
 
 export interface Game {
@@ -128,7 +133,10 @@ export function createGame(
   // When provided, these depot/train colours are used verbatim (the test world
   // pins them, e.g. to force a depot colour-mismatch bounce); otherwise the
   // seeded `assignColors` guarantees every train a reachable matching depot.
-  colors?: ColorAssignment
+  colors?: ColorAssignment,
+  // Per-level road-traffic settings (busyness + vehicle mix). Overlays the
+  // sim's defaults; omitted → the all-cars default behaviour.
+  traffic?: TrafficConfig
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -216,12 +224,17 @@ export function createGame(
     spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
     spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
     carSpeed: 0.5, // tiles/sec — slow enough to read on screen
-    // Match the logical body to the rendered sprite (.road-car is 46px wide in
-    // PlayView/TestStage CSS). If the model body is longer than the sprite, a
-    // queue looks gappy: the bumper gap then sits on top of the invisible extra
-    // body, leaving ~a whole car of air between sprites.
+    // Match the logical (car) body to the rendered sprite (.road-car is 38px wide
+    // in PlayView/TestStage CSS). Trucks and semis scale their length from this in
+    // the sim and size their sprite from it in the view, so the two stay in step.
+    // If the model body is longer than the sprite, a queue looks gappy: the bumper
+    // gap then sits on top of invisible extra body.
     carLength: CAR_SPRITE_PX / tileSize,
     maxCars: 8,
+    // Per-level overrides (busyness + vehicle mix), if the level supplied any.
+    ...(traffic?.spawnInterval !== undefined && { spawnInterval: traffic.spawnInterval }),
+    ...(traffic?.maxCars !== undefined && { maxCars: traffic.maxCars }),
+    ...(traffic?.mix !== undefined && { mix: traffic.mix }),
   });
   const roadCars = reactive([]) as RoadCar[];
   // Road-junction tiles a car currently holds (tileId → car id), refreshed each
@@ -360,22 +373,31 @@ export function createGame(
     }
   }
 
-  // Sample each live car to a world position (reusing the train chord placement)
-  // and reconcile the reactive list by id so Vue reuses the car DOM nodes.
+  // Sample each live car to world positions (reusing the train chord placement)
+  // and reconcile the reactive list by id so Vue reuses the car DOM nodes. A
+  // vehicle contributes one render box per body segment (a semi → cab + trailer),
+  // each keyed `${carId}#${i}` and sized to its segment length.
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
     const laneOffset = tileSize * LANE_OFFSET_FRAC;
     for (const s of samples) {
-      seen.add(s.id);
-      const { x, y, angle } = positionUnit(s as unknown as UnitChord, laneOffset);
-      const existing = roadCars.find(c => c.id === s.id);
-      if (existing) {
-        existing.x = x;
-        existing.y = y;
-        existing.angle = angle;
-      } else {
-        roadCars.push({ id: s.id, x, y, angle });
+      for (let u = 0; u < s.units.length; u++) {
+        const unit = s.units[u];
+        const id = `${s.id}#${u}`;
+        seen.add(id);
+        const { x, y, angle } = positionUnit(unit as unknown as UnitChord, laneOffset);
+        const widthPx = unit.lengthTiles * tileSize;
+        const existing = roadCars.find(c => c.id === id);
+        if (existing) {
+          existing.x = x;
+          existing.y = y;
+          existing.angle = angle;
+          existing.widthPx = widthPx;
+          existing.part = unit.part;
+        } else {
+          roadCars.push({ id, x, y, angle, widthPx, part: unit.part });
+        }
       }
     }
     for (let i = roadCars.length - 1; i >= 0; i--) {

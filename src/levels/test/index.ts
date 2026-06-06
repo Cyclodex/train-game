@@ -8,6 +8,7 @@ import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
+import { trucks } from "@/levels/test/scenarios/trucks";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 
 // The feature test world. One scenario per mechanic; add a new feature by
@@ -23,6 +24,7 @@ export const SCENARIOS: TestScenario[] = [
   crossing,
   carqueue,
   roadcross,
+  trucks,
   keepcrossingclear,
 ];
 

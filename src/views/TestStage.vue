@@ -35,13 +35,14 @@
       <div
         v-for="car in roadCars"
         :key="car.id"
-        class="road-car"
+        :class="['road-car', `road-car--${car.part}`]"
         :style="{
           background: carColor(car.id),
+          width: `${car.widthPx}px`,
           transform: `translate(-50%, -50%) translate(${car.x}px, ${car.y}px) rotate(${car.angle}deg)`,
         }"
       >
-        <span class="road-car-glass"></span>
+        <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
       </div>
       <Crossing
         v-for="c in crossings"
@@ -112,7 +113,8 @@ class TestStage extends Vue {
       buildTrainDefs(this.scenario.trains),
       gameConfig.tileSize,
       gameConfig.colorSeed,
-      this.scenario.colors
+      this.scenario.colors,
+      this.scenario.traffic
     )
   );
 
@@ -154,9 +156,12 @@ class TestStage extends Vue {
     return this.game.roadCars;
   }
   private carPalette = ["#d94c4c", "#3f7fd9", "#e0bc5c", "#e7e7e7", "#5fb37a"];
-  // Stable colour per car from the trailing number in its id (car0, car1, …).
+  // Stable colour per vehicle from the number in its base id (car0, car1, …). The
+  // render id is `${carId}#${segment}`, so strip the segment suffix first — this
+  // keeps a semi's cab and trailer in one livery.
   carColor(id: string): string {
-    const n = parseInt(id.replace(/\D/g, ""), 10) || 0;
+    const base = id.split("#")[0];
+    const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
   }
 
@@ -238,12 +243,22 @@ export default toNative(TestStage);
   z-index: 6; // above the road surface and trains; crossing booms sit above
   top: 0;
   left: 0;
-  width: 38px;
+  // width is set inline per vehicle segment (car/truck/cab/trailer lengths).
   height: 20px;
   border-radius: 4px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   will-change: transform;
   overflow: hidden;
+}
+// A semi's cab: a touch darker and boxier than the trailer it pulls.
+.road-car--cab {
+  filter: brightness(0.82);
+  border-radius: 4px 3px 3px 4px;
+}
+// A semi's trailer: a long boxy container, squarer corners, no windscreen.
+.road-car--trailer {
+  border-radius: 2px;
+  filter: brightness(1.05);
 }
 .road-car-glass {
   position: absolute;

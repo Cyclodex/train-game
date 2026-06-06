@@ -5,6 +5,68 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 
+// --- Vehicle kinds -----------------------------------------------------------
+// A vehicle is described as data: a list of rendered body segments plus a
+// coupling gap, all measured in tiles and scaled from a base car length `B`.
+// A car is one box; a truck one longer box; a semi a short cab + long trailer
+// (two chord segments, so the trailer articulates on curves like a train's
+// loco + wagon). Everything downstream (following distance, lane occupancy,
+// rendering) is derived from the spec, so adding a kind is a one-row change.
+
+export type VehicleKind = "car" | "truck" | "semi";
+
+export interface VehicleSegment {
+  length: number; // rendered box length, in tiles
+  part: "car" | "truck" | "cab" | "trailer"; // render style hint for the view
+}
+
+export interface VehicleSpec {
+  segments: VehicleSegment[];
+  gap: number; // coupling gap between consecutive segments, in tiles
+}
+
+// Length multipliers over the base car length `B` (the sim's `carLength`).
+const TRUCK_LEN = 1.7;
+const SEMI_CAB = 0.7;
+const SEMI_TRAILER = 1.6;
+const SEMI_GAP = 0.12;
+
+export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
+  switch (kind) {
+    case "truck":
+      return { segments: [{ length: base * TRUCK_LEN, part: "truck" }], gap: 0 };
+    case "semi":
+      return {
+        segments: [
+          { length: base * SEMI_CAB, part: "cab" },
+          { length: base * SEMI_TRAILER, part: "trailer" },
+        ],
+        gap: base * SEMI_GAP,
+      };
+    case "car":
+    default:
+      return { segments: [{ length: base, part: "car" }], gap: 0 };
+  }
+}
+
+// Total body length of a spec (the lane span used for following/queueing).
+export function specLength(spec: VehicleSpec): number {
+  const segs = spec.segments.reduce((s, seg) => s + seg.length, 0);
+  return segs + spec.gap * Math.max(0, spec.segments.length - 1);
+}
+
+// Relative spawn weights per kind. Omitted/zero kinds never spawn; `{ car: 1 }`
+// (the default) reproduces the original all-cars behaviour.
+export type TrafficMix = { car?: number; truck?: number; semi?: number };
+
+// Per-level road-traffic settings: how busy the roads are and what mix of
+// vehicles drives them. All optional; each overlays the sim's defaults.
+export interface TrafficConfig {
+  spawnInterval?: number; // mean seconds between spawn attempts (smaller = busier)
+  mix?: TrafficMix; // relative weights of car/truck/semi
+  maxCars?: number; // cap on live vehicles
+}
+
 // --- Road traversal ----------------------------------------------------------
 // Cars walk the road port-graph exactly like trains walk the rail graph
 // (network.ts traverse()), but reading a cell's `road` pairs instead of its
@@ -107,11 +169,12 @@ export interface RoadSegment {
 
 export interface Car {
   id: string;
+  kind: VehicleKind; // car | truck | semi — drives length and render segments
   speed: number; // cruise (max) speed, tiles/sec — the velocity cap
   velocity: number; // current speed, ramps between 0 and `speed`
   accel: number; // acceleration rate, tiles/sec²
   brake: number; // deceleration rate, tiles/sec²
-  length: number; // body length in tiles (for the front/rear render chord)
+  length: number; // total body length in tiles (the lane span; from the spec)
   path: RoadSegment[];
   headIndex: number;
   headProgress: number; // 0..1 within path[headIndex]
@@ -130,10 +193,19 @@ export interface CarSample {
   exitPort: Port | null;
   t: number; // 0..1 progress within the tile segment
 }
-export interface CarChord {
-  id: string;
+// One rendered body box of a vehicle (a car/truck is one unit; a semi is two:
+// cab + trailer). `front`/`rear` are its two ends sampled along the car's path
+// so the box angles along the road and articulates on curves; `lengthTiles` is
+// its length and `part` the render style hint.
+export interface CarUnit {
   front: CarSample;
   rear: CarSample;
+  lengthTiles: number;
+  part: VehicleSegment["part"];
+}
+export interface CarChord {
+  id: string;
+  units: CarUnit[];
 }
 
 // Closed ⇔ this tile is a crossing reserved/occupied by a train. Supplied by the
@@ -149,9 +221,13 @@ export interface RoadSimConfig {
   // Mean seconds between spawn attempts at each entry (a Poisson-ish gate via the
   // seeded RNG). Smaller = busier roads.
   spawnInterval?: number;
-  // Car cruise speed in tiles/sec and body length in tiles. Defaults below.
+  // Car cruise speed in tiles/sec and base (car) body length in tiles. Trucks
+  // and semis scale their length from `carLength` via vehicleSpec(). Defaults
+  // below.
   carSpeed?: number;
   carLength?: number;
+  // Relative spawn weights per vehicle kind. Default `{ car: 1 }` → all cars.
+  mix?: TrafficMix;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
   maxCars?: number;
   // Spawn only from these entries instead of every map-edge road opening. Used to
@@ -164,7 +240,8 @@ export interface RoadSimConfig {
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
   cars(): { id: string; tileId: string; headIndex: number; headProgress: number }[];
-  // Each live car sampled as a front/rear chord for the renderer.
+  // Each live car sampled as its rendered body units (one per segment) for the
+  // renderer: a car/truck has one, a semi has a cab + a trailer.
   sample(): CarChord[];
   // Road-junction tiles a car body currently occupies, keyed by tile id → car id.
   // There is no stored reservation for cars (unlike trains): occupancy is derived
@@ -207,6 +284,12 @@ const REACTION_DELAY = 0.6;
 // Below this clear distance (tiles) a car counts as fully stopped — it can't take
 // a meaningful step, so it (re)arms its launch reaction timer.
 const STOP_EPS = 1e-3;
+// Arc spacing (tiles) at which a vehicle's body is sampled into occupancy points.
+// A long trailer can span a whole junction tile with neither end on it; sampling
+// the *whole* body at this step guarantees every tile any part of the vehicle
+// covers gets at least one point, so a trailer straddling a crossing blocks cars
+// from entering it. Cars are few, so the extra points are cheap.
+const BODY_SAMPLE_STEP = 0.25;
 
 // A road junction tile: two roads cross (or meet) here, so more than the two
 // ports of a plain straight/curve are paved. Cars must claim such a tile
@@ -229,11 +312,29 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
   const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
+  const mix = config.mix ?? { car: 1 };
 
   const entries = config.spawnEntries ?? roadEntries(level, width, height);
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;
+
+  // Draw a vehicle kind from the per-level mix using the seeded RNG, so spawns
+  // stay deterministic. Kinds with no/zero weight never appear; an empty mix
+  // falls back to a car.
+  function pickKind(): VehicleKind {
+    const weighted = (["car", "truck", "semi"] as VehicleKind[])
+      .map(k => [k, Math.max(0, mix[k] ?? 0)] as const)
+      .filter(([, w]) => w > 0);
+    const total = weighted.reduce((s, [, w]) => s + w, 0);
+    if (total <= 0) return "car";
+    let r = rng() * total;
+    for (const [k, w] of weighted) {
+      r -= w;
+      if (r < 0) return k;
+    }
+    return weighted[weighted.length - 1][0];
+  }
 
   const tileIdOf = (c: Car): string => getCoordinatesId(c.path[c.headIndex].coord);
 
@@ -276,25 +377,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return route;
   }
 
-  // A car's head and rear anchor points as { tileId, entry, t } — the two ends of
-  // its body, used as obstacles other cars must not roll into.
+  // The anchor points along a car's whole body as { tileId, entry, t }, used as
+  // obstacles other cars must not roll into. Sampling the entire body (head back
+  // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
+  // means a long trailer that spans a junction tile mid-body still puts a point
+  // on it, so a crossing car sees it occupied and holds off the tile.
   function bodyPoints(car: Car): { tileId: string; entry: Port; t: number }[] {
-    const head = car.path[car.headIndex];
-    const rearDist = Math.max(0, car.headIndex + car.headProgress - car.length);
-    const rearIdx = Math.floor(rearDist + 1e-9);
-    const rear = car.path[rearIdx];
-    return [
-      {
-        tileId: getCoordinatesId(head.coord),
-        entry: head.entryPort,
-        t: car.headProgress,
-      },
-      {
-        tileId: getCoordinatesId(rear.coord),
-        entry: rear.entryPort,
-        t: rearDist - rearIdx,
-      },
-    ];
+    const pts: { tileId: string; entry: Port; t: number }[] = [];
+    for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
+      const s = sampleAtArc(car, a);
+      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, t: s.t });
+    }
+    const tail = sampleAtArc(car, car.length); // always include the exact tail
+    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, t: tail.t });
+    return pts;
   }
 
   // Project a point on another car's body onto this car's look-ahead route. Null
@@ -448,13 +544,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (bodyTileIds(c).has(id)) return; // entry tile occupied
     }
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
+    const kind = pickKind();
+    const length = specLength(vehicleSpec(kind, carLength));
     cars.push({
       id: `car${nextId++}`,
+      kind,
       speed: carSpeed,
       velocity: 0,
       accel: DEFAULT_CAR_ACCEL,
       brake: DEFAULT_CAR_BRAKE,
-      length: carLength,
+      length,
       path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
       headIndex: 0,
       headProgress: 0,
@@ -521,11 +620,21 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }));
     },
     sample() {
-      return cars.map(c => ({
-        id: c.id,
-        front: sampleAtArc(c, 0),
-        rear: sampleAtArc(c, c.length),
-      }));
+      return cars.map(c => {
+        const spec = vehicleSpec(c.kind, carLength);
+        const units: CarUnit[] = [];
+        let lead = 0; // arc distance from the head to this segment's leading edge
+        for (const seg of spec.segments) {
+          units.push({
+            front: sampleAtArc(c, lead),
+            rear: sampleAtArc(c, lead + seg.length),
+            lengthTiles: seg.length,
+            part: seg.part,
+          });
+          lead += seg.length + spec.gap;
+        }
+        return { id: c.id, units };
+      });
     },
     junctionOccupancy() {
       const out: Record<string, string> = {};

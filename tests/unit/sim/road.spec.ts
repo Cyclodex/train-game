@@ -5,9 +5,18 @@ import {
   roadTraverse,
   roadEntries,
   createRoadSim,
+  vehicleSpec,
+  specLength,
+  CarChord,
 } from "@/sim/road";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
+
+// A vehicle samples as one render box per body segment (cab + trailer for a
+// semi); these grab the whole-body front/rear ends used by the queueing tests.
+// Every car here uses the default all-cars mix, so each is a single segment.
+const bodyFront = (c: CarChord) => c.units[0].front;
+const bodyRear = (c: CarChord) => c.units[c.units.length - 1].rear;
 
 // A simple straight road across three tiles (Left<->Right), open at both map
 // edges (0,0 enters from the left edge, 2,0 leaves at the right edge).
@@ -147,7 +156,7 @@ describe("createRoadSim — car following", () => {
 
     const bodies = sim
       .sample()
-      .map(c => ({ front: worldX(c.front), rear: worldX(c.rear) }))
+      .map(c => ({ front: worldX(bodyFront(c)), rear: worldX(bodyRear(c)) }))
       // Order them along the road, leading car first.
       .sort((a, b) => b.front - a.front);
     expect(bodies.length).toBeGreaterThan(1); // a real queue formed
@@ -188,8 +197,8 @@ describe("createRoadSim — car following", () => {
       const bodies = sim
         .sample()
         .map(c => {
-          const a = worldX2(c.front);
-          const b = worldX2(c.rear);
+          const a = worldX2(bodyFront(c));
+          const b = worldX2(bodyRear(c));
           return { lo: Math.min(a, b), hi: Math.max(a, b) };
         })
         .sort((p, q) => p.lo - q.lo);
@@ -269,8 +278,8 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
       .sample()
       .some(
         c =>
-          (c.front.coord.x === 2 && c.front.coord.y === 0) ||
-          (c.rear.coord.x === 2 && c.rear.coord.y === 0)
+          (bodyFront(c).coord.x === 2 && bodyFront(c).coord.y === 0) ||
+          (bodyRear(c).coord.x === 2 && bodyRear(c).coord.y === 0)
       );
     expect(onCrossing).toBe(false);
   });
@@ -312,15 +321,16 @@ describe("createRoadSim — road junction interlock", () => {
       // mixed state is exactly the gridlock the interlock prevents.
       const axes = new Set<string>();
       for (const c of samples) {
-        if (onJunction(c.front))
-          axes.add(horizontal(c.front.entryPort) ? "h" : "v");
-        if (onJunction(c.rear))
-          axes.add(horizontal(c.rear.entryPort) ? "h" : "v");
+        if (onJunction(bodyFront(c)))
+          axes.add(horizontal(bodyFront(c).entryPort) ? "h" : "v");
+        if (onJunction(bodyRear(c)))
+          axes.add(horizontal(bodyRear(c).entryPort) ? "h" : "v");
       }
       expect(axes.size).toBeLessThanOrEqual(1);
       for (const c of samples) {
-        if (c.front.coord.x > 2 && c.front.coord.y === 2) eastboundPassed = true;
-        if (c.front.coord.y < 2 && c.front.coord.x === 2) northboundPassed = true;
+        const f = bodyFront(c);
+        if (f.coord.x > 2 && f.coord.y === 2) eastboundPassed = true;
+        if (f.coord.y < 2 && f.coord.x === 2) northboundPassed = true;
       }
     }
     // Neither stream is starved: traffic actually crosses both ways (no deadlock).
@@ -438,6 +448,105 @@ describe("createRoadSim — acceleration ramp", () => {
   });
 });
 
+describe("vehicle kinds", () => {
+  it("scales each kind's body length from the base car length", () => {
+    const base = 0.2;
+    expect(specLength(vehicleSpec("car", base))).toBeCloseTo(base, 9);
+    // A truck is one longer box.
+    expect(specLength(vehicleSpec("truck", base))).toBeGreaterThan(base);
+    // A semi (cab + trailer + coupling gap) is the longest of the three.
+    expect(specLength(vehicleSpec("semi", base))).toBeGreaterThan(
+      specLength(vehicleSpec("truck", base))
+    );
+  });
+
+  it("renders a car/truck as one box and a semi as a cab + trailer", () => {
+    expect(vehicleSpec("car", 0.2).segments.map(s => s.part)).toEqual(["car"]);
+    expect(vehicleSpec("truck", 0.2).segments.map(s => s.part)).toEqual(["truck"]);
+    expect(vehicleSpec("semi", 0.2).segments.map(s => s.part)).toEqual([
+      "cab",
+      "trailer",
+    ]);
+  });
+
+  it("spawns only the kinds the mix allows", () => {
+    // Mix of only trucks → every sampled vehicle is a single truck box, and its
+    // body is longer than a plain car's.
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 9,
+      spawnInterval: 0.5,
+      carLength: 0.2,
+      mix: { truck: 1 },
+    });
+    for (let i = 0; i < 120; i++) sim.step(0.05, () => false);
+    const samples = sim.sample();
+    expect(samples.length).toBeGreaterThan(0);
+    for (const c of samples) {
+      expect(c.units.map(u => u.part)).toEqual(["truck"]);
+    }
+  });
+});
+
+describe("createRoadSim — long vehicles occupy what they straddle", () => {
+  it("a semi's trailer keeps a perpendicular car out of the junction it straddles", () => {
+    // The roadcross 4-way junction, but every vehicle is a semi (two-box body
+    // longer than one tile). The interlock invariant must still hold for the long
+    // body: two perpendicular streams never co-occupy the centre tile — which can
+    // only work if the trailer (not just the cab/tail) marks the junction it sits
+    // on. Without full-body occupancy a trailer mid-spanning 2,2 would be invisible
+    // to the crossing stream and let it drive in.
+    const sim = createRoadSim({
+      level: roadcross.level,
+      width: roadcross.size!.cols,
+      height: roadcross.size!.rows,
+      seed: 4,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+      mix: { semi: 1 },
+    });
+
+    const onJunction = (s: { coord: { x: number; y: number } }) =>
+      s.coord.x === 2 && s.coord.y === 2;
+    const horizontal = (p: Position) => p === Position.Left || p === Position.Right;
+    let sawSemi = false;
+    let eastboundPassed = false;
+    let northboundPassed = false;
+
+    for (let i = 0; i < 1500; i++) {
+      sim.step(0.05, () => false);
+      const samples = sim.sample();
+      const axes = new Set<string>();
+      for (const c of samples) {
+        if (c.units.length === 2) sawSemi = true;
+        // Every body box of every vehicle is checked, so a trailer straddling the
+        // junction counts as occupying it.
+        for (const u of c.units) {
+          if (onJunction(u.front)) axes.add(horizontal(u.front.entryPort) ? "h" : "v");
+          if (onJunction(u.rear)) axes.add(horizontal(u.rear.entryPort) ? "h" : "v");
+        }
+      }
+      expect(axes.size).toBeLessThanOrEqual(1);
+      for (const c of samples) {
+        const f = c.units[0].front;
+        if (f.coord.x > 2 && f.coord.y === 2) eastboundPassed = true;
+        if (f.coord.y < 2 && f.coord.x === 2) northboundPassed = true;
+      }
+    }
+    expect(sawSemi).toBe(true); // the scenario really did run semis
+    expect(eastboundPassed).toBe(true);
+    expect(northboundPassed).toBe(true); // neither stream deadlocked
+  });
+});
+
 describe("carqueue test-world scenario", () => {
   it("queues cars bumper-to-bumper on the approach to its closed crossing", () => {
     // Drive the actual showcase geometry: cars enter one-way from the left edge
@@ -458,7 +567,10 @@ describe("carqueue test-world scenario", () => {
     // World X along the Left->Right approach road = column + progress.
     const bodies = sim
       .sample()
-      .map(c => ({ front: c.front.coord.x + c.front.t, rear: c.rear.coord.x + c.rear.t }))
+      .map(c => ({
+        front: bodyFront(c).coord.x + bodyFront(c).t,
+        rear: bodyRear(c).coord.x + bodyRear(c).t,
+      }))
       .sort((a, b) => b.front - a.front);
 
     expect(bodies.length).toBeGreaterThan(2); // a real queue built up
