@@ -356,6 +356,12 @@ export default toNative(PlayView);
   background: rgba(185, 222, 255, 0.9);
   border-radius: 2px;
 }
+// A rigid truck's cab is only the front of its longer body, so its windscreen is
+// a small pane right at the nose rather than a wide window like a car's.
+.road-car--truck .road-car-glass {
+  left: 76%;
+  width: 13%;
+}
 .control-buttons {
   position: fixed;
   z-index: 100;
