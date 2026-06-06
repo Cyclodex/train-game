@@ -297,7 +297,10 @@ const DEFAULT_CAR_BRAKE = 1.2;
 // full tile of air between stopped cars. ~6px at tileSize 200. NB: the body
 // length must match the rendered sprite (see CAR_SPRITE_PX in game.ts) or this
 // gap sits on top of invisible extra body and looks far larger on screen.
-const CAR_GAP = 0.03;
+// NB: this is measured bumper-to-bumper along the centerline arc, so on a curve
+// the sprite corners pinch closer than the centerline gap — keep a touch of slack
+// so following cars don't visibly touch through a bend.
+const CAR_GAP = 0.06;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
