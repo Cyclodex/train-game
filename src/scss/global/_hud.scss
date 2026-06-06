@@ -1,0 +1,176 @@
+// Shared HUD chrome: the left menu drawer (style A) and the bottom tool dock
+// (style B), plus the buttons that live in them. Used by MenuDrawer.vue and
+// ToolDock.vue. These are GLOBAL (unscoped) so the buttons the views pass into
+// the slots pick up the styling. The panels reuse the score-card's `glass` look.
+
+$hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+// ---- Menu drawer (style A) -------------------------------------------------
+.menu-drawer {
+  @include glass;
+  position: fixed;
+  z-index: 1500; // below the score-card / event-log (2000), above the board
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 196px;
+  max-height: calc(100vh - 28px);
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.menu-drawer--collapsed {
+  // Slide left until only the tab pokes past the screen edge.
+  transform: translate(-100%, -50%);
+}
+.menu-drawer__tab {
+  @include glass($radius: 0 10px 10px 0);
+  position: absolute;
+  right: -22px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 58px;
+  padding: 0;
+  border-left: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #cfd8e0;
+  cursor: pointer;
+  box-shadow: 6px 0 14px rgba(0, 0, 0, 0.3);
+
+  &:hover {
+    color: #fff;
+  }
+}
+.menu-drawer__title {
+  font: 700 9px/1 $hud-font;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8fa3b3;
+  padding: 2px 6px 4px;
+}
+.menu-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  // Never show a horizontal scrollbar; scroll vertically only if the controls
+  // genuinely exceed the viewport height.
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+// A drawer entry — a <button> or <router-link>.
+.drawer-btn {
+  @include glass-button;
+  width: 100%;
+  padding: 10px 12px;
+  text-decoration: none; // router-links
+  white-space: nowrap;
+  overflow: hidden; // clip any rare overflow instead of spilling/scrolling
+
+  &.on {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+  &.accent {
+    background: rgba(95, 211, 154, 0.18);
+    color: #bff0d4;
+
+    &:hover {
+      background: rgba(95, 211, 154, 0.28);
+      color: #d8ffe8;
+    }
+  }
+  &:disabled,
+  &.is-disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: transparent;
+    color: #cfd8e0;
+  }
+}
+// A small trailing value on a drawer button (e.g. speed / switch-lock state).
+.drawer-btn__val {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: #8fa3b3;
+}
+.drawer-divider {
+  height: 1px;
+  margin: 5px 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.drawer-status {
+  margin-top: auto;
+  font: 700 11px/1.35 $hud-font;
+  padding: 8px 6px 2px;
+  color: #7fd6a2;
+
+  &.drawer-status--bad {
+    color: #f0a0a0;
+  }
+}
+
+// ---- Tool dock (style B) ---------------------------------------------------
+.tool-dock-wrap {
+  position: fixed;
+  z-index: 1500;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none; // wrapper transparent; children re-enable
+  max-width: calc(100vw - 24px);
+}
+.tool-dock__hint {
+  @include glass($radius: 999px);
+  pointer-events: auto;
+  max-width: 560px;
+  padding: 8px 14px;
+  font: 600 12px/1.35 $hud-font;
+  color: #eaf0f5;
+  text-align: center;
+}
+.tool-dock {
+  @include glass;
+  pointer-events: auto;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+}
+// Big, kid-friendly tap targets: a large icon stacked over a label.
+.dock-btn {
+  @include glass-button;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 76px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+
+  &.on {
+    background: #5fd39a;
+    color: #0e1a14;
+    box-shadow: 0 0 14px rgba(95, 211, 154, 0.5);
+
+    &:hover {
+      background: #6ee0a8;
+      color: #0e1a14;
+    }
+  }
+}
+.dock-btn__icon {
+  font-size: 28px;
+  line-height: 1;
+}

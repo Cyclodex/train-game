@@ -52,22 +52,17 @@ export default toNative(TestView);
   padding: 16px;
 }
 .test-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 24px;
+  @include glass;
+  display: inline-flex;
+  align-items: center;
+  gap: 20px;
   margin-bottom: 16px;
+  padding: 12px 16px;
 }
 .nav-link {
-  display: inline-block;
-  padding: 10px 16px;
-  border-radius: 8px;
-  background: #2c3e50;
-  color: #fff;
+  @include glass-button;
+  padding: 9px 14px;
   text-decoration: none;
-
-  &:hover {
-    background: #34506a;
-  }
 }
 .picker {
   display: flex;
@@ -92,7 +87,7 @@ export default toNative(TestView);
 .picker-desc {
   margin: 0;
   max-width: 420px;
-  color: #56657a;
+  color: #cfd8e0;
   font-size: 13px;
 }
 </style>

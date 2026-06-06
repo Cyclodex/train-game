@@ -1,4 +1,23 @@
 import { reactive } from "vue";
+import {
+  DEFAULT_THEME,
+  isWorldTheme,
+  WorldTheme,
+} from "./themes";
+
+const THEME_KEY = "train-game:worldTheme";
+
+// The persisted world theme, falling back to the default when storage is
+// unavailable or holds an unknown id.
+function loadWorldTheme(): WorldTheme {
+  try {
+    const raw = localStorage.getItem(THEME_KEY);
+    if (isWorldTheme(raw)) return raw;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_THEME;
+}
 
 // Switch-lock interlocking levels:
 // - "off":      switches always throwable; the sim re-plans the affected train's
@@ -31,6 +50,9 @@ export interface GameConfig {
   // time at crossings). Independent of `roads` rendering; a game mode can enable
   // the road world without scoring it.
   roadScoring: boolean;
+  // The world backdrop theme (see src/themes.ts). Applied as a `theme-<id>`
+  // class on #app; persisted via `setWorldTheme`.
+  worldTheme: WorldTheme;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -46,4 +68,15 @@ export const gameConfig: GameConfig = reactive({
   colorSeed: 1,
   roads: true,
   roadScoring: false,
+  worldTheme: loadWorldTheme(),
 });
+
+// Set + persist the world theme. Views call this from the drawer's 🎨 button.
+export function setWorldTheme(theme: WorldTheme): void {
+  gameConfig.worldTheme = theme;
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* ignore */
+  }
+}

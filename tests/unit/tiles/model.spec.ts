@@ -11,6 +11,7 @@ import {
   rotateConnections,
   armExit,
   connectionsToExitPort,
+  defaultArmFor,
   kindOf,
 } from "@/tiles/model";
 
@@ -115,6 +116,30 @@ describe("connectionsToExitPort", () => {
       [Right, Top],
     ];
     expect(connectionsToExitPort(T, Bottom, ActiveIntersection.Straight)).toBeNull();
+  });
+});
+
+describe("defaultArmFor (authored starting arm, validated)", () => {
+  it("returns the authored arm when its exit is a current partner", () => {
+    const cell = { connections: CROSS, defaultArms: { [Top]: ActiveIntersection.Right } };
+    // armExit(Top, Right) === Left, and Left is a partner of Top in a full cross.
+    expect(defaultArmFor(cell, Top)).toBe(ActiveIntersection.Right);
+  });
+  it("returns undefined for an unauthored entry", () => {
+    expect(defaultArmFor({ connections: CROSS }, Top)).toBeUndefined();
+    expect(
+      defaultArmFor({ connections: CROSS, defaultArms: { [Right]: ActiveIntersection.Left } }, Top)
+    ).toBeUndefined();
+  });
+  it("returns undefined for a stale arm whose exit is no longer a partner", () => {
+    // A straights-only cross: Top connects only to Bottom. Arm Left -> exit Right
+    // is no longer a real partner, so the authored arm is ignored.
+    const straightsOnly: [Position, Position][] = [
+      [Top, Bottom],
+      [Left, Right],
+    ];
+    const cell = { connections: straightsOnly, defaultArms: { [Top]: ActiveIntersection.Left } };
+    expect(defaultArmFor(cell, Top)).toBeUndefined();
   });
 });
 

@@ -78,6 +78,25 @@ won or lost, and most "matching" is luck because colours are random.
    feedback (replace the removed `alert`), smoother stop-in-depot easing (see the
    `stopTrainInDepot` duration heuristic in `Train.vue`).
 
+## Road traffic
+
+14. **Variable car speeds with car-following** (idea). Today road cars share one
+    speed and queue at the stop line. Give each car its own preferred (cruise)
+    speed, then have it follow the car ahead: a car can never exceed the speed of
+    the slower car in front, so it closes the gap and matches its pace (a simple
+    car-following / "platoon" rule, like real traffic). Faster cars bunch up behind
+    slower ones; the slowest car sets the platoon speed.
+    - *Later extension:* per-road speed limits — different "speeding tracks" where
+      cars are allowed to go faster or slower (e.g. slow zones in the city, faster
+      open stretches). The car's effective speed becomes `min(its preferred speed,
+      the road's limit, the speed of the car ahead)`.
+    - Touch points: the road-car movement / queue-spacing logic added in the recent
+      road-car commits (add a look-ahead to the car ahead, mirroring the train
+      momentum look-ahead in `src/sim/physics.ts`), plus a per-tile/per-road
+      speed-limit field if the limit extension is taken. Ships with its own `/test`
+      scenario (two cars at different preferred speeds on one lane → the fast one
+      catches and follows the slow one).
+
 ## Architecture / code health
 
 6. **Level loading from JSON** (enables everything above). Move the `level` and

@@ -1,5 +1,13 @@
-import { Position } from "@/types";
-import { Port, PortPair, TileCell, samePair } from "@/tiles/model";
+import { Position, ActiveIntersection } from "@/types";
+import {
+  Port,
+  PortPair,
+  TileCell,
+  samePair,
+  armExit,
+  partnersOf,
+  defaultArmFor,
+} from "@/tiles/model";
 
 // Pure, immutable single-cell editing operations used by the level editor. Each
 // returns a new TileCell so Vue's reactive Level can swap the entry in place.
@@ -67,6 +75,38 @@ export function toggleSignalPort(cell: TileCell, port: Port): TileCell {
     ? cur.filter(p => p !== port)
     : [...cur, port];
   return { ...cell, signals };
+}
+
+// Cycling order matches Tile.vue's runtime changeSwitch so the editor and play
+// feel identical.
+const ARMS: ActiveIntersection[] = [
+  ActiveIntersection.Left,
+  ActiveIntersection.Straight,
+  ActiveIntersection.Right,
+];
+
+// The valid arms for an entry (those whose geometric exit is a real partner),
+// in ARMS order. Empty unless `entry` is a switchable junction entry.
+function validArms(cell: TileCell, entry: Port): ActiveIntersection[] {
+  const partners = partnersOf(cell.connections, entry);
+  if (partners.length <= 1) return []; // straight/curve/depot: no switch
+  return ARMS.filter(a => {
+    const exit = armExit(entry, a);
+    return exit !== null && partners.includes(exit);
+  });
+}
+
+// Advance the authored starting arm for `entry` to the next valid arm (cyclic),
+// starting from the currently-effective arm (the authored arm if any, else the
+// computed first-valid one — the same arm the editor displays). Writes it into a
+// fresh cell's `defaultArms`. No-op if `entry` is not a switchable junction entry.
+export function cycleDefaultArm(cell: TileCell, entry: Port): TileCell {
+  const valid = validArms(cell, entry);
+  if (valid.length === 0) return cell;
+  const current = defaultArmFor(cell, entry) ?? valid[0];
+  const idx = valid.indexOf(current);
+  const next = valid[(idx + 1) % valid.length];
+  return { ...cell, defaultArms: { ...cell.defaultArms, [entry]: next } };
 }
 
 // --- Road layer editing -------------------------------------------------------

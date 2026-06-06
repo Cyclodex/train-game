@@ -517,6 +517,51 @@ describe("simulation depots", () => {
     expect(sim.occupiedBy("2,0")).toBeUndefined();
   });
 
+  it("slides every unit's rear all the way to the depot centre when parked", () => {
+    // The renderer (game.ts) hides a unit only once its REAR coupler reaches the
+    // depot centre (exitPort Center, t >= 0.999) — that's what makes the shed
+    // "swallow" the whole train. If parking stops short, the rear units sit
+    // visibly outside the depot. A long train (loco + 2 wagons) exposes it: the
+    // depot segment is only half a tile of arc, so the glide must advance the
+    // head far enough for the rearmost bogie to reach the centre.
+    const level: Level = {
+      "0,0": cell("TileStraight", 1),
+      "1,0": cell("TileStraight", 1),
+      "2,0": cell("TileStraight", 1),
+      "3,0": cell("TileDepot", 3),
+    };
+    const sim = createSimulation({
+      level,
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 2,
+          unitLengths: [0.5, 0.5, 0.5],
+          speed: 1,
+        },
+      ],
+      depotColors: { "3,0": "red" },
+    });
+
+    for (let i = 0; i < 60; i++) {
+      sim.step(0.25);
+      if (sim.trainState("t1") === "parked") break;
+    }
+    expect(sim.trainState("t1")).toBe("parked");
+
+    // Every unit — loco and both wagons — must have its rear coupler docked at
+    // the depot centre, so the renderer hides the whole consist.
+    const units = sim.sampleTrain("t1");
+    for (const unit of units) {
+      expect(unit.rear.exitPort).toBe(Position.Center);
+      expect(unit.rear.t).toBeGreaterThanOrEqual(0.999);
+    }
+  });
+
   it("bounces a train back out of a non-matching depot", () => {
     const sim = createSimulation({
       level: depotLevel,

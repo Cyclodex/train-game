@@ -1,19 +1,39 @@
 <template>
   <div class="play-view" :class="{ debug: config.debug }">
-    <div class="control-buttons">
-      <router-link class="nav-link" to="/editor">Editor</router-link>
-      <router-link class="nav-link" to="/test">Test world</router-link>
-      <button class="debug-button" @click="switchDebugMode">Debug Mode</button>
-      <button class="timeline-button" @click="pausePlayGame">
-        {{ paused ? "Start" : "Pause" }}
+    <MenuDrawer id="play" title="Menu">
+      <button class="drawer-btn" @click="pausePlayGame">
+        <span>{{ paused ? "▶" : "⏸" }}</span>
+        <span>{{ paused ? "Start" : "Pause" }}</span>
       </button>
-      <button class="timeline-button" @click="changeGlobalTimeScale">
-        {{ globalTimeScale }} x Speed
+      <button class="drawer-btn" @click="changeGlobalTimeScale">
+        <span>⏩</span><span>Speed</span>
+        <span class="drawer-btn__val">{{ globalTimeScale }}×</span>
       </button>
-      <button class="timeline-button" @click="cycleSwitchLock">
-        Switch lock: {{ switchLockLabel }}
+      <button class="drawer-btn" @click="cycleSwitchLock">
+        <span>🔀</span><span>Switch lock</span>
+        <span class="drawer-btn__val">{{ switchLockLabel }}</span>
       </button>
-    </div>
+      <div class="drawer-divider"></div>
+      <button
+        class="drawer-btn"
+        :class="{ on: config.debug }"
+        @click="switchDebugMode"
+      >
+        <span>🐞</span><span>Debug</span>
+        <span class="drawer-btn__val">{{ config.debug ? "on" : "off" }}</span>
+      </button>
+      <button class="drawer-btn" @click="cycleTheme">
+        <span>🎨</span><span>Theme</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <router-link class="drawer-btn" to="/editor">
+        <span>✏️</span><span>Editor</span>
+      </router-link>
+      <router-link class="drawer-btn" to="/test">
+        <span>🧪</span><span>Test world</span>
+      </router-link>
+    </MenuDrawer>
     <div
       class="score-card"
       :class="{
@@ -52,6 +72,7 @@
         </div>
       </transition>
     </div>
+    <div class="world">
     <div
       class="level"
       :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
@@ -80,13 +101,14 @@
       <div
         v-for="car in roadCars"
         :key="car.id"
-        class="road-car"
+        :class="['road-car', `road-car--${car.part}`]"
         :style="{
           background: carColor(car.id),
+          width: `${car.widthPx}px`,
           transform: `translate(-50%, -50%) translate(${car.x}px, ${car.y}px) rotate(${car.angle}deg)`,
         }"
       >
-        <span class="road-car-glass"></span>
+        <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
       </div>
       <Crossing
         v-for="c in crossings"
@@ -94,6 +116,7 @@
         :coord-id="c.key"
         :cell="c.cell"
       />
+    </div>
     </div>
     <div v-if="hud.startOverlay && phase === 'ready'" class="game-overlay">
       <div class="overlay-card">
@@ -181,16 +204,19 @@ import {
   GAME_CONFIG_KEY,
   gameConfig,
   SwitchLockMode,
+  setWorldTheme,
 } from "@/gameConfig";
+import { nextTheme, themeMeta } from "@/themes";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
-import { DEFAULT_LEVEL, defaultTrains } from "@/levels/default";
+import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById } from "@/modes/index";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
+import MenuDrawer from "@/components/MenuDrawer.vue";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -211,7 +237,7 @@ function hashParam(name: string): string | null {
   return new URLSearchParams(hash.slice(q + 1)).get(name);
 }
 
-@Component({ components: { Crossing } })
+@Component({ components: { Crossing, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -260,6 +286,7 @@ class PlayView extends Vue {
       this.mode,
       gameConfig.colorSeed,
       undefined,
+      DEFAULT_TRAFFIC,
       this.levelId
     )
   );
@@ -344,9 +371,12 @@ class PlayView extends Vue {
   }
 
   private carPalette = ["#d94c4c", "#3f7fd9", "#e0bc5c", "#e7e7e7", "#5fb37a"];
-  // Stable colour per car from the trailing number in its id (car0, car1, …).
+  // Stable colour per vehicle from the number in its base id (car0, car1, …). The
+  // render id is `${carId}#${segment}`, so strip the segment suffix first — this
+  // keeps a semi's cab and trailer in one livery.
   carColor(id: string): string {
-    const n = parseInt(id.replace(/\D/g, ""), 10) || 0;
+    const base = id.split("#")[0];
+    const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
   }
 
@@ -401,6 +431,14 @@ class PlayView extends Vue {
     return this.game.trainColors[id] ?? "inherit";
   }
 
+  // The current world theme's icon, shown compactly on the drawer button.
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
+  }
+  cycleTheme() {
+    setWorldTheme(nextTheme(this.config.worldTheme));
+  }
+
   switchDebugMode() {
     this.config.debug = !this.config.debug;
   }
@@ -452,12 +490,22 @@ export default toNative(PlayView);
   z-index: 6; // above the road surface and trains; booms (crossing) sit above
   top: 0;
   left: 0;
-  width: 46px;
-  height: 24px;
-  border-radius: 5px;
+  // width is set inline per vehicle segment (car/truck/cab/trailer lengths).
+  height: 20px;
+  border-radius: 4px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   will-change: transform;
   overflow: hidden;
+}
+// A semi's cab: a touch darker and boxier than the trailer it pulls.
+.road-car--cab {
+  filter: brightness(0.82);
+  border-radius: 4px 3px 3px 4px;
+}
+// A semi's trailer: a long boxy container, squarer corners, no windscreen.
+.road-car--trailer {
+  border-radius: 2px;
+  filter: brightness(1.05);
 }
 .road-car-glass {
   position: absolute;
@@ -468,26 +516,12 @@ export default toNative(PlayView);
   background: rgba(185, 222, 255, 0.9);
   border-radius: 2px;
 }
-.control-buttons {
-  position: fixed;
-  z-index: 100;
-  top: 0;
-  left: 0;
-
-  > button,
-  > .nav-link {
-    display: block;
-    padding: 15px;
-    min-width: 150px;
-    box-sizing: border-box;
-  }
-  > .nav-link {
-    background: #2c3e50;
-    color: white;
-    text-decoration: none;
-  }
+// A rigid truck's cab is only the front of its longer body, so its windscreen is
+// a small pane right at the nose rather than a wide window like a car's.
+.road-car--truck .road-car-glass {
+  left: 76%;
+  width: 13%;
 }
-
 .score-card {
   position: fixed;
   z-index: 2000;

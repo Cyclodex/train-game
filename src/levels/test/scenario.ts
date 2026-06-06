@@ -2,6 +2,7 @@ import { Level } from "@/tiles/model";
 import { TrainObject, TrainsDefinition, TrainStatus } from "@/types";
 import { ColorAssignment } from "@/utils/colorAssignment";
 import { TrainRoute } from "@/tiles/validate";
+import { TrafficConfig } from "@/sim/road";
 
 // A single, self-contained feature demo for the /test world. Each scenario is a
 // tiny map that shows exactly one mechanic; see the registry in `index.ts`.
@@ -16,6 +17,10 @@ export interface TestScenario {
   colors?: ColorAssignment;
   // Explicit grid size; defaults to the level's derived extents.
   size?: { cols: number; rows: number };
+  // Per-level road-traffic settings (busyness + vehicle mix). Omitted → the
+  // game's all-cars default. Used by the trucks scenario to force a heavy
+  // truck/semi mix.
+  traffic?: TrafficConfig;
 }
 
 // Build a train that starts in the depot at (x,y), leaves outward, and routes to
