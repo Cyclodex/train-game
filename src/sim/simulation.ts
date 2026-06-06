@@ -280,10 +280,14 @@ export function createSimulation(config: SimConfig): Simulation {
   function bodyTileIds(train: SimTrain): Set<string> {
     // While parking, headProgress runs past 1 so the tail advances into the
     // depot and the approach tiles it used to cover are freed for other trains.
+    // The dock glide pushes headProgress well past the body length (the depot
+    // segment is only half a tile of real arc, so headProgress over-counts there),
+    // which would drive tailIndex past the head and report an empty body; clamp it
+    // so a fully-swallowed train still occupies exactly its depot tile.
     const headDistance = train.headIndex + train.headProgress;
-    const tailIndex = Math.max(
-      0,
-      Math.floor(headDistance - train.bodyLength + 1e-9)
+    const tailIndex = Math.min(
+      train.headIndex,
+      Math.max(0, Math.floor(headDistance - train.bodyLength + 1e-9))
     );
     const ids = new Set<string>();
     for (let i = tailIndex; i <= train.headIndex; i++) {
@@ -543,10 +547,29 @@ export function createSimulation(config: SimConfig): Simulation {
       // forward — sampling clamps every unit to the centre as it catches up, and
       // the renderer hides each unit once it reaches the centre, so the train
       // slides into the shed instead of halting (loco-first) at the entrance and
-      // blocking trains behind it. We're fully docked once the *last* unit has
-      // reached the depot centre: headProgress of 1 (loco at centre) plus the
-      // rearmost unit's centre offset behind the head.
-      const dockDistance = 1 + train.unitOffsets[train.unitOffsets.length - 1];
+      // blocking trains behind it. We're fully docked once the rearmost unit's
+      // *rear coupler* reaches the depot centre — the exact point the renderer
+      // waits for to hide the car (game.ts: rear.exitPort === Center &&
+      // rear.t >= 0.999). Two subtleties:
+      //  1. The renderer hides on the REAR bogie, inset by BOGIE_INSET_FRAC, not
+      //     the unit centre — so glide until that rear point, not the centre.
+      //  2. headProgress is normalised per segment, but the depot segment is only
+      //     `depotSegLen` tiles of real arc (half a tile, edge↔centre). Advancing
+      //     the rear bogie `rearArc` of real arc up to the centre needs
+      //     headProgress to grow by rearArc / depotSegLen. Omitting that divide
+      //     (the old `1 + unitOffsets[last]`) left long consists short of the shed.
+      const depotSeg = train.path[train.headIndex];
+      const depotSegLen = segmentLength(
+        depotSeg.entryPort,
+        depotSeg.exitPort ?? depotSeg.entryPort,
+        1
+      );
+      const last = train.unitLengths.length - 1;
+      const rearArc =
+        train.unitOffsets[last] +
+        train.unitLengths[last] / 2 -
+        train.unitLengths[last] * BOGIE_INSET_FRAC;
+      const dockDistance = 1 + rearArc / depotSegLen;
       train.headProgress += train.speed * dt;
       if (train.headProgress >= dockDistance) {
         train.headProgress = dockDistance;
