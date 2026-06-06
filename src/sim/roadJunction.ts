@@ -1,4 +1,4 @@
-import { PortPair } from "@/tiles/model";
+import { Lane, laneMovements } from "@/tiles/lanes";
 import { Position } from "@/types";
 import { Port } from "./topology";
 
@@ -110,28 +110,17 @@ export function conflictKey(a: Movement, b: Movement): string {
 }
 
 /**
- * Given the road port-pairs for a tile, enumerate every possible movement
- * (each pair [a,b] contributes movement {entry:a,exit:b} AND {entry:b,exit:a}),
+ * Given the lanes for a tile, enumerate every directed movement
+ * (each lane contributes {entry:from, exit:to} for each permitted exit),
  * deduplicate, then return the set of conflict keys for all conflicting pairs.
  */
-export function buildConflictMatrix(road: PortPair[]): Set<string> {
-  // Collect all directed movements.
-  const movements: Movement[] = [];
-  const seen = new Set<string>();
-  for (const [a, b] of road) {
-    for (const m of [
-      { entry: a, exit: b },
-      { entry: b, exit: a },
-    ] as Movement[]) {
-      const k = `${Position[m.entry]}:${Position[m.exit]}`;
-      if (!seen.has(k)) {
-        seen.add(k);
-        movements.push(m);
-      }
-    }
-  }
+export function buildConflictMatrix(road: Lane[]): Set<string> {
+  // Directed movements from the lanes (from -> each permitted exit).
+  const movements: Movement[] = laneMovements(road).map(m => ({
+    entry: m.from,
+    exit: m.to,
+  }));
 
-  // Check every unordered pair once.
   const matrix = new Set<string>();
   for (let i = 0; i < movements.length; i++) {
     for (let j = i + 1; j < movements.length; j++) {

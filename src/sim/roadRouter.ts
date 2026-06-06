@@ -1,8 +1,9 @@
 import { Coordinates } from "@/types";
-import { Level, partnersOf } from "@/tiles/model";
+import { Level } from "@/tiles/model";
+import { exitsFrom, isRoadJunction } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { RoadEntry, isRoadJunction } from "./road";
+import { RoadEntry } from "./road";
 
 // A single routing decision at a road junction: which arm the car takes when it
 // leaves the junction tile. The car uses this to pick among the junction's exits
@@ -93,7 +94,7 @@ export function planRoute(
     if (!tile?.road || tile.road.length === 0) continue;
 
     // Every exit partner for this entry port.
-    const exits = partnersOf(tile.road, node.entryPort);
+    const exits = exitsFrom(tile.road, node.entryPort);
 
     for (const exitPort of exits) {
       // Center has no map-edge neighbour — skip.
@@ -104,7 +105,7 @@ export function planRoute(
       const nextTile = level[nextId];
       const connectedBack =
         nextTile?.road &&
-        partnersOf(nextTile.road, oppositePort(exitPort)).length > 0;
+        exitsFrom(nextTile.road, oppositePort(exitPort)).length > 0;
 
       if (!connectedBack) {
         // Off-grid or dead-end: check whether this is our target exit.

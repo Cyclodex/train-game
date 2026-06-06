@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // 4-way road intersection where cars can enter from all four arms and take any
 // exit (straight, left turn, right turn). The centre tile has explicit turn
@@ -7,7 +8,7 @@ import { TestScenario } from "@/levels/test/scenario";
 // and cars actually have choices when routing.
 //
 // There is no rail here — pure road scenario. Cars spawn from all four edges.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 export const roadjunction: TestScenario = {
   id: "roadjunction",

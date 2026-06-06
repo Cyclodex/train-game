@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Two-lane (right-hand traffic): a single straight road open at both ends. Cars
 // spawn from both edges — some eastbound, some westbound — and pass each other on
@@ -8,7 +9,7 @@ import { TestScenario } from "@/levels/test/scenario";
 // This is the isolated demonstration of the directional lane model: there is no
 // junction, so nothing but the lane separation keeps the two streams flowing.
 // Junction turn arbitration is covered by roadjunction / roadcross.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 export const roadtwolane: TestScenario = {
   id: "roadtwolane",

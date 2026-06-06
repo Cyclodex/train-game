@@ -183,14 +183,25 @@ class Tile extends Vue {
     }));
   }
 
-  // Road surface + lane-marking paths for every road pair on the cell, derived
-  // from `road` the same way railRoutes derives from `connections`.
+  // Road surface + lane-marking paths, one per undirected edge the lanes touch
+  // (a two-way road is one ribbon, not two). At one lane per direction this
+  // renders identically to the old PortPair-based version.
   get roadPaths(): { surface: string; marking: string }[] {
     const size = this.config.tileSize;
-    return (this.tile.road ?? []).map(([a, b]) => ({
-      surface: roadSurfacePath(a, b, size),
-      marking: roadMarkingPath(a, b, size),
-    }));
+    const seen = new Set<string>();
+    const out: { surface: string; marking: string }[] = [];
+    for (const lane of this.tile.road ?? []) {
+      for (const to of lane.to) {
+        const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          surface: roadSurfacePath(lane.from, to, size),
+          marking: roadMarkingPath(lane.from, to, size),
+        });
+      }
+    }
+    return out;
   }
 
   // Entry ports that are junction entries (need a switch widget).

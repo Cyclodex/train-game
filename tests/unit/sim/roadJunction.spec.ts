@@ -6,6 +6,7 @@ import {
   conflictKey,
   buildConflictMatrix,
 } from "@/sim/roadJunction";
+import { fromPairs } from "@/tiles/lanes";
 
 // Shorthand aliases
 const T = Position.Top;
@@ -187,7 +188,7 @@ describe("buildConflictMatrix", () => {
       [T, B],
       [L, R],
     ];
-    const matrix = buildConflictMatrix(road);
+    const matrix = buildConflictMatrix(fromPairs(road));
     expect(matrix.size).toBeGreaterThan(0);
     // T→B vs L→R must be in the matrix
     const a = mv(T, B);
@@ -202,7 +203,7 @@ describe("buildConflictMatrix", () => {
       [T, L],
       [B, L],
     ];
-    const matrix = buildConflictMatrix(road);
+    const matrix = buildConflictMatrix(fromPairs(road));
     expect(matrix.size).toBeGreaterThan(0);
   });
 
@@ -210,7 +211,7 @@ describe("buildConflictMatrix", () => {
     // One pair, two opposite movements: T→B and B→T. They share parallel lanes
     // in right-hand traffic, so no conflict.
     const road: [Position, Position][] = [[T, B]];
-    const matrix = buildConflictMatrix(road);
+    const matrix = buildConflictMatrix(fromPairs(road));
     expect(matrix.size).toBe(0);
   });
 
@@ -219,7 +220,7 @@ describe("buildConflictMatrix", () => {
       [T, B],
       [L, R],
     ];
-    const matrix = buildConflictMatrix(road);
+    const matrix = buildConflictMatrix(fromPairs(road));
     // Verify every key in the matrix actually represents a conflicting pair.
     // Since we can't reverse the key easily, just check the total is sane.
     // A 4-way cross has at most 12 non-U-turn movements; we just need > 0.
@@ -265,7 +266,7 @@ describe("right turns from all four arms never conflict", () => {
       [R, T],
       [T, L],
     ];
-    const matrix = buildConflictMatrix(road);
+    const matrix = buildConflictMatrix(fromPairs(road));
     for (let i = 0; i < rightTurns.length; i++) {
       for (let j = i + 1; j < rightTurns.length; j++) {
         expect(matrix.has(conflictKey(rightTurns[i], rightTurns[j]))).toBe(false);

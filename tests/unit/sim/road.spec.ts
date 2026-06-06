@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
+import { fromPairs } from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -23,9 +24,9 @@ const bodyRear = (c: CarChord) => c.units[c.units.length - 1].rear;
 function straightRoad(): Level {
   const road: [Position, Position] = [Position.Left, Position.Right];
   return {
-    "0,0": { connections: [], road: [road] },
-    "1,0": { connections: [], road: [road] },
-    "2,0": { connections: [], road: [road] },
+    "0,0": { connections: [], road: fromPairs([road]) },
+    "1,0": { connections: [], road: fromPairs([road]) },
+    "2,0": { connections: [], road: fromPairs([road]) },
   };
 }
 
@@ -56,7 +57,7 @@ describe("roadTraverse", () => {
     const lvl: Level = {
       "0,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
     };
     // Entering from the road Left, the car leaves Right (not via the rail).
@@ -134,14 +135,14 @@ describe("createRoadSim — car following", () => {
     // A long straight road; a permanently-closed crossing at 2,0 forces a queue.
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road: fromPairs([road]) },
+      "1,0": { connections: [], road: fromPairs([road]) },
       "2,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [road],
+        road: fromPairs([road]),
       },
-      "3,0": { connections: [], road: [road] },
-      "4,0": { connections: [], road: [road] },
+      "3,0": { connections: [], road: fromPairs([road]) },
+      "4,0": { connections: [], road: fromPairs([road]) },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -182,9 +183,9 @@ describe("createRoadSim — car following", () => {
     // right of its travel, so the streams pass and the road keeps clearing cars
     // from BOTH directions.
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
-      "1,0": { connections: [], road: [[Position.Left, Position.Right]] },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+      "1,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -237,12 +238,12 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
   it("holds a car at a closed crossing and releases it when the train clears", () => {
     // road across 0,0 (open left) -> 1,0 (the crossing) -> 2,0 (open right).
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -276,11 +277,11 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
     // though the crossing's own gate is open.
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [], road: [road] },
-      "2,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
-      "3,0": { connections: [], road: [road] },
-      "4,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road: fromPairs([road]) },
+      "1,0": { connections: [], road: fromPairs([road]) },
+      "2,0": { connections: [[Position.Top, Position.Bottom]], road: fromPairs([road]) },
+      "3,0": { connections: [], road: fromPairs([road]) },
+      "4,0": { connections: [], road: fromPairs([road]) },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -400,7 +401,7 @@ describe("createRoadSim — four-way cross, cars from all sides", () => {
     // streams pass) plus the junction arbiter (conflicting turns take turns, and
     // right turns never conflict at all), the crossing keeps clearing cars from
     // every arm — it must never lock up into a permanent four-way standstill.
-    const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
     const lvl: Level = {
       // Horizontal road.
       "0,2": road([Position.Left, Position.Right]),
@@ -475,12 +476,12 @@ describe("createRoadSim — launch reaction delay", () => {
     // gate and the gate opens, the car must not move on the very next tick — it
     // waits out its reaction time — then accelerates away.
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -552,12 +553,12 @@ describe("createRoadSim — acceleration ramp", () => {
     // again: hold one at a closed crossing, then open it and watch the first
     // movements come out small and build up toward cruise (not a full step at once).
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -682,7 +683,7 @@ describe("createRoadSim — variable preferred speed", () => {
     // ~0.36 leader and a ~0.58 follower (a clear convergence case).
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {};
-    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: [road] };
+    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: fromPairs([road]) };
     const sim = createRoadSim({
       level: lvl,
       width: 40,

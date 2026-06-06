@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Variable car speeds with car-following (platooning), on a divided road.
 //
@@ -17,7 +18,7 @@ import { TestScenario } from "@/levels/test/scenario";
 //
 // There is no rail here — it's a pure road feature — so the scenario has no
 // trains; the car simulation runs on its own.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 const lane: Record<string, ReturnType<typeof road>> = {};
 for (let x = 0; x < 8; x++) {

@@ -32,8 +32,14 @@ const TJUNCTION: [Position, Position][] = [
 ];
 const has = (cell: { connections: [Position, Position][] }, p: [Position, Position]) =>
   cell.connections.some(c => samePair(c, p));
-const hasRoadPair = (cell: { road?: [Position, Position][] }, p: [Position, Position]) =>
-  (cell.road ?? []).some(c => samePair(c, p));
+// A road edge is present as a two-way edge when both directed lane movements
+// (a->b and b->a) exist among the cell's lanes.
+const hasRoadPair = (cell: TileCell, p: [Position, Position]) => {
+  const road = cell.road ?? [];
+  const ab = road.some(l => l.from === p[0] && l.to.includes(p[1]));
+  const ba = road.some(l => l.from === p[1] && l.to.includes(p[0]));
+  return ab && ba;
+};
 
 describe("toggleConnection", () => {
   it("adds when absent and removes when present, order-independent", () => {
@@ -181,11 +187,15 @@ describe("road ops", () => {
   });
 
   it("addRoad is idempotent and accumulates a road junction", () => {
+    // Each two-way edge is one index-0 lane per approach. A single edge L<->R is
+    // two lanes (from L, from R); adding a crossing edge makes four (a junction).
     let c = addRoad(emptyCell(), Left, Right);
-    c = addRoad(c, Right, Left); // reversed, already present
-    expect(c.road).toHaveLength(1);
+    c = addRoad(c, Right, Left); // reversed, already present — idempotent
+    expect(hasRoadPair(c, [Left, Right])).toBe(true);
+    expect(c.road).toHaveLength(2); // lanes from L and from R
     c = addRoad(c, Top, Bottom);
-    expect(c.road).toHaveLength(2);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+    expect(c.road).toHaveLength(4); // + lanes from T and from B
   });
 
   it("removeRoad removes a specific pair regardless of order", () => {

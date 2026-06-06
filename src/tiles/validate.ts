@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { Level, Port, portsOf, parseCoordId } from "@/tiles/model";
+import { roadPortsOf } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -136,14 +137,14 @@ export function validateRoads(level: Level): {
   for (const [id, tile] of Object.entries(level)) {
     const road = tile.road ?? [];
     if (road.length === 0) continue;
-    const edges = portsOf(road).filter(p => p !== Position.Center);
+    const edges = roadPortsOf(road).filter(p => p !== Position.Center);
     for (const e of edges) {
       const n = neighborCoord(parseCoordId(id), e);
       if (!n) continue;
       const nid = getCoordinatesId(n);
       const nt = level[nid];
       if (!nt) continue; // off-grid: a valid map-edge road end
-      const back = portsOf(nt.road ?? []).includes(oppositePort(e));
+      const back = roadPortsOf(nt.road).includes(oppositePort(e));
       if (!back) {
         issues.push({
           type: "dangling-road",

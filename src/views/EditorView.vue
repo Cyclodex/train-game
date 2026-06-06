@@ -146,7 +146,7 @@
             </g>
             <!-- Road-delete handles: a ✕ on each road pair removes just it. -->
             <g
-              v-for="(road, i) in cell.tile.road ?? []"
+              v-for="(road, i) in roadEdges(cell.tile)"
               :key="'xr' + i"
               class="del del--road"
               @click.stop="deleteRoad(cell.key, road)"
@@ -633,6 +633,21 @@ class EditorView extends Vue {
   }
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
+  }
+  // Undirected road edges of a cell (one PortPair per a<->b edge the lanes
+  // touch), so the editor shows a single delete handle per road segment.
+  roadEdges(tile: Level[string]): PortPair[] {
+    const seen = new Set<string>();
+    const out: PortPair[] = [];
+    for (const lane of tile.road ?? []) {
+      for (const to of lane.to) {
+        const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push([lane.from, to]);
+      }
+    }
+    return out;
   }
   deleteRoad(id: string, road: PortPair) {
     this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));

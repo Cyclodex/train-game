@@ -1,5 +1,6 @@
 import { Coordinates, Position } from "@/types";
-import { Level, PortPair, isLevelCrossing, partnersOf } from "@/tiles/model";
+import { Level, isLevelCrossing } from "@/tiles/model";
+import { exitsFrom, isRoadJunction } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -7,6 +8,9 @@ import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
 import { buildConflictMatrix } from "./roadJunction";
 import { ActiveMovement, WaitingCar, fcfsWithPriorityArbiter, JunctionArbiter } from "./roadArbiter";
+
+// Re-export so existing importers of isRoadJunction from "@/sim/road" keep working.
+export { isRoadJunction } from "@/tiles/lanes";
 
 // --- Vehicle kinds -----------------------------------------------------------
 // A vehicle is described as data: a list of rendered body segments plus a
@@ -95,10 +99,10 @@ export interface RoadTraversal {
 function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port | null {
   const tile = level[getCoordinatesId(coord)];
   if (!tile || !tile.road || tile.road.length === 0) return null;
-  const partners = partnersOf(tile.road, entryPort);
-  if (partners.length === 0) return null;
-  // Single partner (straight/curve) — or pick the first for a road junction.
-  return partners[0];
+  const exits = exitsFrom(tile.road, entryPort);
+  if (exits.length === 0) return null;
+  // Single exit (straight/curve/one-way) — or pick the first for a junction.
+  return exits[0];
 }
 
 export function roadTraverse(
@@ -116,7 +120,7 @@ export function roadTraverse(
   if (!nextTile || !nextTile.road || nextTile.road.length === 0)
     return { exitPort, next: null }; // road runs off the map / dead-ends
   // The next tile must actually carry road back to us, else it's not connected.
-  if (partnersOf(nextTile.road, oppositePort(exitPort)).length === 0)
+  if (exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0)
     return { exitPort, next: null };
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
@@ -148,12 +152,12 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
     for (const port of EDGES) {
       // `port` is a road port of this tile and points off the grid (no in-grid
       // road neighbour continuing the road there) -> a spawn entry.
-      if (partnersOf(tile.road, port).length === 0) continue;
+      if (exitsFrom(tile.road, port).length === 0) continue;
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
       const neighRoad =
-        !offGrid && neigh?.road && partnersOf(neigh.road, oppositePort(port)).length > 0;
+        !offGrid && neigh?.road && exitsFrom(neigh.road, oppositePort(port)).length > 0;
       if (offGrid || !neighRoad) {
         out.push({ coord, entryPort: port });
       }
@@ -327,20 +331,6 @@ const STOP_EPS = 1e-3;
 // from entering it. Cars are few, so the extra points are cheap.
 const BODY_SAMPLE_STEP = 0.25;
 
-// A road junction tile: two roads cross (or meet) here, so more than the two
-// ports of a plain straight/curve are paved. Cars must claim such a tile
-// exclusively — never roll into one another car already occupies — or two
-// perpendicular streams gridlock in the middle of the intersection.
-export function isRoadJunction(road: PortPair[] | undefined): boolean {
-  if (!road || road.length < 2) return false;
-  const ports = new Set<Port>();
-  for (const [a, b] of road) {
-    ports.add(a);
-    ports.add(b);
-  }
-  return ports.size > 2;
-}
-
 export function createRoadSim(config: RoadSimConfig): RoadSim {
   const { level, width, height } = config;
   const rng = makeRng(config.seed ?? 1);
@@ -495,7 +485,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     let lead = 1 - car.headProgress; // head -> the next tile's entry edge
     while (lead <= CAR_LOOKAHEAD) {
       const tile = level[getCoordinatesId(coord)];
-      const exits = tile?.road ? partnersOf(tile.road, entry) : [];
+      const exits = exitsFrom(tile?.road, entry);
       if (exits.length === 0) break;
       // At a junction use the route plan's prescribed exit; fall back to the
       // first exit for plain straights/curves (they have exactly one anyway).
@@ -508,7 +498,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        partnersOf(nextTile.road, oppositePort(exitPort)).length === 0
+        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
       )
         break;
       const id = getCoordinatesId(nextCoord);
@@ -700,7 +690,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        partnersOf(nextTile.road, oppositePort(exitPort)).length === 0
+        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
       )
         return false;
       // Backstop: clearAhead caps movement at a closed crossing's entry, which

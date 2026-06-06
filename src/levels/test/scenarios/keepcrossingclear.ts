@@ -1,9 +1,10 @@
 import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 const { Left, Right, Top, Bottom } = Position;
-const road = { connections: [], road: [[Left, Right]] as [Position, Position][] };
+const road = { connections: [], road: fromPairs([[Left, Right]]) };
 
 // "Don't block the level crossing": a car won't roll onto the rails if the road
 // just past the crossing is jammed and it would be left stranded on the tracks.
@@ -26,12 +27,12 @@ export const keepcrossingclear: TestScenario = {
   level: {
     // Rail A — a static depot-to-depot line crossing the road at (1,1).
     "1,0": expandKind("depot", 2), // opens south
-    "1,1": { ...expandKind("straight", 0), road: [[Left, Right]] }, // crossing A
+    "1,1": { ...expandKind("straight", 0), road: fromPairs([[Left, Right]]) }, // crossing A
     "1,2": expandKind("depot", 0), // opens north
     // Rail B — the bouncing train's line, crossing the road at (3,1).
     // Extended 3 tiles south so loco+1 wagon clear the crossing while parked.
     "3,0": expandKind("depot", 2), // opens south
-    "3,1": { ...expandKind("straight", 0), road: [[Left, Right]] }, // crossing B
+    "3,1": { ...expandKind("straight", 0), road: fromPairs([[Left, Right]]) }, // crossing B
     "3,2": expandKind("straight", 0), // straight below crossing
     "3,3": expandKind("straight", 0), // straight, extra clearance
     "3,4": expandKind("depot", 0), // opens north

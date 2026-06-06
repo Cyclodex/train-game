@@ -8,6 +8,7 @@ import {
   partnersOf,
   defaultArmFor,
 } from "@/tiles/model";
+import type { Lane } from "@/tiles/lanes";
 
 // Pure, immutable single-cell editing operations used by the level editor. Each
 // returns a new TileCell so Vue's reactive Level can swap the entry in place.
@@ -114,28 +115,47 @@ export function cycleDefaultArm(cell: TileCell, entry: Port): TileCell {
 // `connections`, on a separate layer. A cell may carry road without rail (a plain
 // road tile) or both (a level crossing).
 
-// Add the road pair if absent, remove it if already present (order-independent).
-export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
-  const pair: PortPair = [a, b];
-  const road = cell.road ?? [];
-  const exists = road.some(c => samePair(c, pair));
-  const next = exists
-    ? road.filter(c => !samePair(c, pair))
-    : [...road, pair];
-  return { ...cell, road: next };
+// Add or remove a single directed movement (from -> to) on the cell's lanes,
+// keeping one index-0 lane per approach.
+function upsertMovement(road: Lane[], from: Port, to: Port): Lane[] {
+  const lane = road.find(l => l.from === from && l.index === 0);
+  if (lane) {
+    if (lane.to.includes(to)) return road;
+    return road.map(l => (l === lane ? { ...l, to: [...l.to, to] } : l));
+  }
+  return [...road, { from, to: [to], index: 0 }];
 }
 
-// Ensure a road pair is present without ever removing one (idempotent) — used
-// when dragging a road so re-crossing a tile forms a road junction.
-export function addRoad(cell: TileCell, a: Port, b: Port): TileCell {
-  const pair: PortPair = [a, b];
+function dropMovement(road: Lane[], from: Port, to: Port): Lane[] {
+  return road
+    .map(l => (l.from === from ? { ...l, to: l.to.filter(t => t !== to) } : l))
+    .filter(l => l.to.length > 0);
+}
+
+// True when both directions of the undirected edge a<->b are present.
+function hasEdge(road: Lane[], a: Port, b: Port): boolean {
+  const ab = road.some(l => l.from === a && l.to.includes(b));
+  const ba = road.some(l => l.from === b && l.to.includes(a));
+  return ab && ba;
+}
+
+// Toggle a two-way road edge: add both directions if absent, drop both if present.
+export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
   const road = cell.road ?? [];
-  if (road.some(c => samePair(c, pair))) return cell;
-  return { ...cell, road: [...road, pair] };
+  if (hasEdge(road, a, b)) {
+    return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
+  }
+  return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
+}
+
+// Ensure a two-way road edge is present without ever removing one (idempotent) —
+// used when dragging a road so re-crossing a tile forms a road junction.
+export function addRoad(cell: TileCell, a: Port, b: Port): TileCell {
+  const road = cell.road ?? [];
+  return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
 }
 
 export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
-  const pair: PortPair = [a, b];
   const road = cell.road ?? [];
-  return { ...cell, road: road.filter(c => !samePair(c, pair)) };
+  return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
 }

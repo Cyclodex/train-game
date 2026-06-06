@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
+import { fromPairs } from "@/tiles/lanes";
 import { planRoute, RouteTurn } from "@/sim/roadRouter";
 import { roadEntries } from "@/sim/road";
 import { makeRng } from "@/utils/globalHelpers";
@@ -12,11 +13,11 @@ import { makeRng } from "@/utils/globalHelpers";
 function straight5(): Level {
   const road: [Position, Position] = [Position.Left, Position.Right];
   return {
-    "0,0": { connections: [], road: [road] },
-    "1,0": { connections: [], road: [road] },
-    "2,0": { connections: [], road: [road] },
-    "3,0": { connections: [], road: [road] },
-    "4,0": { connections: [], road: [road] },
+    "0,0": { connections: [], road: fromPairs([road]) },
+    "1,0": { connections: [], road: fromPairs([road]) },
+    "2,0": { connections: [], road: fromPairs([road]) },
+    "3,0": { connections: [], road: fromPairs([road]) },
+    "4,0": { connections: [], road: fromPairs([road]) },
   };
 }
 
@@ -37,17 +38,17 @@ function cross5(): Level {
   const RB: [Position, Position] = [Position.Right, Position.Bottom];
   return {
     // Horizontal arm (non-junction)
-    "0,2": { connections: [], road: [h] },
-    "1,2": { connections: [], road: [h] },
-    "3,2": { connections: [], road: [h] },
-    "4,2": { connections: [], road: [h] },
+    "0,2": { connections: [], road: fromPairs([h]) },
+    "1,2": { connections: [], road: fromPairs([h]) },
+    "3,2": { connections: [], road: fromPairs([h]) },
+    "4,2": { connections: [], road: fromPairs([h]) },
     // Vertical arm (non-junction)
-    "2,0": { connections: [], road: [v] },
-    "2,1": { connections: [], road: [v] },
-    "2,3": { connections: [], road: [v] },
-    "2,4": { connections: [], road: [v] },
+    "2,0": { connections: [], road: fromPairs([v]) },
+    "2,1": { connections: [], road: fromPairs([v]) },
+    "2,3": { connections: [], road: fromPairs([v]) },
+    "2,4": { connections: [], road: fromPairs([v]) },
     // The full 4-way junction tile: all 6 inter-arm pairs
-    "2,2": { connections: [], road: [h, v, LT, LB, RT, RB] },
+    "2,2": { connections: [], road: fromPairs([h, v, LT, LB, RT, RB]) },
   };
 }
 

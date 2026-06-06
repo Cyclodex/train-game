@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // T-junction where a horizontal main road (roadPriority: 1) meets a vertical
 // side road (roadPriority: 0) from the south. Side-road cars yield to
@@ -15,7 +16,7 @@ import { TestScenario } from "@/levels/test/scenario";
 // roads so the yield behaviour is visible under load.
 const road = (priority: number, ...ports: [Position, Position][]) => ({
   connections: [] as [Position, Position][],
-  road: ports,
+  road: fromPairs(ports),
   roadPriority: priority,
 });
 

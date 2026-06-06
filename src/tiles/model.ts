@@ -1,5 +1,6 @@
 import { Position, Coordinates, ActiveIntersection } from "@/types";
 import { oppositePort } from "@/sim/topology";
+import type { Lane } from "./lanes";
 
 export type Port = Position;
 export type PortPair = [Port, Port];
@@ -26,7 +27,7 @@ export interface TileCell {
   // crossing). Cars traverse `road`; trains traverse `connections`; the two only
   // interact at a crossing via the gate (derived from rail reservation). See
   // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
-  road?: PortPair[];
+  road?: Lane[];
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
   // Authored starting switch arm per junction entry port (keyed by Port). Absent

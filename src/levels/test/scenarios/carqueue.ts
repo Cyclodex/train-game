@@ -1,6 +1,7 @@
 import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Car-following / queue spacing at a level crossing (Bahnübergang).
 //
@@ -23,17 +24,17 @@ export const carqueue: TestScenario = {
     "3,2": expandKind("straight", 0),
     "3,3": {
       ...expandKind("straight", 0), // vertical rail …
-      road: [[Position.Left, Position.Right]], // … crossing the horizontal road
+      road: fromPairs([[Position.Left, Position.Right]]), // … crossing the horizontal road
     },
     "3,4": expandKind("straight", 0),
     "3,5": expandKind("depot", 0), // opens north
     // Horizontal road approaching the crossing from the left and leaving right.
-    "0,3": { connections: [], road: [[Position.Left, Position.Right]] },
-    "1,3": { connections: [], road: [[Position.Left, Position.Right]] },
-    "2,3": { connections: [], road: [[Position.Left, Position.Right]] },
-    "4,3": { connections: [], road: [[Position.Left, Position.Right]] },
-    "5,3": { connections: [], road: [[Position.Left, Position.Right]] },
-    "6,3": { connections: [], road: [[Position.Left, Position.Right]] },
+    "0,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    "1,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    "2,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    "4,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    "5,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    "6,3": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
   },
   trains: {
     train1: mkTrain("train1", 3, 0, "people", 3, "3,5"),

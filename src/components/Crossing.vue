@@ -42,7 +42,8 @@
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { Position } from "@/types";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
-import { TileCell, parseCoordId, pairHas } from "@/tiles/model";
+import { TileCell, parseCoordId } from "@/tiles/model";
+import { roadPortsOf } from "@/tiles/lanes";
 import type { Game } from "@/game";
 
 // The crossing furniture is a pure view over the tile's gate state — no movement
@@ -73,8 +74,8 @@ class Crossing extends Vue {
   // The road runs Top<->Bottom by default; if it runs Left<->Right we draw the
   // same vertical layout and rotate the whole overlay a quarter turn.
   get horizontalRoad(): boolean {
-    const road = this.cell.road ?? [];
-    return road.some(p => pairHas(p, Position.Left) && pairHas(p, Position.Right));
+    const ports = roadPortsOf(this.cell.road);
+    return ports.includes(Position.Left) && ports.includes(Position.Right);
   }
 
   get rotStyle() {
