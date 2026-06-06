@@ -166,6 +166,12 @@ export interface RoadSim {
   cars(): { id: string; tileId: string; headIndex: number; headProgress: number }[];
   // Each live car sampled as a front/rear chord for the renderer.
   sample(): CarChord[];
+  // Road-junction tiles a car body currently occupies, keyed by tile id → car id.
+  // There is no stored reservation for cars (unlike trains): occupancy is derived
+  // live from car positions. The junction interlock keeps this at most one car per
+  // junction tile, so the map is effectively tileId → the car that owns it now.
+  // Exposed purely so the renderer can highlight a held junction in debug mode.
+  junctionOccupancy(): Record<string, string>;
 }
 
 const DEFAULT_SPAWN_INTERVAL = 2.5;
@@ -497,6 +503,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         front: sampleAtArc(c, 0),
         rear: sampleAtArc(c, c.length),
       }));
+    },
+    junctionOccupancy() {
+      const out: Record<string, string> = {};
+      for (const c of cars) {
+        for (const tileId of bodyTileIds(c)) {
+          if (isRoadJunction(level[tileId]?.road)) out[tileId] = c.id;
+        }
+      }
+      return out;
     },
   };
 }

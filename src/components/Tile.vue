@@ -116,6 +116,12 @@
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
+    <!-- Car-junction hold (debug): the road junction is currently owned by a car;
+         perpendicular cars wait clear of it until the owner leaves. -->
+    <div v-if="carJunctionOwner" class="car-junction-hold">
+      <span class="car-junction-label">{{ carJunctionOwner }}</span>
+    </div>
+
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
       <div class="debug-kind">{{ kind }}</div>
@@ -271,6 +277,16 @@ class Tile extends Vue {
     const owner = this.game.reservations[this.coordId];
     if (!owner) return {};
     return { backgroundColor: this.game.trainColors[owner] ?? "yellow" };
+  }
+
+  // --- car junction overlay (debug) ---
+  // The id of the car currently holding this road junction, if any. Cars have no
+  // stored reservation (unlike trains): this is derived live from car positions
+  // by the road sim. Shown only in debug to make the otherwise-invisible "one car
+  // owns the junction at a time" interlock visible on the tile.
+  get carJunctionOwner(): string | undefined {
+    if (!this.config.debug) return undefined;
+    return this.game.carJunctions?.[this.coordId];
   }
 }
 
@@ -440,5 +456,39 @@ $signal-offset: 20px;
   top: 0;
   right: 0;
   color: #1b3a1b;
+}
+
+/* Car-junction hold (debug overlay): an amber wash + dashed ring on a road
+   junction a car currently owns. Sits above the road surface but below the cars
+   (z6) so the owning car still reads on top of its own highlight. */
+.car-junction-hold {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: rgba(255, 176, 32, 0.28);
+  border: 3px dashed rgba(255, 176, 32, 0.95);
+  box-sizing: border-box;
+  animation: car-junction-pulse 0.9s ease-in-out infinite;
+}
+.car-junction-label {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5a3a00;
+  background: rgba(255, 176, 32, 0.95);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+@keyframes car-junction-pulse {
+  0%,
+  100% {
+    background: rgba(255, 176, 32, 0.18);
+  }
+  50% {
+    background: rgba(255, 176, 32, 0.38);
+  }
 }
 </style>

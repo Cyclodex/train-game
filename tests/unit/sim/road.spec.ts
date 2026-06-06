@@ -289,6 +289,37 @@ describe("createRoadSim — road junction interlock", () => {
     expect(eastboundPassed).toBe(true);
     expect(northboundPassed).toBe(true);
   });
+
+  it("reports the junction tile a car holds (and only while one occupies it)", () => {
+    const sim = createRoadSim({
+      level: roadcross.level,
+      width: roadcross.size!.cols,
+      height: roadcross.size!.rows,
+      seed: 4,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
+      ],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+    });
+
+    let everHeld = false;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const held = sim.junctionOccupancy();
+      const ids = Object.keys(held);
+      // Only the actual crossing tile (2,2) is ever reported, never an approach.
+      for (const id of ids) expect(id).toBe("2,2");
+      // It is held by a real, currently-live car.
+      const liveIds = new Set(sim.cars().map(c => c.id));
+      for (const id of ids) expect(liveIds.has(held[id])).toBe(true);
+      if (ids.length > 0) everHeld = true;
+    }
+    expect(everHeld).toBe(true); // cars do pass through, so it gets held
+  });
 });
 
 describe("createRoadSim — launch reaction delay", () => {

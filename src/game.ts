@@ -98,6 +98,9 @@ export interface Game {
   occupied: Record<string, string>;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
+  // Road-junction tile -> car id currently holding it (debug overlay). Derived
+  // live from car positions each frame; cars carry no stored reservation.
+  carJunctions: Record<string, string>;
   // Newest-last activity log of decision-level simulation events (reservations,
   // holds, deliveries) for the debug panel. Capped to the most recent entries.
   eventLog: GameLogEntry[];
@@ -221,6 +224,10 @@ export function createGame(
     maxCars: 8,
   });
   const roadCars = reactive([]) as RoadCar[];
+  // Road-junction tiles a car currently holds (tileId → car id), refreshed each
+  // frame from the road sim. Cars have no stored reservation like trains, so this
+  // is derived live; the renderer reads it to highlight a held junction in debug.
+  const carJunctions = reactive({}) as Record<string, string>;
 
   const unitIds: Record<string, string[]> = {};
   for (const def of trainDefs) unitIds[def.id] = [def.id, ...def.wagonIds];
@@ -374,6 +381,14 @@ export function createGame(
     for (let i = roadCars.length - 1; i >= 0; i--) {
       if (!seen.has(roadCars[i].id)) roadCars.splice(i, 1);
     }
+
+    // Refresh the live junction occupancy (in-place so Vue's reactive map only
+    // notifies on real changes): set currently-held junctions, drop stale ones.
+    const held = roadSim.junctionOccupancy();
+    for (const id of Object.keys(held)) carJunctions[id] = held[id];
+    for (const id of Object.keys(carJunctions)) {
+      if (!(id in held)) delete carJunctions[id];
+    }
   }
 
   // Activity log: newest-last, capped to the most recent MAX_LOG entries so it
@@ -426,6 +441,7 @@ export function createGame(
     reservations,
     occupied,
     roadCars,
+    carJunctions,
     eventLog,
     paused,
     speed,
