@@ -106,7 +106,10 @@ export default toNative(Train);
   &.train-locomotive {
     width: 100px;
     height: 26px;
-    z-index: 3;
+    // Layer order at a crossing: road (z1) < rails (z2) < wagons (z3) <
+    // locomotive (z4). Both train units sit above the track so the train is
+    // never hidden behind the rails it runs on.
+    z-index: 4;
 
     &.green {
       filter: grayscale(100%) brightness(40%) sepia(100%) hue-rotate(50deg)
@@ -132,7 +135,7 @@ export default toNative(Train);
     }
   }
   &.train-wagon {
-    z-index: 2;
+    z-index: 3; // above the rails (z2); see the locomotive note above
   }
   &.train-wagon--people {
     width: 100px;
