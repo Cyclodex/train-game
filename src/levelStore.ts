@@ -1,6 +1,8 @@
 import { TrainsDefinition, TrainStatus } from "@/types";
 import { Level, parseCoordId } from "@/tiles/model";
 import { TrainRoute } from "@/tiles/validate";
+import { fromPairs } from "@/tiles/lanes";
+import type { Lane } from "@/tiles/lanes";
 
 // A tiny cross-route hand-off + persistence for a player-built or generated
 // level. The editor writes here (and to localStorage); the play view reads it.
@@ -23,11 +25,27 @@ export function setCustomLevel(stored: StoredLevel): void {
   }
 }
 
+// Migrate a level's road tiles from the old PortPair[][] format to Lane[].
+// Old format: road = [[0, 1], [1, 0]] (array of 2-element number arrays)
+// New format: road = [{ from, to[], index }, ...]
+function migrateRoads(stored: StoredLevel): StoredLevel {
+  const migrated: Level = {};
+  for (const [id, tile] of Object.entries(stored.level)) {
+    const road = tile.road;
+    if (road && road.length > 0 && Array.isArray(road[0])) {
+      migrated[id] = { ...tile, road: fromPairs(road as unknown as [number, number][]) as Lane[] };
+    } else {
+      migrated[id] = tile;
+    }
+  }
+  return { ...stored, level: migrated };
+}
+
 export function takeCustomLevel(): StoredLevel | null {
   if (pending) return pending;
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return JSON.parse(raw) as StoredLevel;
+    if (raw) return migrateRoads(JSON.parse(raw) as StoredLevel);
   } catch {
     /* ignore */
   }
