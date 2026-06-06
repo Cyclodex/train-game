@@ -96,6 +96,15 @@ export default toNative(Crossing);
 .crossing {
   position: absolute;
   pointer-events: none;
+  /* Establish the overlay's own stacking context above the road surface, road
+  cars (z6), trains (z10) and tile signals (z14) so the crossing furniture is
+  always drawn on top. This must live on `.crossing` (not the inner booms),
+  otherwise the booms' z-index leaks into the level's stacking context only in
+  the unrotated orientation — when the road is horizontal `.crossing-rot`'s
+  `transform` creates a stacking context that would trap the furniture behind
+  the street and train. Anchoring the context here makes both orientations
+  identical. (Switches z20 / depot dots z1000 never share a crossing tile.) */
+  z-index: 15;
 }
 .crossing-rot {
   position: absolute;
