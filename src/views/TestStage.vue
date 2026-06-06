@@ -82,6 +82,7 @@ import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
+import { sandboxMode } from "@/modes/sandbox";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import Crossing from "@/components/Crossing.vue";
 
@@ -92,6 +93,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    spawnAtSec: t.spawnAtSec,
   }));
 }
 
@@ -112,9 +114,11 @@ class TestStage extends Vue {
       this.scenario.level,
       buildTrainDefs(this.scenario.trains),
       gameConfig.tileSize,
+      sandboxMode,
       gameConfig.colorSeed,
       this.scenario.colors,
-      this.scenario.traffic
+      this.scenario.traffic,
+      `test:${this.scenario.id}`
     )
   );
 

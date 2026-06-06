@@ -90,6 +90,34 @@ test.describe("Train game", () => {
     }
   });
 
+  test("puzzle mode: a start overlay leads to a win overlay when all trains arrive", async ({
+    page,
+  }) => {
+    test.setTimeout(60000);
+    // A small, deterministic puzzle board: one train drives straight to its
+    // matching depot and delivers itself (no switching needed).
+    await page.goto("/#/play?mode=puzzle&board=objectives");
+
+    // Puzzle mode gates play behind a start overlay.
+    const start = page.getByRole("button", { name: "Start" });
+    await expect(start).toBeVisible();
+    await start.click();
+
+    // Run fast and let the deterministic sim deliver the train.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__game.objective.phase), {
+        timeout: 45000,
+        intervals: [500],
+      })
+      .toBe("won");
+
+    await expect(page.getByText("You win!")).toBeVisible();
+  });
+
   test("signals are drawn and a manual hold turns a signal to Stop", async ({
     page,
   }) => {

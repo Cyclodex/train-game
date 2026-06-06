@@ -1,5 +1,9 @@
 <template>
-  <div id="app" :class="[`theme-${config.worldTheme}`, { debug: config.debug }]">
+  <div
+    id="app"
+    :class="[`theme-${config.worldTheme}`, { debug: config.debug }]"
+    :style="{ '--meadow-trees': meadowTrees }"
+  >
     <router-view />
   </div>
 </template>
@@ -7,10 +11,15 @@
 <script lang="ts">
 import { Component, Inject, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { meadowTreesUrl } from "@/utils/meadowBackdrop";
 
 @Component
 class App extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
+
+  // Generated once: the seamless scattered-tree tile for the meadow theme,
+  // exposed as a CSS custom property the `.theme-meadow` backdrop consumes.
+  readonly meadowTrees = meadowTreesUrl();
 }
 
 export default toNative(App);

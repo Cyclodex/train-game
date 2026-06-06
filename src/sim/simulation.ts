@@ -193,6 +193,12 @@ export interface Simulation {
   // The loco (index 0) and each wagon sampled as front/rear coupler points along
   // the recent path, for the renderer to draw each car as a chord.
   sampleTrain(id: string): UnitChord[];
+  // Inject a new train mid-run. Builds the same SimTrain structure the init
+  // path builds, so the train departs its depot exactly like one present at t=0.
+  // Deterministic and side-effect-free for existing trains: it touches no
+  // reservations/occupancy (the new train claims its block on its first
+  // crossing, like any other). Throws if a train with that id already exists.
+  addTrain(init: TrainInit): void;
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -238,8 +244,12 @@ export function createSimulation(config: SimConfig): Simulation {
     return !!tile && tile.role === "depot";
   }
 
-  const trains: Record<string, SimTrain> = {};
-  for (const init of config.trains) {
+  // Build the SimTrain for an init descriptor. The single source of truth for a
+  // train's runtime shape, used both at construction and by addTrain() so a
+  // mid-run injection is byte-for-byte the same as an init train (same segments,
+  // body, placement and starting state). Pure: it reads the level/switch state
+  // but mutates nothing, so it can't disturb existing trains.
+  function buildTrain(init: TrainInit): SimTrain {
     const exitPort = resolveExitPort(level, getSwitch, init.coord, init.entryPort);
     const unitLengths =
       init.unitLengths ??
@@ -255,7 +265,7 @@ export function createSimulation(config: SimConfig): Simulation {
     // train never brakes for something beyond where it could matter, and never
     // brakes spuriously on open track), plus a one-tile margin.
     const lookAhead = brake > 0 ? maxSpeed ** 2 / (2 * brake) + 1 : 1;
-    trains[init.id] = {
+    return {
       id: init.id,
       color: init.color,
       type: init.type,
@@ -274,6 +284,11 @@ export function createSimulation(config: SimConfig): Simulation {
       headIndex: 0,
       headProgress: 0,
     };
+  }
+
+  const trains: Record<string, SimTrain> = {};
+  for (const init of config.trains) {
+    trains[init.id] = buildTrain(init);
   }
 
   // The set of tile ids a train's body currently covers (head back to tail).
@@ -761,6 +776,12 @@ export function createSimulation(config: SimConfig): Simulation {
           rear: sampleAtArc(offset + half - inset),
         };
       });
+    },
+    addTrain(init: TrainInit) {
+      if (trains[init.id]) {
+        throw new Error(`addTrain: train "${init.id}" already exists`);
+      }
+      trains[init.id] = buildTrain(init);
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);

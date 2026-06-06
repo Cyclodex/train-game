@@ -10,9 +10,15 @@
           :value="current.id"
           @change="onSelect"
         >
-          <option v-for="s in scenarios" :key="s.id" :value="s.id">
-            {{ s.name }}
-          </option>
+          <optgroup
+            v-for="group in groups"
+            :key="group.id"
+            :label="group.label"
+          >
+            <option v-for="s in group.scenarios" :key="s.id" :value="s.id">
+              {{ s.name }}
+            </option>
+          </optgroup>
         </select>
         <p class="picker-desc">{{ current.description }}</p>
       </div>
@@ -24,7 +30,12 @@
 
 <script lang="ts">
 import { Component, Vue, toNative } from "vue-facing-decorator";
-import { SCENARIOS, scenarioById, TestScenario } from "@/levels/test";
+import {
+  SCENARIO_GROUPS,
+  ScenarioGroup,
+  scenarioById,
+  TestScenario,
+} from "@/levels/test";
 import TestStage from "@/views/TestStage.vue";
 
 // The feature test world: a picker over the scenario registry plus the stage that
@@ -32,7 +43,7 @@ import TestStage from "@/views/TestStage.vue";
 // route param so each map is deep-linkable (/test/signals).
 @Component({ components: { TestStage } })
 class TestView extends Vue {
-  scenarios = SCENARIOS;
+  groups: ScenarioGroup[] = SCENARIO_GROUPS;
 
   get current(): TestScenario {
     return scenarioById(this.$route.params.scenario as string | undefined);

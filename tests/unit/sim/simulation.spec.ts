@@ -1295,3 +1295,136 @@ describe("simulation momentum (acceleration / braking)", () => {
     );
   });
 });
+
+describe("simulation mid-run train injection (addTrain)", () => {
+  // A two-tile lane into a depot: a train at (0,0) leaving outward (Left entry)
+  // runs right and parks at the depot (2,0) when its colour matches.
+  function laneToDepot(): Level {
+    return {
+      "0,0": expandKind("depot", 1), // opens Right
+      "1,0": cell("TileStraight", 1),
+      "2,0": expandKind("depot", 3), // opens Left
+    };
+  }
+
+  it("injects a train at t>0 that departs its depot and is delivered", () => {
+    const sim = createSimulation({
+      level: laneToDepot(),
+      trains: [],
+      depotColors: { "2,0": "green" },
+    });
+    // No trains yet: stepping does nothing.
+    sim.step(0.5);
+    expect(Object.keys(sim.trains)).toHaveLength(0);
+
+    const events1 = sim.step(0.5);
+    expect(events1).toEqual([]);
+
+    // Inject mid-run, leaving the depot outward (Center entry), colour-matched
+    // to the destination depot.
+    sim.addTrain({
+      id: "late",
+      coord: { x: 0, y: 0 },
+      entryPort: Position.Center,
+      color: "green",
+      type: "people",
+      wagonCount: 0,
+      speed: 1,
+    });
+    expect(sim.trainTileId("late")).toBe("0,0");
+
+    // Drive it to the matching depot; it should depart and end up parked.
+    let arrived = false;
+    for (let i = 0; i < 60; i++) {
+      for (const e of sim.step(0.25)) {
+        if (e.type === "arrived" && e.trainId === "late") arrived = true;
+      }
+      if (sim.trainState("late") === "parked") break;
+    }
+    expect(arrived).toBe(true);
+    expect(sim.trainState("late")).toBe("parked");
+    expect(sim.trainTileId("late")).toBe("2,0");
+  });
+
+  it("leaves an already-running train undisturbed when another is injected", () => {
+    const sim = createSimulation({
+      level: corridor(8),
+      trains: [
+        {
+          id: "early",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+          speed: 1,
+        },
+      ],
+    });
+    for (let i = 0; i < 4; i++) sim.step(0.5);
+    const tileBefore = sim.trainTileId("early");
+    const progBefore = sim.trainProgress("early");
+
+    // Inject a second train far down the corridor; the running one must not jump.
+    sim.addTrain({
+      id: "added",
+      coord: { x: 6, y: 0 },
+      entryPort: Position.Left,
+      color: "blue",
+      type: "people",
+      wagonCount: 0,
+      speed: 1,
+    });
+    expect(sim.trainTileId("early")).toBe(tileBefore);
+    expect(sim.trainProgress("early")).toBe(progBefore);
+  });
+
+  it("throws when injecting a duplicate id", () => {
+    const sim = createSimulation({
+      level: corridor(4),
+      trains: [
+        {
+          id: "t1",
+          coord: { x: 0, y: 0 },
+          entryPort: Position.Left,
+          color: "red",
+          type: "people",
+          wagonCount: 0,
+        },
+      ],
+    });
+    expect(() =>
+      sim.addTrain({
+        id: "t1",
+        coord: { x: 0, y: 0 },
+        entryPort: Position.Left,
+        color: "red",
+        type: "people",
+        wagonCount: 0,
+      })
+    ).toThrow();
+  });
+
+  it("is deterministic: injecting the same train into two sims matches a sim built with it at init", () => {
+    const def = {
+      id: "x",
+      coord: { x: 0, y: 0 },
+      entryPort: Position.Left,
+      color: "red",
+      type: "people" as const,
+      wagonCount: 1,
+      speed: 1,
+    };
+    const viaInit = createSimulation({ level: corridor(8), trains: [def] });
+    const viaAdd = createSimulation({ level: corridor(8), trains: [] });
+    viaAdd.addTrain(def);
+    // Same drive on both → identical position/progress every step.
+    for (let i = 0; i < 12; i++) {
+      viaInit.step(0.3);
+      viaAdd.step(0.3);
+      expect(viaAdd.trainTileId("x")).toBe(viaInit.trainTileId("x"));
+      expect(viaAdd.trainProgress("x")).toBeCloseTo(viaInit.trainProgress("x"), 10);
+      expect(viaAdd.trainVelocity("x")).toBeCloseTo(viaInit.trainVelocity("x"), 10);
+    }
+  });
+});

@@ -6,7 +6,9 @@
 .tile {
   width: 100%;
   height: 100%;
-  background-color: rgb(104, 185, 104);
+  // Transparent so the themed world backdrop (meadow bushes / table felt) shows
+  // through between the rails instead of a flat green fill.
+  background-color: transparent;
 }
 
 .tile-status--unknown {

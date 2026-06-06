@@ -203,6 +203,16 @@ export interface Car {
   // starvation guard so a low-priority car on a busy main road eventually gets a
   // gap.
   waitSeconds: number;
+  // Seconds this car has spent held specifically by a CLOSED CROSSING ahead (not
+  // by a car queued in front of it, nor by an occupied junction). Accrues while
+  // the crossing is the binding constraint and the car can't roll; resets to 0
+  // once the car is moving freely again. The objective layer scores patience off
+  // this — the longest a single car waited for a train to clear the crossing.
+  waitedSec: number;
+  // True once any part of this car's body has been on a level-crossing tile, so
+  // the throughput counter (carsDelivered) only counts cars that actually used a
+  // crossing — not cars that drove a road with no rail on it.
+  crossedCrossing: boolean;
 }
 
 // A car sampled as its two anchor points along the recent path (front toward the
@@ -233,6 +243,22 @@ export interface CarChord {
 // caller (simulation.ts) from the existing rail reservation/occupancy — no new
 // interlocking lives here.
 export type CrossingClosed = (tileId: string) => boolean;
+
+// A per-tick snapshot of how well the roads are flowing through the crossings,
+// assembled from the live cars. Pure data the objective layer scores: the worst
+// current single-car wait (the live tension readout), the cumulative wait across
+// all cars (a smoothness aggregate), and how many crossing-using cars have made
+// it through and despawned. Deterministic — derived only from car state + dt.
+export interface RoadFrame {
+  // The longest a single live car has currently been held by a closed crossing
+  // (resets per car when it gets moving), in seconds.
+  maxCarWaitSec: number;
+  // Sum of every live car's current crossing-wait, in seconds — a snapshot, not a
+  // running integral, so it falls as cars are released.
+  carWaitTotalSec: number;
+  // Cars that used a level crossing and have since despawned at a map edge.
+  carsDelivered: number;
+}
 
 export interface RoadSimConfig {
   level: Level;
@@ -268,6 +294,8 @@ export interface RoadSimConfig {
 
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
+  // The crossing-flow snapshot for the objective layer (see RoadFrame).
+  frame(): RoadFrame;
   cars(): {
     id: string;
     tileId: string;
@@ -312,7 +340,10 @@ const DEFAULT_CAR_BRAKE = 1.2;
 // full tile of air between stopped cars. ~6px at tileSize 200. NB: the body
 // length must match the rendered sprite (see CAR_SPRITE_PX in game.ts) or this
 // gap sits on top of invisible extra body and looks far larger on screen.
-const CAR_GAP = 0.03;
+// NB: this is measured bumper-to-bumper along the centerline arc, so on a curve
+// the sprite corners pinch closer than the centerline gap — keep a touch of slack
+// so following cars don't visibly touch through a bend.
+const CAR_GAP = 0.06;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
@@ -363,6 +394,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;
+  // Cars that crossed ≥1 level crossing and then drove off the map. The road
+  // layer's throughput tally, surfaced via frame() for the objective layer.
+  let carsDelivered = 0;
 
   // Draw a vehicle kind from the per-level mix using the seeded RNG, so spawns
   // stay deterministic. Kinds with no/zero weight never appear; an empty mix
@@ -560,7 +594,17 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // nearest point of any other car's body that lies ahead on its route. Capped at
   // the look-ahead. Read-only. This replaces the old whole-tile occupancy gate so
   // cars pack bumper-to-bumper instead of stopping a full tile apart.
-  function clearAhead(car: Car, closed: CrossingClosed): number {
+  //
+  // `boundByCrossing` reports whether the nearest binding constraint is a CLOSED
+  // crossing ahead (as opposed to a car/junction ahead), so the caller can
+  // attribute a car's wait to the crossing specifically rather than to a queue.
+  // It is true only when a closed crossing is *the* limiting stop — a car stalled
+  // behind a queue that is itself stalled at the gate is bound by the car ahead,
+  // not the crossing, so its wait isn't charged to the crossing's patience score.
+  function clearAhead(
+    car: Car,
+    closed: CrossingClosed
+  ): { clear: number; boundByCrossing: boolean } {
     const route = forwardRoute(car);
     // Start unbounded and track the nearest real stop (gate / car / junction).
     // Keeping it unbounded (rather than capped at the look-ahead) lets the
@@ -568,12 +612,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // away" apart from "open road", which matters when a jam is one tile past a
     // crossing that sits at the edge of the look-ahead.
     let clear = Number.POSITIVE_INFINITY;
+    // The distance to the nearest closed crossing ahead, tracked separately so we
+    // can tell whether the crossing is what ultimately binds the car's movement.
+    let crossingClear = Number.POSITIVE_INFINITY;
     // Closed crossing ahead: stop at its entry edge (the car is already past the
     // entry of its own head tile, whose lead is negative, so it is never gated by
     // a crossing it is currently sitting on).
     for (const [tileId, { lead }] of route) {
-      if (lead >= 0 && closed(tileId)) clear = Math.min(clear, lead);
+      if (lead >= 0 && closed(tileId)) crossingClear = Math.min(crossingClear, lead);
     }
+    clear = Math.min(clear, crossingClear);
     // Junction arbiter: for each upcoming junction on the route, ask whether
     // this car may enter given the current conflict geometry and waiting cars.
     for (const [junctionId, { lead, entry: myEntry }] of route) {
@@ -662,11 +710,24 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         }
       }
     }
-    return Math.max(0, Math.min(clear, CAR_LOOKAHEAD));
+    const finalClear = Math.max(0, Math.min(clear, CAR_LOOKAHEAD));
+    // The car is bound by the crossing when the closed crossing is the nearest
+    // stop (its distance equals the overall clear, within epsilon) — i.e. nothing
+    // closer (a car, a junction) is what's holding it.
+    const boundByCrossing =
+      Number.isFinite(crossingClear) &&
+      crossingClear <= clear + STOP_EPS &&
+      finalClear <= STOP_EPS;
+    return { clear: finalClear, boundByCrossing };
   }
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
-    const clear = clearAhead(car, closed);
+    const { clear, boundByCrossing } = clearAhead(car, closed);
+    // Patience bookkeeping: a car stopped specifically by a closed crossing ahead
+    // accrues wait time; any other state (moving, or stopped behind a car/junction)
+    // resets it. This is the deterministic measure the objective layer scores.
+    if (clear <= STOP_EPS && boundByCrossing) car.waitedSec += dt;
+    else car.waitedSec = 0;
     let move: number;
     if (clear <= STOP_EPS) {
       // Fully stopped (queue / closed gate / occupied junction ahead): hold, and
@@ -724,6 +785,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.headIndex += 1;
       car.headProgress -= 1;
     }
+    // Flag the car as a crossing-user the moment its head sits on a level-crossing
+    // tile, so throughput (carsDelivered) counts only cars that actually traversed
+    // a crossing — set once and sticky for the car's life.
+    if (!car.crossedCrossing) {
+      const cell = level[tileIdOf(car)];
+      if (cell && isLevelCrossing(cell)) car.crossedCrossing = true;
+    }
     return true;
   }
 
@@ -755,8 +823,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       routePlan: [],
       routeStep: 0,
       waitSeconds: 0,
+      waitedSec: 0,
+      crossedCrossing: false,
     };
-    if (clearAhead(probe, closed) <= STOP_EPS) return;
+    if (clearAhead(probe, closed).clear <= STOP_EPS) return;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
@@ -792,6 +862,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       routePlan,
       routeStep: 0,
       waitSeconds: 0,
+      waitedSec: 0,
+      crossedCrossing: false,
     });
   }
 
@@ -839,11 +911,24 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         spawnClock -= spawnInterval;
         trySpawn(closed);
       }
-      // Advance cars in a stable order; despawn any that drove off the map.
+      // Advance cars in a stable order; despawn any that drove off the map. A
+      // despawning car that used a crossing en route counts toward throughput.
       for (let i = cars.length - 1; i >= 0; i--) {
         const alive = advance(cars[i], dt, closed);
-        if (!alive) cars.splice(i, 1);
+        if (!alive) {
+          if (cars[i].crossedCrossing) carsDelivered += 1;
+          cars.splice(i, 1);
+        }
       }
+    },
+    frame(): RoadFrame {
+      let maxCarWaitSec = 0;
+      let carWaitTotalSec = 0;
+      for (const c of cars) {
+        if (c.waitedSec > maxCarWaitSec) maxCarWaitSec = c.waitedSec;
+        carWaitTotalSec += c.waitedSec;
+      }
+      return { maxCarWaitSec, carWaitTotalSec, carsDelivered };
     },
     cars() {
       return cars.map(c => ({
