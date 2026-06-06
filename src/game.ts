@@ -65,7 +65,13 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // Rendered width of a road car in px — must match the `.road-car` CSS width in
 // PlayView/TestStage. The road sim's car body length is set from this so the
 // simulated body matches the visible sprite (keeps queues packing tight).
-const CAR_SPRITE_PX = 46;
+const CAR_SPRITE_PX = 38;
+
+// How far (px at the default 200px tile) to push a car off the road centreline
+// toward its right-hand side, so cars drive in the right lane instead of straddling
+// the dashed centre. The paved ribbon is ~0.28·tile wide (see `.road-surface`),
+// so ~0.07·tile centres the car in the right half. Scaled by the actual tileSize.
+const LANE_OFFSET_FRAC = 0.07;
 
 // A road-traffic car sampled to a world position for rendering.
 export interface RoadCar {
@@ -241,8 +247,11 @@ export function createGame(
     return p;
   }
 
-  // World point + path tangent for a single sampled coupler point.
-  function sampleWorld(s: SampledUnit) {
+  // World point + path tangent for a single sampled coupler point. `offsetRight`
+  // (px) shifts the point perpendicular to its direction of travel, toward the
+  // right-hand side — used so road cars drive in the right lane rather than on the
+  // centreline. Trains pass 0 and stay on the rail centreline.
+  function sampleWorld(s: SampledUnit, offsetRight = 0) {
     const exit = s.exitPort ?? s.entryPort;
     const path = pathFor(segmentPathD(s.entryPort, exit, tileSize));
     const len = path.getTotalLength();
@@ -260,9 +269,18 @@ export function createGame(
       dx = at.x - behind.x;
       dy = at.y - behind.y;
     }
+    let px = at.x;
+    let py = at.y;
+    if (offsetRight) {
+      // Right-of-travel unit vector. In screen space (y down) the right hand of a
+      // heading (dx,dy) is (-dy, dx): east→south, north→east, etc.
+      const mag = Math.hypot(dx, dy) || 1;
+      px += (-dy / mag) * offsetRight;
+      py += (dx / mag) * offsetRight;
+    }
     return {
-      x: s.coord.x * tileSize + at.x,
-      y: s.coord.y * tileSize + at.y,
+      x: s.coord.x * tileSize + px,
+      y: s.coord.y * tileSize + py,
       tangent: (Math.atan2(dy, dx) * 180) / Math.PI,
     };
   }
@@ -272,9 +290,9 @@ export function createGame(
   // on curves (the body leans into the curve) instead of overlapping. When the
   // chord collapses (a unit bunched at a depot exit before the train extends),
   // fall back to the front point's tangent to avoid an atan2(0,0) flip.
-  function positionUnit(body: UnitChord) {
-    const f = sampleWorld(body.front);
-    const r = sampleWorld(body.rear);
+  function positionUnit(body: UnitChord, offsetRight = 0) {
+    const f = sampleWorld(body.front, offsetRight);
+    const r = sampleWorld(body.rear, offsetRight);
     const dx = f.x - r.x;
     const dy = f.y - r.y;
     const chord = Math.hypot(dx, dy);
@@ -340,9 +358,10 @@ export function createGame(
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
+    const laneOffset = tileSize * LANE_OFFSET_FRAC;
     for (const s of samples) {
       seen.add(s.id);
-      const { x, y, angle } = positionUnit(s as unknown as UnitChord);
+      const { x, y, angle } = positionUnit(s as unknown as UnitChord, laneOffset);
       const existing = roadCars.find(c => c.id === s.id);
       if (existing) {
         existing.x = x;

@@ -324,9 +324,9 @@ export default toNative(PlayView);
   z-index: 6; // above the road surface and trains; booms (crossing) sit above
   top: 0;
   left: 0;
-  width: 46px;
-  height: 24px;
-  border-radius: 5px;
+  width: 38px;
+  height: 20px;
+  border-radius: 4px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   will-change: transform;
   overflow: hidden;
