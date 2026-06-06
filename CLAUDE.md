@@ -177,6 +177,39 @@ travel.
   migrating to `@use` is a tidy follow-up.
 - `/dist`, `/node_modules`, and test artifacts are gitignored.
 
+## Feature test world (REQUIRED for every feature)
+
+There is a feature test harness at the `/test` route: a registry of tiny,
+isolated maps — **one per game mechanic** — with a picker, deep-linkable at
+`/test/:id`. It's both the manual-QA gallery and a debugging aid: a feature in
+isolation on a 3-tile map is far easier to reason about than the same feature
+buried in `DEFAULT_LEVEL`.
+
+**Project rule: every feature you build must ship with its own test-world
+scenario.** Adding (or meaningfully changing) a mechanic without a scenario that
+demonstrates it in isolation is incomplete work. When debugging a feature, reach
+for its scenario first.
+
+- `src/levels/test/scenario.ts` — the `TestScenario` type + `mkTrain`,
+  `scenarioGrid`, `scenarioRoutes` helpers.
+- `src/levels/test/scenarios/*.ts` — one file per feature (straight, curve,
+  depot, signals, junction, cross, crossing, …).
+- `src/levels/test/index.ts` — the `SCENARIOS` registry (picker order).
+- `src/views/TestView.vue` (picker) + `src/views/TestStage.vue` (keyed per
+  scenario; creates/provides a fresh `markRaw` game and sizes the grid to the
+  map). `createGame`'s optional 5th arg `colors?: ColorAssignment` pins
+  depot/train colours when a scenario needs a determined outcome (e.g. a
+  depot-mismatch bounce).
+
+**To add a feature's scenario:** keep it as small as the mechanic allows (a
+single lane for simple features; a 2D pocket with two trains for contention
+features like signals/crossing, which only *mean* something when trains compete).
+Add one `scenarios/<feature>.ts` and one line in `index.ts`. The unit test
+`tests/unit/levels/testScenarios.spec.ts` iterates the registry and validates
+every map (connectivity, route reachability, trains-in-depots, grid fit), so a
+broken scenario fails CI. Design notes:
+`docs/superpowers/specs/2026-06-06-feature-test-world-design.md`.
+
 ## Ideas for improvement (project goal: iterate on the game)
 
 See `IMPROVEMENTS.md` for the prioritised backlog.
@@ -188,4 +221,6 @@ See `IMPROVEMENTS.md` for the prioritised backlog.
 boots a real browser and asserts the level renders 40 tiles + 2 trains, the
 trains physically leave their depots, and there are no console errors. For visual
 work, `npm run dev` and open http://localhost:5173 (debug overlay is on by
-default).
+default). When you add a feature, verify it in its `/test/:id` scenario (see
+**Feature test world** above) — that is the required check that the mechanic
+works in isolation.
