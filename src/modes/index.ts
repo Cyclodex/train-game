@@ -18,7 +18,13 @@ export const MODES: GameMode[] = [
 export const DEFAULT_MODE_ID = puzzleMode.id;
 
 export function modeById(id: string | undefined | null): GameMode {
-  return MODES.find(m => m.id === id) ?? MODES[0];
+  // Fall back to the designated default mode (not merely the first picker entry),
+  // so picker order can change without altering what plain `/play` loads.
+  return (
+    MODES.find(m => m.id === id) ??
+    MODES.find(m => m.id === DEFAULT_MODE_ID) ??
+    MODES[0]
+  );
 }
 
 export type { GameMode } from "@/modes/types";
