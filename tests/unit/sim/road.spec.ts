@@ -662,6 +662,114 @@ describe("createRoadSim — variable preferred speed", () => {
   });
 });
 
+describe("createRoadSim — crossing patience (waitedSec / frame)", () => {
+  // A straight road across a crossing tile (rail Top-Bottom) so a closed gate
+  // holds the approaching car short of the rails.
+  function crossingRoad(): Level {
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    return {
+      "0,0": { connections: [], road: [road] },
+      "1,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
+      "2,0": { connections: [], road: [road] },
+    };
+  }
+
+  it("accrues wait only while gated by the closed crossing, and resets on release", () => {
+    let closed = true;
+    const sim = createRoadSim({
+      level: crossingRoad(),
+      width: 3,
+      height: 1,
+      seed: 5,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      maxCars: 1,
+    });
+    // Settle a car hard against the closed gate, then keep it waiting.
+    for (let i = 0; i < 100; i++) sim.step(0.1, id => id === "1,0" && closed);
+    const waitedAfterStop = sim.frame().maxCarWaitSec;
+    expect(waitedAfterStop).toBeGreaterThan(1); // it has been waiting a while
+    // The frame's worst wait equals the (single) car's wait.
+    expect(sim.frame().carWaitTotalSec).toBeCloseTo(waitedAfterStop, 6);
+
+    // Keep it closed a little longer: the wait keeps climbing.
+    for (let i = 0; i < 20; i++) sim.step(0.1, id => id === "1,0" && closed);
+    expect(sim.frame().maxCarWaitSec).toBeGreaterThan(waitedAfterStop);
+
+    // Open the gate and let the car roll: its wait resets toward 0 once moving.
+    closed = false;
+    for (let i = 0; i < 60; i++) sim.step(0.1, () => false);
+    expect(sim.frame().maxCarWaitSec).toBeLessThan(0.5);
+  });
+
+  it("does not charge a queued car's wait to the crossing (only the lead car waits on it)", () => {
+    // A longer approach so a queue forms behind the gate: the lead car is bound by
+    // the crossing; the followers are bound by the car ahead, so their wait is not
+    // attributed to the crossing.
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {
+      "0,0": { connections: [], road: [road] },
+      "1,0": { connections: [], road: [road] },
+      "2,0": { connections: [], road: [road] },
+      "3,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
+      "4,0": { connections: [], road: [road] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 1,
+      seed: 3,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.3,
+    });
+    for (let i = 0; i < 400; i++) sim.step(0.05, id => id === "3,0");
+    expect(sim.cars().length).toBeGreaterThan(1); // a real queue formed
+    // Total wait charged to the crossing is essentially one car's worth — the lead
+    // car at the gate — not the whole queue's. (The followers are bound by the car
+    // ahead.) So carWaitTotalSec ≈ maxCarWaitSec, not a multiple of it.
+    const f = sim.frame();
+    expect(f.maxCarWaitSec).toBeGreaterThan(1);
+    expect(f.carWaitTotalSec).toBeLessThan(f.maxCarWaitSec * 1.5);
+  });
+
+  it("counts only crossing-using cars toward carsDelivered", () => {
+    // Open crossing: cars stream across it and despawn at the right edge — each is
+    // a crossing-user, so throughput climbs.
+    const sim = createRoadSim({
+      level: crossingRoad(),
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+    });
+    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
+    expect(sim.frame().carsDelivered).toBeGreaterThan(0);
+  });
+
+  it("a road with no crossing never counts throughput", () => {
+    // A plain straight road (no rail anywhere): cars despawn at the edge but none
+    // used a crossing, so carsDelivered stays 0.
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+    });
+    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
+    expect(sim.frame().carsDelivered).toBe(0);
+  });
+});
+
 describe("vehicle kinds", () => {
   it("scales each kind's body length from the base car length", () => {
     const base = 0.2;
