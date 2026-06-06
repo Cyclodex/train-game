@@ -295,7 +295,7 @@ const BODY_SAMPLE_STEP = 0.25;
 // ports of a plain straight/curve are paved. Cars must claim such a tile
 // exclusively — never roll into one another car already occupies — or two
 // perpendicular streams gridlock in the middle of the intersection.
-function isRoadJunction(road: PortPair[] | undefined): boolean {
+export function isRoadJunction(road: PortPair[] | undefined): boolean {
   if (!road || road.length < 2) return false;
   const ports = new Set<Port>();
   for (const [a, b] of road) {
