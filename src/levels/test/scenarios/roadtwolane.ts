@@ -1,27 +1,22 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
-import { fromPairs } from "@/tiles/lanes";
+import { nWayLanes } from "@/tiles/lanes";
 
-// Two-lane (right-hand traffic): a single straight road open at both ends. Cars
-// spawn from both edges — some eastbound, some westbound — and pass each other on
-// opposite sides of the dashed centreline instead of freezing nose-to-nose.
-//
-// This is the isolated demonstration of the directional lane model: there is no
-// junction, so nothing but the lane separation keeps the two streams flowing.
-// Junction turn arbitration is covered by roadjunction / roadcross.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
-
+// Two-lane-per-direction road: each direction has 2 physical lanes.
+// Opposing streams use opposite sides of the centre divider; same-direction cars in
+// different lanes ride side-by-side without following each other.
+// This upgrades the old single-lane two-way demo to exercise the full Lane.index model.
 export const roadtwolane: TestScenario = {
   id: "roadtwolane",
-  name: "Two-lane road: opposing traffic",
+  name: "Two-lane road: 2 lanes per direction",
   description:
-    "A straight road open at both ends. Cars enter from both edges and pass each other in opposite lanes (right-hand traffic) instead of deadlocking head-on.",
+    "A 2-lane-per-direction straight road open at both ends. Cars spawn from both edges and ride their own lane; same-direction cars in different lanes flow independently without stacking.",
   level: {
-    "0,1": road([Position.Left, Position.Right]),
-    "1,1": road([Position.Left, Position.Right]),
-    "2,1": road([Position.Left, Position.Right]),
-    "3,1": road([Position.Left, Position.Right]),
-    "4,1": road([Position.Left, Position.Right]),
+    "0,1": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+    "1,1": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+    "2,1": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+    "3,1": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+    "4,1": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
   },
   trains: {},
   size: { cols: 5, rows: 3 },
