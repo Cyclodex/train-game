@@ -16,7 +16,6 @@
         :key="'rs' + i"
         :d="r.surface"
         class="road-surface"
-        :style="{ strokeWidth: r.strokeWidth + 'px' }"
       />
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
         <path
@@ -144,11 +143,17 @@ import {
   portsOf,
   armExit,
   isJunctionEntry,
+  parseCoordId,
 } from "@/tiles/model";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
-import { roadSurfacePath, roadLaneMarkingPaths, LaneMarkingPath } from "@/tiles/roadGeometry";
+import {
+  roadSurfacePolygonPath,
+  roadLaneMarkingPaths,
+  LaneMarkingPath,
+} from "@/tiles/roadGeometry";
 import { roadEdges, laneCount } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -156,6 +161,11 @@ const ARMS = [
   ActiveIntersection.Straight,
   ActiveIntersection.Right,
 ];
+
+// Physical width of one lane as a fraction of tile size. Must match the same
+// constant in game.ts so the painted road, the per-car lateral offset, and the
+// markings stay in agreement.
+const LANE_WIDTH_PX_FRAC = 0.14;
 
 @Component
 class Tile extends Vue {
@@ -188,19 +198,49 @@ class Tile extends Vue {
   }
 
   // Road surface + lane-marking paths, one per undirected edge the lanes touch
-  // (a two-way road is one ribbon, not two). At one lane per direction this
-  // renders identically to the old PortPair-based version.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; strokeWidth: number }[] {
+  // (a two-way road is one ribbon, not two). The surface is a filled trapezoid
+  // whose width tapers linearly from one end to the other so the road meets
+  // its neighbour flush at every seam. The painted width at each end of the
+  // edge = (this tile's total lanes, or the neighbour's total at the matching
+  // seam, whichever is greater) × lane width. The wider side wins at the
+  // seam, the narrower side tapers over the length of its tile. Off-map
+  // edges use the tile's own count (no neighbour to match). Lane markings
+  // are derived from this tile's per-direction lane counts: a lane that
+  // exists on both ends is a straight parallel; a lane that only exists on
+  // the wider end tapers to the narrow side's kerb.
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[] }[] {
     const size = this.config.tileSize;
-    const LANE_WIDTH_PX = size * 0.14; // 28px at 200px tile — matches game.ts LANE_WIDTH_FRAC
+    const LANE_W = size * LANE_WIDTH_PX_FRAC;
+    const coord = parseCoordId(this.coordId);
     return roadEdges(this.tile.road).map(([a, b]) => {
-      const lanesA = laneCount(this.tile.road, a);
-      const lanesB = laneCount(this.tile.road, b);
-      const totalLanes = Math.max(lanesA + lanesB, 2); // minimum 2 (1 per direction)
+      const selfA = laneCount(this.tile.road, a);
+      const selfB = laneCount(this.tile.road, b);
+      const selfTotal = (selfA || 0) + (selfB || 0);
+      // The neighbour on the `a` side of the seam: a car leaving through `a`
+      // enters the neighbour on its `oppositePort(a)` side. If that neighbour
+      // is off the map, neighbourCoord returns null and the matching seam
+      // uses this tile's own count (no neighbour to match).
+      const na = neighborCoord(coord, a);
+      const nb = neighborCoord(coord, b);
+      const neighborTotalAtA = na
+        ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
+        : 0;
+      const neighborTotalAtB = nb
+        ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
+        : 0;
+      const totalA = Math.max(selfTotal, neighborTotalAtA);
+      const totalB = Math.max(selfTotal, neighborTotalAtB);
+      const widthA = totalA * LANE_W;
+      const widthB = totalB * LANE_W;
       return {
-        surface: roadSurfacePath(a, b, size),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, lanesA || 1, lanesB || 1),
-        strokeWidth: totalLanes * LANE_WIDTH_PX,
+        surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
+        laneMarkings: roadLaneMarkingPaths(
+          a,
+          b,
+          size,
+          selfA,
+          selfB,
+        ),
       };
     });
   }
@@ -323,12 +363,13 @@ export default toNative(Tile);
   overflow: visible;
 }
 .road-surface {
-  fill: none;
-  stroke: #4a4a4a;
-  // A wide paved ribbon. ~28% of a tile reads as a two-lane road next to the
-  // rail gauge; with butt caps the surface stops cleanly at the tile edge.
-  stroke-width: 56px;
-  stroke-linecap: butt;
+  fill: #4a4a4a;
+  stroke: none;
+  // A filled trapezoid polygon (not a stroked line): the renderer computes the
+  // four corners per edge from this tile's lane count and the neighbour's, so
+  // the painted ribbon meets its neighbour flush at every seam and tapers
+  // smoothly across a merge or split. Shape comes from the path's `d`
+  // attribute; the size constant lives in roadGeometry.
 }
 .road-marking-centre {
   fill: none;

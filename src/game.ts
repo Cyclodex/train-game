@@ -1,5 +1,5 @@
 import { reactive, ref, Ref } from "vue";
-import { Position, ActiveIntersection } from "@/types";
+import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId } from "@/tiles/model";
 import {
   createSimulation,
@@ -9,6 +9,9 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig } from "@/sim/road";
+import { laneCount } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
@@ -154,6 +157,12 @@ export interface Game {
   // The manual override state of a signal, for the renderer's indicator.
   signalOverride(tileId: string, exitPort: Position): "auto" | "green" | "red";
   positionUnit(body: UnitChord): { x: number; y: number; angle: number };
+  // The number of road lanes entering the tile at `coord` from `port`, or 0
+  // if there is no road tile there / no lanes from that port. Used by the
+  // tile renderer to taper the road surface at lane-count transitions
+  // (the wider of this tile and the neighbour dictates the painted width
+  // at the shared edge).
+  roadLaneCount(coord: Coordinates, port: Position): number;
 }
 
 export function createGame(
@@ -449,11 +458,35 @@ export function createGame(
     const samples = roadSim.sample();
     const seen = new Set<string>();
     for (const s of samples) {
-      const laneOffset = (s.laneCount - 0.5 - s.laneIndex) * tileSize * LANE_WIDTH_FRAC;
+      const curCount = s.laneCount;
+      const curIndex = s.laneIndex;
       for (let u = 0; u < s.units.length; u++) {
         const unit = s.units[u];
         const id = `${s.id}#${u}`;
         seen.add(id);
+
+        // Compute lane offset with smooth taper at lane-count transitions.
+        // When a car approaches a tile boundary where the next tile has a different
+        // lane count, interpolate the lateral offset so the car glides into its new
+        // lane position instead of snapping at the boundary.
+        const front = unit.front;
+        const fromOffset = (curCount - 0.5 - curIndex) * tileSize * LANE_WIDTH_FRAC;
+        let laneOffset = fromOffset;
+
+        if (front.exitPort != null) {
+          const nextCoord = neighborCoord(front.coord, front.exitPort);
+          if (nextCoord) {
+            const nextTile = level[getCoordinatesId(nextCoord)];
+            const nextEntry = oppositePort(front.exitPort);
+            const nextCount = laneCount(nextTile?.road, nextEntry);
+            if (nextCount > 0 && nextCount !== curCount) {
+              const nextIndex = Math.min(curIndex, nextCount - 1);
+              const toOffset = (nextCount - 0.5 - nextIndex) * tileSize * LANE_WIDTH_FRAC;
+              laneOffset = fromOffset + (toOffset - fromOffset) * front.t;
+            }
+          }
+        }
+
         const { x, y, angle } = positionUnit(unit as unknown as UnitChord, laneOffset);
         const widthPx = unit.lengthTiles * tileSize;
         const existing = roadCars.find(c => c.id === id);
@@ -683,5 +716,9 @@ export function createGame(
       }
     },
     positionUnit,
+    roadLaneCount(coord: Coordinates, port: Position): number {
+      const id = getCoordinatesId(coord);
+      return laneCount(level[id]?.road, port);
+    },
   };
 }
