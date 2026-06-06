@@ -18,19 +18,19 @@
 }
 
 // ---- Meadow (default) -------------------------------------------------------
-// Rolling green countryside with scattered bushes; the board sits raised on it.
-// Four bush layers tiled at mutually non-aligning sizes/offsets so the scatter
-// reads organically instead of as rows on a grid.
+// Rolling green countryside dotted with little trees; the board sits raised on
+// it. The trees are a procedurally generated, seamless SVG tile (varied size,
+// shape, tint and jittered placement — see `src/utils/meadowBackdrop.ts`),
+// supplied via the `--meadow-trees` custom property on #app and laid over a
+// soft grass gradient. A faint mottling breaks up the flat ground colour.
 .theme-meadow {
   background-color: #6aac6a;
   background-image:
-    radial-gradient(circle, rgba(98, 176, 98, 0.95) 0 7px, transparent 8px),
-    radial-gradient(circle, rgba(72, 148, 72, 0.85) 0 10px, transparent 11px),
-    radial-gradient(circle, rgba(112, 192, 112, 0.7) 0 5px, transparent 6px),
-    radial-gradient(circle, rgba(86, 162, 86, 0.8) 0 8px, transparent 9px),
+    var(--meadow-trees),
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.06), transparent 60%),
     linear-gradient(160deg, #8ecb8e, #6aac6a);
-  background-size: 113px 97px, 167px 149px, 83px 79px, 211px 181px, 100% 100%;
-  background-position: 0 0, 53px 41px, 29px 67px, 139px 23px, 0 0;
+  background-size: 680px 680px, 100% 100%, 100% 100%;
+  background-position: 0 0, 0 0, 0 0;
 }
 .theme-meadow .world .level {
   border: 2px solid rgba(255, 255, 255, 0.4);
