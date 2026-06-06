@@ -8,6 +8,18 @@ export interface Counters {
   elapsedSec: number;
   manualHolds: number;
   manualGreens: number;
+  // Crossing-flow tallies (Crossing Keeper). All zero-defaulted so modes that
+  // don't observe the road (Puzzle/Sandbox) leave them at 0 and existing star/
+  // fail predicates are unaffected.
+  // The worst single-car wait at a crossing seen so far this session, in seconds
+  // (a high-water mark — it does not fall when that car is released, so the
+  // "Smooth operator" star can judge the whole run).
+  maxCarWaitSec: number;
+  // Cars that used a crossing and reached the map edge — the road throughput.
+  carsDelivered: number;
+  // Managed-crossing incidents (a train met a car on a crossing). 0 in the
+  // automatic/default model where an incident is impossible.
+  crossingIncidents: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -25,6 +37,12 @@ export interface ObjectiveSpec {
   timeLimitSec?: number;
   fail?: {
     onTimeout?: boolean;
+    // A single car waiting longer than this (seconds) at a crossing fails the
+    // level — a gridlocked crossing. Off by default.
+    maxCarWaitSec?: number;
+    // A managed-crossing incident (a car caught on a closing crossing) fails the
+    // level. Off by default; only the managed variant ever emits one.
+    onCrossingIncident?: boolean;
   };
   stars?: StarSpec[];
 }
@@ -37,6 +55,14 @@ export interface Observation {
   mismatchedDelta: number; // unmatched (bounced) arrivals this tick
   manualHoldDelta: number; // manual signal holds activated this tick
   manualGreenDelta: number; // forced-green overrides activated this tick
+  // Crossing-flow inputs (Crossing Keeper). All optional so existing callers that
+  // build a plain Observation (Puzzle/Sandbox) need no change. `maxCarWaitSec` and
+  // `carsDelivered` are the road frame's absolute current values (the tracker
+  // folds them into the high-water/throughput counters); `crossingIncidentDelta`
+  // is a per-tick count of new incidents.
+  maxCarWaitSec?: number; // current worst live car wait, seconds
+  carsDelivered?: number; // current cumulative road throughput
+  crossingIncidentDelta?: number; // new managed-crossing incidents this tick
 }
 
 export const emptyObservation: Observation = {
@@ -75,6 +101,9 @@ function zeroCounters(): Counters {
     elapsedSec: 0,
     manualHolds: 0,
     manualGreens: 0,
+    maxCarWaitSec: 0,
+    carsDelivered: 0,
+    crossingIncidents: 0,
   };
 }
 
@@ -104,9 +133,30 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       counters.manualHolds += obs.manualHoldDelta;
       counters.manualGreens += obs.manualGreenDelta;
       counters.elapsedSec += dt;
+      // Crossing flow: the road frame reports an absolute worst-wait + throughput;
+      // keep the high-water mark and the latest throughput. Incidents are a delta.
+      if (obs.maxCarWaitSec !== undefined)
+        counters.maxCarWaitSec = Math.max(counters.maxCarWaitSec, obs.maxCarWaitSec);
+      if (obs.carsDelivered !== undefined)
+        counters.carsDelivered = obs.carsDelivered;
+      counters.crossingIncidents += obs.crossingIncidentDelta ?? 0;
 
+      // Win takes priority over any same-tick fail.
       if (counters.delivered >= spec.deliveriesRequired) {
         phase = "won";
+        return;
+      }
+      if (spec.fail?.onCrossingIncident && counters.crossingIncidents > 0) {
+        phase = "lost";
+        lostReason = "A car was caught on the crossing";
+        return;
+      }
+      if (
+        spec.fail?.maxCarWaitSec !== undefined &&
+        counters.maxCarWaitSec >= spec.fail.maxCarWaitSec
+      ) {
+        phase = "lost";
+        lostReason = "A car was stuck at the crossing too long";
         return;
       }
       if (

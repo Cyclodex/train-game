@@ -46,6 +46,9 @@ describe("puzzle mode", () => {
       elapsedSec: 1,
       manualHolds: 0,
       manualGreens: 0,
+      maxCarWaitSec: 0,
+      carsDelivered: 0,
+      crossingIncidents: 0,
     };
     expect(star.predicate(base)).toBe(true);
     expect(star.predicate({ ...base, mismatchedArrivals: 1 })).toBe(false);
