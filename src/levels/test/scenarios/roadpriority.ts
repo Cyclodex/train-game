@@ -6,6 +6,11 @@ import { TestScenario } from "@/levels/test/scenario";
 // main-road traffic; the starvation guard lets them through after 5 s of
 // continuous yielding.
 //
+// Layout (5×5):
+//   row 2: horizontal main road (west–east)
+//   col 2, rows 3–4: south side road
+//   "2,2": T-junction tile — L↔R through + L/R↔Bottom turns (no north arm)
+//
 // There is no rail here — pure road priority scenario. Cars spawn from both
 // roads so the yield behaviour is visible under load.
 const road = (priority: number, ...ports: [Position, Position][]) => ({
@@ -23,10 +28,11 @@ export const roadpriority: TestScenario = {
     // Main road (horizontal).
     "0,2": road(1, [Position.Left, Position.Right]),
     "1,2": road(1, [Position.Left, Position.Right]),
+    // T-junction: through traffic L↔R; side road turns L/R↔Bottom.
+    // No [Top, Bottom] pair — there is no north arm.
     "2,2": road(
       1,
       [Position.Left, Position.Right],
-      [Position.Top, Position.Bottom],
       [Position.Left, Position.Bottom],
       [Position.Right, Position.Bottom],
     ),

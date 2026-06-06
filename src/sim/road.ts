@@ -422,9 +422,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (exitPort === null) continue;
       const nCoord = neighborCoord(head.coord, exitPort);
       if (!nCoord || getCoordinatesId(nCoord) !== junctionId) continue;
-      const myExit = carExitAt(other, nCoord);
-      if (myExit === null) continue;
       const entryArm = oppositePort(exitPort);
+      const myExit = carExitAt(other, nCoord) ?? roadExitPort(level, nCoord, entryArm);
+      if (myExit === null) continue;
       waiting.push({
         entryArm,
         exitArm: myExit,
@@ -556,7 +556,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const conflictPairs = junctionConflicts.get(junctionId);
       if (!conflictPairs) continue;
       const jCoord = parseJunctionCoord(junctionId);
-      const myExit = carExitAt(car, jCoord);
+      // Fall back to the road's default exit so the arbiter fires even when the
+      // car has no planned turn (e.g. straight-through at a priority junction).
+      const myExit = carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry);
       if (myExit === null) continue;
       const candidate: WaitingCar = {
         entryArm: myEntry,
@@ -686,7 +688,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     for (const c of cars) {
       if (bodyTileIds(c).has(id)) return; // entry tile occupied
     }
-    const routePlan = planRoute(level, entry.coord, entry.entryPort, allMapEntries, rng);
+    // Route only toward "exit" entries — the complement of spawn entries.
+    // This prevents a car from routing backward onto a road that spawn-direction
+    // cars are already using, which would create head-on conflicts on 1-lane roads.
+    const exitEntries = allMapEntries.filter(
+      e => !entries.some(
+        s => s.coord.x === e.coord.x && s.coord.y === e.coord.y && s.entryPort === e.entryPort,
+      ),
+    );
+    const routePlan = planRoute(
+      level, entry.coord, entry.entryPort,
+      exitEntries.length ? exitEntries : allMapEntries,
+      rng,
+    );
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);
