@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs, turns, oneWay } from "@/tiles/lanes";
+import { fromPairs, turns, oneWay, nWayLanes } from "@/tiles/lanes";
 import { expandKind } from "@/tiles/kinds";
 import { validateLevel, validateRoads } from "@/tiles/validate";
 
@@ -100,6 +100,44 @@ describe("validateRoads — lane invariants", () => {
     const level = {
       "0,0": { connections: [], road: [oneWay(L, R)] },
       "1,0": { connections: [], road: [oneWay(L, R)] },
+    };
+    expect(validateRoads(level).ok).toBe(true);
+  });
+});
+
+describe("validateRoads — lane-index-gap", () => {
+  it("flags a gap in lane indices (e.g. 0, 2 without 1)", () => {
+    const level = {
+      "0,0": {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Left, to: [Position.Right], index: 2 }, // gap: missing 1
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      },
+    };
+    const result = validateRoads(level);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some(i => i.type === "lane-index-gap")).toBe(true);
+  });
+
+  it("passes for contiguous indices 0..N-1", () => {
+    const level = {
+      "0,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 3) },
+    };
+    expect(validateRoads(level).ok).toBe(true);
+  });
+
+  it("passes for single-lane (only index 0)", () => {
+    const level = {
+      "0,0": {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      },
     };
     expect(validateRoads(level).ok).toBe(true);
   });

@@ -119,6 +119,7 @@ export function validateLevel(
 export type RoadIssueType =
   | "dangling-road" // road points at a tile with no road back
   | "lane-index-clash" // two lanes from the same approach share an index
+  | "lane-index-gap" // indices for an approach are not contiguous from 0
   | "lane-no-exit"; // an approach permits no exit
 
 export interface RoadIssue {
@@ -178,6 +179,19 @@ export function validateRoads(level: Level): {
         });
       }
       seen.add(lane.index);
+    }
+
+    // Check that each approach has contiguous indices 0..N-1 with no gaps.
+    for (const [key, seen] of indexByFrom) {
+      for (let i = 0; i < seen.size; i++) {
+        if (!seen.has(i)) {
+          issues.push({
+            type: "lane-index-gap",
+            tileId: id,
+            detail: `lanes from ${Position[Number(key)]} of ${id} are missing index ${i} (present: [${[...seen].sort().join(",")}])`,
+          });
+        }
+      }
     }
   }
   return { ok: issues.length === 0, issues };
