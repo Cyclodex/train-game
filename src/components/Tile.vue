@@ -18,12 +18,14 @@
         class="road-surface"
         :style="{ strokeWidth: r.strokeWidth + 'px' }"
       />
-      <path
-        v-for="(r, i) in roadPaths"
-        :key="'rm' + i"
-        :d="r.marking"
-        class="road-marking"
-      />
+      <template v-for="(r, i) in roadPaths" :key="'rm' + i">
+        <path
+          v-for="(m, mi) in r.laneMarkings"
+          :key="'lm' + i + '_' + mi"
+          :d="m.d"
+          :class="'road-marking-' + m.kind"
+        />
+      </template>
     </svg>
 
     <TileRail :possible-routes="railRoutes" />
@@ -145,7 +147,7 @@ import {
 } from "@/tiles/model";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
-import { roadSurfacePath, roadMarkingPath } from "@/tiles/roadGeometry";
+import { roadSurfacePath, roadLaneMarkingPaths, LaneMarkingPath } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount } from "@/tiles/lanes";
 import depotBuildingImg from "@/assets/depot.png";
 
@@ -188,7 +190,7 @@ class Tile extends Vue {
   // Road surface + lane-marking paths, one per undirected edge the lanes touch
   // (a two-way road is one ribbon, not two). At one lane per direction this
   // renders identically to the old PortPair-based version.
-  get roadPaths(): { surface: string; marking: string; strokeWidth: number }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; strokeWidth: number }[] {
     const size = this.config.tileSize;
     const LANE_WIDTH_PX = size * 0.14; // 28px at 200px tile — matches game.ts LANE_WIDTH_FRAC
     return roadEdges(this.tile.road).map(([a, b]) => {
@@ -197,7 +199,7 @@ class Tile extends Vue {
       const totalLanes = Math.max(lanesA + lanesB, 2); // minimum 2 (1 per direction)
       return {
         surface: roadSurfacePath(a, b, size),
-        marking: roadMarkingPath(a, b, size),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, lanesA || 1, lanesB || 1),
         strokeWidth: totalLanes * LANE_WIDTH_PX,
       };
     });
@@ -328,10 +330,16 @@ export default toNative(Tile);
   stroke-width: 56px;
   stroke-linecap: butt;
 }
-.road-marking {
+.road-marking-centre {
   fill: none;
   stroke: #f4d35e;
   stroke-width: 3px;
+  stroke-linecap: butt;
+}
+.road-marking-inner {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 2px;
   stroke-dasharray: 14 12;
   stroke-linecap: butt;
 }
