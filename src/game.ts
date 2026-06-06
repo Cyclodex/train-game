@@ -1,6 +1,6 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection } from "@/types";
-import { Level, partnersOf, armExit, parseCoordId } from "@/tiles/model";
+import { Level, partnersOf, armExit, defaultArmFor, parseCoordId } from "@/tiles/model";
 import {
   createSimulation,
   Simulation,
@@ -35,10 +35,11 @@ const ENTRY_PORTS = [
   Position.Left,
 ];
 
-// Default switch arm per entry port of every junction tile: the first arm whose
+// Default switch arm per entry port of every junction tile: the editor-authored
+// `defaultArms` arm when present and still valid, else the first arm whose
 // geometric exit is an actual connection of that tile. Non-junction tiles need
 // no switch entry. (Player clicks and interlocking mutate this map later.)
-function initialSwitches(
+export function initialSwitches(
   level: Level
 ): Record<string, Record<number, ActiveIntersection>> {
   const out: Record<string, Record<number, ActiveIntersection>> = {};
@@ -49,10 +50,13 @@ function initialSwitches(
       const partners = partnersOf(tile.connections, port);
       if (partners.length <= 1) continue; // straight/curve/depot entry
       isJunction = true;
-      const arm = ALL_ARMS.find(a => {
-        const exit = armExit(port, a);
-        return exit !== null && partners.includes(exit);
-      });
+      const authored = defaultArmFor(tile, port);
+      const arm =
+        authored ??
+        ALL_ARMS.find(a => {
+          const exit = armExit(port, a);
+          return exit !== null && partners.includes(exit);
+        });
       if (arm !== undefined) switches[port] = arm;
     }
     if (isJunction) out[id] = switches;
@@ -235,6 +239,9 @@ export function createGame(
     ...(traffic?.spawnInterval !== undefined && { spawnInterval: traffic.spawnInterval }),
     ...(traffic?.maxCars !== undefined && { maxCars: traffic.maxCars }),
     ...(traffic?.mix !== undefined && { mix: traffic.mix }),
+    // A level may pin exact spawn entries (e.g. a divided road with each lane
+    // one-way in opposite directions), overriding the default edge detection.
+    ...(traffic?.spawnEntries !== undefined && { spawnEntries: traffic.spawnEntries }),
   });
   const roadCars = reactive([]) as RoadCar[];
   // Road-junction tiles a car currently holds (tileId → car id), refreshed each

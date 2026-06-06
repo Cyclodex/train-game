@@ -1,4 +1,4 @@
-import { Position } from "@/types";
+import { Position, ActiveIntersection } from "@/types";
 import {
   Port,
   PortPair,
@@ -39,6 +39,10 @@ export interface KindOptions {
   // `true` puts a signal on every (non-Center) exit port; or pass explicit ports.
   signals?: boolean | Port[];
   disable?: PortPair[]; // pairs (at the final rotation) to remove
+  // Authored starting switch arms, keyed by the FINAL (post-rotation) entry port.
+  // Copied onto the cell's `defaultArms`; ignored when empty. The read-time guard
+  // (`defaultArmFor`) drops any arm whose exit isn't a real connection.
+  defaultArms?: Partial<Record<Port, ActiveIntersection>>;
 }
 
 // Expand a friendly kind + rotation into a canonical TileCell. `rotation` is in
@@ -62,6 +66,9 @@ export function expandKind(
     cell.signals = portsOf(connections).filter(p => p !== Center);
   } else if (Array.isArray(opts.signals)) {
     cell.signals = opts.signals;
+  }
+  if (opts.defaultArms && Object.keys(opts.defaultArms).length > 0) {
+    cell.defaultArms = { ...opts.defaultArms };
   }
   return cell;
 }

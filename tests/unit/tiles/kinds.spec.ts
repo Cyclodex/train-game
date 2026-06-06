@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Position } from "@/types";
+import { Position, ActiveIntersection } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { samePair } from "@/tiles/model";
 
@@ -44,5 +44,17 @@ describe("expandKind", () => {
     const c = expandKind("cross", 0, { disable: [[Top, Right], [Top, Left]] });
     expect(hasPair(c, [Top, Right])).toBe(false);
     expect(hasPair(c, [Top, Bottom])).toBe(true);
+  });
+
+  it("defaultArms (keyed by final entry port) lands on the cell", () => {
+    const c = expandKind("cross", 0, {
+      defaultArms: { [Top]: ActiveIntersection.Right },
+    });
+    expect(c.defaultArms).toEqual({ [Top]: ActiveIntersection.Right });
+  });
+
+  it("omits defaultArms entirely when not authored or empty", () => {
+    expect(expandKind("cross", 0).defaultArms).toBeUndefined();
+    expect(expandKind("cross", 0, { defaultArms: {} }).defaultArms).toBeUndefined();
   });
 });

@@ -414,9 +414,10 @@ describe("createRoadSim — launch reaction delay", () => {
 });
 
 describe("createRoadSim — acceleration ramp", () => {
-  it("ramps a car up from rest instead of snapping to cruise speed", () => {
-    // A single car on an open straight road. It should start slow and work up to
-    // cruise speed over several ticks, not cover a full cruise step immediately.
+  it("enters the map already at cruise speed (no ramp-up from the edge)", () => {
+    // A car drives in from off-screen, so it appears already rolling: its first
+    // movement on the map should be a full cruise step, not a tiny ramp-from-rest
+    // step. speedSpread 0 pins the cruise speed to carSpeed so the step is exact.
     const sim = createRoadSim({
       level: straightRoad(),
       width: 3,
@@ -424,11 +425,12 @@ describe("createRoadSim — acceleration ramp", () => {
       seed: 7,
       spawnInterval: 0.3,
       carSpeed: 0.5,
+      speedSpread: 0,
       maxCars: 1,
     });
     const deltas: number[] = [];
     let prev: number | null = null;
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 40; i++) {
       sim.step(0.05, () => false);
       const c = sim.cars()[0];
       if (!c) {
@@ -441,10 +443,222 @@ describe("createRoadSim — acceleration ramp", () => {
     }
     expect(deltas.length).toBeGreaterThan(5);
     const cruiseStep = 0.5 * 0.05; // speed * dt — the distance at full cruise
-    // The first movement out of rest is a small fraction of a cruise step…
+    // The very first movement after entering is already a full cruise step.
+    expect(deltas[0]).toBeGreaterThan(cruiseStep * 0.9);
+    expect(deltas[0]).toBeLessThan(cruiseStep * 1.1);
+  });
+
+  it("ramps back up from rest after stopping at a closed gate", () => {
+    // The accel ramp still applies when a car has to STOP on the map and get going
+    // again: hold one at a closed crossing, then open it and watch the first
+    // movements come out small and build up toward cruise (not a full step at once).
+    const lvl: Level = {
+      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "1,0": {
+        connections: [[Position.Top, Position.Bottom]],
+        road: [[Position.Left, Position.Right]],
+      },
+      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+    };
+    let closed = true;
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      speedSpread: 0,
+      maxCars: 1,
+    });
+    // Settle the car hard against the closed gate (fully stopped).
+    for (let i = 0; i < 200; i++) sim.step(0.05, id => id === "1,0" && closed);
+    // Open the gate and let the reaction delay elapse, then record the movements.
+    closed = false;
+    const deltas: number[] = [];
+    let prev: number | null = null;
+    for (let i = 0; i < 120; i++) {
+      sim.step(0.05, () => false);
+      const c = sim.cars()[0];
+      if (!c) {
+        prev = null;
+        continue;
+      }
+      const pos = c.headIndex + c.headProgress;
+      if (prev !== null && pos - prev > 1e-9) deltas.push(pos - prev);
+      prev = pos;
+    }
+    expect(deltas.length).toBeGreaterThan(5);
+    const cruiseStep = 0.5 * 0.05;
+    // First movement out of rest is a small fraction of a cruise step…
     expect(deltas[0]).toBeLessThan(cruiseStep * 0.5);
-    // …and the car works up to roughly cruise speed once rolling.
+    // …and it works back up to roughly cruise speed once rolling.
     expect(Math.max(...deltas)).toBeGreaterThan(cruiseStep * 0.9);
+  });
+});
+
+describe("createRoadSim — variable preferred speed", () => {
+  it("draws a spread of per-car cruise speeds within the configured bounds", () => {
+    // Spawn a stream of cars on an open road and read each one's `speed`. With a
+    // speed spread the spawned cruise speeds vary car-to-car (not all the base
+    // value) and every one stays inside [carSpeed*(1-spread), carSpeed*(1+spread)].
+    const carSpeed = 0.5;
+    const spread = 0.4;
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 11,
+      spawnInterval: 0.3,
+      carSpeed,
+      carLength: 0.2,
+      speedSpread: spread,
+      maxCars: 40,
+    });
+    const seen = new Set<number>();
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) seen.add(Math.round(c.speed * 1e6));
+    }
+    const speeds = [...seen].map(s => s / 1e6);
+    expect(speeds.length).toBeGreaterThan(3); // several distinct cars spawned
+    // Not all equal — there's a real spread.
+    expect(new Set(speeds).size).toBeGreaterThan(1);
+    const lo = carSpeed * (1 - spread);
+    const hi = carSpeed * (1 + spread);
+    for (const s of speeds) {
+      expect(s).toBeGreaterThanOrEqual(lo - 1e-9);
+      expect(s).toBeLessThanOrEqual(hi + 1e-9);
+    }
+  });
+
+  it("with zero spread every car keeps the exact base cruise speed", () => {
+    const sim = createRoadSim({
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 11,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0,
+      maxCars: 40,
+    });
+    for (let i = 0; i < 200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) expect(c.speed).toBeCloseTo(0.5, 9);
+    }
+  });
+
+  it("is deterministic: the same seed yields the same per-car speeds", () => {
+    const run = () => {
+      const sim = createRoadSim({
+        level: straightRoad(),
+        width: 3,
+        height: 1,
+        seed: 23,
+        spawnInterval: 0.3,
+        carSpeed: 0.5,
+        carLength: 0.2,
+        speedSpread: 0.4,
+        maxCars: 40,
+      });
+      const speeds: number[] = [];
+      for (let i = 0; i < 300; i++) {
+        sim.step(0.05, () => false);
+        for (const c of sim.cars())
+          if (!speeds.includes(c.speed)) speeds.push(c.speed);
+      }
+      return speeds.map(s => Math.round(s * 1e6));
+    };
+    expect(run()).toEqual(run());
+  });
+
+  it("a fast car never overtakes a slower leader and matches its pace", () => {
+    // A long one-way straight road. Two cars spawn from the left a head start
+    // apart; with a wide speed spread the second car is the faster one and must
+    // reel the slower leader in. The gap cap keeps it behind the leader's rear,
+    // and once it has closed up its velocity is held to the leader's pace, not its
+    // own higher cruise — the slower car sets the platoon speed. Seed 9 yields a
+    // ~0.36 leader and a ~0.58 follower (a clear convergence case).
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {};
+    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: [road] };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 40,
+      height: 1,
+      seed: 9,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 2.0, // a clear head start so the follower must catch up
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0.4,
+      maxCars: 2,
+    });
+
+    const worldX = (s: { coord: { x: number }; t: number }) => s.coord.x + s.t;
+
+    // Capture the first two cars that share the road and reason only about this
+    // pair, and only while both are still on the lane: maxCars 2 means a car
+    // driving off the right edge would let a fresh, unrelated car spawn in its
+    // place, which would muddy a position-only "leader/follower" read.
+    let ids: string[] = [];
+    for (let i = 0; i < 400 && ids.length < 2; i++) {
+      sim.step(0.05, () => false);
+      const live = sim.cars();
+      if (live.length >= 2) ids = live.slice(0, 2).map(c => c.id);
+    }
+    expect(ids.length).toBe(2);
+
+    // The follower closes the gap, then holds a steady following distance where
+    // its braking model balances the leader's pace. Track the pair while both are
+    // alive; assert no-overtake every step, and average the velocities over the
+    // "in contact" phase (a tight gap) so the comparison is robust to the small
+    // oscillation around that equilibrium rather than tied to one instant.
+    let minGap = Infinity;
+    let followerSpeed = 0;
+    let nContact = 0;
+    let sumFollowerV = 0;
+    let sumLeaderV = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const live = sim.cars();
+      const a = live.find(c => c.id === ids[0]);
+      const b = live.find(c => c.id === ids[1]);
+      if (!a || !b) break; // one drove off the lane — stop reasoning about the pair
+      const byId = new Map(sim.sample().map(c => [c.id, c]));
+      const aFront = worldX(byId.get(a.id)!.units[0].front);
+      const bFront = worldX(byId.get(b.id)!.units[0].front);
+      const ahead = aFront >= bFront ? a : b;
+      const behind = ahead === a ? b : a;
+      const leaderRear = worldX(byId.get(ahead.id)!.units[0].rear);
+      const followerFront = worldX(byId.get(behind.id)!.units[0].front);
+      // No overtake, ever: the rear car's nose never crosses the lead car's tail.
+      expect(followerFront).toBeLessThanOrEqual(leaderRear + 1e-6);
+      // The faster car stays the rear one (it can't pass), so the follower always
+      // has the higher preferred speed.
+      expect(behind.speed).toBeGreaterThan(ahead.speed);
+      const gap = leaderRear - followerFront;
+      minGap = Math.min(minGap, gap);
+      if (gap < 0.12) {
+        // In contact: sample the platoon's velocities for the averages below.
+        nContact++;
+        sumFollowerV += behind.velocity;
+        sumLeaderV += ahead.velocity;
+        followerSpeed = behind.speed;
+      }
+    }
+    // The faster car really did catch the slower one and tail it (not just trail at
+    // a distance) — otherwise the velocity comparisons below would be vacuous.
+    expect(minGap).toBeLessThan(0.12);
+    expect(nContact).toBeGreaterThan(50);
+    const avgFollowerV = sumFollowerV / nContact;
+    const avgLeaderV = sumLeaderV / nContact;
+    // While tailing, the follower runs at the leader's pace (within a small band),
+    // not its own higher cruise — the slower leader sets the platoon speed.
+    expect(avgFollowerV).toBeLessThanOrEqual(avgLeaderV + 0.03);
+    expect(avgFollowerV).toBeLessThan(followerSpeed - 0.1);
   });
 });
 

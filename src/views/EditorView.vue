@@ -160,6 +160,20 @@
               <path :d="delMark(road)" class="del-mark" />
             </g>
           </template>
+
+          <!-- Junction switch zones: one clickable spot over each junction
+               entry's switch widget. Painted after the edge zones so it sits in
+               front and intercepts the click, cycling that entry's authored
+               starting arm. Available in any tool — it only covers the widget. -->
+          <circle
+            v-for="entry in junctionEntries(cell.tile)"
+            :key="'sw' + entry"
+            :cx="switchPoint(entry).x"
+            :cy="switchPoint(entry).y"
+            r="15"
+            class="switch-zone"
+            @click.stop="onSwitchClick(cell.key, entry)"
+          />
         </svg>
       </div>
     </div>
@@ -177,14 +191,22 @@
 
 <script lang="ts">
 import { markRaw, reactive } from "vue";
-import { Component, Inject, Provide, Vue, toNative } from "vue-facing-decorator";
+import { Component, Inject, Provide, Vue, Watch, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY, setWorldTheme } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import ToolDock from "@/components/ToolDock.vue";
 import type { Game } from "@/game";
+import { initialSwitches } from "@/game";
 import { Position } from "@/types";
-import { Level, Port, PortPair, portsOf, parseCoordId } from "@/tiles/model";
+import {
+  Level,
+  Port,
+  PortPair,
+  portsOf,
+  isJunctionEntry,
+  parseCoordId,
+} from "@/tiles/model";
 import {
   emptyCell,
   addConnection,
@@ -194,6 +216,7 @@ import {
   setDepot,
   rotateDepot,
   toggleSignalPort,
+  cycleDefaultArm,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -216,7 +239,7 @@ const EDGES: Port[] = [
 
 const HINTS: Record<Tool, string> = {
   connect:
-    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail.",
+    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail. Click a junction's switch to set its starting direction.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
@@ -438,6 +461,45 @@ class EditorView extends Vue {
   }
   hasSignal(tile: Level[string] | null, port: Port): boolean {
     return !!tile?.signals?.includes(port);
+  }
+
+  // --- junction switches (authored starting direction) ---
+  // Entry ports of a junction tile that carry a switch. Empty for plain track.
+  junctionEntries(tile: Level[string] | null): Port[] {
+    if (!tile) return [];
+    return portsOf(tile.connections).filter(p =>
+      isJunctionEntry(tile.connections, p)
+    );
+  }
+  // The centre of an entry's switch widget, in tile (overlay) coordinates, kept
+  // in step with `.switch-box--N` in Tile.vue (a 24×18 box hugging that edge).
+  switchPoint(entry: Port): { x: number; y: number } {
+    const s = this.config.tileSize;
+    const along = 0.57 * s + 12; // box offset (left/top:57%) + half its width
+    switch (entry) {
+      case Position.Top:
+        return { x: along, y: 9 };
+      case Position.Right:
+        return { x: s - 12, y: along };
+      case Position.Bottom:
+        return { x: along, y: s - 9 };
+      default:
+        return { x: 12, y: along }; // Left
+    }
+  }
+  // Clicking a switch zone cycles that entry's authored starting arm and persists.
+  // The zone is painted in front of the edge zones, so it intercepts the click.
+  onSwitchClick(id: string, entry: Port) {
+    this.commit(id, cycleDefaultArm(this.cellOf(id), entry));
+  }
+  // Mirror the level's effective starting arms into the (stub) game so Tile.vue's
+  // switch widget lights the authored bulb — the same seeding play uses.
+  @Watch("level", { deep: true, immediate: true })
+  syncSwitches() {
+    const next = initialSwitches(this.level);
+    const switches = this.game.switches;
+    for (const k of Object.keys(switches)) delete switches[k];
+    Object.assign(switches, next);
   }
 
   cellOf(id: string): Level[string] {
@@ -779,6 +841,16 @@ export default toNative(EditorView);
 }
 .zone--signal {
   fill: rgba(255, 59, 48, 0.28);
+}
+// Junction switch zone: an invisible-but-clickable spot over the switch widget
+// (a transparent fill still receives pointer events). A soft amber wash on hover
+// signals it cycles the junction's starting direction.
+.switch-zone {
+  fill: rgba(0, 0, 0, 0);
+  cursor: pointer;
+}
+.switch-zone:hover {
+  fill: rgba(255, 179, 0, 0.4);
 }
 .zone-dot {
   fill: rgba(66, 184, 131, 0.9);

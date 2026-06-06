@@ -65,6 +65,12 @@ export interface TrafficConfig {
   spawnInterval?: number; // mean seconds between spawn attempts (smaller = busier)
   mix?: TrafficMix; // relative weights of car/truck/semi
   maxCars?: number; // cap on live vehicles
+  // Spawn cars only from these explicit entries instead of the game's default
+  // map-edge detection. Lets a scenario model directed lanes (e.g. a divided road
+  // where each lane is one-way in opposite directions) or bias one direction by
+  // listing its entry more than once — entries are picked uniformly, so a
+  // duplicated entry spawns proportionally more often.
+  spawnEntries?: RoadEntry[];
 }
 
 // --- Road traversal ----------------------------------------------------------
@@ -226,6 +232,14 @@ export interface RoadSimConfig {
   // below.
   carSpeed?: number;
   carLength?: number;
+  // Per-car preferred-speed variation, as a fraction of `carSpeed`. Each spawned
+  // car draws its cruise speed uniformly from
+  // `[carSpeed*(1-speedSpread), carSpeed*(1+speedSpread)]` using the seeded RNG,
+  // so some cars are naturally faster than others (a faster car then catches the
+  // slower one ahead and follows it — the gap cap prevents overtaking, so the
+  // slowest car sets the platoon pace). `0` makes every car the same speed (the
+  // original behaviour). Default below is a small, subtle spread.
+  speedSpread?: number;
   // Relative spawn weights per vehicle kind. Default `{ car: 1 }` → all cars.
   mix?: TrafficMix;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
@@ -239,7 +253,14 @@ export interface RoadSimConfig {
 
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
-  cars(): { id: string; tileId: string; headIndex: number; headProgress: number }[];
+  cars(): {
+    id: string;
+    tileId: string;
+    headIndex: number;
+    headProgress: number;
+    speed: number; // this car's preferred (cruise) speed — varies car-to-car
+    velocity: number; // its current speed (capped by the leader when following)
+  }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
   sample(): CarChord[];
@@ -258,6 +279,10 @@ const DEFAULT_CAR_SPEED = 0.6;
 // sync so the simulated body never out-sizes the visible car.
 const DEFAULT_CAR_LENGTH = 0.23;
 const DEFAULT_MAX_CARS = 40;
+// Default per-car preferred-speed spread (fraction of carSpeed). A subtle ±25%
+// so the road feels alive — some cars cruise a little quicker and bunch up behind
+// slower ones into platoons — without any car being conspicuously fast or slow.
+const DEFAULT_SPEED_SPREAD = 0.25;
 // Acceleration / braking rates (tiles/sec²). Cars ramp their velocity toward the
 // cruise speed instead of snapping to it in one tick, and brake smoothly to the
 // next stop line — the same model the train sim uses (simulation.ts). Tuned for a
@@ -311,6 +336,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
+  const speedSpread = Math.max(0, config.speedSpread ?? DEFAULT_SPEED_SPREAD);
   const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
   const mix = config.mix ?? { car: 1 };
 
@@ -535,22 +561,50 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   function trySpawn(closed: CrossingClosed): void {
     if (entries.length === 0 || cars.length >= maxCars) return;
-    // Pick an entry deterministically; only spawn if its tile is free (no car on
-    // it and not a closed crossing) so we never spawn into another car.
+    // Pick an entry deterministically.
     const entry = entries[Math.floor(rng() * entries.length)];
     const id = getCoordinatesId(entry.coord);
     if (closed(id)) return;
-    for (const c of cars) {
-      if (bodyTileIds(c).has(id)) return; // entry tile occupied
-    }
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
+    // Spawn only if a car entering here would have clear road ahead. We probe with
+    // a zero-length car sitting at the entry edge and reuse clearAhead: it returns
+    // ~0 when another car's body is right at the entry (so we don't spawn on top of
+    // it) and the lookahead on open road otherwise. This replaces the old "the
+    // whole entry tile must be vacant" rule, which forced a full tile of air between
+    // cars — so on a single-lane road only one car could be on the entry tile at a
+    // time. Now cars enter in a steady stream a bumper-gap apart and pack into
+    // platoons, while clearAhead still guarantees they never overlap.
+    const probe: Car = {
+      id: "",
+      kind: "car",
+      speed: 0,
+      velocity: 0,
+      accel: 0,
+      brake: 0,
+      length: 0,
+      path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
+      headIndex: 0,
+      headProgress: 0,
+      launchTimer: 0,
+    };
+    if (clearAhead(probe, closed) <= STOP_EPS) return;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
+    // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
+    // from the seeded RNG, so the spawn order (and thus which car is the slow
+    // leader of a forming platoon) stays reproducible for a given seed.
+    const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
     cars.push({
       id: `car${nextId++}`,
       kind,
-      speed: carSpeed,
-      velocity: 0,
+      speed,
+      // Enter the map already at cruise speed — a car drives in from off-screen, so
+      // it's been rolling before it appears, not starting from a standstill at the
+      // edge. (The accel ramp from rest still applies when a car has to STOP on the
+      // map and then get going again — at a queue or a closed crossing.) clearAhead
+      // caps the first step at the available room, so entering at speed can't make
+      // it overrun a car just ahead.
+      velocity: speed,
       accel: DEFAULT_CAR_ACCEL,
       brake: DEFAULT_CAR_BRAKE,
       length,
@@ -617,6 +671,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         tileId: tileIdOf(c),
         headIndex: c.headIndex,
         headProgress: c.headProgress,
+        speed: c.speed,
+        velocity: c.velocity,
       }));
     },
     sample() {
