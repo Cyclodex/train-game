@@ -6,6 +6,7 @@ import {
   roadEntries,
   createRoadSim,
 } from "@/sim/road";
+import { carqueue } from "@/levels/test/scenarios/carqueue";
 
 // A simple straight road across three tiles (Left<->Right), open at both map
 // edges (0,0 enters from the left edge, 2,0 leaves at the right edge).
@@ -233,5 +234,40 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
       if (sim.cars().some(c => c.tileId === "1,0")) enteredCrossing = true;
     }
     expect(enteredCrossing).toBe(true);
+  });
+});
+
+describe("carqueue test-world scenario", () => {
+  it("queues cars bumper-to-bumper on the approach to its closed crossing", () => {
+    // Drive the actual showcase geometry: cars enter one-way from the left edge
+    // (3,3) is the crossing) and must stack tightly on the 0,3 / 1,3 / 2,3
+    // approach when the gate is held closed.
+    const sim = createRoadSim({
+      level: carqueue.level,
+      width: carqueue.size!.cols,
+      height: carqueue.size!.rows,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 3 }, entryPort: Position.Left }],
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.4,
+    });
+    for (let i = 0; i < 600; i++) sim.step(0.05, id => id === "3,3");
+
+    // World X along the Left->Right approach road = column + progress.
+    const bodies = sim
+      .sample()
+      .map(c => ({ front: c.front.coord.x + c.front.t, rear: c.rear.coord.x + c.rear.t }))
+      .sort((a, b) => b.front - a.front);
+
+    expect(bodies.length).toBeGreaterThan(2); // a real queue built up
+    // None entered the closed crossing tile (front stays left of column 3).
+    expect(bodies[0].front).toBeLessThanOrEqual(3 + 1e-6);
+    // Consecutive cars neither overlap nor leave a full-tile gap between them.
+    for (let i = 1; i < bodies.length; i++) {
+      const gap = bodies[i - 1].rear - bodies[i].front;
+      expect(gap).toBeGreaterThanOrEqual(-1e-6); // no overlap
+      expect(gap).toBeLessThan(0.2); // packed tight (old gate left ~0.6)
+    }
   });
 });

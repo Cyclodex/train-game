@@ -32,6 +32,17 @@
           class="tile-component"
         />
       </div>
+      <div
+        v-for="car in roadCars"
+        :key="car.id"
+        class="road-car"
+        :style="{
+          background: carColor(car.id),
+          transform: `translate(-50%, -50%) translate(${car.x}px, ${car.y}px) rotate(${car.angle}deg)`,
+        }"
+      >
+        <span class="road-car-glass"></span>
+      </div>
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -137,6 +148,18 @@ class TestStage extends Vue {
       .map(([key, cell]) => ({ key, cell }));
   }
 
+  // Live road-traffic cars, sampled to world positions by the game each frame —
+  // the same source PlayView renders, so the /test world shows car spacing too.
+  get roadCars() {
+    return this.game.roadCars;
+  }
+  private carPalette = ["#d94c4c", "#3f7fd9", "#e0bc5c", "#e7e7e7", "#5fb37a"];
+  // Stable colour per car from the trailing number in its id (car0, car1, …).
+  carColor(id: string): string {
+    const n = parseInt(id.replace(/\D/g, ""), 10) || 0;
+    return this.carPalette[n % this.carPalette.length];
+  }
+
   get paused(): boolean {
     return this.game.paused.value;
   }
@@ -209,6 +232,27 @@ export default toNative(TestStage);
   .debug & {
     outline: 1px solid red;
   }
+}
+.road-car {
+  position: absolute;
+  z-index: 6; // above the road surface and trains; crossing booms sit above
+  top: 0;
+  left: 0;
+  width: 46px;
+  height: 24px;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+  will-change: transform;
+  overflow: hidden;
+}
+.road-car-glass {
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 60%; // toward the front (local +x is the direction of travel)
+  width: 26%;
+  background: rgba(185, 222, 255, 0.9);
+  border-radius: 2px;
 }
 .event-log {
   width: 320px;
