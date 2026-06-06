@@ -110,10 +110,11 @@ test.describe("Train game", () => {
 test.describe("Level editor", () => {
   const cell = (page: Page, coord: string) =>
     page.locator(`.editor-cell[data-coord="${coord}"]`);
-  // West=Left=3, East=Right=1.
+  // The redesigned editor draws via triangular edge hit-zones (`.zone`), not
+  // edge dots. West=Left=3, East=Right=1.
   const drawWestEast = async (page: Page, coord: string) => {
-    const west = cell(page, coord).locator('.port[data-port="3"]');
-    const east = cell(page, coord).locator('.port[data-port="1"]');
+    const west = cell(page, coord).locator('.zone[data-port="3"]');
+    const east = cell(page, coord).locator('.zone[data-port="1"]');
     await west.dragTo(east);
   };
 
@@ -151,10 +152,10 @@ test.describe("Level editor", () => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(1);
-    // Click the connection hit-path to delete it. force: a horizontal line has a
-    // zero-height bbox so Playwright's visibility heuristic skips it, but the
-    // 24px-wide stroke is hittable in a real browser.
-    await cell(page, "2,2").locator(".conn-hit").click({ force: true });
+    // In the redesigned editor, the erase tool reveals a ✕ delete handle per
+    // connection; clicking it removes just that rail.
+    await page.getByRole("button", { name: "erase" }).click();
+    await cell(page, "2,2").locator(".del").first().click({ force: true });
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(0);
   });
 
@@ -162,8 +163,8 @@ test.describe("Level editor", () => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
     await page.getByRole("button", { name: "signal" }).click();
-    // Toggle a signal on the East port of the straight.
-    await cell(page, "2,2").locator('.port[data-port="1"]').click();
+    // Toggle a signal on the East edge of the straight.
+    await cell(page, "2,2").locator('.zone[data-port="1"]').click();
     await expect(cell(page, "2,2").locator(".signal")).toHaveCount(1);
   });
 
