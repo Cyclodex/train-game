@@ -1,6 +1,11 @@
 <template>
   <div class="play-view" :class="{ debug: config.debug }">
     <MenuDrawer id="play" title="Menu">
+      <button class="drawer-btn" @click="openPicker">
+        <span>{{ modeIcon(currentModeId) }}</span><span>Game mode</span>
+        <span class="drawer-btn__val">{{ game.mode.label }}</span>
+      </button>
+      <div class="drawer-divider"></div>
       <button class="drawer-btn" @click="pausePlayGame">
         <span>{{ paused ? "▶" : "⏸" }}</span>
         <span>{{ paused ? "Start" : "Pause" }}</span>
@@ -134,6 +139,9 @@
           Best: {{ best.stars }}★ · {{ best.timeSec.toFixed(1) }}s
         </p>
         <button class="overlay-btn" @click="startPlaying">Start</button>
+        <button class="overlay-btn overlay-btn--ghost" @click="openPicker">
+          Change game mode
+        </button>
       </div>
     </div>
     <div
@@ -159,6 +167,33 @@
         </p>
         <p v-else class="overlay-desc">{{ lostReason }}</p>
         <button class="overlay-btn" @click="retry">Retry</button>
+        <button class="overlay-btn overlay-btn--ghost" @click="openPicker">
+          Change game mode
+        </button>
+      </div>
+    </div>
+    <div v-if="pickerOpen" class="game-overlay" @click.self="closePicker">
+      <div class="picker-card">
+        <h2 class="overlay-title">Choose a game mode</h2>
+        <div class="mode-grid">
+          <button
+            v-for="m in modes"
+            :key="m.id"
+            class="mode-card"
+            :class="{ 'mode-card--active': m.id === currentModeId }"
+            @click="pickMode(m.id)"
+          >
+            <span class="mode-card__icon">{{ modeIcon(m.id) }}</span>
+            <span class="mode-card__label">{{ m.label }}</span>
+            <span class="mode-card__desc">{{ m.description }}</span>
+            <span v-if="m.id === currentModeId" class="mode-card__badge"
+              >Playing</span
+            >
+          </button>
+        </div>
+        <button class="overlay-btn overlay-btn--ghost" @click="closePicker">
+          Close
+        </button>
       </div>
     </div>
     <div
@@ -220,8 +255,8 @@ import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
-import { modeById } from "@/modes/index";
-import { ModeSetup } from "@/modes/types";
+import { modeById, MODES } from "@/modes/index";
+import { GameMode, ModeSetup } from "@/modes/types";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
@@ -370,6 +405,40 @@ class PlayView extends Vue {
   retry() {
     this.game.reset();
     this.game.startObjective();
+  }
+
+  // ---- Game-mode picker -------------------------------------------------
+  // The card grid of game types. Opened from the menu drawer or the start
+  // overlay; picking a card navigates to `#/play?mode=<id>`, which remounts the
+  // view (router-view is keyed on the full path) so the chosen mode loads fresh.
+  pickerOpen = false;
+  modes: GameMode[] = MODES;
+
+  get currentModeId(): string {
+    return this.game.mode.id;
+  }
+
+  private modeIcons: Record<string, string> = {
+    puzzle: "🧩",
+    "crossing-keeper": "🚧",
+    "time-attack": "⏱️",
+    daily: "📅",
+    sandbox: "🏖️",
+  };
+  modeIcon(id: string): string {
+    return this.modeIcons[id] ?? "🚆";
+  }
+
+  openPicker() {
+    this.pickerOpen = true;
+  }
+  closePicker() {
+    this.pickerOpen = false;
+  }
+  pickMode(id: string) {
+    this.pickerOpen = false;
+    if (id === this.currentModeId) return; // already playing this mode
+    this.$router.push({ name: "play", query: { mode: id } });
   }
 
   @Watch("phase")
@@ -840,6 +909,90 @@ export default toNative(PlayView);
   &:hover {
     filter: brightness(1.08);
   }
+  &--ghost {
+    margin-top: 10px;
+    color: #cdd7df;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    font-weight: 600;
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      filter: none;
+    }
+  }
+}
+
+// ---- Game-mode picker ----
+.picker-card {
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 26px 30px 22px;
+  text-align: center;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.98),
+    rgba(18, 22, 28, 0.98)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin: 18px 0 8px;
+}
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  position: relative;
+  padding: 16px 16px 18px;
+  text-align: left;
+  color: #eef2f6;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    background 0.15s ease;
+  &:hover {
+    transform: translateY(-2px);
+    border-color: rgba(95, 211, 154, 0.6);
+    background: rgba(95, 211, 154, 0.08);
+  }
+  &--active {
+    border-color: rgba(240, 207, 114, 0.7);
+    background: rgba(240, 207, 114, 0.1);
+  }
+}
+.mode-card__icon {
+  font-size: 30px;
+  line-height: 1;
+}
+.mode-card__label {
+  font-size: 17px;
+  font-weight: 800;
+}
+.mode-card__desc {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #9aa7b2;
+}
+.mode-card__badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f0cf72;
 }
 
 .event-log {

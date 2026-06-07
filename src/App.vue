@@ -4,7 +4,7 @@
     :class="[`theme-${config.worldTheme}`, { debug: config.debug }]"
     :style="{ '--meadow-trees': meadowTrees }"
   >
-    <router-view />
+    <router-view :key="$route.fullPath" />
   </div>
 </template>
 
