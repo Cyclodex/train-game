@@ -172,6 +172,29 @@
             </g>
           </template>
 
+          <!-- Lane-count badge: shown on road tiles when the road tool is
+               active, so the author can see each tile's current lane count
+               without switching to a debug overlay. -->
+          <g
+            v-if="tool === 'road' && roadTileLaneCount(cell.tile) > 0"
+            class="lane-badge"
+            pointer-events="none"
+          >
+            <rect
+              :x="config.tileSize / 2 - 14"
+              :y="config.tileSize - 20"
+              width="28"
+              height="14"
+              rx="3"
+              class="lane-badge-bg"
+            />
+            <text
+              :x="config.tileSize / 2"
+              :y="config.tileSize - 9"
+              class="lane-badge-text"
+            >{{ roadTileLaneCount(cell.tile) }}L</text>
+          </g>
+
           <!-- Junction switch zones: one clickable spot over each junction
                entry's switch widget. Painted after the edge zones so it sits in
                front and intercepts the click, cycling that entry's authored
@@ -209,7 +232,7 @@ import MenuDrawer from "@/components/MenuDrawer.vue";
 import ToolDock from "@/components/ToolDock.vue";
 import type { Game } from "@/game";
 import { initialSwitches } from "@/game";
-import { Position, Coordinates } from "@/types";
+import { Position } from "@/types";
 import {
   Level,
   Port,
@@ -235,7 +258,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges, laneCount, laneCountAt } from "@/tiles/lanes";
+import { roadEdges as laneEdges } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -243,6 +266,7 @@ import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
 const LEVEL_KEY = "train-game:editor-level";
+const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
 const EDGES: Port[] = [
   Position.Top,
   Position.Right,
@@ -256,11 +280,11 @@ const HINTS: Record<Tool, string> = {
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
-  road: "Click an edge, then click tiles to route a road (corner by corner, curves and all). Click the start edge again or press Esc to finish. Drag for a quick single road. A road over track becomes a level crossing.",
+  road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Road over track = level crossing.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
-function stubGame(getLevel?: () => Level): Game {
+function stubGame(): Game {
   const empty: Record<string, never> = {};
   return {
     depotColors: {},
@@ -271,25 +295,17 @@ function stubGame(getLevel?: () => Level): Game {
     signalAspects: empty,
     signalOverrides: empty,
     cycleSignal: () => {},
-    roadLaneCount(coord: Coordinates, port: Position) {
-      if (!getLevel) return 0;
-      const level = getLevel();
-      if (!level) return 0;
-      return laneCount(level[getCoordinatesId(coord)]?.road, port);
-    },
-    roadLaneCountAt(coord: Coordinates, port: Position) {
-      if (!getLevel) return 0;
-      const level = getLevel();
-      if (!level) return 0;
-      return laneCountAt(level[getCoordinatesId(coord)]?.road, port);
-    },
+    // roadLaneCount is called by Tile.vue's roadPaths computed when config.roads
+    // is true and a road tile is present. Return 0 so the road ribbon renders
+    // at the tile's own lane count (no neighbour taper in the editor).
+    roadLaneCount: () => 0,
   } as unknown as Game;
 }
 
 @Component({ components: { MenuDrawer, ToolDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
-  @Provide("game") game: Game = markRaw(stubGame(() => this.level));
+  @Provide("game") game: Game = markRaw(stubGame());
 
   EDGES = EDGES;
   levelSizeY = 6;
@@ -316,7 +332,8 @@ class EditorView extends Vue {
   armed: { id: string; port: Port } | null = null;
   routeStarted = false;
   // Number of lanes per direction when the road tool is active (1/2/3).
-  roadLaneCount = 1;
+  // Persisted in localStorage so it survives tool switches and page reloads.
+  roadLaneCount = loadRoadLaneCount();
   // Set only in the U-turn case: the frontier tile is left undecided (blank)
   // because you're pointing at the edge the track entered through. The head
   // then trails one tile back, pointing at this pending tile.
@@ -526,6 +543,21 @@ class EditorView extends Vue {
   }
   // Mirror the level's effective starting arms into the (stub) game so Tile.vue's
   // switch widget lights the authored bulb — the same seeding play uses.
+  @Watch("roadLaneCount")
+  saveRoadLaneCount(v: number) {
+    try { localStorage.setItem(LANE_COUNT_KEY, String(v)); } catch { /* ignore */ }
+  }
+
+  // Max per-direction lane count across all edges of a tile (for the badge).
+  roadTileLaneCount(tile: Level[string] | null): number {
+    if (!tile?.road?.length) return 0;
+    const counts = laneEdges(tile.road).flatMap(([a, b]) => [
+      laneCount(tile.road, a),
+      laneCount(tile.road, b),
+    ]).filter(n => n > 0);
+    return counts.length ? Math.max(...counts) : 0;
+  }
+
   @Watch("level", { deep: true, immediate: true })
   syncSwitches() {
     const next = initialSwitches(this.level);
@@ -782,6 +814,15 @@ function loadLevel(): Level {
   return {};
 }
 
+function loadRoadLaneCount(): number {
+  try {
+    const v = parseInt(localStorage.getItem(LANE_COUNT_KEY) ?? "1");
+    return [1, 2, 3].includes(v) ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 export default toNative(EditorView);
 </script>
 
@@ -954,6 +995,17 @@ export default toNative(EditorView);
   min-width: 38px;
   padding: 4px 6px;
   font-size: 12px;
+}
+// Per-tile lane-count badge (road tool only): a small pill at the tile bottom.
+.lane-badge-bg {
+  fill: rgba(30, 30, 30, 0.72);
+}
+.lane-badge-text {
+  fill: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  text-anchor: middle;
+  font-family: monospace;
 }
 .io-box {
   position: fixed;

@@ -149,17 +149,23 @@ export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
 }
 
-// Ensure a two-way road edge is present without ever removing one (idempotent) —
-// used when dragging a road so re-crossing a tile forms a road junction.
-// `count` > 1 replaces any existing lanes between a<->b with `nWayLanes(a,b,count)`.
+// Set a two-way road edge to exactly `count` lanes per direction. For a plain
+// straight or curve (no junction exits), the edge is fully replaced so drawing
+// over an existing road with a different count selected upgrades or downgrades
+// it in place. For a junction approach (the lane has exits beyond this edge),
+// the additive merge is used instead to preserve the other movements.
 export function addRoad(cell: TileCell, a: Port, b: Port, count = 1): TileCell {
   const road = cell.road ?? [];
-  if (count > 1) {
-    // Drop existing lanes for this edge, then insert the multi-lane set.
-    const stripped = dropMovement(dropMovement(road, a, b), b, a);
-    return { ...cell, road: [...stripped, ...nWayLanes(a, b, count)] };
+  // Detect junction: an approach whose `to[]` includes exits other than the
+  // partner port. Replacing such a lane would silently drop those movements.
+  const aIsJunction = road.some(l => l.from === a && l.to.some(t => t !== b));
+  const bIsJunction = road.some(l => l.from === b && l.to.some(t => t !== a));
+  if (aIsJunction || bIsJunction) {
+    return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
   }
-  return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
+  // Simple edge: replace with the exact lane count (upgrade or downgrade).
+  const stripped = dropMovement(dropMovement(road, a, b), b, a);
+  return { ...cell, road: [...stripped, ...nWayLanes(a, b, count)] };
 }
 
 export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
