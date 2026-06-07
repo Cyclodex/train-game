@@ -102,6 +102,25 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 700;
   color: #8fa3b3;
 }
+// A drawer row holding a slider: the icon + label + value sit on the first line
+// (like a drawer-btn) and the range spans the full width on the next line.
+.drawer-slider {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  color: #cfd8e0;
+  font: 600 14px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.drawer-range {
+  flex: 1 0 100%;
+  width: 100%;
+  margin: 2px 0 0;
+  accent-color: #5fd39a;
+  cursor: pointer;
+}
 .drawer-divider {
   height: 1px;
   margin: 5px 2px;

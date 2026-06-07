@@ -108,6 +108,67 @@ describe("createRoadSim — spawning + movement", () => {
     expect(moved).toBe(true);
   });
 
+  it("reads a function maxCars live, so changing the cap takes effect mid-run", () => {
+    const lvl = straightRoad();
+    let cap = 2; // the live game-setting cap
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnInterval: 0.2, // busy: would overflow a small cap quickly
+      maxCars: () => cap,
+    });
+    // Fill up under the low cap and confirm it's respected.
+    for (let i = 0; i < 200; i++) sim.step(0.1, () => false);
+    expect(sim.cars().length).toBeLessThanOrEqual(2);
+
+    // Raise the cap live: more cars may now spawn.
+    cap = 8;
+    for (let i = 0; i < 200; i++) sim.step(0.1, () => false);
+    expect(sim.cars().length).toBeGreaterThan(2);
+
+    // Drop it to zero live: no new cars spawn (existing ones drive off the map
+    // and are not replaced), so the road empties.
+    cap = 0;
+    for (let i = 0; i < 400; i++) sim.step(0.1, () => false);
+    expect(sim.cars().length).toBe(0);
+  });
+
+  it("never stacks cars on top of each other at a saturated multi-lane entry", () => {
+    // Regression: a high cap on a busy 2-lane road backed traffic up to the spawn
+    // edge; the spawn probe only checked lane 0 while cars spawned into a random
+    // lane, so new cars piled onto the jammed lane — dozens at the exact same
+    // point, frozen, blocking the road. The spawn must probe the lane it actually
+    // uses and skip when every lane is blocked at the entry.
+    const road: [Position, Position] = [Position.Left, Position.Right];
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(road[0], road[1], 2) },
+      "1,0": { connections: [], road: nWayLanes(road[0], road[1], 2) },
+      "2,0": { connections: [], road: nWayLanes(road[0], road[1], 2) },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 3,
+      spawnInterval: 0.15, // very busy — guarantees the road saturates
+      maxCars: 100, // far more than the little road can hold
+    });
+    for (let i = 0; i < 600; i++) sim.step(0.1, () => false);
+
+    // No two cars may occupy the same tile + lane + position (a "stack").
+    const seen = new Set<string>();
+    let stacked = 0;
+    for (const c of sim.sample()) {
+      const f = c.units[0].front;
+      const key = `${f.coord.x},${f.coord.y}:${c.laneIndex}:${Math.round(f.t * 50)}`;
+      if (seen.has(key)) stacked++;
+      seen.add(key);
+    }
+    expect(stacked).toBe(0);
+  });
+
   it("is deterministic for a fixed seed", () => {
     const run = () => {
       const sim = createRoadSim({

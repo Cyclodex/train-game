@@ -50,6 +50,11 @@ export interface GameConfig {
   // time at crossings). Independent of `roads` rendering; a game mode can enable
   // the road world without scoring it.
   roadScoring: boolean;
+  // How many cars may be on the roads at once — the live cap the player sets in
+  // the menu. Read on every spawn attempt, so lowering it simply stops new cars
+  // spawning until the population falls under the new limit (it never despawns
+  // cars already driving). A scenario with its own `traffic.maxCars` overrides it.
+  maxCars: number;
   // The world backdrop theme (see src/themes.ts). Applied as a `theme-<id>`
   // class on #app; persisted via `setWorldTheme`.
   worldTheme: WorldTheme;
@@ -68,6 +73,7 @@ export const gameConfig: GameConfig = reactive({
   colorSeed: 1,
   roads: true,
   roadScoring: false,
+  maxCars: 8,
   worldTheme: loadWorldTheme(),
 });
 

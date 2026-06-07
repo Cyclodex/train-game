@@ -184,7 +184,11 @@ export function createGame(
   // sim's defaults; omitted → the all-cars default behaviour.
   traffic?: TrafficConfig,
   // Identifies the board for per-level best-score persistence.
-  levelId = "default"
+  levelId = "default",
+  // Live cap on concurrent road cars, read each spawn attempt so a reactive game
+  // setting (config.maxCars) takes effect immediately. A scenario's explicit
+  // `traffic.maxCars` still overrides this. Omitted → the sim's built-in default.
+  getMaxCars?: () => number
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -294,12 +298,15 @@ export function createGame(
       // If the model body is longer than the sprite, a queue looks gappy: the bumper
       // gap then sits on top of invisible extra body.
       carLength: CAR_SPRITE_PX / tileSize,
-      maxCars: 8,
+      // Car cap: the live game-setting getter wins when provided (both PlayView
+      // and TestStage pass one, so the player's slider controls density
+      // everywhere); otherwise a scenario's pinned `traffic.maxCars`, else the
+      // built-in default.
+      maxCars: getMaxCars ?? traffic?.maxCars ?? 8,
       // Per-level overrides (busyness + vehicle mix), if the level supplied any.
       ...(traffic?.spawnInterval !== undefined && {
         spawnInterval: traffic.spawnInterval,
       }),
-      ...(traffic?.maxCars !== undefined && { maxCars: traffic.maxCars }),
       ...(traffic?.mix !== undefined && { mix: traffic.mix }),
       // A level may pin exact spawn entries (e.g. a divided road with each lane
       // one-way in opposite directions), overriding the default edge detection.

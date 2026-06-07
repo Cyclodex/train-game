@@ -290,7 +290,10 @@ export interface RoadSimConfig {
   // Relative spawn weights per vehicle kind. Default `{ car: 1 }` → all cars.
   mix?: TrafficMix;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
-  maxCars?: number;
+  // A function is read live on every spawn attempt, so a game setting can change
+  // the cap mid-game (lowering it just stops new spawns until cars despawn under
+  // the new limit; it never removes cars already on the road).
+  maxCars?: number | (() => number);
   // Spawn only from these entries instead of every map-edge road opening. Used to
   // make a single-lane road effectively one-way (spawn from one end only), which
   // avoids a head-on deadlock on a shared straight road until a direction model
@@ -380,7 +383,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
   const speedSpread = Math.max(0, config.speedSpread ?? DEFAULT_SPEED_SPREAD);
-  const maxCars = config.maxCars ?? DEFAULT_MAX_CARS;
+  // Resolved live on each spawn attempt so a reactive game setting takes effect
+  // immediately (see RoadSimConfig.maxCars). Captured into a const so the
+  // function/number narrowing survives inside the getter closure.
+  const maxCarsCfg = config.maxCars;
+  const maxCarsOf = (): number =>
+    typeof maxCarsCfg === "function" ? maxCarsCfg() : maxCarsCfg ?? DEFAULT_MAX_CARS;
   const mix = config.mix ?? { car: 1 };
 
   const entries = config.spawnEntries ?? roadEntries(level, width, height);
@@ -400,6 +408,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;
+  // Rotates the preferred spawn lane each successful spawn so multi-lane entries
+  // fill their lanes evenly (deterministic, no RNG — keeps seeded order stable).
+  let spawnLaneRot = 0;
   // Cars that crossed ≥1 level crossing and then drove off the map. The road
   // layer's throughput tally, surfaced via frame() for the objective layer.
   let carsDelivered = 0;
@@ -808,18 +819,27 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
   function trySpawn(closed: CrossingClosed): void {
-    if (entries.length === 0 || cars.length >= maxCars) return;
+    if (entries.length === 0 || cars.length >= maxCarsOf()) return;
     // Pick an entry deterministically.
     const entry = entries[Math.floor(rng() * entries.length)];
     const id = getCoordinatesId(entry.coord);
     if (closed(id)) return;
-    // Spawn only if a car entering here would have clear road ahead. We probe with
-    // a zero-length car sitting at the entry edge and reuse clearAhead: it returns
-    // ~0 when another (same-lane) car's body is right at the entry (so we don't
-    // spawn on top of it) and the lookahead on open road otherwise. Two-lane note:
-    // clearAhead skips oncoming-lane cars, so an opposing car on the entry tile no
-    // longer blocks a spawn — exactly right when both directions share the tile.
+    // Spawn only into a lane with clear road at the entry. We probe each lane of
+    // the approach with a zero-length car sitting at the entry edge and reuse
+    // clearAhead: it returns ~0 when a same-lane car's body is right at the entry
+    // (so we never spawn on top of it) and the look-ahead on open road otherwise.
+    // The chosen lane MUST be the one probed — probing only lane 0 while spawning
+    // into a random lane let cars pile up on a jammed lane that backed up to the
+    // entry. Lanes are tried from a rotating start so multi-lane entries fill
+    // evenly; if every lane is blocked at the edge, skip this spawn entirely
+    // (the road is saturated — better to drop the spawn than stack cars). Two-lane
+    // note: clearAhead skips oncoming-lane cars, so an opposing car on the entry
+    // tile never blocks a spawn — right when both directions share the tile.
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
+    const entryLaneCount = Math.max(
+      1,
+      laneCount(level[getCoordinatesId(entry.coord)]?.road, entry.entryPort)
+    );
     const probe: Car = {
       id: "",
       kind: "car",
@@ -839,7 +859,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       crossedCrossing: false,
       laneIndex: 0,
     };
-    if (clearAhead(probe, closed).clear <= STOP_EPS) return;
+    let chosenLane = -1;
+    const startLane = spawnLaneRot % entryLaneCount;
+    for (let k = 0; k < entryLaneCount; k++) {
+      const lane = (startLane + k) % entryLaneCount;
+      probe.laneIndex = lane;
+      if (clearAhead(probe, closed).clear > STOP_EPS) {
+        chosenLane = lane;
+        break;
+      }
+    }
+    if (chosenLane < 0) return; // every lane blocked at the entry — don't stack
+    spawnLaneRot++;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
@@ -848,9 +879,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // — before route planning consumes any RNG — so the per-car speed sequence is
     // independent of routing (keeps seeded platoon tests stable across changes).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
-    // Pick a lane slot: random within the entry tile's lane count for this approach.
-    const entryLaneCount = laneCount(level[getCoordinatesId(entry.coord)]?.road, entry.entryPort);
-    const chosenLane = entryLaneCount > 1 ? Math.floor(rng() * entryLaneCount) : 0;
     // Two-lane (right-hand) roads: oncoming traffic uses the opposite lane, so a
     // car can head for any edge of the map without risking a head-on — routing
     // toward an edge other cars also use is fine. Pick a reachable exit edge

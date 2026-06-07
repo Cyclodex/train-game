@@ -8,6 +8,18 @@
         {{ paused ? "Start" : "Pause" }}
       </button>
       <button class="stage-button" @click="cycleSpeed">{{ speed }}x</button>
+      <label class="stage-cars">
+        🚗 Cars
+        <input
+          class="stage-cars-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          v-model.number="config.maxCars"
+        />
+        <span class="stage-cars-val">{{ config.maxCars === 0 ? "off" : config.maxCars }}</span>
+      </label>
       <span class="stage-deliveries">
         Delivered {{ delivered }} / {{ totalTrains }}
       </span>
@@ -125,7 +137,10 @@ class TestStage extends Vue {
       gameConfig.colorSeed,
       this.scenario.colors,
       this.scenario.traffic,
-      `test:${this.scenario.id}`
+      `test:${this.scenario.id}`,
+      // Live car cap from the shared "Cars" setting — drag the slider to change
+      // density in any scenario (overrides the scenario's pinned maxCars).
+      () => gameConfig.maxCars
     )
   );
 
@@ -234,6 +249,24 @@ export default toNative(TestStage);
   &:hover {
     background: #34506a;
   }
+}
+.stage-cars {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #cfd8e0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stage-cars-range {
+  width: 130px;
+  accent-color: #5fd39a;
+  cursor: pointer;
+}
+.stage-cars-val {
+  min-width: 1.8em;
+  color: #8fa3b3;
 }
 .stage-deliveries {
   color: #8fa3b3;

@@ -18,6 +18,19 @@
         <span>🔀</span><span>Switch lock</span>
         <span class="drawer-btn__val">{{ switchLockLabel }}</span>
       </button>
+      <div class="drawer-slider">
+        <span>🚗</span><span>Cars</span>
+        <span class="drawer-btn__val">{{ carCountLabel }}</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          v-model.number="config.maxCars"
+          @click.stop
+        />
+      </div>
       <div class="drawer-divider"></div>
       <button
         class="drawer-btn"
@@ -389,7 +402,9 @@ class PlayView extends Vue {
       // them so depot/train colours match the generated board exactly.
       this._resolved.setup.colors,
       DEFAULT_TRAFFIC,
-      this._resolved.levelId
+      this._resolved.levelId,
+      // Live car cap from the menu setting, read each spawn attempt.
+      () => gameConfig.maxCars
     )
   );
 
@@ -614,6 +629,11 @@ class PlayView extends Vue {
       default:
         return "off";
     }
+  }
+  // The concurrent-car cap, set by the "Cars" slider (0–100). The sim reads
+  // config.maxCars live, so dragging it changes road density immediately.
+  get carCountLabel(): string {
+    return this.config.maxCars === 0 ? "off" : String(this.config.maxCars);
   }
   pausePlayGame() {
     this.game.paused.value = !this.game.paused.value;
