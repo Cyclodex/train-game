@@ -220,3 +220,14 @@ export function isLevelCrossing(cell: TileCell): boolean {
   const railEdges = portsOf(cell.connections).filter(p => p !== Position.Center);
   return railEdges.length > 0;
 }
+
+// True when the level has no depots and at least one road tile — a pure road map
+// with no rail layer. Used to skip train/depot requirements in validation and UI.
+export function isRoadOnlyLevel(level: Level): boolean {
+  let hasAnyRoad = false;
+  for (const cell of Object.values(level)) {
+    if (cell.role === "depot") return false;
+    if (hasRoad(cell)) hasAnyRoad = true;
+  }
+  return hasAnyRoad;
+}

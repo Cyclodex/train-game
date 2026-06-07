@@ -32,6 +32,7 @@
       <div class="drawer-status" :class="{ 'drawer-status--bad': !valid.ok }">
         {{ valid.ok ? "✓ valid" : valid.issues.length + " issue(s)" }}
         <template v-if="depotIds.length"> · {{ depotIds.length }} depots</template>
+        <template v-else-if="roadOnly"> · road only</template>
       </div>
     </MenuDrawer>
 
@@ -216,6 +217,7 @@ import {
   portsOf,
   isJunctionEntry,
   parseCoordId,
+  isRoadOnlyLevel,
 } from "@/tiles/model";
 import {
   emptyCell,
@@ -337,7 +339,12 @@ class EditorView extends Vue {
       this.valid.issues.map(i => i.tileId).filter((x): x is string => !!x)
     );
   }
+  // True when the level has no depots and at least one road tile.
+  get roadOnly(): boolean {
+    return isRoadOnlyLevel(this.level);
+  }
   get canPlay(): boolean {
+    if (this.roadOnly) return this.valid.ok;
     return this.routes.length > 0 && this.valid.ok;
   }
 
