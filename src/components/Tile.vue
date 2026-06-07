@@ -16,7 +16,7 @@
         <path
           :d="r.surface"
           class="road-surface"
-          :class="{ 'road-surface--mismatch': r.mismatch }"
+          :class="{ 'road-surface--mismatch': r.mismatch, 'road-surface--bus': r.isBus }"
         />
       </g>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
@@ -26,6 +26,19 @@
           :d="m.d"
           :class="'road-marking-' + m.kind"
         />
+      </template>
+    </svg>
+
+    <!-- Lane graph debug overlay: directed arrows from port→port for each road
+         movement. Cyan = car lanes; amber = bus-only lanes. Only in debug mode. -->
+    <svg
+      v-if="config.debug && laneGraphOverlay.length"
+      class="road-layer lane-graph-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <template v-for="(m, mi) in laneGraphOverlay" :key="'lg' + mi">
+        <path :d="m.shaft" class="lg-shaft" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
+        <path :d="m.head" class="lg-head" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
       </template>
     </svg>
 
@@ -147,7 +160,7 @@ import {
   isJunctionEntry,
   parseCoordId,
 } from "@/tiles/model";
-import { segmentPathD } from "@/sim/pathGeometry";
+import { segmentPathD, portPoint } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import {
   roadSurfacePolygonPath,
@@ -155,7 +168,7 @@ import {
   roadLaneMarkingPaths,
   LaneMarkingPath,
 } from "@/tiles/roadGeometry";
-import { roadEdges, laneCount } from "@/tiles/lanes";
+import { roadEdges, laneCount, laneMovements } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import depotBuildingImg from "@/assets/depot.png";
 
@@ -211,7 +224,7 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; mismatch: boolean; mismatchTip: string }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; mismatch: boolean; mismatchTip: string; isBus: boolean }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -241,11 +254,13 @@ class Tile extends Vue {
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this tile has ${selfTotal} lanes total, neighbour has ${badNeighbour}. Draw over with matching lane count to fix.`
           : "";
+        const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
         return {
           surface: roadCurvePolygonPath(a, b, size, selfTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
           mismatch,
           mismatchTip,
+          isBus,
         };
       }
 
@@ -262,13 +277,43 @@ class Tile extends Vue {
       const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
+      const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
         mismatch: false,
         mismatchTip: "",
+        isBus,
       };
     });
+  }
+
+  // Lane node graph for the debug overlay: one directed arrow per movement in
+  // the tile's road layer. Each entry has a `shaft` path (the movement centreline)
+  // and a `head` path (a small chevron at the exit port). Bus-lane movements are
+  // distinguished by `isBus` so the overlay can colour them separately.
+  get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
+    if (!this.config.debug || !this.tile.road?.length) return [];
+    const size = this.config.tileSize;
+    const out: { shaft: string; head: string; isBus: boolean }[] = [];
+    const busSet = new Set(
+      (this.tile.road).filter(l => l.kind === "bus").map(l => `${l.from}:${l.to.join(",")}`)
+    );
+    for (const { from, to } of laneMovements(this.tile.road)) {
+      const isBus = busSet.has(`${from}:${to}`) || (this.tile.road ?? []).some(l => l.from === from && l.kind === "bus");
+      const shaft = segmentPathD(from, to, size);
+      const b = portPoint(to, size);
+      const a = portPoint(from, size);
+      // Arrowhead: small V-chevron pointing into the exit port.
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const mag = Math.hypot(dx, dy) || 1;
+      const nx = dx / mag, ny = dy / mag;
+      const px = -ny, py = nx;
+      const s = 7;
+      const head = `M${b.x - nx * s + px * s * 0.55} ${b.y - ny * s + py * s * 0.55} L${b.x} ${b.y} L${b.x - nx * s - px * s * 0.55} ${b.y - ny * s - py * s * 0.55}`;
+      out.push({ shaft, head, isBus });
+    }
+    return out;
   }
 
   // Entry ports that are junction entries (need a switch widget).
@@ -396,6 +441,33 @@ export default toNative(Tile);
   // Lane-count mismatch at a non-straight seam — invalid connection, cannot
   // route traffic correctly. Render red so the layout error is obvious.
   fill: #b03030;
+}
+.road-surface--bus {
+  fill: #5a4a00;
+}
+
+/* --- lane graph debug overlay --- */
+.lane-graph-layer {
+  z-index: 3; // above road surface, below rails and cars
+}
+.lg-shaft {
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+.lg-head {
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+}
+.lg-car {
+  stroke: #00bcd4;
+}
+.lg-bus {
+  stroke: #ff9800;
 }
 .road-marking-centre {
   fill: none;
