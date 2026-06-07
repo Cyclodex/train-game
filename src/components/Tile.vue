@@ -126,7 +126,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ kind }}</div>
+      <div class="debug-kind">{{ kind }}{{ roadLaneLabel }}</div>
     </div>
   </div>
 </template>
@@ -182,6 +182,12 @@ class Tile extends Vue {
   }
   get kindClass() {
     return `tile-kind--${this.kind}`;
+  }
+  get roadLaneLabel(): string {
+    const road = this.tile.road;
+    if (!road?.length) return "";
+    const max = Math.max(...roadEdges(road).flatMap(([a, b]) => [laneCount(road, a), laneCount(road, b)]));
+    return max > 0 ? ` ${max}L` : "";
   }
   get isDepot() {
     return this.tile.role === "depot";

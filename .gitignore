@@ -2,6 +2,9 @@
 node_modules
 /dist
 
+# Claude Code local state (worktrees, hooks, session settings)
+.claude/
+
 # Brainstorm / visual-companion mockups (Superpowers)
 .superpowers
 
