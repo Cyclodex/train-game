@@ -39,6 +39,8 @@
           </clipPath>
         </defs>
         <template v-for="g in laneDropOverlay.gores" :key="'g' + g.clipId">
+          <!-- Pave the closing-lane triangle so it reads as road, not grass. -->
+          <path :d="g.triangle" class="road-gore-fill" />
           <g :clip-path="`url(#${g.clipId})`">
             <path
               v-for="(h, hi) in g.hatch"
@@ -571,15 +573,20 @@ export default toNative(Tile);
   stroke-dasharray: 14 12;
   stroke-linecap: butt;
 }
+/* The closing-lane gore is paved (concrete), matching the road surface, with
+   white diagonal hatching and a white closing edge — the real lane-drop look. */
+.road-gore-fill {
+  fill: #4a4a4a;
+  stroke: none;
+}
 .road-gore-hatch {
   fill: none;
-  stroke: #f4d35e;
+  stroke: rgba(255, 255, 255, 0.7);
   stroke-width: 1.5px;
-  opacity: 0.65;
 }
 .road-gore-border {
   fill: none;
-  stroke: #f4d35e;
+  stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 2px;
 }
 .road-drop-arrow-shaft {
