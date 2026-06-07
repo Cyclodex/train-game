@@ -30,6 +30,98 @@ export interface LaneMarkingPath {
   kind: "centre" | "inner";
 }
 
+// One painted lane-drop arrow: a stroked shaft plus a filled arrowhead.
+export interface MergeArrowPath {
+  shaft: string;
+  head: string;
+}
+
+// One in-lane lane-drop arrow ("this lane is ending, move over") on a straight
+// road edge, in the Swiss style: a short diagonal painted inside the ending
+// lane, pointing in the direction of travel (entry→exit) and angled toward the
+// centre divider (the merge direction). `laneIndex` is the lane it sits in
+// (0 = centre-adjacent; the outer, higher-index lanes are the ones that end).
+// `alongT` (0..1) is the position of the arrow's midpoint along the entry→exit
+// centreline. LANE_W matches the lane markings so the arrow stays inside its lane.
+export function laneDropArrowPath(
+  entry: Port,
+  exit: Port,
+  size: number,
+  laneIndex: number,
+  alongT: number,
+): MergeArrowPath {
+  const LANE_W = size * 0.14;
+  const HALF = size * 0.16; // half the shaft length
+  const LATERAL = 0.6; // how far (in lane widths) the head shifts toward centre
+  const HEAD = size * 0.06; // arrowhead barb length
+
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const fx = dx / len, fy = dy / len; // forward (travel) unit
+  const n = perpUnit(a, b); // right-of-travel unit (lanes sit on +n)
+
+  const along0 = alongT * len;
+  const tailOff = (laneIndex + 0.5) * LANE_W;
+  const headOff = (laneIndex + 0.5 - LATERAL) * LANE_W;
+  const tail = {
+    x: a.x + fx * (along0 - HALF) + n.x * tailOff,
+    y: a.y + fy * (along0 - HALF) + n.y * tailOff,
+  };
+  const head = {
+    x: a.x + fx * (along0 + HALF) + n.x * headOff,
+    y: a.y + fy * (along0 + HALF) + n.y * headOff,
+  };
+
+  const ang = Math.atan2(head.y - tail.y, head.x - tail.x);
+  const a1 = ang + Math.PI - 0.45;
+  const a2 = ang + Math.PI + 0.45;
+  const r = (v: number) => Math.round(v * 100) / 100;
+  return {
+    shaft: `M ${r(tail.x)} ${r(tail.y)} L ${r(head.x)} ${r(head.y)}`,
+    head:
+      `M ${r(head.x)} ${r(head.y)} ` +
+      `L ${r(head.x + Math.cos(a1) * HEAD)} ${r(head.y + Math.sin(a1) * HEAD)} ` +
+      `L ${r(head.x + Math.cos(a2) * HEAD)} ${r(head.y + Math.sin(a2) * HEAD)} Z`,
+  };
+}
+
+// Decide where lane-drop arrows go for one travel direction on a straight tile.
+// `selfN` is this direction's lane count; `downstream1` / `downstream2` are the
+// same direction's lane counts 1 and 2 tiles ahead (0 = no road / map edge).
+// Returns one `{ laneIndex, alongT }` per arrow to paint:
+//   - drop at this tile's far seam (downstream1 < selfN): one arrow per ending
+//     lane, placed in the entry half (before the surface taper near the exit).
+//   - drop one tile ahead (downstream1 === selfN, downstream2 < selfN): two
+//     advance arrows per ending lane, leading toward the exit.
+// Ending lanes are the outer indices [survivors, selfN) that don't continue.
+// Anything else (no drop, a widening, or the road simply ending) yields nothing.
+export function laneDropArrowPlan(
+  selfN: number,
+  downstream1: number,
+  downstream2: number,
+): { laneIndex: number; alongT: number }[] {
+  if (selfN < 2) return [];
+  let survivors: number;
+  let positions: number[];
+  if (downstream1 > 0 && downstream1 < selfN) {
+    survivors = downstream1;
+    positions = [0.25];
+  } else if (downstream1 === selfN && downstream2 > 0 && downstream2 < selfN) {
+    survivors = downstream2;
+    positions = [0.45, 0.8];
+  } else {
+    return [];
+  }
+  const out: { laneIndex: number; alongT: number }[] = [];
+  for (let lane = survivors; lane < selfN; lane++) {
+    for (const alongT of positions) out.push({ laneIndex: lane, alongT });
+  }
+  return out;
+}
+
 // The paved-surface polygon for a road edge whose width tapers linearly from
 // `widthA` at the entry end to `widthB` at the exit end. Used by the tile
 // renderer to draw a road whose width changes at a seam (a merge or a split):
@@ -155,14 +247,20 @@ export function roadCurvePolygonPath(entry: Port, exit: Port, size: number, widt
   const avgY = nA.y + nB.y;
   const avgMag = Math.hypot(avgX, avgY) || 1;
   const nC = { x: avgX / avgMag, y: avgY / avgMag };
+  // Offsetting a quadratic Bézier by moving its control point straight out by
+  // `halfW` under-shoots the true offset at the apex (the ribbon pinches ~15%
+  // narrower mid-curve). Scaling the control offset by k = 2 − ½·|nA + nB|
+  // makes the offset curve hit the target distance at the apex too, so the
+  // road keeps constant width through the bend. See controlOffsetFactor().
+  const k = controlOffsetFactor(avgMag);
 
   // Outer edge: offset by +halfW (right side of travel).
   const ax = a.x + nA.x * halfW, ay = a.y + nA.y * halfW;
-  const cx1 = c.x + nC.x * halfW, cy1 = c.y + nC.y * halfW;
+  const cx1 = c.x + nC.x * halfW * k, cy1 = c.y + nC.y * halfW * k;
   const bx1 = b.x + nB.x * halfW, by1 = b.y + nB.y * halfW;
   // Inner edge: offset by -halfW (left side of travel), traversed in reverse.
   const bx2 = b.x - nB.x * halfW, by2 = b.y - nB.y * halfW;
-  const cx2 = c.x - nC.x * halfW, cy2 = c.y - nC.y * halfW;
+  const cx2 = c.x - nC.x * halfW * k, cy2 = c.y - nC.y * halfW * k;
   const ax2 = a.x - nA.x * halfW, ay2 = a.y - nA.y * halfW;
 
   return (
@@ -188,10 +286,20 @@ function curvedParallelPath(entry: Port, exit: Port, size: number, d: number): s
   const avgY = nA.y + nB.y;
   const avgMag = Math.hypot(avgX, avgY) || 1;
   const nC = { x: avgX / avgMag, y: avgY / avgMag };
+  const k = controlOffsetFactor(avgMag);
 
   const ax = a.x + nA.x * d, ay = a.y + nA.y * d;
-  const cx = c.x + nC.x * d, cy = c.y + nC.y * d;
+  const cx = c.x + nC.x * d * k, cy = c.y + nC.y * d * k;
   const bx = b.x + nB.x * d, by = b.y + nB.y * d;
 
   return `M ${ax} ${ay} Q ${cx} ${cy} ${bx} ${by}`;
+}
+
+// How far to push a quadratic Bézier's control point (as a multiple of the
+// desired perpendicular offset) so the offset curve sits at the target distance
+// at the apex, not just at the endpoints. `avgMag` is |nA + nB| for the two
+// unit endpoint normals: for a 90° tile curve it is √2, giving k ≈ 1.293; as a
+// bend straightens (normals align) avgMag → 2 and k → 1 (no correction needed).
+function controlOffsetFactor(avgMag: number): number {
+  return 2 - 0.5 * avgMag;
 }

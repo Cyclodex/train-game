@@ -209,7 +209,7 @@ import MenuDrawer from "@/components/MenuDrawer.vue";
 import ToolDock from "@/components/ToolDock.vue";
 import type { Game } from "@/game";
 import { initialSwitches } from "@/game";
-import { Position } from "@/types";
+import { Position, Coordinates } from "@/types";
 import {
   Level,
   Port,
@@ -235,7 +235,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges } from "@/tiles/lanes";
+import { roadEdges as laneEdges, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -260,7 +260,7 @@ const HINTS: Record<Tool, string> = {
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
-function stubGame(): Game {
+function stubGame(getLevel?: () => Level): Game {
   const empty: Record<string, never> = {};
   return {
     depotColors: {},
@@ -271,17 +271,25 @@ function stubGame(): Game {
     signalAspects: empty,
     signalOverrides: empty,
     cycleSignal: () => {},
-    // roadLaneCount is called by Tile.vue's roadPaths computed when config.roads
-    // is true and a road tile is present. Return 0 so the road ribbon renders
-    // at the tile's own lane count (no neighbour taper in the editor).
-    roadLaneCount: () => 0,
+    roadLaneCount(coord: Coordinates, port: Position) {
+      if (!getLevel) return 0;
+      const level = getLevel();
+      if (!level) return 0;
+      return laneCount(level[getCoordinatesId(coord)]?.road, port);
+    },
+    roadLaneCountAt(coord: Coordinates, port: Position) {
+      if (!getLevel) return 0;
+      const level = getLevel();
+      if (!level) return 0;
+      return laneCountAt(level[getCoordinatesId(coord)]?.road, port);
+    },
   } as unknown as Game;
 }
 
 @Component({ components: { MenuDrawer, ToolDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
-  @Provide("game") game: Game = markRaw(stubGame());
+  @Provide("game") game: Game = markRaw(stubGame(() => this.level));
 
   EDGES = EDGES;
   levelSizeY = 6;

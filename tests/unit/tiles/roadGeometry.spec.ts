@@ -5,6 +5,8 @@ import {
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
   roadLaneMarkingPaths,
+  laneDropArrowPath,
+  laneDropArrowPlan,
 } from "@/tiles/roadGeometry";
 
 describe("roadSurfacePath", () => {
@@ -187,6 +189,80 @@ describe("roadLaneMarkingPaths", () => {
   });
 });
 
+describe("laneDropArrowPlan", () => {
+  it("narrowing tile (2→1): one arrow in the single ending lane", () => {
+    const plan = laneDropArrowPlan(2, 1, 0);
+    expect(plan).toEqual([{ laneIndex: 1, alongT: 0.25 }]);
+  });
+
+  it("approach tile (2,2,1): two advance arrows in the ending lane", () => {
+    const plan = laneDropArrowPlan(2, 2, 1);
+    expect(plan).toEqual([
+      { laneIndex: 1, alongT: 0.45 },
+      { laneIndex: 1, alongT: 0.8 },
+    ]);
+  });
+
+  it("narrowing 3→1: one arrow per ending lane (indices 1 and 2)", () => {
+    const plan = laneDropArrowPlan(3, 1, 0);
+    expect(plan).toEqual([
+      { laneIndex: 1, alongT: 0.25 },
+      { laneIndex: 2, alongT: 0.25 },
+    ]);
+  });
+
+  it("approach 3→1: two advance arrows per ending lane (4 total)", () => {
+    const plan = laneDropArrowPlan(3, 3, 1);
+    expect(plan).toHaveLength(4);
+    expect(plan.filter(p => p.laneIndex === 1)).toHaveLength(2);
+    expect(plan.filter(p => p.laneIndex === 2)).toHaveLength(2);
+  });
+
+  it("no drop ahead (2,2,2): no arrows", () => {
+    expect(laneDropArrowPlan(2, 2, 2)).toEqual([]);
+  });
+
+  it("a widening downstream (2→3): no arrows", () => {
+    expect(laneDropArrowPlan(2, 3, 0)).toEqual([]);
+  });
+
+  it("single-lane road: no arrows", () => {
+    expect(laneDropArrowPlan(1, 0, 0)).toEqual([]);
+  });
+
+  it("road simply ends at the seam (downstream1 = 0): no arrows", () => {
+    expect(laneDropArrowPlan(2, 0, 0)).toEqual([]);
+  });
+
+  it("road ends one tile ahead (2,2,0): no arrows (not a lane drop)", () => {
+    expect(laneDropArrowPlan(2, 2, 0)).toEqual([]);
+  });
+});
+
+describe("laneDropArrowPath", () => {
+  it("places a forward-and-inward diagonal inside the ending lane", () => {
+    // Left→Right, size 200: forward = (1,0), right-of-travel n = (0,1) (down).
+    // lane 1 → tailOff = 1.5·28 = 42, headOff = 0.9·28 = 25.2. HALF = 32.
+    // along0 = 0.25·200 = 50 → tail x = 50−32 = 18, head x = 50+32 = 82.
+    const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25);
+    expect(arrow.shaft).toBe("M 18 142 L 82 125.2");
+    // Head tilts toward the centreline (y decreases from tail to head).
+    expect(arrow.head.startsWith("M 82 125.2 ")).toBe(true);
+  });
+
+  it("arrowhead is a closed triangle", () => {
+    const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25);
+    expect(arrow.head.trimEnd().endsWith("Z")).toBe(true);
+    expect((arrow.head.match(/L/g) ?? []).length).toBe(2);
+  });
+
+  it("points in the travel direction (head ahead of tail along entry→exit)", () => {
+    const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.5);
+    const [, tailX, , headX] = arrow.shaft.match(/M (\S+) (\S+) L (\S+) (\S+)/)!.map(Number);
+    expect(headX).toBeGreaterThan(tailX);
+  });
+});
+
 describe("roadCurvePolygonPath", () => {
   it("returns a closed path (starts with M, ends with Z)", () => {
     const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
@@ -220,6 +296,35 @@ describe("roadCurvePolygonPath", () => {
     const inners = marks.filter(m => m.kind === "inner");
     for (const inner of inners) {
       expect(inner.d).toContain("Q");
+    }
+  });
+
+  it("keeps a near-constant half-width through the bend (no apex pinch)", () => {
+    // Regression: offsetting the control point by exactly halfW under-shoots at
+    // the apex (the ribbon pinched to ~85% mid-curve). The control-offset factor
+    // restores constant width — the outer edge must stay within ~2% of halfW all
+    // along the curve, not just at the seam endpoints.
+    const halfW = 56;
+    const d = roadCurvePolygonPath(Position.Top, Position.Right, 200, halfW * 2);
+    // Parse: "M ax ay Q cx1 cy1 bx1 by1 L ... Q ... Z". The outer edge is the
+    // first M + first Q (control cx1,cy1 ; end bx1,by1).
+    const n = d.match(/-?\d+\.?\d*/g)!.map(Number);
+    const outer = { a: { x: n[0], y: n[1] }, c: { x: n[2], y: n[3] }, b: { x: n[4], y: n[5] } };
+    // Centreline through Top(100,0) -> Center(100,100) -> Right(200,100).
+    const cl = { a: { x: 100, y: 0 }, c: { x: 100, y: 100 }, b: { x: 200, y: 100 } };
+    const bez = (
+      p: { a: { x: number; y: number }; c: { x: number; y: number }; b: { x: number; y: number } },
+      t: number,
+    ) => ({
+      x: (1 - t) * (1 - t) * p.a.x + 2 * (1 - t) * t * p.c.x + t * t * p.b.x,
+      y: (1 - t) * (1 - t) * p.a.y + 2 * (1 - t) * t * p.c.y + t * t * p.b.y,
+    });
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const o = bez(outer, t);
+      const m = bez(cl, t);
+      const dist = Math.hypot(o.x - m.x, o.y - m.y);
+      expect(dist).toBeGreaterThan(halfW * 0.98);
+      expect(dist).toBeLessThan(halfW * 1.02);
     }
   });
 });

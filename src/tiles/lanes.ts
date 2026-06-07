@@ -121,6 +121,18 @@ export function laneCount(road: Lane[] | undefined, from: Port): number {
   return lanes.length === 0 ? 0 : Math.max(...lanes.map(l => l.index)) + 1;
 }
 
+// Total physical lanes crossing a port boundary: lanes entering FROM the port plus
+// lanes exiting THROUGH the port (i.e. whose `to` list includes it). Use this
+// instead of laneCount(a) + laneCount(oppositePort(a)) when the neighbour may be a
+// curve or junction — for those tiles the opposite port carries no lanes, so the
+// two-term formula under-counts and triggers false mismatch / taper errors.
+export function laneCountAt(road: Lane[] | undefined, port: Port): number {
+  const entering = laneCount(road, port);
+  const exitingLanes = (road ?? []).filter(l => l.to.includes(port));
+  const exiting = exitingLanes.length === 0 ? 0 : Math.max(...exitingLanes.map(l => l.index)) + 1;
+  return entering + exiting;
+}
+
 // Generate `count` index slots in both directions between ports `a` and `b`.
 // Produces a multi-lane bidirectional road: indices 0..count-1 each way.
 export function nWayLanes(a: Port, b: Port, count: number): Lane[] {

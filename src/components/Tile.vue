@@ -26,6 +26,10 @@
           :class="'road-marking-' + m.kind"
         />
       </template>
+      <template v-for="(ar, ai) in roadArrows" :key="'ar' + ai">
+        <path :d="ar.shaft" class="road-arrow" />
+        <path :d="ar.head" class="road-arrow-head" />
+      </template>
     </svg>
 
     <TileRail :possible-routes="railRoutes" />
@@ -127,7 +131,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ kind }}</div>
+      <div class="debug-kind">{{ kind }}{{ roadLaneLabel }}</div>
     </div>
   </div>
 </template>
@@ -152,7 +156,10 @@ import {
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
   roadLaneMarkingPaths,
+  laneDropArrowPath,
+  laneDropArrowPlan,
   LaneMarkingPath,
+  MergeArrowPath,
 } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -183,6 +190,12 @@ class Tile extends Vue {
   }
   get kindClass() {
     return `tile-kind--${this.kind}`;
+  }
+  get roadLaneLabel(): string {
+    const road = this.tile.road;
+    if (!road?.length) return "";
+    const max = Math.max(...roadEdges(road).flatMap(([a, b]) => [laneCount(road, a), laneCount(road, b)]));
+    return max > 0 ? ` ${max}L` : "";
   }
   get isDepot() {
     return this.tile.role === "depot";
@@ -228,10 +241,10 @@ class Tile extends Vue {
         const na = neighborCoord(coord, a);
         const nb = neighborCoord(coord, b);
         const nTotalA = na
-          ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
+          ? this.game.roadLaneCountAt(na, oppositePort(a))
           : 0;
         const nTotalB = nb
-          ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
+          ? this.game.roadLaneCountAt(nb, oppositePort(b))
           : 0;
         const mismatch =
           (na !== null && nTotalA > 0 && nTotalA !== selfTotal) ||
@@ -247,10 +260,10 @@ class Tile extends Vue {
       const na = neighborCoord(coord, a);
       const nb = neighborCoord(coord, b);
       const neighborTotalAtA = na
-        ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
+        ? this.game.roadLaneCountAt(na, oppositePort(a))
         : 0;
       const neighborTotalAtB = nb
-        ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
+        ? this.game.roadLaneCountAt(nb, oppositePort(b))
         : 0;
       const totalA = (na && neighborTotalAtA > 0) ? Math.min(selfTotal, neighborTotalAtA) : selfTotal;
       const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
@@ -262,6 +275,33 @@ class Tile extends Vue {
         mismatch: false,
       };
     });
+  }
+
+  // Swiss-style lane-drop arrows: painted in a lane that is about to end so the
+  // driver knows to merge. For each straight edge and each travel direction, we
+  // look 1 and 2 tiles downstream; `laneDropArrowPlan` decides whether this tile
+  // is the narrowing tile (1 arrow) or the tile just before it (2 advance
+  // arrows), and which ending lanes they sit in. Curves/junctions are skipped.
+  get roadArrows(): MergeArrowPath[] {
+    if (!this.tile.road?.length) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const out: MergeArrowPath[] = [];
+    for (const [a, b] of roadEdges(this.tile.road)) {
+      if (oppositePort(a) !== b) continue; // straight tiles only
+      for (const [entry, exit] of [[a, b], [b, a]] as [Position, Position][]) {
+        const selfN = laneCount(this.tile.road, entry);
+        const n1 = neighborCoord(coord, exit);
+        if (!n1) continue; // map edge: the road ends, not a lane drop
+        const d1 = this.game.roadLaneCount(n1, oppositePort(exit));
+        const n2 = neighborCoord(n1, exit);
+        const d2 = n2 ? this.game.roadLaneCount(n2, oppositePort(exit)) : 0;
+        for (const { laneIndex, alongT } of laneDropArrowPlan(selfN, d1, d2)) {
+          out.push(laneDropArrowPath(entry, exit, size, laneIndex, alongT));
+        }
+      }
+    }
+    return out;
   }
 
   // Entry ports that are junction entries (need a switch widget).
@@ -402,6 +442,17 @@ export default toNative(Tile);
   stroke-width: 2px;
   stroke-dasharray: 14 12;
   stroke-linecap: butt;
+}
+// Lane-drop ("merge ahead") arrow painted inside an ending lane.
+.road-arrow {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 5px;
+  stroke-linecap: round;
+}
+.road-arrow-head {
+  fill: rgba(255, 255, 255, 0.85);
+  stroke: none;
 }
 
 /* --- signals (from TileStraight.vue) --- */
