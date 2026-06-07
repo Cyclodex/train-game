@@ -58,9 +58,9 @@ export function laneDropArrowPath(
   alongT: number,
 ): MergeArrowPath {
   const LANE_W = size * 0.14;
-  const HALF = size * 0.09; // half the shaft length (compact)
+  const HALF = size * 0.075; // half the shaft length (compact)
   const LATERAL = 0.6; // chevron lean (in lane widths) toward the centre divider
-  const HEAD = size * 0.06; // chevron barb length (slim head)
+  const HEAD = size * 0.05; // chevron barb length (slim head)
   const SPLAY = 0.5; // half-angle of the open chevron, radians
 
   const a = portPoint(entry, size);
@@ -120,10 +120,12 @@ export function laneDropArrowPlan(
   let positions: number[];
   if (downstream1 > 0 && downstream1 < selfN) {
     survivors = downstream1;
-    positions = [0.25];
+    positions = [0.15];
   } else if (downstream1 === selfN && downstream2 > 0 && downstream2 < selfN) {
     survivors = downstream2;
-    positions = [0.45, 0.8];
+    // Evenly spaced with the narrowing tile's 0.15 arrow: continuous positions
+    // 0.35, 0.75, 1.15 — equal 0.40-tile gaps across the two tiles.
+    positions = [0.35, 0.75];
   } else {
     return [];
   }

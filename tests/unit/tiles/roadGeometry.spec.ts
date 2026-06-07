@@ -225,22 +225,22 @@ describe("roadLaneMarkingPaths", () => {
 describe("laneDropArrowPlan", () => {
   it("narrowing tile (2→1): one arrow in the single ending lane", () => {
     const plan = laneDropArrowPlan(2, 1, 0);
-    expect(plan).toEqual([{ laneIndex: 1, alongT: 0.25 }]);
+    expect(plan).toEqual([{ laneIndex: 1, alongT: 0.15 }]);
   });
 
   it("approach tile (2,2,1): two advance arrows in the ending lane", () => {
     const plan = laneDropArrowPlan(2, 2, 1);
     expect(plan).toEqual([
-      { laneIndex: 1, alongT: 0.45 },
-      { laneIndex: 1, alongT: 0.8 },
+      { laneIndex: 1, alongT: 0.35 },
+      { laneIndex: 1, alongT: 0.75 },
     ]);
   });
 
   it("narrowing 3→1: one arrow per ending lane (indices 1 and 2)", () => {
     const plan = laneDropArrowPlan(3, 1, 0);
     expect(plan).toEqual([
-      { laneIndex: 1, alongT: 0.25 },
-      { laneIndex: 2, alongT: 0.25 },
+      { laneIndex: 1, alongT: 0.15 },
+      { laneIndex: 2, alongT: 0.15 },
     ]);
   });
 
@@ -277,9 +277,9 @@ describe("laneDropArrowPath", () => {
     // Left→Right, size 200: forward = (1,0), right-of-travel n = (0,1) (down).
     // lane 1 → laneMid = 1.5·28 = 42. LATERAL 0.6 → ±0.3·28 = ±8.4 about laneMid:
     // tailOff = 50.4, headOff = 33.6 → y 150.4 → 133.6 (leans toward centreline).
-    // HALF = 18, along0 = 0.25·200 = 50 → tail x = 32, head x = 68.
+    // HALF = 15, along0 = 0.25·200 = 50 → tail x = 35, head x = 65.
     const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25);
-    expect(arrow.shaft).toBe("M 32 150.4 L 68 133.6");
+    expect(arrow.shaft).toBe("M 35 150.4 L 65 133.6");
   });
 
   it("arrowhead is an open chevron (two strokes, no fill/close)", () => {
@@ -287,8 +287,8 @@ describe("laneDropArrowPath", () => {
     // Open path: barb → tip → barb, not closed with Z.
     expect(arrow.head.trimEnd().endsWith("Z")).toBe(false);
     expect((arrow.head.match(/L/g) ?? []).length).toBe(2);
-    // The chevron tip is the shaft's head point (68, 133.6).
-    expect(arrow.head).toContain("L 68 133.6 L");
+    // The chevron tip is the shaft's head point (65, 133.6).
+    expect(arrow.head).toContain("L 65 133.6 L");
   });
 
   it("points in the travel direction (head ahead of tail along entry→exit)", () => {
