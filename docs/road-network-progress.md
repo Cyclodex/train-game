@@ -15,8 +15,8 @@ lanes, turn rules, vehicle classes, and (eventually) lateral lane changes.
 | B+C | Multi-lane roads (render + sim) | ✅ **Done & merged** |
 | D | Junction turn restrictions / one-way | ✅ **Done & merged** (editor authoring now real, see below) |
 | E | Lane attributes / vehicle classes (bus lanes) | ✅ **Done & merged** (enforced + rendered + scenario) |
-| F | Route planner v2 (lane- + restriction-aware; car destinations) | 🟡 **Partial** — cars route to destinations & obey turn bans; lane *choice* is still naive |
-| G | Lane switching (overtake, pre-turn positioning, lateral changes) | ⬜ **Not started** — the main remaining behaviour |
+| F | Route planner v2 (lane- + restriction-aware; car destinations) | ✅ **Done & merged** — cars sort into the turn lane their route needs; routes target off-map exits (one-way networks route) |
+| G | Lane switching (overtake, pre-turn positioning, lateral changes) | ✅ **Done & merged** — continuous lane position, gap-accepted lane changes, merge before a lane drop |
 
 ## Where we stand
 
@@ -57,24 +57,38 @@ Test scenarios (in `/test`): `roadoneway`, `roadtwolane`, `roadmultilane`,
 `roadpriority`, `trucks`, `buslane`, `cardestination`, plus the car-traffic
 demos (`carfollowing`, `carqueue`, `carcircle`, `carscurve`).
 
-## What's next
+## Recently landed: F + G (the traffic-realism arc)
 
-### F — Route planner v2 (finish the partial)
-Cars have destinations and obey turn bans, but **lane choice is naive** — a car
-doesn't position itself in the correct lane ahead of a turn, and there's no
-lane-cost in routing. Next:
-- Pick the spawn/approach lane based on the *next* required turn (left-turn lane
-  vs right-turn lane), not round-robin.
-- Make `roadRouter` lane- and restriction-aware end-to-end (a route is a sequence
-  of `(tile, lane)` not just tiles).
+Cars now drive a **continuous lateral lane position** and change lanes with **gap
+acceptance**, so traffic sorts and merges instead of queueing (`src/sim/road.ts`):
 
-### G — Lane switching (the big remaining behaviour)
-Lateral lane changes mid-tile: **overtaking** a slower leader, **pre-turn
-positioning**, and **merging** when a lane ends (today a dropped-lane car just
-queues at the taper; it should signal and merge across). This is the last piece
-that makes traffic feel alive. Needs: a lane-change intent model, a gap-acceptance
-check against the target lane, and the renderer already supports the lean so the
-visual is mostly there.
+- **G — lane switching:** `Car.laneIndex` is a float (the lateral position);
+  `Math.round` is the lane it occupies for following/conflict. It eases toward an
+  integer `targetLane`, crossing into the next lane only when that lane has a
+  clear gap ahead and behind. A car whose lane ends **merges before the taper**.
+  The render-side taper is gone — the sim owns the lateral motion, so a plain
+  per-lane offset gives the smooth change for free.
+- **F — lane-aware routing:** cars look a few tiles ahead (`junctionAhead`) and
+  move into a lane whose `to` permits their next turn (`lanesAllowingExit`),
+  preferring to **spawn** in that lane. `roadExits()` makes routing destinations
+  the off-map openings a car can drive *out* of, so one-way networks route.
+- Demo: `turnlanes` scenario (kerb lane turns right, inner lane turns left). Plus
+  the 1/2/3-lane `roadcrossNlane` scenarios. Tests: cars always merge out of a
+  dropping lane; every car turns from a permitting lane; crosses never gridlock.
+- Turn-lane junctions no longer false-flag as lane-count mismatches (the seam
+  check is now per-port via `laneCountAt`).
+
+## What's next (polish + game direction)
+
+### F/G follow-ups (nice-to-haves, not blockers)
+- **Overtaking:** a faster car stuck behind a slow leader doesn't yet pull into a
+  clear adjacent lane to pass — `desiredLane` only targets merge/turn lanes.
+- **Lean into the change:** lane changes are a smooth parallel slide; angling the
+  body (front coupler leading) would read more naturally. The per-coupler offset
+  existed once and was reverted — re-add a rear-lagged lateral offset.
+- **Per-`(tile, lane)` routing:** routes are still tile sequences with lane
+  positioning layered on; a true lane-cost planner would handle dense turn-lane
+  networks more robustly.
 
 ### Beyond the lane model (game direction)
 - **A road objective / game mode**: the scoring hooks exist (`roadScoring`,
@@ -83,10 +97,11 @@ visual is mostly there.
 - **Bigger authored maps / a road generator** to exercise the network at scale.
 
 ## Open questions for the next session
-- Do we push **F then G** (finish the traffic-realism arc), or pivot to a **road
-  game mode** now that the sandbox looks good?
+- The lane model (A–G) is **feature-complete**. The next big lever is a **road
+  game mode** (a "keep the city flowing" win/lose loop over the existing scoring
+  hooks) — is that the priority, or more traffic realism (overtaking) first?
 - Is per-lane routing (`(tile, lane)` paths) worth the planner rewrite, or is
-  "choose lane at spawn + merge greedily" enough for the game's scale?
+  "choose lane at spawn + sort on approach" enough for the game's scale?
 - Editor: is JSON import still needed, or is the visual lane authoring complete
   enough to drop it?
 
