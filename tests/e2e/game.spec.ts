@@ -117,6 +117,44 @@ test.describe("Train game", () => {
     await expect(page.getByText("You win!")).toBeVisible();
   });
 
+  test("the game-mode picker switches modes by clicking a card", async ({
+    page,
+  }) => {
+    await page.goto("/#/play?mode=puzzle");
+    // Open the game-mode picker from the start overlay.
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    await expect(page.locator(".picker-card")).toBeVisible();
+    // The picker shows a card per registered mode; pick Time Attack.
+    await page.getByRole("button", { name: /Time Attack/ }).click();
+    // The view remounts on the new mode (router-view keyed on the query).
+    await expect.poll(() => page.url()).toContain("mode=time-attack");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+    ).toBeVisible();
+  });
+
+  test("time attack injects scheduled trains over time (test scenario)", async ({
+    page,
+  }) => {
+    test.setTimeout(60000);
+    // The /test/timeattack scenario runs in Time Attack mode: t1 is present at
+    // start, t2 and t3 are injected by the schedule at 3s and 6s.
+    await page.goto("/#/test/timeattack");
+    const liveTrainCount = () =>
+      page.evaluate(
+        () => Object.keys((window as any).__game.sim.trains).length
+      );
+    // Only the init train is in the sim at first.
+    await expect.poll(liveTrainCount, { timeout: 5000 }).toBe(1);
+    // Run fast and let the schedule inject the other two.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+    await expect
+      .poll(liveTrainCount, { timeout: 45000, intervals: [300] })
+      .toBe(3);
+  });
+
   test("signals are drawn and a manual hold turns a signal to Stop", async ({
     page,
   }) => {
