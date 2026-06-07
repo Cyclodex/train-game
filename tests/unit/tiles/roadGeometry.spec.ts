@@ -8,6 +8,7 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
+  roadKerbEdge,
 } from "@/tiles/roadGeometry";
 
 describe("roadSurfacePath", () => {
@@ -296,6 +297,17 @@ describe("laneDropArrowPath", () => {
     const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.5);
     const [, tailX, , headX] = arrow.shaft.match(/M (\S+) (\S+) L (\S+) (\S+)/)!.map(Number);
     expect(headX).toBeGreaterThan(tailX);
+  });
+});
+
+describe("roadKerbEdge", () => {
+  it("tapers from halfA at the entry to halfB at the exit on the +side", () => {
+    // Left→Right, n = (0,1). +1 side at +y; halfA 56 → y156, halfB 28 → y128.
+    expect(roadKerbEdge(Position.Left, Position.Right, 200, 56, 28, 1)).toBe("M 0 156 L 200 128");
+  });
+
+  it("uses the opposite side for side = -1", () => {
+    expect(roadKerbEdge(Position.Left, Position.Right, 200, 56, 28, -1)).toBe("M 0 44 L 200 72");
   });
 });
 

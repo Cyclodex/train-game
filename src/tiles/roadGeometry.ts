@@ -203,6 +203,21 @@ export function laneDropGore(
   return { triangle, hatch };
 }
 
+// The outer kerb edge line of a straight road ribbon — the white line where the
+// pavement meets the grass. `side` is +1 (right-of-travel) or -1 (left); the
+// offset tapers from `halfA` at the entry to `halfB` at the exit, so the line
+// follows a tapered tarmac edge exactly. Stroked (not filled) by the renderer.
+export function roadKerbEdge(
+  entry: Port,
+  exit: Port,
+  size: number,
+  halfA: number,
+  halfB: number,
+  side: 1 | -1,
+): string {
+  return taperedParallel(entry, exit, size, side * halfA, side * halfB);
+}
+
 // The paved-surface polygon for a road edge whose width tapers linearly from
 // `widthA` at the entry end to `widthB` at the exit end. Used by the tile
 // renderer to draw a road whose width changes at a seam (a merge or a split):

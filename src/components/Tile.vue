@@ -19,6 +19,15 @@
           :class="{ 'road-surface--mismatch': r.mismatch, 'road-surface--bus': r.isBus }"
         />
       </g>
+      <!-- Road edge line where the tarmac meets the grass (per outer kerb). -->
+      <template v-for="(r, i) in roadPaths" :key="'re' + i">
+        <path
+          v-for="(e, ei) in r.edges"
+          :key="'re' + i + '_' + ei"
+          :d="e"
+          class="road-edge"
+        />
+      </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
         <path
           v-for="(m, mi) in r.laneMarkings"
@@ -200,6 +209,7 @@ import {
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
   roadLaneMarkingPaths,
+  roadKerbEdge,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -209,7 +219,7 @@ import {
 } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
-import { seamBand } from "@/sim/laneOffset";
+import { seamBand, laneSeamOffsetPx } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -264,7 +274,7 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; mismatch: boolean; mismatchTip: string; isBus: boolean }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: string[]; mismatch: boolean; mismatchTip: string; isBus: boolean }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -307,6 +317,7 @@ class Tile extends Vue {
         return {
           surface: roadCurvePolygonPath(a, b, size, widthTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
+          edges: [], // curves/junctions: edge lines are a follow-up
           mismatch,
           mismatchTip,
           isBus,
@@ -327,9 +338,22 @@ class Tile extends Vue {
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
+      // Road edge line where the tarmac meets the grass — one per outer kerb,
+      // tapering with the surface. Skip a side that has a lane-drop gore: its
+      // gore border already draws the full-width kerb there (the tapered surface
+      // kerb on that side is filled back to full by the paved gore). +n side has
+      // a gore when the a→b direction narrows; -n side when b→a narrows.
+      const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
+      const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
+      const goreA = selfA > 0 && d1A > 0 && d1A < selfA;
+      const goreB = selfB > 0 && d1B > 0 && d1B < selfB;
+      const edges: string[] = [];
+      if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
+      if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
+        edges,
         mismatch: false,
         mismatchTip: "",
         isBus,
@@ -376,8 +400,11 @@ class Tile extends Vue {
             selfBand,
             nExit ? this.game.roadLaneCount(nExit, oppositePort(to)) : 0,
           );
-          const offA = (bandEntry - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
-          const offB = (bandExit - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+          // Clamp each end to the seam band so a dropping (kerb) lane merges in
+          // and a surviving (inner) lane holds its line — never crossing the
+          // centreline onto the oncoming side (see sim/laneOffset.ts).
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
         } else {
           out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
@@ -701,6 +728,14 @@ export default toNative(Tile);
   fill: none;
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 2px;
+}
+/* Road edge line where the tarmac meets the grass — same stroke as the gore
+   border so the road outline reads as one continuous painted edge. */
+.road-edge {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 2px;
+  stroke-linecap: round;
 }
 .road-drop-arrow-shaft {
   fill: none;
