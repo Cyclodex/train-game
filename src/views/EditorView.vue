@@ -56,6 +56,12 @@
           :class="{ on: roadLaneCount === n }"
           @click="roadLaneCount = n"
         >{{ n }}L</button>
+        <button
+          class="dock-btn lane-btn bus-btn"
+          :class="{ on: roadIsBus }"
+          @click="roadIsBus = !roadIsBus"
+          title="Bus-only lane (cars cannot use)"
+        >🚌</button>
       </div>
     </ToolDock>
 
@@ -259,6 +265,7 @@ import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
 import { roadEdges as laneEdges } from "@/tiles/lanes";
+import type { LaneKind } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -267,6 +274,7 @@ type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
+const ROAD_BUS_KEY = "train-game:editor-road-is-bus";
 const EDGES: Port[] = [
   Position.Top,
   Position.Right,
@@ -334,6 +342,8 @@ class EditorView extends Vue {
   // Number of lanes per direction when the road tool is active (1/2/3).
   // Persisted in localStorage so it survives tool switches and page reloads.
   roadLaneCount = loadRoadLaneCount();
+  // Whether the road tool draws bus-only lanes (cars cannot use them).
+  roadIsBus = loadRoadIsBus();
   // Set only in the U-turn case: the frontier tile is left undecided (blank)
   // because you're pointing at the edge the track entered through. The head
   // then trails one tile back, pointing at this pending tile.
@@ -460,9 +470,11 @@ class EditorView extends Vue {
   }
   // Lay a port pair on the active layer, returning the new cell.
   layPair(cell: Level[string], a: Port, b: Port): Level[string] {
-    return this.drawing === "road"
-      ? addRoad(cell, a, b, this.roadLaneCount)
-      : addConnection(cell, a, b);
+    if (this.drawing === "road") {
+      const kind: LaneKind | undefined = this.roadIsBus ? "bus" : undefined;
+      return addRoad(cell, a, b, this.roadLaneCount, kind);
+    }
+    return addConnection(cell, a, b);
   }
   // The CSS class for the ghost preview, so a road previews as a road ribbon.
   get previewClass(): string {
@@ -546,6 +558,11 @@ class EditorView extends Vue {
   @Watch("roadLaneCount")
   saveRoadLaneCount(v: number) {
     try { localStorage.setItem(LANE_COUNT_KEY, String(v)); } catch { /* ignore */ }
+  }
+
+  @Watch("roadIsBus")
+  saveRoadIsBus(v: boolean) {
+    try { localStorage.setItem(ROAD_BUS_KEY, v ? "1" : "0"); } catch { /* ignore */ }
   }
 
   // Max per-direction lane count across all edges of a tile (for the badge).
@@ -820,6 +837,14 @@ function loadRoadLaneCount(): number {
     return [1, 2, 3].includes(v) ? v : 1;
   } catch {
     return 1;
+  }
+}
+
+function loadRoadIsBus(): boolean {
+  try {
+    return localStorage.getItem(ROAD_BUS_KEY) === "1";
+  } catch {
+    return false;
   }
 }
 

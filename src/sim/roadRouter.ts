@@ -1,6 +1,6 @@
 import { Coordinates } from "@/types";
 import { Level } from "@/tiles/model";
-import { exitsFrom, isRoadJunction } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { RoadEntry } from "./road";
@@ -48,20 +48,26 @@ function extractTurns(level: Level, path: PathStep[]): RouteTurn[] {
  * @param allEntries  All map-edge road entries (includes the spawn entry).
  * @param rng         A seeded [0, 1) uniform random function.
  */
+// Return value of planRoute: the junction turns and the chosen destination entry.
+export interface RoutePlan {
+  turns: RouteTurn[];
+  destination: RoadEntry | null;
+}
+
 export function planRoute(
   level: Level,
   spawnCoord: Coordinates,
   spawnEntry: Port,
   allEntries: RoadEntry[],
   rng: () => number,
-): RouteTurn[] {
+): RoutePlan {
   // Filter out the spawn entry itself so the car doesn't immediately target
   // the hole it just entered through.
   const spawnId = getCoordinatesId(spawnCoord);
   const targets = allEntries.filter(
     e => !(getCoordinatesId(e.coord) === spawnId && e.entryPort === spawnEntry),
   );
-  if (targets.length === 0) return [];
+  if (targets.length === 0) return { turns: [], destination: null };
 
   // Pick a random target exit entry.
   const target = targets[Math.floor(rng() * targets.length)];
@@ -93,8 +99,8 @@ export function planRoute(
     const tile = level[getCoordinatesId(node.coord)];
     if (!tile?.road || tile.road.length === 0) continue;
 
-    // Every exit partner for this entry port.
-    const exits = exitsFrom(tile.road, node.entryPort);
+    // Only traverse lanes accessible to cars (skip bus-only lanes).
+    const exits = exitsForCar(tile.road, node.entryPort);
 
     for (const exitPort of exits) {
       // Center has no map-edge neighbour — skip.
@@ -105,7 +111,7 @@ export function planRoute(
       const nextTile = level[nextId];
       const connectedBack =
         nextTile?.road &&
-        exitsFrom(nextTile.road, oppositePort(exitPort)).length > 0;
+        exitsForCar(nextTile.road, oppositePort(exitPort)).length > 0;
 
       if (!connectedBack) {
         // Off-grid or dead-end: check whether this is our target exit.
@@ -114,10 +120,13 @@ export function planRoute(
           exitPort === target.entryPort
         ) {
           // Found the target — build the full path and return its turns.
-          return extractTurns(level, [
-            ...path,
-            { coord: node.coord, entry: node.entryPort, exit: exitPort },
-          ]);
+          return {
+            turns: extractTurns(level, [
+              ...path,
+              { coord: node.coord, entry: node.entryPort, exit: exitPort },
+            ]),
+            destination: target,
+          };
         }
         // Not our target — this exit leads nowhere useful, skip.
         continue;
@@ -139,5 +148,5 @@ export function planRoute(
   }
 
   // No path to the chosen target found.
-  return [];
+  return { turns: [], destination: null };
 }

@@ -68,6 +68,16 @@ export function exitsFrom(road: Lane[] | undefined, from: Port): Port[] {
   return [...out];
 }
 
+// Like exitsFrom but only for non-bus vehicles: skips lanes whose kind is "bus".
+export function exitsForCar(road: Lane[] | undefined, from: Port): Port[] {
+  const out = new Set<Port>();
+  for (const lane of lanesFrom(road, from)) {
+    if (lane.kind === "bus") continue;
+    for (const to of lane.to) out.add(to);
+  }
+  return [...out];
+}
+
 // Every port the road touches (as an approach or an exit).
 export function roadPortsOf(road: Lane[] | undefined): Port[] {
   const out = new Set<Port>();
@@ -121,24 +131,13 @@ export function laneCount(road: Lane[] | undefined, from: Port): number {
   return lanes.length === 0 ? 0 : Math.max(...lanes.map(l => l.index)) + 1;
 }
 
-// Total physical lanes crossing a port boundary: lanes entering FROM the port plus
-// lanes exiting THROUGH the port (i.e. whose `to` list includes it). Use this
-// instead of laneCount(a) + laneCount(oppositePort(a)) when the neighbour may be a
-// curve or junction — for those tiles the opposite port carries no lanes, so the
-// two-term formula under-counts and triggers false mismatch / taper errors.
-export function laneCountAt(road: Lane[] | undefined, port: Port): number {
-  const entering = laneCount(road, port);
-  const exitingLanes = (road ?? []).filter(l => l.to.includes(port));
-  const exiting = exitingLanes.length === 0 ? 0 : Math.max(...exitingLanes.map(l => l.index)) + 1;
-  return entering + exiting;
-}
-
 // Generate `count` index slots in both directions between ports `a` and `b`.
 // Produces a multi-lane bidirectional road: indices 0..count-1 each way.
-export function nWayLanes(a: Port, b: Port, count: number): Lane[] {
+// Pass `kind` to mark all lanes with a restriction (e.g. "bus").
+export function nWayLanes(a: Port, b: Port, count: number, kind?: LaneKind): Lane[] {
   return Array.from({ length: count }, (_, i) => [
-    { from: a, to: [b], index: i },
-    { from: b, to: [a], index: i },
+    { from: a, to: [b], index: i, ...(kind != null ? { kind } : {}) },
+    { from: b, to: [a], index: i, ...(kind != null ? { kind } : {}) },
   ]).flat();
 }
 

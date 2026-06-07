@@ -133,6 +133,11 @@
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
+    <!-- Car destination marker (debug): a car is currently heading to this tile. -->
+    <div v-if="config.debug && carDestinationId" class="car-destination-marker">
+      <span class="car-destination-label">→{{ carDestinationId }}</span>
+    </div>
+
     <!-- Car-junction hold (debug): the road junction is currently owned by a car;
          perpendicular cars wait clear of it until the owner leaves. -->
     <div v-if="carJunctionOwner" class="car-junction-hold">
@@ -411,6 +416,15 @@ class Tile extends Vue {
     if (!this.config.debug) return undefined;
     return this.game.carJunctions?.[this.coordId];
   }
+
+  // --- car destination overlay (debug) ---
+  // The shortened id of a car whose planned destination is this tile, or undefined.
+  // Shows which tile each car is heading toward in debug mode.
+  get carDestinationId(): string | undefined {
+    if (!this.config.debug) return undefined;
+    const id = this.game.carDestinations?.[this.coordId];
+    return id ? id.replace("car", "") : undefined;
+  }
 }
 
 export default toNative(Tile);
@@ -613,6 +627,24 @@ $signal-offset: 20px;
   top: 0;
   right: 0;
   color: #1b3a1b;
+}
+
+/* Car destination marker (debug overlay): a small teal tag on a tile that a car
+   is currently heading toward. Non-intrusive — sits in the top-right corner. */
+.car-destination-marker {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 5;
+  pointer-events: none;
+}
+.car-destination-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #003030;
+  background: rgba(0, 188, 212, 0.85);
+  padding: 0 3px;
+  border-radius: 3px;
 }
 
 /* Car-junction hold (debug overlay): an amber wash + dashed ring on a road

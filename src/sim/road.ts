@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, isRoadJunction, laneCount } from "@/tiles/lanes";
+import { exitsFrom, exitsForCar, isRoadJunction, laneCount } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -99,7 +99,7 @@ export interface RoadTraversal {
 function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port | null {
   const tile = level[getCoordinatesId(coord)];
   if (!tile || !tile.road || tile.road.length === 0) return null;
-  const exits = exitsFrom(tile.road, entryPort);
+  const exits = exitsForCar(tile.road, entryPort);
   if (exits.length === 0) return null;
   // Single exit (straight/curve/one-way) — or pick the first for a junction.
   return exits[0];
@@ -119,8 +119,8 @@ export function roadTraverse(
   const nextTile = level[getCoordinatesId(nextCoord)];
   if (!nextTile || !nextTile.road || nextTile.road.length === 0)
     return { exitPort, next: null }; // road runs off the map / dead-ends
-  // The next tile must actually carry road back to us, else it's not connected.
-  if (exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0)
+  // The next tile must carry car-accessible road back to us.
+  if (exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0)
     return { exitPort, next: null };
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
@@ -150,14 +150,13 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
     const [xs, ys] = id.split(",").map(Number);
     const coord = { x: xs, y: ys };
     for (const port of EDGES) {
-      // `port` is a road port of this tile and points off the grid (no in-grid
-      // road neighbour continuing the road there) -> a spawn entry.
-      if (exitsFrom(tile.road, port).length === 0) continue;
+      // `port` is a car-accessible road port and points off the grid -> a spawn entry.
+      if (exitsForCar(tile.road, port).length === 0) continue;
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
       const neighRoad =
-        !offGrid && neigh?.road && exitsFrom(neigh.road, oppositePort(port)).length > 0;
+        !offGrid && neigh?.road && exitsForCar(neigh.road, oppositePort(port)).length > 0;
       if (offGrid || !neighRoad) {
         out.push({ coord, entryPort: port });
       }
@@ -217,6 +216,9 @@ export interface Car {
   // N-1 = innermost (centre-adjacent). Set at spawn; clamped at each tile
   // boundary when the next tile has fewer lanes.
   laneIndex: number;
+  // The map-edge entry this car is heading toward (set at spawn via planRoute).
+  // Null when the BFS found no path or no targets exist.
+  destination: RoadEntry | null;
 }
 
 // A car sampled as its two anchor points along the recent path (front toward the
@@ -243,6 +245,7 @@ export interface CarChord {
   units: CarUnit[];
   laneIndex: number;
   laneCount: number;
+  destination: RoadEntry | null;
 }
 
 // Closed ⇔ this tile is a crossing reserved/occupied by a train. Supplied by the
@@ -291,8 +294,7 @@ export interface RoadSimConfig {
   mix?: TrafficMix;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
   // A function is read live on every spawn attempt, so a game setting can change
-  // the cap mid-game (lowering it just stops new spawns until cars despawn under
-  // the new limit; it never removes cars already on the road).
+  // the cap mid-game without removing cars already on the road.
   maxCars?: number | (() => number);
   // Spawn only from these entries instead of every map-edge road opening. Used to
   // make a single-lane road effectively one-way (spawn from one end only), which
@@ -383,9 +385,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
   const speedSpread = Math.max(0, config.speedSpread ?? DEFAULT_SPEED_SPREAD);
-  // Resolved live on each spawn attempt so a reactive game setting takes effect
-  // immediately (see RoadSimConfig.maxCars). Captured into a const so the
-  // function/number narrowing survives inside the getter closure.
   const maxCarsCfg = config.maxCars;
   const maxCarsOf = (): number =>
     typeof maxCarsCfg === "function" ? maxCarsCfg() : maxCarsCfg ?? DEFAULT_MAX_CARS;
@@ -536,7 +535,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     let lead = 1 - car.headProgress; // head -> the next tile's entry edge
     while (lead <= CAR_LOOKAHEAD) {
       const tile = level[getCoordinatesId(coord)];
-      const exits = exitsFrom(tile?.road, entry);
+      const exits = exitsForCar(tile?.road, entry);
       if (exits.length === 0) break;
       // At a junction use the route plan's prescribed exit; fall back to the
       // first exit for plain straights/curves (they have exactly one anyway).
@@ -549,7 +548,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
+        exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0
       )
         break;
       const id = getCoordinatesId(nextCoord);
@@ -789,7 +788,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
+        exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0
       )
         return false;
       // Backstop: clearAhead caps movement at a closed crossing's entry, which
@@ -858,6 +857,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitedSec: 0,
       crossedCrossing: false,
       laneIndex: 0,
+      destination: null,
     };
     let chosenLane = -1;
     const startLane = spawnLaneRot % entryLaneCount;
@@ -883,7 +883,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // car can head for any edge of the map without risking a head-on — routing
     // toward an edge other cars also use is fine. Pick a reachable exit edge
     // (planRoute excludes this car's own spawn opening as a target).
-    const routePlan = planRoute(level, entry.coord, entry.entryPort, allMapEntries, routeRng);
+    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapEntries, routeRng);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);
     cars.push({
       id: `car${nextId++}`,
@@ -909,6 +909,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitedSec: 0,
       crossedCrossing: false,
       laneIndex: chosenLane,
+      destination,
     });
   }
 
@@ -1001,7 +1002,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         }
         const headSeg = c.path[c.headIndex];
         const curLaneCount = laneCount(level[getCoordinatesId(headSeg.coord)]?.road, headSeg.entryPort);
-        return { id: c.id, units, laneIndex: c.laneIndex, laneCount: Math.max(1, curLaneCount) };
+        return { id: c.id, units, laneIndex: c.laneIndex, laneCount: Math.max(1, curLaneCount), destination: c.destination };
       });
     },
     junctionOccupancy() {

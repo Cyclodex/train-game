@@ -67,7 +67,9 @@ describe("planRoute", () => {
     const rng = makeRng(1);
     const plan = planRoute(level, spawn.coord, spawn.entryPort, entries, rng);
     // A straight road has no junctions, so the plan has zero turns.
-    expect(plan).toEqual([]);
+    expect(plan.turns).toEqual([]);
+    // Destination is the opposite end of the road.
+    expect(plan.destination).not.toBeNull();
   });
 
   it("produces exactly one junction turn for a 4-way cross", () => {
@@ -83,13 +85,15 @@ describe("planRoute", () => {
     const plan = planRoute(level, spawn.coord, spawn.entryPort, entries, rng);
 
     // Exactly one turn (at the junction 2,2)
-    expect(plan).toHaveLength(1);
-    const turn = plan[0] as RouteTurn;
+    expect(plan.turns).toHaveLength(1);
+    const turn = plan.turns[0] as RouteTurn;
     expect(turn.junctionId).toBe("2,2");
     // Exit arm is not Left (can't go back the way we came)
     expect(turn.exitArm).not.toBe(Position.Left);
     // Must be one of the valid exits from the junction
     expect([Position.Right, Position.Top, Position.Bottom]).toContain(turn.exitArm);
+    // Destination should be set
+    expect(plan.destination).not.toBeNull();
   });
 
   it("is deterministic for a fixed rng", () => {
@@ -112,7 +116,8 @@ describe("planRoute", () => {
     const spawn = { x: 0, y: 2 };
     const rng = makeRng(1);
     const plan = planRoute(level, spawn, Position.Left, [], rng);
-    expect(plan).toEqual([]);
+    expect(plan.turns).toEqual([]);
+    expect(plan.destination).toBeNull();
   });
 
   it("returns empty plan when only the spawn entry is in allEntries", () => {
@@ -127,6 +132,7 @@ describe("planRoute", () => {
     const rng = makeRng(1);
     // allEntries contains only the spawn itself; targets list will be empty
     const plan = planRoute(level, spawn.coord, spawn.entryPort, [spawn], rng);
-    expect(plan).toEqual([]);
+    expect(plan.turns).toEqual([]);
+    expect(plan.destination).toBeNull();
   });
 });

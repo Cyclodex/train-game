@@ -8,7 +8,7 @@ import {
   partnersOf,
   defaultArmFor,
 } from "@/tiles/model";
-import type { Lane } from "@/tiles/lanes";
+import type { Lane, LaneKind } from "@/tiles/lanes";
 import { nWayLanes } from "@/tiles/lanes";
 
 // Pure, immutable single-cell editing operations used by the level editor. Each
@@ -154,7 +154,7 @@ export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
 // over an existing road with a different count selected upgrades or downgrades
 // it in place. For a junction approach (the lane has exits beyond this edge),
 // the additive merge is used instead to preserve the other movements.
-export function addRoad(cell: TileCell, a: Port, b: Port, count = 1): TileCell {
+export function addRoad(cell: TileCell, a: Port, b: Port, count = 1, kind?: LaneKind): TileCell {
   const road = cell.road ?? [];
   // Detect junction: an approach whose `to[]` includes exits other than the
   // partner port. Replacing such a lane would silently drop those movements.
@@ -165,7 +165,7 @@ export function addRoad(cell: TileCell, a: Port, b: Port, count = 1): TileCell {
   }
   // Simple edge: replace with the exact lane count (upgrade or downgrade).
   const stripped = dropMovement(dropMovement(road, a, b), b, a);
-  return { ...cell, road: [...stripped, ...nWayLanes(a, b, count)] };
+  return { ...cell, road: [...stripped, ...nWayLanes(a, b, count, kind)] };
 }
 
 export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
