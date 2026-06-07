@@ -163,6 +163,39 @@ describe("roadLaneMarkingPaths", () => {
     expect(negative!.d).toBe(`M 0 ${100 - LANE_W} L 200 ${100 - LANE_W}`);
   });
 
+  it("flags the dropped-lane divider as a merge line (tighter dash), not continuing ones", () => {
+    // 3→2 taper, lo=2/hi=3: the i=1 boundary (lanes 0|1) continues on both ends
+    // and is NOT a merge line; the i=2 boundary (lane 2 ends) IS — one per side.
+    const taper = roadLaneMarkingPaths(Position.Left, Position.Right, 200, 3, 2);
+    const innerTaper = taper.filter(m => m.kind === "inner");
+    expect(innerTaper.filter(m => m.merge)).toHaveLength(2); // the ending lane, both sides
+    expect(innerTaper.filter(m => !m.merge)).toHaveLength(2); // the continuing divider, both sides
+
+    // Equal lane counts: no lane ends, so no divider is a merge line.
+    const even = roadLaneMarkingPaths(Position.Left, Position.Right, 200, 3, 3);
+    expect(even.some(m => m.merge)).toBe(false);
+  });
+
+  it("detects the merge line from the caps when the tile's lane count is uniform", () => {
+    // How real tiles render: a 3-per-direction tile (lanesA === lanesB === 3)
+    // that tapers via the caps — wide half = 3·LANE_W on entry, narrow half =
+    // 2·LANE_W on exit (a 3→2 drop). The divider at 2·LANE_W sits on the narrow
+    // kerb and is the lane-drop line; the one at 1·LANE_W continues.
+    const LANE_W = 200 * 0.14;
+    const marks = roadLaneMarkingPaths(
+      Position.Left, Position.Right, 200, 3, 3, 3 * LANE_W, 2 * LANE_W,
+    );
+    const inner = marks.filter(m => m.kind === "inner");
+    expect(inner.filter(m => m.merge)).toHaveLength(2); // 2·LANE_W divider, both sides
+    expect(inner.filter(m => !m.merge)).toHaveLength(2); // 1·LANE_W divider, both sides
+
+    // Uniform caps (no taper): nothing is a merge line.
+    const flat = roadLaneMarkingPaths(
+      Position.Left, Position.Right, 200, 3, 3, 3 * LANE_W, 3 * LANE_W,
+    );
+    expect(flat.some(m => m.merge)).toBe(false);
+  });
+
   it("2→1 taper: no extra inner divider is produced for the dropped lane", () => {
     // A 2-lane road has 1 inner divider per side; the 2→1 case still draws
     // exactly 1 per side (the lane-1 boundary is on the new kerb), not 0.
@@ -240,20 +273,22 @@ describe("laneDropArrowPlan", () => {
 });
 
 describe("laneDropArrowPath", () => {
-  it("places a forward-and-inward diagonal inside the ending lane", () => {
+  it("angles toward the centre but stays balanced about the lane centre", () => {
     // Left→Right, size 200: forward = (1,0), right-of-travel n = (0,1) (down).
-    // lane 1 → tailOff = 1.5·28 = 42, headOff = 0.9·28 = 25.2. HALF = 32.
-    // along0 = 0.25·200 = 50 → tail x = 50−32 = 18, head x = 50+32 = 82.
+    // lane 1 → laneMid = 1.5·28 = 42. LATERAL 0.6 → ±0.3·28 = ±8.4 about laneMid:
+    // tailOff = 50.4, headOff = 33.6 → y 150.4 → 133.6 (leans toward centreline).
+    // HALF = 18, along0 = 0.25·200 = 50 → tail x = 32, head x = 68.
     const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25);
-    expect(arrow.shaft).toBe("M 18 142 L 82 125.2");
-    // Head tilts toward the centreline (y decreases from tail to head).
-    expect(arrow.head.startsWith("M 82 125.2 ")).toBe(true);
+    expect(arrow.shaft).toBe("M 32 150.4 L 68 133.6");
   });
 
-  it("arrowhead is a closed triangle", () => {
+  it("arrowhead is an open chevron (two strokes, no fill/close)", () => {
     const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25);
-    expect(arrow.head.trimEnd().endsWith("Z")).toBe(true);
+    // Open path: barb → tip → barb, not closed with Z.
+    expect(arrow.head.trimEnd().endsWith("Z")).toBe(false);
     expect((arrow.head.match(/L/g) ?? []).length).toBe(2);
+    // The chevron tip is the shaft's head point (68, 133.6).
+    expect(arrow.head).toContain("L 68 133.6 L");
   });
 
   it("points in the travel direction (head ahead of tail along entry→exit)", () => {

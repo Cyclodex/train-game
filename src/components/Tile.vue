@@ -23,7 +23,7 @@
           v-for="(m, mi) in r.laneMarkings"
           :key="'lm' + i + '_' + mi"
           :d="m.d"
-          :class="'road-marking-' + m.kind"
+          :class="['road-marking-' + m.kind, { 'road-marking-merge': m.merge }]"
         />
       </template>
       <template v-for="(ar, ai) in roadArrows" :key="'ar' + ai">
@@ -440,19 +440,23 @@ export default toNative(Tile);
   fill: none;
   stroke: rgba(255, 255, 255, 0.7);
   stroke-width: 2px;
-  stroke-dasharray: 7 9;
+  stroke-dasharray: 14 12;
   stroke-linecap: butt;
 }
-// Lane-drop ("merge ahead") arrow painted inside an ending lane.
-.road-arrow {
+/* Lane-drop divider (a lane ending at a 3→2 / 2→1 taper, where cars merge
+   across): a tighter dash than ordinary dividers to read as the crossing line. */
+.road-marking-merge {
+  stroke-dasharray: 7 9;
+}
+// Lane-drop ("merge ahead") arrow painted inside an ending lane: a slim shaft
+// with an open chevron head, both stroked (the Swiss lane-reduction marking).
+.road-arrow,
+.road-arrow-head {
   fill: none;
   stroke: rgba(255, 255, 255, 0.85);
-  stroke-width: 5px;
+  stroke-width: 3px;
   stroke-linecap: round;
-}
-.road-arrow-head {
-  fill: rgba(255, 255, 255, 0.85);
-  stroke: none;
+  stroke-linejoin: round;
 }
 
 /* --- signals (from TileStraight.vue) --- */

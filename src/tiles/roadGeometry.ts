@@ -28,21 +28,28 @@ function perpUnit(a: { x: number; y: number }, b: { x: number; y: number }): { x
 export interface LaneMarkingPath {
   d: string;
   kind: "centre" | "inner";
+  // True for a lane-drop divider — the boundary of a lane that ends at this
+  // tile (a 3→2 / 2→1 taper), which merging cars cross. The view paints these
+  // with a tighter dash than ordinary continuing lane dividers.
+  merge?: boolean;
 }
 
-// One painted lane-drop arrow: a stroked shaft plus a filled arrowhead.
+// One painted lane-drop arrow: a stroked shaft plus an open (two-stroke)
+// chevron head. Both parts are stroked, not filled — the slim open-chevron
+// look of the real Swiss lane-reduction marking.
 export interface MergeArrowPath {
   shaft: string;
   head: string;
 }
 
 // One in-lane lane-drop arrow ("this lane is ending, move over") on a straight
-// road edge, in the Swiss style: a short diagonal painted inside the ending
-// lane, pointing in the direction of travel (entry→exit) and angled toward the
-// centre divider (the merge direction). `laneIndex` is the lane it sits in
-// (0 = centre-adjacent; the outer, higher-index lanes are the ones that end).
-// `alongT` (0..1) is the position of the arrow's midpoint along the entry→exit
-// centreline. LANE_W matches the lane markings so the arrow stays inside its lane.
+// road edge, in the Swiss style: a slim open-chevron arrow painted inside the
+// ending lane, pointing in the direction of travel (entry→exit) and angled
+// toward the centre divider (the merge direction). The lean is balanced around
+// the lane centre so the whole arrow stays centred in — and contained by — its
+// own lane. `laneIndex` is the lane it sits in (0 = centre-adjacent; the outer,
+// higher-index lanes are the ones that end). `alongT` (0..1) is the position of
+// the arrow's midpoint along the entry→exit centreline.
 export function laneDropArrowPath(
   entry: Port,
   exit: Port,
@@ -51,9 +58,10 @@ export function laneDropArrowPath(
   alongT: number,
 ): MergeArrowPath {
   const LANE_W = size * 0.14;
-  const HALF = size * 0.16; // half the shaft length
-  const LATERAL = 0.6; // how far (in lane widths) the head shifts toward centre
-  const HEAD = size * 0.06; // arrowhead barb length
+  const HALF = size * 0.09; // half the shaft length (compact)
+  const LATERAL = 0.6; // chevron lean (in lane widths) toward the centre divider
+  const HEAD = size * 0.06; // chevron barb length (slim head)
+  const SPLAY = 0.5; // half-angle of the open chevron, radians
 
   const a = portPoint(entry, size);
   const b = portPoint(exit, size);
@@ -63,9 +71,12 @@ export function laneDropArrowPath(
   const fx = dx / len, fy = dy / len; // forward (travel) unit
   const n = perpUnit(a, b); // right-of-travel unit (lanes sit on +n)
 
+  // Split the lateral lean symmetrically about the lane centre so the angled
+  // arrow stays centred in its lane: tail sits outward, head leans inward.
   const along0 = alongT * len;
-  const tailOff = (laneIndex + 0.5) * LANE_W;
-  const headOff = (laneIndex + 0.5 - LATERAL) * LANE_W;
+  const laneMid = (laneIndex + 0.5) * LANE_W;
+  const tailOff = laneMid + (LATERAL / 2) * LANE_W;
+  const headOff = laneMid - (LATERAL / 2) * LANE_W;
   const tail = {
     x: a.x + fx * (along0 - HALF) + n.x * tailOff,
     y: a.y + fy * (along0 - HALF) + n.y * tailOff,
@@ -76,15 +87,16 @@ export function laneDropArrowPath(
   };
 
   const ang = Math.atan2(head.y - tail.y, head.x - tail.x);
-  const a1 = ang + Math.PI - 0.45;
-  const a2 = ang + Math.PI + 0.45;
+  const a1 = ang + Math.PI - SPLAY;
+  const a2 = ang + Math.PI + SPLAY;
   const r = (v: number) => Math.round(v * 100) / 100;
+  // Open chevron: a barb back to the tip and out to the other barb (no fill).
   return {
     shaft: `M ${r(tail.x)} ${r(tail.y)} L ${r(head.x)} ${r(head.y)}`,
     head:
-      `M ${r(head.x)} ${r(head.y)} ` +
-      `L ${r(head.x + Math.cos(a1) * HEAD)} ${r(head.y + Math.sin(a1) * HEAD)} ` +
-      `L ${r(head.x + Math.cos(a2) * HEAD)} ${r(head.y + Math.sin(a2) * HEAD)} Z`,
+      `M ${r(head.x + Math.cos(a1) * HEAD)} ${r(head.y + Math.sin(a1) * HEAD)} ` +
+      `L ${r(head.x)} ${r(head.y)} ` +
+      `L ${r(head.x + Math.cos(a2) * HEAD)} ${r(head.y + Math.sin(a2) * HEAD)}`,
   };
 }
 
@@ -186,13 +198,28 @@ export function roadLaneMarkingPaths(
     const hi = Math.max(lanesA, lanesB);
     const narrowKerb = lo * LANE_W;
 
+    // A divider is a lane-drop line (the one merging cars cross) when the lane
+    // it bounds ends within this tile. Real tiles have a uniform lane count
+    // (lanesA === lanesB) and taper only via the caps, so the signal is the
+    // caps: on a tapering edge (capHalfA ≠ capHalfB) any divider at or beyond
+    // the narrower painted half-width sits on the kerb where a lane drops. The
+    // `i >= lo` term keeps it working for the cap-less unit-test calls that
+    // pass lanesA ≠ lanesB directly. Lane-drop lines get a tighter dash.
+    const tapered =
+      capHalfA !== undefined && capHalfB !== undefined && capHalfA !== capHalfB;
+    const capNarrow =
+      capHalfA !== undefined && capHalfB !== undefined
+        ? Math.min(capHalfA, capHalfB)
+        : Infinity;
+    const isMerge = (i: number) => i >= lo || (tapered && i * LANE_W >= capNarrow);
+
     // Between same-direction lanes on the entry→exit side (positive offset).
     for (let i = 1; i < hi; i++) {
       let fromD = i * LANE_W;
       let toD = i < lo ? i * LANE_W : narrowKerb;
       if (capHalfA !== undefined) fromD = Math.min(fromD, capHalfA);
       if (capHalfB !== undefined) toD = Math.min(toD, capHalfB);
-      out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner" });
+      out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
     // Between same-direction lanes on the exit→entry side (negative offset).
     for (let i = 1; i < hi; i++) {
@@ -200,7 +227,7 @@ export function roadLaneMarkingPaths(
       let toD = i < lo ? -i * LANE_W : -narrowKerb;
       if (capHalfA !== undefined) fromD = Math.max(fromD, -capHalfA);
       if (capHalfB !== undefined) toD = Math.max(toD, -capHalfB);
-      out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner" });
+      out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
   } else {
     // Curved tile (adjacent ports): add offset Bézier inner dividers for each
