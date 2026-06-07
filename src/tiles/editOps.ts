@@ -9,6 +9,7 @@ import {
   defaultArmFor,
 } from "@/tiles/model";
 import type { Lane } from "@/tiles/lanes";
+import { nWayLanes } from "@/tiles/lanes";
 
 // Pure, immutable single-cell editing operations used by the level editor. Each
 // returns a new TileCell so Vue's reactive Level can swap the entry in place.
@@ -150,8 +151,14 @@ export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
 
 // Ensure a two-way road edge is present without ever removing one (idempotent) —
 // used when dragging a road so re-crossing a tile forms a road junction.
-export function addRoad(cell: TileCell, a: Port, b: Port): TileCell {
+// `count` > 1 replaces any existing lanes between a<->b with `nWayLanes(a,b,count)`.
+export function addRoad(cell: TileCell, a: Port, b: Port, count = 1): TileCell {
   const road = cell.road ?? [];
+  if (count > 1) {
+    // Drop existing lanes for this edge, then insert the multi-lane set.
+    const stripped = dropMovement(dropMovement(road, a, b), b, a);
+    return { ...cell, road: [...stripped, ...nWayLanes(a, b, count)] };
+  }
   return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
 }
 
