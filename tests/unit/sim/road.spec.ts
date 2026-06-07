@@ -458,6 +458,43 @@ describe("createRoadSim — spawning + movement", () => {
     };
     expect(run()).toEqual(run());
   });
+
+  it("two-way traffic flows past itself on a CURVE (no head-on deadlock)", () => {
+    // An L-shaped bidirectional 2-lane road: a horizontal straight, a 90° curve,
+    // and a vertical straight, open at both far ends so cars spawn from each and
+    // meet head-on in the bend. Regression: an oncoming car on a curve enters
+    // through our EXIT port (an adjacent port), which oppositePort(entry) doesn't
+    // recognise as opposing — so the car-follower treated it as a same-lane
+    // obstacle and the two streams froze nose-to-nose in the curve. With opposing
+    // detected by the tile's single edge-pair, the lanes pass and the road flows.
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "1,0": { connections: [], road: nWayLanes(Position.Left, Position.Bottom, 2) }, // curve
+      "1,1": { connections: [], road: nWayLanes(Position.Top, Position.Bottom, 2) },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 2,
+      height: 2,
+      seed: 7,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+
+    let prev = new Set<string>();
+    const completed = new Set<string>();
+    for (let i = 0; i < 800; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed.add(id);
+      prev = now;
+    }
+    // In the deadlock NO car ever traverses the curve to despawn at the far edge;
+    // with both streams flowing many do.
+    expect(completed.size).toBeGreaterThan(8);
+  });
 });
 
 describe("createRoadSim — car following", () => {

@@ -1014,7 +1014,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     let perpendicular = false;
     let opposing = false;
     if (p.entry === hit.entry) within = p.t;
-    else if (p.entry === oppositePort(hit.entry)) {
+    else if (!isRoadJunction(level[p.tileId]?.road)) {
+      // A straight/curve tile has a single edge-pair, so any car not entering the
+      // way we do is travelling it head-on (the oncoming lane). On a CURVE that
+      // oncoming car enters through our EXIT port — an ADJACENT port that
+      // oppositePort(entry) would miss, the bug that froze two streams nose-to-
+      // nose in a bend. Two ports ⇒ it can never be perpendicular.
+      within = 1 - p.t;
+      opposing = true;
+    } else if (p.entry === oppositePort(hit.entry)) {
       within = 1 - p.t;
       opposing = true; // travels this tile head-on to us — i.e. the oncoming lane
     } else {

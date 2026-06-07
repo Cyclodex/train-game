@@ -12,6 +12,7 @@ import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
 import { carscurve } from "@/levels/test/scenarios/carscurve";
 import { roadcurveloops } from "@/levels/test/scenarios/roadcurveloops";
+import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
@@ -59,7 +60,7 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
     id: "road",
     label: "Road",
     scenarios: [
-      carfollowing, carqueue, carcircle, carscurve, roadcurveloops,
+      carfollowing, carqueue, carcircle, carscurve, roadcurveloops, roadcurvetraffic,
       roadoneway, roadstraightlanes, roadlanemerge,
       roadcross, roadcross1lane, roadcross2lane, roadcross3lane, roadjunction,
       turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, cardestination,
