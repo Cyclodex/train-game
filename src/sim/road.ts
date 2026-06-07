@@ -397,6 +397,13 @@ export interface RoadSim {
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
   sample(): CarChord[];
+  // The remaining route of the live car `carId`, as the ordered tile segments
+  // from its current head tile to the map edge it is heading for. `[]` when no
+  // such car exists. Pure/derived — the future path isn't stored, it is replayed
+  // forward by following the car's `routePlan` at junctions (the same turns the
+  // car will actually take) and the single straight/curve exit elsewhere. Used by
+  // the renderer to draw a debug "where is this car going" overlay.
+  routePath(carId: string): RoadSegment[];
   // Road-junction tiles a car body currently occupies, keyed by tile id → car id.
   // There is no stored reservation for cars (unlike trains): occupancy is derived
   // live from car positions. The junction interlock keeps this at most one car per
@@ -434,12 +441,22 @@ const DEFAULT_CAR_BRAKE = 1.2;
 // the sprite corners pinch closer than the centerline gap — keep a touch of slack
 // so following cars don't visibly touch through a bend.
 const CAR_GAP = 0.06;
-// Lane-change (lateral) motion. A car eases sideways at LANE_CHANGE_RATE lanes
-// per second toward its target lane, but only commits to entering the next lane
-// when that lane has at least LANE_CHANGE_GAP tiles of clear road both ahead of
-// and behind the car (gap acceptance) — so a lane change never overlaps another
-// car. LANE_SETTLE is how close (in lanes) counts as "arrived".
+// Lane-change (lateral) motion. A car eases sideways toward its target lane on
+// an S-curve: lateral velocity ramps up and back down under a bounded lateral
+// acceleration (LANE_CHANGE_ACCEL) instead of snapping to full speed, capped at
+// LANE_CHANGE_RATE lanes/sec at cruise. The acceleration limit is what makes a
+// pull-out/return for an overtake glide (ease-in then ease-out) the same way a
+// lane-count taper does, rather than kinking sideways at constant velocity. A
+// car only commits to entering the next integer lane when that lane has at least
+// LANE_CHANGE_GAP tiles of clear road both ahead of and behind it (gap
+// acceptance) — so a lane change never overlaps another car. LANE_SETTLE is how
+// close (in lanes) counts as "arrived".
 const LANE_CHANGE_RATE = 2.2;
+// Max lateral acceleration (lanes/sec²) for the lane-change S-curve. Tuned so the
+// ramp-up/down each take ~LANE_CHANGE_RATE / LANE_CHANGE_ACCEL ≈ 0.4s, long
+// enough to read as an eased glide but short enough that a one-lane change still
+// finishes briskly.
+const LANE_CHANGE_ACCEL = 5.5;
 const LANE_CHANGE_GAP = 0.18;
 const LANE_SETTLE = 1e-3;
 // How many tiles ahead a car looks for the junction it must be lane-sorted for,
@@ -706,7 +723,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // integer lane when that lane is clear; otherwise it holds its current lateral
   // position and waits for a gap. Called once per car per tick.
   function updateLateral(car: Car, dt: number): void {
-    const before = car.laneIndex;
     // Confine the car to car lanes: snap the desired lane to the nearest car lane
     // so a merge/overtake/turn target on a road with a bus lane never lands the car
     // on the bus lane. A no-op on roads with no bus lanes (every lane is a car lane).
@@ -717,8 +733,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       desiredLane(car),
     );
     const diff = car.targetLane - car.laneIndex;
-    if (Math.abs(diff) <= LANE_SETTLE) {
+    if (Math.abs(diff) <= LANE_SETTLE && Math.abs(car.laneVel) <= LANE_SETTLE) {
+      // Settled in the target lane and no residual lateral motion — pin it.
       car.laneIndex = car.targetLane;
+      car.laneVel = 0;
     } else {
       const dir = Math.sign(diff);
       // Starting from a settled lane, only begin the change once the lane we'd
@@ -726,13 +744,26 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // position) we are committed and finish — the gap was checked when we set off.
       const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
       const blocked = atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir);
-      if (!blocked) {
-        const step = LANE_CHANGE_RATE * dt;
-        car.laneIndex += dir * Math.min(step, Math.abs(diff));
+      // Desired lateral velocity follows an S-curve motion profile: cruise at
+      // LANE_CHANGE_RATE but slow down approaching the target so we arrive with
+      // zero speed (the decel cap √(2·a·d) is the fastest speed from which we can
+      // still brake to a stop in the remaining distance `d` under LANE_CHANGE_ACCEL).
+      // If the next lane is blocked, the target velocity is 0 — we brake to a hold
+      // and wait for a gap. Either way the actual velocity ramps toward the target
+      // under the acceleration cap, so the lean eases in and out instead of snapping.
+      const decelCap = Math.sqrt(2 * LANE_CHANGE_ACCEL * Math.abs(diff));
+      const vTarget = blocked ? 0 : dir * Math.min(LANE_CHANGE_RATE, decelCap);
+      const dv = vTarget - car.laneVel;
+      const maxDv = LANE_CHANGE_ACCEL * dt;
+      car.laneVel += Math.max(-maxDv, Math.min(maxDv, dv));
+      car.laneIndex += car.laneVel * dt;
+      // Discrete-step guard: never coast past the target (would oscillate). If we
+      // crossed it this tick, snap onto it and kill the lateral velocity.
+      if ((car.targetLane - car.laneIndex) * dir < 0) {
+        car.laneIndex = car.targetLane;
+        car.laneVel = 0;
       }
     }
-    // Lateral speed this tick — drives the render lean (see Car.laneVel).
-    car.laneVel = dt > 0 ? (car.laneIndex - before) / dt : 0;
   }
 
   // The car's lateral lane position at a point `arc` tiles behind its head: it
@@ -1447,6 +1478,42 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         for (const tileId of bodyTileIds(c)) {
           if (isRoadJunction(level[tileId]?.road)) out[tileId] = c.id;
         }
+      }
+      return out;
+    },
+    routePath(carId: string): RoadSegment[] {
+      const car = cars.find(c => c.id === carId);
+      if (!car) return [];
+      const head = car.path[car.headIndex];
+      const out: RoadSegment[] = [];
+      const visited = new Set<string>();
+      // Cap so a malformed (looping) map can never spin forever: a route visits
+      // each tile/entry at most once, bounded by the grid size.
+      const maxSteps = width * height + 1;
+      let coord: Coordinates = head.coord;
+      let entry: Port = head.entryPort;
+      for (let i = 0; i < maxSteps; i++) {
+        const stateId = `${getCoordinatesId(coord)}:${entry}`;
+        if (visited.has(stateId)) break;
+        visited.add(stateId);
+        // At a junction take the route plan's prescribed turn (the car already
+        // chose it); on a straight/curve there is a single car exit.
+        const jExit = isRoadJunction(level[getCoordinatesId(coord)]?.road)
+          ? carExitAt(car, coord)
+          : null;
+        const exitPort = jExit ?? roadExitPort(level, coord, entry);
+        out.push({ coord, entryPort: entry, exitPort });
+        if (exitPort === null) break;
+        const nextCoord = neighborCoord(coord, exitPort);
+        if (!nextCoord) break;
+        const nextTile = level[getCoordinatesId(nextCoord)];
+        if (
+          !nextTile?.road?.length ||
+          exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0
+        )
+          break; // ran off the map / dead-ended — this exit is the destination edge
+        coord = nextCoord;
+        entry = oppositePort(exitPort);
       }
       return out;
     },

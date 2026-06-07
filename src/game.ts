@@ -9,8 +9,8 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { laneCount, carLaneIndices, roadPortsOf } from "@/tiles/lanes";
-import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
+import { laneCount, laneCountAt, carLaneIndices, roadPortsOf } from "@/tiles/lanes";
+import { laneOffsetPx, laneOffsetConstPx, seamBand, positioningBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
@@ -137,6 +137,23 @@ export interface RoadCar {
   part: string;
 }
 
+// One tile-local segment of a car's drawn route: the SVG path `d` (from
+// segmentPathD) plus the tile's screen origin so the overlay can place it with a
+// translate. The last segment in a route carries the arrowhead at the
+// destination edge.
+export interface CarRouteSeg {
+  d: string;
+  x: number; // tile origin px (coord.x * tileSize)
+  y: number;
+}
+
+// The active car's route for the debug overlay: the car id (so the view can
+// colour the line to match the car) and its centreline path as tile segments.
+export interface CarRoute {
+  carId: string;
+  segments: CarRouteSeg[];
+}
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -159,6 +176,10 @@ export interface Game {
   carJunctions: Record<string, string>;
   // In debug mode: destination tile id -> car id for cars heading there.
   carDestinations: Record<string, string>;
+  // In debug mode: the route of the hovered/pinned car (null when none). The view
+  // sets the active car via the methods below (only while debug is on) and draws
+  // this as a highlighted line. Pinned takes precedence over hovered.
+  carRoute: Ref<CarRoute | null>;
   // Newest-last activity log of decision-level simulation events (reservations,
   // holds, deliveries) for the debug panel. Capped to the most recent entries.
   eventLog: GameLogEntry[];
@@ -192,6 +213,17 @@ export interface Game {
   // (the wider of this tile and the neighbour dictates the painted width
   // at the shared edge).
   roadLaneCount(coord: Coordinates, port: Position): number;
+  // The total physical lanes crossing the tile's `port` boundary (both
+  // directions), counting lanes entering FROM the port plus distinct lanes
+  // exiting THROUGH it. Unlike summing roadLaneCount(port)+roadLaneCount(opposite),
+  // this is correct for curves/junctions where the opposite port carries no
+  // lanes — so a straight tapers to meet a curve neighbour at its true width.
+  roadLaneCountAt(coord: Coordinates, port: Position): number;
+  // Debug route overlay — the view drives these on car hover/click (debug only):
+  setHoveredCar(carId: string): void; // preview this car's route while hovering
+  clearHoveredCar(): void; // hover left a car
+  togglePinnedCar(carId: string): void; // click: pin this car's route (or unpin)
+  clearRouteCar(): void; // click empty space: drop hover + pin
 }
 
 export function createGame(
@@ -359,6 +391,11 @@ export function createGame(
   // is derived live; the renderer reads it to highlight a held junction in debug.
   const carJunctions = reactive({}) as Record<string, string>;
   const carDestinations = reactive({}) as Record<string, string>;
+  // Debug route overlay: which car's route to draw. `pinned` (a click) wins over
+  // `hovered`; the per-frame updateRoadCars resolves the active id to `carRoute`.
+  let hoveredCarId: string | null = null;
+  let pinnedCarId: string | null = null;
+  const carRoute = ref<CarRoute | null>(null);
 
   const unitIds: Record<string, string[]> = {};
   for (const def of trainDefs) unitIds[def.id] = [def.id, ...def.wagonIds];
@@ -512,6 +549,16 @@ export function createGame(
     return laneCount(level[id]?.road, port);
   }
 
+  // The lane-positioning band a car drives in: half the combined lanes of both
+  // directions, so one-way roads centre their lanes in the tile instead of
+  // hugging the right half (see sim/laneOffset.ts positioningBand). For a
+  // bidirectional road both directions match, so this equals the forward count
+  // and the offset is unchanged.
+  function centeredBandAt(coord: Coordinates, port: Position): number {
+    const road = level[getCoordinatesId(coord)]?.road;
+    return positioningBand(laneCount(road, port), laneCount(road, oppositePort(port)));
+  }
+
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT
   // tile whose neighbour has a different lane count, the painted surface tapers
   // across the tile (min-seam rule); the coupler's offset interpolates the same
@@ -524,21 +571,21 @@ export function createGame(
     const lanePos = s.lanePos ?? fallbackLane;
     const entry = s.entryPort;
     const exit = s.exitPort;
-    const selfBand = bandAt(s.coord, entry);
-    if (selfBand <= 0) return 0;
+    if (bandAt(s.coord, entry) <= 0) return 0;
+    const selfBand = centeredBandAt(s.coord, entry);
     // Straight tile: taper the band from the entry seam to the exit seam.
     if (exit !== null && exit === oppositePort(entry)) {
       const nEntry = neighborCoord(s.coord, entry);
       const nExit = neighborCoord(s.coord, exit);
       const bandEntry = seamBand(
         selfBand,
-        nEntry ? bandAt(nEntry, oppositePort(entry)) : 0,
+        nEntry ? centeredBandAt(nEntry, oppositePort(entry)) : 0,
       );
       const bandExit = seamBand(
         selfBand,
-        nExit ? bandAt(nExit, oppositePort(exit)) : 0,
+        nExit ? centeredBandAt(nExit, oppositePort(exit)) : 0,
       );
-      return laneOffsetPx(lanePos, bandEntry, bandExit, s.t, tileSize);
+      return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize);
     }
     // Curve / junction / dead-end: constant-width surface, constant offset.
     return laneOffsetConstPx(lanePos, selfBand, tileSize);
@@ -597,6 +644,30 @@ export function createGame(
     for (const id of Object.keys(newDest)) carDestinations[id] = newDest[id];
     for (const id of Object.keys(carDestinations)) {
       if (!(id in newDest)) delete carDestinations[id];
+    }
+
+    // Debug route overlay: resolve the active car (pinned wins) to its centreline
+    // path. Recomputed each frame so the line shrinks as the car drives. A stale
+    // pin/hover (the car despawned at its destination) drops to null.
+    const activeId = pinnedCarId ?? hoveredCarId;
+    if (activeId) {
+      const segs = roadSim.routePath(activeId);
+      if (segs.length === 0) {
+        if (pinnedCarId === activeId) pinnedCarId = null;
+        if (hoveredCarId === activeId) hoveredCarId = null;
+        carRoute.value = null;
+      } else {
+        carRoute.value = {
+          carId: activeId,
+          segments: segs.map(s => ({
+            d: segmentPathD(s.entryPort, s.exitPort ?? s.entryPort, tileSize),
+            x: s.coord.x * tileSize,
+            y: s.coord.y * tileSize,
+          })),
+        };
+      }
+    } else if (carRoute.value) {
+      carRoute.value = null;
     }
   }
 
@@ -724,6 +795,7 @@ export function createGame(
     roadCars,
     carJunctions,
     carDestinations,
+    carRoute,
     eventLog,
     paused,
     speed,
@@ -806,6 +878,23 @@ export function createGame(
     roadLaneCount(coord: Coordinates, port: Position): number {
       const id = getCoordinatesId(coord);
       return laneCount(level[id]?.road, port);
+    },
+    roadLaneCountAt(coord: Coordinates, port: Position): number {
+      const id = getCoordinatesId(coord);
+      return laneCountAt(level[id]?.road, port);
+    },
+    setHoveredCar(carId: string) {
+      hoveredCarId = carId;
+    },
+    clearHoveredCar() {
+      hoveredCarId = null;
+    },
+    togglePinnedCar(carId: string) {
+      pinnedCarId = pinnedCarId === carId ? null : carId;
+    },
+    clearRouteCar() {
+      hoveredCarId = null;
+      pinnedCarId = null;
     },
   };
 }

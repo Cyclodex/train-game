@@ -37,7 +37,7 @@ function couplerOffset(
     const nExit = neighborCoord(coord, exit);
     const bandEntry = seamBand(selfBand, nEntry ? bandAt(nEntry, oppositePort(entry)) : 0);
     const bandExit = seamBand(selfBand, nExit ? bandAt(nExit, oppositePort(exit)) : 0);
-    return laneOffsetPx(lanePos, bandEntry, bandExit, t, TILE);
+    return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, t, TILE);
   }
   return laneOffsetConstPx(lanePos, selfBand, TILE);
 }
@@ -59,15 +59,23 @@ function laneRoad(counts: number[]): Level {
 // collecting its lateral offset at each step. The car advances `t` from 0→1
 // within each tile, then moves onto the next tile at t = 0.
 function sweepOffsets(level: Level, tiles: number, lanePos: number, steps = 20): number[] {
+  // Clamp the requested lane to the tile's actual lane count, mirroring the sim:
+  // a car never holds a lane index a tile doesn't have (it has merged to a valid
+  // lane before the narrowing). Asserting offsets at a nonexistent lane index
+  // would test an unreachable state.
+  const laneOn = (i: number) => {
+    const n = laneCount(level[`${i},0`]?.road, Position.Left);
+    return n > 0 ? Math.min(lanePos, n - 1) : lanePos;
+  };
   const out: number[] = [];
   for (let i = 0; i < tiles; i++) {
     for (let k = 0; k < steps; k++) {
       const t = k / steps;
-      out.push(couplerOffset(level, { x: i, y: 0 }, Position.Left, Position.Right, t, lanePos));
+      out.push(couplerOffset(level, { x: i, y: 0 }, Position.Left, Position.Right, t, laneOn(i)));
     }
   }
   // Include the final exit seam of the last tile.
-  out.push(couplerOffset(level, { x: tiles - 1, y: 0 }, Position.Left, Position.Right, 1, lanePos));
+  out.push(couplerOffset(level, { x: tiles - 1, y: 0 }, Position.Left, Position.Right, 1, laneOn(tiles - 1)));
   return out;
 }
 
@@ -133,6 +141,29 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
     const offs = sweepOffsets(level, 3, 0);
     expect(maxStep(offs)).toBeCloseTo(0, 6);
     for (const o of offs) expect(o).toBeCloseTo(42, 5); // kerb lane of a 2-lane road
+  });
+
+  it("never sends a surviving inner lane across the centreline at a narrowing", () => {
+    // Regression: when a 3-lane direction narrows to 1 (the skip-a-lane row of
+    // the lanemerge gallery), the two inner lanes SURVIVE (the kerb lanes drop).
+    // The old band-substitution taper computed (bandExit - 0.5 - lanePos)·W, which
+    // for lanePos 1 and 2 with bandExit = 1 is -0.5·W and -1.5·W — negative, i.e.
+    // the lane line crossing onto the oncoming side of the street. Every lane's
+    // offset must stay on its own side (>= 0) at all progress points.
+    const level = laneRoad([3, 3, 1]);
+    for (const lanePos of [0, 1, 2]) {
+      const offs = sweepOffsets(level, 3, lanePos);
+      for (const o of offs) expect(o).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("holds a surviving inner lane steady across a 2->1 drop (kerb lane is the one that merges)", () => {
+    // The kerb lane (lanePos 0) is the one that closes and merges to centre; the
+    // inner lane (lanePos 1) survives and must keep its centre-adjacent offset
+    // (0.5·W = 14px) all the way through, not drift toward / across the centre.
+    const level = laneRoad([2, 2, 1]);
+    const inner = sweepOffsets(level, 3, 1);
+    for (const o of inner) expect(o).toBeCloseTo(14, 1);
   });
 
   it("keeps the inner lane continuous across the seam too", () => {

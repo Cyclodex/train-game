@@ -16,6 +16,22 @@
 // match the same constant in game.ts and Tile.vue.
 export const LANE_WIDTH_FRAC = 0.14;
 
+// The lane-positioning band for a road approach: half the combined lanes of both
+// travel directions, (forward + backward) / 2.
+//
+// Lane offsets anchor at the tile CENTRELINE and grow outward to the kerb, which
+// is right for a BIDIRECTIONAL road: each direction owns one half and the
+// centreline is the divider between them, so `forward === backward` and this is
+// just `forward` — the original behaviour, unchanged. But a ONE-WAY road has no
+// oncoming traffic to fill the other half (`backward === 0`); anchoring its lanes
+// at the centreline pushes them all onto the right half, leaving half the
+// pavement empty and the outer lane hanging off the kerb. Using `(forward + 0)/2`
+// instead re-centres the one-way lanes in the tile so they fill the painted
+// surface (which is always centred and `max(forward + backward, 2)` wide).
+export function positioningBand(forward: number, backward: number): number {
+  return (forward + backward) / 2;
+}
+
 // The same-direction lane band that actually crosses a port seam under the
 // min-seam rule: the wider tile tapers down to the narrower neighbour, so the
 // band at the seam is the smaller of this tile's band and the neighbour's.
@@ -25,27 +41,53 @@ export function seamBand(selfBand: number, neighbourBand: number): number {
   return neighbourBand > 0 ? Math.min(selfBand, neighbourBand) : selfBand;
 }
 
-// Lateral offset (px, right-of-travel) for a coupler at continuous lane position
-// `lanePos` (0 = kerb-side, N-1 = centre-adjacent) and progress `t` (0 at the
-// entry port, 1 at the exit port) along a STRAIGHT tile whose same-direction
-// lane band tapers from `bandEntry` lanes at the entry seam to `bandExit` at the
-// exit seam (the min-seam rule). A lane's offset is `(band - 0.5 - lanePos)·W`
-// at each end; interpolating the two ends makes a continuing lane glide inward /
-// outward as the painted kerb shifts, exactly matching the tapered surface —
-// instead of jumping when the discrete tile lane count changes at the seam.
+// The lateral offset (px, right-of-travel) of lane position `lanePos` at a seam
+// where this tile's same-direction band (`selfBand` lanes) meets a band of
+// `seamWidth` lanes (the min-seam result). 0 = kerb-side, selfBand-1 = centre.
 //
-// For a uniform road (bandEntry === bandExit) this reduces to the original
-// constant `(band - 0.5 - lanePos)·W`, so non-tapering roads are unchanged.
+// Lanes are anchored at the CENTRELINE and grow outward to the kerb, so a
+// narrowing eats the road from the KERB inward: the centre-adjacent lanes
+// survive and the kerb lanes drop (see roadGeometry.ts `laneDropGore`, whose
+// closure sits on the kerb strip). A lane's natural distance from centre is
+// `(selfBand - 0.5 - lanePos)·W`; at the seam it is clamped so it never reaches
+// past the narrow kerb (`(seamWidth - 0.5)·W`). That clamp does two correct
+// things at once: a surviving (inner) lane is already inside the narrow band so
+// it is unchanged, while a dropping (kerb) lane is pulled in to the narrow kerb
+// to merge — and crucially NO lane is ever pushed to a negative offset across
+// the centreline into oncoming traffic (the bug the old band-substitution
+// `(seamWidth - 0.5 - lanePos)·W` produced for every inner lane).
+export function laneSeamOffsetPx(
+  lanePos: number,
+  selfBand: number,
+  seamWidth: number,
+  tileSize: number,
+): number {
+  const natural = selfBand - 0.5 - lanePos;
+  const clamped = Math.min(natural, seamWidth - 0.5);
+  return clamped * tileSize * LANE_WIDTH_FRAC;
+}
+
+// Lateral offset (px, right-of-travel) for a coupler at continuous lane position
+// `lanePos` (0 = kerb-side, selfBand-1 = centre-adjacent) and progress `t` (0 at
+// the entry port, 1 at the exit port) along a STRAIGHT tile of `selfBand` lanes
+// whose same-direction band tapers to `bandEntry` lanes at the entry seam and
+// `bandExit` at the exit seam (the min-seam rule). Interpolating the seam offsets
+// of the two ends makes a dropping lane glide inward to merge as the painted kerb
+// shifts — exactly matching the tapered surface — instead of jumping at the seam,
+// while a surviving lane holds its line.
+//
+// For a uniform road (bandEntry === bandExit === selfBand) this reduces to the
+// constant `(selfBand - 0.5 - lanePos)·W`, so non-tapering roads are unchanged.
 export function laneOffsetPx(
   lanePos: number,
+  selfBand: number,
   bandEntry: number,
   bandExit: number,
   t: number,
   tileSize: number,
 ): number {
-  const w = tileSize * LANE_WIDTH_FRAC;
-  const offEntry = (bandEntry - 0.5 - lanePos) * w;
-  const offExit = (bandExit - 0.5 - lanePos) * w;
+  const offEntry = laneSeamOffsetPx(lanePos, selfBand, bandEntry, tileSize);
+  const offExit = laneSeamOffsetPx(lanePos, selfBand, bandExit, tileSize);
   return offEntry + (offExit - offEntry) * t;
 }
 

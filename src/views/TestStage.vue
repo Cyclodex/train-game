@@ -25,7 +25,11 @@
       </span>
     </div>
 
-    <div class="level" :style="{ width: cols * config.tileSize + 'px' }">
+    <div
+      class="level"
+      :style="{ width: cols * config.tileSize + 'px' }"
+      @click="onBackgroundClick"
+    >
       <Train
         v-for="trainObject in trains"
         :key="trainObject.id"
@@ -47,15 +51,23 @@
       <div
         v-for="car in roadCars"
         :key="car.id"
-        :class="['road-car', `road-car--${car.part}`]"
+        :class="['road-car', `road-car--${car.part}`, { 'road-car--inspect': config.debug }]"
         :style="{
           background: carColor(car.id),
           width: `${car.widthPx}px`,
           transform: `translate(-50%, -50%) translate(${car.x}px, ${car.y}px) rotate(${car.angle}deg)`,
         }"
+        @mouseenter="onCarEnter(car.id)"
+        @mouseleave="onCarLeave()"
+        @click.stop="onCarClick(car.id)"
       >
         <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
       </div>
+      <CarRouteOverlay
+        v-if="config.debug && carRoute"
+        :segments="carRoute.segments"
+        :color="carColor(carRoute.carId)"
+      />
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -185,6 +197,12 @@ class TestStage extends Vue {
   get roadCars() {
     return this.game.roadCars;
   }
+
+  // The hovered/pinned car's route for the debug overlay (null when none).
+  get carRoute() {
+    return this.game.carRoute.value;
+  }
+
   private carPalette = ["#d94c4c", "#3f7fd9", "#e0bc5c", "#e7e7e7", "#5fb37a"];
   // Stable colour per vehicle from the number in its base id (car0, car1, …). The
   // render id is `${carId}#${segment}`, so strip the segment suffix first — this
@@ -193,6 +211,24 @@ class TestStage extends Vue {
     const base = id.split("#")[0];
     const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
+  }
+
+  // Debug route inspection: hover previews a car's route, click pins it (click
+  // again or click empty space to unpin). No-op unless the debug overlay is on.
+  private baseCarId(id: string): string {
+    return id.split("#")[0];
+  }
+  onCarEnter(id: string): void {
+    if (this.config.debug) this.game.setHoveredCar(this.baseCarId(id));
+  }
+  onCarLeave(): void {
+    if (this.config.debug) this.game.clearHoveredCar();
+  }
+  onCarClick(id: string): void {
+    if (this.config.debug) this.game.togglePinnedCar(this.baseCarId(id));
+  }
+  onBackgroundClick(): void {
+    if (this.config.debug) this.game.clearRouteCar();
   }
 
   get paused(): boolean {
@@ -297,6 +333,10 @@ export default toNative(TestStage);
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   will-change: transform;
   overflow: hidden;
+}
+// In debug mode cars are clickable to inspect their route.
+.road-car--inspect {
+  cursor: pointer;
 }
 // A semi's cab: a touch darker and boxier than the trailer it pulls.
 .road-car--cab {

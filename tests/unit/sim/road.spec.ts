@@ -252,6 +252,60 @@ describe("createRoadSim — spawning + movement", () => {
     expect(maxLean).toBeGreaterThan(0.1);
   });
 
+  it("eases into a lane change instead of snapping to full lateral speed", () => {
+    // The S-curve motion profile ramps lateral velocity up under a bounded
+    // acceleration, so a car never jumps from no sideways motion to its full
+    // lane-change speed in a single tick (the old bang-bang behaviour, which
+    // looked harsh on an overtake). Use the overtake map (uniform 2-lane each
+    // way, no lane drop) so the only lateral motion is the eased pull-out/return —
+    // assert that whenever a car is laterally at rest one tick, its lateral speed
+    // the next tick is small (it accelerates in, not a jump to the cruise rate).
+    const lane2 = () => ({ connections: [], road: nWayLanes(Position.Left, Position.Right, 2) });
+    const lvl: Level = {
+      "0,0": lane2(), "1,0": lane2(), "2,0": lane2(), "3,0": lane2(), "4,0": lane2(), "5,0": lane2(),
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 6,
+      height: 1,
+      seed: 4,
+      spawnInterval: 0.9,
+      carSpeed: 0.6,
+      speedSpread: 0.3, // a fast/slow mix so leaders get caught and overtaken
+      carLength: 0.2,
+      maxCars: 8,
+      overtakeFraction: 1,
+    });
+    const dt = 0.05;
+    // Per-car lateral history, so we measure every merging car (the first car to
+    // spawn rides the kerb lane straight through and never changes).
+    const hist = new Map<string, { lane: number; vel: number }>();
+    let worstOnsetVel = 0;
+    for (let i = 0; i < 600; i++) {
+      sim.step(dt, () => false);
+      const live = new Set<string>();
+      for (const c of sim.sample()) {
+        live.add(c.id);
+        const prev = hist.get(c.id);
+        if (prev) {
+          const vel = Math.abs(c.laneIndex - prev.lane) / dt;
+          // At lateral rest last tick → this tick's speed is the acceleration
+          // onset; it must not leap straight to the cruise rate.
+          if (prev.vel < 0.05) worstOnsetVel = Math.max(worstOnsetVel, vel);
+          hist.set(c.id, { lane: c.laneIndex, vel });
+        } else {
+          hist.set(c.id, { lane: c.laneIndex, vel: 0 });
+        }
+      }
+      for (const id of [...hist.keys()]) if (!live.has(id)) hist.delete(id);
+    }
+    // The car did change lane (so the test actually exercised the motion)…
+    expect(worstOnsetVel).toBeGreaterThan(0);
+    // …but the onset speed stayed within one acceleration step of rest, not the
+    // full ~2.2 lanes/sec cruise the old constant-velocity change jumped to.
+    expect(worstOnsetVel).toBeLessThan(0.5);
+  });
+
   it("overtakers pass a slow leader on the inner lane, then return; disciplined drivers don't", () => {
     // A 2-lane-each-way straight (no junctions, no lane drops) — the ONLY reason
     // to ride the inner lane is to overtake. Drive it once with all overtakers and
