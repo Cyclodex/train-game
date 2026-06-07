@@ -1,3 +1,4 @@
+import { Position } from "@/types";
 import { Port, oppositePort } from "@/sim/topology";
 import { segmentPathD, portPoint } from "@/sim/pathGeometry";
 
@@ -99,6 +100,15 @@ export function roadLaneMarkingPaths(
       const toD = i < lo ? -i * LANE_W : -narrowKerb;
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner" });
     }
+  } else {
+    // Curved tile (adjacent ports): add offset Bézier inner dividers for each
+    // same-direction lane boundary, using the entry→exit and exit→entry sides.
+    for (let i = 1; i < lanesA; i++) {
+      out.push({ d: curvedParallelPath(entry, exit, size, i * LANE_W), kind: "inner" });
+    }
+    for (let i = 1; i < lanesB; i++) {
+      out.push({ d: curvedParallelPath(entry, exit, size, -i * LANE_W), kind: "inner" });
+    }
   }
 
   return out;
@@ -114,4 +124,64 @@ function taperedParallel(entry: Port, exit: Port, size: number, dA: number, dB: 
   const b = portPoint(exit, size);
   const n = perpUnit(a, b);
   return `M ${a.x + n.x * dA} ${a.y + n.y * dA} L ${b.x + n.x * dB} ${b.y + n.y * dB}`;
+}
+
+// A filled road-ribbon polygon for a curved tile (adjacent ports), approximated
+// by offsetting the quadratic Bézier along perpendiculars at each endpoint.
+// The control point is always the tile centre (portPoint(Center, size)).
+// `width` is the total road width (total lanes × LANE_W).
+// Returns a closed SVG path string suitable for a filled <path>.
+export function roadCurvePolygonPath(entry: Port, exit: Port, size: number, width: number): string {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const c = portPoint(Position.Center, size);
+  const halfW = width / 2;
+
+  // Unit right-hand perpendiculars at t=0 (entry tangent: a→c) and t=1 (exit tangent: c→b).
+  const nA = perpUnit(a, c);
+  const nB = perpUnit(c, b);
+  // Average direction for the Bézier control-point offset, then normalize.
+  const avgX = nA.x + nB.x;
+  const avgY = nA.y + nB.y;
+  const avgMag = Math.hypot(avgX, avgY) || 1;
+  const nC = { x: avgX / avgMag, y: avgY / avgMag };
+
+  // Outer edge: offset by +halfW (right side of travel).
+  const ax = a.x + nA.x * halfW, ay = a.y + nA.y * halfW;
+  const cx1 = c.x + nC.x * halfW, cy1 = c.y + nC.y * halfW;
+  const bx1 = b.x + nB.x * halfW, by1 = b.y + nB.y * halfW;
+  // Inner edge: offset by -halfW (left side of travel), traversed in reverse.
+  const bx2 = b.x - nB.x * halfW, by2 = b.y - nB.y * halfW;
+  const cx2 = c.x - nC.x * halfW, cy2 = c.y - nC.y * halfW;
+  const ax2 = a.x - nA.x * halfW, ay2 = a.y - nA.y * halfW;
+
+  return (
+    `M ${ax} ${ay} ` +
+    `Q ${cx1} ${cy1} ${bx1} ${by1} ` +
+    `L ${bx2} ${by2} ` +
+    `Q ${cx2} ${cy2} ${ax2} ${ay2} ` +
+    `Z`
+  );
+}
+
+// An offset quadratic Bézier path for a curved lane marking at perpendicular
+// offset `d` from the centreline. Used for inner lane dividers on curved tiles.
+// Positive `d` = right of travel direction; negative = left.
+function curvedParallelPath(entry: Port, exit: Port, size: number, d: number): string {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const c = portPoint(Position.Center, size);
+
+  const nA = perpUnit(a, c);
+  const nB = perpUnit(c, b);
+  const avgX = nA.x + nB.x;
+  const avgY = nA.y + nB.y;
+  const avgMag = Math.hypot(avgX, avgY) || 1;
+  const nC = { x: avgX / avgMag, y: avgY / avgMag };
+
+  const ax = a.x + nA.x * d, ay = a.y + nA.y * d;
+  const cx = c.x + nC.x * d, cy = c.y + nC.y * d;
+  const bx = b.x + nB.x * d, by = b.y + nB.y * d;
+
+  return `M ${ax} ${ay} Q ${cx} ${cy} ${bx} ${by}`;
 }

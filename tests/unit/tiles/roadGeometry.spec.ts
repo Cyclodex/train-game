@@ -3,6 +3,7 @@ import { Position } from "@/types";
 import {
   roadSurfacePath,
   roadSurfacePolygonPath,
+  roadCurvePolygonPath,
   roadLaneMarkingPaths,
 } from "@/tiles/roadGeometry";
 
@@ -95,8 +96,15 @@ describe("roadLaneMarkingPaths", () => {
     expect(marks.filter(m => m.kind === "inner")).toHaveLength(4);
   });
 
-  it("curved road: only centre divider (no parallel Bezier offsets)", () => {
+  it("curved road: centre divider + offset Bézier inner dividers", () => {
     const marks = roadLaneMarkingPaths(Position.Left, Position.Bottom, 200, 2, 2);
+    expect(marks).toHaveLength(3); // centre + 1 inner per side
+    expect(marks[0].kind).toBe("centre");
+    expect(marks.filter(m => m.kind === "inner")).toHaveLength(2);
+  });
+
+  it("curved road 1-lane: only centre divider", () => {
+    const marks = roadLaneMarkingPaths(Position.Left, Position.Bottom, 200, 1, 1);
     expect(marks).toHaveLength(1);
     expect(marks[0].kind).toBe("centre");
   });
@@ -176,6 +184,43 @@ describe("roadLaneMarkingPaths", () => {
       3, 2,
     );
     expect(marks.filter(m => m.kind === "inner")).toHaveLength(4);
+  });
+});
+
+describe("roadCurvePolygonPath", () => {
+  it("returns a closed path (starts with M, ends with Z)", () => {
+    const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
+    expect(d.trimStart().startsWith("M")).toBe(true);
+    expect(d.trimEnd().endsWith("Z")).toBe(true);
+  });
+
+  it("contains a quadratic Bézier segment (Q) for both outer and inner edges", () => {
+    const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
+    // Should have outer Q and inner Q (two Q commands total).
+    const qCount = (d.match(/Q/g) ?? []).length;
+    expect(qCount).toBe(2);
+  });
+
+  it("is wider than the centreline (offset points differ from centrepoints)", () => {
+    // For Left→Bottom, centre entry is (0,100) and centre exit is (100,200).
+    // With halfW=28 the outer entry point should not be (0,100).
+    const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
+    expect(d).not.toContain("M 0 100");
+  });
+
+  it("roadLaneMarkingPaths curved 2-lane returns 3 paths: centre + 2 inner", () => {
+    const marks = roadLaneMarkingPaths(Position.Left, Position.Bottom, 200, 2, 2);
+    expect(marks).toHaveLength(3);
+    expect(marks[0].kind).toBe("centre");
+    expect(marks.filter(m => m.kind === "inner")).toHaveLength(2);
+  });
+
+  it("inner Bézier markings on curved roads contain Q command", () => {
+    const marks = roadLaneMarkingPaths(Position.Left, Position.Bottom, 200, 2, 2);
+    const inners = marks.filter(m => m.kind === "inner");
+    for (const inner of inners) {
+      expect(inner.d).toContain("Q");
+    }
   });
 });
 

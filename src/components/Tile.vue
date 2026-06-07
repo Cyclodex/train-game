@@ -15,8 +15,7 @@
         v-for="(r, i) in roadPaths"
         :key="'rs' + i"
         :d="r.surface"
-        :class="r.strokeWidth ? 'road-surface-curved' : 'road-surface'"
-        :style="r.strokeWidth ? { strokeWidth: r.strokeWidth + 'px' } : {}"
+        class="road-surface"
       />
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
         <path
@@ -149,8 +148,8 @@ import {
 import { segmentPathD } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import {
-  roadSurfacePath,
   roadSurfacePolygonPath,
+  roadCurvePolygonPath,
   roadLaneMarkingPaths,
   LaneMarkingPath,
 } from "@/tiles/roadGeometry";
@@ -210,7 +209,7 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; strokeWidth: number }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[] }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -221,14 +220,11 @@ class Tile extends Vue {
       const selfTotal = Math.max((selfA || 0) + (selfB || 0), 2);
       const isStraight = oppositePort(a) === b;
 
-      // Curved tiles (adjacent ports): the chord-perpendicular polygon draws a
-      // wrong diagonal shape that cuts across the tile corner instead of following
-      // the Bézier arc. Fall back to the stroked centreline for curves; taper is
-      // only meaningful on straight merges anyway.
+      // Curved tiles (adjacent ports): use a filled Bézier offset polygon so
+      // the surface follows the arc correctly instead of drawing a diagonal chord.
       if (!isStraight) {
         return {
-          surface: roadSurfacePath(a, b, size),
-          strokeWidth: selfTotal * LANE_W,
+          surface: roadCurvePolygonPath(a, b, size, selfTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
         };
       }
@@ -254,7 +250,6 @@ class Tile extends Vue {
       const widthB = totalB * LANE_W;
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        strokeWidth: 0,
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
       };
     });
@@ -380,16 +375,8 @@ export default toNative(Tile);
 .road-surface {
   fill: #4a4a4a;
   stroke: none;
-  // A filled trapezoid polygon: the renderer computes the four corners per
-  // edge from this tile's lane count and the neighbour's so the ribbon meets
-  // flush at every seam and tapers smoothly across a merge or split.
-}
-.road-surface-curved {
-  fill: none;
-  stroke: #4a4a4a;
-  stroke-linecap: butt;
-  // Curved tiles use a stroked centreline rather than a filled polygon; the
-  // chord-based perpendicular produces the wrong shape for Bézier arcs.
+  // A filled polygon: straight roads use a trapezoid with tapered width;
+  // curved roads use a Bézier-offset ribbon that follows the arc correctly.
 }
 .road-marking-centre {
   fill: none;
