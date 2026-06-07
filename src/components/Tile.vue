@@ -245,8 +245,11 @@ class Tile extends Vue {
       const neighborTotalAtB = nb
         ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
         : 0;
-      const totalA = Math.max(selfTotal, neighborTotalAtA);
-      const totalB = Math.max(selfTotal, neighborTotalAtB);
+      // The wider tile owns the taper: at a seam the width is min(self, neighbour)
+      // so a 4-lane tile narrows to match a 2-lane curve next door, rather than
+      // the curve being forced to widen (it can't — it uses a stroked path).
+      const totalA = (na && neighborTotalAtA > 0) ? Math.min(selfTotal, neighborTotalAtA) : selfTotal;
+      const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       return {
