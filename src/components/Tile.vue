@@ -16,6 +16,7 @@
         :key="'rs' + i"
         :d="r.surface"
         class="road-surface"
+        :class="{ 'road-surface--mismatch': r.mismatch }"
       />
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
         <path
@@ -126,7 +127,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ kind }}{{ roadLaneLabel }}</div>
+      <div class="debug-kind">{{ kind }}</div>
     </div>
   </div>
 </template>
@@ -183,12 +184,6 @@ class Tile extends Vue {
   get kindClass() {
     return `tile-kind--${this.kind}`;
   }
-  get roadLaneLabel(): string {
-    const road = this.tile.road;
-    if (!road?.length) return "";
-    const max = Math.max(...roadEdges(road).flatMap(([a, b]) => [laneCount(road, a), laneCount(road, b)]));
-    return max > 0 ? ` ${max}L` : "";
-  }
   get isDepot() {
     return this.tile.role === "depot";
   }
@@ -215,7 +210,7 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[] }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; mismatch: boolean }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -226,19 +221,29 @@ class Tile extends Vue {
       const selfTotal = Math.max((selfA || 0) + (selfB || 0), 2);
       const isStraight = oppositePort(a) === b;
 
-      // Curved tiles (adjacent ports): use a filled Bézier offset polygon so
-      // the surface follows the arc correctly instead of drawing a diagonal chord.
+      // Curved, T-junction, and cross tiles: flag mismatches instead of tapering.
+      // Mixed lane counts at non-straight connections cannot route traffic correctly;
+      // render the edge red so the author knows to fix the layout.
       if (!isStraight) {
+        const na = neighborCoord(coord, a);
+        const nb = neighborCoord(coord, b);
+        const nTotalA = na
+          ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
+          : 0;
+        const nTotalB = nb
+          ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
+          : 0;
+        const mismatch =
+          (na !== null && nTotalA > 0 && nTotalA !== selfTotal) ||
+          (nb !== null && nTotalB > 0 && nTotalB !== selfTotal);
         return {
           surface: roadCurvePolygonPath(a, b, size, selfTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
+          mismatch,
         };
       }
 
-      // The neighbour on the `a` side of the seam: a car leaving through `a`
-      // enters the neighbour on its `oppositePort(a)` side. If that neighbour
-      // is off the map, neighbourCoord returns null and the matching seam
-      // uses this tile's own count (no neighbour to match).
+      // Straight tiles: taper at seams is valid (lane merge/diverge). No mismatch flag.
       const na = neighborCoord(coord, a);
       const nb = neighborCoord(coord, b);
       const neighborTotalAtA = na
@@ -247,9 +252,6 @@ class Tile extends Vue {
       const neighborTotalAtB = nb
         ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
         : 0;
-      // The wider tile owns the taper: at a seam the width is min(self, neighbour)
-      // so a 4-lane tile narrows to match a 2-lane curve next door, rather than
-      // the curve being forced to widen (it can't — it uses a stroked path).
       const totalA = (na && neighborTotalAtA > 0) ? Math.min(selfTotal, neighborTotalAtA) : selfTotal;
       const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
       const widthA = totalA * LANE_W;
@@ -257,6 +259,7 @@ class Tile extends Vue {
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
+        mismatch: false,
       };
     });
   }
@@ -381,8 +384,11 @@ export default toNative(Tile);
 .road-surface {
   fill: #4a4a4a;
   stroke: none;
-  // A filled polygon: straight roads use a trapezoid with tapered width;
-  // curved roads use a Bézier-offset ribbon that follows the arc correctly.
+}
+.road-surface--mismatch {
+  // Lane-count mismatch at a non-straight seam — invalid connection, cannot
+  // route traffic correctly. Render red so the layout error is obvious.
+  fill: #b03030;
 }
 .road-marking-centre {
   fill: none;
