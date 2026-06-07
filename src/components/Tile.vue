@@ -818,13 +818,21 @@ export default toNative(Tile);
   fill: none;
   stroke: rgba(255, 255, 255, 0.7);
   stroke-width: 2px;
-  stroke-dasharray: 14 12;
+  /* Period (13 + 12 = 25) divides the 200px tile exactly (8 dashes/tile). The
+     offset lands the tile edge in the MIDDLE of a gap: the gap occupies pattern
+     positions [13, 25), whose centre is 19. So abutting tiles each contribute a
+     half-gap at the seam, summing to one full gap — the dashes stay evenly
+     spaced across tile boundaries. */
+  stroke-dasharray: 13 12;
+  stroke-dashoffset: 19px;
   stroke-linecap: butt;
 }
 /* Lane-drop divider (a lane ending at a 3→2 / 2→1 taper, where cars merge
-   across): a tighter dash than ordinary dividers to read as the crossing line. */
+   across): a tighter dash than ordinary dividers to read as the crossing line.
+   Period (7 + 13 = 20) also divides 200 (10/tile); gap [7, 20) centre = 13.5. */
 .road-marking-merge {
-  stroke-dasharray: 7 9;
+  stroke-dasharray: 7 13;
+  stroke-dashoffset: 13.5px;
 }
 /* The closing-lane gore is paved (concrete), matching the road surface, with
    white diagonal hatching and a white closing edge — the real lane-drop look. */
