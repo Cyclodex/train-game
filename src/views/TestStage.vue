@@ -8,6 +8,13 @@
         {{ paused ? "Start" : "Pause" }}
       </button>
       <button class="stage-button" @click="cycleSpeed">{{ speed }}x</button>
+      <button
+        class="stage-button stage-button--edit"
+        title="Open this map in the editor to correct it, then Export the JSON back into the scenario file"
+        @click="editInEditor"
+      >
+        ✏️ Edit
+      </button>
       <label class="stage-cars">
         🚗 Cars
         <input
@@ -109,6 +116,7 @@ import { createGame, Game, TrainDef } from "@/game";
 import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
+import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
@@ -253,6 +261,13 @@ class TestStage extends Vue {
   pausePlay() {
     this.game.paused.value = !this.game.paused.value;
   }
+  // Hand this scenario's map off to the editor for manual correction. Scenarios
+  // live in source, so there's no auto-write-back: fix the map with the real
+  // tools, then Export the JSON and paste it into scenarios/<id>.ts.
+  editInEditor() {
+    setEditorSeed(this.scenario.level);
+    this.$router.push("/editor");
+  }
   cycleSpeed() {
     const i = this.speeds.indexOf(this.game.speed.value);
     this.game.speed.value = this.speeds[(i + 1) % this.speeds.length];
@@ -284,6 +299,13 @@ export default toNative(TestStage);
 
   &:hover {
     background: #34506a;
+  }
+}
+.stage-button--edit {
+  background: #3a6b4f;
+
+  &:hover {
+    background: #468060;
   }
 }
 .stage-cars {
