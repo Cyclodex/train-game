@@ -86,6 +86,24 @@ export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
     .sort((a, b) => a - b);
 }
 
+// The car-accessible lane index of approach `from` nearest to `lane` (0 = kerb).
+// Cars are confined to car lanes (a bus lane is off-limits): wherever lane logic
+// would place a car — a spawn slot, a merge target, an overtake lane — it is
+// snapped to the closest car lane so a car never ends up on a bus lane. Ties
+// favour the kerb-side (lower) index. Returns `lane` unchanged if the approach has
+// no car lanes at all (nothing to snap to).
+export function nearestCarLaneIndex(
+  road: Lane[] | undefined,
+  from: Port,
+  lane: number,
+): number {
+  const carLanes = carLaneIndices(road, from);
+  if (carLanes.length === 0) return lane;
+  return carLanes.reduce((best, l) =>
+    Math.abs(l - lane) < Math.abs(best - lane) ? l : best,
+  );
+}
+
 // The car-accessible lane indices of approach `from` that permit exiting toward
 // `exit` (i.e. whose `to` lists it). Used by lane-aware routing to position a car
 // in a lane that allows its next turn. Empty when no car lane permits the move.

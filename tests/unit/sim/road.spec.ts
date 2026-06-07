@@ -19,7 +19,8 @@ import {
   roadcross3lane,
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
-import { lanesAllowingExit } from "@/tiles/lanes";
+import { buslane } from "@/levels/test/scenarios/buslane";
+import { lanesAllowingExit, carLaneIndices } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -305,6 +306,41 @@ describe("createRoadSim — spawning + movement", () => {
 
     const disciplined = run(0);
     expect(disciplined.changed).toBe(0); // nobody ever changes lane (no overtakes)
+  });
+
+  it("never puts a car in a bus-only lane (cars confined to car lanes)", () => {
+    // The buslane scenario: 1 car lane (index 0) + 1 bus-only lane (index 1) per
+    // direction. Cars are car/truck/semi — none is a bus — so NO vehicle may ever
+    // occupy the bus lane. Drive it busy, with every driver an overtaker and a wide
+    // speed spread (so slow leaders get caught and a pass into the inner lane is
+    // tempting): the only inner lane here is the bus lane, so a correct sim never
+    // moves a car into it.
+    const sim = createRoadSim({
+      level: buslane.level,
+      width: buslane.size!.cols,
+      height: buslane.size!.rows,
+      seed: 7,
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0.4,
+      overtakeFraction: 1,
+      maxCars: 12,
+    });
+    let busLaneViolations = 0;
+    let sampled = 0;
+    for (let i = 0; i < 1500; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        const id = `${f.coord.x},${f.coord.y}`;
+        const carLanes = carLaneIndices(buslane.level[id]?.road, f.entryPort);
+        sampled++;
+        if (!carLanes.includes(Math.round(c.laneIndex))) busLaneViolations++;
+      }
+    }
+    expect(sampled).toBeGreaterThan(100); // cars actually ran the road
+    expect(busLaneViolations).toBe(0); // and none ever rode the bus lane
   });
 
   it("sorts cars into the turn lane that permits their turn (F)", () => {

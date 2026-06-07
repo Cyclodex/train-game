@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit } from "@/tiles/lanes";
+import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, carLaneIndices, nearestCarLaneIndex } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -707,7 +707,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // position and waits for a gap. Called once per car per tick.
   function updateLateral(car: Car, dt: number): void {
     const before = car.laneIndex;
-    car.targetLane = desiredLane(car);
+    // Confine the car to car lanes: snap the desired lane to the nearest car lane
+    // so a merge/overtake/turn target on a road with a bus lane never lands the car
+    // on the bus lane. A no-op on roads with no bus lanes (every lane is a car lane).
+    const head = car.path[car.headIndex];
+    car.targetLane = nearestCarLaneIndex(
+      level[getCoordinatesId(head.coord)]?.road,
+      head.entryPort,
+      desiredLane(car),
+    );
     const diff = car.targetLane - car.laneIndex;
     if (Math.abs(diff) <= LANE_SETTLE) {
       car.laneIndex = car.targetLane;
@@ -825,6 +833,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (junctionAhead(head.coord, head.entryPort, head.exitPort, TURN_LANE_LOOKAHEAD)) return;
     const passLane = laneOf(car) + 1; // overtake on the left (higher index)
     if (passLane > count - 1) return;
+    // Never pass by pulling into a bus lane — cars are confined to car lanes.
+    if (!carLaneIndices(level[getCoordinatesId(head.coord)]?.road, head.entryPort).includes(passLane)) return;
     if (!laneClearForChange(car, passLane) || !passingWindowClear(car, passLane)) return;
     car.overtakePhase = "passing";
     car.overtakeOf = lead!.other.id;
@@ -1224,10 +1234,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // note: clearAhead skips oncoming-lane cars, so an opposing car on the entry
     // tile never blocks a spawn — right when both directions share the tile.
     const exit = roadExitPort(level, entry.coord, entry.entryPort);
-    const entryLaneCount = Math.max(
-      1,
-      laneCount(level[getCoordinatesId(entry.coord)]?.road, entry.entryPort)
-    );
+    // Cars may only use car lanes — a bus lane is off-limits. Spawn into (and count)
+    // car lanes only, so a car never starts on the bus lane.
+    const entryRoad = level[getCoordinatesId(entry.coord)]?.road;
+    const carLanes = carLaneIndices(entryRoad, entry.entryPort);
+    if (carLanes.length === 0) return false; // no car-usable lane at this entry
+    const entryLaneCount = carLanes.length;
     const probe: Car = {
       id: "",
       kind: "car",
@@ -1271,7 +1283,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const order: number[] =
       preferred >= 0
         ? [preferred]
-        : Array.from({ length: entryLaneCount }, (_, k) => (spawnLaneRot + k) % entryLaneCount);
+        : Array.from({ length: carLanes.length }, (_, k) => carLanes[(spawnLaneRot + k) % carLanes.length]);
     for (const lane of order) {
       probe.laneIndex = lane;
       if (clearAhead(probe, closed).clear > STOP_EPS) {
