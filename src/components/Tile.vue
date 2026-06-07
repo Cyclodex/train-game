@@ -207,7 +207,7 @@ import {
   MergeArrowPath,
   LaneDropGore,
 } from "@/tiles/roadGeometry";
-import { roadEdges, laneCount } from "@/tiles/lanes";
+import { roadEdges, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import depotBuildingImg from "@/assets/depot.png";
 
@@ -280,22 +280,31 @@ class Tile extends Vue {
       if (!isStraight) {
         const na = neighborCoord(coord, a);
         const nb = neighborCoord(coord, b);
+        // Compare PER SEAM, not whole-tile totals: the lanes crossing THIS port
+        // boundary (both directions). For a turn lane that is just the lanes
+        // using that movement, so a 2-lane approach feeding two 1-lane turn arms
+        // matches each arm and is not flagged — only a genuinely mismatched seam
+        // (e.g. a 3-lane curve into a 2-lane road) goes red.
+        const selfAtA = laneCountAt(this.tile.road, a);
+        const selfAtB = laneCountAt(this.tile.road, b);
         const nTotalA = na
           ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
           : 0;
         const nTotalB = nb
           ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
           : 0;
-        const mismatch =
-          (na !== null && nTotalA > 0 && nTotalA !== selfTotal) ||
-          (nb !== null && nTotalB > 0 && nTotalB !== selfTotal);
-        const badNeighbour = (na !== null && nTotalA > 0 && nTotalA !== selfTotal) ? nTotalA : nTotalB;
+        const badA = na !== null && nTotalA > 0 && nTotalA !== selfAtA;
+        const badB = nb !== null && nTotalB > 0 && nTotalB !== selfAtB;
+        const mismatch = badA || badB;
         const mismatchTip = mismatch
-          ? `Lane-count mismatch: this tile has ${selfTotal} lanes total, neighbour has ${badNeighbour}. Draw over with matching lane count to fix.`
+          ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`
           : "";
         const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
+        // Width = the widest seam of this edge (min 2 so a one-way still reads as a
+        // road), so the turn ribbon meets its arm flush.
+        const widthTotal = Math.max(selfAtA, selfAtB, 2);
         return {
-          surface: roadCurvePolygonPath(a, b, size, selfTotal * LANE_W),
+          surface: roadCurvePolygonPath(a, b, size, widthTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
           mismatch,
           mismatchTip,

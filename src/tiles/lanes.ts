@@ -153,6 +153,22 @@ export function laneCount(road: Lane[] | undefined, from: Port): number {
   return lanes.length === 0 ? 0 : Math.max(...lanes.map(l => l.index)) + 1;
 }
 
+// Total physical lanes crossing a port boundary: lanes entering FROM the port
+// PLUS lanes exiting THROUGH it (whose `to` includes the port). Use this instead
+// of laneCount(a) + laneCount(oppositePort(a)) when the tile is a curve or
+// junction — there the opposite port carries no lanes, so the two-term formula
+// under-counts and triggers false mismatch / taper errors. For a turn movement
+// it counts only the lanes using that movement (e.g. one lane of a 2-lane
+// approach turning off), so each seam is measured by what actually crosses it.
+export function laneCountAt(road: Lane[] | undefined, port: Port): number {
+  const entering = laneCount(road, port);
+  // Count the NUMBER of lanes that exit via this port, not max(index)+1: with
+  // turn lanes only some indices exit a given port (e.g. only lane 1 turns left),
+  // so the index-based formula would over-count the seam.
+  const exitingCount = (road ?? []).filter(l => l.to.includes(port)).length;
+  return entering + exitingCount;
+}
+
 // Generate `count` index slots in both directions between ports `a` and `b`.
 // Produces a multi-lane bidirectional road: indices 0..count-1 each way.
 // Pass `kind` to mark all lanes with a restriction (e.g. "bus").
