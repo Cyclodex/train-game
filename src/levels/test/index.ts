@@ -16,6 +16,11 @@ import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
+import {
+  roadcross1lane,
+  roadcross2lane,
+  roadcross3lane,
+} from "@/levels/test/scenarios/roadcrosslanes";
 import { roadjunction } from "@/levels/test/scenarios/roadjunction";
 import { rightturncross } from "@/levels/test/scenarios/rightturncross";
 import { noleftturn } from "@/levels/test/scenarios/noleftturn";
@@ -50,7 +55,8 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
     label: "Road",
     scenarios: [
       carfollowing, carqueue, carcircle, carscurve, roadcurveloops,
-      roadoneway, roadstraightlanes, roadlanemerge, roadcross, roadjunction,
+      roadoneway, roadstraightlanes, roadlanemerge,
+      roadcross, roadcross1lane, roadcross2lane, roadcross3lane, roadjunction,
       rightturncross, noleftturn, roadpriority, trucks, buslane, cardestination,
     ],
   },

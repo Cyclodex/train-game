@@ -207,7 +207,7 @@ import {
   MergeArrowPath,
   LaneDropGore,
 } from "@/tiles/roadGeometry";
-import { roadEdges, laneCount, laneMovements } from "@/tiles/lanes";
+import { roadEdges, laneCount } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import depotBuildingImg from "@/assets/depot.png";
 
@@ -327,32 +327,107 @@ class Tile extends Vue {
     });
   }
 
-  // Lane node graph for the debug overlay: one directed arrow per movement in
-  // the tile's road layer. Each entry has a `shaft` path (the movement centreline)
-  // and a `head` path (a small chevron at the exit port). Bus-lane movements are
-  // distinguished by `isBus` so the overlay can colour them separately.
+  // Lane node graph for the debug overlay: one directed arrow per *physical lane*
+  // in the tile's road layer (one per `lane` × each permitted exit). Each arrow is
+  // laterally offset to the exact position its cars drive — matching the renderer's
+  // per-car offset in game.ts — so a multi-lane road shows one arrow per lane on its
+  // own lane, not a single centre arrow. Each entry has a `shaft` path (offset
+  // straight line or offset Bézier) and a `head` path (a chevron at the offset
+  // exit). `isBus` is per-lane (`lane.kind === "bus"`) so only true bus lanes go amber.
   get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
     if (!this.config.debug || !this.tile.road?.length) return [];
     const size = this.config.tileSize;
+    const road = this.tile.road;
     const out: { shaft: string; head: string; isBus: boolean }[] = [];
-    const busSet = new Set(
-      (this.tile.road).filter(l => l.kind === "bus").map(l => `${l.from}:${l.to.join(",")}`)
-    );
-    for (const { from, to } of laneMovements(this.tile.road)) {
-      const isBus = busSet.has(`${from}:${to}`) || (this.tile.road ?? []).some(l => l.from === from && l.kind === "bus");
-      const shaft = segmentPathD(from, to, size);
-      const b = portPoint(to, size);
-      const a = portPoint(from, size);
-      // Arrowhead: small V-chevron pointing into the exit port.
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const mag = Math.hypot(dx, dy) || 1;
-      const nx = dx / mag, ny = dy / mag;
-      const px = -ny, py = nx;
-      const s = 7;
-      const head = `M${b.x - nx * s + px * s * 0.55} ${b.y - ny * s + py * s * 0.55} L${b.x} ${b.y} L${b.x - nx * s - px * s * 0.55} ${b.y - ny * s - py * s * 0.55}`;
-      out.push({ shaft, head, isBus });
+
+    for (const lane of road) {
+      const isBus = lane.kind === "bus";
+      // Lateral offset (px) right-of-travel for this lane, identical to the car
+      // renderer: a lane `index` of an approach with `count` lanes sits at
+      // (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.
+      const count = laneCount(road, lane.from);
+      const off = (count - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+
+      for (const to of lane.to) {
+        out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
+      }
     }
     return out;
+  }
+
+  // One lane-offset arrow (shaft + arrowhead) for a movement `from`→`to`, pushed
+  // `off` px right-of-travel so it sits on its lane rather than the centreline.
+  // Straight / opposite / Center movements offset a straight line; turns (adjacent
+  // ports) offset the quadratic Bézier through the tile centre, mirroring
+  // roadGeometry.ts's `curvedParallelPath` so the arrow tracks its lane round the
+  // bend. The arrowhead sits at the offset exit point, aimed along the offset path.
+  private laneArrow(
+    from: Position,
+    to: Position,
+    size: number,
+    off: number
+  ): { shaft: string; head: string } {
+    const a = portPoint(from, size);
+    const b = portPoint(to, size);
+    const r = (v: number) => Math.round(v * 100) / 100;
+
+    // Right-of-travel unit vector for a heading (dx,dy) in screen space (y-down)
+    // is (-dy, dx)/|..| — the same convention game.ts uses for the car offset.
+    const rightUnit = (
+      p: { x: number; y: number },
+      q: { x: number; y: number }
+    ) => {
+      const dx = q.x - p.x, dy = q.y - p.y;
+      const mag = Math.hypot(dx, dy) || 1;
+      return { x: -dy / mag, y: dx / mag };
+    };
+
+    let shaft: string;
+    let tip: { x: number; y: number }; // offset exit point (arrowhead apex)
+    let dir: { x: number; y: number }; // unit travel direction at the tip
+
+    if (oppositePort(from) === to || from === Position.Center || to === Position.Center) {
+      // Straight / opposite / Center: offset the line by a constant perpendicular.
+      const n = rightUnit(a, b);
+      const a2 = { x: a.x + n.x * off, y: a.y + n.y * off };
+      const b2 = { x: b.x + n.x * off, y: b.y + n.y * off };
+      shaft = `M ${r(a2.x)} ${r(a2.y)} L ${r(b2.x)} ${r(b2.y)}`;
+      tip = b2;
+      const mag = Math.hypot(b2.x - a2.x, b2.y - a2.y) || 1;
+      dir = { x: (b2.x - a2.x) / mag, y: (b2.y - a2.y) / mag };
+    } else {
+      // Turn (adjacent ports): offset the quadratic Bézier whose control point is
+      // the tile centre. Endpoint normals use the entry tangent (a→c) and exit
+      // tangent (c→b); the control point is pushed out by off·k so the offset
+      // curve keeps its lane distance through the apex (see controlOffsetFactor
+      // in roadGeometry.ts: k = 2 − ½·|nA + nB|).
+      const c = portPoint(Position.Center, size);
+      const nA = rightUnit(a, c);
+      const nB = rightUnit(c, b);
+      const avgX = nA.x + nB.x, avgY = nA.y + nB.y;
+      const avgMag = Math.hypot(avgX, avgY) || 1;
+      const nC = { x: avgX / avgMag, y: avgY / avgMag };
+      const k = 2 - 0.5 * avgMag;
+
+      const a2 = { x: a.x + nA.x * off, y: a.y + nA.y * off };
+      const c2 = { x: c.x + nC.x * off * k, y: c.y + nC.y * off * k };
+      const b2 = { x: b.x + nB.x * off, y: b.y + nB.y * off };
+      shaft = `M ${r(a2.x)} ${r(a2.y)} Q ${r(c2.x)} ${r(c2.y)} ${r(b2.x)} ${r(b2.y)}`;
+      tip = b2;
+      // Tangent of the quadratic at t=1 is 2·(b2 − c2); normalise for the head.
+      const tx = b2.x - c2.x, ty = b2.y - c2.y;
+      const mag = Math.hypot(tx, ty) || 1;
+      dir = { x: tx / mag, y: ty / mag };
+    }
+
+    // Arrowhead: small open V-chevron at the offset exit, pointing along `dir`.
+    const s = 7;
+    const px = -dir.y, py = dir.x; // perpendicular for the chevron splay
+    const head =
+      `M${r(tip.x - dir.x * s + px * s * 0.55)} ${r(tip.y - dir.y * s + py * s * 0.55)} ` +
+      `L${r(tip.x)} ${r(tip.y)} ` +
+      `L${r(tip.x - dir.x * s - px * s * 0.55)} ${r(tip.y - dir.y * s - py * s * 0.55)}`;
+    return { shaft, head };
   }
 
   // Lane-drop gores and advance arrows for straight reducer tiles.

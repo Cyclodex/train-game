@@ -13,6 +13,11 @@ import {
 import { movementsConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
+import {
+  roadcross1lane,
+  roadcross2lane,
+  roadcross3lane,
+} from "@/levels/test/scenarios/roadcrosslanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -454,6 +459,47 @@ describe("createRoadSim — road junction interlock", () => {
     }
     expect(everHeld).toBe(true); // cars do pass through, so it gets held
   });
+});
+
+describe("createRoadSim — multi-lane crosses keep flowing", () => {
+  // The shipped 1/2/3-lane cross scenarios must each clear cars from all four
+  // arms continuously — adding lanes must not introduce a gridlock the 1-lane
+  // case avoids. Drives the real scenario levels so the test guards what ships.
+  for (const scn of [roadcross1lane, roadcross2lane, roadcross3lane]) {
+    it(`${scn.id}: sustained throughput from every arm, no gridlock`, () => {
+      const spawnInterval = scn.traffic?.spawnInterval ?? 0.5;
+      const cap = scn.traffic?.maxCars ?? 12;
+      const sim = createRoadSim({
+        level: scn.level,
+        width: 5,
+        height: 5,
+        seed: 7,
+        spawnInterval,
+        carSpeed: 0.5,
+        carLength: 0.2,
+        maxCars: cap,
+      });
+      let prev = new Set<string>();
+      const allIds = new Set<string>();
+      let firstHalf = 0;
+      let secondHalf = 0;
+      const STEPS = 2000;
+      for (let i = 0; i < STEPS; i++) {
+        sim.step(0.05, () => false);
+        const now = new Set(sim.cars().map(c => c.id));
+        for (const id of now) allIds.add(id);
+        for (const id of prev) {
+          if (!now.has(id)) (i < STEPS / 2 ? firstHalf++ : secondHalf++);
+        }
+        prev = now;
+      }
+      // Cars complete crossings in BOTH halves → never permanently deadlocks.
+      expect(firstHalf).toBeGreaterThan(0);
+      expect(secondHalf).toBeGreaterThan(0);
+      // Far more cars cycled through than the live cap → real flow, not fill-once.
+      expect(allIds.size).toBeGreaterThan(cap);
+    });
+  }
 });
 
 describe("createRoadSim — four-way cross, cars from all sides", () => {
