@@ -8,8 +8,9 @@ import {
   UnitChord,
   SimEvent,
 } from "@/sim/simulation";
-import { createRoadSim, roadEntries, TrafficConfig } from "@/sim/road";
+import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { laneCount } from "@/tiles/lanes";
+import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
@@ -93,9 +94,10 @@ const CAR_SPRITE_PX = 38;
 // nearest the kerb) by `(L + 0.5) · laneWidthFrac`. The sim's lane separation
 // (opposing traffic never shares a lane) already generalises; only lane *assignment*
 // (which of several same-direction lanes a car picks) would be new work.
-// Physical width of one lane as a fraction of tile size. At 200px this is 28px.
-// Single-lane (count=1, index=0): offset = (1-0.5-0) × LANE_WIDTH_FRAC = 0.07 — same as before.
-const LANE_WIDTH_FRAC = 0.14;
+// Physical width of one lane as a fraction of tile size (28px at 200px) lives in
+// sim/laneOffset.ts alongside the lateral-offset math; both the car renderer here
+// and the debug overlay import from there so the painted road, the per-car offset,
+// and the markings stay in agreement.
 
 // A single rendered body box of a road vehicle, sampled to a world position. A
 // car/truck contributes one; a semi two (cab + trailer). The id is
@@ -460,11 +462,50 @@ export function createGame(
   // and reconcile the reactive list by id so Vue reuses the car DOM nodes. A
   // vehicle contributes one render box per body segment (a semi → cab + trailer),
   // each keyed `${carId}#${i}` and sized to its segment length.
+  // The same-direction lane band of the road tile at `coord` entered via `port`
+  // (0 if there is no road / no lanes from that port). The band a car drives in
+  // is the lanes sharing its travel direction, i.e. those entering via `port`.
+  function bandAt(coord: Coordinates, port: Position): number {
+    const id = getCoordinatesId(coord);
+    return laneCount(level[id]?.road, port);
+  }
+
+  // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT
+  // tile whose neighbour has a different lane count, the painted surface tapers
+  // across the tile (min-seam rule); the coupler's offset interpolates the same
+  // way so a continuing lane glides as the kerb shifts, instead of snapping at the
+  // boundary. On a uniform road this is the original constant offset; on a
+  // curve/junction (entry/exit not opposite) the surface keeps a constant width,
+  // so a constant offset is used. Reads the coupler's OWN tile, so front and rear
+  // couplers straddling a seam each taper correctly (preserving the body lean).
+  function couplerOffset(s: CarSample, fallbackLane: number): number {
+    const lanePos = s.lanePos ?? fallbackLane;
+    const entry = s.entryPort;
+    const exit = s.exitPort;
+    const selfBand = bandAt(s.coord, entry);
+    if (selfBand <= 0) return 0;
+    // Straight tile: taper the band from the entry seam to the exit seam.
+    if (exit !== null && exit === oppositePort(entry)) {
+      const nEntry = neighborCoord(s.coord, entry);
+      const nExit = neighborCoord(s.coord, exit);
+      const bandEntry = seamBand(
+        selfBand,
+        nEntry ? bandAt(nEntry, oppositePort(entry)) : 0,
+      );
+      const bandExit = seamBand(
+        selfBand,
+        nExit ? bandAt(nExit, oppositePort(exit)) : 0,
+      );
+      return laneOffsetPx(lanePos, bandEntry, bandExit, s.t, tileSize);
+    }
+    // Curve / junction / dead-end: constant-width surface, constant offset.
+    return laneOffsetConstPx(lanePos, selfBand, tileSize);
+  }
+
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
     for (const s of samples) {
-      const curCount = s.laneCount;
       const curIndex = s.laneIndex;
       for (let u = 0; u < s.units.length; u++) {
         const unit = s.units[u];
@@ -472,13 +513,13 @@ export function createGame(
         seen.add(id);
 
         // Lateral lane offset, right-of-travel, computed PER COUPLER from its own
-        // continuous lane position (`lanePos`). During a lane change the rear
-        // coupler's position lags the front's, so the body angles into the new
-        // lane (the lean) instead of sliding flat. The sim eases these across
-        // lanes for merges and turn-lane moves; off-change they're equal.
-        const off = (lanePos: number) => (curCount - 0.5 - lanePos) * tileSize * LANE_WIDTH_FRAC;
-        const offsetFront = off(unit.front.lanePos ?? curIndex);
-        const offsetRear = off(unit.rear.lanePos ?? curIndex);
+        // continuous lane position (`lanePos`) AND its own tile, so a coupler on a
+        // tapering tile glides as the painted kerb shifts (seam-aware taper). During
+        // a lane change the rear coupler's position lags the front's, so the body
+        // angles into the new lane (the lean) instead of sliding flat. The sim eases
+        // the lane positions for merges/turns; off-change they're equal.
+        const offsetFront = couplerOffset(unit.front, curIndex);
+        const offsetRear = couplerOffset(unit.rear, curIndex);
 
         const { x, y, angle } = positionUnit(unit as unknown as UnitChord, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;

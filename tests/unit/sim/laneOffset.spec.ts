@@ -1,0 +1,147 @@
+import { describe, it, expect } from "vitest";
+import { Position } from "@/types";
+import { Level } from "@/tiles/model";
+import { nWayLanes, laneCount } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
+import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
+import { Coordinates } from "@/types";
+
+// These tests pin the lateral-offset continuity that fixes the "cars snap
+// sideways at a lane-count change" rendering regression. The offset math lives
+// in the Vue-free sim/laneOffset.ts and is composed here exactly the way
+// game.ts `couplerOffset` (and Tile.vue's debug overlay) compose it, so the
+// assertion below proves the on-screen behaviour without booting a DOM.
+
+const TILE = 200;
+
+// A pure re-statement of game.ts `couplerOffset` for one coupler at lateral
+// lane position `lanePos`, on the straight road tile at `coord` entered via
+// `entry`, at progress `t` (0 = entry seam, 1 = exit seam). Reads the level's
+// neighbour lane counts and applies the min-seam taper, identical to the
+// renderer. (Straight-only — these fixtures are straight roads.)
+function couplerOffset(
+  level: Level,
+  coord: Coordinates,
+  entry: Position,
+  exit: Position,
+  t: number,
+  lanePos: number,
+): number {
+  const bandAt = (c: Coordinates, port: Position): number =>
+    laneCount(level[getCoordinatesId(c)]?.road, port);
+  const selfBand = bandAt(coord, entry);
+  if (selfBand <= 0) return 0;
+  if (exit === oppositePort(entry)) {
+    const nEntry = neighborCoord(coord, entry);
+    const nExit = neighborCoord(coord, exit);
+    const bandEntry = seamBand(selfBand, nEntry ? bandAt(nEntry, oppositePort(entry)) : 0);
+    const bandExit = seamBand(selfBand, nExit ? bandAt(nExit, oppositePort(exit)) : 0);
+    return laneOffsetPx(lanePos, bandEntry, bandExit, t, TILE);
+  }
+  return laneOffsetConstPx(lanePos, selfBand, TILE);
+}
+
+// A west→east straight road whose per-direction lane counts follow `counts`,
+// one tile per entry. Tile i is entered (eastbound) via Left, exits via Right.
+function laneRoad(counts: number[]): Level {
+  const lvl: Level = {};
+  counts.forEach((count, i) => {
+    lvl[`${i},0`] = {
+      connections: [],
+      road: nWayLanes(Position.Left, Position.Right, count),
+    };
+  });
+  return lvl;
+}
+
+// Walk an eastbound kerb-lane (lanePos = 0) car across the road in small steps,
+// collecting its lateral offset at each step. The car advances `t` from 0→1
+// within each tile, then moves onto the next tile at t = 0.
+function sweepOffsets(level: Level, tiles: number, lanePos: number, steps = 20): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < tiles; i++) {
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      out.push(couplerOffset(level, { x: i, y: 0 }, Position.Left, Position.Right, t, lanePos));
+    }
+  }
+  // Include the final exit seam of the last tile.
+  out.push(couplerOffset(level, { x: tiles - 1, y: 0 }, Position.Left, Position.Right, 1, lanePos));
+  return out;
+}
+
+function maxStep(xs: number[]): number {
+  let m = 0;
+  for (let i = 1; i < xs.length; i++) m = Math.max(m, Math.abs(xs[i] - xs[i - 1]));
+  return m;
+}
+
+describe("lane lateral offset — seam continuity (rendering regression)", () => {
+  // The bug, stated as the OLD (constant, centre-relative) offset: a kerb-lane
+  // car's offset is (curCount - 0.5 - lanePos)·W on its CURRENT tile, so it jumps
+  // by a whole lane-width when curCount changes at the seam.
+  const W = TILE * 0.14;
+
+  it("documents the discontinuity the old constant offset produced at a 2->1 seam", () => {
+    // Kerb lane (lanePos 0). On the 2-lane tile: (2 - 0.5 - 0)·W = 1.5·W = 42px.
+    // On the 1-lane tile: (1 - 0.5 - 0)·W = 0.5·W = 14px. A 28px snap.
+    const onTwo = (2 - 0.5 - 0) * W;
+    const onOne = (1 - 0.5 - 0) * W;
+    expect(onTwo).toBeCloseTo(42, 5);
+    expect(onOne).toBeCloseTo(14, 5);
+    expect(Math.abs(onTwo - onOne)).toBeCloseTo(W, 5); // a full lane-width jump
+  });
+
+  it("documents the discontinuity the old constant offset produced at a 1->2 seam", () => {
+    const onOne = (1 - 0.5 - 0) * W;
+    const onTwo = (2 - 0.5 - 0) * W;
+    expect(Math.abs(onTwo - onOne)).toBeCloseTo(W, 5);
+  });
+
+  it("tapers smoothly across a 2->1 reduction (no per-tick snap)", () => {
+    // counts: 2, 2, 1 — the kerb-lane car continues through; the 2-lane tile
+    // before the drop tapers its band from 2 down to 1 across its own length.
+    const level = laneRoad([2, 2, 1]);
+    const offs = sweepOffsets(level, 3, 0);
+    // Per-step change must stay well under a lane-width: a continuous glide.
+    expect(maxStep(offs)).toBeLessThan(W * 0.12);
+    // And it actually moved (a real taper, not a flat line): the 2-lane start
+    // offset (42px) eases to the 1-lane offset (14px).
+    expect(offs[0]).toBeCloseTo(42, 1);
+    expect(offs[offs.length - 1]).toBeCloseTo(14, 1);
+  });
+
+  it("tapers smoothly across a 1->2 addition (no per-tick snap)", () => {
+    // counts: 1, 2, 2 — entering the widened road, the 2-lane tile tapers from
+    // 1 (at the seam with the 1-lane neighbour) up to 2 across its length.
+    const level = laneRoad([1, 2, 2]);
+    const offs = sweepOffsets(level, 3, 0);
+    expect(maxStep(offs)).toBeLessThan(W * 0.12);
+    expect(offs[0]).toBeCloseTo(14, 1); // starts at the 1-lane offset
+    expect(offs[offs.length - 1]).toBeCloseTo(42, 1); // ends at the 2-lane offset
+  });
+
+  it("tapers smoothly across a 3->2->1 multi-step reduction", () => {
+    const level = laneRoad([3, 3, 2, 1]);
+    const offs = sweepOffsets(level, 4, 0);
+    expect(maxStep(offs)).toBeLessThan(W * 0.12);
+  });
+
+  it("leaves a uniform road unchanged (constant offset, zero per-tick delta)", () => {
+    const level = laneRoad([2, 2, 2]);
+    const offs = sweepOffsets(level, 3, 0);
+    expect(maxStep(offs)).toBeCloseTo(0, 6);
+    for (const o of offs) expect(o).toBeCloseTo(42, 5); // kerb lane of a 2-lane road
+  });
+
+  it("keeps the inner lane continuous across the seam too", () => {
+    // Inner lane (lanePos 1) on a 2->1 road: the inner lane is the one that
+    // DROPS, but the sim merges that car to lane 0 before the seam (desiredLane);
+    // the offset math itself must still be continuous for whatever lanePos it is
+    // handed, so a mid-merge fractional lanePos doesn't snap.
+    const level = laneRoad([2, 2, 1]);
+    const offs = sweepOffsets(level, 3, 0.5); // a half-merged car
+    expect(maxStep(offs)).toBeLessThan(W * 0.12);
+  });
+});

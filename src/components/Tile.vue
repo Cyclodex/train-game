@@ -209,6 +209,7 @@ import {
 } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
+import { seamBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -347,18 +348,40 @@ class Tile extends Vue {
     if (!this.config.debug || !this.tile.road?.length) return [];
     const size = this.config.tileSize;
     const road = this.tile.road;
+    const coord = parseCoordId(this.coordId);
     const out: { shaft: string; head: string; isBus: boolean }[] = [];
 
     for (const lane of road) {
       const isBus = lane.kind === "bus";
       // Lateral offset (px) right-of-travel for this lane, identical to the car
-      // renderer: a lane `index` of an approach with `count` lanes sits at
-      // (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.
-      const count = laneCount(road, lane.from);
-      const off = (count - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      // renderer (game.ts): a lane `index` of an approach with `count` lanes sits
+      // at (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.
+      const selfBand = laneCount(road, lane.from);
+      const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
 
       for (const to of lane.to) {
-        out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
+        // Straight movement on a tapering tile: the painted surface narrows /
+        // widens across the tile to meet a neighbour with a different lane count
+        // (min-seam rule). Taper this lane's arrow the same way so it tracks the
+        // tapering lane across the seam instead of sitting at a single offset and
+        // jumping at the boundary — mirroring the per-car taper in game.ts.
+        if (oppositePort(lane.from) === to) {
+          const nEntry = neighborCoord(coord, lane.from);
+          const nExit = neighborCoord(coord, to);
+          const bandEntry = seamBand(
+            selfBand,
+            nEntry ? this.game.roadLaneCount(nEntry, oppositePort(lane.from)) : 0,
+          );
+          const bandExit = seamBand(
+            selfBand,
+            nExit ? this.game.roadLaneCount(nExit, oppositePort(to)) : 0,
+          );
+          const offA = (bandEntry - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+          const offB = (bandExit - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+          out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
+        } else {
+          out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
+        }
       }
     }
     return out;
@@ -374,7 +397,11 @@ class Tile extends Vue {
     from: Position,
     to: Position,
     size: number,
-    off: number
+    off: number,
+    // Exit-end offset for a straight movement: when it differs from `off` the
+    // arrow tapers across the tile to track a lane whose distance-from-centre
+    // changes (the surface min-seam taper). Defaults to `off` (constant offset).
+    offB: number = off,
   ): { shaft: string; head: string } {
     const a = portPoint(from, size);
     const b = portPoint(to, size);
@@ -396,10 +423,12 @@ class Tile extends Vue {
     let dir: { x: number; y: number }; // unit travel direction at the tip
 
     if (oppositePort(from) === to || from === Position.Center || to === Position.Center) {
-      // Straight / opposite / Center: offset the line by a constant perpendicular.
+      // Straight / opposite / Center: offset the line perpendicular by `off` at
+      // the entry and `offB` at the exit, so it tapers across a tile whose lane
+      // count changes at a seam (offB === off → a constant-offset parallel).
       const n = rightUnit(a, b);
       const a2 = { x: a.x + n.x * off, y: a.y + n.y * off };
-      const b2 = { x: b.x + n.x * off, y: b.y + n.y * off };
+      const b2 = { x: b.x + n.x * offB, y: b.y + n.y * offB };
       shaft = `M ${r(a2.x)} ${r(a2.y)} L ${r(b2.x)} ${r(b2.y)}`;
       tip = b2;
       const mag = Math.hypot(b2.x - a2.x, b2.y - a2.y) || 1;
