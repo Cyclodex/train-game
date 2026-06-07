@@ -13,6 +13,7 @@ import {
   roadEdges,
   isRoadJunction,
   laneCount,
+  laneCountAt,
   nWayLanes,
 } from "@/tiles/lanes";
 
@@ -78,6 +79,27 @@ describe("lane query helpers", () => {
       { from: L, to: R },
       { from: L, to: B },
     ]);
+  });
+});
+
+describe("laneCountAt", () => {
+  it("counts distinct physical lanes crossing a seam, not movements", () => {
+    // 4-way all-turns junction: every approach is one index-0 lane that fans out
+    // to all three exits. Each port carries 1 lane in + 1 lane out = 2, even
+    // though three movements converge on it (they share the one index-0 exit
+    // lane). Counting movements would wrongly report 4 and false-flag a mismatch.
+    const junction = fromPairs([
+      [L, R], [T, B], [L, T], [L, B], [R, T], [R, B],
+    ]);
+    for (const p of [T, R, B, L]) expect(laneCountAt(junction, p)).toBe(2);
+  });
+
+  it("still counts genuine multi-lane turn approaches by their distinct lanes", () => {
+    // Two-lane approach from L: lane 0 goes straight to R, lane 1 turns to T.
+    // L carries 2 distinct lanes entering; the R seam carries 1 exiting (lane 0).
+    const road: Lane[] = [turns(L, [R], 0), turns(L, [T], 1)];
+    expect(laneCountAt(road, L)).toBe(2);
+    expect(laneCountAt(road, R)).toBe(1);
   });
 });
 

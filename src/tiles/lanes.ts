@@ -162,10 +162,14 @@ export function laneCount(road: Lane[] | undefined, from: Port): number {
 // approach turning off), so each seam is measured by what actually crosses it.
 export function laneCountAt(road: Lane[] | undefined, port: Port): number {
   const entering = laneCount(road, port);
-  // Count the NUMBER of lanes that exit via this port, not max(index)+1: with
-  // turn lanes only some indices exit a given port (e.g. only lane 1 turns left),
-  // so the index-based formula would over-count the seam.
-  const exitingCount = (road ?? []).filter(l => l.to.includes(port)).length;
+  // Count the DISTINCT physical exit lanes at this port. Not max(index)+1: with
+  // turn lanes only some indices exit a given port (e.g. only lane 1 turns left).
+  // But also not the raw lane count: at an all-turns junction several approaches
+  // funnel into the same index-0 exit lane, so counting movements would over-count
+  // the seam (3 turns sharing one lane != 3 lanes). Distinct indices handles both.
+  const exitingCount = new Set(
+    (road ?? []).filter(l => l.to.includes(port)).map(l => l.index),
+  ).size;
   return entering + exitingCount;
 }
 
