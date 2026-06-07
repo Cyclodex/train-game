@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { nWayLanes, laneCount } from "@/tiles/lanes";
+import { nWayLanes, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
@@ -164,6 +164,24 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
     const level = laneRoad([2, 2, 1]);
     const inner = sweepOffsets(level, 3, 1);
     for (const o of inner) expect(o).toBeCloseTo(14, 1);
+  });
+
+  it("keeps both same-direction lanes of a CURVE on their own side (no centreline crossing)", () => {
+    // Regression: the lane-positioning band is half the lanes crossing the
+    // approach (forward + backward) = laneCountAt(road, from) / 2. On a curve the
+    // oncoming lanes enter from the ADJACENT exit port, so a naive
+    // positioningBand(laneCount(from), laneCount(oppositePort(from))) reads the
+    // opposite port — which carries NO lanes on a curve — and halves the band
+    // (2 -> 1), pushing one same-direction lane to a negative offset across the
+    // centreline. That is the crossed-arrows / wrong-car-path bug. With the
+    // laneCountAt band, both lanes stay on the right-of-travel side.
+    const curve = nWayLanes(Position.Right, Position.Bottom, 2); // 2 each way
+    const band = laneCountAt(curve, Position.Right) / 2; // forward + backward = 4 -> 2
+    expect(band).toBe(2);
+    const offset = (index: number) => (band - 0.5 - index) * W;
+    expect(offset(0)).toBeCloseTo(1.5 * W, 5); // kerb lane, well right of centre
+    expect(offset(1)).toBeCloseTo(0.5 * W, 5); // inner lane, still right of centre
+    for (const index of [0, 1]) expect(offset(index)).toBeGreaterThan(0);
   });
 
   it("keeps the inner lane continuous across the seam too", () => {

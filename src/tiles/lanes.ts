@@ -201,6 +201,23 @@ export function nWayLanes(a: Port, b: Port, count: number, kind?: LaneKind): Lan
   ]).flat();
 }
 
+// The painted total lane count for one end of a straight road edge, given this
+// tile's own painted total (`selfTotal`, already floored at the min-2 a one-way
+// road draws) and the neighbour's lane count crossing the shared seam
+// (`neighbourCrossing`, from `laneCountAt` on the neighbour's matching port; 0
+// when there is no neighbour road — an off-map border edge or a grass tile).
+//
+// With a neighbour road the edge meets it flush: take the narrower of the two
+// painted widths, flooring the neighbour at the same min-2 (so a one-way
+// single-lane neighbour, painted 2 wide, doesn't pinch the seam to 1). With NO
+// neighbour road the road simply ends at the map edge and keeps its own full
+// width — it must NOT taper toward a phantom 2-lane neighbour, which is what
+// made 3+-lane roads visibly narrow as they ran off the play area.
+export function seamPaintTotal(selfTotal: number, neighbourCrossing: number): number {
+  if (neighbourCrossing <= 0) return selfTotal;
+  return Math.min(selfTotal, Math.max(neighbourCrossing, 2));
+}
+
 // A road junction is a tile whose road touches more than two ports (so a car has
 // a real routing choice / streams cross). Straights and one-ways touch exactly
 // two ports.

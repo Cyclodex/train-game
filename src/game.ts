@@ -10,7 +10,7 @@ import {
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { laneCount, laneCountAt, carLaneIndices, roadPortsOf } from "@/tiles/lanes";
-import { laneOffsetPx, laneOffsetConstPx, seamBand, positioningBand } from "@/sim/laneOffset";
+import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
@@ -549,14 +549,16 @@ export function createGame(
     return laneCount(level[id]?.road, port);
   }
 
-  // The lane-positioning band a car drives in: half the combined lanes of both
-  // directions, so one-way roads centre their lanes in the tile instead of
-  // hugging the right half (see sim/laneOffset.ts positioningBand). For a
-  // bidirectional road both directions match, so this equals the forward count
-  // and the offset is unchanged.
+  // The lane-positioning band a car drives in: half the lanes physically crossing
+  // this port's boundary (both directions), so a car sits inside its own half of
+  // the ribbon. `laneCountAt(port)` counts forward (entering) PLUS backward
+  // (exiting-through) lanes, which is correct on a CURVE too — there the oncoming
+  // lanes enter from the adjacent exit port, not oppositePort(port) (which carries
+  // no lanes, the bug that halved the curve band and crossed the lanes). For a
+  // straight/one-way this equals (forward + backward)/2, so those are unchanged.
   function centeredBandAt(coord: Coordinates, port: Position): number {
     const road = level[getCoordinatesId(coord)]?.road;
-    return positioningBand(laneCount(road, port), laneCount(road, oppositePort(port)));
+    return laneCountAt(road, port) / 2;
   }
 
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT

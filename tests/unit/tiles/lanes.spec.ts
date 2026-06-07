@@ -15,6 +15,7 @@ import {
   laneCount,
   laneCountAt,
   nWayLanes,
+  seamPaintTotal,
 } from "@/tiles/lanes";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
@@ -154,6 +155,34 @@ describe("laneCount", () => {
     const road = nWayLanes(Position.Left, Position.Right, 3);
     expect(laneCount(road, Position.Left)).toBe(3);
     expect(laneCount(road, Position.Right)).toBe(3);
+  });
+});
+
+describe("seamPaintTotal", () => {
+  it("keeps the tile's full width at an off-map / grass edge (no neighbour road)", () => {
+    // The regression: a 3-lane road running off the play area must NOT taper to
+    // a phantom 2-lane neighbour. neighbourCrossing 0 means there is no road.
+    expect(seamPaintTotal(3, 0)).toBe(3);
+    expect(seamPaintTotal(4, 0)).toBe(4);
+    expect(seamPaintTotal(6, 0)).toBe(6);
+    expect(seamPaintTotal(2, 0)).toBe(2);
+  });
+
+  it("meets a narrower neighbour road flush (takes the min)", () => {
+    expect(seamPaintTotal(4, 2)).toBe(2);
+    expect(seamPaintTotal(3, 2)).toBe(2);
+  });
+
+  it("floors a one-way single-lane neighbour at the min-2 it is painted", () => {
+    // Neighbour physically carries 1 lane but is drawn 2 wide; the seam meets
+    // that painted width, not a 1-lane pinch.
+    expect(seamPaintTotal(2, 1)).toBe(2);
+    expect(seamPaintTotal(3, 1)).toBe(2);
+  });
+
+  it("stays at the tile's width when the neighbour is wider (the neighbour tapers)", () => {
+    expect(seamPaintTotal(2, 4)).toBe(2);
+    expect(seamPaintTotal(3, 5)).toBe(3);
   });
 });
 
