@@ -7,6 +7,7 @@ import TileRail from "@/components/TileRail.vue";
 import Tile from "@/components/Tile.vue";
 import Train from "@/components/Train.vue";
 import DebugShowRoutes from "@/components/DebugShowRoutes.vue";
+import CarRouteOverlay from "@/components/CarRouteOverlay.vue";
 
 const app = createApp(App);
 
@@ -17,6 +18,7 @@ app.component("TileRail", TileRail);
 app.component("Tile", Tile);
 app.component("Train", Train);
 app.component("DebugShowRoutes", DebugShowRoutes);
+app.component("CarRouteOverlay", CarRouteOverlay);
 
 app.use(router);
 app.mount("#app");
