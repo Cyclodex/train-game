@@ -81,11 +81,15 @@ acceptance**, so traffic sorts and merges instead of queueing (`src/sim/road.ts`
 ## What's next (polish + game direction)
 
 ### F/G follow-ups (nice-to-haves, not blockers)
-- **Overtaking:** a faster car stuck behind a slow leader doesn't yet pull into a
-  clear adjacent lane to pass — `desiredLane` only targets merge/turn lanes.
-- **Lean into the change:** lane changes are a smooth parallel slide; angling the
-  body (front coupler leading) would read more naturally. The per-coupler offset
-  existed once and was reverted — re-add a rear-lagged lateral offset.
+- **Overtaking + driver behaviour:** faster/impatient drivers pull out to pass a
+  slow leader, judging the pass from distance + speed difference; patient drivers
+  stay put. DESIGNED — see
+  `docs/superpowers/specs/2026-06-07-overtaking-driver-behaviour-design.md`.
+  Build order: driver profiles → same-direction overtake → oncoming-lane pass
+  with the feasibility math.
+- **Lean into the change:** DONE — the body now angles into a lane change (the
+  sim tracks lateral speed and lags the rear coupler; the renderer offsets each
+  coupler independently).
 - **Per-`(tile, lane)` routing:** routes are still tile sequences with lane
   positioning layered on; a true lane-cost planner would handle dense turn-lane
   networks more robustly.
