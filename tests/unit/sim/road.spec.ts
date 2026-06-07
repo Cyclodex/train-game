@@ -8,6 +8,7 @@ import {
   createRoadSim,
   vehicleSpec,
   specLength,
+  vehicleClassOf,
   CarChord,
 } from "@/sim/road";
 import { movementsConflict } from "@/sim/roadJunction";
@@ -20,7 +21,7 @@ import {
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { buslane } from "@/levels/test/scenarios/buslane";
-import { lanesAllowingExit, carLaneIndices } from "@/tiles/lanes";
+import { lanesAllowingExit, carLaneIndices, busLaneIndices } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -87,6 +88,21 @@ describe("roadEntries", () => {
     expect(entries).toContainEqual({ coord: { x: 2, y: 0 }, entryPort: Position.Right });
     // The middle tile connects on both sides to road neighbours: not an entry.
     expect(entries.every(e => !(e.coord.x === 1 && e.coord.y === 0))).toBe(true);
+  });
+
+  it("treats only the true open edge of a one-way road as a spawn entry", () => {
+    // A 3-tile eastbound one-way road (every tile Left->Right). Cars enter at the
+    // west edge (0,0) and nowhere else: an interior tile's upstream neighbour
+    // feeds it (drives toward the seam) even though no lane LEAVES the neighbour
+    // through that seam, so it must not be misread as an open edge. The east edge
+    // has no inbound lane, so it is not an entry either.
+    const lvl: Level = {
+      "0,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "1,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "2,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+    };
+    const entries = roadEntries(lvl, 3, 1);
+    expect(entries).toEqual([{ coord: { x: 0, y: 0 }, entryPort: Position.Left }]);
   });
 });
 
@@ -395,6 +411,79 @@ describe("createRoadSim — spawning + movement", () => {
     }
     expect(sampled).toBeGreaterThan(100); // cars actually ran the road
     expect(busLaneViolations).toBe(0); // and none ever rode the bus lane
+  });
+
+  it("a bus prefers the bus lane (rides the bus-only lane)", () => {
+    // The buslane scenario has a kerb-side bus lane (index 0) + a car lane per
+    // direction. Spawn an all-bus stream: a bus MAY use either lane but PREFERS the
+    // bus lane, so the overwhelming majority of sampled bus positions sit on it.
+    const sim = createRoadSim({
+      level: buslane.level,
+      width: buslane.size!.cols,
+      height: buslane.size!.rows,
+      seed: 4,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+      mix: { bus: 1 },
+    });
+    let onBusLane = 0;
+    let busSamples = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        if (c.units[0].part !== "bus") continue; // only buses spawned, but be explicit
+        const f = c.units[0].front;
+        const id = `${f.coord.x},${f.coord.y}`;
+        const busLanes = busLaneIndices(buslane.level[id]?.road, f.entryPort);
+        busSamples++;
+        if (busLanes.includes(Math.round(c.laneIndex))) onBusLane++;
+      }
+    }
+    expect(busSamples).toBeGreaterThan(100); // buses actually ran the road
+    // Buses settle onto the bus lane and stay there — allow a small margin for the
+    // brief lateral ease at spawn, but the strong majority must be on the bus lane.
+    expect(onBusLane / busSamples).toBeGreaterThan(0.9);
+  });
+
+  it("keeps cars off the bus lane even when buses share the road", () => {
+    // A mixed car + bus stream on the buslane scenario. Buses ride the bus lane;
+    // cars must STILL never occupy it (a car is confined to car lanes regardless of
+    // what else is on the road). Distinguish the two by the rendered part.
+    const sim = createRoadSim({
+      level: buslane.level,
+      width: buslane.size!.cols,
+      height: buslane.size!.rows,
+      seed: 11,
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      speedSpread: 0.4,
+      overtakeFraction: 1,
+      maxCars: 12,
+      mix: { car: 1, bus: 1 },
+    });
+    let carBusLaneViolations = 0;
+    let carSamples = 0;
+    let busOnBusLane = 0;
+    for (let i = 0; i < 1500; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        const id = `${f.coord.x},${f.coord.y}`;
+        const lane = Math.round(c.laneIndex);
+        if (c.units[0].part === "bus") {
+          if (busLaneIndices(buslane.level[id]?.road, f.entryPort).includes(lane)) busOnBusLane++;
+          continue;
+        }
+        carSamples++;
+        if (!carLaneIndices(buslane.level[id]?.road, f.entryPort).includes(lane)) carBusLaneViolations++;
+      }
+    }
+    expect(carSamples).toBeGreaterThan(100); // cars actually ran the road
+    expect(carBusLaneViolations).toBe(0); // and none ever strayed onto the bus lane
+    expect(busOnBusLane).toBeGreaterThan(50); // buses were present and used the bus lane
   });
 
   it("sorts cars into the turn lane that permits their turn (F)", () => {
@@ -802,7 +891,7 @@ describe("createRoadSim — multi-lane crosses keep flowing", () => {
       expect(secondHalf).toBeGreaterThan(0);
       // Far more cars cycled through than the live cap → real flow, not fill-once.
       expect(allIds.size).toBeGreaterThan(cap);
-    });
+    }, 15000); // 3-lane drives ~2000 heavy steps and sits near the 5s default — give headroom
   }
 });
 
@@ -1369,15 +1458,28 @@ describe("vehicle kinds", () => {
     expect(specLength(vehicleSpec("semi", base))).toBeGreaterThan(
       specLength(vehicleSpec("truck", base))
     );
+    // A bus is a single box, longer than a car but shorter than a rigid truck.
+    expect(specLength(vehicleSpec("bus", base))).toBeGreaterThan(base);
+    expect(specLength(vehicleSpec("bus", base))).toBeLessThan(
+      specLength(vehicleSpec("truck", base))
+    );
   });
 
-  it("renders a car/truck as one box and a semi as a cab + trailer", () => {
+  it("renders a car/truck/bus as one box and a semi as a cab + trailer", () => {
     expect(vehicleSpec("car", 0.2).segments.map(s => s.part)).toEqual(["car"]);
     expect(vehicleSpec("truck", 0.2).segments.map(s => s.part)).toEqual(["truck"]);
+    expect(vehicleSpec("bus", 0.2).segments.map(s => s.part)).toEqual(["bus"]);
     expect(vehicleSpec("semi", 0.2).segments.map(s => s.part)).toEqual([
       "cab",
       "trailer",
     ]);
+  });
+
+  it("classes a bus as the bus lane-access class and everything else as car", () => {
+    expect(vehicleClassOf("bus")).toBe("bus");
+    expect(vehicleClassOf("car")).toBe("car");
+    expect(vehicleClassOf("truck")).toBe("car");
+    expect(vehicleClassOf("semi")).toBe("car");
   });
 
   it("spawns only the kinds the mix allows", () => {

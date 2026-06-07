@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, carLaneIndices, nearestCarLaneIndex } from "@/tiles/lanes";
+import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -20,11 +20,17 @@ export { isRoadJunction } from "@/tiles/lanes";
 // loco + wagon). Everything downstream (following distance, lane occupancy,
 // rendering) is derived from the spec, so adding a kind is a one-row change.
 
-export type VehicleKind = "car" | "truck" | "semi";
+export type VehicleKind = "car" | "truck" | "semi" | "bus";
 
 export interface VehicleSegment {
   length: number; // rendered box length, in tiles
-  part: "car" | "truck" | "cab" | "trailer"; // render style hint for the view
+  part: "car" | "truck" | "cab" | "trailer" | "bus"; // render style hint for the view
+}
+
+// The lane-access class of a vehicle kind: a bus may use bus lanes (and prefers
+// them); every other kind is a general "car" confined to non-bus lanes.
+export function vehicleClassOf(kind: VehicleKind): VehicleClass {
+  return kind === "bus" ? "bus" : "car";
 }
 
 export interface VehicleSpec {
@@ -37,11 +43,17 @@ const TRUCK_LEN = 1.7;
 const SEMI_CAB = 0.7;
 const SEMI_TRAILER = 1.6;
 const SEMI_GAP = 0.12;
+// A bus is one rigid box, longer than a car but shorter than a rigid truck — it
+// reads as a passenger coach rather than a cargo hauler (the renderer's `bus`
+// part then paints a long side window-band so it looks distinct from a truck).
+const BUS_LEN = 1.45;
 
 export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
   switch (kind) {
     case "truck":
       return { segments: [{ length: base * TRUCK_LEN, part: "truck" }], gap: 0 };
+    case "bus":
+      return { segments: [{ length: base * BUS_LEN, part: "bus" }], gap: 0 };
     case "semi":
       return {
         segments: [
@@ -64,7 +76,7 @@ export function specLength(spec: VehicleSpec): number {
 
 // Relative spawn weights per kind. Omitted/zero kinds never spawn; `{ car: 1 }`
 // (the default) reproduces the original all-cars behaviour.
-export type TrafficMix = { car?: number; truck?: number; semi?: number };
+export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number };
 
 // Per-level road-traffic settings: how busy the roads are and what mix of
 // vehicles drives them. All optional; each overlays the sim's defaults.
@@ -97,10 +109,15 @@ export interface RoadTraversal {
   next: { coord: Coordinates; entryPort: Port } | null;
 }
 
-function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port | null {
+function roadExitPort(
+  level: Level,
+  coord: Coordinates,
+  entryPort: Port,
+  cls: VehicleClass = "car",
+): Port | null {
   const tile = level[getCoordinatesId(coord)];
   if (!tile || !tile.road || tile.road.length === 0) return null;
-  const exits = exitsForCar(tile.road, entryPort);
+  const exits = usableExits(tile.road, entryPort, cls);
   if (exits.length === 0) return null;
   // Single exit (straight/curve/one-way) — or pick the first for a junction.
   return exits[0];
@@ -109,9 +126,10 @@ function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port |
 export function roadTraverse(
   level: Level,
   coord: Coordinates,
-  entryPort: Port
+  entryPort: Port,
+  cls: VehicleClass = "car",
 ): RoadTraversal {
-  const exitPort = roadExitPort(level, coord, entryPort);
+  const exitPort = roadExitPort(level, coord, entryPort, cls);
   if (exitPort === null) return { exitPort: null, next: null };
 
   const nextCoord = neighborCoord(coord, exitPort);
@@ -120,8 +138,8 @@ export function roadTraverse(
   const nextTile = level[getCoordinatesId(nextCoord)];
   if (!nextTile || !nextTile.road || nextTile.road.length === 0)
     return { exitPort, next: null }; // road runs off the map / dead-ends
-  // The next tile must carry car-accessible road back to us.
-  if (exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0)
+  // The next tile must carry road back to us that this vehicle class may use.
+  if (usableExits(nextTile.road, oppositePort(exitPort), cls).length === 0)
     return { exitPort, next: null };
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
@@ -156,9 +174,18 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
-      const neighRoad =
-        !offGrid && neigh?.road && exitsForCar(neigh.road, oppositePort(port)).length > 0;
-      if (offGrid || !neighRoad) {
+      // The upstream neighbour feeds this edge only if some car lane of it drives
+      // TOWARD the shared seam (its `to` includes our matching port) — not merely
+      // if it has a lane entering from that seam. On a two-way road both hold, but
+      // on a one-way road the upstream neighbour exits toward us without any lane
+      // leaving from that port, so the old `exitsForCar(neigh, opposite)` test
+      // wrongly flagged every interior one-way tile as an open spawn edge.
+      const back = oppositePort(port);
+      const neighFeeds =
+        !offGrid &&
+        !!neigh?.road &&
+        neigh.road.some(l => l.kind !== "bus" && l.to.includes(back));
+      if (offGrid || !neighFeeds) {
         out.push({ coord, entryPort: port });
       }
     }
@@ -532,7 +559,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // stay deterministic. Kinds with no/zero weight never appear; an empty mix
   // falls back to a car.
   function pickKind(): VehicleKind {
-    const weighted = (["car", "truck", "semi"] as VehicleKind[])
+    const weighted = (["car", "truck", "semi", "bus"] as VehicleKind[])
       .map(k => [k, Math.max(0, mix[k] ?? 0)] as const)
       .filter(([, w]) => w > 0);
     const total = weighted.reduce((s, [, w]) => s + w, 0);
@@ -577,6 +604,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return Math.round(car.laneIndex);
   }
 
+  // The lane-access class of a vehicle: a bus may use (and prefers) bus lanes;
+  // every other kind is confined to car lanes.
+  function clsOf(car: Car): VehicleClass {
+    return vehicleClassOf(car.kind);
+  }
+
   // The lane the car WANTS to be in on its current tile (sub-projects F + G):
   //  • Merge (G): if the next tile in its travel direction has fewer lanes than
   //    its current lane index, aim for the innermost lane that survives the drop,
@@ -596,10 +629,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     startEntry: Port,
     startExit: Port | null,
     maxTiles: number,
+    cls: VehicleClass = "car",
   ): { coord: Coordinates; entry: Port } | null {
     let coord = startCoord;
     let entry = startEntry;
-    let exit = startExit ?? roadExitPort(level, coord, entry);
+    let exit = startExit ?? roadExitPort(level, coord, entry, cls);
     for (let k = 0; k < maxTiles; k++) {
       if (exit == null) return null;
       const n = neighborCoord(coord, exit);
@@ -610,7 +644,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (isRoadJunction(nTile.road)) return { coord: n, entry: nEntry };
       coord = n;
       entry = nEntry;
-      exit = roadExitPort(level, coord, entry); // straight continuation
+      exit = roadExitPort(level, coord, entry, cls); // straight continuation
     }
     return null;
   }
@@ -618,6 +652,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function desiredLane(car: Car): number {
     const head = car.path[car.headIndex];
     const tile = level[getCoordinatesId(head.coord)];
+    const cls = clsOf(car);
     const curCount = laneCount(tile?.road, head.entryPort);
     const cur = laneOf(car);
     if (curCount <= 1) return 0;
@@ -629,7 +664,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
     // (G) Lane drop on the immediately next tile — our lane doesn't continue, so
     // merge to the innermost surviving lane (takes precedence: it's the urgent one).
-    const exit = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
+    const exit = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls);
     if (exit != null) {
       const nCoord = neighborCoord(head.coord, exit);
       const nTile = nCoord ? level[getCoordinatesId(nCoord)] : undefined;
@@ -650,21 +685,46 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const ahead = junctionAhead(
       head.coord,
       head.entryPort,
-      head.exitPort ?? roadExitPort(level, head.coord, head.entryPort),
+      head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls),
       TURN_LANE_LOOKAHEAD,
+      cls,
     );
     if (ahead) {
       const jTile = level[getCoordinatesId(ahead.coord)];
       const myExit = carExitAt(car, ahead.coord);
       if (jTile?.road && myExit != null) {
-        const allow = lanesAllowingExit(jTile.road, ahead.entry, myExit);
-        if (allow.length > 0 && !allow.includes(cur)) {
-          const best = allow.reduce(
-            (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
-            allow[0],
+        // Lanes that permit the upcoming turn for this vehicle class. A bus may
+        // turn from a bus lane too, so this can include one; a car never can.
+        const allow = lanesAllowingExitFor(jTile.road, ahead.entry, myExit, cls);
+        if (allow.length > 0) {
+          // A bus prefers a bus lane among the permitted lanes; otherwise pick the
+          // nearest permitted lane to where we already are.
+          const busAllowed = allow.filter(l =>
+            busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
-          return clampLane(best, curCount);
+          const pool = cls === "bus" && busAllowed.length > 0 ? busAllowed : allow;
+          if (!pool.includes(cur)) {
+            const best = pool.reduce(
+              (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
+              pool[0],
+            );
+            return clampLane(best, curCount);
+          }
         }
+      }
+    }
+
+    // A bus with no turn to sort for prefers the bus lane on its current approach:
+    // ease to the nearest bus lane (an empty list — no bus lane here — leaves it
+    // in place). This is what makes a bus drift onto and ride the bus lane.
+    if (cls === "bus") {
+      const busLanes = busLaneIndices(tile?.road, head.entryPort);
+      if (busLanes.length > 0) {
+        const nearest = busLanes.reduce(
+          (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
+          busLanes[0],
+        );
+        return clampLane(nearest, curCount);
       }
     }
     return clampLane(cur, curCount);
@@ -692,7 +752,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const turn = routePlan.find(t => t.junctionId === getCoordinatesId(ahead.coord));
     if (!jTile?.road || !turn) return -1;
     const allow = lanesAllowingExit(jTile.road, ahead.entry, turn.exitArm);
-    return allow.length > 0 ? allow[0] : -1;
+    if (allow.length === 0) return -1;
+    // Only steer to a specific lane when the movement is a DEDICATED turn lane —
+    // i.e. restricted to a subset of the approach's car lanes. When every lane
+    // permits the move (an unrestricted junction where any lane can turn), there
+    // is no turn lane to pre-sort into, so give no preference and let the rotating
+    // spawn fill all lanes evenly (otherwise every car piles into lane 0 and the
+    // multi-lane road drives like a single lane).
+    if (allow.length >= carLaneIndices(jTile.road, ahead.entry).length) return -1;
+    return allow[0];
   }
 
   // Is the integer lane `lane` clear of same-direction cars next to us on the same
@@ -723,14 +791,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // integer lane when that lane is clear; otherwise it holds its current lateral
   // position and waits for a gap. Called once per car per tick.
   function updateLateral(car: Car, dt: number): void {
-    // Confine the car to car lanes: snap the desired lane to the nearest car lane
-    // so a merge/overtake/turn target on a road with a bus lane never lands the car
-    // on the bus lane. A no-op on roads with no bus lanes (every lane is a car lane).
+    // Confine the vehicle to the lanes its class may use: snap the desired lane to
+    // the nearest usable lane so a car's merge/overtake/turn target never lands it
+    // on a bus lane (a bus may land on either). A no-op on roads with no bus lanes.
     const head = car.path[car.headIndex];
-    car.targetLane = nearestCarLaneIndex(
+    car.targetLane = nearestUsableLaneIndex(
       level[getCoordinatesId(head.coord)]?.road,
       head.entryPort,
       desiredLane(car),
+      clsOf(car),
     );
     const diff = car.targetLane - car.laneIndex;
     if (Math.abs(diff) <= LANE_SETTLE && Math.abs(car.laneVel) <= LANE_SETTLE) {
@@ -943,6 +1012,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // so a tile a loop revisits is measured at its nearest pass. Used to project
   // other cars / a closed crossing onto this car's path for car-following.
   function forwardRoute(car: Car): Map<string, { lead: number; entry: Port }> {
+    const cls = clsOf(car);
     const route = new Map<string, { lead: number; entry: Port }>();
     let coord = car.path[car.headIndex].coord;
     let entry = car.path[car.headIndex].entryPort;
@@ -950,7 +1020,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     let lead = 1 - car.headProgress; // head -> the next tile's entry edge
     while (lead <= CAR_LOOKAHEAD) {
       const tile = level[getCoordinatesId(coord)];
-      const exits = exitsForCar(tile?.road, entry);
+      const exits = usableExits(tile?.road, entry, cls);
       if (exits.length === 0) break;
       // At a junction use the route plan's prescribed exit; fall back to the
       // first exit for plain straights/curves (they have exactly one anyway).
@@ -963,7 +1033,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0
+        usableExits(nextTile.road, oppositePort(exitPort), cls).length === 0
       )
         break;
       const id = getCoordinatesId(nextCoord);
@@ -1205,17 +1275,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.waitSeconds = 0; // reset: the car is moving
       move = Math.min(car.velocity * dt, clear); // never roll past the stop line
     }
+    const cls = clsOf(car);
     car.headProgress += move;
     while (car.headProgress >= 1) {
       const head = car.path[car.headIndex];
-      const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
+      const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls);
       if (exitPort === null) return false;
       const nextCoord = neighborCoord(head.coord, exitPort);
       if (!nextCoord) return false;
       const nextTile = level[getCoordinatesId(nextCoord)];
       if (
         !nextTile?.road?.length ||
-        exitsForCar(nextTile.road, oppositePort(exitPort)).length === 0
+        usableExits(nextTile.road, oppositePort(exitPort), cls).length === 0
       )
         return false;
       // Backstop: clearAhead caps movement at a closed crossing's entry, which
@@ -1226,7 +1297,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
       const nextEntry = oppositePort(exitPort);
       const nextExit =
-        carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry);
+        carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry, cls);
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
       // Clamp lane position when the next tile has fewer lanes — a backstop for a
       // car that hadn't finished merging before the drop (it normally merges on
@@ -1272,16 +1343,21 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // (the road is saturated — better to drop the spawn than stack cars). Two-lane
     // note: clearAhead skips oncoming-lane cars, so an opposing car on the entry
     // tile never blocks a spawn — right when both directions share the tile.
-    const exit = roadExitPort(level, entry.coord, entry.entryPort);
-    // Cars may only use car lanes — a bus lane is off-limits. Spawn into (and count)
-    // car lanes only, so a car never starts on the bus lane.
+    // Decide the vehicle kind up front: it fixes the lane-access class, which in
+    // turn decides the lanes this vehicle may start in (a bus may also use — and
+    // prefers — the bus lane, a car never may). Drawn here so the probe runs with
+    // the right class.
+    const kind = pickKind();
+    const cls = vehicleClassOf(kind);
+    const exit = roadExitPort(level, entry.coord, entry.entryPort, cls);
+    // The lanes this vehicle class may start in. A car gets only car lanes (the
+    // bus lane is off-limits); a bus gets every lane, and prefers the bus lane below.
     const entryRoad = level[getCoordinatesId(entry.coord)]?.road;
-    const carLanes = carLaneIndices(entryRoad, entry.entryPort);
-    if (carLanes.length === 0) return false; // no car-usable lane at this entry
-    const entryLaneCount = carLanes.length;
+    const usable = usableLaneIndices(entryRoad, entry.entryPort, cls);
+    if (usable.length === 0) return false; // no usable lane at this entry
     const probe: Car = {
       id: "",
-      kind: "car",
+      kind,
       speed: 0,
       velocity: 0,
       accel: 0,
@@ -1309,20 +1385,30 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
     const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng);
-    const preferred = preferredSpawnLane(entry.coord, entry.entryPort, exit, routePlan, entryLaneCount);
-    // Try the preferred (turn) lane first, then the rest from a rotating start so
-    // unrestricted multi-lane entries still fill evenly. Skip the spawn if every
-    // lane is blocked at the edge (saturated — better than stacking cars).
-    // When the route dictates a turn lane, spawn ONLY into that lane — if it's
-    // momentarily blocked, wait (skip this spawn) rather than start in the wrong
-    // lane, which would force a swap with an oncoming lane-changer and leave the
-    // car turning from a lane that doesn't permit it. Otherwise (no turn
-    // preference) fill lanes from a rotating start so they fill evenly.
+    // Lane order to try at the entry, by class:
+    //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
+    //    then the remaining lanes from a rotating start.
+    //  • A car uses the turn-lane preference (F) when its first junction has a
+    //    dedicated turn lane, else fills its car lanes evenly from a rotating start.
+    // Either way, spawn ONLY into a probed-clear lane; if all are blocked at the
+    // edge skip the spawn (saturated — better than stacking cars).
+    let order: number[];
+    if (cls === "bus") {
+      const busLanes = busLaneIndices(entryRoad, entry.entryPort);
+      const rest = usable.filter(l => !busLanes.includes(l));
+      const rotatedRest = Array.from(
+        { length: rest.length },
+        (_, k) => rest[(spawnLaneRot + k) % rest.length],
+      );
+      order = [...busLanes, ...rotatedRest];
+    } else {
+      const preferred = preferredSpawnLane(entry.coord, entry.entryPort, exit, routePlan, usable.length);
+      order =
+        preferred >= 0
+          ? [preferred]
+          : Array.from({ length: usable.length }, (_, k) => usable[(spawnLaneRot + k) % usable.length]);
+    }
     let chosenLane = -1;
-    const order: number[] =
-      preferred >= 0
-        ? [preferred]
-        : Array.from({ length: carLanes.length }, (_, k) => carLanes[(spawnLaneRot + k) % carLanes.length]);
     for (const lane of order) {
       probe.laneIndex = lane;
       if (clearAhead(probe, closed).clear > STOP_EPS) {
@@ -1332,7 +1418,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
     if (chosenLane < 0) return false; // preferred/all lanes blocked — wait, don't stack
     spawnLaneRot++;
-    const kind = pickKind();
+    // Buses never overtake (they ride their lane, preferring the bus lane). Draw
+    // from the driver RNG regardless so its stream stays stable across mixes.
+    const overtaker = driverRng() < overtakeFraction && cls !== "bus";
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
     // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
@@ -1364,7 +1452,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: chosenLane,
       targetLane: chosenLane,
       laneVel: 0,
-      overtaker: driverRng() < overtakeFraction,
+      overtaker,
       heldSec: 0,
       overtakePhase: "none",
       overtakeOf: null,

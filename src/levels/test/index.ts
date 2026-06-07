@@ -16,6 +16,7 @@ import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
+import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import {
   roadcross1lane,
@@ -31,9 +32,11 @@ import { noleftturn } from "@/levels/test/scenarios/noleftturn";
 import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
+import { buses } from "@/levels/test/scenarios/buses";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
 import { bigjunction } from "@/levels/test/scenarios/bigjunction";
+import { crossturns2lane, crossturns3lane } from "@/levels/test/scenarios/crossturns";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
@@ -61,9 +64,9 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
     label: "Road",
     scenarios: [
       carfollowing, carqueue, carcircle, carscurve, roadcurveloops, roadcurvetraffic,
-      roadoneway, roadstraightlanes, roadlanemerge,
-      roadcross, roadcross1lane, roadcross2lane, roadcross3lane, roadjunction,
-      turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, cardestination,
+      roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes,
+      roadcross, roadcross1lane, roadcross2lane, roadcross3lane, crossturns2lane, crossturns3lane, roadjunction,
+      turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, buses, cardestination,
       carroute, bigjunction,
     ],
   },

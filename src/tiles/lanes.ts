@@ -4,6 +4,18 @@ import type { Port } from "@/tiles/model";
 // enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
 export type LaneKind = "all" | "bus"; // extensible
 
+// A vehicle's lane-access class. A general road vehicle ("car": car/truck/semi)
+// may not use bus-only lanes; a "bus" may use ANY lane (car lanes AND bus lanes).
+// This is the single rule for "which lanes may this vehicle drive in", consumed by
+// every lane query below so access logic lives in one place.
+export type VehicleClass = "car" | "bus";
+
+// May a vehicle of class `cls` drive in `lane`? Buses may use any lane; everything
+// else is barred from bus-only lanes.
+export function laneUsableBy(lane: Lane, cls: VehicleClass): boolean {
+  return cls === "bus" || lane.kind !== "bus";
+}
+
 // One physical lane through a tile, directed. A car enters via `from` and may
 // leave by any port listed in `to` (the permitted movements from this lane).
 export interface Lane {
@@ -68,54 +80,105 @@ export function exitsFrom(road: Lane[] | undefined, from: Port): Port[] {
   return [...out];
 }
 
-// Like exitsFrom but only for non-bus vehicles: skips lanes whose kind is "bus".
-export function exitsForCar(road: Lane[] | undefined, from: Port): Port[] {
+// Like exitsFrom but only for lanes the vehicle class may use (a "car" skips
+// bus-only lanes; a "bus" uses any).
+export function usableExits(
+  road: Lane[] | undefined,
+  from: Port,
+  cls: VehicleClass,
+): Port[] {
   const out = new Set<Port>();
   for (const lane of lanesFrom(road, from)) {
-    if (lane.kind === "bus") continue;
+    if (!laneUsableBy(lane, cls)) continue;
     for (const to of lane.to) out.add(to);
   }
   return [...out];
 }
 
-// The car-accessible lane indices of an approach, ascending by index (0 = kerb).
-export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+// Like exitsFrom but only for non-bus vehicles: skips lanes whose kind is "bus".
+export function exitsForCar(road: Lane[] | undefined, from: Port): Port[] {
+  return usableExits(road, from, "car");
+}
+
+// The lane indices of an approach a vehicle of class `cls` may use, ascending by
+// index (0 = kerb).
+export function usableLaneIndices(
+  road: Lane[] | undefined,
+  from: Port,
+  cls: VehicleClass,
+): number[] {
   return lanesFrom(road, from)
-    .filter(l => l.kind !== "bus")
+    .filter(l => laneUsableBy(l, cls))
     .map(l => l.index)
     .sort((a, b) => a - b);
 }
 
+// The car-accessible lane indices of an approach, ascending by index (0 = kerb).
+export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return usableLaneIndices(road, from, "car");
+}
+
+// The bus-only lane indices of an approach (kind === "bus"), ascending by index.
+// A bus prefers these; empty when the approach has no bus lane.
+export function busLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind === "bus")
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
+// The lane index of approach `from` usable by class `cls` nearest to `lane`
+// (0 = kerb). Wherever lane logic would place a vehicle — a spawn slot, a merge
+// target, an overtake lane — it is snapped to the closest lane it may use, so a
+// car never ends up on a bus lane (a bus may land on either). Ties favour the
+// kerb-side (lower) index. Returns `lane` unchanged if the approach has no usable
+// lane at all (nothing to snap to).
+export function nearestUsableLaneIndex(
+  road: Lane[] | undefined,
+  from: Port,
+  lane: number,
+  cls: VehicleClass,
+): number {
+  const usable = usableLaneIndices(road, from, cls);
+  if (usable.length === 0) return lane;
+  return usable.reduce((best, l) =>
+    Math.abs(l - lane) < Math.abs(best - lane) ? l : best,
+  );
+}
+
 // The car-accessible lane index of approach `from` nearest to `lane` (0 = kerb).
-// Cars are confined to car lanes (a bus lane is off-limits): wherever lane logic
-// would place a car — a spawn slot, a merge target, an overtake lane — it is
-// snapped to the closest car lane so a car never ends up on a bus lane. Ties
-// favour the kerb-side (lower) index. Returns `lane` unchanged if the approach has
-// no car lanes at all (nothing to snap to).
 export function nearestCarLaneIndex(
   road: Lane[] | undefined,
   from: Port,
   lane: number,
 ): number {
-  const carLanes = carLaneIndices(road, from);
-  if (carLanes.length === 0) return lane;
-  return carLanes.reduce((best, l) =>
-    Math.abs(l - lane) < Math.abs(best - lane) ? l : best,
-  );
+  return nearestUsableLaneIndex(road, from, lane, "car");
+}
+
+// The lane indices of approach `from` usable by class `cls` that permit exiting
+// toward `exit` (i.e. whose `to` lists it), ascending. Used by lane-aware routing
+// to position a vehicle in a lane that allows its next turn. Empty when no usable
+// lane permits the move.
+export function lanesAllowingExitFor(
+  road: Lane[] | undefined,
+  from: Port,
+  exit: Port,
+  cls: VehicleClass,
+): number[] {
+  return lanesFrom(road, from)
+    .filter(l => laneUsableBy(l, cls) && l.to.includes(exit))
+    .map(l => l.index)
+    .sort((a, b) => a - b);
 }
 
 // The car-accessible lane indices of approach `from` that permit exiting toward
-// `exit` (i.e. whose `to` lists it). Used by lane-aware routing to position a car
-// in a lane that allows its next turn. Empty when no car lane permits the move.
+// `exit`. Empty when no car lane permits the move.
 export function lanesAllowingExit(
   road: Lane[] | undefined,
   from: Port,
   exit: Port,
 ): number[] {
-  return lanesFrom(road, from)
-    .filter(l => l.kind !== "bus" && l.to.includes(exit))
-    .map(l => l.index)
-    .sort((a, b) => a - b);
+  return lanesAllowingExitFor(road, from, exit, "car");
 }
 
 // Every port the road touches (as an approach or an exit).
@@ -199,6 +262,20 @@ export function nWayLanes(a: Port, b: Port, count: number, kind?: LaneKind): Lan
     { from: a, to: [b], index: i, ...(kind != null ? { kind } : {}) },
     { from: b, to: [a], index: i, ...(kind != null ? { kind } : {}) },
   ]).flat();
+}
+
+// Generate a one-way multi-lane road: `count` lanes all entering FROM `a` and
+// exiting TOWARD `b`, indices 0..count-1 (0 = kerb side). The mirror direction
+// is absent, so traffic only ever flows a→b. The single-lane case equals
+// `[oneWay(a, b)]`; this is its multi-lane generalisation, parallel to
+// `nWayLanes` for two-way roads.
+export function oneWayLanes(a: Port, b: Port, count: number, kind?: LaneKind): Lane[] {
+  return Array.from({ length: count }, (_, i) => ({
+    from: a,
+    to: [b],
+    index: i,
+    ...(kind != null ? { kind } : {}),
+  }));
 }
 
 // The painted total lane count for one end of a straight road edge, given this

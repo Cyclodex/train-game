@@ -738,6 +738,28 @@ export default toNative(PlayView);
   left: 76%;
   width: 13%;
 }
+// A bus: a long, slightly taller coach. A row of side windows runs nearly the
+// whole length (a repeating glass/pillar band), so it reads as a passenger bus
+// rather than a cargo truck even before you notice it riding the bus lane.
+.road-car--bus {
+  height: 24px;
+  border-radius: 6px;
+  filter: brightness(1.08);
+}
+.road-car--bus .road-car-glass {
+  top: 22%;
+  bottom: 48%;
+  left: 10%;
+  width: 80%;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(185, 222, 255, 0.95) 0,
+    rgba(185, 222, 255, 0.95) 7px,
+    rgba(30, 44, 60, 0.55) 7px,
+    rgba(30, 44, 60, 0.55) 10px
+  );
+}
 .score-card {
   position: fixed;
   z-index: 2000;
