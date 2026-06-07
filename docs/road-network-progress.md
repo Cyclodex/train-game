@@ -80,13 +80,14 @@ acceptance**, so traffic sorts and merges instead of queueing (`src/sim/road.ts`
 
 ## What's next (polish + game direction)
 
-### F/G follow-ups (nice-to-haves, not blockers)
-- **Overtaking + driver behaviour:** faster/impatient drivers pull out to pass a
-  slow leader, judging the pass from distance + speed difference; patient drivers
-  stay put. DESIGNED — see
-  `docs/superpowers/specs/2026-06-07-overtaking-driver-behaviour-design.md`.
-  Build order: driver profiles → same-direction overtake → oncoming-lane pass
-  with the feasibility math.
+### F/G follow-ups
+- **Overtaking + driver behaviour:** driver profiles (overtaker vs disciplined)
+  and **same-direction (multi-lane) overtaking** are **DONE & merged** — an
+  overtaker held behind a slow leader pulls into the lane to its left, passes,
+  and returns, gated by gap acceptance; `overtakeFraction` is configurable;
+  scenario `overtaketwolane`. Still TODO (deferred): **oncoming-lane passing** on
+  1-lane-each-way roads with the distance/speed feasibility math + abort — see
+  `docs/superpowers/specs/2026-06-07-overtaking-driver-behaviour-design.md` §3b.
 - **Lean into the change:** DONE — the body now angles into a lane change (the
   sim tracks lateral speed and lags the rear coupler; the renderer offsets each
   coupler independently).
