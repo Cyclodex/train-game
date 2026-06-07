@@ -9,7 +9,7 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { laneCount } from "@/tiles/lanes";
+import { laneCount, carLaneIndices, roadPortsOf } from "@/tiles/lanes";
 import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -81,6 +81,31 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // PlayView/TestStage. The road sim's car body length is set from this so the
 // simulated body matches the visible sprite (keeps queues packing tight).
 const CAR_SPRITE_PX = 38;
+
+// Jam spacing between car centres when a road is packed bumper-to-bumper, in px:
+// the sprite body plus a small standing gap. Used only to estimate how many cars
+// a map can physically hold (the density slider's 100% target) — not by the sim,
+// which spaces cars dynamically via clearAhead.
+const JAM_SPACING_PX = CAR_SPRITE_PX * 1.7;
+
+// The number of cars a level's roads can physically hold bumper-to-bumper: every
+// road tile contributes (its distinct car lanes) × (cars that fit along one tile
+// length). The density slider (0–100%) scales against this, so 100% means "pack
+// the streets" on any map, large or small, rather than a fixed absolute count.
+function roadCarCapacity(level: Level, tileSize: number): number {
+  const carsPerLaneTile = Math.max(1, Math.floor(tileSize / JAM_SPACING_PX));
+  let laneTiles = 0;
+  for (const tile of Object.values(level)) {
+    const road = tile.road;
+    if (!road) continue;
+    // Distinct car lanes through this tile = sum of each approach's car lanes
+    // (one directed lane per entry direction; a two-way straight counts 2).
+    for (const port of roadPortsOf(road)) {
+      laneTiles += carLaneIndices(road, port).length;
+    }
+  }
+  return laneTiles * carsPerLaneTile;
+}
 
 // Right-hand-traffic lane model. A road tile is a single centreline; a car drives
 // in a lane offset to the *right* of its direction of travel, so oncoming traffic
@@ -184,9 +209,11 @@ export function createGame(
   traffic?: TrafficConfig,
   // Identifies the board for per-level best-score persistence.
   levelId = "default",
-  // Live cap on the number of road vehicles. A callback so the slider can
-  // change density without restarting the game. Overrides traffic.maxCars.
-  maxCarsCap?: () => number,
+  // Live road-traffic density as a percentage (0–100) of what the map's roads can
+  // physically hold. A callback so the slider can change density without
+  // restarting the game; scaled to an absolute car cap against the level's
+  // capacity below. Overrides traffic.maxCars.
+  densityPct?: () => number,
 ): Game {
   const switches = reactive(initialSwitches(level)) as Record<
     string,
@@ -241,6 +268,17 @@ export function createGame(
     roadH = Math.max(roadH, y + 1);
   }
   const allRoadEntries = roadEntries(level, roadW, roadH);
+  // How many cars this map's roads can physically hold. The density slider is a
+  // percentage of this, so 100% packs the streets on any map (a tiny test road
+  // and the full play board both fill proportionally). Clamped to ≥1 so a road
+  // map is never capped to zero by rounding.
+  const roadCapacity = Math.max(1, roadCarCapacity(level, tileSize));
+  // Resolve the live density% → an absolute car cap for the sim. Falls back to
+  // the scenario's pinned traffic.maxCars (absolute) when no slider is wired.
+  const carCapOf = (): number =>
+    densityPct
+      ? Math.round((Math.max(0, Math.min(100, densityPct())) / 100) * roadCapacity)
+      : traffic?.maxCars ?? 8;
   // The train + road sims are built together so `reset()` can rebuild both from
   // the same inputs (the simulation has no in-place reset), giving a true,
   // deterministic do-over for Retry. They're `let` so the rebuild reassigns them;
@@ -296,7 +334,11 @@ export function createGame(
       // If the model body is longer than the sprite, a queue looks gappy: the bumper
       // gap then sits on top of invisible extra body.
       carLength: CAR_SPRITE_PX / tileSize,
-      maxCars: maxCarsCap ?? traffic?.maxCars ?? 8,
+      maxCars: carCapOf,
+      // Fill toward the density target quickly so dragging the slider up packs the
+      // streets without waiting out a slow trickle — the rendered game wants this;
+      // the unit-test sims leave it off for a deterministic per-interval cadence.
+      fillFast: true,
       // Per-level overrides (busyness + vehicle mix), if the level supplied any.
       ...(traffic?.spawnInterval !== undefined && {
         spawnInterval: traffic.spawnInterval,

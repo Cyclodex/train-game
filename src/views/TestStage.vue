@@ -18,7 +18,7 @@
           step="1"
           v-model.number="config.maxCars"
         />
-        <span class="stage-cars-val">{{ config.maxCars === 0 ? "off" : config.maxCars }}</span>
+        <span class="stage-cars-val">{{ config.maxCars === 0 ? "off" : config.maxCars + "%" }}</span>
       </label>
       <span class="stage-deliveries">
         Delivered {{ delivered }} / {{ totalTrains }}

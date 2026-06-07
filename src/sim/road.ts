@@ -373,6 +373,13 @@ export interface RoadSimConfig {
   // avoids a head-on deadlock on a shared straight road until a direction model
   // exists. Defaults to all auto-detected entries.
   spawnEntries?: RoadEntry[];
+  // Fill-fast mode: instead of one spawn per `spawnInterval`, attempt spawns at
+  // every entry on each tick until the cap is reached (each placement still gated
+  // by `clearAhead`, so cars never stack — they fill only as fast as the road
+  // physically clears the entry edge). Used by the rendered game so the density
+  // slider reaches its target quickly; the unit-test sims leave it off and keep
+  // the deterministic per-interval trickle. Default false.
+  fillFast?: boolean;
 }
 
 export interface RoadSim {
@@ -469,6 +476,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const driverRng = makeRng((config.seed ?? 1) ^ 0x517cc1b7);
   const overtakeFraction = Math.max(0, Math.min(1, config.overtakeFraction ?? OVERTAKE.fraction));
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
+  const fillFast = config.fillFast ?? false;
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
   const speedSpread = Math.max(0, config.speedSpread ?? DEFAULT_SPEED_SPREAD);
@@ -1196,12 +1204,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return true;
   }
 
-  function trySpawn(closed: CrossingClosed): void {
-    if (entries.length === 0 || cars.length >= maxCarsOf()) return;
+  // Attempt one spawn at a randomly-chosen entry. Returns true iff a car was
+  // placed, so the fill-fast loop knows whether the road still has room.
+  function trySpawn(closed: CrossingClosed): boolean {
+    if (entries.length === 0 || cars.length >= maxCarsOf()) return false;
     // Pick an entry deterministically.
     const entry = entries[Math.floor(rng() * entries.length)];
     const id = getCoordinatesId(entry.coord);
-    if (closed(id)) return;
+    if (closed(id)) return false;
     // Spawn only into a lane with clear road at the entry. We probe each lane of
     // the approach with a zero-length car sitting at the entry edge and reuse
     // clearAhead: it returns ~0 when a same-lane car's body is right at the entry
@@ -1269,7 +1279,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         break;
       }
     }
-    if (chosenLane < 0) return; // preferred/all lanes blocked — wait, don't stack
+    if (chosenLane < 0) return false; // preferred/all lanes blocked — wait, don't stack
     spawnLaneRot++;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
@@ -1310,6 +1320,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       overtakeHomeLane: chosenLane,
       destination,
     });
+    return true;
   }
 
   function segLen(seg: RoadSegment): number {
@@ -1350,11 +1361,26 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   return {
     step(dt: number, closed: CrossingClosed) {
-      spawnClock += dt;
-      // One spawn attempt per spawnInterval of sim time (deterministic cadence).
-      while (spawnClock >= spawnInterval) {
-        spawnClock -= spawnInterval;
-        trySpawn(closed);
+      if (fillFast) {
+        // Fill toward the cap as fast as the road physically clears: each tick,
+        // keep attempting spawns until the cap is hit or a run of attempts all
+        // bounce (every entry blocked at its edge — the road is saturated).
+        // clearAhead still gates each placement, so cars never stack; they fill
+        // only as fast as room opens at the entries. Running every tick (~60Hz)
+        // packs even a wide cap to its target within a fraction of a second.
+        let misses = 0;
+        const maxAttempts = Math.max(1, entries.length) * 4;
+        for (let a = 0; a < maxAttempts && cars.length < maxCarsOf(); a++) {
+          if (trySpawn(closed)) misses = 0;
+          else if (++misses >= Math.max(1, entries.length)) break;
+        }
+      } else {
+        spawnClock += dt;
+        // One spawn attempt per spawnInterval of sim time (deterministic cadence).
+        while (spawnClock >= spawnInterval) {
+          spawnClock -= spawnInterval;
+          trySpawn(closed);
+        }
       }
       // Advance cars in a stable order; despawn any that drove off the map. A
       // despawning car that used a crossing en route counts toward throughput.

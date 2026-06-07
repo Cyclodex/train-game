@@ -630,10 +630,11 @@ class PlayView extends Vue {
         return "off";
     }
   }
-  // The concurrent-car cap, set by the "Cars" slider (0–100). The sim reads
-  // config.maxCars live, so dragging it changes road density immediately.
+  // Road-traffic density %, set by the "Cars" slider (0–100). The game scales it
+  // against the map's capacity and reads it live, so dragging re-targets density
+  // immediately (100% packs the streets).
   get carCountLabel(): string {
-    return this.config.maxCars === 0 ? "off" : String(this.config.maxCars);
+    return this.config.maxCars === 0 ? "off" : `${this.config.maxCars}%`;
   }
   pausePlayGame() {
     this.game.paused.value = !this.game.paused.value;
