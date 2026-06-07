@@ -259,6 +259,10 @@ function stubGame(): Game {
     signalAspects: empty,
     signalOverrides: empty,
     cycleSignal: () => {},
+    // roadLaneCount is called by Tile.vue's roadPaths computed when config.roads
+    // is true and a road tile is present. Return 0 so the road ribbon renders
+    // at the tile's own lane count (no neighbour taper in the editor).
+    roadLaneCount: () => 0,
   } as unknown as Game;
 }
 
