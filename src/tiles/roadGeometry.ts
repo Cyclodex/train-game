@@ -136,6 +136,73 @@ export function laneDropArrowPlan(
   return out;
 }
 
+// A painted lane-closure gore (Swiss Sperrfläche): the closed area of a lane
+// that ends at this tile. `triangle` is the closed polygon — used both as the
+// bold solid border and as a clip for the diagonal `hatch` stripes that fill it.
+export interface LaneDropGore {
+  triangle: string;
+  hatch: string[];
+}
+
+// The closure gore for the lanes ending in one travel direction (entry→exit) on
+// a straight reducer tile. `survivors` lanes continue; lanes [survivors, selfN)
+// close. The tarmac stays full width, so the closing lanes are real road painted
+// as a gore: a triangle whose point sits at the OUTER kerb upstream and widens
+// inward to fill the closing lanes at the downstream seam — i.e. the diverging
+// line shepherds cars in toward the surviving lanes. Returned in this travel
+// direction's frame (lanes on the +n side), so call it once per direction.
+export function laneDropGore(
+  entry: Port,
+  exit: Port,
+  size: number,
+  survivors: number,
+  selfN: number,
+): LaneDropGore {
+  const LANE_W = size * 0.14;
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const f = { x: dx / len, y: dy / len }; // forward (travel) unit
+  const n = perpUnit(a, b); // right-of-travel unit (this direction's lanes on +n)
+
+  const innerOff = survivors * LANE_W; // inner edge of the closing region
+  const outerOff = selfN * LANE_W; // outer kerb
+  const P = (along: number, off: number) => ({
+    x: a.x + f.x * along + n.x * off,
+    y: a.y + f.y * along + n.y * off,
+  });
+  const r = (v: number) => Math.round(v * 100) / 100;
+
+  // Tip at the outer kerb upstream (A); widens to the full closing band at the
+  // downstream seam (B outer, C inner).
+  const A = P(0, outerOff), B = P(len, outerOff), C = P(len, innerOff);
+  const triangle = `M ${r(A.x)} ${r(A.y)} L ${r(B.x)} ${r(B.y)} L ${r(C.x)} ${r(C.y)} Z`;
+
+  // Diagonal hatch stripes (forward + inward), spaced; the view clips them to the
+  // triangle. Iterate the stripe offset only across the triangle's own extent so
+  // we don't emit lines that fall entirely outside it.
+  const u = { x: f.x - n.x, y: f.y - n.y }; // stripe direction
+  const um = Math.hypot(u.x, u.y) || 1;
+  u.x /= um; u.y /= um;
+  const p = { x: -u.y, y: u.x }; // perpendicular: successive stripes step along p
+  const projA = 0;
+  const projB = (B.x - A.x) * p.x + (B.y - A.y) * p.y;
+  const projC = (C.x - A.x) * p.x + (C.y - A.y) * p.y;
+  const sMin = Math.min(projA, projB, projC);
+  const sMax = Math.max(projA, projB, projC);
+  const spacing = LANE_W * 0.55;
+  const reach = len + outerOff * 2;
+  const hatch: string[] = [];
+  for (let s = sMin; s <= sMax; s += spacing) {
+    const c = { x: A.x + p.x * s, y: A.y + p.y * s };
+    const s0 = { x: c.x - u.x * reach, y: c.y - u.y * reach };
+    const s1 = { x: c.x + u.x * reach, y: c.y + u.y * reach };
+    hatch.push(`M ${r(s0.x)} ${r(s0.y)} L ${r(s1.x)} ${r(s1.y)}`);
+  }
+  return { triangle, hatch };
+}
+
 // The paved-surface polygon for a road edge whose width tapers linearly from
 // `widthA` at the entry end to `widthB` at the exit end. Used by the tile
 // renderer to draw a road whose width changes at a seam (a merge or a split):

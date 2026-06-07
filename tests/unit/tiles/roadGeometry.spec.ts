@@ -7,6 +7,7 @@ import {
   roadLaneMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
+  laneDropGore,
 } from "@/tiles/roadGeometry";
 
 describe("roadSurfacePath", () => {
@@ -295,6 +296,29 @@ describe("laneDropArrowPath", () => {
     const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.5);
     const [, tailX, , headX] = arrow.shaft.match(/M (\S+) (\S+) L (\S+) (\S+)/)!.map(Number);
     expect(headX).toBeGreaterThan(tailX);
+  });
+});
+
+describe("laneDropGore", () => {
+  it("2→1 drop: triangle from outer kerb upstream to the closing band at the seam", () => {
+    // Left→Right, size 200: f = (1,0), n = (0,1). survivors=1, selfN=2.
+    // innerOff = 1·28 = 28 → y 128; outerOff = 2·28 = 56 → y 156.
+    // A = (0,156) tip at outer kerb upstream; B = (200,156); C = (200,128).
+    const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 2);
+    expect(gore.triangle).toBe("M 0 156 L 200 156 L 200 128 Z");
+  });
+
+  it("border is a closed triangle and the hatch has stripes", () => {
+    const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 2);
+    expect(gore.triangle.trimEnd().endsWith("Z")).toBe(true);
+    expect(gore.hatch.length).toBeGreaterThan(0);
+    expect(gore.hatch.every(d => d.startsWith("M "))).toBe(true);
+  });
+
+  it("3→1 drop covers the whole closing band (lanes 1 and 2)", () => {
+    // survivors=1, selfN=3 → innerOff 28 (y128), outerOff 84 (y184).
+    const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 3);
+    expect(gore.triangle).toBe("M 0 184 L 200 184 L 200 128 Z");
   });
 });
 

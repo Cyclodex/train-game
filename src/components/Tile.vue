@@ -18,6 +18,22 @@
         class="road-surface"
         :class="{ 'road-surface--mismatch': r.mismatch }"
       />
+      <!-- Lane-closure gores: hatched, bold-bordered no-drive area of an ending
+           lane, painted on the (still paved) closing lane of a reducer tile. -->
+      <template v-for="g in roadGores" :key="g.clipId">
+        <clipPath :id="g.clipId">
+          <path :d="g.triangle" />
+        </clipPath>
+        <g :clip-path="`url(#${g.clipId})`">
+          <path
+            v-for="(h, hi) in g.hatch"
+            :key="'gh' + hi"
+            :d="h"
+            class="road-gore-hatch"
+          />
+        </g>
+        <path :d="g.triangle" class="road-gore-border" />
+      </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
         <path
           v-for="(m, mi) in r.laneMarkings"
@@ -158,6 +174,7 @@ import {
   roadLaneMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
+  laneDropGore,
   LaneMarkingPath,
   MergeArrowPath,
 } from "@/tiles/roadGeometry";
@@ -256,22 +273,15 @@ class Tile extends Vue {
         };
       }
 
-      // Straight tiles: taper at seams is valid (lane merge/diverge). No mismatch flag.
-      const na = neighborCoord(coord, a);
-      const nb = neighborCoord(coord, b);
-      const neighborTotalAtA = na
-        ? this.game.roadLaneCountAt(na, oppositePort(a))
-        : 0;
-      const neighborTotalAtB = nb
-        ? this.game.roadLaneCountAt(nb, oppositePort(b))
-        : 0;
-      const totalA = (na && neighborTotalAtA > 0) ? Math.min(selfTotal, neighborTotalAtA) : selfTotal;
-      const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
-      const widthA = totalA * LANE_W;
-      const widthB = totalB * LANE_W;
+      // Straight tiles keep their FULL width — the tarmac never tapers to match a
+      // narrower neighbour. A lane that ends stays paved (cars merge on it) and is
+      // painted as a closure gore (see `roadGores`); the road simply steps down to
+      // the narrow neighbour at the seam, which is exactly where the gore finishes
+      // closing the lane.
+      const width = selfTotal * LANE_W;
       return {
-        surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
+        surface: roadSurfacePolygonPath(a, b, size, width, width),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, width / 2, width / 2),
         mismatch: false,
       };
     });
@@ -299,6 +309,32 @@ class Tile extends Vue {
         for (const { laneIndex, alongT } of laneDropArrowPlan(selfN, d1, d2)) {
           out.push(laneDropArrowPath(entry, exit, size, laneIndex, alongT));
         }
+      }
+    }
+    return out;
+  }
+
+  // Lane-closure gores (Swiss Sperrfläche): on a reducer tile the lanes that end
+  // stay paved (full-width tarmac) and are painted as a hatched, bold-bordered
+  // triangle. One per travel direction whose immediate downstream neighbour has
+  // fewer lanes. Each carries a unique clip id so its hatch stays inside the gore.
+  get roadGores(): { triangle: string; hatch: string[]; clipId: string }[] {
+    if (!this.tile.road?.length) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const safe = this.coordId.replace(/[^a-z0-9]/gi, "_");
+    const out: { triangle: string; hatch: string[]; clipId: string }[] = [];
+    for (const [a, b] of roadEdges(this.tile.road)) {
+      if (oppositePort(a) !== b) continue; // straight tiles only
+      for (const [entry, exit] of [[a, b], [b, a]] as [Position, Position][]) {
+        const selfN = laneCount(this.tile.road, entry);
+        if (selfN < 1) continue;
+        const n1 = neighborCoord(coord, exit);
+        if (!n1) continue; // map edge: the road ends, not a lane drop
+        const survivors = this.game.roadLaneCount(n1, oppositePort(exit));
+        if (survivors <= 0 || survivors >= selfN) continue; // no drop here
+        const gore = laneDropGore(entry, exit, size, survivors, selfN);
+        out.push({ ...gore, clipId: `gore_${safe}_${entry}_${exit}` });
       }
     }
     return out;
@@ -464,6 +500,20 @@ export default toNative(Tile);
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 3px;
   stroke-linecap: round;
+  stroke-linejoin: round;
+}
+// Lane-closure gore (Sperrfläche): diagonal hatch inside a bold solid border,
+// marking the no-drive area of a lane that ends on a reducer tile.
+.road-gore-hatch {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.8);
+  stroke-width: 3px;
+  stroke-linecap: butt;
+}
+.road-gore-border {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 4px;
   stroke-linejoin: round;
 }
 
