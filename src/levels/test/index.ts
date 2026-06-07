@@ -32,6 +32,7 @@ import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
+import { bigjunction } from "@/levels/test/scenarios/bigjunction";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
@@ -62,7 +63,7 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
       roadoneway, roadstraightlanes, roadlanemerge,
       roadcross, roadcross1lane, roadcross2lane, roadcross3lane, roadjunction,
       turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, cardestination,
-      carroute,
+      carroute, bigjunction,
     ],
   },
   {
