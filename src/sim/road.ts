@@ -72,6 +72,7 @@ export interface TrafficConfig {
   spawnInterval?: number; // mean seconds between spawn attempts (smaller = busier)
   mix?: TrafficMix; // relative weights of car/truck/semi
   maxCars?: number; // cap on live vehicles
+  overtakeFraction?: number; // fraction of drivers that overtake a slow leader (0..1)
   // Spawn cars only from these explicit entries instead of the game's default
   // map-edge detection. Lets a scenario model directed lanes (e.g. a divided road
   // where each lane is one-way in opposite directions) or bias one direction by
@@ -257,10 +258,33 @@ export interface Car {
   // was a moment ago, so its lateral position lags by `laneVel · (arc / speed)`,
   // angling the body into the change instead of sliding flat.
   laneVel: number;
+  // Driver behaviour: an `overtaker` will pull into the lane to its left to pass a
+  // slower leader when held below cruise; a disciplined driver (false) never does.
+  overtaker: boolean;
+  // Seconds spent held below cruise speed by a car ahead (resets when free). Once
+  // it passes the patience threshold an overtaker looks to pass.
+  heldSec: number;
+  // Overtake state machine: "none" → "passing" (pulled into the left lane to get
+  // past `overtakeOf`) → "returning" (back to `overtakeHomeLane` once clear ahead).
+  overtakePhase: "none" | "passing" | "returning";
+  overtakeOf: string | null; // id of the car being passed
+  overtakeHomeLane: number; // lane to return to after the pass
   // The map-edge entry this car is heading toward (set at spawn via planRoute).
   // Null when the BFS found no path or no targets exist.
   destination: RoadEntry | null;
 }
+
+// Driver behaviour tuning (same-direction overtaking).
+const OVERTAKE = {
+  // Fraction of drivers that will overtake (the rest stay disciplined in lane).
+  fraction: 0.4,
+  // Seconds held below cruise by a leader before an overtaker pulls out.
+  patience: 1.2,
+  // Min speed advantage over the leader (as a fraction of cruise) worth passing.
+  gainFrac: 0.08,
+  // Clear tiles needed ahead in the passing lane to commit to a pass.
+  window: 2.5,
+};
 
 // A car sampled as its two anchor points along the recent path (front toward the
 // direction of travel, rear behind), mirroring the train UnitChord so the
@@ -337,6 +361,9 @@ export interface RoadSimConfig {
   speedSpread?: number;
   // Relative spawn weights per vehicle kind. Default `{ car: 1 }` → all cars.
   mix?: TrafficMix;
+  // Fraction of drivers that will overtake a slow leader (same-direction, into
+  // the lane to their left). The rest stay disciplined in lane. Default 0.4.
+  overtakeFraction?: number;
   // Cap so a busy junction of entries can't spawn an unbounded number of cars.
   // A function is read live on every spawn attempt, so a game setting can change
   // the cap mid-game without removing cars already on the road.
@@ -437,6 +464,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // many routing choices a level offers — so seeded spawn/platoon behaviour stays
   // stable whether a map is a single straight or a branching junction network.
   const routeRng = makeRng((config.seed ?? 1) ^ 0x9e3779b9);
+  // A third independent stream for driver-behaviour (overtaker?) draws, so adding
+  // it doesn't shift the seeded speed/kind or route sequences.
+  const driverRng = makeRng((config.seed ?? 1) ^ 0x517cc1b7);
+  const overtakeFraction = Math.max(0, Math.min(1, config.overtakeFraction ?? OVERTAKE.fraction));
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
@@ -583,6 +614,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
     }
 
+    // Overtaking (G+): while passing aim for the lane left of home; while
+    // returning aim back at home. Above turn-lane sorting, but the merge/junction
+    // guards above still win (safety). considerOvertake drives the phase.
+    if (car.overtakePhase === "passing") return clampLane(car.overtakeHomeLane + 1, curCount);
+    if (car.overtakePhase === "returning") return clampLane(car.overtakeHomeLane, curCount);
+
     // (F) A junction is coming up — get into a lane that permits the turn the
     // route takes there, as early as a few tiles out so there's room to change.
     const ahead = junctionAhead(
@@ -691,6 +728,100 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const pos = car.laneIndex - lag;
     if (count <= 1) return 0;
     return Math.max(0, Math.min(count - 1, pos));
+  }
+
+  // The nearest car ahead in the same lane and travel direction (the leader the
+  // car is following), within the look-ahead. Used to decide whether to overtake.
+  function leaderAhead(car: Car): { other: Car; dist: number } | null {
+    const route = forwardRoute(car);
+    const myLane = laneOf(car);
+    let best: { other: Car; dist: number } | null = null;
+    for (const other of cars) {
+      if (other === car) continue;
+      for (const p of bodyPoints(other)) {
+        const proj = projectPoint(route, p);
+        if (!proj || proj.d < 0 || proj.opposing || proj.perpendicular) continue;
+        if (p.laneIndex !== myLane) continue;
+        if (!best || proj.d < best.dist) best = { other, dist: proj.d };
+      }
+    }
+    return best;
+  }
+
+  // Is the passing lane clear enough ahead to commit to an overtake? No car in
+  // `lane` within the pass window that we'd just get stuck behind again.
+  function passingWindowClear(car: Car, lane: number): boolean {
+    const route = forwardRoute(car);
+    for (const other of cars) {
+      if (other === car) continue;
+      for (const p of bodyPoints(other)) {
+        const proj = projectPoint(route, p);
+        if (!proj || proj.d < 0 || proj.d > OVERTAKE.window) continue;
+        if (proj.opposing || proj.perpendicular) continue;
+        if (p.laneIndex === lane && other.speed <= car.speed) return false;
+      }
+    }
+    return true;
+  }
+
+  // True once the car being overtaken is fully behind us (its frontmost point is
+  // behind our tail) — or it has despawned. Then we can pull back in.
+  function isPast(car: Car, otherId: string | null): boolean {
+    if (!otherId) return true;
+    const other = cars.find(c => c.id === otherId);
+    if (!other) return true;
+    const route = forwardRoute(car);
+    let maxD = -Infinity;
+    for (const p of bodyPoints(other)) {
+      const proj = projectPoint(route, p);
+      if (proj) maxD = Math.max(maxD, proj.d);
+    }
+    if (maxD === -Infinity) return true; // off our route → behind us
+    return maxD < -(car.length + CAR_GAP);
+  }
+
+  // Same-direction overtaking (sub-project G+). An impatient/faster driver held
+  // behind a slower leader pulls into the lane to its left to pass, then returns —
+  // but only when the passing lane is clear and it isn't about to need its lane
+  // for a turn. Disciplined drivers never do this. Runs the small state machine.
+  function considerOvertake(car: Car, dt: number): void {
+    const head = car.path[car.headIndex];
+    const count = laneCount(level[getCoordinatesId(head.coord)]?.road, head.entryPort);
+
+    if (car.overtakePhase === "passing") {
+      // Bail out if the passing lane vanished (a drop) or we've cleared the car.
+      if (car.overtakeHomeLane + 1 > count - 1 || isPast(car, car.overtakeOf)) {
+        car.overtakePhase = "returning";
+      }
+      return;
+    }
+    if (car.overtakePhase === "returning") {
+      if (Math.abs(car.laneIndex - car.overtakeHomeLane) <= LANE_SETTLE) {
+        car.overtakePhase = "none";
+        car.overtakeOf = null;
+      }
+      return;
+    }
+
+    // phase "none": maybe start a pass.
+    if (!car.overtaker || count <= 1) {
+      car.heldSec = 0;
+      return;
+    }
+    const lead = leaderAhead(car);
+    const held = car.velocity < car.speed * 0.9 && lead != null;
+    car.heldSec = held ? car.heldSec + dt : 0;
+    if (!held || car.heldSec < OVERTAKE.patience) return;
+    if (car.speed - lead!.other.speed < carSpeed * OVERTAKE.gainFrac) return;
+    // Don't pull out when a junction we must sort/turn for is close.
+    if (junctionAhead(head.coord, head.entryPort, head.exitPort, TURN_LANE_LOOKAHEAD)) return;
+    const passLane = laneOf(car) + 1; // overtake on the left (higher index)
+    if (passLane > count - 1) return;
+    if (!laneClearForChange(car, passLane) || !passingWindowClear(car, passLane)) return;
+    car.overtakePhase = "passing";
+    car.overtakeOf = lead!.other.id;
+    car.overtakeHomeLane = laneOf(car);
+    car.heldSec = 0;
   }
 
   // Exit port for the very first tile on the spawn path: checks the route plan
@@ -1058,7 +1189,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const cell = level[tileIdOf(car)];
       if (cell && isLevelCrossing(cell)) car.crossedCrossing = true;
     }
-    // Lateral motion: ease toward the lane the car wants (merge / turn lane).
+    // Driver behaviour: maybe start/continue an overtake (sets the phase that
+    // desiredLane reads), then ease laterally toward the lane the car wants.
+    considerOvertake(car, dt);
     updateLateral(car, dt);
     return true;
   }
@@ -1105,6 +1238,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: 0,
       targetLane: 0,
       laneVel: 0,
+      overtaker: false,
+      heldSec: 0,
+      overtakePhase: "none",
+      overtakeOf: null,
+      overtakeHomeLane: 0,
       destination: null,
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
@@ -1165,6 +1303,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: chosenLane,
       targetLane: chosenLane,
       laneVel: 0,
+      overtaker: driverRng() < overtakeFraction,
+      heldSec: 0,
+      overtakePhase: "none",
+      overtakeOf: null,
+      overtakeHomeLane: chosenLane,
       destination,
     });
   }

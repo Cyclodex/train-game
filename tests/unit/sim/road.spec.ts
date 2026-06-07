@@ -251,6 +251,62 @@ describe("createRoadSim — spawning + movement", () => {
     expect(maxLean).toBeGreaterThan(0.1);
   });
 
+  it("overtakers pass a slow leader on the inner lane, then return; disciplined drivers don't", () => {
+    // A 2-lane-each-way straight (no junctions, no lane drops) — the ONLY reason
+    // to ride the inner lane is to overtake. Drive it once with all overtakers and
+    // once with none; the first must produce inner-lane passes that return to the
+    // kerb lane, the second must keep every car in lane 0.
+    const lane2 = () => ({ connections: [], road: nWayLanes(Position.Left, Position.Right, 2) });
+    const lvl: Level = {
+      "0,0": lane2(), "1,0": lane2(), "2,0": lane2(), "3,0": lane2(), "4,0": lane2(), "5,0": lane2(),
+    };
+    const run = (overtakeFraction: number) => {
+      const sim = createRoadSim({
+        level: lvl,
+        width: 6,
+        height: 1,
+        seed: 4,
+        spawnInterval: 0.9,
+        carSpeed: 0.6,
+        speedSpread: 0.3, // a real fast/slow mix so leaders get caught
+        carLength: 0.2,
+        maxCars: 8,
+        overtakeFraction,
+        spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }], // eastbound only
+      });
+      // Cars spawn into either lane (rotating), so "overtook" means a car CHANGED
+      // lane from where it started — on this map only an overtake does that.
+      const firstLane = new Map<string, number>();
+      const changedLane = new Set<string>();
+      const returnedHome = new Set<string>();
+      let stacked = 0;
+      for (let i = 0; i < 1500; i++) {
+        sim.step(0.05, () => false);
+        const pos = new Set<string>();
+        for (const c of sim.sample()) {
+          const f = c.units[0].front;
+          const lane = Math.round(c.laneIndex);
+          if (!firstLane.has(c.id)) firstLane.set(c.id, lane);
+          const home = firstLane.get(c.id)!;
+          if (lane !== home) changedLane.add(c.id);
+          else if (changedLane.has(c.id)) returnedHome.add(c.id); // back where it began
+          const key = `${f.coord.x},${f.coord.y}:${lane}:${Math.round(f.t * 40)}`;
+          if (pos.has(key)) stacked++;
+          pos.add(key);
+        }
+      }
+      return { changed: changedLane.size, returned: returnedHome.size, stacked };
+    };
+
+    const overtakers = run(1);
+    expect(overtakers.changed).toBeGreaterThan(0); // passes happen
+    expect(overtakers.returned).toBeGreaterThan(0); // and the car pulls back in
+    expect(overtakers.stacked).toBe(0); // never overlaps another car
+
+    const disciplined = run(0);
+    expect(disciplined.changed).toBe(0); // nobody ever changes lane (no overtakes)
+  });
+
   it("sorts cars into the turn lane that permits their turn (F)", () => {
     // The turnlanes scenario: a 2-lane approach to a T whose kerb lane turns
     // right and inner lane turns left. Every car that reaches the junction must

@@ -300,6 +300,7 @@ export function createGame(
         spawnInterval: traffic.spawnInterval,
       }),
       ...(traffic?.mix !== undefined && { mix: traffic.mix }),
+      ...(traffic?.overtakeFraction !== undefined && { overtakeFraction: traffic.overtakeFraction }),
       // A level may pin exact spawn entries (e.g. a divided road with each lane
       // one-way in opposite directions), overriding the default edge detection.
       ...(traffic?.spawnEntries !== undefined && {
