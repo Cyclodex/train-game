@@ -1048,6 +1048,137 @@ describe("createRoadSim — four-way cross, cars from all sides", () => {
   });
 });
 
+describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
+  const B = Position.Bottom;
+  const T = Position.Top;
+  const L = Position.Left;
+  const R = Position.Right;
+  // A T-junction at (2,1): a 1-lane road climbs from the south and meets a 3-lane
+  // east–west road. A car from the south can only turn left (west) or right (east).
+  // West arm: (1,1),(0,1); east arm: (3,1),(4,1) — two tiles each so the car has
+  // room to ease into the matched lane after the turn. Spawn ONLY from the south,
+  // so every car on an arm came up the 1-lane approach and turned.
+  function tLevel(): Level {
+    const arm3 = () => ({ connections: [], road: nWayLanes(L, R, 3) });
+    return {
+      "2,2": { connections: [], road: nWayLanes(T, B, 1) }, // 1-lane south approach
+      "1,1": arm3(),
+      "0,1": arm3(),
+      "3,1": arm3(),
+      "4,1": arm3(),
+      "2,1": {
+        connections: [],
+        road: [
+          { from: B, to: [L, R], index: 0 }, // 1-lane approach: may turn either way
+          { from: L, to: [R], index: 0 },
+          { from: L, to: [R], index: 1 },
+          { from: L, to: [R], index: 2 },
+          { from: R, to: [L], index: 0 },
+          { from: R, to: [L], index: 1 },
+          { from: R, to: [L], index: 2 },
+        ],
+      },
+    };
+  }
+
+  it("fans 1→3: a left-turner reaches the inner lane, a right-turner the kerb lane", () => {
+    const sim = createRoadSim({
+      level: tLevel(),
+      width: 5,
+      height: 3,
+      seed: 5,
+      spawnEntries: [{ coord: { x: 2, y: 2 }, entryPort: B }], // south only
+      spawnInterval: 1.0,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+      overtakeFraction: 0, // isolate lane-matching: no overtakers pulling out to pass
+    });
+    // On the FAR exit tiles, a left-turner (now westbound on (0,1), entered via
+    // Right) must have reached the inner lane (2); a right-turner (eastbound on
+    // (4,1), entered via Left) the kerb lane (0). Observe each car once it is on the
+    // far tile and settled (laneVel ~ 0 is implied by it having had a whole tile).
+    let leftInner = 0;
+    let leftWrong = 0;
+    let rightKerb = 0;
+    let rightWrong = 0;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        const lane = Math.round(c.laneIndex);
+        if (f.coord.x === 0 && f.coord.y === 1 && f.entryPort === R) {
+          // westbound on the far west tile = turned left at the junction.
+          if (lane === 2) leftInner++; else leftWrong++;
+        }
+        if (f.coord.x === 4 && f.coord.y === 1 && f.entryPort === L) {
+          // eastbound on the far east tile = turned right at the junction.
+          if (lane === 0) rightKerb++; else rightWrong++;
+        }
+      }
+    }
+    // Both turns happened, and each landed in its matching exit lane — the left-
+    // turner actually reached lane 2 (proving 1→3 fan-out, not the old pile-into-0).
+    expect(leftInner).toBeGreaterThan(20);
+    expect(rightKerb).toBeGreaterThan(20);
+    expect(leftWrong).toBe(0);
+    expect(rightWrong).toBe(0);
+  });
+
+  it("routes buses onto a kerb bus lane through a junction; cars stay off it", () => {
+    // Same T, but the east arm's kerb lane is a bus lane (index 0) + 2 car lanes.
+    // A right-turner kerb-aligns: a bus lands on the bus lane, a car on the lowest
+    // CAR lane (1) — never the bus lane — even though it crossed a junction to get
+    // there.
+    const busArm = (): { connections: []; road: import("@/tiles/lanes").Lane[] } => ({
+      connections: [],
+      road: [
+        { from: L, to: [R], index: 0, kind: "bus" },
+        { from: L, to: [R], index: 1 },
+        { from: L, to: [R], index: 2 },
+        { from: R, to: [L], index: 0, kind: "bus" },
+        { from: R, to: [L], index: 1 },
+        { from: R, to: [L], index: 2 },
+      ],
+    });
+    const lvl = tLevel();
+    lvl["3,1"] = busArm();
+    lvl["4,1"] = busArm();
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 3,
+      seed: 8,
+      spawnEntries: [{ coord: { x: 2, y: 2 }, entryPort: B }],
+      spawnInterval: 0.8,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+      mix: { car: 1, bus: 1 },
+    });
+    let busOnBusLane = 0;
+    let carOnBusLane = 0;
+    let carSamples = 0;
+    for (let i = 0; i < 1800; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x !== 4 || f.coord.y !== 1 || f.entryPort !== L) continue; // far east, right-turners
+        const lane = Math.round(c.laneIndex);
+        if (c.units[0].part === "bus") {
+          if (lane === 0) busOnBusLane++;
+        } else {
+          carSamples++;
+          if (lane === 0) carOnBusLane++;
+        }
+      }
+    }
+    expect(carSamples).toBeGreaterThan(20); // cars did turn right onto the bus arm
+    expect(carOnBusLane).toBe(0); // and none ever rode the kerb bus lane
+    expect(busOnBusLane).toBeGreaterThan(10); // buses used the bus lane through the junction
+  });
+});
+
 describe("createRoadSim — launch reaction delay", () => {
   it("waits a beat before a stopped car rolls once the gate opens", () => {
     // One car approaching a closed crossing at 1,0. Once it has stopped at the

@@ -5,7 +5,6 @@ import { Port } from "./topology";
 export interface Movement {
   entry: Port;
   exit: Port;
-  entryIndex?: number; // lane slot (default 0); included in key for multi-lane conflict resolution
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +100,15 @@ export function movementsConflict(a: Movement, b: Movement): boolean {
 
 /**
  * Order-independent string key for a conflict pair.
- * Movements are encoded as "entry:exit"; the two keys are sorted
- * alphabetically so conflictKey(a,b) === conflictKey(b,a).
+ * Movements are encoded as "entry:exit" (the geometric conflict depends only on
+ * the entry/exit ports, not the lane index); the two keys are sorted
+ * alphabetically so conflictKey(a,b) === conflictKey(b,a). The matrix, the
+ * arbiter, and the per-car perpendicular check therefore all key the same way —
+ * so a car in ANY lane (not just lane 0) is gated by a conflicting cross stream.
  */
 export function conflictKey(a: Movement, b: Movement): string {
-  const ai = a.entryIndex ?? 0;
-  const bi = b.entryIndex ?? 0;
-  const ka = `${Position[a.entry]}[${ai}]:${Position[a.exit]}`;
-  const kb = `${Position[b.entry]}[${bi}]:${Position[b.exit]}`;
+  const ka = `${Position[a.entry]}:${Position[a.exit]}`;
+  const kb = `${Position[b.entry]}:${Position[b.exit]}`;
   return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
 }
 

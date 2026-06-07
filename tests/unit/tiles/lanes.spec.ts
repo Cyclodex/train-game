@@ -16,6 +16,8 @@ import {
   laneCountAt,
   nWayLanes,
   seamPaintTotal,
+  turnKind,
+  junctionExitLane,
 } from "@/tiles/lanes";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
@@ -199,5 +201,66 @@ describe("nWayLanes", () => {
     expect(a).toHaveLength(2);
     expect(a[0].index).toBe(0);
     expect(a[1].index).toBe(0);
+  });
+});
+
+describe("turnKind", () => {
+  it("classifies straight / left / right from right-hand-traffic geometry", () => {
+    // Entering from Bottom = travelling North.
+    expect(turnKind(Position.Bottom, Position.Top)).toBe("straight");
+    expect(turnKind(Position.Bottom, Position.Left)).toBe("left");
+    expect(turnKind(Position.Bottom, Position.Right)).toBe("right");
+    // Entering from Left = travelling East.
+    expect(turnKind(Position.Left, Position.Right)).toBe("straight");
+    expect(turnKind(Position.Left, Position.Top)).toBe("left");
+    expect(turnKind(Position.Left, Position.Bottom)).toBe("right");
+  });
+});
+
+describe("junctionExitLane", () => {
+  const B = Position.Bottom;
+  const T = Position.Top;
+  const L = Position.Left;
+  const R = Position.Right;
+  // A junction approach from Bottom with `n` lanes, each permitting all turns.
+  const approach = (n: number): Lane[] =>
+    Array.from({ length: n }, (_, i) => ({ from: B, to: [T, L, R], index: i }));
+
+  it("fans a 1-lane approach out by turn direction into a 3-lane exit", () => {
+    const j = approach(1);
+    // Straight (exit Top): exit arm entered through its Bottom; kerb-aligned → lane 0.
+    expect(junctionExitLane(j, B, 0, T, nWayLanes(T, B, 3), B, "car")).toBe(0);
+    // Right turn (exit Right): exit arm entered through Left; kerb-aligned → lane 0.
+    expect(junctionExitLane(j, B, 0, R, nWayLanes(L, R, 3), L, "car")).toBe(0);
+    // Left turn (exit Left): exit arm entered through Right; inner-aligned → lane 2.
+    expect(junctionExitLane(j, B, 0, L, nWayLanes(L, R, 3), R, "car")).toBe(2);
+  });
+
+  it("merges a 3-lane approach into a 1-lane exit (every lane → lane 0)", () => {
+    const j = approach(3);
+    for (const idx of [0, 1, 2]) {
+      expect(junctionExitLane(j, B, idx, T, nWayLanes(T, B, 1), B, "car")).toBe(0);
+    }
+  });
+
+  it("matches lanes 1:1 across an equal 3→3 straight", () => {
+    const j = approach(3);
+    expect(junctionExitLane(j, B, 0, T, nWayLanes(T, B, 3), B, "car")).toBe(0);
+    expect(junctionExitLane(j, B, 1, T, nWayLanes(T, B, 3), B, "car")).toBe(1);
+    expect(junctionExitLane(j, B, 2, T, nWayLanes(T, B, 3), B, "car")).toBe(2);
+  });
+
+  it("keeps cars off a kerb-side bus lane on the exit arm; puts buses on it", () => {
+    const j = approach(1);
+    // Exit arm: kerb bus lane (index 0) + two car lanes (1,2), entered via Bottom.
+    const busExit: Lane[] = [
+      { from: B, to: [T], index: 0, kind: "bus" },
+      { from: B, to: [T], index: 1 },
+      { from: B, to: [T], index: 2 },
+    ];
+    // A car going straight kerb-aligns to the lowest CAR lane (1), never the bus lane.
+    expect(junctionExitLane(j, B, 0, T, busExit, B, "car")).toBe(1);
+    // A bus going straight kerb-aligns onto the bus lane (index 0).
+    expect(junctionExitLane(j, B, 0, T, busExit, B, "bus")).toBe(0);
   });
 });

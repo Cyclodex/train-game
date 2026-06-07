@@ -1,4 +1,5 @@
 import type { Port } from "@/tiles/model";
+import { Position } from "@/types";
 
 // A lane's vehicle class, for restrictions. v1 stores the field but does not
 // enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
@@ -179,6 +180,90 @@ export function lanesAllowingExit(
   exit: Port,
 ): number[] {
   return lanesAllowingExitFor(road, from, exit, "car");
+}
+
+// --- Junction lane matching --------------------------------------------------
+// Right-hand-traffic port order, clockwise. Index 0 = kerb side of an approach.
+const PORT_CW: Partial<Record<Port, number>> = {
+  [Position.Top]: 0,
+  [Position.Right]: 1,
+  [Position.Bottom]: 2,
+  [Position.Left]: 3,
+};
+
+// Classify the movement entry→exit through a tile as a left/right turn or a
+// straight-through, from the right-hand-traffic geometry. A car entering through
+// `entryPort` travels toward `oppositePort(entryPort)`; the exit relative to that
+// heading is a right turn (90° clockwise), a left turn (90° anticlockwise), or
+// straight (same heading, or a U-turn which we treat as straight for alignment).
+export type TurnKind = "left" | "right" | "straight";
+export function turnKind(entryPort: Port, exitPort: Port): TurnKind {
+  const e = PORT_CW[entryPort];
+  const x = PORT_CW[exitPort];
+  if (e == null || x == null) return "straight";
+  const heading = (e + 2) % 4; // travel direction = opposite of the entry edge
+  const delta = (x - heading + 4) % 4;
+  if (delta === 1) return "right";
+  if (delta === 3) return "left";
+  return "straight"; // 0 = straight, 2 = U-turn (align like a straight)
+}
+
+// The lane a vehicle of class `cls` should land in on the EXIT arm of a junction,
+// given the lane it occupied on the approach. This is what makes a cross with
+// unequal lane counts route correctly: the index is chosen from the *exit* road's
+// usable lanes (never the approach's), so a 1→3 fans out and a 3→1 merges, and a
+// turn lands in the lane that matches its direction.
+//
+// Alignment: keep the vehicle's lateral RANK among the approach lanes that permit
+// the movement, projected onto the exit arm's usable lanes — kerb-aligned for a
+// straight or right turn (rank counted from the kerb, index 0), inner-aligned for
+// a left turn (rank counted from the centre side). The result is always a lane the
+// class may use (cars never land on a bus lane; a bus may, and for a straight/right
+// onto a kerb-side bus lane it does — then prefers to stay there).
+//
+// `entryPort`/`entryIndex` = how/where the vehicle sat on the junction tile;
+// `exitPort` = the arm it leaves by; `exitRoad`/`exitApproach` = the next tile's
+// lanes and the port it enters that tile through (oppositePort(exitPort)).
+export function junctionExitLane(
+  junctionRoad: Lane[] | undefined,
+  entryPort: Port,
+  entryIndex: number,
+  exitPort: Port,
+  exitRoad: Lane[] | undefined,
+  exitApproach: Port,
+  cls: VehicleClass,
+): number {
+  const dst = usableLaneIndices(exitRoad, exitApproach, cls);
+  if (dst.length === 0) return entryIndex; // exit arm offers this class no lane
+  // Approach lanes that permit this exact movement; fall back to all usable
+  // approach lanes, then to the raw entry index, so we always have a source set.
+  let src = lanesAllowingExitFor(junctionRoad, entryPort, exitPort, cls);
+  if (src.length === 0) src = usableLaneIndices(junctionRoad, entryPort, cls);
+  if (src.length === 0) src = [entryIndex];
+  // Rank of the vehicle's lane within the source set (nearest if it isn't exactly
+  // one of them), 0 = kerb side.
+  let rank = 0;
+  let bestDelta = Infinity;
+  src.forEach((l, i) => {
+    const d = Math.abs(l - entryIndex);
+    if (d < bestDelta) {
+      bestDelta = d;
+      rank = i;
+    }
+  });
+  const S = src.length;
+  const D = dst.length;
+  let pos: number;
+  if (turnKind(entryPort, exitPort) === "left") {
+    // Inner-align: the innermost source lane maps to the innermost exit lane.
+    const fromInner = S - 1 - rank;
+    pos = D - 1 - fromInner;
+  } else {
+    // Kerb-align: the kerb source lane maps to the kerb exit lane.
+    pos = rank;
+  }
+  pos = Math.max(0, Math.min(D - 1, pos));
+  return dst[pos];
 }
 
 // Every port the road touches (as an approach or an exit).

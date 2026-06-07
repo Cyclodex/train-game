@@ -230,25 +230,17 @@ describe("buildConflictMatrix", () => {
 });
 
 // ---------------------------------------------------------------------------
-// conflictKey — lane-indexed
+// conflictKey — port-based (lane-index independent)
 // ---------------------------------------------------------------------------
-describe("conflictKey — lane-indexed", () => {
-  it("two movements from different entry arms with different lane indices have distinct keys", () => {
-    const ka = conflictKey(
-      { entry: Position.Left, entryIndex: 0, exit: Position.Right },
-      { entry: Position.Top, entryIndex: 1, exit: Position.Bottom },
-    );
-    const kb = conflictKey(
-      { entry: Position.Left, entryIndex: 0, exit: Position.Right },
-      { entry: Position.Top, entryIndex: 0, exit: Position.Bottom },
-    );
-    expect(ka).not.toBe(kb);
-  });
-
-  it("is order-independent (swap a and b gives same key)", () => {
-    const a: Movement = { entry: Position.Left, entryIndex: 1, exit: Position.Right };
-    const b: Movement = { entry: Position.Top, entryIndex: 0, exit: Position.Bottom };
-    expect(conflictKey(a, b)).toBe(conflictKey(b, a));
+describe("conflictKey — port-based", () => {
+  it("depends only on the entry/exit ports, not on any lane index", () => {
+    // The geometric conflict between two movements is set by their ports, so the
+    // matrix, the arbiter and the per-car perpendicular check all key the same way
+    // — a car in lane 1 is gated by a cross stream exactly as a car in lane 0 is.
+    const a: Movement = { entry: Position.Left, exit: Position.Right };
+    const b: Movement = { entry: Position.Top, exit: Position.Bottom };
+    expect(conflictKey(a, b)).toBe(conflictKey(b, a)); // order-independent
+    expect(conflictKey(a, b)).toBe("Left:Right|Top:Bottom");
   });
 });
 

@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, type VehicleClass } from "@/tiles/lanes";
+import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -299,6 +299,12 @@ export interface Car {
   // The map-edge entry this car is heading toward (set at spawn via planRoute).
   // Null when the BFS found no path or no targets exist.
   destination: RoadEntry | null;
+  // After crossing a junction, the exit-arm lane the vehicle should settle into so
+  // it MATCHES the lane its movement implies (turn-aware, set from junctionExitLane
+  // when lane counts differ across the cross). desiredLane eases toward this while
+  // it's set — unless a nearer junction needs a different turn lane — and it clears
+  // once reached. Null when the vehicle has no pending exit-lane to match.
+  pendingExitLane: number | null;
 }
 
 // Driver behaviour tuning (same-direction overtaking).
@@ -714,6 +720,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
     }
 
+    // Settle into the exit lane matched at the last junction crossing (turn-aware,
+    // lane-count-aware). Skipped when a nearer junction needs a specific turn lane
+    // (handled above) — that takes precedence. This is what spreads a 1→3 cross's
+    // traffic into the correct exit lane rather than leaving everyone on the kerb.
+    if (car.pendingExitLane != null && !ahead) {
+      return clampLane(car.pendingExitLane, curCount);
+    }
+
     // A bus with no turn to sort for prefers the bus lane on its current approach:
     // ease to the nearest bus lane (an empty list — no bus lane here — leaves it
     // in place). This is what makes a bus drift onto and ride the bus lane.
@@ -791,6 +805,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // integer lane when that lane is clear; otherwise it holds its current lateral
   // position and waits for a gap. Called once per car per tick.
   function updateLateral(car: Car, dt: number): void {
+    // Once the vehicle has settled into the exit lane matched at the last junction,
+    // drop the pending target so normal lane logic resumes.
+    if (car.pendingExitLane != null && laneOf(car) === car.pendingExitLane) {
+      car.pendingExitLane = null;
+    }
     // Confine the vehicle to the lanes its class may use: snap the desired lane to
     // the nearest usable lane so a car's merge/overtake/turn target never lands it
     // on a bus lane (a bus may land on either). A no-op on roads with no bus lanes.
@@ -1198,8 +1217,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             p.exit !== null &&
             conflictPairs.has(
               conflictKey(
-                { entry: myEntry, entryIndex: laneOf(car), exit: myExit },
-                { entry: p.entry, entryIndex: p.laneIndex, exit: p.exit }
+                { entry: myEntry, exit: myExit },
+                { entry: p.entry, exit: p.exit }
               )
             );
           if (conflicts) clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
@@ -1299,11 +1318,30 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextExit =
         carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry, cls);
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
-      // Clamp lane position when the next tile has fewer lanes — a backstop for a
-      // car that hadn't finished merging before the drop (it normally merges on
-      // the wider tile via updateLateral, so this rarely bites).
+      const prevRoad = level[getCoordinatesId(head.coord)]?.road; // the tile we leave
       const nextLaneCount = laneCount(nextTile.road, nextEntry);
-      if (nextLaneCount > 0) {
+      if (isRoadJunction(prevRoad)) {
+        // Crossing OUT of a junction: choose the exit-arm lane that MATCHES this
+        // movement (turn-aware, lane-count-aware), so a 1→3 fans out and a turn
+        // lands in the lane its direction implies — instead of carrying the
+        // approach index across and piling everyone into lane 0. The vehicle eases
+        // into it (pendingExitLane) so the change reads as a merge, not a teleport;
+        // it starts in the nearest lane it may use (never a bus lane for a car).
+        const want = junctionExitLane(
+          prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
+        );
+        const start = nearestUsableLaneIndex(
+          nextTile.road, nextEntry,
+          nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
+          cls,
+        );
+        car.laneIndex = start;
+        car.targetLane = want;
+        car.laneVel = 0;
+        car.pendingExitLane = want;
+      } else if (nextLaneCount > 0) {
+        // Straight / curve: keep the lane, only clamping down when the road narrows
+        // (a backstop for a car that hadn't finished merging before the drop).
         car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
         car.targetLane = Math.min(car.targetLane, nextLaneCount - 1);
       }
@@ -1381,6 +1419,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       overtakeOf: null,
       overtakeHomeLane: 0,
       destination: null,
+      pendingExitLane: null,
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
@@ -1458,6 +1497,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       overtakeOf: null,
       overtakeHomeLane: chosenLane,
       destination,
+      pendingExitLane: null,
     });
     return true;
   }
