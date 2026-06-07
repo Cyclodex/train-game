@@ -264,7 +264,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges } from "@/tiles/lanes";
+import { roadEdges as laneEdges, laneCount } from "@/tiles/lanes";
 import type { LaneKind } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";

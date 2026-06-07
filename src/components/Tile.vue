@@ -27,6 +27,33 @@
           :class="'road-marking-' + m.kind"
         />
       </template>
+      <!-- Lane-drop gores (hatched closure triangles) and advance arrows -->
+      <template v-if="laneDropOverlay.gores.length || laneDropOverlay.arrows.length">
+        <defs>
+          <clipPath
+            v-for="g in laneDropOverlay.gores"
+            :key="'gc' + g.clipId"
+            :id="g.clipId"
+          >
+            <path :d="g.triangle" />
+          </clipPath>
+        </defs>
+        <template v-for="g in laneDropOverlay.gores" :key="'g' + g.clipId">
+          <g :clip-path="`url(#${g.clipId})`">
+            <path
+              v-for="(h, hi) in g.hatch"
+              :key="hi"
+              :d="h"
+              class="road-gore-hatch"
+            />
+          </g>
+          <path :d="g.triangle" class="road-gore-border" />
+        </template>
+        <template v-for="(arr, ai) in laneDropOverlay.arrows" :key="'da' + ai">
+          <path :d="arr.shaft" class="road-drop-arrow-shaft" />
+          <path :d="arr.head" class="road-drop-arrow-head" />
+        </template>
+      </template>
     </svg>
 
     <!-- Lane graph debug overlay: directed arrows from port→port for each road
@@ -171,7 +198,12 @@ import {
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
   roadLaneMarkingPaths,
+  laneDropArrowPath,
+  laneDropArrowPlan,
+  laneDropGore,
   LaneMarkingPath,
+  MergeArrowPath,
+  LaneDropGore,
 } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount, laneMovements } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -319,6 +351,49 @@ class Tile extends Vue {
       out.push({ shaft, head, isBus });
     }
     return out;
+  }
+
+  // Lane-drop gores and advance arrows for straight reducer tiles.
+  // A gore is the hatched closed triangle painted over the lanes that end at
+  // this tile's exit seam. Arrows warn drivers one tile in advance.
+  get laneDropOverlay(): {
+    gores: (LaneDropGore & { clipId: string })[];
+    arrows: MergeArrowPath[];
+  } {
+    if (!this.tile.road?.length) return { gores: [], arrows: [] };
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const gores: (LaneDropGore & { clipId: string })[] = [];
+    const arrows: MergeArrowPath[] = [];
+
+    for (const [a, b] of roadEdges(this.tile.road)) {
+      if (oppositePort(a) !== b) continue;
+      const selfA = laneCount(this.tile.road, a);
+      const selfB = laneCount(this.tile.road, b);
+      const nb = neighborCoord(coord, b);
+      const na = neighborCoord(coord, a);
+      const nb2 = nb ? neighborCoord(nb, b) : null;
+      const na2 = na ? neighborCoord(na, a) : null;
+      // Downstream lane counts in the a→b and b→a travel directions.
+      const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
+      const d2A = nb2 ? this.game.roadLaneCount(nb2, oppositePort(b)) : 0;
+      const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
+      const d2B = na2 ? this.game.roadLaneCount(na2, oppositePort(a)) : 0;
+
+      if (selfA > 0 && d1A > 0 && d1A < selfA) {
+        gores.push({ ...laneDropGore(a, b, size, d1A, selfA), clipId: `gore-${this.coordId}-${a}-${b}` });
+      }
+      if (selfB > 0 && d1B > 0 && d1B < selfB) {
+        gores.push({ ...laneDropGore(b, a, size, d1B, selfB), clipId: `gore-${this.coordId}-${b}-${a}` });
+      }
+      for (const { laneIndex, alongT } of laneDropArrowPlan(selfA, d1A, d2A)) {
+        arrows.push(laneDropArrowPath(a, b, size, laneIndex, alongT));
+      }
+      for (const { laneIndex, alongT } of laneDropArrowPlan(selfB, d1B, d2B)) {
+        arrows.push(laneDropArrowPath(b, a, size, laneIndex, alongT));
+      }
+    }
+    return { gores, arrows };
   }
 
   // Entry ports that are junction entries (need a switch widget).
@@ -495,6 +570,30 @@ export default toNative(Tile);
   stroke-width: 2px;
   stroke-dasharray: 14 12;
   stroke-linecap: butt;
+}
+.road-gore-hatch {
+  fill: none;
+  stroke: #f4d35e;
+  stroke-width: 1.5px;
+  opacity: 0.65;
+}
+.road-gore-border {
+  fill: none;
+  stroke: #f4d35e;
+  stroke-width: 2px;
+}
+.road-drop-arrow-shaft {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 2px;
+  stroke-linecap: round;
+}
+.road-drop-arrow-head {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* --- signals (from TileStraight.vue) --- */
