@@ -440,7 +440,7 @@ export default toNative(Tile);
   fill: none;
   stroke: rgba(255, 255, 255, 0.7);
   stroke-width: 2px;
-  stroke-dasharray: 14 12;
+  stroke-dasharray: 7 9;
   stroke-linecap: butt;
 }
 // Lane-drop ("merge ahead") arrow painted inside an ending lane.
