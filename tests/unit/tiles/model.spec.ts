@@ -157,7 +157,7 @@ describe("kindOf", () => {
   });
 
   it("labels a road-only straight, taper and one-way from its lanes", () => {
-    const lane = (from: typeof Top, to: typeof Top, index: number) => ({ from, to: [to], index });
+    const lane = (from: Position, to: Position, index: number) => ({ from, to: [to], index });
     // Equal lane count both ways -> plain straight.
     expect(
       kindOf({ connections: [], road: [lane(Top, Bottom, 0), lane(Bottom, Top, 0)] })

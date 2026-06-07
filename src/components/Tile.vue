@@ -192,7 +192,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ kind }}{{ roadLaneLabel }}</div>
+      <div class="debug-kind">{{ displayKind }}{{ roadLaneLabel }}</div>
     </div>
   </div>
 </template>
@@ -257,6 +257,32 @@ class Tile extends Vue {
   }
   get kindClass() {
     return `tile-kind--${this.kind}`;
+  }
+  // The label shown in the debug overlay. A straight road tile that paints a
+  // different width at each end — because a neighbour carries a different lane
+  // count, so the ribbon visually narrows/widens across it — is a taper (the
+  // lane-count transition tile). `kindOf` can't see this (it's a cross-tile
+  // relationship); we derive it here from the same seam math the renderer uses.
+  get displayKind(): string {
+    return this.kind === "road-straight" && this.roadTapers ? "road-taper" : this.kind;
+  }
+  // True when this straight road tile changes painted width between its two
+  // ends, i.e. it sits at a lane-count change against a neighbour. Mirrors the
+  // per-seam width logic in `roadPaths` exactly. False in the editor (the stub
+  // game reports 0 neighbour lanes, so every tile renders at its own width).
+  get roadTapers(): boolean {
+    const road = this.tile.road;
+    if (!road?.length) return false;
+    const coord = parseCoordId(this.coordId);
+    return roadEdges(road).some(([a, b]) => {
+      if (oppositePort(a) !== b) return false; // straight edges only
+      const selfTotal = Math.max(laneCount(road, a) + laneCount(road, b), 2);
+      const na = neighborCoord(coord, a);
+      const nb = neighborCoord(coord, b);
+      const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
+      const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
+      return seamPaintTotal(selfTotal, crossingA) !== seamPaintTotal(selfTotal, crossingB);
+    });
   }
   // Debug suffix on the tile-kind label: the configured lane amount of a road
   // tile (the max lanes-per-direction across its edges), e.g. " 3L". Empty for
@@ -593,17 +619,24 @@ class Tile extends Vue {
       const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
       const d2B = na2 ? this.game.roadLaneCount(na2, oppositePort(a)) : 0;
 
+      // On a one-way edge the opposing direction has no lanes, so its lanes are
+      // centred in the tile (not anchored to one half); shift the gore/arrows by
+      // -selfN/2·LANE_W to match. A bidirectional edge shifts by 0.
+      const LANE_W = size * 0.14;
+      const shiftA = selfB === 0 ? -(selfA / 2) * LANE_W : 0;
+      const shiftB = selfA === 0 ? -(selfB / 2) * LANE_W : 0;
+
       if (selfA > 0 && d1A > 0 && d1A < selfA) {
-        gores.push({ ...laneDropGore(a, b, size, d1A, selfA), clipId: `gore-${this.coordId}-${a}-${b}` });
+        gores.push({ ...laneDropGore(a, b, size, d1A, selfA, shiftA), clipId: `gore-${this.coordId}-${a}-${b}` });
       }
       if (selfB > 0 && d1B > 0 && d1B < selfB) {
-        gores.push({ ...laneDropGore(b, a, size, d1B, selfB), clipId: `gore-${this.coordId}-${b}-${a}` });
+        gores.push({ ...laneDropGore(b, a, size, d1B, selfB, shiftB), clipId: `gore-${this.coordId}-${b}-${a}` });
       }
       for (const { laneIndex, alongT } of laneDropArrowPlan(selfA, d1A, d2A)) {
-        arrows.push(laneDropArrowPath(a, b, size, laneIndex, alongT));
+        arrows.push(laneDropArrowPath(a, b, size, laneIndex, alongT, shiftA));
       }
       for (const { laneIndex, alongT } of laneDropArrowPlan(selfB, d1B, d2B)) {
-        arrows.push(laneDropArrowPath(b, a, size, laneIndex, alongT));
+        arrows.push(laneDropArrowPath(b, a, size, laneIndex, alongT, shiftB));
       }
     }
     return { gores, arrows };
