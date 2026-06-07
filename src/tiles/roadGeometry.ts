@@ -218,6 +218,20 @@ export function roadKerbEdge(
   return taperedParallel(entry, exit, size, side * halfA, side * halfB);
 }
 
+// The outer kerb edge line of a CURVED road ribbon — the offset Bézier at
+// half-width `half` on the given side (+1 outer / right-of-travel, -1 inner).
+// Matches the edge of `roadCurvePolygonPath`, so it traces exactly where the
+// curved tarmac meets the grass.
+export function roadCurveKerbEdge(
+  entry: Port,
+  exit: Port,
+  size: number,
+  half: number,
+  side: 1 | -1,
+): string {
+  return curvedParallelPath(entry, exit, size, side * half);
+}
+
 // The paved-surface polygon for a road edge whose width tapers linearly from
 // `widthA` at the entry end to `widthB` at the exit end. Used by the tile
 // renderer to draw a road whose width changes at a seam (a merge or a split):
@@ -273,11 +287,32 @@ export function roadLaneMarkingPaths(
 ): LaneMarkingPath[] {
   const LANE_W = size * 0.14;
   const out: LaneMarkingPath[] = [];
+  const isStraight = oppositePort(entry) === exit;
 
-  // Centre divider always present
+  // A one-way road carries lanes in only one direction (the other count is 0).
+  // It is CENTRED in the tile and has NO yellow centre line — there is no
+  // opposing stream to divide, so its same-direction lanes are split by dashed
+  // white dividers only, evenly spaced about the centreline. (A bidirectional
+  // road keeps the yellow centreline below as the divider between the two
+  // opposing streams.) See sim/laneOffset.ts positioningBand for the matching
+  // car / debug-overlay centring.
+  if ((lanesA === 0) !== (lanesB === 0)) {
+    const m = Math.max(lanesA, lanesB); // the single direction's lane count
+    for (let k = 1; k < m; k++) {
+      const d = (m / 2 - k) * LANE_W; // centred divider offsets: m-1 of them
+      out.push(
+        isStraight
+          ? { d: taperedParallel(entry, exit, size, d, d), kind: "inner" }
+          : { d: curvedParallelPath(entry, exit, size, d), kind: "inner" },
+      );
+    }
+    return out;
+  }
+
+  // Centre divider always present (bidirectional road)
   out.push({ d: segmentPathD(entry, exit, size), kind: "centre" });
 
-  if (oppositePort(entry) === exit) {
+  if (isStraight) {
     const lo = Math.min(lanesA, lanesB);
     const hi = Math.max(lanesA, lanesB);
     const narrowKerb = lo * LANE_W;

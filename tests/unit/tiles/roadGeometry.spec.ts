@@ -9,6 +9,7 @@ import {
   laneDropArrowPlan,
   laneDropGore,
   roadKerbEdge,
+  roadCurveKerbEdge,
 } from "@/tiles/roadGeometry";
 
 describe("roadSurfacePath", () => {
@@ -308,6 +309,17 @@ describe("roadKerbEdge", () => {
 
   it("uses the opposite side for side = -1", () => {
     expect(roadKerbEdge(Position.Left, Position.Right, 200, 56, 28, -1)).toBe("M 0 44 L 200 72");
+  });
+});
+
+describe("roadCurveKerbEdge", () => {
+  it("traces an offset Bézier kerb on each side of a curve", () => {
+    const outer = roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, 1);
+    const inner = roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, -1);
+    // Quadratic Bézier offset curves (one Q each), offset to opposite sides.
+    expect(outer).toContain("Q");
+    expect(inner).toContain("Q");
+    expect(outer).not.toBe(inner);
   });
 });
 

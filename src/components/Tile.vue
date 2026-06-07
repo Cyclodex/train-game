@@ -210,6 +210,7 @@ import {
   roadCurvePolygonPath,
   roadLaneMarkingPaths,
   roadKerbEdge,
+  roadCurveKerbEdge,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -219,7 +220,7 @@ import {
 } from "@/tiles/roadGeometry";
 import { roadEdges, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
-import { seamBand, laneSeamOffsetPx } from "@/sim/laneOffset";
+import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -298,12 +299,11 @@ class Tile extends Vue {
         // (e.g. a 3-lane curve into a 2-lane road) goes red.
         const selfAtA = laneCountAt(this.tile.road, a);
         const selfAtB = laneCountAt(this.tile.road, b);
-        const nTotalA = na
-          ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
-          : 0;
-        const nTotalB = nb
-          ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
-          : 0;
+        // Measure the neighbour the same way (laneCountAt on its matching port),
+        // so a curve↔curve seam isn't falsely flagged: the two-term sum
+        // under-counts a curve neighbour (its opposite port carries no lanes).
+        const nTotalA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
+        const nTotalB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
         const badA = na !== null && nTotalA > 0 && nTotalA !== selfAtA;
         const badB = nb !== null && nTotalB > 0 && nTotalB !== selfAtB;
         const mismatch = badA || badB;
@@ -314,10 +314,17 @@ class Tile extends Vue {
         // Width = the widest seam of this edge (min 2 so a one-way still reads as a
         // road), so the turn ribbon meets its arm flush.
         const widthTotal = Math.max(selfAtA, selfAtB, 2);
+        // Edge lines on a *simple* curve (a single bend, 2 ports): both kerbs.
+        // Junctions (T/cross, >1 road edge) are skipped — their outer outline is
+        // the union of overlapping ribbons, which needs separate handling.
+        const half = (widthTotal * LANE_W) / 2;
+        const edges = roadEdges(this.tile.road).length === 1
+          ? [roadCurveKerbEdge(a, b, size, half, 1), roadCurveKerbEdge(a, b, size, half, -1)]
+          : [];
         return {
           surface: roadCurvePolygonPath(a, b, size, widthTotal * LANE_W),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
-          edges: [], // curves/junctions: edge lines are a follow-up
+          edges,
           mismatch,
           mismatchTip,
           isBus,
@@ -327,12 +334,18 @@ class Tile extends Vue {
       // Straight tiles: taper at seams is valid (lane merge/diverge). No mismatch flag.
       const na = neighborCoord(coord, a);
       const nb = neighborCoord(coord, b);
-      const neighborTotalAtA = na
-        ? this.game.roadLaneCount(na, a) + this.game.roadLaneCount(na, oppositePort(a))
-        : 0;
-      const neighborTotalAtB = nb
-        ? this.game.roadLaneCount(nb, b) + this.game.roadLaneCount(nb, oppositePort(b))
-        : 0;
+      // The neighbour's total lanes crossing the shared seam. Use laneCountAt on
+      // the neighbour's matching port (oppositePort) rather than summing both
+      // approaches: a curve/junction neighbour carries no lanes on the opposite
+      // port, so the two-term sum under-counts and the straight would taper down
+      // to a false-narrow width at the seam (the bug this fixes).
+      // Floor the neighbour's crossing count at the same min-2 the painted
+      // surface uses (selfTotal = max(..., 2)): a one-way road is drawn 2 lanes
+      // wide even when it physically carries one lane, so its neighbour must
+      // match against that painted width — otherwise two one-way single-lane
+      // tiles taper down to a 1-lane pinch at the seam (the bug this fixes).
+      const neighborTotalAtA = na ? Math.max(this.game.roadLaneCountAt(na, oppositePort(a)), 2) : 0;
+      const neighborTotalAtB = nb ? Math.max(this.game.roadLaneCountAt(nb, oppositePort(b)), 2) : 0;
       const totalA = (na && neighborTotalAtA > 0) ? Math.min(selfTotal, neighborTotalAtA) : selfTotal;
       const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
       const widthA = totalA * LANE_W;
@@ -368,6 +381,16 @@ class Tile extends Vue {
   // own lane, not a single centre arrow. Each entry has a `shaft` path (offset
   // straight line or offset Bézier) and a `head` path (a chevron at the offset
   // exit). `isBus` is per-lane (`lane.kind === "bus"`) so only true bus lanes go amber.
+  // Centred positioning band of a neighbour road tile entered via `port`: half its
+  // combined both-direction lanes, so one-way seams taper to the centred band the
+  // car renderer uses (see sim/laneOffset.ts positioningBand).
+  private centeredRoadBand(coord: ReturnType<typeof parseCoordId>, port: Position): number {
+    return positioningBand(
+      this.game.roadLaneCount(coord, port),
+      this.game.roadLaneCount(coord, oppositePort(port)),
+    );
+  }
+
   get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
     if (!this.config.debug || !this.tile.road?.length) return [];
     const size = this.config.tileSize;
@@ -380,7 +403,12 @@ class Tile extends Vue {
       // Lateral offset (px) right-of-travel for this lane, identical to the car
       // renderer (game.ts): a lane `index` of an approach with `count` lanes sits
       // at (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.
-      const selfBand = laneCount(road, lane.from);
+      // Centred band: one-way lanes sit centred in the tile, bidirectional lanes
+      // anchor at the centreline as before (see sim/laneOffset.ts positioningBand).
+      const selfBand = positioningBand(
+        laneCount(road, lane.from),
+        laneCount(road, oppositePort(lane.from)),
+      );
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
 
       for (const to of lane.to) {
@@ -394,11 +422,11 @@ class Tile extends Vue {
           const nExit = neighborCoord(coord, to);
           const bandEntry = seamBand(
             selfBand,
-            nEntry ? this.game.roadLaneCount(nEntry, oppositePort(lane.from)) : 0,
+            nEntry ? this.centeredRoadBand(nEntry, oppositePort(lane.from)) : 0,
           );
           const bandExit = seamBand(
             selfBand,
-            nExit ? this.game.roadLaneCount(nExit, oppositePort(to)) : 0,
+            nExit ? this.centeredRoadBand(nExit, oppositePort(to)) : 0,
           );
           // Clamp each end to the seam band so a dropping (kerb) lane merges in
           // and a surviving (inner) lane holds its line — never crossing the
