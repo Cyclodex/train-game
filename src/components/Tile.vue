@@ -41,7 +41,7 @@
           v-for="(m, mi) in r.laneMarkings"
           :key="'lm' + i + '_' + mi"
           :d="m.d"
-          :class="'road-marking-' + m.kind"
+          :class="['road-marking-' + m.kind, { 'road-marking-merge': m.merge }]"
         />
       </template>
       <!-- Lane-drop gores (hatched closure triangles) and advance arrows -->
@@ -820,6 +820,11 @@ export default toNative(Tile);
   stroke-width: 2px;
   stroke-dasharray: 14 12;
   stroke-linecap: butt;
+}
+/* Lane-drop divider (a lane ending at a 3→2 / 2→1 taper, where cars merge
+   across): a tighter dash than ordinary dividers to read as the crossing line. */
+.road-marking-merge {
+  stroke-dasharray: 7 9;
 }
 /* The closing-lane gore is paved (concrete), matching the road surface, with
    white diagonal hatching and a white closing edge — the real lane-drop look. */

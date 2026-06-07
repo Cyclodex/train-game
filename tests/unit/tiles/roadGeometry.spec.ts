@@ -299,6 +299,13 @@ describe("laneDropArrowPath", () => {
     const [, tailX, , headX] = arrow.shaft.match(/M (\S+) (\S+) L (\S+) (\S+)/)!.map(Number);
     expect(headX).toBeGreaterThan(tailX);
   });
+
+  it("bandShiftPx re-centres the arrow for a one-way road", () => {
+    // One-way 2→1: lanes are centred, so the band shifts by -selfN/2·W = -28.
+    // laneMid 1.5·28 = 42 → 14; tailOff 22.4 → y122.4, headOff 5.6 → y105.6.
+    const arrow = laneDropArrowPath(Position.Left, Position.Right, 200, 1, 0.25, -28);
+    expect(arrow.shaft).toBe("M 35 122.4 L 65 105.6");
+  });
 });
 
 describe("roadKerbEdge", () => {
@@ -343,6 +350,14 @@ describe("laneDropGore", () => {
     // survivors=1, selfN=3 → innerOff 28 (y128), outerOff 84 (y184).
     const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 3);
     expect(gore.triangle).toBe("M 0 184 L 200 184 L 200 128 Z");
+  });
+
+  it("bandShiftPx re-centres the gore for a one-way road", () => {
+    // One-way 2→1: lanes centred, band shifts by -selfN/2·W = -28. innerOff
+    // 28→0 (y100), outerOff 56→28 (y128). The gore sits on the centred lane band
+    // instead of one half — the fix for one-way gores spilling onto the grass.
+    const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 2, -28);
+    expect(gore.triangle).toBe("M 0 128 L 200 128 L 200 100 Z");
   });
 });
 

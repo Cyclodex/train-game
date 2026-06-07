@@ -50,12 +50,18 @@ export interface MergeArrowPath {
 // own lane. `laneIndex` is the lane it sits in (0 = centre-adjacent; the outer,
 // higher-index lanes are the ones that end). `alongT` (0..1) is the position of
 // the arrow's midpoint along the entry→exit centreline.
+// `bandShiftPx` slides the whole lane band along the right-of-travel normal. It
+// is 0 for a bidirectional road (the direction's lanes own the +n half, anchored
+// at the centreline). For a ONE-WAY road the lanes are centred in the tile (see
+// sim/laneOffset.ts positioningBand), so the caller passes -selfN/2·LANE_W to
+// re-centre the arrow over the actual lanes instead of leaving it on one half.
 export function laneDropArrowPath(
   entry: Port,
   exit: Port,
   size: number,
   laneIndex: number,
   alongT: number,
+  bandShiftPx = 0,
 ): MergeArrowPath {
   const LANE_W = size * 0.14;
   const HALF = size * 0.075; // half the shaft length (compact)
@@ -74,7 +80,7 @@ export function laneDropArrowPath(
   // Split the lateral lean symmetrically about the lane centre so the angled
   // arrow stays centred in its lane: tail sits outward, head leans inward.
   const along0 = alongT * len;
-  const laneMid = (laneIndex + 0.5) * LANE_W;
+  const laneMid = (laneIndex + 0.5) * LANE_W + bandShiftPx;
   const tailOff = laneMid + (LATERAL / 2) * LANE_W;
   const headOff = laneMid - (LATERAL / 2) * LANE_W;
   const tail = {
@@ -151,12 +157,16 @@ export interface LaneDropGore {
 // inward to fill the closing lanes at the downstream seam — i.e. the diverging
 // line shepherds cars in toward the surviving lanes. Returned in this travel
 // direction's frame (lanes on the +n side), so call it once per direction.
+// `bandShiftPx` slides the gore along the right-of-travel normal: 0 for a
+// bidirectional road (lanes own the +n half), or -selfN/2·LANE_W for a ONE-WAY
+// road whose lanes are centred in the tile (see laneDropArrowPath / laneOffset).
 export function laneDropGore(
   entry: Port,
   exit: Port,
   size: number,
   survivors: number,
   selfN: number,
+  bandShiftPx = 0,
 ): LaneDropGore {
   const LANE_W = size * 0.14;
   const a = portPoint(entry, size);
@@ -166,8 +176,8 @@ export function laneDropGore(
   const f = { x: dx / len, y: dy / len }; // forward (travel) unit
   const n = perpUnit(a, b); // right-of-travel unit (this direction's lanes on +n)
 
-  const innerOff = survivors * LANE_W; // inner edge of the closing region
-  const outerOff = selfN * LANE_W; // outer kerb
+  const innerOff = survivors * LANE_W + bandShiftPx; // inner edge of the closing region
+  const outerOff = selfN * LANE_W + bandShiftPx; // outer kerb
   const P = (along: number, off: number) => ({
     x: a.x + f.x * along + n.x * off,
     y: a.y + f.y * along + n.y * off,
