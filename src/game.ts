@@ -466,23 +466,44 @@ export function createGame(
         seen.add(id);
 
         // Compute lane offset with smooth taper at lane-count transitions.
-        // When a car approaches a tile boundary where the next tile has a different
-        // lane count, interpolate the lateral offset so the car glides into its new
-        // lane position instead of snapping at the boundary.
+        // The taper always animates on the WIDER tile — matching the visual polygon
+        // that also tapers on the wider tile (Math.min seam rule in Tile.vue):
+        //   • Narrowing (curCount > nextCount): look ahead, glide from wide to narrow
+        //     as the car traverses the end of this wider tile.
+        //   • Widening (curCount > prevCount): look behind, glide from the entry
+        //     (narrow) offset to the proper lane position as the car traverses the
+        //     start of this wider tile.
         const front = unit.front;
         const fromOffset = (curCount - 0.5 - curIndex) * tileSize * LANE_WIDTH_FRAC;
         let laneOffset = fromOffset;
+        let taperApplied = false;
 
+        // Narrowing: current tile is wider than the next — animate toward narrower exit.
         if (front.exitPort != null) {
           const nextCoord = neighborCoord(front.coord, front.exitPort);
           if (nextCoord) {
             const nextTile = level[getCoordinatesId(nextCoord)];
             const nextEntry = oppositePort(front.exitPort);
             const nextCount = laneCount(nextTile?.road, nextEntry);
-            if (nextCount > 0 && nextCount !== curCount) {
+            if (nextCount > 0 && nextCount < curCount) {
               const nextIndex = Math.min(curIndex, nextCount - 1);
               const toOffset = (nextCount - 0.5 - nextIndex) * tileSize * LANE_WIDTH_FRAC;
               laneOffset = fromOffset + (toOffset - fromOffset) * front.t;
+              taperApplied = true;
+            }
+          }
+        }
+
+        // Widening: current tile is wider than the previous — animate from narrow entry.
+        if (!taperApplied) {
+          const prevCoord = neighborCoord(front.coord, front.entryPort);
+          if (prevCoord) {
+            const prevTile = level[getCoordinatesId(prevCoord)];
+            const prevCount = laneCount(prevTile?.road, front.entryPort);
+            if (prevCount > 0 && prevCount < curCount) {
+              const prevIndex = Math.min(curIndex, prevCount - 1);
+              const fromNarrowOffset = (prevCount - 0.5 - prevIndex) * tileSize * LANE_WIDTH_FRAC;
+              laneOffset = fromNarrowOffset + (fromOffset - fromNarrowOffset) * front.t;
             }
           }
         }

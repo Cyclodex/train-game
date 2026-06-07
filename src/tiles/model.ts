@@ -12,6 +12,11 @@ export type TileKind =
   | "cross"
   | "depot"
   | "dead-end"
+  | "road-straight"
+  | "road-curve"
+  | "road-tjunction"
+  | "road-cross"
+  | "crossing"
   | "empty";
 
 // The canonical, authoritative description of one grid cell. `connections` is
@@ -163,6 +168,28 @@ export function defaultArmFor(
 export function kindOf(cell: TileCell): TileKind {
   if (cell.role === "depot") return "depot";
   const conns = cell.connections;
+  const hasRoadLayer = (cell.road?.length ?? 0) > 0;
+
+  // Level crossing: has both rail edges and road.
+  if (conns.length > 0 && hasRoadLayer) return "crossing";
+
+  // Road-only tiles: derive kind from the road's port set.
+  if (conns.length === 0 && hasRoadLayer) {
+    const road = cell.road!;
+    const ports = new Set<Port>();
+    for (const lane of road) {
+      ports.add(lane.from);
+      for (const to of lane.to) ports.add(to);
+    }
+    if (ports.size >= 4) return "road-cross";
+    if (ports.size === 3) return "road-tjunction";
+    if (ports.size === 2) {
+      const [a, b] = [...ports] as [Port, Port];
+      return a === oppositePort(b) ? "road-straight" : "road-curve";
+    }
+    return "road-straight";
+  }
+
   if (conns.length === 0) return "empty";
   const edges = portsOf(conns).filter(p => p !== Position.Center);
   if (edges.length >= 3) return conns.length >= 6 ? "cross" : "tjunction";
