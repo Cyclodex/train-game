@@ -70,12 +70,18 @@ export function roadSurfacePolygonPath(
 // wide end down to the narrow side's kerb (lo·LANE_W), so a lane that no
 // longer exists is not drawn past the seam. Curved tiles only get the
 // centre marking.
+//
+// `capHalfA` / `capHalfB` (px) clamp the maximum marking offset at each end
+// to the rendered surface half-width, so markings never escape the road when
+// the surface tapers to match a narrower neighbour.
 export function roadLaneMarkingPaths(
   entry: Port,
   exit: Port,
   size: number,
   lanesA: number,
   lanesB: number,
+  capHalfA?: number,
+  capHalfB?: number,
 ): LaneMarkingPath[] {
   const LANE_W = size * 0.14;
   const out: LaneMarkingPath[] = [];
@@ -90,14 +96,18 @@ export function roadLaneMarkingPaths(
 
     // Between same-direction lanes on the entry→exit side (positive offset).
     for (let i = 1; i < hi; i++) {
-      const fromD = i * LANE_W;
-      const toD = i < lo ? i * LANE_W : narrowKerb;
+      let fromD = i * LANE_W;
+      let toD = i < lo ? i * LANE_W : narrowKerb;
+      if (capHalfA !== undefined) fromD = Math.min(fromD, capHalfA);
+      if (capHalfB !== undefined) toD = Math.min(toD, capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner" });
     }
     // Between same-direction lanes on the exit→entry side (negative offset).
     for (let i = 1; i < hi; i++) {
-      const fromD = -i * LANE_W;
-      const toD = i < lo ? -i * LANE_W : -narrowKerb;
+      let fromD = -i * LANE_W;
+      let toD = i < lo ? -i * LANE_W : -narrowKerb;
+      if (capHalfA !== undefined) fromD = Math.max(fromD, -capHalfA);
+      if (capHalfB !== undefined) toD = Math.max(toD, -capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner" });
     }
   } else {

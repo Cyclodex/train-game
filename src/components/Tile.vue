@@ -256,7 +256,7 @@ class Tile extends Vue {
       const widthB = totalB * LANE_W;
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
       };
     });
   }
