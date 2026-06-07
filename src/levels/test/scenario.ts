@@ -21,6 +21,10 @@ export interface TestScenario {
   // game's all-cars default. Used by the trucks scenario to force a heavy
   // truck/semi mix.
   traffic?: TrafficConfig;
+  // Run the scenario under a specific game mode (by id) instead of free-play
+  // Sandbox. Needed for mechanics that only exist in a mode — e.g. Time Attack's
+  // scheduled spawner. Omitted → Sandbox (the free-play default for demos).
+  modeId?: string;
 }
 
 // Build a train that starts in the depot at (x,y), leaves outward, and routes to

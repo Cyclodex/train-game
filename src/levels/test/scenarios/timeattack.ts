@@ -13,6 +13,9 @@ export const timeattack: TestScenario = {
   name: "Time Attack schedule",
   description:
     "Trains arrive on a fixed timetable (t=0, 3s, 6s), each routing to its depot.",
+  // Run under Time Attack so the scheduled spawner actually injects t2/t3 (Sandbox
+  // has no spawner, so they would never appear).
+  modeId: "time-attack",
   level: {
     "0,0": expandKind("depot", 1),
     "1,0": expandKind("straight", 1),

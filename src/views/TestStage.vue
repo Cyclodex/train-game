@@ -83,6 +83,7 @@ import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { sandboxMode } from "@/modes/sandbox";
+import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import Crossing from "@/components/Crossing.vue";
 
@@ -109,12 +110,18 @@ class TestStage extends Vue {
   @Provide() trains: TrainsDefinition = this.scenario.trains;
   @Provide() level: Level = this.scenario.level;
 
+  // A scenario can name a mode (e.g. Time Attack for its scheduled spawner);
+  // otherwise demos run in free-play Sandbox.
+  private mode = this.scenario.modeId
+    ? modeById(this.scenario.modeId)
+    : sandboxMode;
+
   @Provide("game") game: Game = markRaw(
     createGame(
       this.scenario.level,
       buildTrainDefs(this.scenario.trains),
       gameConfig.tileSize,
-      sandboxMode,
+      this.mode,
       gameConfig.colorSeed,
       this.scenario.colors,
       this.scenario.traffic,
@@ -131,6 +138,10 @@ class TestStage extends Vue {
 
   mounted() {
     this.game.start();
+    // The test world has no start overlay, so drive the objective to Playing
+    // immediately — this is what lets mode mechanics that only run while live
+    // (e.g. Time Attack's scheduled spawner) actually fire.
+    this.game.startObjective();
     (window as unknown as { __game?: Game }).__game = this.game;
   }
   beforeUnmount() {
