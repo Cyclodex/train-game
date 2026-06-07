@@ -78,6 +78,28 @@ export function exitsForCar(road: Lane[] | undefined, from: Port): Port[] {
   return [...out];
 }
 
+// The car-accessible lane indices of an approach, ascending by index (0 = kerb).
+export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind !== "bus")
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
+// The car-accessible lane indices of approach `from` that permit exiting toward
+// `exit` (i.e. whose `to` lists it). Used by lane-aware routing to position a car
+// in a lane that allows its next turn. Empty when no car lane permits the move.
+export function lanesAllowingExit(
+  road: Lane[] | undefined,
+  from: Port,
+  exit: Port,
+): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind !== "bus" && l.to.includes(exit))
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
 // Every port the road touches (as an approach or an exit).
 export function roadPortsOf(road: Lane[] | undefined): Port[] {
   const out = new Set<Port>();

@@ -18,6 +18,8 @@ import {
   roadcross2lane,
   roadcross3lane,
 } from "@/levels/test/scenarios/roadcrosslanes";
+import { turnlanes } from "@/levels/test/scenarios/turnlanes";
+import { lanesAllowingExit } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -172,6 +174,92 @@ describe("createRoadSim — spawning + movement", () => {
       seen.add(key);
     }
     expect(stacked).toBe(0);
+  });
+
+  it("merges cars out of a dropping lane before it ends (G)", () => {
+    // A two-lane road (tiles x=0,1) that drops to one lane (tiles x=2,3). A car
+    // in lane 1 has nowhere to go past x=1, so it must change into lane 0 BEFORE
+    // the drop — and the road must keep flowing (no permanent queue at the taper).
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "1,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "2,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 1) },
+      "3,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 1) },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 4,
+      height: 1,
+      seed: 5,
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 10,
+      // Eastbound only, so every car meets the 2→1 drop.
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+    });
+
+    let prev = new Set<string>();
+    const completed = new Set<string>();
+    let onePerLaneViolations = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed.add(id);
+      prev = now;
+      // Any eastbound car whose head is on the single-lane section must be in
+      // lane 0 — i.e. it merged before the drop, it didn't ride a phantom lane 1.
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x >= 2 && Math.round(c.laneIndex) !== 0) onePerLaneViolations++;
+      }
+    }
+    expect(onePerLaneViolations).toBe(0); // always merged before entering 1-lane
+    expect(completed.size).toBeGreaterThan(10); // sustained flow through the merge
+  });
+
+  it("sorts cars into the turn lane that permits their turn (F)", () => {
+    // The turnlanes scenario: a 2-lane approach to a T whose kerb lane turns
+    // right and inner lane turns left. Every car that reaches the junction must
+    // be in a lane that PERMITS the turn it takes — i.e. it sorted itself into
+    // the right lane on the approach (a left-turner never turns from the kerb
+    // lane). Both turns must actually happen (cars do reach and use the T).
+    const junctionRoad = turnlanes.level["2,1"].road;
+    const sim = createRoadSim({
+      level: turnlanes.level,
+      width: 5,
+      height: 5,
+      seed: 3,
+      spawnInterval: turnlanes.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: turnlanes.traffic!.maxCars,
+      spawnEntries: turnlanes.traffic!.spawnEntries,
+    });
+
+    // Record, once per car, the lane it occupies when its head FIRST reaches the
+    // junction (the moment it commits its turn) — one clean observation each,
+    // not per-tick mid-turn noise.
+    const committed = new Set<string>();
+    let leftTurns = 0;
+    let rightTurns = 0;
+    let wrongLane = 0;
+    for (let i = 0; i < 2500; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x !== 2 || f.coord.y !== 1 || f.entryPort !== Position.Bottom) continue;
+        if (f.exitPort !== Position.Left && f.exitPort !== Position.Right) continue;
+        if (committed.has(c.id)) continue;
+        committed.add(c.id);
+        if (f.exitPort === Position.Left) leftTurns++; else rightTurns++;
+        const allowed = lanesAllowingExit(junctionRoad, Position.Bottom, f.exitPort);
+        if (!allowed.includes(Math.round(c.laneIndex))) wrongLane++;
+      }
+    }
+    expect(leftTurns).toBeGreaterThan(0);
+    expect(rightTurns).toBeGreaterThan(0);
+    expect(wrongLane).toBe(0); // every car turns from a lane that permits it
   });
 
   it("is deterministic for a fixed seed", () => {

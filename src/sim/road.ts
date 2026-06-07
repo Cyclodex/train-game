@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsFrom, exitsForCar, isRoadJunction, laneCount } from "@/tiles/lanes";
+import { exitsFrom, exitsForCar, isRoadJunction, laneCount, lanesAllowingExit } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
@@ -171,6 +171,37 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
   return out;
 }
 
+// Off-map openings a car can drive OUT of: an edge port some car lane of the tile
+// exits toward (`to` includes it) that leads off the grid (or to a tile with no
+// road continuing the move). The mirror of roadEntries — for a two-way road the
+// two coincide, but on a one-way road the inbound (entry) and outbound (exit)
+// openings differ, so route destinations must be these. The `entryPort` field
+// carries the EXIT port (RoadEntry shape is reused). Used as planRoute targets.
+export function roadExits(level: Level, width: number, height: number): RoadEntry[] {
+  const out: RoadEntry[] = [];
+  for (const [id, tile] of Object.entries(level)) {
+    if (!tile.road || tile.road.length === 0) continue;
+    const [xs, ys] = id.split(",").map(Number);
+    const coord = { x: xs, y: ys };
+    for (const port of EDGES) {
+      // Some car-accessible lane of this tile leaves via `port`.
+      if (!tile.road.some(l => l.kind !== "bus" && l.to.includes(port))) continue;
+      const n = neighborCoord(coord, port)!;
+      const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
+      const neigh = level[getCoordinatesId(n)];
+      const continues =
+        !offGrid && neigh?.road && exitsForCar(neigh.road, oppositePort(port)).length > 0;
+      if (offGrid || !continues) out.push({ coord, entryPort: port });
+    }
+  }
+  out.sort((a, b) => {
+    const ka = `${a.coord.x},${a.coord.y},${a.entryPort}`;
+    const kb = `${b.coord.x},${b.coord.y},${b.entryPort}`;
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  return out;
+}
+
 // --- Cars ---------------------------------------------------------------------
 
 export interface RoadSegment {
@@ -212,10 +243,15 @@ export interface Car {
   // the throughput counter (carsDelivered) only counts cars that actually used a
   // crossing — not cars that drove a road with no rail on it.
   crossedCrossing: boolean;
-  // Physical lane slot this car occupies: 0 = rightmost (kerb-side),
-  // N-1 = innermost (centre-adjacent). Set at spawn; clamped at each tile
-  // boundary when the next tile has fewer lanes.
+  // Continuous lateral lane position: 0 = rightmost (kerb-side), N-1 = innermost
+  // (centre-adjacent). A FLOAT so a lane change eases across (e.g. 1.4 = mostly in
+  // lane 1, drifting toward 2); `Math.round` gives the lane the car logically
+  // occupies for following/conflict. Set at spawn; eased toward `targetLane`.
   laneIndex: number;
+  // The integer lane the car wants to be in, recomputed each tick: a lane that
+  // survives the next lane drop (merge) and that permits its next turn (F). The
+  // car eases `laneIndex` toward this when the adjacent lane is clear (G).
+  targetLane: number;
   // The map-edge entry this car is heading toward (set at spawn via planRoute).
   // Null when the BFS found no path or no targets exist.
   destination: RoadEntry | null;
@@ -355,6 +391,17 @@ const DEFAULT_CAR_BRAKE = 1.2;
 // the sprite corners pinch closer than the centerline gap — keep a touch of slack
 // so following cars don't visibly touch through a bend.
 const CAR_GAP = 0.06;
+// Lane-change (lateral) motion. A car eases sideways at LANE_CHANGE_RATE lanes
+// per second toward its target lane, but only commits to entering the next lane
+// when that lane has at least LANE_CHANGE_GAP tiles of clear road both ahead of
+// and behind the car (gap acceptance) — so a lane change never overlaps another
+// car. LANE_SETTLE is how close (in lanes) counts as "arrived".
+const LANE_CHANGE_RATE = 2.2;
+const LANE_CHANGE_GAP = 0.18;
+const LANE_SETTLE = 1e-3;
+// How many tiles ahead a car looks for the junction it must be lane-sorted for,
+// so it starts moving into its turn lane with room to spare (sub-project F).
+const TURN_LANE_LOOKAHEAD = 4;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
@@ -391,8 +438,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const mix = config.mix ?? { car: 1 };
 
   const entries = config.spawnEntries ?? roadEntries(level, width, height);
-  // All map-edge entries used as BFS routing targets (not limited to spawn entries).
-  const allMapEntries = roadEntries(level, width, height);
+  // BFS routing targets: the off-map openings a car can drive OUT of. On one-way
+  // roads these differ from the spawn entries, so a car can be routed to an
+  // outbound arm that is not itself a spawn point.
+  const allMapExits = roadExits(level, width, height);
 
   // Pre-compute the conflict matrix for every road-junction tile once, so
   // clearAhead doesn't rebuild it every frame.
@@ -456,6 +505,169 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (idx < 0) return null;
     car.routeStep = idx + 1;
     return car.routePlan[idx].exitArm;
+  }
+
+  // The integer lane the car logically occupies (its continuous position rounded).
+  function laneOf(car: Car): number {
+    return Math.round(car.laneIndex);
+  }
+
+  // The lane the car WANTS to be in on its current tile (sub-projects F + G):
+  //  • Merge (G): if the next tile in its travel direction has fewer lanes than
+  //    its current lane index, aim for the innermost lane that survives the drop,
+  //    so it merges across BEFORE the lane ends instead of queueing at the taper.
+  //  • Turn lane (F): if the next tile is a junction, aim for a lane whose `to`
+  //    permits the exit the car's route takes there (nearest such lane to where
+  //    it already is). With dedicated turn lanes a left-turner moves into the
+  //    turn lane in advance; with no per-lane restriction every lane qualifies
+  //    and it stays put.
+  // Otherwise hold the current lane. Result is clamped to the current tile's lanes.
+  // The first road junction within `maxTiles` ahead of the car along its straight
+  // path, and the port it will enter that junction through. Walks the car's
+  // committed exit then the straight continuation of each tile; stops at the first
+  // junction (where the car has a turn choice). Null if none is near.
+  function junctionAhead(
+    startCoord: Coordinates,
+    startEntry: Port,
+    startExit: Port | null,
+    maxTiles: number,
+  ): { coord: Coordinates; entry: Port } | null {
+    let coord = startCoord;
+    let entry = startEntry;
+    let exit = startExit ?? roadExitPort(level, coord, entry);
+    for (let k = 0; k < maxTiles; k++) {
+      if (exit == null) return null;
+      const n = neighborCoord(coord, exit);
+      if (!n) return null;
+      const nTile = level[getCoordinatesId(n)];
+      if (!nTile?.road?.length) return null;
+      const nEntry = oppositePort(exit);
+      if (isRoadJunction(nTile.road)) return { coord: n, entry: nEntry };
+      coord = n;
+      entry = nEntry;
+      exit = roadExitPort(level, coord, entry); // straight continuation
+    }
+    return null;
+  }
+
+  function desiredLane(car: Car): number {
+    const head = car.path[car.headIndex];
+    const tile = level[getCoordinatesId(head.coord)];
+    const curCount = laneCount(tile?.road, head.entryPort);
+    const cur = laneOf(car);
+    if (curCount <= 1) return 0;
+    // On a junction tile the car is committed to its turn — its approach-lane
+    // index maps to the exit through the movement, not laterally. Don't merge or
+    // re-sort here (the exit arm being narrower must not drag the car sideways
+    // mid-turn); lateral positioning is an approach-tile concern.
+    if (isRoadJunction(tile?.road)) return clampLane(cur, curCount);
+
+    // (G) Lane drop on the immediately next tile — our lane doesn't continue, so
+    // merge to the innermost surviving lane (takes precedence: it's the urgent one).
+    const exit = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
+    if (exit != null) {
+      const nCoord = neighborCoord(head.coord, exit);
+      const nTile = nCoord ? level[getCoordinatesId(nCoord)] : undefined;
+      if (nCoord && nTile?.road?.length) {
+        const nCount = laneCount(nTile.road, oppositePort(exit));
+        if (nCount > 0 && cur > nCount - 1) return clampLane(nCount - 1, curCount);
+      }
+    }
+
+    // (F) A junction is coming up — get into a lane that permits the turn the
+    // route takes there, as early as a few tiles out so there's room to change.
+    const ahead = junctionAhead(
+      head.coord,
+      head.entryPort,
+      head.exitPort ?? roadExitPort(level, head.coord, head.entryPort),
+      TURN_LANE_LOOKAHEAD,
+    );
+    if (ahead) {
+      const jTile = level[getCoordinatesId(ahead.coord)];
+      const myExit = carExitAt(car, ahead.coord);
+      if (jTile?.road && myExit != null) {
+        const allow = lanesAllowingExit(jTile.road, ahead.entry, myExit);
+        if (allow.length > 0 && !allow.includes(cur)) {
+          const best = allow.reduce(
+            (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
+            allow[0],
+          );
+          return clampLane(best, curCount);
+        }
+      }
+    }
+    return clampLane(cur, curCount);
+  }
+
+  function clampLane(lane: number, count: number): number {
+    return Math.max(0, Math.min(count - 1, lane));
+  }
+
+  // The lane a freshly-spawned car should prefer so it STARTS in the turn lane for
+  // its first junction (F) — avoiding a needless lane swap on the approach (and
+  // the gridlock two cars wanting to swap into each other's lane would cause).
+  // -1 = no preference (single lane, no junction near, or no per-lane restriction).
+  function preferredSpawnLane(
+    coord: Coordinates,
+    entry: Port,
+    exit: Port | null,
+    routePlan: RouteTurn[],
+    entryLaneCount: number,
+  ): number {
+    if (entryLaneCount <= 1) return -1;
+    const ahead = junctionAhead(coord, entry, exit, TURN_LANE_LOOKAHEAD);
+    if (!ahead) return -1;
+    const jTile = level[getCoordinatesId(ahead.coord)];
+    const turn = routePlan.find(t => t.junctionId === getCoordinatesId(ahead.coord));
+    if (!jTile?.road || !turn) return -1;
+    const allow = lanesAllowingExit(jTile.road, ahead.entry, turn.exitArm);
+    return allow.length > 0 ? allow[0] : -1;
+  }
+
+  // Is the integer lane `lane` clear of same-direction cars next to us on the same
+  // tile (gap acceptance for a lane change)? Considers only cars on our head tile
+  // travelling the same way; a car is "alongside" (blocking) unless it sits a full
+  // LANE_CHANGE_GAP ahead of our nose or behind our tail.
+  function laneClearForChange(car: Car, lane: number): boolean {
+    const head = car.path[car.headIndex];
+    const headId = getCoordinatesId(head.coord);
+    const myFront = car.headProgress;
+    const myRear = car.headProgress - car.length;
+    for (const o of cars) {
+      if (o === car) continue;
+      const oh = o.path[o.headIndex];
+      if (getCoordinatesId(oh.coord) !== headId) continue;
+      if (oh.entryPort !== head.entryPort) continue; // same travel direction only
+      if (laneOf(o) !== lane) continue;
+      const oFront = o.headProgress;
+      const oRear = o.headProgress - o.length;
+      const clearAheadOfMe = oRear > myFront + LANE_CHANGE_GAP;
+      const clearBehindMe = oFront < myRear - LANE_CHANGE_GAP;
+      if (!clearAheadOfMe && !clearBehindMe) return false;
+    }
+    return true;
+  }
+
+  // Ease the car sideways toward its target lane (G). Only crosses into the next
+  // integer lane when that lane is clear; otherwise it holds its current lateral
+  // position and waits for a gap. Called once per car per tick.
+  function updateLateral(car: Car, dt: number): void {
+    car.targetLane = desiredLane(car);
+    const diff = car.targetLane - car.laneIndex;
+    if (Math.abs(diff) <= LANE_SETTLE) {
+      car.laneIndex = car.targetLane;
+      return;
+    }
+    const dir = Math.sign(diff);
+    // Starting from a settled lane, only begin the change once the lane we'd cross
+    // into is clear (gap acceptance). Once mid-crossing (fractional position) we
+    // are committed and finish — the gap was already checked when we set off.
+    const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
+    if (atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir)) {
+      return; // hold and wait for a gap
+    }
+    const step = LANE_CHANGE_RATE * dt;
+    car.laneIndex += dir * Math.min(step, Math.abs(diff));
   }
 
   // Exit port for the very first tile on the spawn path: checks the route plan
@@ -569,12 +781,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     car: Car
   ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] {
     const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] = [];
+    // Lane identity for following/conflict is the integer lane the car occupies
+    // (its continuous position rounded) — a mid-change car counts as in the lane
+    // it is closest to.
+    const lane = laneOf(car);
     for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
       const s = sampleAtArc(car, a);
-      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t, laneIndex: car.laneIndex });
+      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t, laneIndex: lane });
     }
     const tail = sampleAtArc(car, car.length); // always include the exact tail
-    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t, laneIndex: car.laneIndex });
+    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t, laneIndex: lane });
     return pts;
   }
 
@@ -681,7 +897,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         if (proj.opposing) continue;
         // Different lane, same travel direction: cars ride side-by-side and must not
         // gate each other. Perpendicular junction occupants are handled below.
-        if (!proj.perpendicular && !proj.opposing && p.laneIndex !== car.laneIndex) continue;
+        if (!proj.perpendicular && !proj.opposing && p.laneIndex !== laneOf(car)) continue;
         if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
           // A car crossing our path at a junction only blocks us if its movement
           // actually conflicts with ours (same conflict matrix the arbiter uses).
@@ -701,7 +917,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             p.exit !== null &&
             conflictPairs.has(
               conflictKey(
-                { entry: myEntry, entryIndex: car.laneIndex, exit: myExit },
+                { entry: myEntry, entryIndex: laneOf(car), exit: myExit },
                 { entry: p.entry, entryIndex: p.laneIndex, exit: p.exit }
               )
             );
@@ -801,9 +1017,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nextExit =
         carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry);
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
-      // Clamp lane index when the next tile has fewer lanes than the current one.
+      // Clamp lane position when the next tile has fewer lanes — a backstop for a
+      // car that hadn't finished merging before the drop (it normally merges on
+      // the wider tile via updateLateral, so this rarely bites).
       const nextLaneCount = laneCount(nextTile.road, nextEntry);
-      if (nextLaneCount > 0) car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
+      if (nextLaneCount > 0) {
+        car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
+        car.targetLane = Math.min(car.targetLane, nextLaneCount - 1);
+      }
       car.headIndex += 1;
       car.headProgress -= 1;
     }
@@ -814,6 +1035,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const cell = level[tileIdOf(car)];
       if (cell && isLevelCrossing(cell)) car.crossedCrossing = true;
     }
+    // Lateral motion: ease toward the lane the car wants (merge / turn lane).
+    updateLateral(car, dt);
     return true;
   }
 
@@ -857,33 +1080,40 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitedSec: 0,
       crossedCrossing: false,
       laneIndex: 0,
+      targetLane: 0,
       destination: null,
     };
+    // Plan the route first so we can prefer the turn lane it will need (F). Routes
+    // run on their own RNG stream, independent of the per-car speed/kind draws.
+    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng);
+    const preferred = preferredSpawnLane(entry.coord, entry.entryPort, exit, routePlan, entryLaneCount);
+    // Try the preferred (turn) lane first, then the rest from a rotating start so
+    // unrestricted multi-lane entries still fill evenly. Skip the spawn if every
+    // lane is blocked at the edge (saturated — better than stacking cars).
+    // When the route dictates a turn lane, spawn ONLY into that lane — if it's
+    // momentarily blocked, wait (skip this spawn) rather than start in the wrong
+    // lane, which would force a swap with an oncoming lane-changer and leave the
+    // car turning from a lane that doesn't permit it. Otherwise (no turn
+    // preference) fill lanes from a rotating start so they fill evenly.
     let chosenLane = -1;
-    const startLane = spawnLaneRot % entryLaneCount;
-    for (let k = 0; k < entryLaneCount; k++) {
-      const lane = (startLane + k) % entryLaneCount;
+    const order: number[] =
+      preferred >= 0
+        ? [preferred]
+        : Array.from({ length: entryLaneCount }, (_, k) => (spawnLaneRot + k) % entryLaneCount);
+    for (const lane of order) {
       probe.laneIndex = lane;
       if (clearAhead(probe, closed).clear > STOP_EPS) {
         chosenLane = lane;
         break;
       }
     }
-    if (chosenLane < 0) return; // every lane blocked at the entry — don't stack
+    if (chosenLane < 0) return; // preferred/all lanes blocked — wait, don't stack
     spawnLaneRot++;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
-    // from the seeded RNG, so the spawn order (and thus which car is the slow
-    // leader of a forming platoon) stays reproducible for a given seed. Drawn here
-    // — before route planning consumes any RNG — so the per-car speed sequence is
-    // independent of routing (keeps seeded platoon tests stable across changes).
+    // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
-    // Two-lane (right-hand) roads: oncoming traffic uses the opposite lane, so a
-    // car can head for any edge of the map without risking a head-on — routing
-    // toward an edge other cars also use is fine. Pick a reachable exit edge
-    // (planRoute excludes this car's own spawn opening as a target).
-    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapEntries, routeRng);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);
     cars.push({
       id: `car${nextId++}`,
@@ -909,6 +1139,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       waitedSec: 0,
       crossedCrossing: false,
       laneIndex: chosenLane,
+      targetLane: chosenLane,
       destination,
     });
   }
