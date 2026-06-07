@@ -258,6 +258,7 @@ import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default"
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
 import { GameMode, ModeSetup } from "@/modes/types";
+import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
@@ -345,7 +346,9 @@ class PlayView extends Vue {
   // handed over right before navigation is picked up on this mount.
   private custom = this.board ? null : takeCustomLevel();
 
-  private mode = modeById(hashParam("mode"));
+  // The active mode: an explicit ?mode= wins; otherwise reopen the mode the
+  // player last used (persisted), falling back to the default.
+  private mode = modeById(hashParam("mode") ?? loadLastModeId());
 
   // Resolve which board the view should use. Modes that generate their own board
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
@@ -391,6 +394,8 @@ class PlayView extends Vue {
   );
 
   mounted() {
+    // Remember the mode we ended up in, so a later plain /play reopens it.
+    saveLastModeId(this.mode.id);
     this.best = loadBest(this.levelId);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
     if (!this.game.mode.hud.startOverlay) this.game.startObjective();

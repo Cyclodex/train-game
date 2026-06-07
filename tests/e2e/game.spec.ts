@@ -134,6 +134,21 @@ test.describe("Train game", () => {
     ).toBeVisible();
   });
 
+  test("remembers the last selected game mode on a plain /play", async ({
+    page,
+  }) => {
+    // Pick a non-default mode explicitly...
+    await page.goto("/#/play?mode=time-attack");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+    ).toBeVisible();
+    // ...then open /play with no mode query: it should reopen Time Attack.
+    await page.goto("/#/play");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+    ).toBeVisible();
+  });
+
   test("time attack injects scheduled trains over time (test scenario)", async ({
     page,
   }) => {
