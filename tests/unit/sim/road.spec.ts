@@ -486,17 +486,17 @@ describe("createRoadSim — spawning + movement", () => {
     expect(busOnBusLane).toBeGreaterThan(50); // buses were present and used the bus lane
   });
 
-  it("sorts cars into the turn lane that permits their turn (F)", () => {
-    // The turnlanes scenario: a 2-lane approach to a T whose kerb lane turns
-    // right and inner lane turns left. Every car that reaches the junction must
-    // be in a lane that PERMITS the turn it takes — i.e. it sorted itself into
-    // the right lane on the approach (a left-turner never turns from the kerb
-    // lane). Both turns must actually happen (cars do reach and use the T).
-    const junctionRoad = turnlanes.level["2,1"].road;
+  it("feeds the cross from permitted lanes and turns both ways (F)", () => {
+    // The turnlanes scenario: a one-way road widens 1→2→3 lanes from the south
+    // edge into an all-turns crossroads at "3,3" (every approach lane may go
+    // straight / left / right). Every car that reaches the junction must be in a
+    // lane that PERMITS the turn it takes, and both left and right turns must
+    // actually happen (cars reach and fan out through the cross).
+    const junctionRoad = turnlanes.level["3,3"].road;
     const sim = createRoadSim({
       level: turnlanes.level,
-      width: 5,
-      height: 5,
+      width: turnlanes.size!.cols,
+      height: turnlanes.size!.rows,
       seed: 3,
       spawnInterval: turnlanes.traffic!.spawnInterval,
       carSpeed: 0.5,
@@ -516,7 +516,7 @@ describe("createRoadSim — spawning + movement", () => {
       sim.step(0.05, () => false);
       for (const c of sim.sample()) {
         const f = c.units[0].front;
-        if (f.coord.x !== 2 || f.coord.y !== 1 || f.entryPort !== Position.Bottom) continue;
+        if (f.coord.x !== 3 || f.coord.y !== 3 || f.entryPort !== Position.Bottom) continue;
         if (f.exitPort !== Position.Left && f.exitPort !== Position.Right) continue;
         if (committed.has(c.id)) continue;
         committed.add(c.id);
