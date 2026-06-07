@@ -400,10 +400,15 @@ class Tile extends Vue {
       // gore border already draws the full-width kerb there (the tapered surface
       // kerb on that side is filled back to full by the paved gore). +n side has
       // a gore when the a→b direction narrows; -n side when b→a narrows.
+      // A one-way road (the other direction has no lanes) has its band CENTRED,
+      // so a drop is a symmetric squeeze split across both kerbs — a one-sided
+      // gore would overshoot the narrower neighbour. We draw no gore there (both
+      // kerbs taper instead), so neither side is suppressed.
+      const oneWay = selfA === 0 || selfB === 0;
       const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
       const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
-      const goreA = selfA > 0 && d1A > 0 && d1A < selfA;
-      const goreB = selfB > 0 && d1B > 0 && d1B < selfB;
+      const goreA = !oneWay && selfA > 0 && d1A > 0 && d1A < selfA;
+      const goreB = !oneWay && selfB > 0 && d1B > 0 && d1B < selfB;
       const edges: string[] = [];
       if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
       if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
@@ -479,6 +484,9 @@ class Tile extends Vue {
       // this equals (forward + backward)/2 — unchanged. See game.ts centeredBandAt.
       const selfBand = laneCountAt(road, lane.from) / 2;
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      // One-way ⟺ no oncoming lanes exit through this approach: the band is
+      // centred and a drop squeezes both kerbs symmetrically (see laneOffset).
+      const centred = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
       for (const to of lane.to) {
         // Straight movement on a tapering tile: the painted surface narrows /
@@ -497,11 +505,11 @@ class Tile extends Vue {
             selfBand,
             nExit ? this.centeredRoadBand(nExit, oppositePort(to)) : 0,
           );
-          // Clamp each end to the seam band so a dropping (kerb) lane merges in
-          // and a surviving (inner) lane holds its line — never crossing the
-          // centreline onto the oncoming side (see sim/laneOffset.ts).
-          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
-          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
+          // Bidirectional: clamp each end inward so the kerb lane merges and
+          // inner lanes hold. One-way: scale symmetrically so the centred band
+          // funnels evenly (see sim/laneOffset.ts laneSeamOffsetPx).
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, centred);
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, centred);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
         } else {
           out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
@@ -609,6 +617,12 @@ class Tile extends Vue {
       if (oppositePort(a) !== b) continue;
       const selfA = laneCount(this.tile.road, a);
       const selfB = laneCount(this.tile.road, b);
+      // One-way edges (the other direction has no lanes) have a CENTRED band, so
+      // a lane drop is a symmetric squeeze split across both kerbs — the surface
+      // taper + funneling dividers show it. A one-sided hatched gore would
+      // overshoot the narrower neighbour, so skip gores/arrows here entirely.
+      // The Swiss gore + advance arrows stay for genuinely bidirectional reducers.
+      if (selfA === 0 || selfB === 0) continue;
       const nb = neighborCoord(coord, b);
       const na = neighborCoord(coord, a);
       const nb2 = nb ? neighborCoord(nb, b) : null;
@@ -619,24 +633,17 @@ class Tile extends Vue {
       const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
       const d2B = na2 ? this.game.roadLaneCount(na2, oppositePort(a)) : 0;
 
-      // On a one-way edge the opposing direction has no lanes, so its lanes are
-      // centred in the tile (not anchored to one half); shift the gore/arrows by
-      // -selfN/2·LANE_W to match. A bidirectional edge shifts by 0.
-      const LANE_W = size * 0.14;
-      const shiftA = selfB === 0 ? -(selfA / 2) * LANE_W : 0;
-      const shiftB = selfA === 0 ? -(selfB / 2) * LANE_W : 0;
-
       if (selfA > 0 && d1A > 0 && d1A < selfA) {
-        gores.push({ ...laneDropGore(a, b, size, d1A, selfA, shiftA), clipId: `gore-${this.coordId}-${a}-${b}` });
+        gores.push({ ...laneDropGore(a, b, size, d1A, selfA), clipId: `gore-${this.coordId}-${a}-${b}` });
       }
       if (selfB > 0 && d1B > 0 && d1B < selfB) {
-        gores.push({ ...laneDropGore(b, a, size, d1B, selfB, shiftB), clipId: `gore-${this.coordId}-${b}-${a}` });
+        gores.push({ ...laneDropGore(b, a, size, d1B, selfB), clipId: `gore-${this.coordId}-${b}-${a}` });
       }
       for (const { laneIndex, alongT } of laneDropArrowPlan(selfA, d1A, d2A)) {
-        arrows.push(laneDropArrowPath(a, b, size, laneIndex, alongT, shiftA));
+        arrows.push(laneDropArrowPath(a, b, size, laneIndex, alongT));
       }
       for (const { laneIndex, alongT } of laneDropArrowPlan(selfB, d1B, d2B)) {
-        arrows.push(laneDropArrowPath(b, a, size, laneIndex, alongT, shiftB));
+        arrows.push(laneDropArrowPath(b, a, size, laneIndex, alongT));
       }
     }
     return { gores, arrows };

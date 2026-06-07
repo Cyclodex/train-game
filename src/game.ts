@@ -575,6 +575,10 @@ export function createGame(
     const exit = s.exitPort;
     if (bandAt(s.coord, entry) <= 0) return 0;
     const selfBand = centeredBandAt(s.coord, entry);
+    // One-way ⟺ no oncoming lanes exit through the entry port, so the band is
+    // centred and a drop squeezes both kerbs symmetrically (see laneOffset).
+    const road = level[getCoordinatesId(s.coord)]?.road;
+    const centred = laneCount(road, entry) === laneCountAt(road, entry);
     // Straight tile: taper the band from the entry seam to the exit seam.
     if (exit !== null && exit === oppositePort(entry)) {
       const nEntry = neighborCoord(s.coord, entry);
@@ -587,7 +591,7 @@ export function createGame(
         selfBand,
         nExit ? centeredBandAt(nExit, oppositePort(exit)) : 0,
       );
-      return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize);
+      return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize, centred);
     }
     // Curve / junction / dead-end: constant-width surface, constant offset.
     return laneOffsetConstPx(lanePos, selfBand, tileSize);

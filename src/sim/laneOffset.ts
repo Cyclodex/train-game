@@ -56,15 +56,27 @@ export function seamBand(selfBand: number, neighbourBand: number): number {
 // to merge — and crucially NO lane is ever pushed to a negative offset across
 // the centreline into oncoming traffic (the bug the old band-substitution
 // `(seamWidth - 0.5 - lanePos)·W` produced for every inner lane).
+// `centred` distinguishes the two band layouts. A BIDIRECTIONAL road owns one
+// half (lanes on the +n side, the centreline is the divider with oncoming): a
+// narrowing drops the OUTER kerb lane, so the offset is clamped inward
+// (`min(natural, seamWidth - 0.5)`) — inner lanes hold, the kerb lane merges,
+// and no lane crosses the centreline. A ONE-WAY road has its lanes CENTRED about
+// the centreline (no oncoming half to anchor against), so a lane drop is a
+// symmetric squeeze split across BOTH kerbs: scale the whole band toward the
+// narrower seam (`natural · seamWidth/selfBand`) so every lane eases in evenly,
+// keeping the funnel symmetric instead of pulling only one side in.
 export function laneSeamOffsetPx(
   lanePos: number,
   selfBand: number,
   seamWidth: number,
   tileSize: number,
+  centred = false,
 ): number {
   const natural = selfBand - 0.5 - lanePos;
-  const clamped = Math.min(natural, seamWidth - 0.5);
-  return clamped * tileSize * LANE_WIDTH_FRAC;
+  const adjusted = centred
+    ? natural * (selfBand > 0 ? seamWidth / selfBand : 1)
+    : Math.min(natural, seamWidth - 0.5);
+  return adjusted * tileSize * LANE_WIDTH_FRAC;
 }
 
 // Lateral offset (px, right-of-travel) for a coupler at continuous lane position
@@ -85,9 +97,10 @@ export function laneOffsetPx(
   bandExit: number,
   t: number,
   tileSize: number,
+  centred = false,
 ): number {
-  const offEntry = laneSeamOffsetPx(lanePos, selfBand, bandEntry, tileSize);
-  const offExit = laneSeamOffsetPx(lanePos, selfBand, bandExit, tileSize);
+  const offEntry = laneSeamOffsetPx(lanePos, selfBand, bandEntry, tileSize, centred);
+  const offExit = laneSeamOffsetPx(lanePos, selfBand, bandExit, tileSize, centred);
   return offEntry + (offExit - offEntry) * t;
 }
 

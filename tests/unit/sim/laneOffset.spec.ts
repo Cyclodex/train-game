@@ -194,3 +194,39 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
     expect(maxStep(offs)).toBeLessThan(W * 0.12);
   });
 });
+
+describe("one-way centred funnel (symmetric squeeze)", () => {
+  const W = TILE * 0.14;
+
+  it("scales the centred band symmetrically toward the narrower seam", () => {
+    // A one-way 3-lane tile has a CENTRED band selfBand = 3/2 = 1.5, lane centres
+    // at +1·W, 0, -1·W. Narrowing toward a 2-lane seam (band 1), the centred
+    // funnel scales every lane by seamWidth/selfBand = 2/3, so the whole band
+    // squeezes symmetrically: the outer lanes ease in by equal amounts and the
+    // centre lane stays put. `centred = true` is the one-way path.
+    const selfBand = 1.5;
+    const seam = 1;
+    const off = (lp: number) => laneOffsetPx(lp, selfBand, selfBand, seam, 1, TILE, true);
+    expect(off(0)).toBeCloseTo(1 * W * (2 / 3), 5); // +0.667·W
+    expect(off(1)).toBeCloseTo(0, 5); // centre lane holds
+    expect(off(2)).toBeCloseTo(-1 * W * (2 / 3), 5); // -0.667·W
+    expect(off(0)).toBeCloseTo(-off(2), 5); // symmetric about the centreline
+  });
+
+  it("a uniform one-way road (no taper) keeps every lane on its centred line", () => {
+    const selfBand = 1.5;
+    const off = (lp: number) => laneOffsetPx(lp, selfBand, selfBand, selfBand, 1, TILE, true);
+    expect(off(0)).toBeCloseTo(1 * W, 5);
+    expect(off(1)).toBeCloseTo(0, 5);
+    expect(off(2)).toBeCloseTo(-1 * W, 5);
+  });
+
+  it("contrasts with the bidirectional clamp (asymmetric, kerb lane only)", () => {
+    // Same band numbers but the two-way path (centred = false): the offset is
+    // clamped to one side (min(natural, seamWidth-0.5)), so the kerb lane is
+    // pulled in while the others are not mirrored — the wrong look for a one-way.
+    const off = (lp: number) => laneOffsetPx(lp, 1.5, 1.5, 1, 1, TILE, false);
+    expect(off(0)).toBeCloseTo(0.5 * W, 5); // clamped to seamWidth-0.5 = 0.5
+    expect(off(0)).not.toBeCloseTo(-off(2), 5); // not symmetric
+  });
+});
