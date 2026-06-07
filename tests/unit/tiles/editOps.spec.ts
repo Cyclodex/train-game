@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Position, ActiveIntersection } from "@/types";
 import { samePair, TileCell } from "@/tiles/model";
+import { lanesAllowingExit } from "@/tiles/lanes";
+import { validateRoads } from "@/tiles/validate";
 import {
   emptyCell,
   toggleConnection,
@@ -196,6 +198,47 @@ describe("road ops", () => {
     c = addRoad(c, Top, Bottom);
     expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
     expect(c.road).toHaveLength(4); // + lanes from T and from B
+  });
+
+  it("wires turns onto EVERY lane of a multi-lane junction (not just lane 0)", () => {
+    // Build a 2-lane 4-way cross, then draw the four turn edges with the lane
+    // picker at 2. Every lane of every approach must permit each turn — the bug
+    // was that turns landed only on lane index 0, so lane 1 couldn't turn.
+    const T = Position.Top, R = Position.Right, B = Position.Bottom, L = Position.Left;
+    let c = addRoad(emptyCell(), L, R, 2);
+    c = addRoad(c, T, B, 2); // straight 2-lane cross
+    for (const [a, b] of [[L, T], [L, B], [R, T], [R, B]] as [Position, Position][]) {
+      c = addRoad(c, a, b, 2);
+    }
+    // Each approach has two car lanes (0 and 1), and BOTH permit every turn.
+    for (const from of [T, R, B, L]) {
+      for (const exit of [T, R, B, L].filter(p => p !== from)) {
+        expect(lanesAllowingExit(c.road, from, exit)).toEqual([0, 1]);
+      }
+    }
+    // The resulting layer is structurally valid (contiguous indices, every lane exits).
+    expect(validateRoads({ "0,0": c }).issues).toEqual([]);
+  });
+
+  it("addRoad oneWay lays lanes only in the drawn direction", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    expect(c.road).toHaveLength(1);
+    expect(c.road![0]).toMatchObject({ from: Left, to: [Right], index: 0 });
+    // Not a two-way edge: there is no Right->Left movement.
+    expect(hasRoadPair(c, [Left, Right])).toBe(false);
+    // Multi-lane one-way: only the forward direction's lanes exist.
+    const w = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    expect(w.road).toHaveLength(2);
+    expect(w.road!.every(l => l.from === Left && l.to.includes(Right))).toBe(true);
+    expect(validateRoads({ "0,0": w }).issues).toEqual([]);
+  });
+
+  it("redrawing a two-way edge as one-way strips the reverse direction", () => {
+    let c = addRoad(emptyCell(), Left, Right); // two-way
+    expect(hasRoadPair(c, [Left, Right])).toBe(true);
+    c = addRoad(c, Left, Right, 1, 0, true); // repaint one-way L->R
+    expect(c.road).toHaveLength(1);
+    expect(c.road![0]).toMatchObject({ from: Left, to: [Right] });
   });
 
   it("removeRoad removes a specific pair regardless of order", () => {

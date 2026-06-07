@@ -62,6 +62,12 @@
           @click="roadIsBus = !roadIsBus"
           title="Bus-only lane (cars cannot use)"
         >🚌</button>
+        <button
+          class="dock-btn lane-btn oneway-btn"
+          :class="{ on: roadOneWay }"
+          @click="roadOneWay = !roadOneWay"
+          title="One-way road (lanes only in the drawn direction)"
+        >➡️</button>
       </div>
     </ToolDock>
 
@@ -275,6 +281,7 @@ type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
 const ROAD_BUS_KEY = "train-game:editor-road-is-bus";
+const ROAD_ONEWAY_KEY = "train-game:editor-road-one-way";
 const EDGES: Port[] = [
   Position.Top,
   Position.Right,
@@ -288,7 +295,7 @@ const HINTS: Record<Tool, string> = {
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
-  road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Road over track = level crossing.",
+  road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -346,6 +353,9 @@ class EditorView extends Vue {
   roadLaneCount = loadRoadLaneCount();
   // Whether the road tool draws bus-only lanes (cars cannot use them).
   roadIsBus = loadRoadIsBus();
+  // Whether the road tool draws one-way roads (lanes only in the drawn
+  // direction) rather than the default two-way road.
+  roadOneWay = loadRoadOneWay();
   // Set only in the U-turn case: the frontier tile is left undecided (blank)
   // because you're pointing at the edge the track entered through. The head
   // then trails one tile back, pointing at this pending tile.
@@ -487,7 +497,14 @@ class EditorView extends Vue {
   // Lay a port pair on the active layer, returning the new cell.
   layPair(cell: Level[string], a: Port, b: Port): Level[string] {
     if (this.drawing === "road") {
-      return addRoad(cell, a, b, this.roadLaneCount, this.roadIsBus ? 1 : 0);
+      return addRoad(
+        cell,
+        a,
+        b,
+        this.roadLaneCount,
+        this.roadIsBus ? 1 : 0,
+        this.roadOneWay,
+      );
     }
     return addConnection(cell, a, b);
   }
@@ -578,6 +595,11 @@ class EditorView extends Vue {
   @Watch("roadIsBus")
   saveRoadIsBus(v: boolean) {
     try { localStorage.setItem(ROAD_BUS_KEY, v ? "1" : "0"); } catch { /* ignore */ }
+  }
+
+  @Watch("roadOneWay")
+  saveRoadOneWay(v: boolean) {
+    try { localStorage.setItem(ROAD_ONEWAY_KEY, v ? "1" : "0"); } catch { /* ignore */ }
   }
 
   // Max per-direction lane count across all edges of a tile (for the badge).
@@ -863,6 +885,14 @@ function loadRoadLaneCount(): number {
 function loadRoadIsBus(): boolean {
   try {
     return localStorage.getItem(ROAD_BUS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function loadRoadOneWay(): boolean {
+  try {
+    return localStorage.getItem(ROAD_ONEWAY_KEY) === "1";
   } catch {
     return false;
   }

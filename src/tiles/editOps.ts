@@ -9,14 +9,22 @@ import {
   defaultArmFor,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
-import { nWayLanes } from "@/tiles/lanes";
 
-// Build bus lanes with indices starting at `startIndex`.
-function busLanesFrom(a: Port, b: Port, count: number, startIndex: number): Lane[] {
-  return Array.from({ length: count }, (_, i) => [
-    { from: a, to: [b], index: startIndex + i, kind: "bus" as LaneKind },
-    { from: b, to: [a], index: startIndex + i, kind: "bus" as LaneKind },
-  ]).flat();
+// Lanes for a SINGLE direction from -> to: `count` lanes at indices
+// startIndex..startIndex+count-1, optionally tagged with a lane `kind`.
+function directedLanes(
+  from: Port,
+  to: Port,
+  count: number,
+  startIndex: number,
+  kind?: LaneKind,
+): Lane[] {
+  return Array.from({ length: count }, (_, i) => ({
+    from,
+    to: [to],
+    index: startIndex + i,
+    ...(kind != null ? { kind } : {}),
+  }));
 }
 
 // Pure, immutable single-cell editing operations used by the level editor. Each
@@ -135,6 +143,29 @@ function upsertMovement(road: Lane[], from: Port, to: Port): Lane[] {
   return [...road, { from, to: [to], index: 0 }];
 }
 
+// Add the movement from -> to to EVERY car lane of the `from` approach, widening
+// it to `count` car lanes when it has fewer. This is the multi-lane junction case:
+// drawing a turn into a 2/3-lane junction must connect on all of its lanes, not
+// just lane 0 (the bug that left higher lanes unable to turn). Bus lanes keep
+// their own indices and are left untouched.
+function addJunctionMovement(road: Lane[], from: Port, to: Port, count: number): Lane[] {
+  const carLanes = road.filter(l => l.from === from && l.kind !== "bus");
+  const maxIdx = carLanes.length ? Math.max(...carLanes.map(l => l.index)) : -1;
+  const target = Math.max(count, maxIdx + 1); // never shrink an existing approach
+  // Add the exit to existing car lanes of this approach.
+  let out = road.map(l =>
+    l.from === from && l.kind !== "bus" && !l.to.includes(to)
+      ? { ...l, to: [...l.to, to] }
+      : l,
+  );
+  // Create any car lanes missing below `target` (skip indices a bus lane holds).
+  const present = new Set(road.filter(l => l.from === from).map(l => l.index));
+  for (let i = 0; i < target; i++) {
+    if (!present.has(i)) out = [...out, { from, to: [to], index: i }];
+  }
+  return out;
+}
+
 function dropMovement(road: Lane[], from: Port, to: Port): Lane[] {
   return road
     .map(l => (l.from === from ? { ...l, to: l.to.filter(t => t !== to) } : l))
@@ -157,31 +188,49 @@ export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
 }
 
-// Set a two-way road edge to exactly `carCount` car lanes + `busCount` bus lanes
-// per direction. For a plain straight or curve (no junction exits), the edge is
-// fully replaced so drawing over an existing road upgrades or downgrades it in
-// place. For a junction approach (the lane has exits beyond this edge), the
-// additive merge is used instead to preserve the other movements.
-// Bus lanes are placed after car lanes (higher index) so they form a separate
-// physical lane slot alongside the regular lanes rather than replacing them.
-export function addRoad(cell: TileCell, a: Port, b: Port, carCount = 1, busCount = 0): TileCell {
+// Set a road edge to exactly `carCount` car lanes + `busCount` bus lanes per
+// direction. When `oneWay` is true the edge carries lanes only in the drawn
+// direction (a -> b); otherwise both directions are laid (the default two-way
+// road). For a plain straight or curve (no junction exits), the edge is fully
+// replaced so drawing over an existing road upgrades/downgrades it in place —
+// including flipping a two-way road to one-way (the reverse lanes are stripped).
+// For a junction approach (the lane has exits beyond this edge), the additive
+// merge is used instead to preserve the other movements.
+// Bus lanes take the OUTER (kerb-side) slots — indices 0..busCount-1 — and the
+// car lanes sit inboard of them at busCount..busCount+carCount-1, so a bus lane
+// renders on the kerb edge of the road rather than between the car lanes and the
+// centreline (index 0 = kerb, highest index = centre; see sim/laneOffset.ts).
+export function addRoad(
+  cell: TileCell,
+  a: Port,
+  b: Port,
+  carCount = 1,
+  busCount = 0,
+  oneWay = false,
+): TileCell {
   const road = cell.road ?? [];
   // Detect junction: an approach whose `to[]` includes exits other than the
   // partner port. Replacing such a lane would silently drop those movements.
   const aIsJunction = road.some(l => l.from === a && l.to.some(t => t !== b));
   const bIsJunction = road.some(l => l.from === b && l.to.some(t => t !== a));
   if (aIsJunction || bIsJunction) {
-    return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
+    // Wire the movement across every lane of the approach(es) at the picked lane
+    // count, so a turn into a multi-lane junction connects on all its lanes. A
+    // one-way road only wires the drawn direction.
+    let next = addJunctionMovement(road, a, b, carCount);
+    if (!oneWay) next = addJunctionMovement(next, b, a, carCount);
+    return { ...cell, road: next };
   }
   // Simple edge: replace with the exact lane count (upgrade or downgrade).
   const stripped = dropMovement(dropMovement(road, a, b), b, a);
+  // Bus lanes on the kerb-side slots, car lanes inboard, for one direction.
+  const dir = (from: Port, to: Port): Lane[] => [
+    ...directedLanes(from, to, busCount, 0, "bus"),
+    ...directedLanes(from, to, carCount, busCount),
+  ];
   return {
     ...cell,
-    road: [
-      ...stripped,
-      ...nWayLanes(a, b, carCount),
-      ...busLanesFrom(a, b, busCount, carCount),
-    ],
+    road: [...stripped, ...dir(a, b), ...(oneWay ? [] : dir(b, a))],
   };
 }
 
