@@ -77,7 +77,7 @@ export const gameConfig: GameConfig = reactive({
   colorSeed: 1,
   roads: true,
   roadScoring: false,
-  maxCars: 35, // % of map capacity — a moderately busy default
+  maxCars: 5, // % of map capacity — a quiet default (few cars on screen)
   worldTheme: loadWorldTheme(),
 });
 
