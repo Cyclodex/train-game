@@ -264,8 +264,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges, laneCount } from "@/tiles/lanes";
-import type { LaneKind } from "@/tiles/lanes";
+import { roadEdges as laneEdges } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -471,8 +470,7 @@ class EditorView extends Vue {
   // Lay a port pair on the active layer, returning the new cell.
   layPair(cell: Level[string], a: Port, b: Port): Level[string] {
     if (this.drawing === "road") {
-      const kind: LaneKind | undefined = this.roadIsBus ? "bus" : undefined;
-      return addRoad(cell, a, b, this.roadLaneCount, kind);
+      return addRoad(cell, a, b, this.roadLaneCount, this.roadIsBus ? 1 : 0);
     }
     return addConnection(cell, a, b);
   }

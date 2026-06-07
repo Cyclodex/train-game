@@ -11,6 +11,14 @@ import {
 import type { Lane, LaneKind } from "@/tiles/lanes";
 import { nWayLanes } from "@/tiles/lanes";
 
+// Build bus lanes with indices starting at `startIndex`.
+function busLanesFrom(a: Port, b: Port, count: number, startIndex: number): Lane[] {
+  return Array.from({ length: count }, (_, i) => [
+    { from: a, to: [b], index: startIndex + i, kind: "bus" as LaneKind },
+    { from: b, to: [a], index: startIndex + i, kind: "bus" as LaneKind },
+  ]).flat();
+}
+
 // Pure, immutable single-cell editing operations used by the level editor. Each
 // returns a new TileCell so Vue's reactive Level can swap the entry in place.
 
@@ -149,12 +157,14 @@ export function toggleRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: upsertMovement(upsertMovement(road, a, b), b, a) };
 }
 
-// Set a two-way road edge to exactly `count` lanes per direction. For a plain
-// straight or curve (no junction exits), the edge is fully replaced so drawing
-// over an existing road with a different count selected upgrades or downgrades
-// it in place. For a junction approach (the lane has exits beyond this edge),
-// the additive merge is used instead to preserve the other movements.
-export function addRoad(cell: TileCell, a: Port, b: Port, count = 1, kind?: LaneKind): TileCell {
+// Set a two-way road edge to exactly `carCount` car lanes + `busCount` bus lanes
+// per direction. For a plain straight or curve (no junction exits), the edge is
+// fully replaced so drawing over an existing road upgrades or downgrades it in
+// place. For a junction approach (the lane has exits beyond this edge), the
+// additive merge is used instead to preserve the other movements.
+// Bus lanes are placed after car lanes (higher index) so they form a separate
+// physical lane slot alongside the regular lanes rather than replacing them.
+export function addRoad(cell: TileCell, a: Port, b: Port, carCount = 1, busCount = 0): TileCell {
   const road = cell.road ?? [];
   // Detect junction: an approach whose `to[]` includes exits other than the
   // partner port. Replacing such a lane would silently drop those movements.
@@ -165,7 +175,14 @@ export function addRoad(cell: TileCell, a: Port, b: Port, count = 1, kind?: Lane
   }
   // Simple edge: replace with the exact lane count (upgrade or downgrade).
   const stripped = dropMovement(dropMovement(road, a, b), b, a);
-  return { ...cell, road: [...stripped, ...nWayLanes(a, b, count, kind)] };
+  return {
+    ...cell,
+    road: [
+      ...stripped,
+      ...nWayLanes(a, b, carCount),
+      ...busLanesFrom(a, b, busCount, carCount),
+    ],
+  };
 }
 
 export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
