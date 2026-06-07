@@ -218,6 +218,39 @@ describe("createRoadSim — spawning + movement", () => {
     expect(completed.size).toBeGreaterThan(10); // sustained flow through the merge
   });
 
+  it("angles the body into a lane change (rear coupler lags the front)", () => {
+    // While a car merges out of lane 1, its front coupler reaches the new lane
+    // before its rear, so the two couplers sit at different lateral positions —
+    // that divergence is the lean (a flat sideways slide would keep them equal).
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "1,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "2,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 1) },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 9,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 6,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+    });
+    let maxLean = 0;
+    for (let i = 0; i < 600; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const fp = c.units[0].front.lanePos;
+        const rp = c.units[0].rear.lanePos;
+        if (fp != null && rp != null) maxLean = Math.max(maxLean, Math.abs(fp - rp));
+      }
+    }
+    // A clear front/rear lateral divergence occurs at some point (the lean).
+    expect(maxLean).toBeGreaterThan(0.1);
+  });
+
   it("sorts cars into the turn lane that permits their turn (F)", () => {
     // The turnlanes scenario: a 2-lane approach to a T whose kerb lane turns
     // right and inner lane turns left. Every car that reaches the junction must

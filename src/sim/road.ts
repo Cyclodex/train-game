@@ -252,6 +252,11 @@ export interface Car {
   // survives the next lane drop (merge) and that permits its next turn (F). The
   // car eases `laneIndex` toward this when the adjacent lane is clear (G).
   targetLane: number;
+  // Current lateral speed (lanes/sec, signed) — how fast `laneIndex` is changing.
+  // Drives the body lean: a coupler a distance behind the head sits where the car
+  // was a moment ago, so its lateral position lags by `laneVel · (arc / speed)`,
+  // angling the body into the change instead of sliding flat.
+  laneVel: number;
   // The map-edge entry this car is heading toward (set at spawn via planRoute).
   // Null when the BFS found no path or no targets exist.
   destination: RoadEntry | null;
@@ -265,6 +270,10 @@ export interface CarSample {
   entryPort: Port;
   exitPort: Port | null;
   t: number; // 0..1 progress within the tile segment
+  // Continuous lateral lane position at this coupler (set by sample()). Lags the
+  // head during a lane change so the rendered body angles into it. Optional so
+  // internal sampleAtArc callers that don't render can ignore it.
+  lanePos?: number;
 }
 // One rendered body box of a vehicle (a car/truck is one unit; a semi is two:
 // cab + trailer). `front`/`rear` are its two ends sampled along the car's path
@@ -652,22 +661,36 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // integer lane when that lane is clear; otherwise it holds its current lateral
   // position and waits for a gap. Called once per car per tick.
   function updateLateral(car: Car, dt: number): void {
+    const before = car.laneIndex;
     car.targetLane = desiredLane(car);
     const diff = car.targetLane - car.laneIndex;
     if (Math.abs(diff) <= LANE_SETTLE) {
       car.laneIndex = car.targetLane;
-      return;
+    } else {
+      const dir = Math.sign(diff);
+      // Starting from a settled lane, only begin the change once the lane we'd
+      // cross into is clear (gap acceptance). Once mid-crossing (fractional
+      // position) we are committed and finish — the gap was checked when we set off.
+      const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
+      const blocked = atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir);
+      if (!blocked) {
+        const step = LANE_CHANGE_RATE * dt;
+        car.laneIndex += dir * Math.min(step, Math.abs(diff));
+      }
     }
-    const dir = Math.sign(diff);
-    // Starting from a settled lane, only begin the change once the lane we'd cross
-    // into is clear (gap acceptance). Once mid-crossing (fractional position) we
-    // are committed and finish — the gap was already checked when we set off.
-    const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
-    if (atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir)) {
-      return; // hold and wait for a gap
-    }
-    const step = LANE_CHANGE_RATE * dt;
-    car.laneIndex += dir * Math.min(step, Math.abs(diff));
+    // Lateral speed this tick — drives the render lean (see Car.laneVel).
+    car.laneVel = dt > 0 ? (car.laneIndex - before) / dt : 0;
+  }
+
+  // The car's lateral lane position at a point `arc` tiles behind its head: it
+  // lags the head's `laneIndex` by the lateral distance covered while the head
+  // travelled that arc, so a mid-change body angles into the new lane.
+  function lanePosAt(car: Car, arc: number, sample: CarSample): number {
+    const count = laneCount(level[getCoordinatesId(sample.coord)]?.road, sample.entryPort);
+    const lag = car.laneVel * (arc / Math.max(car.velocity, 1e-3));
+    const pos = car.laneIndex - lag;
+    if (count <= 1) return 0;
+    return Math.max(0, Math.min(count - 1, pos));
   }
 
   // Exit port for the very first tile on the spawn path: checks the route plan
@@ -1081,6 +1104,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       crossedCrossing: false,
       laneIndex: 0,
       targetLane: 0,
+      laneVel: 0,
       destination: null,
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
@@ -1140,6 +1164,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       crossedCrossing: false,
       laneIndex: chosenLane,
       targetLane: chosenLane,
+      laneVel: 0,
       destination,
     });
   }
@@ -1223,12 +1248,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const units: CarUnit[] = [];
         let lead = 0; // arc distance from the head to this segment's leading edge
         for (const seg of spec.segments) {
-          units.push({
-            front: sampleAtArc(c, lead),
-            rear: sampleAtArc(c, lead + seg.length),
-            lengthTiles: seg.length,
-            part: seg.part,
-          });
+          const front = sampleAtArc(c, lead);
+          const rear = sampleAtArc(c, lead + seg.length);
+          front.lanePos = lanePosAt(c, lead, front);
+          rear.lanePos = lanePosAt(c, lead + seg.length, rear);
+          units.push({ front, rear, lengthTiles: seg.length, part: seg.part });
           lead += seg.length + spec.gap;
         }
         const headSeg = c.path[c.headIndex];

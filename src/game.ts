@@ -383,9 +383,9 @@ export function createGame(
   // on curves (the body leans into the curve) instead of overlapping. When the
   // chord collapses (a unit bunched at a depot exit before the train extends),
   // fall back to the front point's tangent to avoid an atan2(0,0) flip.
-  function positionUnit(body: UnitChord, offsetRight = 0) {
-    const f = sampleWorld(body.front, offsetRight);
-    const r = sampleWorld(body.rear, offsetRight);
+  function positionUnit(body: UnitChord, offsetFront = 0, offsetRear = offsetFront) {
+    const f = sampleWorld(body.front, offsetFront);
+    const r = sampleWorld(body.rear, offsetRear);
     const dx = f.x - r.x;
     const dy = f.y - r.y;
     const chord = Math.hypot(dx, dy);
@@ -470,13 +470,16 @@ export function createGame(
         const id = `${s.id}#${u}`;
         seen.add(id);
 
-        // Lateral lane offset, right-of-travel. `curIndex` is the car's CONTINUOUS
-        // lane position (the sim eases it across lanes for merges and turn-lane
-        // moves), so a plain offset gives a smooth lane change for free — no
-        // render-side taper needed; the simulation owns the lateral motion now.
-        const laneOffset = (curCount - 0.5 - curIndex) * tileSize * LANE_WIDTH_FRAC;
+        // Lateral lane offset, right-of-travel, computed PER COUPLER from its own
+        // continuous lane position (`lanePos`). During a lane change the rear
+        // coupler's position lags the front's, so the body angles into the new
+        // lane (the lean) instead of sliding flat. The sim eases these across
+        // lanes for merges and turn-lane moves; off-change they're equal.
+        const off = (lanePos: number) => (curCount - 0.5 - lanePos) * tileSize * LANE_WIDTH_FRAC;
+        const offsetFront = off(unit.front.lanePos ?? curIndex);
+        const offsetRear = off(unit.rear.lanePos ?? curIndex);
 
-        const { x, y, angle } = positionUnit(unit as unknown as UnitChord, laneOffset);
+        const { x, y, angle } = positionUnit(unit as unknown as UnitChord, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;
         const existing = roadCars.find(c => c.id === id);
         if (existing) {
