@@ -155,4 +155,26 @@ describe("kindOf", () => {
     ).toBe("tjunction");
     expect(kindOf({ connections: CROSS })).toBe("cross");
   });
+
+  it("labels a road-only straight, taper and one-way from its lanes", () => {
+    const lane = (from: typeof Top, to: typeof Top, index: number) => ({ from, to: [to], index });
+    // Equal lane count both ways -> plain straight.
+    expect(
+      kindOf({ connections: [], road: [lane(Top, Bottom, 0), lane(Bottom, Top, 0)] })
+    ).toBe("road-straight");
+    // 2 lanes one way, 3 the other -> taper (the lane-count transition tile).
+    expect(
+      kindOf({
+        connections: [],
+        road: [
+          lane(Top, Bottom, 0), lane(Top, Bottom, 1),
+          lane(Bottom, Top, 0), lane(Bottom, Top, 1), lane(Bottom, Top, 2),
+        ],
+      })
+    ).toBe("road-taper");
+    // One-way (lanes only one direction) is a straight, not a taper.
+    expect(
+      kindOf({ connections: [], road: [lane(Top, Bottom, 0), lane(Top, Bottom, 1)] })
+    ).toBe("road-straight");
+  });
 });

@@ -13,6 +13,7 @@ export type TileKind =
   | "depot"
   | "dead-end"
   | "road-straight"
+  | "road-taper"
   | "road-curve"
   | "road-tjunction"
   | "road-cross"
@@ -185,7 +186,17 @@ export function kindOf(cell: TileCell): TileKind {
     if (ports.size === 3) return "road-tjunction";
     if (ports.size === 2) {
       const [a, b] = [...ports] as [Port, Port];
-      return a === oppositePort(b) ? "road-straight" : "road-curve";
+      if (a !== oppositePort(b)) return "road-curve";
+      // A straight whose two ends carry a different number of physical lanes is
+      // a taper (the lane-count transition tile, e.g. 2L on one side, 3L on the
+      // other). Distinct lane indices per approach = that approach's lane count.
+      // Both ends must carry lanes — a one-way straight (lanes only one way) has
+      // an empty opposite approach and is a road-straight, not a taper.
+      const countFrom = (p: Port) =>
+        new Set(road.filter(l => l.from === p).map(l => l.index)).size;
+      const ca = countFrom(a);
+      const cb = countFrom(b);
+      return ca > 0 && cb > 0 && ca !== cb ? "road-taper" : "road-straight";
     }
     return "road-straight";
   }
