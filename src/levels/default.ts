@@ -1,6 +1,7 @@
 import { Position, TrainsDefinition, TrainStatus } from "@/types";
 import { Level } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
+import { fromPairs } from "@/tiles/lanes";
 import { TrafficConfig } from "@/sim/road";
 
 // Road traffic for the default level: mostly cars, the occasional truck, and a
@@ -99,7 +100,7 @@ export const DEFAULT_LEVEL: Level = {
   // vertical road crossing it. The road continues down into the road-only tile
   // 1,5 so cars approach and queue from below; the gate derives from the train
   // reservation on this tile.
-  "1,4": { ...expandKind("straight", 1), road: [[Position.Top, Position.Bottom]] },
+  "1,4": { ...expandKind("straight", 1), road: fromPairs([[Position.Top, Position.Bottom]]) },
   "2,4": expandKind("cross", 0),
   "3,4": expandKind("straight", 1),
   "4,4": expandKind("curve", 3),
@@ -107,7 +108,7 @@ export const DEFAULT_LEVEL: Level = {
   "6,4": expandKind("straight", 0),
   // Road-only tile feeding the level crossing at 1,4 from below (cars approach
   // and queue here). No rail, so it is plain road, not a crossing.
-  "1,5": { connections: [], road: [[Position.Top, Position.Bottom]] },
+  "1,5": { connections: [], road: fromPairs([[Position.Top, Position.Bottom]]) },
   "2,5": expandKind("curve", 0),
   "3,5": expandKind("straight", 1, { signals: true }),
   "4,5": expandKind("straight", 1),

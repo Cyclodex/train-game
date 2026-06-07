@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Cargo trucks: the three road-vehicle kinds — a car, a longer rigid truck, and
 // an articulated cab + trailer semi — driving curves and crossing a junction.
@@ -15,7 +16,7 @@ import { TestScenario } from "@/levels/test/scenario";
 // until the whole rig is clear (full-body occupancy, not just the cab/tail). The
 // mix is weighted toward trucks and semis so all three lengths are on show. No
 // rail, so the scenario has no trains.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 export const trucks: TestScenario = {
   id: "trucks",

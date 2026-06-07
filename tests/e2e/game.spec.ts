@@ -12,8 +12,9 @@ test.describe("Train game", () => {
 
     await page.goto("/");
 
-    // The 7x6 grid has 40 track tiles (two cells are intentionally empty).
-    await expect(page.locator(".tile")).toHaveCount(40);
+    // The 7x6 grid has 41 tiles (one cell is intentionally empty); this includes
+    // the road-only feeder tile below the level crossing.
+    await expect(page.locator(".tile")).toHaveCount(41);
 
     // Both trains (the locomotives) are rendered.
     const locomotives = page.locator(".train-locomotive");
@@ -175,10 +176,11 @@ test.describe("Train game", () => {
 test.describe("Level editor", () => {
   const cell = (page: Page, coord: string) =>
     page.locator(`.editor-cell[data-coord="${coord}"]`);
-  // West=Left=3, East=Right=1.
+  // The redesigned editor draws via triangular edge hit-zones (`.zone`), not
+  // edge dots. West=Left=3, East=Right=1.
   const drawWestEast = async (page: Page, coord: string) => {
-    const west = cell(page, coord).locator('.port[data-port="3"]');
-    const east = cell(page, coord).locator('.port[data-port="1"]');
+    const west = cell(page, coord).locator('.zone[data-port="3"]');
+    const east = cell(page, coord).locator('.zone[data-port="1"]');
     await west.dragTo(east);
   };
 
@@ -216,10 +218,10 @@ test.describe("Level editor", () => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(1);
-    // Click the connection hit-path to delete it. force: a horizontal line has a
-    // zero-height bbox so Playwright's visibility heuristic skips it, but the
-    // 24px-wide stroke is hittable in a real browser.
-    await cell(page, "2,2").locator(".conn-hit").click({ force: true });
+    // In the redesigned editor, the erase tool reveals a ✕ delete handle per
+    // connection; clicking it removes just that rail.
+    await page.getByRole("button", { name: "erase" }).click();
+    await cell(page, "2,2").locator(".del").first().click({ force: true });
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(0);
   });
 
@@ -227,8 +229,8 @@ test.describe("Level editor", () => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
     await page.getByRole("button", { name: "signal" }).click();
-    // Toggle a signal on the East port of the straight.
-    await cell(page, "2,2").locator('.port[data-port="1"]').click();
+    // Toggle a signal on the East edge of the straight.
+    await cell(page, "2,2").locator('.zone[data-port="1"]').click();
     await expect(cell(page, "2,2").locator(".signal")).toHaveCount(1);
   });
 

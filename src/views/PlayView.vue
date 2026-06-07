@@ -40,6 +40,7 @@
       </router-link>
     </MenuDrawer>
     <div
+      v-if="!roadOnly"
       class="score-card"
       :class="{
         'score-card--pulse': pulsing,
@@ -251,7 +252,7 @@ import {
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import { TrainsDefinition, TrainStatus } from "@/types";
-import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
+import { Level, TileCell, isLevelCrossing, isRoadOnlyLevel } from "@/tiles/model";
 import { createGame, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
@@ -535,6 +536,11 @@ class PlayView extends Vue {
   }
   get delivered(): number {
     return this.game.deliveries.value;
+  }
+
+  // True when the level has no depots and at least one road tile.
+  get roadOnly(): boolean {
+    return isRoadOnlyLevel(this.level);
   }
 
   // Total trains in the level — the delivery goal, since each train parks once

@@ -11,7 +11,15 @@ import { carfollowing } from "@/levels/test/scenarios/carfollowing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
 import { carscurve } from "@/levels/test/scenarios/carscurve";
+import { roadoneway } from "@/levels/test/scenarios/roadoneway";
+import { roadtwolane } from "@/levels/test/scenarios/roadtwolane";
+import { roadmultilane } from "@/levels/test/scenarios/roadmultilane";
+import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
+import { roadjunction } from "@/levels/test/scenarios/roadjunction";
+import { rightturncross } from "@/levels/test/scenarios/rightturncross";
+import { noleftturn } from "@/levels/test/scenarios/noleftturn";
+import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { trucks } from "@/levels/test/scenarios/trucks";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
@@ -38,7 +46,11 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
   {
     id: "road",
     label: "Road",
-    scenarios: [carfollowing, carqueue, carcircle, carscurve, roadcross, trucks],
+    scenarios: [
+      carfollowing, carqueue, carcircle, carscurve,
+      roadoneway, roadtwolane, roadmultilane, roadlanemerge, roadcross, roadjunction,
+      rightturncross, noleftturn, roadpriority, trucks,
+    ],
   },
   {
     id: "crossing",

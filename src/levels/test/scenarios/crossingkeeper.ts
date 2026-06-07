@@ -1,9 +1,10 @@
 import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
-const { Left, Right, Top, Bottom } = Position;
-const road = { connections: [], road: [[Left, Right]] as [Position, Position][] };
+const { Left, Right } = Position;
+const road = { connections: [], road: fromPairs([[Left, Right]]) };
 
 // Crossing Keeper, playable in isolation: one train delivers across a single
 // level crossing while a one-way street of cars flows through it. As the train
@@ -24,7 +25,7 @@ export const crossingkeeper: TestScenario = {
   level: {
     // Rail: a short depot-to-depot line crossing the road at (1,1).
     "1,0": expandKind("depot", 2), // opens south onto the crossing line
-    "1,1": { ...expandKind("straight", 0), road: [[Left, Right]] }, // the crossing
+    "1,1": { ...expandKind("straight", 0), road: fromPairs([[Left, Right]]) }, // the crossing
     "1,2": expandKind("straight", 0), // clearance so the consist parks off the rails
     "1,3": expandKind("depot", 0), // opens north — the train's destination
     // Road: one-way street from the left edge, across the crossing, out the right.

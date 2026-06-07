@@ -1,5 +1,5 @@
 import { reactive, ref, Ref } from "vue";
-import { Position, ActiveIntersection } from "@/types";
+import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId } from "@/tiles/model";
 import {
   createSimulation,
@@ -9,6 +9,9 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig } from "@/sim/road";
+import { laneCount } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
@@ -78,11 +81,21 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // simulated body matches the visible sprite (keeps queues packing tight).
 const CAR_SPRITE_PX = 38;
 
-// How far (px at the default 200px tile) to push a car off the road centreline
-// toward its right-hand side, so cars drive in the right lane instead of straddling
-// the dashed centre. The paved ribbon is ~0.28·tile wide (see `.road-surface`),
-// so ~0.07·tile centres the car in the right half. Scaled by the actual tileSize.
-const LANE_OFFSET_FRAC = 0.07;
+// Right-hand-traffic lane model. A road tile is a single centreline; a car drives
+// in a lane offset to the *right* of its direction of travel, so oncoming traffic
+// rides the opposite side of the dashed centre and the two streams pass instead of
+// meeting head-on. The paved ribbon is ~0.28·tile wide (see `.road-surface`), split
+// into two ~0.14·tile lanes; a car sits at the centre of its lane, ~0.07·tile from
+// the centreline. Scaled by the actual tileSize.
+//
+// Extending to >1 lane per direction later: widen `.road-surface` to
+// `2 · lanesPerDirection` lane-widths and offset a car in lane L (0 = rightmost,
+// nearest the kerb) by `(L + 0.5) · laneWidthFrac`. The sim's lane separation
+// (opposing traffic never shares a lane) already generalises; only lane *assignment*
+// (which of several same-direction lanes a car picks) would be new work.
+// Physical width of one lane as a fraction of tile size. At 200px this is 28px.
+// Single-lane (count=1, index=0): offset = (1-0.5-0) × LANE_WIDTH_FRAC = 0.07 — same as before.
+const LANE_WIDTH_FRAC = 0.14;
 
 // A single rendered body box of a road vehicle, sampled to a world position. A
 // car/truck contributes one; a semi two (cab + trailer). The id is
@@ -144,6 +157,12 @@ export interface Game {
   // The manual override state of a signal, for the renderer's indicator.
   signalOverride(tileId: string, exitPort: Position): "auto" | "green" | "red";
   positionUnit(body: UnitChord): { x: number; y: number; angle: number };
+  // The number of road lanes entering the tile at `coord` from `port`, or 0
+  // if there is no road tile there / no lanes from that port. Used by the
+  // tile renderer to taper the road surface at lane-count transitions
+  // (the wider of this tile and the neighbour dictates the painted width
+  // at the shared edge).
+  roadLaneCount(coord: Coordinates, port: Position): number;
 }
 
 export function createGame(
@@ -206,10 +225,7 @@ export function createGame(
   const { depotColors, trainColors } =
     colors ?? assignColors(level, trainDefs, makeRng(colorSeed));
 
-  // Road traffic geometry (deterministic from the level): grid extents and the
-  // one-way spawn entries. Cars spawn one-way (from Bottom/Left openings only) so
-  // a single-lane road can't head-on deadlock until a road direction model
-  // exists. Computed once; the sims are (re)built from these.
+  // Road traffic geometry (deterministic from the level): grid extents.
   let roadW = 0;
   let roadH = 0;
   for (const id of Object.keys(level)) {
@@ -218,10 +234,6 @@ export function createGame(
     roadH = Math.max(roadH, y + 1);
   }
   const allRoadEntries = roadEntries(level, roadW, roadH);
-  const oneWayEntries = allRoadEntries.filter(
-    e => e.entryPort === Position.Bottom || e.entryPort === Position.Left
-  );
-
   // The train + road sims are built together so `reset()` can rebuild both from
   // the same inputs (the simulation has no in-place reset), giving a true,
   // deterministic do-over for Retry. They're `let` so the rebuild reassigns them;
@@ -266,7 +278,9 @@ export function createGame(
       width: roadW,
       height: roadH,
       seed: colorSeed,
-      spawnEntries: oneWayEntries.length ? oneWayEntries : allRoadEntries,
+      // Directed lane model: every edge opening is a valid spawn point; the Lane[]
+      // from/to fields handle one-way and turn restrictions so no external filter needed.
+      spawnEntries: allRoadEntries,
       spawnInterval: 1.6, // a steady trickle so a small queue forms at a closed gate
       carSpeed: 0.5, // tiles/sec — slow enough to read on screen
       // Match the logical (car) body to the rendered sprite (.road-car is 38px wide
@@ -443,12 +457,57 @@ export function createGame(
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
-    const laneOffset = tileSize * LANE_OFFSET_FRAC;
     for (const s of samples) {
+      const curCount = s.laneCount;
+      const curIndex = s.laneIndex;
       for (let u = 0; u < s.units.length; u++) {
         const unit = s.units[u];
         const id = `${s.id}#${u}`;
         seen.add(id);
+
+        // Compute lane offset with smooth taper at lane-count transitions.
+        // The taper always animates on the WIDER tile — matching the visual polygon
+        // that also tapers on the wider tile (Math.min seam rule in Tile.vue):
+        //   • Narrowing (curCount > nextCount): look ahead, glide from wide to narrow
+        //     as the car traverses the end of this wider tile.
+        //   • Widening (curCount > prevCount): look behind, glide from the entry
+        //     (narrow) offset to the proper lane position as the car traverses the
+        //     start of this wider tile.
+        const front = unit.front;
+        const fromOffset = (curCount - 0.5 - curIndex) * tileSize * LANE_WIDTH_FRAC;
+        let laneOffset = fromOffset;
+        let taperApplied = false;
+
+        // Narrowing: current tile is wider than the next — animate toward narrower exit.
+        if (front.exitPort != null) {
+          const nextCoord = neighborCoord(front.coord, front.exitPort);
+          if (nextCoord) {
+            const nextTile = level[getCoordinatesId(nextCoord)];
+            const nextEntry = oppositePort(front.exitPort);
+            const nextCount = laneCount(nextTile?.road, nextEntry);
+            if (nextCount > 0 && nextCount < curCount) {
+              const nextIndex = Math.min(curIndex, nextCount - 1);
+              const toOffset = (nextCount - 0.5 - nextIndex) * tileSize * LANE_WIDTH_FRAC;
+              laneOffset = fromOffset + (toOffset - fromOffset) * front.t;
+              taperApplied = true;
+            }
+          }
+        }
+
+        // Widening: current tile is wider than the previous — animate from narrow entry.
+        if (!taperApplied) {
+          const prevCoord = neighborCoord(front.coord, front.entryPort);
+          if (prevCoord) {
+            const prevTile = level[getCoordinatesId(prevCoord)];
+            const prevCount = laneCount(prevTile?.road, front.entryPort);
+            if (prevCount > 0 && prevCount < curCount) {
+              const prevIndex = Math.min(curIndex, prevCount - 1);
+              const fromNarrowOffset = (prevCount - 0.5 - prevIndex) * tileSize * LANE_WIDTH_FRAC;
+              laneOffset = fromNarrowOffset + (fromOffset - fromNarrowOffset) * front.t;
+            }
+          }
+        }
+
         const { x, y, angle } = positionUnit(unit as unknown as UnitChord, laneOffset);
         const widthPx = unit.lengthTiles * tileSize;
         const existing = roadCars.find(c => c.id === id);
@@ -678,5 +737,9 @@ export function createGame(
       }
     },
     positionUnit,
+    roadLaneCount(coord: Coordinates, port: Position): number {
+      const id = getCoordinatesId(coord);
+      return laneCount(level[id]?.road, port);
+    },
   };
 }

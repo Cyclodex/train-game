@@ -1,6 +1,7 @@
 import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 const { Top, Right, Bottom, Left } = Position;
 
@@ -34,19 +35,19 @@ export const crossing: TestScenario = {
     "3,1": expandKind("depot", 3), // opens west onto crossing#1
     "2,1": {
       ...expandKind("straight", 1), // horizontal rail (Left-Right) …
-      road: [[Top, Bottom]], // … crossing#1: vertical road over it
+      road: fromPairs([[Top, Bottom]]), // … crossing#1: vertical road over it
     },
     "1,1": expandKind("curve", 1), // Right <-> Bottom: turn the track downward
     "1,2": {
       ...expandKind("straight", 0), // vertical rail (Top-Bottom) …
-      road: [[Left, Right]], // … crossing#2: horizontal road over it
+      road: fromPairs([[Left, Right]]), // … crossing#2: horizontal road over it
     },
     "1,3": expandKind("depot", 0), // opens north onto crossing#2
 
     // --- Road: one continuous street, approach → crossing → curve → crossing ---
-    "2,0": { connections: [], road: [[Top, Bottom]] }, // straight approach (top edge)
-    "0,2": { connections: [], road: [[Left, Right]] }, // straight approach (left edge → spawn)
-    "2,2": { connections: [], road: [[Top, Left]] }, // road curve joining the crossings
+    "2,0": { connections: [], road: fromPairs([[Top, Bottom]]) }, // straight approach (top edge)
+    "0,2": { connections: [], road: fromPairs([[Left, Right]]) }, // straight approach (left edge → spawn)
+    "2,2": { connections: [], road: fromPairs([[Top, Left]]) }, // road curve joining the crossings
   },
   trains: {
     train1: mkTrain("train1", 3, 1, "people", 3, "1,3"),

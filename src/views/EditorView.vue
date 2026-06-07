@@ -32,6 +32,7 @@
       <div class="drawer-status" :class="{ 'drawer-status--bad': !valid.ok }">
         {{ valid.ok ? "✓ valid" : valid.issues.length + " issue(s)" }}
         <template v-if="depotIds.length"> · {{ depotIds.length }} depots</template>
+        <template v-else-if="roadOnly"> · road only</template>
       </div>
     </MenuDrawer>
 
@@ -46,6 +47,16 @@
         <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
         <span>{{ toolMeta[t].label }}</span>
       </button>
+      <!-- Lane-count picker: only visible when the road tool is active. -->
+      <div v-if="tool === 'road'" class="lane-picker">
+        <button
+          v-for="n in [1, 2, 3]"
+          :key="n"
+          class="dock-btn lane-btn"
+          :class="{ on: roadLaneCount === n }"
+          @click="roadLaneCount = n"
+        >{{ n }}L</button>
+      </div>
     </ToolDock>
 
     <div class="world">
@@ -146,7 +157,7 @@
             </g>
             <!-- Road-delete handles: a ✕ on each road pair removes just it. -->
             <g
-              v-for="(road, i) in cell.tile.road ?? []"
+              v-for="(road, i) in roadEdges(cell.tile)"
               :key="'xr' + i"
               class="del del--road"
               @click.stop="deleteRoad(cell.key, road)"
@@ -206,6 +217,7 @@ import {
   portsOf,
   isJunctionEntry,
   parseCoordId,
+  isRoadOnlyLevel,
 } from "@/tiles/model";
 import {
   emptyCell,
@@ -223,9 +235,10 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
+import { roadEdges as laneEdges } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { setCustomLevel, trainsFromRoutes } from "@/levelStore";
+import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 
 type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
@@ -258,6 +271,10 @@ function stubGame(): Game {
     signalAspects: empty,
     signalOverrides: empty,
     cycleSignal: () => {},
+    // roadLaneCount is called by Tile.vue's roadPaths computed when config.roads
+    // is true and a road tile is present. Return 0 so the road ribbon renders
+    // at the tile's own lane count (no neighbour taper in the editor).
+    roadLaneCount: () => 0,
   } as unknown as Game;
 }
 
@@ -290,6 +307,8 @@ class EditorView extends Vue {
   // segment is laid, so the start tile is only laid once.
   armed: { id: string; port: Port } | null = null;
   routeStarted = false;
+  // Number of lanes per direction when the road tool is active (1/2/3).
+  roadLaneCount = 1;
   // Set only in the U-turn case: the frontier tile is left undecided (blank)
   // because you're pointing at the edge the track entered through. The head
   // then trails one tile back, pointing at this pending tile.
@@ -320,7 +339,12 @@ class EditorView extends Vue {
       this.valid.issues.map(i => i.tileId).filter((x): x is string => !!x)
     );
   }
+  // True when the level has no depots and at least one road tile.
+  get roadOnly(): boolean {
+    return isRoadOnlyLevel(this.level);
+  }
   get canPlay(): boolean {
+    if (this.roadOnly) return this.valid.ok;
     return this.routes.length > 0 && this.valid.ok;
   }
 
@@ -412,7 +436,7 @@ class EditorView extends Vue {
   // Lay a port pair on the active layer, returning the new cell.
   layPair(cell: Level[string], a: Port, b: Port): Level[string] {
     return this.drawing === "road"
-      ? addRoad(cell, a, b)
+      ? addRoad(cell, a, b, this.roadLaneCount)
       : addConnection(cell, a, b);
   }
   // The CSS class for the ghost preview, so a road previews as a road ribbon.
@@ -634,6 +658,11 @@ class EditorView extends Vue {
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
   }
+  // Undirected road edges of a cell (one PortPair per a<->b edge the lanes
+  // touch), so the editor shows a single delete handle per road segment.
+  roadEdges(tile: Level[string]): PortPair[] {
+    return laneEdges(tile.road);
+  }
   deleteRoad(id: string, road: PortPair) {
     this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));
   }
@@ -738,7 +767,7 @@ class EditorView extends Vue {
 function loadLevel(): Level {
   try {
     const raw = localStorage.getItem(LEVEL_KEY);
-    if (raw) return JSON.parse(raw) as Level;
+    if (raw) return migrateLevel(JSON.parse(raw) as Level);
   } catch {
     /* ignore */
   }
@@ -903,6 +932,20 @@ export default toNative(EditorView);
   fill: none;
   stroke-linecap: round;
   pointer-events: none;
+}
+// Lane-count picker: a compact inline group next to the road tool buttons.
+.lane-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+.lane-btn {
+  min-width: 38px;
+  padding: 4px 6px;
+  font-size: 12px;
 }
 .io-box {
   position: fixed;

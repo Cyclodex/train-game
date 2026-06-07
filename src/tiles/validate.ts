@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { Level, Port, portsOf, parseCoordId } from "@/tiles/model";
+import { roadPortsOf } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -115,7 +116,11 @@ export function validateLevel(
   return { ok: issues.length === 0, issues };
 }
 
-export type RoadIssueType = "dangling-road"; // road points at a tile with no road back
+export type RoadIssueType =
+  | "dangling-road" // road points at a tile with no road back
+  | "lane-index-clash" // two lanes from the same approach share an index
+  | "lane-index-gap" // indices for an approach are not contiguous from 0
+  | "lane-no-exit"; // an approach permits no exit
 
 export interface RoadIssue {
   type: RoadIssueType;
@@ -136,20 +141,56 @@ export function validateRoads(level: Level): {
   for (const [id, tile] of Object.entries(level)) {
     const road = tile.road ?? [];
     if (road.length === 0) continue;
-    const edges = portsOf(road).filter(p => p !== Position.Center);
+    const edges = roadPortsOf(road).filter(p => p !== Position.Center);
     for (const e of edges) {
       const n = neighborCoord(parseCoordId(id), e);
       if (!n) continue;
       const nid = getCoordinatesId(n);
       const nt = level[nid];
       if (!nt) continue; // off-grid: a valid map-edge road end
-      const back = portsOf(nt.road ?? []).includes(oppositePort(e));
+      const back = roadPortsOf(nt.road).includes(oppositePort(e));
       if (!back) {
         issues.push({
           type: "dangling-road",
           tileId: id,
           detail: `road port ${Position[e]} of ${id} has no connecting road neighbour`,
         });
+      }
+    }
+
+    // Lane invariants: unique index per approach; every approach permits an exit.
+    const indexByFrom = new Map<string, Set<number>>();
+    for (const lane of road) {
+      if (lane.to.length === 0) {
+        issues.push({
+          type: "lane-no-exit",
+          tileId: id,
+          detail: `lane entering ${Position[lane.from]} of ${id} permits no exit`,
+        });
+      }
+      const key = String(lane.from);
+      if (!indexByFrom.has(key)) indexByFrom.set(key, new Set());
+      const seen = indexByFrom.get(key)!;
+      if (seen.has(lane.index)) {
+        issues.push({
+          type: "lane-index-clash",
+          tileId: id,
+          detail: `two lanes from ${Position[lane.from]} share index ${lane.index} on ${id}`,
+        });
+      }
+      seen.add(lane.index);
+    }
+
+    // Check that each approach has contiguous indices 0..N-1 with no gaps.
+    for (const [key, seen] of indexByFrom) {
+      for (let i = 0; i < seen.size; i++) {
+        if (!seen.has(i)) {
+          issues.push({
+            type: "lane-index-gap",
+            tileId: id,
+            detail: `lanes from ${Position[Number(key)]} of ${id} are missing index ${i} (present: [${[...seen].sort().join(",")}])`,
+          });
+        }
       }
     }
   }

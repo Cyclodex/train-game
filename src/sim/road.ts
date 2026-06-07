@@ -1,9 +1,16 @@
 import { Coordinates, Position } from "@/types";
-import { Level, PortPair, isLevelCrossing, partnersOf } from "@/tiles/model";
+import { Level, isLevelCrossing } from "@/tiles/model";
+import { exitsFrom, isRoadJunction, laneCount } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
+import { planRoute, RouteTurn } from "./roadRouter";
+import { buildConflictMatrix, conflictKey } from "./roadJunction";
+import { ActiveMovement, WaitingCar, fcfsWithPriorityArbiter, JunctionArbiter } from "./roadArbiter";
+
+// Re-export so existing importers of isRoadJunction from "@/sim/road" keep working.
+export { isRoadJunction } from "@/tiles/lanes";
 
 // --- Vehicle kinds -----------------------------------------------------------
 // A vehicle is described as data: a list of rendered body segments plus a
@@ -92,10 +99,10 @@ export interface RoadTraversal {
 function roadExitPort(level: Level, coord: Coordinates, entryPort: Port): Port | null {
   const tile = level[getCoordinatesId(coord)];
   if (!tile || !tile.road || tile.road.length === 0) return null;
-  const partners = partnersOf(tile.road, entryPort);
-  if (partners.length === 0) return null;
-  // Single partner (straight/curve) — or pick the first for a road junction.
-  return partners[0];
+  const exits = exitsFrom(tile.road, entryPort);
+  if (exits.length === 0) return null;
+  // Single exit (straight/curve/one-way) — or pick the first for a junction.
+  return exits[0];
 }
 
 export function roadTraverse(
@@ -113,7 +120,7 @@ export function roadTraverse(
   if (!nextTile || !nextTile.road || nextTile.road.length === 0)
     return { exitPort, next: null }; // road runs off the map / dead-ends
   // The next tile must actually carry road back to us, else it's not connected.
-  if (partnersOf(nextTile.road, oppositePort(exitPort)).length === 0)
+  if (exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0)
     return { exitPort, next: null };
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
@@ -145,12 +152,12 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
     for (const port of EDGES) {
       // `port` is a road port of this tile and points off the grid (no in-grid
       // road neighbour continuing the road there) -> a spawn entry.
-      if (partnersOf(tile.road, port).length === 0) continue;
+      if (exitsFrom(tile.road, port).length === 0) continue;
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
       const neighRoad =
-        !offGrid && neigh?.road && partnersOf(neigh.road, oppositePort(port)).length > 0;
+        !offGrid && neigh?.road && exitsFrom(neigh.road, oppositePort(port)).length > 0;
       if (offGrid || !neighRoad) {
         out.push({ coord, entryPort: port });
       }
@@ -188,6 +195,14 @@ export interface Car {
   // the way ahead has cleared. Re-armed to REACTION_DELAY whenever the car is
   // fully stopped, so a released queue launches staggered instead of as a block.
   launchTimer: number;
+  // Route plan: which exit arm to take at each junction along the BFS path.
+  routePlan: RouteTurn[];
+  // Index into routePlan of the next unconsumed junction turn.
+  routeStep: number;
+  // How long this car has been stopped (seconds). Used by the arbiter's
+  // starvation guard so a low-priority car on a busy main road eventually gets a
+  // gap.
+  waitSeconds: number;
   // Seconds this car has spent held specifically by a CLOSED CROSSING ahead (not
   // by a car queued in front of it, nor by an occupied junction). Accrues while
   // the crossing is the binding constraint and the car can't roll; resets to 0
@@ -198,6 +213,10 @@ export interface Car {
   // the throughput counter (carsDelivered) only counts cars that actually used a
   // crossing — not cars that drove a road with no rail on it.
   crossedCrossing: boolean;
+  // Physical lane slot this car occupies: 0 = rightmost (kerb-side),
+  // N-1 = innermost (centre-adjacent). Set at spawn; clamped at each tile
+  // boundary when the next tile has fewer lanes.
+  laneIndex: number;
 }
 
 // A car sampled as its two anchor points along the recent path (front toward the
@@ -222,6 +241,8 @@ export interface CarUnit {
 export interface CarChord {
   id: string;
   units: CarUnit[];
+  laneIndex: number;
+  laneCount: number;
 }
 
 // Closed ⇔ this tile is a crossing reserved/occupied by a train. Supplied by the
@@ -347,23 +368,14 @@ const STOP_EPS = 1e-3;
 // from entering it. Cars are few, so the extra points are cheap.
 const BODY_SAMPLE_STEP = 0.25;
 
-// A road junction tile: two roads cross (or meet) here, so more than the two
-// ports of a plain straight/curve are paved. Cars must claim such a tile
-// exclusively — never roll into one another car already occupies — or two
-// perpendicular streams gridlock in the middle of the intersection.
-function isRoadJunction(road: PortPair[] | undefined): boolean {
-  if (!road || road.length < 2) return false;
-  const ports = new Set<Port>();
-  for (const [a, b] of road) {
-    ports.add(a);
-    ports.add(b);
-  }
-  return ports.size > 2;
-}
-
 export function createRoadSim(config: RoadSimConfig): RoadSim {
   const { level, width, height } = config;
   const rng = makeRng(config.seed ?? 1);
+  // A second, independent RNG stream for route planning. Keeping routing off the
+  // main `rng` means the per-car kind/speed draw sequence is unaffected by how
+  // many routing choices a level offers — so seeded spawn/platoon behaviour stays
+  // stable whether a map is a single straight or a branching junction network.
+  const routeRng = makeRng((config.seed ?? 1) ^ 0x9e3779b9);
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
   const carSpeed = config.carSpeed ?? DEFAULT_CAR_SPEED;
   const carLength = config.carLength ?? DEFAULT_CAR_LENGTH;
@@ -372,6 +384,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   const mix = config.mix ?? { car: 1 };
 
   const entries = config.spawnEntries ?? roadEntries(level, width, height);
+  // All map-edge entries used as BFS routing targets (not limited to spawn entries).
+  const allMapEntries = roadEntries(level, width, height);
+
+  // Pre-compute the conflict matrix for every road-junction tile once, so
+  // clearAhead doesn't rebuild it every frame.
+  const junctionConflicts = new Map<string, Set<string>>();
+  for (const [id, tile] of Object.entries(level)) {
+    if (isRoadJunction(tile.road)) {
+      junctionConflicts.set(id, buildConflictMatrix(tile.road!));
+    }
+  }
+  const arbiter: JunctionArbiter = fcfsWithPriorityArbiter;
+
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;
@@ -397,6 +422,79 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
   const tileIdOf = (c: Car): string => getCoordinatesId(c.path[c.headIndex].coord);
+
+  // Parse a "x,y" tile id back to a Coordinates object.
+  function parseJunctionCoord(id: string): Coordinates {
+    const [x, y] = id.split(",").map(Number);
+    return { x, y };
+  }
+
+  // Look up which exit arm this car's route plan prescribes at `coord` (without
+  // consuming the step). Returns null when no turn for that junction exists.
+  function carExitAt(car: Car, coord: Coordinates): Port | null {
+    const jId = getCoordinatesId(coord);
+    for (let i = car.routeStep; i < car.routePlan.length; i++) {
+      if (car.routePlan[i].junctionId === jId) return car.routePlan[i].exitArm;
+    }
+    return null;
+  }
+
+  // Same as carExitAt, but also advances routeStep past this junction once found.
+  function carExitAtConsume(car: Car, coord: Coordinates): Port | null {
+    const jId = getCoordinatesId(coord);
+    const idx = car.routePlan.findIndex((t, i) => i >= car.routeStep && t.junctionId === jId);
+    if (idx < 0) return null;
+    car.routeStep = idx + 1;
+    return car.routePlan[idx].exitArm;
+  }
+
+  // Exit port for the very first tile on the spawn path: checks the route plan
+  // for a junction turn; falls back to roadExitPort for plain tiles.
+  function routeAwareExitForSpawn(
+    coord: Coordinates,
+    entry: Port,
+    plan: RouteTurn[],
+  ): Port | null {
+    const jId = getCoordinatesId(coord);
+    const turn = plan.find(t => t.junctionId === jId);
+    return turn?.exitArm ?? roadExitPort(level, coord, entry);
+  }
+
+  // Return the ActiveMovements currently held by cars *inside* `junctionId`.
+  function activeMovementsAt(junctionId: string): ActiveMovement[] {
+    const active: ActiveMovement[] = [];
+    for (const other of cars) {
+      if (!bodyTileIds(other).has(junctionId)) continue;
+      const seg = other.path.find(s => getCoordinatesId(s.coord) === junctionId);
+      if (!seg || seg.exitPort === null) continue;
+      active.push({ carId: other.id, entryArm: seg.entryPort, exitArm: seg.exitPort });
+    }
+    return active;
+  }
+
+  // Return WaitingCars that are stopped and about to enter `junctionId`,
+  // excluding `me`.
+  function waitingCarsAt(junctionId: string, me: Car): WaitingCar[] {
+    const waiting: WaitingCar[] = [];
+    for (const other of cars) {
+      if (other === me || other.velocity > 0.001) continue;
+      const head = other.path[other.headIndex];
+      const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
+      if (exitPort === null) continue;
+      const nCoord = neighborCoord(head.coord, exitPort);
+      if (!nCoord || getCoordinatesId(nCoord) !== junctionId) continue;
+      const entryArm = oppositePort(exitPort);
+      const myExit = carExitAt(other, nCoord) ?? roadExitPort(level, nCoord, entryArm);
+      if (myExit === null) continue;
+      waiting.push({
+        entryArm,
+        exitArm: myExit,
+        priority: level[getCoordinatesId(head.coord)]?.roadPriority ?? 0,
+        waitSeconds: other.waitSeconds,
+      });
+    }
+    return waiting;
+  }
 
   // Tiles a car's body currently covers (head tile back to wherever its tail is).
   // The body is short (< 1 tile by default), so this is the head tile plus the
@@ -426,13 +524,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     route.set(getCoordinatesId(coord), { lead: -car.headProgress, entry });
     let lead = 1 - car.headProgress; // head -> the next tile's entry edge
     while (lead <= CAR_LOOKAHEAD) {
-      const t = roadTraverse(level, coord, entry);
-      if (!t.next) break; // map edge / road end
-      const id = getCoordinatesId(t.next.coord);
-      if (!route.has(id)) route.set(id, { lead, entry: t.next.entryPort });
+      const tile = level[getCoordinatesId(coord)];
+      const exits = exitsFrom(tile?.road, entry);
+      if (exits.length === 0) break;
+      // At a junction use the route plan's prescribed exit; fall back to the
+      // first exit for plain straights/curves (they have exactly one anyway).
+      const junctionExit = isRoadJunction(tile?.road)
+        ? (carExitAt(car, coord) ?? exits[0])
+        : exits[0];
+      const exitPort = junctionExit;
+      const nextCoord = neighborCoord(coord, exitPort);
+      if (!nextCoord) break;
+      const nextTile = level[getCoordinatesId(nextCoord)];
+      if (
+        !nextTile?.road?.length ||
+        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
+      )
+        break;
+      const id = getCoordinatesId(nextCoord);
+      if (!route.has(id)) route.set(id, { lead, entry: oppositePort(exitPort) });
       lead += 1;
-      coord = t.next.coord;
-      entry = t.next.entryPort;
+      coord = nextCoord;
+      entry = oppositePort(exitPort);
     }
     return route;
   }
@@ -442,14 +555,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
   // means a long trailer that spans a junction tile mid-body still puts a point
   // on it, so a crossing car sees it occupied and holds off the tile.
-  function bodyPoints(car: Car): { tileId: string; entry: Port; t: number }[] {
-    const pts: { tileId: string; entry: Port; t: number }[] = [];
+  function bodyPoints(
+    car: Car
+  ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] {
+    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] = [];
     for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
       const s = sampleAtArc(car, a);
-      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, t: s.t });
+      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t, laneIndex: car.laneIndex });
     }
     const tail = sampleAtArc(car, car.length); // always include the exact tail
-    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, t: tail.t });
+    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t, laneIndex: car.laneIndex });
     return pts;
   }
 
@@ -463,18 +578,21 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function projectPoint(
     route: Map<string, { lead: number; entry: Port }>,
     p: { tileId: string; entry: Port; t: number }
-  ): { d: number; lead: number; perpendicular: boolean } | null {
+  ): { d: number; lead: number; perpendicular: boolean; opposing: boolean } | null {
     const hit = route.get(p.tileId);
     if (!hit) return null;
     let within: number;
     let perpendicular = false;
+    let opposing = false;
     if (p.entry === hit.entry) within = p.t;
-    else if (p.entry === oppositePort(hit.entry)) within = 1 - p.t;
-    else {
+    else if (p.entry === oppositePort(hit.entry)) {
+      within = 1 - p.t;
+      opposing = true; // travels this tile head-on to us — i.e. the oncoming lane
+    } else {
       within = 0.5; // perpendicular junction occupant: treat as mid-tile
       perpendicular = true;
     }
-    return { d: hit.lead + within, lead: hit.lead, perpendicular };
+    return { d: hit.lead + within, lead: hit.lead, perpendicular, opposing };
   }
 
   // The clear tile-distance the car's head may advance this tick before it must
@@ -510,20 +628,74 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (lead >= 0 && closed(tileId)) crossingClear = Math.min(crossingClear, lead);
     }
     clear = Math.min(clear, crossingClear);
-    // Other cars: stop a gap behind the nearest body point ahead on the route.
+    // Junction arbiter: for each upcoming junction on the route, ask whether
+    // this car may enter given the current conflict geometry and waiting cars.
+    for (const [junctionId, { lead, entry: myEntry }] of route) {
+      if (lead < 0) continue;
+      if (!isRoadJunction(level[junctionId]?.road)) continue;
+      const conflictPairs = junctionConflicts.get(junctionId);
+      if (!conflictPairs) continue;
+      const jCoord = parseJunctionCoord(junctionId);
+      // Fall back to the road's default exit so the arbiter fires even when the
+      // car has no planned turn (e.g. straight-through at a priority junction).
+      const myExit = carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry);
+      if (myExit === null) continue;
+      const candidate: WaitingCar = {
+        entryArm: myEntry,
+        exitArm: myExit,
+        priority: level[getCoordinatesId(car.path[car.headIndex].coord)]?.roadPriority ?? 0,
+        waitSeconds: car.waitSeconds,
+      };
+      if (
+        !arbiter.canEnter(
+          candidate,
+          activeMovementsAt(junctionId),
+          waitingCarsAt(junctionId, car),
+          conflictPairs,
+        )
+      ) {
+        clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+      }
+    }
+
+    // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
       if (other === car) continue;
       for (const p of bodyPoints(other)) {
         const proj = projectPoint(route, p);
         if (!proj || proj.d < 0) continue;
+        // Oncoming traffic rides its own lane (offset to its right — the far side
+        // of the dashed centre from ours), so an opposite-direction car never
+        // shares our lane and must not gate us. This is what lets two streams flow
+        // past each other instead of freezing nose-to-nose on a single centreline.
+        if (proj.opposing) continue;
+        // Different lane, same travel direction: cars ride side-by-side and must not
+        // gate each other. Perpendicular junction occupants are handled below.
+        if (!proj.perpendicular && !proj.opposing && p.laneIndex !== car.laneIndex) continue;
         if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
-          // The occupant is crossing our path inside a junction. Hold a gap short
-          // of the junction's entry edge instead of rolling in (the mid-tile
-          // projection is what lets two perpendicular streams jam in the middle of
-          // the crossing; stopping *exactly* on the entry would still roll us onto
-          // the boundary the same tick another car claimed it). One car owns the
-          // junction at a time; everyone else waits clear of it.
-          clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+          // A car crossing our path at a junction only blocks us if its movement
+          // actually conflicts with ours (same conflict matrix the arbiter uses).
+          // Two non-conflicting movements — e.g. perpendicular right turns — may
+          // share the junction tile, so a right-turn-only cross never blocks;
+          // genuinely crossing streams (perpendicular straights, a left turn over
+          // oncoming) still hold at the entry edge.
+          const conflictPairs = junctionConflicts.get(p.tileId);
+          const jCoord = parseJunctionCoord(p.tileId);
+          const myEntry = route.get(p.tileId)?.entry;
+          const myExit =
+            myEntry != null ? carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry) : null;
+          const conflicts =
+            conflictPairs != null &&
+            myEntry != null &&
+            myExit !== null &&
+            p.exit !== null &&
+            conflictPairs.has(
+              conflictKey(
+                { entry: myEntry, entryIndex: car.laneIndex, exit: myExit },
+                { entry: p.entry, entryIndex: p.laneIndex, exit: p.exit }
+              )
+            );
+          if (conflicts) clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
         } else {
           clear = Math.min(clear, proj.d - CAR_GAP);
         }
@@ -572,12 +744,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.launchTimer = REACTION_DELAY;
       car.velocity = 0;
       move = 0;
+      car.waitSeconds += dt;
     } else if (car.launchTimer > 0) {
       // The way ahead just cleared but the driver hasn't reacted yet — sit still
       // while the leader pulls away, so the queue stretches out on release.
       car.launchTimer = Math.max(0, car.launchTimer - dt);
       car.velocity = 0;
       move = 0;
+      car.waitSeconds += dt;
     } else {
       // Ramp the velocity toward the cap instead of snapping to cruise: accelerate
       // from rest, and brake smoothly so the car can still stop within `clear`
@@ -591,29 +765,35 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         car.velocity = Math.max(vCap, car.velocity - car.brake * dt);
       }
       if (car.velocity < 0) car.velocity = 0;
+      car.waitSeconds = 0; // reset: the car is moving
       move = Math.min(car.velocity * dt, clear); // never roll past the stop line
     }
     car.headProgress += move;
     while (car.headProgress >= 1) {
       const head = car.path[car.headIndex];
-      const t = roadTraverse(level, head.coord, head.entryPort);
-      if (!t.next) {
-        // Reached a road end / map edge: the car has driven its head off the
-        // grid — signal the caller to despawn it.
+      const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
+      if (exitPort === null) return false;
+      const nextCoord = neighborCoord(head.coord, exitPort);
+      if (!nextCoord) return false;
+      const nextTile = level[getCoordinatesId(nextCoord)];
+      if (
+        !nextTile?.road?.length ||
+        exitsFrom(nextTile.road, oppositePort(exitPort)).length === 0
+      )
         return false;
-      }
       // Backstop: clearAhead caps movement at a closed crossing's entry, which
       // can land headProgress exactly on the boundary — never cross onto it.
-      if (closed(getCoordinatesId(t.next.coord))) {
+      if (closed(getCoordinatesId(nextCoord))) {
         car.headProgress = 1;
         break;
       }
-      const exit = roadExitPort(level, t.next.coord, t.next.entryPort);
-      car.path.push({
-        coord: t.next.coord,
-        entryPort: t.next.entryPort,
-        exitPort: exit,
-      });
+      const nextEntry = oppositePort(exitPort);
+      const nextExit =
+        carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry);
+      car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
+      // Clamp lane index when the next tile has fewer lanes than the current one.
+      const nextLaneCount = laneCount(nextTile.road, nextEntry);
+      if (nextLaneCount > 0) car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
       car.headIndex += 1;
       car.headProgress -= 1;
     }
@@ -633,15 +813,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const entry = entries[Math.floor(rng() * entries.length)];
     const id = getCoordinatesId(entry.coord);
     if (closed(id)) return;
-    const exit = roadExitPort(level, entry.coord, entry.entryPort);
     // Spawn only if a car entering here would have clear road ahead. We probe with
     // a zero-length car sitting at the entry edge and reuse clearAhead: it returns
-    // ~0 when another car's body is right at the entry (so we don't spawn on top of
-    // it) and the lookahead on open road otherwise. This replaces the old "the
-    // whole entry tile must be vacant" rule, which forced a full tile of air between
-    // cars — so on a single-lane road only one car could be on the entry tile at a
-    // time. Now cars enter in a steady stream a bumper-gap apart and pack into
-    // platoons, while clearAhead still guarantees they never overlap.
+    // ~0 when another (same-lane) car's body is right at the entry (so we don't
+    // spawn on top of it) and the lookahead on open road otherwise. Two-lane note:
+    // clearAhead skips oncoming-lane cars, so an opposing car on the entry tile no
+    // longer blocks a spawn — exactly right when both directions share the tile.
+    const exit = roadExitPort(level, entry.coord, entry.entryPort);
     const probe: Car = {
       id: "",
       kind: "car",
@@ -654,16 +832,31 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       headIndex: 0,
       headProgress: 0,
       launchTimer: 0,
+      routePlan: [],
+      routeStep: 0,
+      waitSeconds: 0,
       waitedSec: 0,
       crossedCrossing: false,
+      laneIndex: 0,
     };
     if (clearAhead(probe, closed).clear <= STOP_EPS) return;
     const kind = pickKind();
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
     // from the seeded RNG, so the spawn order (and thus which car is the slow
-    // leader of a forming platoon) stays reproducible for a given seed.
+    // leader of a forming platoon) stays reproducible for a given seed. Drawn here
+    // — before route planning consumes any RNG — so the per-car speed sequence is
+    // independent of routing (keeps seeded platoon tests stable across changes).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+    // Pick a lane slot: random within the entry tile's lane count for this approach.
+    const entryLaneCount = laneCount(level[getCoordinatesId(entry.coord)]?.road, entry.entryPort);
+    const chosenLane = entryLaneCount > 1 ? Math.floor(rng() * entryLaneCount) : 0;
+    // Two-lane (right-hand) roads: oncoming traffic uses the opposite lane, so a
+    // car can head for any edge of the map without risking a head-on — routing
+    // toward an edge other cars also use is fine. Pick a reachable exit edge
+    // (planRoute excludes this car's own spawn opening as a target).
+    const routePlan = planRoute(level, entry.coord, entry.entryPort, allMapEntries, routeRng);
+    const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);
     cars.push({
       id: `car${nextId++}`,
       kind,
@@ -678,12 +871,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       accel: DEFAULT_CAR_ACCEL,
       brake: DEFAULT_CAR_BRAKE,
       length,
-      path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: exit }],
+      path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: spawnExit }],
       headIndex: 0,
       headProgress: 0,
       launchTimer: 0,
+      routePlan,
+      routeStep: 0,
+      waitSeconds: 0,
       waitedSec: 0,
       crossedCrossing: false,
+      laneIndex: chosenLane,
     });
   }
 
@@ -774,7 +971,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           });
           lead += seg.length + spec.gap;
         }
-        return { id: c.id, units };
+        const headSeg = c.path[c.headIndex];
+        const curLaneCount = laneCount(level[getCoordinatesId(headSeg.coord)]?.road, headSeg.entryPort);
+        return { id: c.id, units, laneIndex: c.laneIndex, laneCount: Math.max(1, curLaneCount) };
       });
     },
     junctionOccupancy() {

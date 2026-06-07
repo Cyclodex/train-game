@@ -1,5 +1,6 @@
 import { Position, Coordinates, ActiveIntersection } from "@/types";
 import { oppositePort } from "@/sim/topology";
+import type { Lane } from "./lanes";
 
 export type Port = Position;
 export type PortPair = [Port, Port];
@@ -11,6 +12,11 @@ export type TileKind =
   | "cross"
   | "depot"
   | "dead-end"
+  | "road-straight"
+  | "road-curve"
+  | "road-tjunction"
+  | "road-cross"
+  | "crossing"
   | "empty";
 
 // The canonical, authoritative description of one grid cell. `connections` is
@@ -26,7 +32,9 @@ export interface TileCell {
   // crossing). Cars traverse `road`; trains traverse `connections`; the two only
   // interact at a crossing via the gate (derived from rail reservation). See
   // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
-  road?: PortPair[];
+  road?: Lane[];
+  // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
+  roadPriority?: number;
   // Authored starting switch arm per junction entry port (keyed by Port). Absent
   // entries fall back to the auto-computed first-valid arm. Only meaningful on a
   // switchable junction (cross / T-junction); ignored elsewhere. Round-trips
@@ -160,6 +168,28 @@ export function defaultArmFor(
 export function kindOf(cell: TileCell): TileKind {
   if (cell.role === "depot") return "depot";
   const conns = cell.connections;
+  const hasRoadLayer = (cell.road?.length ?? 0) > 0;
+
+  // Level crossing: has both rail edges and road.
+  if (conns.length > 0 && hasRoadLayer) return "crossing";
+
+  // Road-only tiles: derive kind from the road's port set.
+  if (conns.length === 0 && hasRoadLayer) {
+    const road = cell.road!;
+    const ports = new Set<Port>();
+    for (const lane of road) {
+      ports.add(lane.from);
+      for (const to of lane.to) ports.add(to);
+    }
+    if (ports.size >= 4) return "road-cross";
+    if (ports.size === 3) return "road-tjunction";
+    if (ports.size === 2) {
+      const [a, b] = [...ports] as [Port, Port];
+      return a === oppositePort(b) ? "road-straight" : "road-curve";
+    }
+    return "road-straight";
+  }
+
   if (conns.length === 0) return "empty";
   const edges = portsOf(conns).filter(p => p !== Position.Center);
   if (edges.length >= 3) return conns.length >= 6 ? "cross" : "tjunction";
@@ -189,4 +219,15 @@ export function isLevelCrossing(cell: TileCell): boolean {
   if (!hasRoad(cell)) return false;
   const railEdges = portsOf(cell.connections).filter(p => p !== Position.Center);
   return railEdges.length > 0;
+}
+
+// True when the level has no depots and at least one road tile — a pure road map
+// with no rail layer. Used to skip train/depot requirements in validation and UI.
+export function isRoadOnlyLevel(level: Level): boolean {
+  let hasAnyRoad = false;
+  for (const cell of Object.values(level)) {
+    if (cell.role === "depot") return false;
+    if (hasRoad(cell)) hasAnyRoad = true;
+  }
+  return hasAnyRoad;
 }

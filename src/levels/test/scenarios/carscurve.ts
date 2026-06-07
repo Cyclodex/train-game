@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Many cars on a winding S-shaped road with sustained sequential curves.
 //
@@ -10,7 +11,7 @@ import { TestScenario } from "@/levels/test/scenario";
 // constantly in curves with very little straight between them, so the
 // CAR_GAP spacing is under maximum stress through the bends.
 //
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 export const carscurve: TestScenario = {
   id: "carscurve",

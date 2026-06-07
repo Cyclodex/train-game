@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
+import { fromPairs, oneWay, turns, nWayLanes } from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -9,6 +10,7 @@ import {
   specLength,
   CarChord,
 } from "@/sim/road";
+import { movementsConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 
@@ -23,9 +25,9 @@ const bodyRear = (c: CarChord) => c.units[c.units.length - 1].rear;
 function straightRoad(): Level {
   const road: [Position, Position] = [Position.Left, Position.Right];
   return {
-    "0,0": { connections: [], road: [road] },
-    "1,0": { connections: [], road: [road] },
-    "2,0": { connections: [], road: [road] },
+    "0,0": { connections: [], road: fromPairs([road]) },
+    "1,0": { connections: [], road: fromPairs([road]) },
+    "2,0": { connections: [], road: fromPairs([road]) },
   };
 }
 
@@ -56,7 +58,7 @@ describe("roadTraverse", () => {
     const lvl: Level = {
       "0,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
     };
     // Entering from the road Left, the car leaves Right (not via the rail).
@@ -134,14 +136,14 @@ describe("createRoadSim — car following", () => {
     // A long straight road; a permanently-closed crossing at 2,0 forces a queue.
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road: fromPairs([road]) },
+      "1,0": { connections: [], road: fromPairs([road]) },
       "2,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [road],
+        road: fromPairs([road]),
       },
-      "3,0": { connections: [], road: [road] },
-      "4,0": { connections: [], road: [road] },
+      "3,0": { connections: [], road: fromPairs([road]) },
+      "4,0": { connections: [], road: fromPairs([road]) },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -175,38 +177,61 @@ describe("createRoadSim — car following", () => {
     expect(minGap).toBeLessThan(0.2);
   });
 
-  it("never rolls a car onto a tile occupied head-on by an oncoming car", () => {
-    // Two-tile road open at both edges; cars spawn from both ends and must not
-    // pass through each other (they stop nose-to-nose).
+  it("lets two opposing streams pass in separate lanes without deadlocking", () => {
+    // Two-lane (right-hand) road open at both edges; cars spawn from both ends —
+    // eastbound enters from the Left edge, westbound from the Right. On the old
+    // single-lane model these froze nose-to-nose; now each rides the lane to the
+    // right of its travel, so the streams pass and the road keeps clearing cars
+    // from BOTH directions.
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
-      "1,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+      "1,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     const sim = createRoadSim({
       level: lvl,
-      width: 2,
+      width: 3,
       height: 1,
       seed: 3,
-      spawnInterval: 0.2,
+      spawnInterval: 0.4,
       carLength: 0.4,
     });
-    const worldX2 = (s: { coord: { x: number }; entryPort: Position; t: number }) =>
-      s.entryPort === Position.Left ? s.coord.x + s.t : s.coord.x + (1 - s.t);
-    for (let i = 0; i < 300; i++) {
+    // A car's head entered its tile from the Left when travelling east, from the
+    // Right when travelling west — so its head-segment entry port reveals which
+    // way it is going.
+    const dirOf = (c: CarChord): "east" | "west" =>
+      bodyFront(c).entryPort === Position.Left ? "east" : "west";
+
+    const completed = { east: 0, west: 0 };
+    let prev = new Map<string, "east" | "west">();
+    let sawBothPresent = false;
+
+    for (let i = 0; i < 400; i++) {
       sim.step(0.05, () => false);
-      const bodies = sim
-        .sample()
-        .map(c => {
-          const a = worldX2(bodyFront(c));
-          const b = worldX2(bodyRear(c));
-          return { lo: Math.min(a, b), hi: Math.max(a, b) };
-        })
-        .sort((p, q) => p.lo - q.lo);
-      for (let k = 1; k < bodies.length; k++) {
-        // Each body starts at or after the previous one ends: no overlap.
-        expect(bodies[k].lo).toBeGreaterThanOrEqual(bodies[k - 1].hi - 1e-6);
+      const now = new Map<string, "east" | "west">();
+      let east = false;
+      let west = false;
+      for (const c of sim.sample()) {
+        const d = dirOf(c);
+        now.set(c.id, d);
+        if (d === "east") east = true;
+        else west = true;
       }
+      if (east && west) sawBothPresent = true;
+      // A car present last tick but gone now drove off the far edge — a completed
+      // crossing. If the road had deadlocked, completions would stop entirely.
+      for (const [id, d] of prev) {
+        if (!now.has(id)) completed[d]++;
+      }
+      prev = now;
     }
+
+    // Both streams kept flowing — cars from each direction crossed the whole road.
+    expect(completed.east).toBeGreaterThan(0);
+    expect(completed.west).toBeGreaterThan(0);
+    // And both streams shared the road at the same time (they met and passed,
+    // rather than strictly alternating) — direct proof of lane separation.
+    expect(sawBothPresent).toBe(true);
   });
 });
 
@@ -214,12 +239,12 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
   it("holds a car at a closed crossing and releases it when the train clears", () => {
     // road across 0,0 (open left) -> 1,0 (the crossing) -> 2,0 (open right).
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -253,11 +278,11 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
     // though the crossing's own gate is open.
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [], road: [road] },
-      "2,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
-      "3,0": { connections: [], road: [road] },
-      "4,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road: fromPairs([road]) },
+      "1,0": { connections: [], road: fromPairs([road]) },
+      "2,0": { connections: [[Position.Top, Position.Bottom]], road: fromPairs([road]) },
+      "3,0": { connections: [], road: fromPairs([road]) },
+      "4,0": { connections: [], road: fromPairs([road]) },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -370,18 +395,171 @@ describe("createRoadSim — road junction interlock", () => {
   });
 });
 
+describe("createRoadSim — four-way cross, cars from all sides", () => {
+  it("keeps traffic from all four arms flowing without gridlock", () => {
+    // A 4-way cross whose centre carries every movement (straight + both turns).
+    // Cars spawn from ALL FOUR map edges at once. With two-lane roads (opposing
+    // streams pass) plus the junction arbiter (conflicting turns take turns, and
+    // right turns never conflict at all), the crossing keeps clearing cars from
+    // every arm — it must never lock up into a permanent four-way standstill.
+    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
+    const lvl: Level = {
+      // Horizontal road.
+      "0,2": road([Position.Left, Position.Right]),
+      "1,2": road([Position.Left, Position.Right]),
+      "3,2": road([Position.Left, Position.Right]),
+      "4,2": road([Position.Left, Position.Right]),
+      // Vertical road.
+      "2,0": road([Position.Top, Position.Bottom]),
+      "2,1": road([Position.Top, Position.Bottom]),
+      "2,3": road([Position.Top, Position.Bottom]),
+      "2,4": road([Position.Top, Position.Bottom]),
+      // All-directions centre: straight through both ways + every turn.
+      "2,2": road(
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Bottom],
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+        [Position.Right, Position.Top],
+        [Position.Right, Position.Bottom],
+      ),
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right }, // westbound
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top }, // southbound
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+
+    // A car that was present last tick and is gone now drove off the far edge — a
+    // completed crossing. Count completions in each half of the run: if the cross
+    // ever permanently deadlocked, the second half would see none.
+    let prev = new Set<string>();
+    const allIds = new Set<string>();
+    let firstHalf = 0;
+    let secondHalf = 0;
+    const STEPS = 1600;
+    for (let i = 0; i < STEPS; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of now) allIds.add(id);
+      for (const id of prev) {
+        if (!now.has(id)) {
+          if (i < STEPS / 2) firstHalf++;
+          else secondHalf++;
+        }
+      }
+      prev = now;
+    }
+
+    // Sustained throughput in BOTH halves → the crossing never locked up.
+    expect(firstHalf).toBeGreaterThan(0);
+    expect(secondHalf).toBeGreaterThan(0);
+    // Far more cars completed than the live cap → cars really cycle through, they
+    // do not just fill the map once and freeze.
+    expect(allIds.size).toBeGreaterThan(12);
+  });
+
+  it("never lets two conflicting movements occupy the centre at once", () => {
+    // The safety counterpart to the liveness test above. With every movement
+    // permitted, the centre carries a mix of conflicting (perpendicular straights,
+    // left turns across oncoming) and non-conflicting (right turns, parallel
+    // straights in separate lanes) movements. The arbiter + conflict-aware
+    // body-point guard must ensure that whenever 2+ cars are on the centre tile at
+    // the same time, NONE of their movements geometrically cross — otherwise that
+    // is a collision course.
+    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
+    const lvl: Level = {
+      "0,2": road([Position.Left, Position.Right]),
+      "1,2": road([Position.Left, Position.Right]),
+      "3,2": road([Position.Left, Position.Right]),
+      "4,2": road([Position.Left, Position.Right]),
+      "2,0": road([Position.Top, Position.Bottom]),
+      "2,1": road([Position.Top, Position.Bottom]),
+      "2,3": road([Position.Top, Position.Bottom]),
+      "2,4": road([Position.Top, Position.Bottom]),
+      "2,2": road(
+        [Position.Left, Position.Right],
+        [Position.Top, Position.Bottom],
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+        [Position.Right, Position.Top],
+        [Position.Right, Position.Bottom],
+      ),
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+
+    // The movement each car is making through the centre tile (2,2), if it is on it.
+    const centreMovements = () => {
+      const out: { entry: Position; exit: Position }[] = [];
+      for (const c of sim.sample()) {
+        for (const u of c.units) {
+          const pt = [u.front, u.rear].find(
+            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
+          );
+          if (pt) {
+            out.push({ entry: pt.entryPort, exit: pt.exitPort as Position });
+            break; // one movement per vehicle
+          }
+        }
+      }
+      return out;
+    };
+
+    let sawCoOccupancy = false;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      const moves = centreMovements();
+      if (moves.length >= 2) sawCoOccupancy = true;
+      for (let a = 0; a < moves.length; a++) {
+        for (let b = a + 1; b < moves.length; b++) {
+          expect(movementsConflict(moves[a], moves[b])).toBe(false);
+        }
+      }
+    }
+    // The centre really did get shared (otherwise the safety check is vacuous):
+    // non-conflicting movements pass through together.
+    expect(sawCoOccupancy).toBe(true);
+  });
+});
+
 describe("createRoadSim — launch reaction delay", () => {
   it("waits a beat before a stopped car rolls once the gate opens", () => {
     // One car approaching a closed crossing at 1,0. Once it has stopped at the
     // gate and the gate opens, the car must not move on the very next tick — it
     // waits out its reaction time — then accelerates away.
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -453,12 +631,12 @@ describe("createRoadSim — acceleration ramp", () => {
     // again: hold one at a closed crossing, then open it and watch the first
     // movements come out small and build up toward cruise (not a full step at once).
     const lvl: Level = {
-      "0,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
       "1,0": {
         connections: [[Position.Top, Position.Bottom]],
-        road: [[Position.Left, Position.Right]],
+        road: fromPairs([[Position.Left, Position.Right]]),
       },
-      "2,0": { connections: [], road: [[Position.Left, Position.Right]] },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
     };
     let closed = true;
     const sim = createRoadSim({
@@ -583,7 +761,7 @@ describe("createRoadSim — variable preferred speed", () => {
     // ~0.36 leader and a ~0.58 follower (a clear convergence case).
     const road: [Position, Position] = [Position.Left, Position.Right];
     const lvl: Level = {};
-    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: [road] };
+    for (let x = 0; x < 40; x++) lvl[`${x},0`] = { connections: [], road: fromPairs([road]) };
     const sim = createRoadSim({
       level: lvl,
       width: 40,
@@ -666,11 +844,11 @@ describe("createRoadSim — crossing patience (waitedSec / frame)", () => {
   // A straight road across a crossing tile (rail Top-Bottom) so a closed gate
   // holds the approaching car short of the rails.
   function crossingRoad(): Level {
-    const road: [Position, Position] = [Position.Left, Position.Right];
+    const road = fromPairs([[Position.Left, Position.Right]]);
     return {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
-      "2,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road },
+      "1,0": { connections: [[Position.Top, Position.Bottom]], road },
+      "2,0": { connections: [], road },
     };
   }
 
@@ -707,13 +885,13 @@ describe("createRoadSim — crossing patience (waitedSec / frame)", () => {
     // A longer approach so a queue forms behind the gate: the lead car is bound by
     // the crossing; the followers are bound by the car ahead, so their wait is not
     // attributed to the crossing.
-    const road: [Position, Position] = [Position.Left, Position.Right];
+    const road = fromPairs([[Position.Left, Position.Right]]);
     const lvl: Level = {
-      "0,0": { connections: [], road: [road] },
-      "1,0": { connections: [], road: [road] },
-      "2,0": { connections: [], road: [road] },
-      "3,0": { connections: [[Position.Top, Position.Bottom]], road: [road] },
-      "4,0": { connections: [], road: [road] },
+      "0,0": { connections: [], road },
+      "1,0": { connections: [], road },
+      "2,0": { connections: [], road },
+      "3,0": { connections: [[Position.Top, Position.Bottom]], road },
+      "4,0": { connections: [], road },
     };
     const sim = createRoadSim({
       level: lvl,
@@ -904,5 +1082,286 @@ describe("carqueue test-world scenario", () => {
       expect(gap).toBeGreaterThanOrEqual(-1e-6); // no overlap
       expect(gap).toBeLessThan(0.08); // packed nearly nose-to-tail (~12px gap)
     }
+  });
+});
+
+describe("createRoadSim — one-way street", () => {
+  it("only ever carries cars in the permitted direction", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "1,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+      "2,0": { connections: [], road: [oneWay(Position.Left, Position.Right)] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 3,
+      height: 1,
+      seed: 5,
+      spawnInterval: 0.3,
+      carLength: 0.2,
+    });
+    let everSeen = false;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        everSeen = true;
+        expect(c.units[0].front.entryPort).toBe(Position.Left);
+      }
+    }
+    expect(everSeen).toBe(true);
+  });
+});
+
+describe("createRoadSim — right-turn-only cross", () => {
+  it("lets all four arms flow simultaneously without gridlock", () => {
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      // Right-turn-only centre: Left->Bottom, Bottom->Right, Right->Top, Top->Left.
+      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    let prev = new Set<string>();
+    let completed = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed++;
+      prev = now;
+    }
+    expect(completed).toBeGreaterThan(8);
+  });
+
+  it("never makes a right-turner yield (non-conflicting movements are not blocked)", () => {
+    // Every movement here is a right turn, and right turns never conflict, so no
+    // car should ever have to stop for the junction — they all flow freely. We
+    // measure stalled car-ticks (a car whose position doesn't advance between
+    // steps). With the old whole-tile exclusion this was in the thousands; with
+    // conflict-aware blocking it is ~0. (A small margin tolerates incidental
+    // same-lane following, though at these speeds there is none.)
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    const posOf = new Map<string, number>();
+    let stalled = 0;
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        const pos = c.headIndex + c.headProgress;
+        const prevPos = posOf.get(c.id);
+        if (prevPos !== undefined && Math.abs(pos - prevPos) < 1e-4) stalled++;
+        posOf.set(c.id, pos);
+      }
+    }
+    expect(stalled).toBeLessThan(50);
+  });
+});
+
+describe("createRoadSim — no-left-turn cross", () => {
+  it("never performs a banned left turn, and still flows", () => {
+    // A 4-way cross where each approach may go straight or right, but NOT left.
+    // The banned movements are simply absent from the lanes, so the planner can
+    // never route them and the sim never offers them — directed lanes enforcing a
+    // partial turn restriction.
+    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+    const straight = (a: Position, b: Position) => ({
+      connections: [],
+      road: [turns(a, [b]), turns(b, [a])],
+    });
+    const lvl: Level = {
+      "0,2": straight(L, R),
+      "1,2": straight(L, R),
+      "3,2": straight(L, R),
+      "4,2": straight(L, R),
+      "2,0": straight(T, B),
+      "2,1": straight(T, B),
+      "2,3": straight(T, B),
+      "2,4": straight(T, B),
+      // Straight + right only (left turns banned).
+      "2,2": {
+        connections: [],
+        road: [turns(L, [R, B]), turns(R, [L, T]), turns(T, [B, L]), turns(B, [T, R])],
+      },
+    };
+    const sim = createRoadSim({
+      level: lvl,
+      width: 5,
+      height: 5,
+      seed: 7,
+      spawnEntries: [
+        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
+        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
+        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
+        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
+      ],
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+    });
+    // The four banned left-turn movements (screen coords: x→right, y→down).
+    const isLeftTurn = (m: { entry: Position; exit: Position }) =>
+      (m.entry === L && m.exit === T) ||
+      (m.entry === R && m.exit === B) ||
+      (m.entry === T && m.exit === R) ||
+      (m.entry === B && m.exit === L);
+
+    let prev = new Set<string>();
+    let completed = 0;
+    let sawCentreMovement = false;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        for (const u of c.units) {
+          const pt = [u.front, u.rear].find(
+            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
+          );
+          if (pt) {
+            const m = { entry: pt.entryPort, exit: pt.exitPort as Position };
+            expect(isLeftTurn(m)).toBe(false); // no banned left turn, ever
+            sawCentreMovement = true;
+            break;
+          }
+        }
+      }
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed++;
+      prev = now;
+    }
+    expect(sawCentreMovement).toBe(true); // cars really used the junction
+    expect(completed).toBeGreaterThan(8); // and traffic kept flowing
+  });
+});
+
+describe("createRoadSim — per-lane following", () => {
+  function twoLaneRoad(): Level {
+    const road = nWayLanes(Position.Left, Position.Right, 2);
+    return {
+      "0,0": { connections: [], road },
+      "1,0": { connections: [], road },
+      "2,0": { connections: [], road },
+    };
+  }
+
+  it("cars in different lanes of the same direction flow without cross-lane stalling", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.05,
+      carSpeed: 0.5,
+      maxCars: 6,
+    });
+    let stalledTicks = 0;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      if (cars.length >= 2) {
+        const moving = cars.filter(c => c.velocity > 0.01);
+        if (moving.length === 0) stalledTicks++;
+      }
+    }
+    expect(stalledTicks).toBeLessThan(30);
+  });
+
+  it("sample() includes laneIndex and laneCount fields", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      maxCars: 4,
+    });
+    for (let i = 0; i < 100; i++) sim.step(0.1, () => false);
+    const samples = sim.sample();
+    expect(samples.length).toBeGreaterThan(0);
+    for (const s of samples) {
+      expect(typeof s.laneIndex).toBe("number");
+      expect(typeof s.laneCount).toBe("number");
+      expect(s.laneIndex).toBeGreaterThanOrEqual(0);
+      expect(s.laneCount).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
+
+describe("createRoadSim — lane merge (cross-tile continuity)", () => {
+  function mergingRoad(): Level {
+    const twoLane = nWayLanes(Position.Left, Position.Right, 2);
+    const oneLane = fromPairs([[Position.Left, Position.Right]]);
+    return {
+      "0,0": { connections: [], road: twoLane },
+      "1,0": { connections: [], road: twoLane },
+      "2,0": { connections: [], road: oneLane },
+      "3,0": { connections: [], road: oneLane },
+    };
+  }
+
+  it("cars entering the merge point keep flowing (laneIndex clamped to 0)", () => {
+    const sim = createRoadSim({
+      level: mergingRoad(),
+      width: 4,
+      height: 1,
+      seed: 3,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
+      carSpeed: 0.5,
+      maxCars: 6,
+    });
+    // Run the sim and ensure no permanent gridlock (not all cars stopped simultaneously).
+    let allStuckTicks = 0;
+    for (let i = 0; i < 600; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      if (cars.length >= 2 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
+    }
+    expect(allStuckTicks).toBeLessThan(50);
   });
 });

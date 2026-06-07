@@ -1,5 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
+import { fromPairs } from "@/tiles/lanes";
 
 // Many cars circulating a rectangular road loop with proper curve corners.
 //
@@ -13,7 +14,7 @@ import { TestScenario } from "@/levels/test/scenario";
 //
 // Tests: curve-gap spacing under sustained load; cars visible through all four
 // 90° bends simultaneously.
-const road = (...ports: [Position, Position][]) => ({ connections: [], road: ports });
+const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
 
 export const carcircle: TestScenario = {
   id: "carcircle",
