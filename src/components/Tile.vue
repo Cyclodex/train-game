@@ -16,9 +16,17 @@
         <path
           :d="r.surface"
           class="road-surface"
-          :class="{ 'road-surface--mismatch': r.mismatch, 'road-surface--bus': r.isBus }"
+          :class="{ 'road-surface--mismatch': r.mismatch }"
         />
       </g>
+      <!-- Bus-lane tint: a gold strip over just the bus lane(s), not the whole
+           ribbon, laterally aligned with the lane's cars/arrows. -->
+      <path
+        v-for="(b, bi) in busLaneBands"
+        :key="'bus' + bi"
+        :d="b"
+        class="road-bus-band"
+      />
       <!-- Road edge line where the tarmac meets the grass (per outer kerb). -->
       <template v-for="(r, i) in roadPaths" :key="'re' + i">
         <path
@@ -208,6 +216,7 @@ import { railPathsFor } from "@/tiles/geometry";
 import {
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
+  roadLaneBandPath,
   roadLaneMarkingPaths,
   roadKerbEdge,
   roadCurveKerbEdge,
@@ -275,7 +284,7 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: string[]; mismatch: boolean; mismatchTip: string; isBus: boolean }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: string[]; mismatch: boolean; mismatchTip: string }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -310,7 +319,6 @@ class Tile extends Vue {
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`
           : "";
-        const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
         // Width = the widest seam of this edge (min 2 so a one-way still reads as a
         // road), so the turn ribbon meets its arm flush.
         const widthTotal = Math.max(selfAtA, selfAtB, 2);
@@ -327,7 +335,6 @@ class Tile extends Vue {
           edges,
           mismatch,
           mismatchTip,
-          isBus,
         };
       }
 
@@ -350,7 +357,6 @@ class Tile extends Vue {
       const totalB = (nb && neighborTotalAtB > 0) ? Math.min(selfTotal, neighborTotalAtB) : selfTotal;
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
-      const isBus = (this.tile.road ?? []).some(l => (l.from === a || l.from === b) && l.kind === "bus");
       // Road edge line where the tarmac meets the grass — one per outer kerb,
       // tapering with the surface. Skip a side that has a lane-drop gore: its
       // gore border already draws the full-width kerb there (the tapered surface
@@ -369,9 +375,34 @@ class Tile extends Vue {
         edges,
         mismatch: false,
         mismatchTip: "",
-        isBus,
       };
     });
+  }
+
+  // Tinted strips for bus lanes: one filled band per bus lane, laterally aligned
+  // with that lane exactly like the debug arrows and the cars (positioningBand +
+  // the per-lane offset), so only the bus lane is gold — not the whole ribbon.
+  // Straight movements only (bus lanes are authored on straight road for now).
+  // Always on (not debug-gated) — it marks a real road feature.
+  get busLaneBands(): string[] {
+    const road = this.tile.road;
+    if (!this.config.roads || !road?.length) return [];
+    const size = this.config.tileSize;
+    const half = 0.5 * LANE_WIDTH_PX_FRAC * size;
+    const out: string[] = [];
+    for (const lane of road) {
+      if (lane.kind !== "bus") continue;
+      const selfBand = positioningBand(
+        laneCount(road, lane.from),
+        laneCount(road, oppositePort(lane.from)),
+      );
+      const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      for (const to of lane.to) {
+        if (oppositePort(lane.from) !== to) continue; // straight lanes only
+        out.push(roadLaneBandPath(lane.from, to, size, off, half));
+      }
+    }
+    return out;
   }
 
   // Lane node graph for the debug overlay: one directed arrow per *physical lane*
@@ -701,8 +732,12 @@ export default toNative(Tile);
   // route traffic correctly. Render red so the layout error is obvious.
   fill: #b03030;
 }
-.road-surface--bus {
+.road-bus-band {
+  // Gold tint over just the bus lane strip (laid over the grey tarmac), so a bus
+  // lane reads at a glance without recolouring the whole road. z-index via paint
+  // order: drawn after the surface, before the lane markings (which stay on top).
   fill: #5a4a00;
+  stroke: none;
 }
 
 /* --- lane graph debug overlay --- */

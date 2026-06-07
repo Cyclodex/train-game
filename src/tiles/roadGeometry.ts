@@ -261,6 +261,30 @@ export function roadSurfacePolygonPath(
   return `M ${ax} ${ay} L ${bx} ${by} L ${cx} ${cy} L ${dx} ${dy} Z`;
 }
 
+// A filled polygon for a single STRAIGHT lane's strip, used to tint one lane of
+// the road (e.g. a kerb-side bus lane) without recolouring the whole ribbon. The
+// strip is centred at `centreOff` px right-of-travel from the entry→exit
+// centreline and is `2·half` px wide. Returns a closed d-string for a filled
+// <path>. (Straight tiles only — bus-lane tinting on curves isn't needed yet.)
+export function roadLaneBandPath(
+  entry: Port,
+  exit: Port,
+  size: number,
+  centreOff: number,
+  half: number,
+): string {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const n = perpUnit(a, b);
+  const lo = centreOff - half;
+  const hi = centreOff + half;
+  const ax = a.x + n.x * lo, ay = a.y + n.y * lo;
+  const bx = b.x + n.x * lo, by = b.y + n.y * lo;
+  const cx = b.x + n.x * hi, cy = b.y + n.y * hi;
+  const dx = a.x + n.x * hi, dy = a.y + n.y * hi;
+  return `M ${ax} ${ay} L ${bx} ${by} L ${cx} ${cy} L ${dx} ${dy} Z`;
+}
+
 // Lane markings for one road edge [entry, exit] with `lanesA` lanes in the
 // entry→exit direction and `lanesB` lanes in the exit→entry direction.
 //
