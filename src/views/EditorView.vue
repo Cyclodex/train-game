@@ -68,7 +68,7 @@
     <div class="world">
     <div
       class="level editor-grid"
-      :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
+      :style="{ width: config.tileSize * gridCols + 'px' }"
       @mouseup="pressFrom = null"
       @mouseleave="pressFrom = null"
     >
@@ -268,6 +268,7 @@ import { roadEdges as laneEdges, laneCount } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
+import { takeEditorSeed } from "@/editorSeed";
 
 type Tool = "connect" | "depot" | "signal" | "erase" | "road";
 
@@ -302,10 +303,12 @@ function stubGame(): Game {
     signalAspects: empty,
     signalOverrides: empty,
     cycleSignal: () => {},
-    // roadLaneCount is called by Tile.vue's roadPaths computed when config.roads
-    // is true and a road tile is present. Return 0 so the road ribbon renders
-    // at the tile's own lane count (no neighbour taper in the editor).
+    // roadLaneCount / roadLaneCountAt are both called by Tile.vue's roadPaths
+    // computed when a road tile is present. Return 0 so the road ribbon renders
+    // at the tile's own lane count (no neighbour taper in the editor) — and so
+    // drawing a road doesn't throw on the missing live-game lane lookups.
     roadLaneCount: () => 0,
+    roadLaneCountAt: () => 0,
   } as unknown as Game;
 }
 
@@ -382,10 +385,24 @@ class EditorView extends Vue {
     return this.routes.length > 0 && this.valid.ok;
   }
 
+  // The editor grid sizes to the configured board, but grows to fit a larger
+  // loaded level — e.g. a /test scenario handed over for correction (carroute is
+  // 7×7, roadlanemerge is 9 tall) — so every authored tile stays editable.
+  get gridCols(): number {
+    let cols = this.config.levelSizeX;
+    for (const id of Object.keys(this.level)) cols = Math.max(cols, parseCoordId(id).x + 1);
+    return cols;
+  }
+  get gridRows(): number {
+    let rows = this.levelSizeY;
+    for (const id of Object.keys(this.level)) rows = Math.max(rows, parseCoordId(id).y + 1);
+    return rows;
+  }
+
   get gridCells(): { key: string; tile: Level[string] | null }[] {
     const out: { key: string; tile: Level[string] | null }[] = [];
-    for (let y = 0; y < this.levelSizeY; y++) {
-      for (let x = 0; x < this.config.levelSizeX; x++) {
+    for (let y = 0; y < this.gridRows; y++) {
+      for (let x = 0; x < this.gridCols; x++) {
         const key = `${x},${y}`;
         const tile = this.level[key];
         const drawable = tile && (tile.connections.length || tile.road?.length);
@@ -457,7 +474,7 @@ class EditorView extends Vue {
   get routeOpts() {
     // `passable` is left default (everything passable); the future "blocked
     // tiles" feature plugs in here without touching the router.
-    return { width: this.config.levelSizeX, height: this.levelSizeY };
+    return { width: this.gridCols, height: this.gridRows };
   }
 
   // The layer the route-builder is currently drawing on. `connect` lays rail
@@ -820,6 +837,11 @@ class EditorView extends Vue {
 }
 
 function loadLevel(): Level {
+  // A scenario "Edit" hand-off takes priority over the saved editor level: open
+  // straight onto the map being corrected (consumed once, so a later plain visit
+  // restores the user's own work).
+  const seed = takeEditorSeed();
+  if (seed) return seed;
   try {
     const raw = localStorage.getItem(LEVEL_KEY);
     if (raw) return migrateLevel(JSON.parse(raw) as Level);
