@@ -46,51 +46,110 @@ import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { daily } from "@/levels/test/scenarios/daily";
 
-// A named group of scenarios in the picker, rendered as an <optgroup>.
-export interface ScenarioGroup {
-  id: string;
-  label: string;
+// The feature test world is a three-level tree: domain → category → scenario,
+// rendered as a drill-down gallery at /test (see TestView.vue). Add a new feature
+// by dropping a file in `scenarios/` and appending it to the matching category's
+// `scenarios` array below (simplest first within a category).
+export interface ScenarioCategory {
+  id: string; // url slug within its domain, e.g. "lanes"
+  label: string; // human label, e.g. "One-way & lanes"
   scenarios: TestScenario[];
 }
+export interface ScenarioDomain {
+  id: string; // url slug, e.g. "streets"
+  label: string; // human label, e.g. "Streets"
+  categories: ScenarioCategory[];
+}
 
-// The feature test world, grouped by domain so the picker stays readable as more
-// mechanics land. Add a new feature by dropping a file in `scenarios/` and
-// appending it to the matching group below (simplest first within a group).
-export const SCENARIO_GROUPS: ScenarioGroup[] = [
+export const DOMAINS: ScenarioDomain[] = [
   {
-    id: "rail",
-    label: "Rail",
-    scenarios: [straight, curve, depot, signals, junction, switchDefault, cross],
-  },
-  {
-    id: "road",
-    label: "Road",
-    scenarios: [
-      carfollowing, carqueue, carcircle, carscurve, roadcurveloops, roadcurvetraffic,
-      roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes,
-      roadcross, roadcross1lane, roadcross2lane, roadcross3lane, crossturns2lane, crossturns3lane, crosslanes, mixedcross, mixedtee, roadjunction,
-      turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, buses, buscross, cardestination,
-      carroute, bigjunction,
+    id: "trains",
+    label: "Trains",
+    categories: [
+      { id: "basics", label: "Basics", scenarios: [straight, curve, depot] },
+      { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault] },
+      { id: "junctions", label: "Junctions", scenarios: [junction, cross] },
+      {
+        id: "crossings",
+        label: "Crossings",
+        scenarios: [crossing, keepcrossingclear, crossingkeeper],
+      },
     ],
   },
   {
-    id: "crossing",
-    label: "Rail × Road",
-    scenarios: [crossing, keepcrossingclear, crossingkeeper],
+    id: "streets",
+    label: "Streets",
+    categories: [
+      {
+        id: "basics",
+        label: "Driving basics",
+        scenarios: [carfollowing, carqueue, carcircle, carscurve],
+      },
+      { id: "curves", label: "Curves", scenarios: [roadcurveloops, roadcurvetraffic] },
+      {
+        id: "lanes",
+        label: "One-way & lanes",
+        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes, crosslanes],
+      },
+      {
+        id: "crosses",
+        label: "Crosses & junctions",
+        scenarios: [
+          roadcross, roadcross1lane, roadcross2lane, roadcross3lane,
+          crossturns2lane, crossturns3lane, mixedcross, mixedtee, roadjunction, bigjunction,
+        ],
+      },
+      {
+        id: "turning",
+        label: "Turning rules",
+        scenarios: [turnlanes, rightturncross, noleftturn],
+      },
+      { id: "overtaking", label: "Overtaking", scenarios: [overtaketwolane, overtakeloop] },
+      { id: "priority", label: "Priority", scenarios: [roadpriority] },
+      { id: "vehicles", label: "Vehicles", scenarios: [trucks, buslane, buses, buscross] },
+      {
+        id: "routing",
+        label: "Destinations & routing",
+        scenarios: [cardestination, carroute],
+      },
+    ],
   },
   {
-    id: "objectives",
-    label: "Objectives",
-    scenarios: [objectives, timeattack, daily],
+    id: "challenges",
+    label: "Challenges",
+    categories: [
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, daily] },
+    ],
   },
 ];
 
 // Flat registry, in picker order. Kept for lookup-by-id and the validation test
-// that iterates every scenario; derived from the groups so there's one source.
-export const SCENARIOS: TestScenario[] = SCENARIO_GROUPS.flatMap(g => g.scenarios);
+// that iterates every scenario; derived from the tree so there's one source.
+export const SCENARIOS: TestScenario[] = DOMAINS.flatMap(d => d.categories).flatMap(
+  c => c.scenarios
+);
 
 export function scenarioById(id: string | undefined): TestScenario {
   return SCENARIOS.find(s => s.id === id) ?? SCENARIOS[0];
+}
+
+// Reverse lookup: the domain + category a scenario lives in. Used for breadcrumbs
+// and the back-compat redirect from a bare `/test/:scenarioId` deep link.
+export function locate(
+  scenarioId: string
+): { domain: ScenarioDomain; category: ScenarioCategory } | undefined {
+  for (const domain of DOMAINS) {
+    for (const category of domain.categories) {
+      if (category.scenarios.some(s => s.id === scenarioId)) {
+        return { domain, category };
+      }
+    }
+  }
+  return undefined;
+}
+
+export function domainById(id: string | undefined): ScenarioDomain | undefined {
+  return DOMAINS.find(d => d.id === id);
 }
 
 export type { TestScenario } from "@/levels/test/scenario";

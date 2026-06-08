@@ -11,6 +11,11 @@ export const router = createRouter({
     { path: "/", redirect: "/play" },
     { path: "/play", name: "play", component: PlayView },
     { path: "/editor", name: "editor", component: EditorView },
-    { path: "/test/:scenario?", name: "test", component: TestView },
+    // The feature test world is a drill-down gallery: /test → domains,
+    // /test/:domain → categories, /test/:domain/:category → scenarios,
+    // /test/:domain/:category/:scenario → the live stage. TestView renders the
+    // level matching whichever params are present, and redirects bare
+    // `/test/:scenarioId` back-compat links to their full path.
+    { path: "/test/:domain?/:category?/:scenario?", name: "test", component: TestView },
   ],
 });
