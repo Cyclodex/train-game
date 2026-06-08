@@ -172,3 +172,24 @@ menu (large image cards with title overlays), the gallery's text cards became
 Still deferred: curated hero screenshots for top-level tiles (auto previews were
 enough), and a brand-new main-menu launcher at `/` (this addendum only touched
 the `/test` gallery).
+
+### Identity glyphs (follow-up)
+
+The auto previews are recognisable but samey (grey-on-green), so each tile also
+carries a big **identity glyph** centred over a dimmed preview — the layout
+flavour stays, but the topic/mechanic reads instantly (inspired again by
+BeamNG's mode tiles).
+
+- **`src/levels/test/icons.ts`** — emoji maps (`DOMAIN_ICONS`, `CATEGORY_ICONS`
+  keyed `domain/category`, `SCENARIO_ICONS`) plus resolvers. Emoji chosen for
+  zero-asset, universally-recognisable identity; kept out of the scenario files.
+  A scenario falls back to its category's glyph, so none hit the generic
+  placeholder.
+- **`TestView.vue`** — each tile gains a radial dark **veil** (darkest centre,
+  clearing to the edges so the map still shows) and a large glyph that scales on
+  hover.
+- **`tests/unit/levels/icons.spec.ts`** — every domain/category/scenario resolves
+  to a real glyph.
+
+A natural next step if more polish is wanted: replace emoji with a consistent set
+of custom line-icons, and/or a per-domain accent colour.

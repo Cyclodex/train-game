@@ -39,6 +39,8 @@
           :to="`/test/${d.id}`"
         >
           <span class="card-thumb"><ScenarioThumb :scenario="rep(d)" /></span>
+          <span class="card-veil"></span>
+          <span class="card-icon">{{ iconDomain(d.id) }}</span>
           <span class="card-overlay">
             <span class="card-title">{{ d.label }}</span>
             <span class="card-meta">{{ countLabel(countDomain(d)) }}</span>
@@ -55,6 +57,8 @@
           :to="`/test/${domain.id}/${c.id}`"
         >
           <span class="card-thumb"><ScenarioThumb :scenario="rep(c)" /></span>
+          <span class="card-veil"></span>
+          <span class="card-icon">{{ iconCategory(domain.id, c.id) }}</span>
           <span class="card-overlay">
             <span class="card-title">{{ c.label }}</span>
             <span class="card-meta">{{ countLabel(c.scenarios.length) }}</span>
@@ -71,6 +75,8 @@
           :to="`/test/${domain.id}/${category.id}/${s.id}`"
         >
           <span class="card-thumb"><ScenarioThumb :scenario="s" /></span>
+          <span class="card-veil"></span>
+          <span class="card-icon card-icon--scenario">{{ iconScenario(s.id) }}</span>
           <span class="card-overlay">
             <span class="card-title">{{ s.name }}</span>
             <span class="card-desc">{{ s.description }}</span>
@@ -92,6 +98,7 @@ import {
   firstScenarioOf,
   locate,
 } from "@/levels/test";
+import { iconForDomain, iconForCategory, iconForScenario } from "@/levels/test/icons";
 import TestStage from "@/views/TestStage.vue";
 import ScenarioThumb from "@/components/ScenarioThumb.vue";
 
@@ -108,6 +115,11 @@ class TestView extends Vue {
   rep(node: ScenarioDomain | ScenarioCategory): TestScenario {
     return firstScenarioOf(node);
   }
+
+  // Big identity glyph for each tile (over the dimmed level preview).
+  iconDomain = iconForDomain;
+  iconCategory = iconForCategory;
+  iconScenario = iconForScenario;
 
   get domain(): ScenarioDomain | undefined {
     return domainById(this.$route.params.domain as string | undefined);
@@ -221,6 +233,36 @@ export default toNative(TestView);
   .card:hover & {
     transform: scale(1.06);
   }
+}
+// A soft dark veil over the preview so the big glyph reads on any map. Darkest in
+// the centre (behind the icon), clearing toward the edges so the map still shows.
+.card-veil {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    rgba(8, 12, 16, 0.62) 0%,
+    rgba(8, 12, 16, 0.34) 45%,
+    rgba(8, 12, 16, 0.1) 75%
+  );
+}
+// The identity glyph — large, centred a little above middle, lifting on hover.
+.card-icon {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 58px;
+  line-height: 1;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.55));
+  transition: transform 0.15s ease;
+  pointer-events: none;
+  .card:hover & {
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+}
+.card-icon--scenario {
+  font-size: 46px;
 }
 .card-overlay {
   position: absolute;
