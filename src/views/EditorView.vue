@@ -115,7 +115,7 @@
 
           <!-- Edge hit-zones: the whole tile is clickable, split into four
                triangles (one per edge) for big, kid-friendly targets. -->
-          <template v-if="tool === 'connect' || tool === 'road' || tool === 'signal'">
+          <template v-if="tool === 'connect' || tool === 'road' || tool === 'signal' || tool === 'buslane'">
             <path
               v-for="p in EDGES"
               :key="'z' + p"
@@ -264,6 +264,7 @@ import {
   rotateDepot,
   toggleSignalPort,
   cycleDefaultArm,
+  toggleLaneKind,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -276,7 +277,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 import { takeEditorSeed } from "@/editorSeed";
 
-type Tool = "connect" | "depot" | "signal" | "erase" | "road";
+type Tool = "connect" | "depot" | "signal" | "erase" | "road" | "buslane";
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
@@ -296,6 +297,8 @@ const HINTS: Record<Tool, string> = {
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
+  buslane:
+    "Click a road edge to mark its kerb lane (the one entering from that side) as a BUS lane — click again to make it a normal lane. Each direction's kerb lane toggles independently.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -332,12 +335,13 @@ class EditorView extends Vue {
   levelSizeY = 6;
   // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
   // unaffected by order.
-  tools: Tool[] = ["connect", "road", "depot", "signal", "erase"];
+  tools: Tool[] = ["connect", "road", "buslane", "depot", "signal", "erase"];
   tool: Tool = "connect";
   // Big, kid-friendly icon + label for each build tool, shown in the dock.
   toolMeta: Record<Tool, { icon: string; label: string }> = {
     connect: { icon: "🚂", label: "Rail" },
     road: { icon: "🚗", label: "Road" },
+    buslane: { icon: "🚌", label: "Bus lane" },
     depot: { icon: "🏠", label: "Depot" },
     signal: { icon: "🚦", label: "Signal" },
     erase: { icon: "🧽", label: "Erase" },
@@ -695,6 +699,12 @@ class EditorView extends Vue {
   onZoneClick(id: string, port: Port) {
     if (this.tool === "signal") {
       this.commit(id, toggleSignalPort(this.cellOf(id), port));
+      return;
+    }
+    if (this.tool === "buslane") {
+      // Toggle the kerb lane (index 0) of the approach entering from this edge
+      // between bus-only and normal. No-op if there's no road there.
+      this.commit(id, toggleLaneKind(this.cellOf(id), port, 0));
       return;
     }
     if (!this.drawing) return;

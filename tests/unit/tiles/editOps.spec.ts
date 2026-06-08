@@ -16,6 +16,7 @@ import {
   addRoad,
   removeRoad,
   cycleDefaultArm,
+  toggleLaneKind,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
@@ -251,5 +252,41 @@ describe("road ops", () => {
     const c = emptyCell();
     toggleRoad(c, Top, Bottom);
     expect(c.road).toBeUndefined();
+  });
+});
+
+describe("toggleLaneKind", () => {
+  const laneAt = (cell: TileCell, from: Position, index: number) =>
+    cell.road!.find(l => l.from === from && l.index === index)!;
+
+  it("marks a normal lane as a bus lane and back, identified by from+index", () => {
+    // A 2-lane one-way road L->R (index 0 kerb, index 1 inboard).
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    expect(laneAt(c, Left, 0).kind).toBeUndefined();
+    c = toggleLaneKind(c, Left, 0); // mark the kerb lane as bus
+    expect(laneAt(c, Left, 0).kind).toBe("bus");
+    expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the other lane is untouched
+    c = toggleLaneKind(c, Left, 0); // toggle back to normal
+    expect(laneAt(c, Left, 0).kind).toBeUndefined();
+  });
+
+  it("keeps the lane's movements and index when flipping kind", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = toggleLaneKind(c, Left, 1);
+    const lane = laneAt(c, Left, 1);
+    expect(lane).toMatchObject({ from: Left, to: [Right], index: 1, kind: "bus" });
+  });
+
+  it("is a no-op (same cell) when no lane matches", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    expect(toggleLaneKind(c, Left, 5)).toBe(c); // no lane at index 5
+    expect(toggleLaneKind(emptyCell(), Left, 0)).toBeDefined(); // no road at all
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    const before = c.road![0].kind;
+    toggleLaneKind(c, Left, 0);
+    expect(c.road![0].kind).toBe(before);
   });
 });

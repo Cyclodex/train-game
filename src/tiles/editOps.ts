@@ -238,3 +238,20 @@ export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
   const road = cell.road ?? [];
   return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
 }
+
+// Toggle a single lane's BUS designation: flip its `kind` between "bus" and
+// normal (undefined), identified by its approach `from` and physical `index`
+// (0 = kerb). This is the editor's "mark a lane as a bus lane" tool — it changes
+// only the lane's access class, keeping its geometry and movements, so a normal
+// 2-lane road becomes "1 car + 1 bus" without re-laying it (and back). No-op if
+// the cell has no such lane.
+export function toggleLaneKind(cell: TileCell, from: Port, index: number): TileCell {
+  const road = cell.road;
+  if (!road || !road.some(l => l.from === from && l.index === index)) return cell;
+  const next = road.map(l => {
+    if (l.from !== from || l.index !== index) return l;
+    if (l.kind === "bus") return { from: l.from, to: l.to, index: l.index }; // → normal
+    return { ...l, kind: "bus" as LaneKind };
+  });
+  return { ...cell, road: next };
+}
