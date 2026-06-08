@@ -20,6 +20,7 @@ import {
   roadcross3lane,
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
+import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buscross } from "@/levels/test/scenarios/buscross";
 import { lanesAllowingExit, carLaneIndices, busLaneIndices } from "@/tiles/lanes";
@@ -2049,5 +2050,61 @@ describe("createRoadSim — lane merge (cross-tile continuity)", () => {
       if (cars.length >= 2 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
     }
     expect(allStuckTicks).toBeLessThan(50);
+  });
+});
+
+describe("mixed-lane junctions route end-to-end", () => {
+  // Drive a junction whose arms have different lane counts and confirm cars
+  // actually flow THROUGH the centre and off the far side — i.e. every connection
+  // works, with no permanent gridlock and no broken (NaN / off-grid) position.
+  const drive = (
+    scenario: { level: Level; size?: { cols: number; rows: number } },
+    centre: { x: number; y: number },
+    seed: number,
+  ) => {
+    const sim = createRoadSim({
+      level: scenario.level,
+      width: scenario.size!.cols,
+      height: scenario.size!.rows,
+      seed,
+      spawnInterval: 0.5,
+      maxCars: 16,
+    });
+    let prev = new Set<string>();
+    const completed = new Set<string>();
+    let throughCentre = 0;
+    let badPos = 0;
+    let allStuckTicks = 0;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed.add(id);
+      prev = now;
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        // A broken sample = non-finite progress or lateral lane position.
+        if (!Number.isFinite(f.t) || (f.lanePos != null && !Number.isFinite(f.lanePos))) badPos++;
+        if (f.coord.x === centre.x && f.coord.y === centre.y) throughCentre++;
+      }
+      const cars = sim.cars();
+      if (cars.length >= 3 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
+    }
+    return { completed: completed.size, throughCentre, badPos, allStuckTicks };
+  };
+
+  it("mixedcross (1/2/3/2 arms): cars cross the centre and exit, no gridlock", () => {
+    const r = drive(mixedcross, { x: 3, y: 3 }, 7);
+    expect(r.badPos).toBe(0); // no broken positions
+    expect(r.throughCentre).toBeGreaterThan(0); // cars actually traverse the junction
+    expect(r.completed).toBeGreaterThan(10); // sustained flow off the far side
+    expect(r.allStuckTicks).toBeLessThan(80); // no permanent deadlock
+  });
+
+  it("mixedtee (3-lane road, 2-lane spur): cars cross the centre and exit, no gridlock", () => {
+    const r = drive(mixedtee, { x: 3, y: 2 }, 4);
+    expect(r.badPos).toBe(0);
+    expect(r.throughCentre).toBeGreaterThan(0);
+    expect(r.completed).toBeGreaterThan(10);
+    expect(r.allStuckTicks).toBeLessThan(80);
   });
 });
