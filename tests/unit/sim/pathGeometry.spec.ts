@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { portPoint, segmentPathD, segmentLength } from "@/sim/pathGeometry";
+import {
+  portPoint,
+  segmentPathD,
+  segmentLength,
+  laneSegmentPointAt,
+  laneSegmentPathD,
+  laneRibbonPathD,
+  arrowHeadD,
+} from "@/sim/pathGeometry";
 import { Position } from "@/types";
 
 describe("portPoint", () => {
@@ -59,6 +67,80 @@ describe("segmentLength", () => {
     expect(segmentLength(Position.Top, Position.Right, 200)).toBeCloseTo(
       curve * 200,
       4
+    );
+  });
+});
+
+describe("laneSegmentPointAt", () => {
+  it("a zero-offset straight is the centreline, heading along travel", () => {
+    const p = laneSegmentPointAt(Position.Left, Position.Right, 200, 0, 0, 0.5);
+    expect(p.x).toBeCloseTo(100, 6);
+    expect(p.y).toBeCloseTo(100, 6);
+    expect(p.tangentDeg).toBeCloseTo(0, 4); // east
+  });
+
+  it("a constant offset pushes right-of-travel (east → south)", () => {
+    const p = laneSegmentPointAt(Position.Left, Position.Right, 200, 28, 28, 0.5);
+    expect(p.x).toBeCloseTo(100, 6);
+    expect(p.y).toBeCloseTo(128, 6); // 28px to the right of an eastbound heading
+    expect(p.tangentDeg).toBeCloseTo(0, 4);
+  });
+
+  it("interpolates offEntry→offExit across the tile (a seam taper)", () => {
+    const e = laneSegmentPointAt(Position.Left, Position.Right, 200, 0, 28, 0);
+    const m = laneSegmentPointAt(Position.Left, Position.Right, 200, 0, 28, 0.5);
+    const x = laneSegmentPointAt(Position.Left, Position.Right, 200, 0, 28, 1);
+    expect(e.y).toBeCloseTo(100, 6); // starts on the centreline
+    expect(m.y).toBeCloseTo(114, 6); // half way out
+    expect(x.y).toBeCloseTo(128, 6); // arrives fully offset
+    expect(m.tangentDeg).toBeCloseTo((Math.atan2(28, 200) * 180) / Math.PI, 2);
+  });
+
+  it("a zero-offset curve follows the centreline Bézier; apex heads 45°", () => {
+    const p = laneSegmentPointAt(Position.Top, Position.Right, 200, 0, 0, 0.5);
+    expect(p.x).toBeCloseTo(125, 6);
+    expect(p.y).toBeCloseTo(75, 6);
+    expect(p.tangentDeg).toBeCloseTo(45, 2); // SE at the apex of a Top→Right bend
+  });
+});
+
+describe("laneSegmentPathD", () => {
+  it("a constant-offset straight collapses to a 2-point line", () => {
+    expect(laneSegmentPathD(Position.Left, Position.Right, 200, 0, 0)).toBe(
+      "M 0 100 L 200 100"
+    );
+    expect(laneSegmentPathD(Position.Left, Position.Right, 200, 28, 28)).toBe(
+      "M 0 128 L 200 128"
+    );
+  });
+
+  it("a curve samples into a polyline from entry to exit", () => {
+    const d = laneSegmentPathD(Position.Top, Position.Right, 200, 0, 0, 24);
+    expect(d.startsWith("M 100 0 ")).toBe(true);
+    expect(d.endsWith("200 100")).toBe(true);
+    expect(d.match(/ L /g)!.length).toBe(24); // 25 sampled points
+  });
+});
+
+describe("laneRibbonPathD", () => {
+  it("a straight ribbon is the closed rectangle between its two edges", () => {
+    // left edge at -28, right edge at +28 of an eastbound heading.
+    expect(
+      laneRibbonPathD(Position.Left, Position.Right, 200, -28, -28, 28, 28)
+    ).toBe("M 0 128 L 200 128 L 200 72 L 0 72 Z");
+  });
+
+  it("a curved ribbon is a closed sampled polygon", () => {
+    const d = laneRibbonPathD(Position.Top, Position.Right, 200, -28, -28, 28, 28, 24);
+    expect(d.startsWith("M ")).toBe(true);
+    expect(d.endsWith(" Z")).toBe(true);
+  });
+});
+
+describe("arrowHeadD", () => {
+  it("draws an open chevron at the tip, splayed about the heading", () => {
+    expect(arrowHeadD({ x: 100, y: 100 }, 0, 7)).toBe(
+      "M93 103.85 L100 100 L93 96.15"
     );
   });
 });
