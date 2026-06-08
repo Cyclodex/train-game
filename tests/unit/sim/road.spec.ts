@@ -23,7 +23,7 @@ import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buscross } from "@/levels/test/scenarios/buscross";
-import { lanesAllowingExit, carLaneIndices, busLaneIndices } from "@/tiles/lanes";
+import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -1219,6 +1219,47 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(busOffBus).toBe(0); // and were never off it past the cross
     expect(carSamples).toBeGreaterThan(20); // cars ran the through road too
     expect(carOnBus).toBe(0); // and never strayed onto the bus lane across the cross
+  });
+
+  it("buscross scenario: the kerb bus lane feeds a turn, and buses take it", () => {
+    // The user flagged that bus lanes looked turn-locked. They are not: the kerb
+    // bus lane at the cross feeds the natural right turn off the main road, and
+    // buses physically leave the main road onto the 1-lane side road.
+    const centre = buscross.level["2,2"].road;
+    // Eastbound (L→…) bus lane: straight (R) AND the right turn (B, south).
+    const eastExits = usableExits(centre, Position.Left, "bus");
+    expect(eastExits).toContain(Position.Right); // straight still allowed
+    expect(eastExits).toContain(Position.Bottom); // right turn now allowed
+    // Westbound (R→…) bus lane: straight (L) AND the right turn (T, north).
+    const westExits = usableExits(centre, Position.Right, "bus");
+    expect(westExits).toContain(Position.Left);
+    expect(westExits).toContain(Position.Top);
+
+    // And it happens in the running sim: buses reach the side-road arms, which
+    // are only fed from the cross (a bus there either turned off the main road
+    // or ran the side road — either way buses are not confined to the through
+    // road). At least one bus must be observed on a side-road tile.
+    const sim = createRoadSim({
+      level: buscross.level,
+      width: buscross.size!.cols,
+      height: buscross.size!.rows,
+      seed: 6,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+      mix: buscross.traffic!.mix,
+    });
+    let busesOnSideRoad = 0;
+    for (let i = 0; i < 1800; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        if (c.units[0].part !== "bus") continue;
+        const f = c.units[0].front;
+        if (f.coord.x === 2 && (f.coord.y === 1 || f.coord.y === 3)) busesOnSideRoad++;
+      }
+    }
+    expect(busesOnSideRoad).toBeGreaterThan(0);
   });
 });
 

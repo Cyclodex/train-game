@@ -4,6 +4,13 @@
       <button class="stage-button" @click="config.debug = !config.debug">
         Debug
       </button>
+      <button
+        class="stage-button"
+        title="Hide the meadow backdrop for a flat neutral ground — makes lane markings, gores and kerbs easy to read while debugging geometry"
+        @click="config.plainBackdrop = !config.plainBackdrop"
+      >
+        {{ config.plainBackdrop ? "🌳 BG off" : "🌳 BG on" }}
+      </button>
       <button class="stage-button" @click="pausePlay">
         {{ paused ? "Start" : "Pause" }}
       </button>

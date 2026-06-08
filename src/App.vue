@@ -1,7 +1,7 @@
 <template>
   <div
     id="app"
-    :class="[`theme-${config.worldTheme}`, { debug: config.debug }]"
+    :class="[`theme-${config.worldTheme}`, { debug: config.debug, 'bg-plain': config.plainBackdrop }]"
     :style="{ '--meadow-trees': meadowTrees }"
   >
     <router-view :key="$route.fullPath" />
@@ -65,6 +65,16 @@ pre {
   position: absolute;
   bottom: 0;
   left: 0;
+}
+
+// Debug "plain background" mode: override the themed backdrop with a flat
+// neutral ground and drop the board's framing glow, so tile geometry stands out.
+#app.bg-plain {
+  background: #3a3f44 !important;
+}
+#app.bg-plain .level {
+  box-shadow: none !important;
+  border-radius: 0 !important;
 }
 
 .clickable {

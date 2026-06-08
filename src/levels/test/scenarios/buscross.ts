@@ -7,6 +7,9 @@ import { type Lane, nWayLanes } from "@/tiles/lanes";
 // This exercises bus-lane handling THROUGH a junction (the cross-lane fix):
 //   • a bus driving straight along the main road stays on the bus lane right
 //     across the cross;
+//   • a bus CAN turn off the main road — the kerb bus lane feeds the natural
+//     right turn onto the side road (left turns come from the inner car lane,
+//     just like real kerb-side markings);
 //   • a bus turning in from the side road lands on / settles onto the bus lane;
 //   • a car never ends up on the bus lane, on the through road OR after a turn.
 // Toggle Debug to see the amber bus-lane markings and watch buses hold the kerb
@@ -30,17 +33,20 @@ function ewArm(): { connections: []; road: Lane[] } {
   };
 }
 
-// The crossroads centre. The east–west bus lane goes straight only (a bus lane
-// doesn't feed turns); the east–west car lane and the 1-lane north–south arms
-// carry the turns.
+// The crossroads centre. Right-hand traffic, so right turns leave from the kerb
+// lane and left turns from the inner lane. The kerb BUS lane therefore feeds
+// straight + the right turn; the inner CAR lane feeds straight + the left turn
+// (and keeps the right turn too, so a car is never stranded). The 1-lane
+// north–south arms carry all of their turns. Heading east (L→…): right = B
+// (south), left = T (north); heading west (R→…): right = T, left = B.
 function centre(): { connections: []; road: Lane[] } {
   return {
     connections: [],
     road: [
-      { from: L, to: [R], index: 0, kind: "bus" },
-      { from: L, to: [R, T, B], index: 1 },
-      { from: R, to: [L], index: 0, kind: "bus" },
-      { from: R, to: [L, T, B], index: 1 },
+      { from: L, to: [R, B], index: 0, kind: "bus" }, // bus: straight + right turn
+      { from: L, to: [R, T, B], index: 1 }, // car: straight + both turns
+      { from: R, to: [L, T], index: 0, kind: "bus" }, // bus: straight + right turn
+      { from: R, to: [L, T, B], index: 1 }, // car: straight + both turns
       { from: T, to: [B, L, R], index: 0 },
       { from: B, to: [T, L, R], index: 0 },
     ],

@@ -62,6 +62,10 @@ export interface GameConfig {
   // The world backdrop theme (see src/themes.ts). Applied as a `theme-<id>`
   // class on #app; persisted via `setWorldTheme`.
   worldTheme: WorldTheme;
+  // Debug aid: strip the themed world backdrop (meadow trees / table grain) and
+  // the board's drop-shadow framing for a flat neutral ground, so tile geometry
+  // (lane markings, gores, kerbs) reads clearly while debugging. Not persisted.
+  plainBackdrop: boolean;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -79,6 +83,7 @@ export const gameConfig: GameConfig = reactive({
   roadScoring: false,
   maxCars: 5, // % of map capacity — a quiet default (few cars on screen)
   worldTheme: loadWorldTheme(),
+  plainBackdrop: false,
 });
 
 // Set + persist the world theme. Views call this from the drawer's 🎨 button.
