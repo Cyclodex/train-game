@@ -15,7 +15,7 @@ import {
   carLaneIndices,
   roadPortsOf,
   isRoadJunction,
-  junctionExitLane,
+  junctionExitOffsetPx,
   VehicleClass,
 } from "@/tiles/lanes";
 import { laneOffsetPx, laneOffsetConstPx, oneWayLaneOffsetPx, seamBand } from "@/sim/laneOffset";
@@ -648,16 +648,17 @@ export function createGame(
     const exitApproach = oppositePort(exit);
     const exitBand = laneCountAt(exitRoad, exitApproach) / 2;
     if (exitBand <= 0) return null;
-    const target = junctionExitLane(
+    return junctionExitOffsetPx(
       here,
       entry,
-      Math.round(entryLane),
+      entryLane,
       exit,
       exitRoad,
       exitApproach,
+      exitBand,
+      tileSize,
       cls,
     );
-    return laneOffsetConstPx(target, exitBand, tileSize);
   }
 
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT

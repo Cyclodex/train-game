@@ -19,6 +19,7 @@ import {
   seamMismatch,
   turnKind,
   junctionExitLane,
+  junctionExitOffsetPx,
 } from "@/tiles/lanes";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
@@ -293,5 +294,41 @@ describe("junctionExitLane", () => {
     expect(junctionExitLane(j, B, 0, T, busExit, B, "car")).toBe(1);
     // A bus going straight kerb-aligns onto the bus lane (index 0).
     expect(junctionExitLane(j, B, 0, T, busExit, B, "bus")).toBe(0);
+  });
+});
+
+describe("junctionExitOffsetPx (turn-glide target offset)", () => {
+  const B = Position.Bottom;
+  const T = Position.Top;
+  const approach = (n: number): Lane[] =>
+    Array.from({ length: n }, (_, i) => ({ from: B, to: [T, Position.Left, Position.Right], index: i }));
+  // tileSize 200 → lane width 0.14·200 = 28px; laneOffsetConstPx = (band-0.5-lane)·28.
+
+  it("a turn onto a 1-lane arm lands at that lane's centre offset (the glide target)", () => {
+    // 1-lane two-way exit arm → centred band 1; target lane 0 → (1-0.5-0)·28 = 14px.
+    const off = junctionExitOffsetPx(approach(1), B, 0, T, nWayLanes(T, B, 1), B, 1, 200, "car");
+    expect(off).toBeCloseTo(14, 6);
+  });
+
+  it("every lane of a wide approach merging to a 1-lane arm targets the same offset", () => {
+    const j = approach(3);
+    const offs = [0, 1, 2].map(i => junctionExitOffsetPx(j, B, i, T, nWayLanes(T, B, 1), B, 1, 200, "car"));
+    expect(offs).toEqual([offs[0], offs[0], offs[0]]); // all converge — no fan-out onto a 1-lane arm
+    expect(offs[0]).toBeCloseTo(14, 6);
+  });
+
+  it("a bus glides to a kerb bus lane further out than a car (which avoids it)", () => {
+    const busExit: Lane[] = [
+      { from: B, to: [T], index: 0, kind: "bus" },
+      { from: B, to: [T], index: 1 },
+      { from: B, to: [T], index: 2 },
+    ];
+    // One-way 3-lane exit arm → band passed as 1.5. Car target lane 1 → (1.5-0.5-1)·28 = 0.
+    const car = junctionExitOffsetPx(approach(1), B, 0, T, busExit, B, 1.5, 200, "car");
+    // Bus target lane 0 (the kerb bus lane) → (1.5-0.5-0)·28 = 28.
+    const bus = junctionExitOffsetPx(approach(1), B, 0, T, busExit, B, 1.5, 200, "bus");
+    expect(car).toBeCloseTo(0, 6);
+    expect(bus).toBeCloseTo(28, 6);
+    expect(bus).toBeGreaterThan(car); // bus sits further toward the kerb
   });
 });

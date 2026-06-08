@@ -1,5 +1,6 @@
 import type { Port } from "@/tiles/model";
 import { Position } from "@/types";
+import { laneOffsetConstPx } from "@/sim/laneOffset";
 
 // A lane's vehicle class, for restrictions. v1 stores the field but does not
 // enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
@@ -264,6 +265,36 @@ export function junctionExitLane(
   }
   pos = Math.max(0, Math.min(D - 1, pos));
   return dst[pos];
+}
+
+// The lateral offset (px, right-of-travel) a class-`cls` vehicle in approach lane
+// `entryLane` should arrive at on the EXIT arm of a turn: the lane it lands in
+// (junctionExitLane) projected onto the exit arm's centred band `exitBand` (half
+// the arm's both-direction lanes). This is what lets a turning vehicle GLIDE to a
+// real exit-arm lane across the junction tile instead of holding the approach
+// offset and snapping at the boundary (a turn onto a narrower arm used to end
+// outside its only lane). Pure: the renderer supplies both roads + the exit band.
+export function junctionExitOffsetPx(
+  junctionRoad: Lane[] | undefined,
+  entryPort: Port,
+  entryLane: number,
+  exitPort: Port,
+  exitRoad: Lane[] | undefined,
+  exitApproach: Port,
+  exitBand: number,
+  tileSize: number,
+  cls: VehicleClass,
+): number {
+  const target = junctionExitLane(
+    junctionRoad,
+    entryPort,
+    Math.round(entryLane),
+    exitPort,
+    exitRoad,
+    exitApproach,
+    cls,
+  );
+  return laneOffsetConstPx(target, exitBand, tileSize);
 }
 
 // Every port the road touches (as an approach or an exit).
