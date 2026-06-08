@@ -9,7 +9,15 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { laneCount, laneCountAt, carLaneIndices, roadPortsOf, isRoadJunction } from "@/tiles/lanes";
+import {
+  laneCount,
+  laneCountAt,
+  carLaneIndices,
+  roadPortsOf,
+  isRoadJunction,
+  junctionExitLane,
+  VehicleClass,
+} from "@/tiles/lanes";
 import { laneOffsetPx, laneOffsetConstPx, oneWayLaneOffsetPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -229,6 +237,18 @@ export interface Game {
   // this width (highway lane drop): the through lanes run straight and the right
   // lane ends. Returns this tile's own one-way count when it is not a one-way run.
   roadOneWayRunMax(coord: Coordinates, entry: Position): number;
+  // The lateral offset (px, right-of-travel) a class-`cls` vehicle in approach
+  // lane `entryLane` lands at on the EXIT arm of a TURN through `coord` (a curve /
+  // junction movement, entry→exit adjacent). null for a dead-end / map edge. The
+  // debug lane overlay uses this so a turn arrow ends on the SAME lane the car
+  // glides to (couplerOffset's turn branch), never on a phantom lane.
+  roadTurnExitOffsetPx(
+    coord: Coordinates,
+    entry: Position,
+    exit: Position,
+    entryLane: number,
+    cls: VehicleClass,
+  ): number | null;
   // Debug route overlay — the view drives these on car hover/click (debug only):
   setHoveredCar(carId: string): void; // preview this car's route while hovering
   clearHoveredCar(): void; // hover left a car
@@ -605,15 +625,51 @@ export function createGame(
     return max || laneCount(level[getCoordinatesId(coord)]?.road, entry);
   }
 
+  // The lateral offset (px, right-of-travel, this tile's frame) a vehicle of class
+  // `cls` in approach lane `entryLane` should arrive at on the EXIT arm of a TURN
+  // through `coord` (entry→exit adjacent — a curve or junction movement). It is the
+  // offset of the lane the vehicle lands in on the exit arm (junctionExitLane),
+  // measured on that arm's centred band, so a turn onto a narrower/wider arm — or a
+  // bus turning toward a bus lane — glides to a REAL lane instead of holding the
+  // approach offset and snapping at the boundary. Returns null when the move has no
+  // road exit arm (dead-end / map edge): the caller then holds the approach offset.
+  function turnExitOffsetPx(
+    coord: Coordinates,
+    entry: Position,
+    exit: Position,
+    entryLane: number,
+    cls: VehicleClass,
+  ): number | null {
+    const here = level[getCoordinatesId(coord)]?.road;
+    const next = neighborCoord(coord, exit);
+    if (!next) return null;
+    const exitRoad = level[getCoordinatesId(next)]?.road;
+    if (!exitRoad) return null;
+    const exitApproach = oppositePort(exit);
+    const exitBand = laneCountAt(exitRoad, exitApproach) / 2;
+    if (exitBand <= 0) return null;
+    const target = junctionExitLane(
+      here,
+      entry,
+      Math.round(entryLane),
+      exit,
+      exitRoad,
+      exitApproach,
+      cls,
+    );
+    return laneOffsetConstPx(target, exitBand, tileSize);
+  }
+
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT
   // tile whose neighbour has a different lane count, the painted surface tapers
   // across the tile (min-seam rule); the coupler's offset interpolates the same
   // way so a continuing lane glides as the kerb shifts, instead of snapping at the
-  // boundary. On a uniform road this is the original constant offset; on a
-  // curve/junction (entry/exit not opposite) the surface keeps a constant width,
-  // so a constant offset is used. Reads the coupler's OWN tile, so front and rear
-  // couplers straddling a seam each taper correctly (preserving the body lean).
-  function couplerOffset(s: CarSample, fallbackLane: number): number {
+  // boundary. On a uniform road this is the original constant offset; on a curve /
+  // junction (entry/exit not opposite) the surface keeps a constant width, but a
+  // TURN onto a different arm eases from the approach lane to its exit-arm lane
+  // (turnExitOffsetPx) across the tile. Reads the coupler's OWN tile, so front and
+  // rear couplers straddling a seam each taper correctly (preserving the body lean).
+  function couplerOffset(s: CarSample, fallbackLane: number, cls: VehicleClass): number {
     const lanePos = s.lanePos ?? fallbackLane;
     const entry = s.entryPort;
     const exit = s.exitPort;
@@ -642,8 +698,18 @@ export function createGame(
       );
       return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize, false);
     }
-    // Curve / junction / dead-end: constant-width surface, constant offset.
-    return laneOffsetConstPx(lanePos, selfBand, tileSize);
+    // Curve / junction: constant-width surface. A uniform straight-through curve
+    // keeps a constant offset (offEntry === offExit below — the glide is a no-op),
+    // but a TURN onto a different arm eases from the approach lane to the lane it
+    // lands in on the exit arm, so it never holds the wide-arm offset across the
+    // tile and snaps at the boundary (a turn onto a narrower arm used to end
+    // outside its only lane). Buses glide toward the exit arm's bus lane the same
+    // way. Dead-end / map edge → hold the approach offset.
+    const offEntry = laneOffsetConstPx(lanePos, selfBand, tileSize);
+    if (exit === null) return offEntry;
+    const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
+    if (offExit === null) return offEntry;
+    return offEntry + (offExit - offEntry) * s.t;
   }
 
   function updateRoadCars() {
@@ -662,8 +728,9 @@ export function createGame(
         // a lane change the rear coupler's position lags the front's, so the body
         // angles into the new lane (the lean) instead of sliding flat. The sim eases
         // the lane positions for merges/turns; off-change they're equal.
-        const offsetFront = couplerOffset(unit.front, curIndex);
-        const offsetRear = couplerOffset(unit.rear, curIndex);
+        const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
+        const offsetFront = couplerOffset(unit.front, curIndex, cls);
+        const offsetRear = couplerOffset(unit.rear, curIndex, cls);
 
         const { x, y, angle } = positionUnit(unit as unknown as UnitChord, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;
@@ -943,6 +1010,15 @@ export function createGame(
     },
     roadOneWayRunMax(coord: Coordinates, entry: Position): number {
       return oneWayRunMaxAt(coord, entry);
+    },
+    roadTurnExitOffsetPx(
+      coord: Coordinates,
+      entry: Position,
+      exit: Position,
+      entryLane: number,
+      cls: VehicleClass,
+    ): number | null {
+      return turnExitOffsetPx(coord, entry, exit, entryLane, cls);
     },
     setHoveredCar(carId: string) {
       hoveredCarId = carId;
