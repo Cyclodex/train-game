@@ -339,6 +339,25 @@ export function laneCountAt(road: Lane[] | undefined, port: Port): number {
   return entering + exitingCount;
 }
 
+// Whether a road tile's seam at `port` is a genuine lane-count mismatch worth
+// flagging to the author (the renderer paints such a seam red). Only a simple
+// curve/bend (two ports) must preserve its lane count across the seam, so a
+// differing neighbour count there is an authoring error. A JUNCTION (more than
+// two ports) fans and merges unequal lane counts by design — a 3-lane road may
+// legitimately feed a 1-lane arm — so a junction seam is never a mismatch (its
+// per-port `laneCountAt` deliberately over-counts the lanes that can fan through
+// an arm). `neighbourCountAt` is the neighbour's `laneCountAt` at the shared
+// port, or 0 when there is no neighbour road (an off-map border or grass tile).
+export function seamMismatch(
+  road: Lane[] | undefined,
+  port: Port,
+  neighbourCountAt: number,
+): boolean {
+  if (neighbourCountAt <= 0) return false;
+  if (isRoadJunction(road)) return false;
+  return neighbourCountAt !== laneCountAt(road, port);
+}
+
 // Generate `count` index slots in both directions between ports `a` and `b`.
 // Produces a multi-lane bidirectional road: indices 0..count-1 each way.
 // Pass `kind` to mark all lanes with a restriction (e.g. "bus").

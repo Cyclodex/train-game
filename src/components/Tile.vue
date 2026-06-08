@@ -227,7 +227,7 @@ import {
   MergeArrowPath,
   LaneDropGore,
 } from "@/tiles/roadGeometry";
-import { roadEdges, laneCount, laneCountAt, seamPaintTotal } from "@/tiles/lanes";
+import { roadEdges, laneCount, laneCountAt, seamPaintTotal, seamMismatch } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
@@ -348,8 +348,10 @@ class Tile extends Vue {
         // under-counts a curve neighbour (its opposite port carries no lanes).
         const nTotalA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
         const nTotalB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
-        const badA = na !== null && nTotalA > 0 && nTotalA !== selfAtA;
-        const badB = nb !== null && nTotalB > 0 && nTotalB !== selfAtB;
+        // Only a simple curve must preserve its lane count across a seam; a
+        // junction fans/merges unequal arms by design and is never a mismatch.
+        const badA = seamMismatch(this.tile.road, a, nTotalA);
+        const badB = seamMismatch(this.tile.road, b, nTotalB);
         const mismatch = badA || badB;
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`

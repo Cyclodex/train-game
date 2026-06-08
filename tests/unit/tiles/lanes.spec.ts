@@ -16,6 +16,7 @@ import {
   laneCountAt,
   nWayLanes,
   seamPaintTotal,
+  seamMismatch,
   turnKind,
   junctionExitLane,
 } from "@/tiles/lanes";
@@ -185,6 +186,36 @@ describe("seamPaintTotal", () => {
   it("stays at the tile's width when the neighbour is wider (the neighbour tapers)", () => {
     expect(seamPaintTotal(2, 4)).toBe(2);
     expect(seamPaintTotal(3, 5)).toBe(3);
+  });
+});
+
+describe("seamMismatch", () => {
+  // The crosslanes centre: 3-lane E-W approaches + 1-lane N-S, every lane → every exit.
+  const centre: Lane[] = [
+    ...Array.from({ length: 3 }, (_, i) => ({ from: L, to: [R, T, B], index: i })),
+    ...Array.from({ length: 3 }, (_, i) => ({ from: R, to: [L, T, B], index: i })),
+    { from: T, to: [B, L, R], index: 0 },
+    { from: B, to: [T, L, R], index: 0 },
+  ];
+
+  it("never flags a junction — arms fan/merge unequal lane counts by design", () => {
+    // laneCountAt over-counts a junction exit port (3 E-W lanes can fan through T
+    // plus the 1 N approach = 4), but the 1-lane arm crosses only 2. That is a
+    // legal merge, not a mismatch, because the tile is a junction.
+    expect(laneCountAt(centre, T)).toBe(4);
+    expect(seamMismatch(centre, T, 2)).toBe(false);
+  });
+
+  it("flags a simple curve whose lane count is not preserved across the bend", () => {
+    // A 3-lane curve (L<->T, two ports) meeting a 2-lane neighbour: genuine error.
+    const curve = nWayLanes(L, T, 3);
+    expect(seamMismatch(curve, L, 2)).toBe(true);
+  });
+
+  it("does not flag a matching seam or an off-map / grass edge", () => {
+    const curve = nWayLanes(L, T, 2);
+    expect(seamMismatch(curve, L, laneCountAt(curve, L))).toBe(false);
+    expect(seamMismatch(curve, L, 0)).toBe(false); // no neighbour road
   });
 });
 
