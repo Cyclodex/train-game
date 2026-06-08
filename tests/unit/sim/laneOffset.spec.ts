@@ -195,22 +195,32 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
   });
 });
 
-describe("one-way centred funnel (symmetric squeeze)", () => {
+describe("one-way centred band — substitution (lanes connect, highest index merges)", () => {
   const W = TILE * 0.14;
 
-  it("scales the centred band symmetrically toward the narrower seam", () => {
-    // A one-way 3-lane tile has a CENTRED band selfBand = 3/2 = 1.5, lane centres
-    // at +1·W, 0, -1·W. Narrowing toward a 2-lane seam (band 1), the centred
-    // funnel scales every lane by seamWidth/selfBand = 2/3, so the whole band
-    // squeezes symmetrically: the outer lanes ease in by equal amounts and the
-    // centre lane stays put. `centred = true` is the one-way path.
+  it("substitutes the narrow-side offset so survivors land on their neighbour and the top index merges", () => {
+    // A one-way 3-lane tile: CENTRED band selfBand = 3/2 = 1.5, lane centres at
+    // +1·W, 0, -1·W. Narrowing toward a 2-lane seam (band 1, lane centres +0.5·W,
+    // -0.5·W), each surviving lane takes its NARROW-side offset so it lands exactly
+    // on the downstream lane (no half-lane gap — the old scaling left +0.667·W,
+    // 0.167·W short of the +0.5·W neighbour), and the highest-index lane (lane 2)
+    // merges onto the innermost survivor (lane 1). `centred = true` is the one-way path.
     const selfBand = 1.5;
     const seam = 1;
     const off = (lp: number) => laneOffsetPx(lp, selfBand, selfBand, seam, 1, TILE, true);
-    expect(off(0)).toBeCloseTo(1 * W * (2 / 3), 5); // +0.667·W
-    expect(off(1)).toBeCloseTo(0, 5); // centre lane holds
-    expect(off(2)).toBeCloseTo(-1 * W * (2 / 3), 5); // -0.667·W
-    expect(off(0)).toBeCloseTo(-off(2), 5); // symmetric about the centreline
+    expect(off(0)).toBeCloseTo(0.5 * W, 5); // lands on the downstream top lane
+    expect(off(1)).toBeCloseTo(-0.5 * W, 5); // lands on the downstream bottom lane
+    expect(off(2)).toBeCloseTo(-0.5 * W, 5); // highest index merges onto lane 1
+  });
+
+  it("matches the downstream uniform one-way tile exactly at the seam (continuity)", () => {
+    // The 3-lane tile's exit-seam offset for a surviving lane equals the 2-lane
+    // tile's own centred offset for that lane — so the lane line is continuous,
+    // which is the whole point of substitution over the old scaling.
+    const seamOff = (lp: number) => laneOffsetPx(lp, 1.5, 1.5, 1, 1, TILE, true);
+    const downstreamOff = (lp: number) => laneOffsetPx(lp, 1, 1, 1, 0, TILE, true); // 2-lane uniform, entry seam
+    expect(seamOff(0)).toBeCloseTo(downstreamOff(0), 5);
+    expect(seamOff(1)).toBeCloseTo(downstreamOff(1), 5);
   });
 
   it("a uniform one-way road (no taper) keeps every lane on its centred line", () => {
@@ -221,12 +231,12 @@ describe("one-way centred funnel (symmetric squeeze)", () => {
     expect(off(2)).toBeCloseTo(-1 * W, 5);
   });
 
-  it("contrasts with the bidirectional clamp (asymmetric, kerb lane only)", () => {
-    // Same band numbers but the two-way path (centred = false): the offset is
-    // clamped to one side (min(natural, seamWidth-0.5)), so the kerb lane is
-    // pulled in while the others are not mirrored — the wrong look for a one-way.
-    const off = (lp: number) => laneOffsetPx(lp, 1.5, 1.5, 1, 1, TILE, false);
-    expect(off(0)).toBeCloseTo(0.5 * W, 5); // clamped to seamWidth-0.5 = 0.5
-    expect(off(0)).not.toBeCloseTo(-off(2), 5); // not symmetric
+  it("collapses every lane to the centreline at a one-lane seam", () => {
+    // 3 (or 2) lanes narrowing to a single centred lane: all lanes converge to
+    // offset 0 at the seam (seamCount = 1).
+    const off = (lp: number) => laneOffsetPx(lp, 1.5, 1.5, 0.5, 1, TILE, true);
+    expect(off(0)).toBeCloseTo(0, 5);
+    expect(off(1)).toBeCloseTo(0, 5);
+    expect(off(2)).toBeCloseTo(0, 5);
   });
 });

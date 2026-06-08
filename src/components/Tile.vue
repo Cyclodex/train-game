@@ -419,9 +419,19 @@ class Tile extends Vue {
       const edges: string[] = [];
       if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
       if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
+      // Lane markings cap = surface half-width, EXCEPT on a one-way road, where the
+      // dashed dividers follow the cars via band substitution and so need the TRUE
+      // seam lane count (the un-floored neighbour band), not the min-2 paint width.
+      const mOne = (selfA || 0) + (selfB || 0); // one-way: the single direction's lanes
+      const markHalfA = oneWay
+        ? ((crossingA > 0 ? Math.min(mOne, crossingA) : mOne) / 2) * LANE_W
+        : widthA / 2;
+      const markHalfB = oneWay
+        ? ((crossingB > 0 ? Math.min(mOne, crossingB) : mOne) / 2) * LANE_W
+        : widthB / 2;
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, markHalfA, markHalfB),
         edges,
         mismatch: false,
         mismatchTip: "",
@@ -492,7 +502,8 @@ class Tile extends Vue {
       const selfBand = laneCountAt(road, lane.from) / 2;
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       // One-way ⟺ no oncoming lanes exit through this approach: the band is
-      // centred and a drop squeezes both kerbs symmetrically (see laneOffset).
+      // centred and a drop merges the highest-index lane onto its neighbour by
+      // band substitution (see sim/laneOffset.ts laneSeamOffsetPx).
       const centred = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
       for (const to of lane.to) {
@@ -513,8 +524,9 @@ class Tile extends Vue {
             nExit ? this.centeredRoadBand(nExit, oppositePort(to)) : 0,
           );
           // Bidirectional: clamp each end inward so the kerb lane merges and
-          // inner lanes hold. One-way: scale symmetrically so the centred band
-          // funnels evenly (see sim/laneOffset.ts laneSeamOffsetPx).
+          // inner lanes hold. One-way: band substitution so each surviving lane
+          // lands on its narrow-side neighbour and the dropped (highest-index)
+          // lane merges onto it (see sim/laneOffset.ts laneSeamOffsetPx).
           const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, centred);
           const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, centred);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });

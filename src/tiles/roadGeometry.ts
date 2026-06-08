@@ -322,21 +322,28 @@ export function roadLaneMarkingPaths(
   // car / debug-overlay centring.
   if ((lanesA === 0) !== (lanesB === 0)) {
     const m = Math.max(lanesA, lanesB); // the single direction's lane count
-    // When the surface tapers (a lane-count change), the centred band funnels
-    // symmetrically toward the narrower seam, so scale each divider by the ratio
-    // of the capped surface half-width to the untapered band kerb at that end.
-    // This keeps the dashed dividers converging in step with the cars and debug
-    // lane lines (which scale the same way; see sim/laneOffset.ts). No caps (a
-    // curve, or a uniform straight) → ratio 1, the original constant offsets.
-    const fullHalf = (m / 2) * LANE_W; // the band kerb, before any taper
-    const ratioA = capHalfA !== undefined && fullHalf > 0 ? capHalfA / fullHalf : 1;
-    const ratioB = capHalfB !== undefined && fullHalf > 0 ? capHalfB / fullHalf : 1;
+    // One-way lanes are CENTRED, so divider k (between lanes k-1 and k) sits at
+    // offset (band - k)·W. At a lane-count change the dividers follow the cars by
+    // BAND SUBSTITUTION (see sim/laneOffset.ts): a surviving divider takes its
+    // narrow-side offset (band → seamCount/2) and a dropped divider (index at or
+    // beyond seamCount) sweeps out to the narrow-side kerb, closing the merging
+    // lane. seamCount at each end comes from the TRUE seam half-width passed as a
+    // cap (the un-floored neighbour band — NOT the min-2 paint width — so the
+    // dashes meet the cyan lane lines, which use the true band). No caps (a curve
+    // or a uniform straight) → the constant centred offsets, unchanged.
+    const seamCountA = capHalfA !== undefined ? Math.max(1, Math.round((2 * capHalfA) / LANE_W)) : m;
+    const seamCountB = capHalfB !== undefined ? Math.max(1, Math.round((2 * capHalfB) / LANE_W)) : m;
+    const off = (seamCount: number, k: number) => (seamCount / 2 - Math.min(k, seamCount)) * LANE_W;
+    const dropFrom = Math.min(seamCountA, seamCountB); // dividers >= this one drop
     for (let k = 1; k < m; k++) {
-      const d = (m / 2 - k) * LANE_W; // centred divider offsets: m-1 of them
       out.push(
         isStraight
-          ? { d: taperedParallel(entry, exit, size, d * ratioA, d * ratioB), kind: "inner" }
-          : { d: curvedParallelPath(entry, exit, size, d), kind: "inner" },
+          ? {
+              d: taperedParallel(entry, exit, size, off(seamCountA, k), off(seamCountB, k)),
+              kind: "inner",
+              merge: k >= dropFrom,
+            }
+          : { d: curvedParallelPath(entry, exit, size, (m / 2 - k) * LANE_W), kind: "inner" },
       );
     }
     return out;

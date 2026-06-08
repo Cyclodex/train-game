@@ -70,7 +70,9 @@ pre {
 // Debug "plain background" mode: override the themed backdrop with a flat
 // neutral ground and drop the board's framing glow, so tile geometry stands out.
 #app.bg-plain {
-  background: #3a3f44 !important;
+  // A flat mid-green ground: clearly distinct from the dark tarmac so the kerb
+  // edges read, while still letting the white markings stand out.
+  background: #3f6b40 !important;
 }
 #app.bg-plain .level {
   box-shadow: none !important;
