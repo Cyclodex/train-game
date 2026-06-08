@@ -418,8 +418,12 @@ class Tile extends Vue {
         const exitCount = crossExit > 0 ? Math.min(m, crossExit) : m;
         const R = this.game.roadOneWayRunMax(coord, entry);
         const leftOff = -(R / 2) * LANE_W; // constant through-side kerb
+        // The closing-lane tarmac stays FULL width across a narrowing tile (the
+        // lane is closed by the hatched gore, not by the kerb tapering — a real
+        // motorway lane drop); it only grows on a WIDENING. So the right kerb runs
+        // at the wider of the two seam counts and is straight on a narrowing.
         const rightEntry = leftOff + entryCount * LANE_W;
-        const rightExit = leftOff + exitCount * LANE_W;
+        const rightExit = leftOff + Math.max(entryCount, exitCount) * LANE_W;
         const owMarkings: LaneMarkingPath[] = [];
         // Survivor dividers — straight lines between through-lanes present at both
         // ends (lane k boundary at (k − R/2)·W). The boundary of the dropping lane
@@ -689,17 +693,23 @@ class Tile extends Vue {
         if (exitCount < entryCount) {
           const W = size * LANE_WIDTH_PX_FRAC;
           const R = this.game.roadOneWayRunMax(coord, entry);
-          // Inner edge = boundary of the survivors (divider k = exitCount), straight
-          // at (exitCount − R/2)·W. Right kerb = (count − R/2)·W at each seam.
-          const inner = (exitCount - R / 2) * W;
-          const kerbEntry = (entryCount - R / 2) * W;
-          const kerbExit = (exitCount - R / 2) * W; // == inner: the lane has closed
+          // The closing lane stays full-width drivable; the gore (Sperrfläche) is a
+          // POINT upstream that WIDENS downstream to fill the lane where it ends —
+          // a real motorway lane drop, not a tarmac that pinches. Bounded below by
+          // the full-width kerb (straight) and above by a line diverging from that
+          // kerb (upstream point) to the survivors' boundary (downstream).
+          const kerbOff = (entryCount - R / 2) * W; // full-width kerb (closing-lane outer)
+          const innerOff = (exitCount - R / 2) * W; // survivors' boundary (gore inner, downstream)
           gores.push({
-            ...oneWayClosingGore(entry, exit, size, inner, kerbEntry, inner, kerbExit),
+            // (innerEntry, kerbEntry, innerExit, kerbExit): point at the kerb
+            // upstream (inner==kerb), widening to inner..kerb downstream.
+            ...oneWayClosingGore(entry, exit, size, kerbOff, kerbOff, innerOff, kerbOff),
             clipId: `gore-${this.coordId}-${entry}-${exit}`,
           });
-          const laneOff = (entryCount - 0.5 - R / 2) * W; // closing (outer) lane centre
-          for (const alongT of [0.3, 0.62]) {
+          // Merge arrows in the still-open part of the closing lane, leaning toward
+          // the through lanes (the merge direction).
+          const laneOff = (entryCount - 0.5 - R / 2) * W; // closing lane centre
+          for (const alongT of [0.2, 0.42]) {
             arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
           }
         }
