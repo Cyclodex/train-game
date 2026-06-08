@@ -132,7 +132,43 @@ and are explicitly out of scope here.
 
 ## Out of scope / deferred
 
-- Map thumbnails on cards (v2).
+- ~~Map thumbnails on cards (v2).~~ **Done** — see the addendum below.
 - Search / tag filtering (the dropdown-era idea #2 — not needed once drill-down
   lands).
 - Any change to scenario `.ts` files or the `TestScenario` type.
+
+---
+
+## Addendum (2026-06-08): BeamNG-style image tiles
+
+The deferred thumbnails landed as a follow-up. Inspired by BeamNG's game-mode
+menu (large image cards with title overlays), the gallery's text cards became
+**image tiles** backed by auto-rendered, sim-free level previews.
+
+- **`src/levels/test/thumb.ts`** — `scenarioThumb(level, grid)`, a *pure*
+  function that builds preview geometry from the same modules the live tile
+  renderer uses (`railPathsFor`, `roadSurfacePolygonPath`,
+  `roadCurvePolygonPath`, `segmentPathD`, `roadEdges`, `laneCount`) but none of
+  the game-coupled detail (signals, switches, lane-drop gores, mismatch flags,
+  cars). Output is per-tile, in tile-local coordinates, so the view places each
+  tile under a `translate()` group. Road width = the tile's own lane count
+  (min 2), no cross-tile taper — accurate enough for a thumbnail.
+- **`src/components/ScenarioThumb.vue`** — a pure view over that data: one SVG
+  with a muted-meadow backdrop, grey road ribbons, rail trackbed + steel rails,
+  and amber depot markers. No injects, no game, no rAF — renders even in a
+  backgrounded tab.
+- **`TestView.vue`** — cards became 16:10 image tiles: a full-bleed
+  `ScenarioThumb` background, a bottom gradient, and the title/description/count
+  overlaid; hover zooms the art (`scale(1.06)`) and lifts the card. Domain and
+  category tiles preview their **representative** scenario
+  (`firstScenarioOf` — the first leaf under them); scenario tiles preview
+  themselves.
+- **Decisions:** depot markers use a neutral amber (no game colour-assignment in
+  a static preview); the count label is pluralised ("1 scenario").
+- **Testing:** `tests/unit/levels/thumb.spec.ts` iterates `SCENARIOS` and asserts
+  `scenarioThumb` covers the whole grid, emits one tile per cell placed in-grid,
+  draws ≥1 path with only finite coordinates, and marks every depot cell.
+
+Still deferred: curated hero screenshots for top-level tiles (auto previews were
+enough), and a brand-new main-menu launcher at `/` (this addendum only touched
+the `/test` gallery).

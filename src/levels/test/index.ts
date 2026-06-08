@@ -152,4 +152,11 @@ export function domainById(id: string | undefined): ScenarioDomain | undefined {
   return DOMAINS.find(d => d.id === id);
 }
 
+// The representative scenario for a domain or category card (which have no level
+// of their own): the first leaf scenario under it. Used to pick the preview art
+// for the upper gallery levels.
+export function firstScenarioOf(node: ScenarioDomain | ScenarioCategory): TestScenario {
+  return "categories" in node ? node.categories[0].scenarios[0] : node.scenarios[0];
+}
+
 export type { TestScenario } from "@/levels/test/scenario";
