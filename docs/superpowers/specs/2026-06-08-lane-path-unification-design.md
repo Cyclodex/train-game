@@ -175,3 +175,48 @@ curves become 24-point polylines (smooth at tile scale; tiles are static).
 Concurrent agents are editing the same geometry files, so each step rebases onto
 `develop` first and is gated by `npm run build` + the unit suite, keeping every
 step isolable and revertible.
+
+## As-built (2026-06-09) — what shipped, and two deliberate deltas
+
+Rebased onto `develop@311fe05` (another agent's one-way highway lane-drop +
+car-driving-lines work landed first; see `docs/handoff-road-lane-rendering.md`).
+That work established the invariant **the cyan lane overlay must equal where cars
+drive (`couplerOffset`)** — this design is its continuation for curves/turns.
+
+Shipped (all gated by `npm run build` + the full unit suite, 693 green):
+
+1. **Shared geometry** — `laneSegmentPointAt` / `laneSegmentPathD` /
+   `laneRibbonPathD` / `arrowHeadD` in `pathGeometry.ts` (true constant-distance
+   offset, Vue-free). +16 unit tests.
+2. **Turn glide** — `couplerOffset`'s curve/junction branch eases
+   `offEntry → offExit` by `t`, where `offExit` is the exit-arm lane the vehicle
+   lands in (class-aware, so buses glide toward a bus lane). The reported
+   phantom-lane snap is fixed. Exposed as `game.roadTurnExitOffsetPx`.
+3. **Overlay** — `laneArrow` delegates to the shared path; turn arrows use
+   `roadTurnExitOffsetPx`, so the cyan/amber arrow ends on the exact lane the car
+   drives to (overlay == driving, per the handoff invariant).
+4. **Pure, tested core** — `junctionExitOffsetPx` in `lanes.ts` (the turn-exit
+   offset math) with focused tests (wide→narrow converge, bus-to-bus-lane).
+5. **Editor "Bus lane" tool** — `toggleLaneKind` reducer (+4 tests) + a 🚌 tool
+   that flips the clicked approach's kerb lane between bus and normal.
+6. **`/test/turnglide`** scenario.
+
+Deltas from the plan above (deliberate):
+
+- **DOM sampler kept (§2).** The renderer's `getPointAtLength` sampler is
+  *arc-length* parameterized and the sim advances cars by arc length; swapping to
+  `laneSegmentPointAt` (uniform Bézier param) would misposition cars on curves and
+  break coupled-car spacing. The sampler already produces the *true* offset curve,
+  so the unification is at the **offset/curve-shape definition** level (overlay &
+  paint use `laneSegmentPathD` for the same shape) — motion keeps arc-length
+  sampling. Net effect for the user (overlay == driving) is achieved.
+- **Curve paint left on the k-Bézier (§4) — deferred.** Its own regression test
+  shows the k factor already holds curve width within ~2% at the apex (~0.5px on a
+  200px tile), and `roadGeometry`'s curve/gore code is the other agent's active
+  area (their handoff follow-up #1). Converting it to shared polylines is a
+  sub-pixel refinement with disproportionate conflict risk; documented as a
+  follow-up. Consequence: on curves the cyan overlay (true offset) and the painted
+  dashes (k-Bézier) can differ by ~0.5px — negligible, and the prioritized
+  invariant (overlay == car) holds.
+- **Car-route overlay + rails (§6, §7) — not done.** Lower-value, isolated
+  follow-ons; left for a future pass.
