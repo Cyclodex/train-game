@@ -1,141 +1,177 @@
 # Lane-path unification + turn glide + editor bus-lane tool
 
 Date: 2026-06-08
-Status: approved (approach A), implementing autonomously
+Status: approved (approach A); scope expanded after a full-codebase audit ("go
+for gold — correct paths AND their visualisation, every tile kind").
 
 ## Problem
 
-A road vehicle's on-screen path and the debug lane overlay are computed by **two
-separate implementations**, so the overlay can disagree with where cars really
-drive — and worse, both do the naive thing on turns:
+"The path a vehicle follows across a tile" is computed by **four different
+implementations** that only partly agree. The amber bus-turn arrow ending on a
+lane that doesn't exist is one visible symptom; the deeper issue is that what is
+*drawn* (painted lanes, debug arrows, route line) is not derived from what is
+*driven*.
 
-- **Renderer** (`game.ts` `sampleWorld`): builds the tile centreline with
-  `segmentPathD`, materialises it as a hidden `<svg>` `<path>`, samples it with
-  `getPointAtLength`, then pushes the point perpendicular (right-of-travel) by a
-  lateral offset from `couplerOffset`.
-- **Overlay** (`Tile.vue` `laneGraphOverlay`/`laneArrow`): analytically offsets a
-  straight line or a quadratic Bézier (control point pushed out by a factor `k`).
+### Audit — every path-geometry site (worktree, 2026-06-08)
 
-On a **turn/junction tile** (`exit !== oppositePort(entry)`), `couplerOffset`
-returns `laneOffsetConstPx(...)` — a *constant* offset based on the **approach**
-lane band — for the whole tile. The overlay likewise holds a constant approach
-offset. So a vehicle turning from a wide arm onto a narrow one (e.g. a 2-lane road
-onto a 1-lane side road) keeps the wide arm's kerb offset across the junction,
-exits the tile at a lateral position that is *outside* the narrow arm's only lane,
-then **snaps/eases** to the correct lane on the *next* tile. The overlay arrow
-faithfully ends in that gap ("a bus going left→bottom ends on a lane that doesn't
-exist"). The routing layer is already correct — `junctionExitLane` returns an
-index taken from the exit arm's real lanes — the defect is purely the lateral
-*glide*.
+Centreline (the one shared truth): `pathGeometry.ts` `segmentPathD` — a straight
+line for opposite/Center ports, a quadratic Bézier `a→centre→b` for adjacent
+ports. Trains ride it directly (offset 0).
+
+Lateral-offset sites and how each builds its curve:
+
+| Site | Straight | Curve | Turn / junction |
+|------|----------|-------|-----------------|
+| Car driving — `game.ts` `sampleWorld`+`couplerOffset` | true offset, seam-tapered (`laneOffsetPx`) | **true** sampled offset at constant distance (centreline via DOM `getPointAtLength` + perpendicular push) | holds **approach** offset (`laneOffsetConstPx`), snaps to the new lane on the *next* tile |
+| Road surface / markings / kerb / bus band — `roadGeometry.ts` | exact (trapezoid + `taperedParallel`) | **k-Bézier approximation** (`roadCurvePolygonPath`, `curvedParallelPath`, `controlOffsetFactor`) | centreline only |
+| Lane-graph overlay — `Tile.vue` `laneArrow` | exact (offset line, `offA`/`offB` taper — matches car) | **k-Bézier** (matches paint, **not** the car) | holds **approach** offset → **arrow ends on a phantom lane** |
+| Car-route overlay — `game.ts` `CarRouteSeg` | **centreline only** (no lane offset) | centreline only | centreline only |
+| Rails — `geometry.ts` `railPathsFor` | offset line | offset endpoints, control point unchanged → **no apex correction** (rails pinch ~15% mid-curve) | n/a |
+
+The three curve methods (true sampled offset / k-Bézier / uncorrected-endpoint)
+are mutually inconsistent, so on a bend a car drives slightly off the painted
+lane, and the overlay traces the paint rather than the car. On a turn onto a
+narrower arm, *nothing* interpolates the lateral offset toward the exit arm's
+lane, so the vehicle holds the wide-arm offset across the junction and snaps at
+the boundary — and the overlay arrow faithfully ends in the gap. Routing is
+already correct (`junctionExitLane` returns a real exit-arm lane); only the
+lateral **glide** is wrong.
 
 ## Goal
 
-One source of truth for "the path a vehicle follows across a tile", consumed by
-both the renderer and the overlay, with the lateral offset **interpolated from the
-approach lane to the exit arm's lane across a turn** so vehicles glide to the
-correct lane (and the overlay shows exactly that). Plus an editor tool to mark an
-individual lane as a bus lane.
+One Vue-free family of functions producing the **true sampled offset curve** of a
+lane across a tile, with the offset interpolated `offEntry → offExit` so it covers
+seam tapers AND turn-to-exit-arm glide. Every consumer — car driving, painted
+surface, lane markings, kerb edges, bus-lane band, lane-graph overlay,
+car-route overlay, and (for consistency) rails — derives from it. The k-Bézier
+approximation and the renderer's hidden-SVG DOM sampler are retired.
 
-## Approach A (chosen)
+## Design
 
 ### 1. Shared lane-path geometry (`src/sim/pathGeometry.ts`, Vue-free)
 
-Add a pure function that returns a point + tangent at parameter `t ∈ [0,1]` along
-the lane path across one tile:
-
 ```ts
-laneSegmentPointAt(
-  entryPort, exitPort, size,
-  offEntry, offExit,   // lateral offset px, right-of-travel, at t=0 and t=1
-  t,
-): { x, y, tangentDeg }
+laneSegmentPointAt(entry, exit, size, offEntry, offExit, t)
+  : { x, y, tangentDeg }                 // renderer + any point sampling
+laneSegmentPathD(entry, exit, size, offEntry, offExit, samples = 24)
+  : string                               // SVG polyline (paint, overlay, edges)
+arrowHeadD(tip, tangentDeg, s)
+  : string                               // shared chevron head
 ```
 
-- Centreline sampled **analytically** (no DOM): a straight line for
-  opposite/Center ports, the quadratic Bézier `a → centre → b` for adjacent ports
-  (the same curve `segmentPathD` draws and `quadLength` already integrates).
-- Lateral offset at `t` = `lerp(offEntry, offExit, t)`, applied along the **local
-  right-of-travel normal** of the centreline tangent (`(-dy, dx)/|..|`, the
-  existing convention).
-- Tangent for sprite/arrow heading taken from the **offset** path (finite
-  difference), so a tapering/turning lane's heading matches the drawn curve.
+- Centreline sampled analytically (line, or the quadratic `a→centre→b`) — no DOM.
+- Lateral offset at `t` = `lerp(offEntry, offExit, t)` applied along the **local
+  right-of-travel normal** of the centreline tangent. This is the *true* parallel
+  (offset) curve at constant distance when `offEntry === offExit`, exactly what
+  the car already does — so the k-Bézier apex correction is no longer needed.
+- Heading from a finite difference of the **offset** path (matches the drawn
+  curve through tapers/turns).
+- A constant-offset straight collapses to a 2-point line (cheap, pixel-identical
+  to today).
 
-Add `laneSegmentPathD(entryPort, exitPort, size, offEntry, offExit, samples?)`
-that returns an SVG `d` polyline of the same sampled points (for the overlay
-shaft), plus a small helper for the arrowhead chevron from the end point+tangent.
+### 2. Renderer (`src/game.ts`)
 
-This subsumes both the renderer's "centreline + perpendicular push" and the
-overlay's "offset Bézier"; the analytic curve removes the hidden-SVG sampler.
+`sampleWorld` takes its point + tangent from `laneSegmentPointAt`; delete the
+hidden `<svg>` sampler, `pathFor`, and `pathCache`. Trains pass `0,0` (unchanged).
+Road couplers pass `offEntry`/`offExit` from `couplerOffset` (see §3).
 
-### 2. Renderer refactor (`src/game.ts`)
+### 3. Turn lateral interpolation (`src/game.ts` + sim seam data)
 
-`sampleWorld` computes its point+tangent from `laneSegmentPointAt` instead of the
-DOM `getPointAtLength` sampler; delete the hidden `<svg>` sampler and `pathFor`.
-Trains pass `offEntry = offExit = 0` (centreline) — behaviour identical. For road
-couplers, `offEntry`/`offExit` come from `couplerOffset` split into its entry-seam
-and exit-seam values (straights already compute both via `seamBand`; see §3 for
-turns). Keep the per-coupler, per-tile sampling so the body-lean on lane changes
-is preserved.
+`couplerOffset` returns a `{ offEntry, offExit }` pair, not a single number:
 
-### 3. Turn lateral interpolation (`src/game.ts` + sim)
+- Straight tile: the existing seam-tapered ends (`laneSeamOffsetPx` at the entry
+  and exit bands) — already computed, just surfaced as two values.
+- Turn / junction tile: `offEntry` = the vehicle's lane offset on the **approach**
+  band; `offExit` = the **target exit lane** offset on the **exit arm** band,
+  where the target lane = `junctionExitLane(...)` (the same lane the boundary
+  handoff already picks) and the band is the exit arm's centred band. Edge of map
+  / unknown exit → `offExit = offEntry` (today's constant behaviour).
 
-On a turn/junction tile, instead of a constant approach offset, compute:
+The vehicle then glides from approach lane to exit-arm lane across the junction
+tile and arrives already on the correct lane. The sim still sets the lane index
+at the boundary; this only moves the *visual* transition onto the turn tile.
+Needs the sim to expose, per sampled unit on a turn tile, the resolved exit arm
+(next coord + entry port) so the renderer can compute the exit band + target lane
+— `road.ts` already resolves this at the boundary; surface it on the sample.
 
-- `offEntry` = lateral offset of the vehicle's lane on the **approach** band
-  (today's `laneOffsetConstPx`).
-- `offExit` = lateral offset of the **target exit lane** on the exit arm's band,
-  where the target lane is `junctionExitLane(...)` (already used at the boundary
-  handoff) and the band is the exit arm's centred band.
+### 4. Road painting (`src/tiles/roadGeometry.ts`)
 
-`laneSegmentPointAt` then glides the vehicle from approach lane to exit lane
-across the junction tile, so it arrives at the exit arm already on the correct
-lane — no boundary snap. The boundary handoff keeps setting the lane index; this
-change only makes the *visual/positional* transition happen across the turn tile
-rather than after it.
+Re-express every curved primitive as a polyline from `laneSegmentPathD`:
 
-Care: `offExit` needs the exit arm's lane count + band. The sim already resolves
-the next tile/entry at the boundary; expose enough (target lane index + exit
-band) for the sampler. Where the exit arm is unknown (level edge), fall back to
-the constant approach offset (today's behaviour).
+- `roadCurvePolygonPath` → the `+halfW` edge polyline followed by the `−halfW`
+  edge reversed, closed (an exact ribbon; no `k`).
+- `curvedParallelPath` (inner dividers, curved kerb edge) → `laneSegmentPathD`.
+- Curved bus-lane band (`roadLaneBandPath` currently straight-only) → a closed
+  strip between two offset polylines, so bus lanes can be tinted on curves too.
+- Delete `controlOffsetFactor` and the k-Bézier code once nothing calls it.
 
-### 4. Overlay refactor (`src/components/Tile.vue`)
+Straight primitives (`taperedParallel`, trapezoid, gores, lane-drop arrows) are
+already exact and stay, but share `laneSegmentPathD`/`arrowHeadD` where it tidies.
 
-`laneGraphOverlay` builds each movement's arrow with `laneSegmentPathD(from, to,
-size, offEntry, offExit)` + the shared arrowhead helper. `offEntry` is the lane's
-offset on its approach band; `offExit` is the offset of the movement's target lane
-on the exit arm's band (same computation as §3, so the picture equals the path).
-Delete `laneArrow`'s bespoke Bézier-offset math. Straights keep their existing
-seam taper (now expressed as offEntry≠offExit through the same function).
+### 5. Lane-graph overlay (`src/components/Tile.vue`)
 
-### 5. Editor mark-a-lane bus tool (`src/tiles/editOps.ts`, `EditorView.vue`)
+`laneGraphOverlay` builds each movement with `laneSegmentPathD(from, to, size,
+offEntry, offExit)` + `arrowHeadD`; `offEntry`/`offExit` computed identically to
+§3 (approach offset → exit-arm target-lane offset). Delete `laneArrow`'s bespoke
+Bézier-offset math. Result: the overlay is pixel-identical to the driven path.
 
-- `toggleLaneKind(cell, from, index)`: pure reducer flipping a single lane's
-  `kind` between `undefined`/`"all"` and `"bus"`. No-op if the lane is absent.
-- A **Bus lane** tool in `EditorView`: clicking a road tile hit-tests which drawn
-  lane the cursor is over (lateral offset via the shared offset math + the lane's
-  approach), and toggles that lane's kind. Live validation + the gold bus band and
-  amber overlay already render `kind:"bus"`, so the visual feedback is automatic.
+### 6. Car-route overlay (`src/game.ts` `CarRouteSeg` + `sim.routePath`)
 
-### 6. Tests + scenario
+Build each route segment with the lane offset (the car's lane on that segment),
+so the highlighted route traces where the car actually drives, not the centreline.
+`routePath` must include the per-segment lane (or we offset by the car's current
+lane as a documented approximation where the per-segment lane isn't tracked).
 
-- Unit: `laneSegmentPointAt`/`laneSegmentPathD` — straight offset, curve offset,
-  offEntry→offExit interpolation endpoints, tangent direction.
-- Unit: turning onto a narrower arm lands the vehicle at the exit arm's lane
-  offset by t=1 (no gap), for both car and bus.
-- Unit: `toggleLaneKind` round-trips a lane's kind.
-- `/test` scenario: a turn from a multi-lane arm onto a 1-lane arm, asserting a
-  vehicle's sampled lateral position converges to the exit lane (glide, not snap).
+### 7. Rails (`src/tiles/geometry.ts`) — consistency follow-on
+
+`railPathsFor` adopts `laneSegmentPathD` for the two flanking rails (offset
+`±railDistance`), removing the uncorrected-apex pinch. Cosmetic (trains ride the
+centreline) but unifies the last offset-curve method. Lowest priority; isolated.
+
+### 8. Editor mark-a-lane bus tool (`src/tiles/editOps.ts`, `EditorView.vue`)
+
+- `toggleLaneKind(cell, from, index)` — pure reducer flipping one lane's `kind`
+  between `undefined`/`"all"` and `"bus"`; no-op if absent.
+- A **Bus lane** tool: clicking a road tile hit-tests which drawn lane is under
+  the cursor (lateral offset via the same shared math + the lane's approach) and
+  toggles its kind. The gold band + amber overlay already render `kind:"bus"`.
+
+### 9. Tests + scenario
+
+- `laneSegmentPointAt`/`laneSegmentPathD`/`arrowHeadD`: straight, curve, taper
+  (offEntry≠offExit) endpoints, tangent direction, constant-offset == old line.
+- Curve ribbon: a vehicle's sampled position stays within the painted curved
+  surface at several `t` (car-on-paint agreement — would have failed before).
+- Turn glide: turning onto a 1-lane arm, the sampled lateral offset converges to
+  the exit-arm lane by `t=1` (no gap), car and bus.
+- `toggleLaneKind` round-trip.
+- `/test` scenario: a wide→narrow turn demonstrating the glide; reuse/extend
+  `buscross` for the bus turn.
+
+## Sequencing (to minimise conflict with concurrent agents)
+
+Land in small, independently-green commits, rebasing onto `develop` before each:
+1. shared functions + unit tests (additive, no behaviour change);
+2. renderer onto shared sampler (delete DOM sampler) — visual parity check;
+3. turn interpolation (the reported bug) + overlay onto shared path;
+4. road painting onto shared polylines (retire k-Bézier);
+5. car-route overlay offset; rails consistency;
+6. editor bus-lane tool;
+7. scenario + final suite + merge.
 
 ## Non-goals
 
 - No change to the bus-lane data model (`kind:"bus"` on a `Lane` is correct).
-- No change to routing/interlocking, junction arbitration, or collision logic.
-- No "extra vs replace" lane concept toggle — that is purely an authoring/editor
-  count choice and already works both ways.
+- No change to routing/interlocking, junction arbitration, collision, or
+  coupled-car spacing (still by centreline arc length — a pre-existing, accepted
+  approximation).
+- No "extra vs replace" lane-count concept toggle — already an authoring choice.
 
 ## Risk / rollback
 
-The renderer change is on the hot path; analytic sampling of a line/quad Bézier is
-cheaper than DOM `getPointAtLength`, so no perf regression is expected. Each step
-is committed separately and gated by `npm run build` + the unit suite (666 tests),
-so any regression is isolable and revertible.
+The renderer change is on the hot path; analytic sampling of a line/quad is
+cheaper than DOM `getPointAtLength`, so no perf regression is expected. Painted
+curves become 24-point polylines (smooth at tile scale; tiles are static).
+Concurrent agents are editing the same geometry files, so each step rebases onto
+`develop` first and is gated by `npm run build` + the unit suite, keeping every
+step isolable and revertible.
