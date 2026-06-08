@@ -34,6 +34,7 @@ import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buses } from "@/levels/test/scenarios/buses";
+import { buscross } from "@/levels/test/scenarios/buscross";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
 import { bigjunction } from "@/levels/test/scenarios/bigjunction";
@@ -67,7 +68,7 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
       carfollowing, carqueue, carcircle, carscurve, roadcurveloops, roadcurvetraffic,
       roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes,
       roadcross, roadcross1lane, roadcross2lane, roadcross3lane, crossturns2lane, crossturns3lane, crosslanes, roadjunction,
-      turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, buses, cardestination,
+      turnlanes, overtaketwolane, overtakeloop, rightturncross, noleftturn, roadpriority, trucks, buslane, buses, buscross, cardestination,
       carroute, bigjunction,
     ],
   },

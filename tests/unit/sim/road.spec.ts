@@ -21,6 +21,7 @@ import {
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { buslane } from "@/levels/test/scenarios/buslane";
+import { buscross } from "@/levels/test/scenarios/buscross";
 import { lanesAllowingExit, carLaneIndices, busLaneIndices } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
@@ -1176,6 +1177,47 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(carSamples).toBeGreaterThan(20); // cars did turn right onto the bus arm
     expect(carOnBusLane).toBe(0); // and none ever rode the kerb bus lane
     expect(busOnBusLane).toBeGreaterThan(10); // buses used the bus lane through the junction
+  });
+
+  it("buscross scenario: buses hold the bus lane through the cross, cars never do", () => {
+    // Drive the actual /test/buscross scenario (a 4-way cross whose east–west main
+    // road has a kerb bus lane). On the far-east through tile (4,2), eastbound
+    // vehicles have crossed the junction: every bus must be on the bus lane (0),
+    // and no car may ever be — the cross-lane fix keeps the classes apart across
+    // the intersection too.
+    const sim = createRoadSim({
+      level: buscross.level,
+      width: buscross.size!.cols,
+      height: buscross.size!.rows,
+      seed: 6,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+      mix: buscross.traffic!.mix,
+    });
+    let busOnBus = 0;
+    let busOffBus = 0;
+    let carOnBus = 0;
+    let carSamples = 0;
+    for (let i = 0; i < 1800; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x !== 4 || f.coord.y !== 2 || f.entryPort !== Position.Left) continue;
+        const lane = Math.round(c.laneIndex);
+        if (c.units[0].part === "bus") {
+          if (lane === 0) busOnBus++; else busOffBus++;
+        } else {
+          carSamples++;
+          if (lane === 0) carOnBus++;
+        }
+      }
+    }
+    expect(busOnBus).toBeGreaterThan(20); // buses ran the through road on the bus lane
+    expect(busOffBus).toBe(0); // and were never off it past the cross
+    expect(carSamples).toBeGreaterThan(20); // cars ran the through road too
+    expect(carOnBus).toBe(0); // and never strayed onto the bus lane across the cross
   });
 });
 
