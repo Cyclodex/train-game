@@ -35,6 +35,7 @@ import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buses } from "@/levels/test/scenarios/buses";
 import { buscross } from "@/levels/test/scenarios/buscross";
+import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
 import { bigjunction } from "@/levels/test/scenarios/bigjunction";
@@ -96,7 +97,7 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Crosses & junctions",
         scenarios: [
           roadcross, roadcross1lane, roadcross2lane, roadcross3lane,
-          crossturns2lane, crossturns3lane, mixedcross, mixedtee, roadjunction, bigjunction,
+          crossturns2lane, crossturns3lane, mixedcross, mixedtee, turnglide, roadjunction, bigjunction,
         ],
       },
       {
