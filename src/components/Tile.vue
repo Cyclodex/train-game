@@ -349,9 +349,14 @@ class Tile extends Vue {
         const nTotalA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
         const nTotalB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
         // Only a simple curve must preserve its lane count across a seam; a
-        // junction fans/merges unequal arms by design and is never a mismatch.
-        const badA = seamMismatch(this.tile.road, a, nTotalA);
-        const badB = seamMismatch(this.tile.road, b, nTotalB);
+        // junction fans/merges unequal arms by design and is never a mismatch —
+        // on EITHER side of the seam. seamMismatch() handles this tile being a
+        // junction; guard here for the NEIGHBOUR being one (whose laneCountAt
+        // over-counts the lanes that can fan through the shared arm).
+        const aJunction = na ? this.game.roadIsJunctionAt(na) : false;
+        const bJunction = nb ? this.game.roadIsJunctionAt(nb) : false;
+        const badA = !aJunction && seamMismatch(this.tile.road, a, nTotalA);
+        const badB = !bJunction && seamMismatch(this.tile.road, b, nTotalB);
         const mismatch = badA || badB;
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`

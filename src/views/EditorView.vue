@@ -270,7 +270,7 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges, laneCount, laneCountAt } from "@/tiles/lanes";
+import { roadEdges as laneEdges, laneCount, laneCountAt, isRoadJunction } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -319,6 +319,7 @@ function stubGame(getLevel: () => Level): Game {
     // game) so neighbour-aware tapering and the road-taper label work in-editor.
     roadLaneCount: (coord: Coordinates, port: Position) => laneCount(roadOf(coord), port),
     roadLaneCountAt: (coord: Coordinates, port: Position) => laneCountAt(roadOf(coord), port),
+    roadIsJunctionAt: (coord: Coordinates) => isRoadJunction(roadOf(coord)),
   } as unknown as Game;
 }
 

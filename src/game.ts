@@ -9,7 +9,7 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { laneCount, laneCountAt, carLaneIndices, roadPortsOf } from "@/tiles/lanes";
+import { laneCount, laneCountAt, carLaneIndices, roadPortsOf, isRoadJunction } from "@/tiles/lanes";
 import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -219,6 +219,11 @@ export interface Game {
   // this is correct for curves/junctions where the opposite port carries no
   // lanes — so a straight tapers to meet a curve neighbour at its true width.
   roadLaneCountAt(coord: Coordinates, port: Position): number;
+  // Whether the tile at `coord` is a road junction (its road touches more than
+  // two ports). The renderer uses this so a seam touching a junction is never
+  // flagged as a lane-count mismatch — a junction fans/merges unequal arms by
+  // design, on either side of the seam.
+  roadIsJunctionAt(coord: Coordinates): boolean;
   // Debug route overlay — the view drives these on car hover/click (debug only):
   setHoveredCar(carId: string): void; // preview this car's route while hovering
   clearHoveredCar(): void; // hover left a car
@@ -888,6 +893,9 @@ export function createGame(
     roadLaneCountAt(coord: Coordinates, port: Position): number {
       const id = getCoordinatesId(coord);
       return laneCountAt(level[id]?.road, port);
+    },
+    roadIsJunctionAt(coord: Coordinates): boolean {
+      return isRoadJunction(level[getCoordinatesId(coord)]?.road);
     },
     setHoveredCar(carId: string) {
       hoveredCarId = carId;
