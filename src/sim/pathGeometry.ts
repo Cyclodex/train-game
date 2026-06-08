@@ -185,7 +185,9 @@ export function laneSegmentPathD(
     entryPort === Position.Center ||
     exitPort === Position.Center ||
     oppositePort(entryPort) === exitPort;
-  const n = isStraight && offEntry === offExit ? 1 : samples;
+  // A straight centreline offset by a linearly-interpolated amount is itself a
+  // straight segment (affine in t), so two endpoints are exact — even for a taper.
+  const n = isStraight ? 1 : samples;
   const r = (v: number) => Math.round(v * 100) / 100;
   const pts: string[] = [];
   for (let i = 0; i <= n; i++) {

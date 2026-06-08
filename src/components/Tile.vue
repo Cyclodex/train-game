@@ -211,7 +211,12 @@ import {
   isJunctionEntry,
   parseCoordId,
 } from "@/tiles/model";
-import { segmentPathD, portPoint } from "@/sim/pathGeometry";
+import {
+  segmentPathD,
+  laneSegmentPathD,
+  laneSegmentPointAt,
+  arrowHeadD,
+} from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import {
   roadSurfacePolygonPath,
@@ -570,7 +575,13 @@ class Tile extends Vue {
           const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, false);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
         } else {
-          out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
+          // Turn / junction movement: glide from this lane's approach offset to the
+          // lane the vehicle lands in on the EXIT arm (game.roadTurnExitOffsetPx,
+          // class-aware), identical to couplerOffset's turn branch — so the arrow
+          // ends on the same real lane the car drives to, never a phantom one.
+          const cls = isBus ? "bus" : "car";
+          const offExit = this.game.roadTurnExitOffsetPx(coord, lane.from, to, lane.index, cls);
+          out.push({ ...this.laneArrow(lane.from, to, size, off, offExit ?? off), isBus });
         }
       }
     }
@@ -583,78 +594,21 @@ class Tile extends Vue {
   // ports) offset the quadratic Bézier through the tile centre, mirroring
   // roadGeometry.ts's `curvedParallelPath` so the arrow tracks its lane round the
   // bend. The arrowhead sits at the offset exit point, aimed along the offset path.
+  // One lane-offset arrow (shaft + arrowhead) for a movement `from`→`to`, drawn
+  // from the SHARED lane-path geometry (sim/pathGeometry.ts) so the overlay traces
+  // the EXACT curve the car drives (game.ts samples the same centreline + offset).
+  // `off` is the lateral offset (px, right-of-travel) at the entry; `offB` at the
+  // exit — they differ for a seam taper or a turn gliding to its exit-arm lane.
   private laneArrow(
     from: Position,
     to: Position,
     size: number,
     off: number,
-    // Exit-end offset for a straight movement: when it differs from `off` the
-    // arrow tapers across the tile to track a lane whose distance-from-centre
-    // changes (the surface min-seam taper). Defaults to `off` (constant offset).
     offB: number = off,
   ): { shaft: string; head: string } {
-    const a = portPoint(from, size);
-    const b = portPoint(to, size);
-    const r = (v: number) => Math.round(v * 100) / 100;
-
-    // Right-of-travel unit vector for a heading (dx,dy) in screen space (y-down)
-    // is (-dy, dx)/|..| — the same convention game.ts uses for the car offset.
-    const rightUnit = (
-      p: { x: number; y: number },
-      q: { x: number; y: number }
-    ) => {
-      const dx = q.x - p.x, dy = q.y - p.y;
-      const mag = Math.hypot(dx, dy) || 1;
-      return { x: -dy / mag, y: dx / mag };
-    };
-
-    let shaft: string;
-    let tip: { x: number; y: number }; // offset exit point (arrowhead apex)
-    let dir: { x: number; y: number }; // unit travel direction at the tip
-
-    if (oppositePort(from) === to || from === Position.Center || to === Position.Center) {
-      // Straight / opposite / Center: offset the line perpendicular by `off` at
-      // the entry and `offB` at the exit, so it tapers across a tile whose lane
-      // count changes at a seam (offB === off → a constant-offset parallel).
-      const n = rightUnit(a, b);
-      const a2 = { x: a.x + n.x * off, y: a.y + n.y * off };
-      const b2 = { x: b.x + n.x * offB, y: b.y + n.y * offB };
-      shaft = `M ${r(a2.x)} ${r(a2.y)} L ${r(b2.x)} ${r(b2.y)}`;
-      tip = b2;
-      const mag = Math.hypot(b2.x - a2.x, b2.y - a2.y) || 1;
-      dir = { x: (b2.x - a2.x) / mag, y: (b2.y - a2.y) / mag };
-    } else {
-      // Turn (adjacent ports): offset the quadratic Bézier whose control point is
-      // the tile centre. Endpoint normals use the entry tangent (a→c) and exit
-      // tangent (c→b); the control point is pushed out by off·k so the offset
-      // curve keeps its lane distance through the apex (see controlOffsetFactor
-      // in roadGeometry.ts: k = 2 − ½·|nA + nB|).
-      const c = portPoint(Position.Center, size);
-      const nA = rightUnit(a, c);
-      const nB = rightUnit(c, b);
-      const avgX = nA.x + nB.x, avgY = nA.y + nB.y;
-      const avgMag = Math.hypot(avgX, avgY) || 1;
-      const nC = { x: avgX / avgMag, y: avgY / avgMag };
-      const k = 2 - 0.5 * avgMag;
-
-      const a2 = { x: a.x + nA.x * off, y: a.y + nA.y * off };
-      const c2 = { x: c.x + nC.x * off * k, y: c.y + nC.y * off * k };
-      const b2 = { x: b.x + nB.x * off, y: b.y + nB.y * off };
-      shaft = `M ${r(a2.x)} ${r(a2.y)} Q ${r(c2.x)} ${r(c2.y)} ${r(b2.x)} ${r(b2.y)}`;
-      tip = b2;
-      // Tangent of the quadratic at t=1 is 2·(b2 − c2); normalise for the head.
-      const tx = b2.x - c2.x, ty = b2.y - c2.y;
-      const mag = Math.hypot(tx, ty) || 1;
-      dir = { x: tx / mag, y: ty / mag };
-    }
-
-    // Arrowhead: small open V-chevron at the offset exit, pointing along `dir`.
-    const s = 7;
-    const px = -dir.y, py = dir.x; // perpendicular for the chevron splay
-    const head =
-      `M${r(tip.x - dir.x * s + px * s * 0.55)} ${r(tip.y - dir.y * s + py * s * 0.55)} ` +
-      `L${r(tip.x)} ${r(tip.y)} ` +
-      `L${r(tip.x - dir.x * s - px * s * 0.55)} ${r(tip.y - dir.y * s - py * s * 0.55)}`;
+    const shaft = laneSegmentPathD(from, to, size, off, offB);
+    const end = laneSegmentPointAt(from, to, size, off, offB, 1);
+    const head = arrowHeadD({ x: end.x, y: end.y }, end.tangentDeg, 7);
     return { shaft, head };
   }
 
