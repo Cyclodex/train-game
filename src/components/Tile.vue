@@ -215,6 +215,8 @@ import { segmentPathD, portPoint } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
 import {
   roadSurfacePolygonPath,
+  roadRibbonPolygonPath,
+  roadParallelLine,
   roadCurvePolygonPath,
   roadLaneBandPath,
   roadLaneMarkingPaths,
@@ -223,6 +225,8 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
+  oneWayClosingGore,
+  oneWayMergeArrowPath,
   LaneMarkingPath,
   MergeArrowPath,
   LaneDropGore,
@@ -398,40 +402,71 @@ class Tile extends Vue {
       // narrowed 3+-lane roads as they ran off the play area).
       const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
       const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
+
+      // One-way HIGHWAY tile: left-align to the run's widest lane count so the
+      // through lanes run dead straight and lanes are added / dropped on the RIGHT
+      // (+n). The left kerb is a constant offset; the right kerb tapers. See
+      // sim/laneOffset.ts oneWayLaneOffsetPx for the matching car offset.
+      if (selfA === 0 || selfB === 0) {
+        const fwdA = selfA > 0; // carrying direction a→b?
+        const entry = fwdA ? a : b;
+        const exit = fwdA ? b : a;
+        const m = Math.max(selfA, selfB);
+        const crossEntry = fwdA ? crossingA : crossingB;
+        const crossExit = fwdA ? crossingB : crossingA;
+        const entryCount = crossEntry > 0 ? Math.min(m, crossEntry) : m;
+        const exitCount = crossExit > 0 ? Math.min(m, crossExit) : m;
+        const R = this.game.roadOneWayRunMax(coord, entry);
+        const leftOff = -(R / 2) * LANE_W; // constant through-side kerb
+        const rightEntry = leftOff + entryCount * LANE_W;
+        const rightExit = leftOff + exitCount * LANE_W;
+        const owMarkings: LaneMarkingPath[] = [];
+        // Survivor dividers — straight lines between through-lanes present at both
+        // ends (lane k boundary at (k − R/2)·W). The boundary of the dropping lane
+        // is drawn by the closure gore (laneDropOverlay), so stop before it.
+        const survivors = Math.min(entryCount, exitCount);
+        for (let k = 1; k < survivors; k++) {
+          const d = (k - R / 2) * LANE_W;
+          owMarkings.push({ d: roadParallelLine(entry, exit, size, d, d), kind: "inner" });
+        }
+        // A widening opens new lanes on the right: their dividers fan out from the
+        // entry kerb to their straight line.
+        for (let k = entryCount; k < exitCount; k++) {
+          const dOpen = (entryCount - R / 2) * LANE_W;
+          const dStraight = (k - R / 2) * LANE_W;
+          owMarkings.push({ d: roadParallelLine(entry, exit, size, dOpen, dStraight), kind: "inner" });
+        }
+        return {
+          surface: roadRibbonPolygonPath(entry, exit, size, leftOff, rightEntry, leftOff, rightExit),
+          laneMarkings: owMarkings,
+          edges: [
+            roadParallelLine(entry, exit, size, leftOff, leftOff),
+            roadParallelLine(entry, exit, size, rightEntry, rightExit),
+          ],
+          mismatch: false,
+          mismatchTip: "",
+        };
+      }
+
+      // Bidirectional straight road: centred symmetric taper (min-seam rule).
       const totalA = seamPaintTotal(selfTotal, crossingA);
       const totalB = seamPaintTotal(selfTotal, crossingB);
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       // Road edge line where the tarmac meets the grass — one per outer kerb,
-      // tapering with the surface. Skip a side that has a lane-drop gore: its
-      // gore border already draws the full-width kerb there (the tapered surface
-      // kerb on that side is filled back to full by the paved gore). +n side has
-      // a gore when the a→b direction narrows; -n side when b→a narrows.
-      // A one-way road (the other direction has no lanes) has its band CENTRED,
-      // so a drop is a symmetric squeeze split across both kerbs — a one-sided
-      // gore would overshoot the narrower neighbour. We draw no gore there (both
-      // kerbs taper instead), so neither side is suppressed.
-      const oneWay = selfA === 0 || selfB === 0;
+      // tapering with the surface. Skip a side that has a lane-drop gore: its gore
+      // border already draws the full-width kerb there. +n side has a gore when the
+      // a→b direction narrows; -n side when b→a narrows.
       const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
       const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
-      const goreA = !oneWay && selfA > 0 && d1A > 0 && d1A < selfA;
-      const goreB = !oneWay && selfB > 0 && d1B > 0 && d1B < selfB;
+      const goreA = selfA > 0 && d1A > 0 && d1A < selfA;
+      const goreB = selfB > 0 && d1B > 0 && d1B < selfB;
       const edges: string[] = [];
       if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
       if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
-      // Lane markings cap = surface half-width, EXCEPT on a one-way road, where the
-      // dashed dividers follow the cars via band substitution and so need the TRUE
-      // seam lane count (the un-floored neighbour band), not the min-2 paint width.
-      const mOne = (selfA || 0) + (selfB || 0); // one-way: the single direction's lanes
-      const markHalfA = oneWay
-        ? ((crossingA > 0 ? Math.min(mOne, crossingA) : mOne) / 2) * LANE_W
-        : widthA / 2;
-      const markHalfB = oneWay
-        ? ((crossingB > 0 ? Math.min(mOne, crossingB) : mOne) / 2) * LANE_W
-        : widthB / 2;
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, markHalfA, markHalfB),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
         edges,
         mismatch: false,
         mismatchTip: "",
@@ -501,18 +536,22 @@ class Tile extends Vue {
       // this equals (forward + backward)/2 — unchanged. See game.ts centeredBandAt.
       const selfBand = laneCountAt(road, lane.from) / 2;
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
-      // One-way ⟺ no oncoming lanes exit through this approach: the band is
-      // centred and a drop merges the highest-index lane onto its neighbour by
-      // band substitution (see sim/laneOffset.ts laneSeamOffsetPx).
-      const centred = laneCount(road, lane.from) === laneCountAt(road, lane.from);
+      // One-way ⟺ no oncoming lanes exit through this approach. A one-way STRAIGHT
+      // is a highway lane drop: lanes left-align to the run's widest count and the
+      // offset is (index + 0.5 − R/2)·W, dead straight (the through lanes don't
+      // move; the right lane ends). See sim/laneOffset.ts oneWayLaneOffsetPx.
+      const oneWay = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
       for (const to of lane.to) {
-        // Straight movement on a tapering tile: the painted surface narrows /
-        // widens across the tile to meet a neighbour with a different lane count
-        // (min-seam rule). Taper this lane's arrow the same way so it tracks the
-        // tapering lane across the seam instead of sitting at a single offset and
-        // jumping at the boundary — mirroring the per-car taper in game.ts.
         if (oppositePort(lane.from) === to) {
+          if (oneWay) {
+            const R = this.game.roadOneWayRunMax(coord, lane.from);
+            const owOff = (lane.index + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
+            out.push({ ...this.laneArrow(lane.from, to, size, owOff, owOff), isBus });
+            continue;
+          }
+          // Bidirectional straight on a tapering tile: clamp each end inward so the
+          // kerb lane merges and inner lanes hold, tracking the surface taper.
           const nEntry = neighborCoord(coord, lane.from);
           const nExit = neighborCoord(coord, to);
           const bandEntry = seamBand(
@@ -523,12 +562,8 @@ class Tile extends Vue {
             selfBand,
             nExit ? this.centeredRoadBand(nExit, oppositePort(to)) : 0,
           );
-          // Bidirectional: clamp each end inward so the kerb lane merges and
-          // inner lanes hold. One-way: band substitution so each surviving lane
-          // lands on its narrow-side neighbour and the dropped (highest-index)
-          // lane merges onto it (see sim/laneOffset.ts laneSeamOffsetPx).
-          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, centred);
-          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, centred);
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, false);
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, false);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
         } else {
           out.push({ ...this.laneArrow(lane.from, to, size, off), isBus });
@@ -636,12 +671,40 @@ class Tile extends Vue {
       if (oppositePort(a) !== b) continue;
       const selfA = laneCount(this.tile.road, a);
       const selfB = laneCount(this.tile.road, b);
-      // One-way edges (the other direction has no lanes) have a CENTRED band, so
-      // a lane drop is a symmetric squeeze split across both kerbs — the surface
-      // taper + funneling dividers show it. A one-sided hatched gore would
-      // overshoot the narrower neighbour, so skip gores/arrows here entirely.
-      // The Swiss gore + advance arrows stay for genuinely bidirectional reducers.
-      if (selfA === 0 || selfB === 0) continue;
+      // One-way HIGHWAY edge: the road left-aligns and sheds its outermost lane on
+      // the RIGHT (+n). Paint the closing lane as a hatched Sperrfläche island
+      // (between the survivors' divider and the tapering right kerb) with merge
+      // arrows leaning left. See roadPaths for the matching left-aligned surface.
+      if (selfA === 0 || selfB === 0) {
+        const fwdA = selfA > 0;
+        const entry = fwdA ? a : b;
+        const exit = fwdA ? b : a;
+        const m = Math.max(selfA, selfB);
+        const nEntry = neighborCoord(coord, entry);
+        const nExit = neighborCoord(coord, exit);
+        const crossEntry = nEntry ? this.game.roadLaneCountAt(nEntry, oppositePort(entry)) : 0;
+        const crossExit = nExit ? this.game.roadLaneCountAt(nExit, oppositePort(exit)) : 0;
+        const entryCount = crossEntry > 0 ? Math.min(m, crossEntry) : m;
+        const exitCount = crossExit > 0 ? Math.min(m, crossExit) : m;
+        if (exitCount < entryCount) {
+          const W = size * LANE_WIDTH_PX_FRAC;
+          const R = this.game.roadOneWayRunMax(coord, entry);
+          // Inner edge = boundary of the survivors (divider k = exitCount), straight
+          // at (exitCount − R/2)·W. Right kerb = (count − R/2)·W at each seam.
+          const inner = (exitCount - R / 2) * W;
+          const kerbEntry = (entryCount - R / 2) * W;
+          const kerbExit = (exitCount - R / 2) * W; // == inner: the lane has closed
+          gores.push({
+            ...oneWayClosingGore(entry, exit, size, inner, kerbEntry, inner, kerbExit),
+            clipId: `gore-${this.coordId}-${entry}-${exit}`,
+          });
+          const laneOff = (entryCount - 0.5 - R / 2) * W; // closing (outer) lane centre
+          for (const alongT of [0.3, 0.62]) {
+            arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
+          }
+        }
+        continue;
+      }
       const nb = neighborCoord(coord, b);
       const na = neighborCoord(coord, a);
       const nb2 = nb ? neighborCoord(nb, b) : null;

@@ -261,6 +261,132 @@ export function roadSurfacePolygonPath(
   return `M ${ax} ${ay} L ${bx} ${by} L ${cx} ${cy} L ${dx} ${dy} Z`;
 }
 
+// A left-anchored road ribbon for a ONE-WAY HIGHWAY tile: the surface fills
+// between a LEFT edge and a RIGHT edge whose offsets (px along +n, right of
+// travel) are given independently at the entry and exit ends. One-way roads
+// left-align to the run's widest count, so the left edge is a straight constant
+// offset and the right edge tapers in (a lane drop) or out (a lane added) — the
+// motorway look, vs the symmetric trapezoid of `roadSurfacePolygonPath`.
+export function roadRibbonPolygonPath(
+  entry: Port,
+  exit: Port,
+  size: number,
+  leftA: number,
+  rightA: number,
+  leftB: number,
+  rightB: number,
+): string {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const n = perpUnit(a, b);
+  const r = (v: number) => Math.round(v * 100) / 100;
+  // left edge entry→exit, then right edge exit→entry (closed).
+  return (
+    `M ${r(a.x + n.x * leftA)} ${r(a.y + n.y * leftA)} ` +
+    `L ${r(b.x + n.x * leftB)} ${r(b.y + n.y * leftB)} ` +
+    `L ${r(b.x + n.x * rightB)} ${r(b.y + n.y * rightB)} ` +
+    `L ${r(a.x + n.x * rightA)} ${r(a.y + n.y * rightA)} Z`
+  );
+}
+
+// A line parallel to the entry→exit centreline at offset `dA` (entry) → `dB`
+// (exit) px along +n. Used for one-way kerb edges (left straight, right tapering)
+// and lane dividers. Exposes the module-internal `taperedParallel`.
+export function roadParallelLine(entry: Port, exit: Port, size: number, dA: number, dB: number): string {
+  return taperedParallel(entry, exit, size, dA, dB);
+}
+
+// A lane-closure gore (Sperrfläche) for a ONE-WAY HIGHWAY narrowing, on the RIGHT
+// (+n) side where the road sheds its outermost lane. The closed region is the
+// band between the closing lane's INNER divider and the OUTER kerb; offsets are
+// px along +n at each end. Where the lane has fully closed the inner and kerb
+// offsets coincide and the quad degenerates to a triangle. Returns the closed
+// polygon + clipped diagonal hatch, like `laneDropGore`.
+export function oneWayClosingGore(
+  entry: Port,
+  exit: Port,
+  size: number,
+  innerEntry: number,
+  kerbEntry: number,
+  innerExit: number,
+  kerbExit: number,
+): LaneDropGore {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const f = { x: dx / len, y: dy / len };
+  const n = perpUnit(a, b); // +n right-of-travel; the gore sits on +n
+  const P = (along: number, off: number) => ({
+    x: a.x + f.x * along + n.x * off,
+    y: a.y + f.y * along + n.y * off,
+  });
+  const r = (v: number) => Math.round(v * 100) / 100;
+  const A = P(0, innerEntry), B = P(0, kerbEntry), C = P(len, kerbExit), D = P(len, innerExit);
+  const triangle =
+    `M ${r(A.x)} ${r(A.y)} L ${r(B.x)} ${r(B.y)} L ${r(C.x)} ${r(C.y)} L ${r(D.x)} ${r(D.y)} Z`;
+
+  // Diagonal hatch (forward + outward), clipped to the polygon by the view.
+  const u = { x: f.x + n.x, y: f.y + n.y };
+  const um = Math.hypot(u.x, u.y) || 1;
+  u.x /= um; u.y /= um;
+  const p = { x: -u.y, y: u.x };
+  const corners = [A, B, C, D];
+  const projs = corners.map(c => (c.x - A.x) * p.x + (c.y - A.y) * p.y);
+  const sMin = Math.min(...projs), sMax = Math.max(...projs);
+  const spacing = size * 0.14 * 0.55;
+  const reach = len + Math.max(kerbEntry, kerbExit) * 2 + size * 0.14;
+  const hatch: string[] = [];
+  for (let s = sMin; s <= sMax; s += spacing) {
+    const c = { x: A.x + p.x * s, y: A.y + p.y * s };
+    hatch.push(
+      `M ${r(c.x - u.x * reach)} ${r(c.y - u.y * reach)} L ${r(c.x + u.x * reach)} ${r(c.y + u.y * reach)}`,
+    );
+  }
+  return { triangle, hatch };
+}
+
+// One in-lane merge arrow for a ONE-WAY HIGHWAY closing lane: a slim open chevron
+// in the closing (right) lane at offset `laneOff` px on +n, pointing forward and
+// leaning toward the centreline (left, the merge direction). `alongT` (0..1) is
+// the arrow midpoint along the entry→exit centreline.
+export function oneWayMergeArrowPath(
+  entry: Port,
+  exit: Port,
+  size: number,
+  laneOff: number,
+  alongT: number,
+): MergeArrowPath {
+  const LANE_W = size * 0.14;
+  const HALF = size * 0.075;
+  const HEAD = size * 0.05;
+  const SPLAY = 0.5;
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const fx = dx / len, fy = dy / len;
+  const n = perpUnit(a, b); // +n right-of-travel; closing lane is on +n
+  const along0 = alongT * len;
+  // Tail sits further out (+n), head leans inward (toward the centreline) so the
+  // chevron points the way the closing lane merges (left).
+  const tailOff = laneOff + 0.3 * LANE_W;
+  const headOff = laneOff - 0.3 * LANE_W;
+  const tail = { x: a.x + fx * (along0 - HALF) + n.x * tailOff, y: a.y + fy * (along0 - HALF) + n.y * tailOff };
+  const head = { x: a.x + fx * (along0 + HALF) + n.x * headOff, y: a.y + fy * (along0 + HALF) + n.y * headOff };
+  const ang = Math.atan2(head.y - tail.y, head.x - tail.x);
+  const a1 = ang + Math.PI - SPLAY;
+  const a2 = ang + Math.PI + SPLAY;
+  const r = (v: number) => Math.round(v * 100) / 100;
+  return {
+    shaft: `M ${r(tail.x)} ${r(tail.y)} L ${r(head.x)} ${r(head.y)}`,
+    head:
+      `M ${r(head.x + Math.cos(a1) * HEAD)} ${r(head.y + Math.sin(a1) * HEAD)} ` +
+      `L ${r(head.x)} ${r(head.y)} ` +
+      `L ${r(head.x + Math.cos(a2) * HEAD)} ${r(head.y + Math.sin(a2) * HEAD)}`,
+  };
+}
+
 // A filled polygon for a single STRAIGHT lane's strip, used to tint one lane of
 // the road (e.g. a kerb-side bus lane) without recolouring the whole ribbon. The
 // strip is centred at `centreOff` px right-of-travel from the entry→exit

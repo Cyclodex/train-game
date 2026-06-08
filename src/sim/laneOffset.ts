@@ -113,6 +113,21 @@ export function laneOffsetPx(
   return offEntry + (offExit - offEntry) * t;
 }
 
+// Left-anchored lateral offset (px, +n right-of-travel) for a ONE-WAY HIGHWAY
+// lane drop. One-way roads left-align to the widest lane count `runMax` along
+// their contiguous run, so the through lanes run dead straight and lanes are
+// added / dropped on the RIGHT (kerb) — exactly like a motorway. Lane `lanePos`
+// (0 = leftmost / through, highest index = right kerb) sits at
+// `(lanePos + 0.5 − runMax/2)·W` from the centreline. Because the offset depends
+// only on the lane index and the (run-constant) `runMax`, a surviving lane has
+// the SAME offset on every tile of the run — no seam taper — and a car merging
+// out of the dropping (right) lane glides as its fractional lane index eases left
+// (the sim's `desiredLane` keeps lanes 0..n-1 and merges the highest index down,
+// which under this left-align is precisely "keep the left lanes, drop the right").
+export function oneWayLaneOffsetPx(lanePos: number, runMax: number, tileSize: number): number {
+  return (lanePos + 0.5 - runMax / 2) * tileSize * LANE_WIDTH_FRAC;
+}
+
 // Constant lateral offset (px) for a lane position on a tile whose band does not
 // taper (a uniform road, or a curve/junction where the surface keeps a constant
 // width). Equivalent to laneOffsetPx with bandEntry === bandExit.

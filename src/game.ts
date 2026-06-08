@@ -10,7 +10,7 @@ import {
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { laneCount, laneCountAt, carLaneIndices, roadPortsOf, isRoadJunction } from "@/tiles/lanes";
-import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
+import { laneOffsetPx, laneOffsetConstPx, oneWayLaneOffsetPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD } from "@/sim/pathGeometry";
@@ -224,6 +224,11 @@ export interface Game {
   // flagged as a lane-count mismatch — a junction fans/merges unequal arms by
   // design, on either side of the seam.
   roadIsJunctionAt(coord: Coordinates): boolean;
+  // The widest lane count along the contiguous one-way straight run through this
+  // tile in the travel direction entered via `entry`. One-way roads left-align to
+  // this width (highway lane drop): the through lanes run straight and the right
+  // lane ends. Returns this tile's own one-way count when it is not a one-way run.
+  roadOneWayRunMax(coord: Coordinates, entry: Position): number;
   // Debug route overlay — the view drives these on car hover/click (debug only):
   setHoveredCar(carId: string): void; // preview this car's route while hovering
   clearHoveredCar(): void; // hover left a car
@@ -566,6 +571,40 @@ export function createGame(
     return laneCountAt(road, port) / 2;
   }
 
+  // Is the tile at `coord` a ONE-WAY STRAIGHT carrying travel in via `entry`
+  // (lanes entry→oppositePort(entry), none oncoming)? The unit of a one-way run.
+  function isOneWayStraightAt(coord: Coordinates, entry: Position): boolean {
+    const road = level[getCoordinatesId(coord)]?.road;
+    if (!road || isRoadJunction(road)) return false;
+    const exit = oppositePort(entry);
+    return (
+      laneCount(road, entry) > 0 &&
+      laneCount(road, exit) === 0 && // one-way: no oncoming stream
+      road.some(l => l.from === entry && l.to.includes(exit)) // straight movement
+    );
+  }
+
+  // The widest lane count along the contiguous one-way straight run through this
+  // tile (walking upstream + downstream in the travel direction). One-way roads
+  // left-align to this width so the through lanes run straight and lanes drop on
+  // the right (see sim/laneOffset.ts oneWayLaneOffsetPx). The entry port is
+  // invariant along a straight run, so the walk just steps neighbour to neighbour.
+  function oneWayRunMaxAt(coord: Coordinates, entry: Position): number {
+    const exit = oppositePort(entry);
+    let max = 0;
+    let c: Coordinates | null = coord;
+    for (let k = 0; k < 64 && c && isOneWayStraightAt(c, entry); k++) {
+      max = Math.max(max, laneCount(level[getCoordinatesId(c)]?.road, entry));
+      c = neighborCoord(c, exit);
+    }
+    c = neighborCoord(coord, entry);
+    for (let k = 0; k < 64 && c && isOneWayStraightAt(c, entry); k++) {
+      max = Math.max(max, laneCount(level[getCoordinatesId(c)]?.road, entry));
+      c = neighborCoord(c, entry);
+    }
+    return max || laneCount(level[getCoordinatesId(coord)]?.road, entry);
+  }
+
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT
   // tile whose neighbour has a different lane count, the painted surface tapers
   // across the tile (min-seam rule); the coupler's offset interpolates the same
@@ -579,12 +618,17 @@ export function createGame(
     const entry = s.entryPort;
     const exit = s.exitPort;
     if (bandAt(s.coord, entry) <= 0) return 0;
+    // One-way STRAIGHT: highway lane drop. Left-align to the run's widest count
+    // so the through lanes are dead straight and the right lane ends (see
+    // sim/laneOffset.ts oneWayLaneOffsetPx). A merging car's fractional lane index
+    // eases it left onto the surviving lane; no seam taper is needed.
+    if (exit !== null && exit === oppositePort(entry) && isOneWayStraightAt(s.coord, entry)) {
+      return oneWayLaneOffsetPx(lanePos, oneWayRunMaxAt(s.coord, entry), tileSize);
+    }
     const selfBand = centeredBandAt(s.coord, entry);
-    // One-way ⟺ no oncoming lanes exit through the entry port, so the band is
-    // centred and a drop squeezes both kerbs symmetrically (see laneOffset).
-    const road = level[getCoordinatesId(s.coord)]?.road;
-    const centred = laneCount(road, entry) === laneCountAt(road, entry);
-    // Straight tile: taper the band from the entry seam to the exit seam.
+    // Bidirectional straight tile: taper the band from the entry seam to the exit
+    // seam so a continuing lane glides as the kerb shifts (the kerb lane merges
+    // inward, inner lanes hold — the clamp in laneSeamOffsetPx).
     if (exit !== null && exit === oppositePort(entry)) {
       const nEntry = neighborCoord(s.coord, entry);
       const nExit = neighborCoord(s.coord, exit);
@@ -596,7 +640,7 @@ export function createGame(
         selfBand,
         nExit ? centeredBandAt(nExit, oppositePort(exit)) : 0,
       );
-      return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize, centred);
+      return laneOffsetPx(lanePos, selfBand, bandEntry, bandExit, s.t, tileSize, false);
     }
     // Curve / junction / dead-end: constant-width surface, constant offset.
     return laneOffsetConstPx(lanePos, selfBand, tileSize);
@@ -896,6 +940,9 @@ export function createGame(
     },
     roadIsJunctionAt(coord: Coordinates): boolean {
       return isRoadJunction(level[getCoordinatesId(coord)]?.road);
+    },
+    roadOneWayRunMax(coord: Coordinates, entry: Position): number {
+      return oneWayRunMaxAt(coord, entry);
     },
     setHoveredCar(carId: string) {
       hoveredCarId = carId;
