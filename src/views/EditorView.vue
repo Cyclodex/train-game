@@ -238,7 +238,7 @@
 <script lang="ts">
 import { markRaw, reactive } from "vue";
 import { Component, Inject, Provide, Vue, Watch, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY, setWorldTheme } from "@/gameConfig";
+import { GameConfig, GAME_CONFIG_KEY, gameConfig, setWorldTheme } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import ToolDock from "@/components/ToolDock.vue";
@@ -271,7 +271,14 @@ import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
 import { planRoute, OpenEnd } from "@/tiles/routePlanner";
-import { roadEdges as laneEdges, laneCount, laneCountAt, isRoadJunction } from "@/tiles/lanes";
+import {
+  roadEdges as laneEdges,
+  laneCount,
+  laneCountAt,
+  isRoadJunction,
+  junctionExitOffsetPx,
+} from "@/tiles/lanes";
+import type { VehicleClass } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -305,7 +312,7 @@ const HINTS: Record<Tool, string> = {
 // `getLevel` lets the road lane-count lookups read the live editor level, so the
 // editor tapers road ribbons at lane-count transitions and labels taper tiles
 // exactly like play (rather than rendering every tile at its own flat width).
-function stubGame(getLevel: () => Level): Game {
+function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
   const empty: Record<string, never> = {};
   const roadOf = (coord: Coordinates) => getLevel()[getCoordinatesId(coord)]?.road;
   return {
@@ -323,13 +330,52 @@ function stubGame(getLevel: () => Level): Game {
     roadLaneCount: (coord: Coordinates, port: Position) => laneCount(roadOf(coord), port),
     roadLaneCountAt: (coord: Coordinates, port: Position) => laneCountAt(roadOf(coord), port),
     roadIsJunctionAt: (coord: Coordinates) => isRoadJunction(roadOf(coord)),
+    // Tile.vue's laneGraphOverlay (the debug lane-arrow overlay, on by default)
+    // calls this for every TURN/junction movement to glide the arrow to the lane
+    // the car lands in on the exit arm. Mirrors game.ts's turnExitOffsetPx exactly
+    // so a junction drawn in the editor doesn't crash the render (omitting it threw
+    // "roadTurnExitOffsetPx is not a function" the moment a road junction existed).
+    roadTurnExitOffsetPx: (
+      coord: Coordinates,
+      entry: Position,
+      exit: Position,
+      entryLane: number,
+      cls: VehicleClass,
+    ): number | null => {
+      const here = roadOf(coord);
+      const next = neighborCoord(coord, exit);
+      if (!next) return null;
+      const exitRoad = roadOf(next);
+      if (!exitRoad) return null;
+      const exitApproach = oppositePort(exit);
+      const exitBand = laneCountAt(exitRoad, exitApproach) / 2;
+      if (exitBand <= 0) return null;
+      return junctionExitOffsetPx(
+        here,
+        entry,
+        entryLane,
+        exit,
+        exitRoad,
+        exitApproach,
+        exitBand,
+        getTileSize(),
+        cls,
+      );
+    },
   } as unknown as Game;
 }
 
 @Component({ components: { MenuDrawer, ToolDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
-  @Provide("game") game: Game = markRaw(stubGame(() => this.level));
+  @Provide("game") game: Game = markRaw(
+    // Read the gameConfig singleton directly (not this.config): the inject isn't
+    // populated yet on the `this` captured by this field initializer.
+    stubGame(
+      () => this.level,
+      () => gameConfig.tileSize,
+    ),
+  );
 
   EDGES = EDGES;
   levelSizeY = 6;
