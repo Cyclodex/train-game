@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs, oneWay, turns, nWayLanes } from "@/tiles/lanes";
+import { fromPairs, oneWay, turns, nWayLanes, junctionExitLane } from "@/tiles/lanes";
+import { oppositePort } from "@/sim/topology";
 import {
   roadTraverse,
   roadEntries,
@@ -11,7 +12,7 @@ import {
   vehicleClassOf,
   CarChord,
 } from "@/sim/road";
-import { movementsConflict } from "@/sim/roadJunction";
+import { movementsConflict, sameEntryConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import {
@@ -1269,6 +1270,116 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     }
     expect(busesOnSideRoad).toBeGreaterThan(0);
   });
+
+  it("same-arm crossing movements never share the junction (car right-turn vs bus straight)", () => {
+    // User-reported on buscrossboth: a bus on the kerb bus lane (index 0) goes
+    // STRAIGHT while a car from the inner lane (index 1) of the SAME arm turns
+    // RIGHT — the right turn sweeps across the bus lane, and the two drove over
+    // each other. Movements from the same entry were hard-coded as never
+    // conflicting (a single-lane-era assumption), so nothing serialized them.
+    // Assert: at no tick are two vehicles simultaneously on the junction tile
+    // having entered from the SAME arm where one goes straight/left and the
+    // other turns right from a more inner lane (the kerb-crossing combo).
+    const sim = createRoadSim({
+      level: buscrossboth.level,
+      width: buscrossboth.size!.cols,
+      height: buscrossboth.size!.rows,
+      seed: 3,
+      spawnInterval: 0.45,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 14,
+      mix: buscrossboth.traffic!.mix,
+    });
+    let overlaps = 0;
+    for (let i = 0; i < 4000; i++) {
+      sim.step(0.05, () => false);
+      const onJunction = sim
+        .sample()
+        .filter(c => {
+          const f = c.units[0].front;
+          return f.coord.x === 2 && f.coord.y === 2 && f.exitPort !== null;
+        });
+      for (let a = 0; a < onJunction.length; a++) {
+        for (let b = a + 1; b < onJunction.length; b++) {
+          const fa = onJunction[a].units[0].front;
+          const fb = onJunction[b].units[0].front;
+          if (fa.entryPort !== fb.entryPort) continue; // same-arm pairs only
+          // Their paths cross exactly when the lateral order inverts (the same
+          // predicate the sim now enforces): e.g. an inner-lane right turn over
+          // a kerb-lane straight. A kerb bus turning right beside an inner
+          // straight car is parallel and legitimately concurrent.
+          if (
+            sameEntryConflict(
+              fa.entryPort,
+              fa.exitPort!,
+              Math.round(onJunction[a].laneIndex),
+              fb.exitPort!,
+              Math.round(onJunction[b].laneIndex),
+            )
+          )
+            overlaps++;
+        }
+      }
+    }
+    expect(overlaps).toBe(0);
+  }, 30000);
+
+  it("merging movements landing on the SAME exit lane never share the junction", () => {
+    // User-reported: vehicles from DIFFERENT arms exiting onto the same arm can
+    // overlap when they land on the same lane (e.g. a westbound straight car and
+    // a south left-turner both landing the west arm's car lane). Merging onto
+    // DIFFERENT lanes (bus → bus lane beside car → car lane) is fine and must
+    // stay concurrent. Assert: no two vehicles simultaneously on the junction
+    // with the same exit arm AND the same landing lane (per junctionExitLane).
+    const sim = createRoadSim({
+      level: buscrossboth.level,
+      width: buscrossboth.size!.cols,
+      height: buscrossboth.size!.rows,
+      seed: 5,
+      spawnInterval: 0.45,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 14,
+      mix: buscrossboth.traffic!.mix,
+    });
+    const centre = buscrossboth.level["2,2"].road;
+    let overlaps = 0;
+    for (let i = 0; i < 4000; i++) {
+      sim.step(0.05, () => false);
+      const onJunction = sim.sample().filter(c => {
+        const f = c.units[0].front;
+        return f.coord.x === 2 && f.coord.y === 2 && f.exitPort !== null;
+      });
+      for (let a = 0; a < onJunction.length; a++) {
+        for (let b = a + 1; b < onJunction.length; b++) {
+          const A = onJunction[a];
+          const B = onJunction[b];
+          const fa = A.units[0].front;
+          const fb = B.units[0].front;
+          if (fa.entryPort === fb.entryPort) continue; // same-arm covered elsewhere
+          if (fa.exitPort !== fb.exitPort) continue; // merges only
+          const exit = fa.exitPort!;
+          const arm = buscrossboth.level[
+            `${2 + (exit === Position.Right ? 1 : exit === Position.Left ? -1 : 0)},${
+              2 + (exit === Position.Bottom ? 1 : exit === Position.Top ? -1 : 0)
+            }`
+          ].road;
+          const ap = oppositePort(exit);
+          const la = junctionExitLane(
+            centre, fa.entryPort, Math.round(A.laneIndex), exit, arm, ap,
+            A.units[0].part === "bus" ? "bus" : "car",
+          );
+          const lb = junctionExitLane(
+            centre, fb.entryPort, Math.round(B.laneIndex), exit, arm, ap,
+            B.units[0].part === "bus" ? "bus" : "car",
+          );
+          if (la === lb) overlaps++;
+        }
+      }
+    }
+    expect(overlaps).toBe(0);
+  }, 30000);
 
   it("a committed turner is not frozen mid-junction by a non-conflicting cross stream", () => {
     // Regression (user-reported): in buscrossboth a car from the south turning

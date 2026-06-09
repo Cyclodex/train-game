@@ -1,10 +1,37 @@
-import { Lane, laneMovements } from "@/tiles/lanes";
+import { Lane, laneMovements, turnKind } from "@/tiles/lanes";
 import { Position } from "@/types";
 import { Port } from "./topology";
 
 export interface Movement {
   entry: Port;
   exit: Port;
+}
+
+// Lateral order of a movement's exit relative to its approach, right-hand
+// traffic: a RIGHT turn leaves on the kerb side (rank 0), STRAIGHT in the middle
+// (1), a LEFT turn on the centre side (2). U-turns rank like straights.
+export function turnRank(entry: Port, exit: Port): number {
+  const k = turnKind(entry, exit);
+  return k === "right" ? 0 : k === "left" ? 2 : 1;
+}
+
+// Do two movements entering a junction from the SAME arm, in lanes `laneA` /
+// `laneB` (0 = kerb), cross inside the junction? They cross exactly when their
+// lateral order inverts between entry and exit: the kerb-ward vehicle heads
+// "more left" than the inner one (e.g. a kerb bus lane going straight while the
+// inner lane turns right across it), so one path sweeps over the other. Same
+// lane (a queue) or same lateral order (parallel paths) never cross. The old
+// matrix hard-coded same-entry pairs as never conflicting — a single-lane-era
+// assumption that let an inner-lane right-turner drive through a kerb-lane bus.
+export function sameEntryConflict(
+  entry: Port,
+  exitA: Port,
+  laneA: number,
+  exitB: Port,
+  laneB: number,
+): boolean {
+  if (exitA === exitB) return false; // same path: car-following handles queues
+  return (laneA - laneB) * (turnRank(entry, exitA) - turnRank(entry, exitB)) < 0;
 }
 
 // ---------------------------------------------------------------------------

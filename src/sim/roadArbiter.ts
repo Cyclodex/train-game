@@ -1,34 +1,39 @@
 import { Port } from "./topology";
-import { conflictKey, Movement } from "./roadJunction";
+import type { VehicleClass } from "@/tiles/lanes";
 
-export interface ActiveMovement {
-  carId: string;
+// A junction movement with its lane context: which arm it enters/leaves by,
+// which approach lane it occupies (0 = kerb), and the vehicle's class. Lane and
+// class let the conflict predicate decide LANE-AWARE cases the port pair alone
+// cannot: two same-arm movements only cross when their lateral order inverts,
+// and two merges onto the same arm only collide when they land on the same lane.
+export interface JunctionMovement {
   entryArm: Port;
   exitArm: Port;
+  lane: number;
+  cls: VehicleClass;
 }
 
-export interface WaitingCar {
-  entryArm: Port;
-  exitArm: Port;
+export interface ActiveMovement extends JunctionMovement {
+  carId: string;
+}
+
+export interface WaitingCar extends JunctionMovement {
   priority: number; // roadPriority of the approach tile (0=side, 1=main)
   waitSeconds: number;
 }
+
+// Whether two junction movements conflict. Supplied per junction by the sim
+// (closing over the geometric conflict matrix, the junction's lanes and the
+// exit arms' lanes) so the arbiter itself stays pure decision logic.
+export type ConflictFn = (a: JunctionMovement, b: JunctionMovement) => boolean;
 
 export interface JunctionArbiter {
   canEnter(
     candidate: WaitingCar,
     active: ActiveMovement[],
     waiting: WaitingCar[],
-    conflictPairs: Set<string>,
+    conflicts: ConflictFn,
   ): boolean;
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function conflicts(a: Movement, b: Movement, pairs: Set<string>): boolean {
-  return pairs.has(conflictKey(a, b));
 }
 
 // ---------------------------------------------------------------------------
@@ -44,19 +49,17 @@ function conflicts(a: Movement, b: Movement, pairs: Set<string>): boolean {
 const STARVATION_THRESHOLD = 5; // seconds
 
 export const fcfsWithPriorityArbiter: JunctionArbiter = {
-  canEnter(candidate, active, waiting, conflictPairs) {
-    const cMov: Movement = { entry: candidate.entryArm, exit: candidate.exitArm };
-
+  canEnter(candidate, active, waiting, conflicts) {
     // Rule 1: block if any active movement conflicts with ours
     for (const a of active) {
-      if (conflicts(cMov, { entry: a.entryArm, exit: a.exitArm }, conflictPairs)) return false;
+      if (conflicts(candidate, a)) return false;
     }
 
     // Rule 2: yield to higher-priority waiting cars (unless starvation guard fires)
     if (candidate.waitSeconds < STARVATION_THRESHOLD) {
       for (const w of waiting) {
         if (w.priority <= candidate.priority) continue;
-        if (conflicts(cMov, { entry: w.entryArm, exit: w.exitArm }, conflictPairs)) return false;
+        if (conflicts(candidate, w)) return false;
       }
     }
 

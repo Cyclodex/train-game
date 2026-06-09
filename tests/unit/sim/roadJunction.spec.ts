@@ -5,6 +5,8 @@ import {
   movementsConflict,
   conflictKey,
   buildConflictMatrix,
+  sameEntryConflict,
+  turnRank,
 } from "@/sim/roadJunction";
 import { fromPairs } from "@/tiles/lanes";
 
@@ -287,5 +289,41 @@ describe("right turns from all four arms never conflict", () => {
         expect(matrix.has(conflictKey(rightTurns[i], rightTurns[j]))).toBe(false);
       }
     }
+  });
+});
+
+describe("sameEntryConflict — same-arm lateral crossing", () => {
+  // Entry from Bottom, heading north: right turn = R (rank 0), straight = T (1),
+  // left = L (2). Lane 0 = kerb, lane 1 = inner.
+  it("an inner-lane right turn crosses a kerb lane going straight (the bus case)", () => {
+    expect(sameEntryConflict(B, R, 1, T, 0)).toBe(true);
+    expect(sameEntryConflict(B, T, 0, R, 1)).toBe(true); // symmetric
+  });
+
+  it("a kerb-lane right turn beside an inner straight is parallel (no conflict)", () => {
+    expect(sameEntryConflict(B, R, 0, T, 1)).toBe(false);
+    expect(sameEntryConflict(B, T, 1, R, 0)).toBe(false);
+  });
+
+  it("a kerb lane going straight under an inner-lane left turn is parallel", () => {
+    expect(sameEntryConflict(B, T, 0, L, 1)).toBe(false);
+  });
+
+  it("a kerb-lane LEFT turn crosses an inner lane going straight", () => {
+    expect(sameEntryConflict(B, L, 0, T, 1)).toBe(true);
+  });
+
+  it("same lane or same exit never conflicts (queueing / parallel fan-out)", () => {
+    expect(sameEntryConflict(B, R, 1, T, 1)).toBe(false); // same lane: a queue
+    expect(sameEntryConflict(B, T, 0, T, 1)).toBe(false); // same exit
+  });
+
+  it("turnRank orders right < straight < left from any entry", () => {
+    expect(turnRank(B, R)).toBe(0);
+    expect(turnRank(B, T)).toBe(1);
+    expect(turnRank(B, L)).toBe(2);
+    expect(turnRank(L, B)).toBe(0); // eastbound: right = south
+    expect(turnRank(L, R)).toBe(1);
+    expect(turnRank(L, T)).toBe(2);
   });
 });

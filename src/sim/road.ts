@@ -6,8 +6,14 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
-import { buildConflictMatrix, conflictKey } from "./roadJunction";
-import { ActiveMovement, WaitingCar, fcfsWithPriorityArbiter, JunctionArbiter } from "./roadArbiter";
+import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
+import {
+  ActiveMovement,
+  WaitingCar,
+  ConflictFn,
+  fcfsWithPriorityArbiter,
+  JunctionArbiter,
+} from "./roadArbiter";
 
 // Re-export so existing importers of isRoadJunction from "@/sim/road" keep working.
 export { isRoadJunction } from "@/tiles/lanes";
@@ -551,6 +557,51 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
   const arbiter: JunctionArbiter = fcfsWithPriorityArbiter;
 
+  // The lane-aware conflict predicate for one junction, used by the arbiter.
+  // Three cases, in increasing need of lane context:
+  //  • different entry + different exit — genuinely crossing streams: the
+  //    pre-computed geometric matrix decides (port pairs suffice).
+  //  • SAME entry — two vehicles side by side on one approach: they cross only
+  //    when their lateral order inverts (an inner lane turning across a
+  //    kerb-ward lane's straight/left path — e.g. a car's right turn through a
+  //    straight-going bus on the kerb bus lane). Pure lane/turn-rank maths.
+  //  • SAME exit (a merge) — they collide only when they LAND on the same lane
+  //    of the exit arm (junctionExitLane, class-aware). A bus merging onto the
+  //    bus lane beside a car merging onto the car lane stays concurrent.
+  const junctionConflictFns = new Map<string, ConflictFn>();
+  function junctionConflictFn(junctionId: string): ConflictFn {
+    let fn = junctionConflictFns.get(junctionId);
+    if (fn) return fn;
+    const pairs = junctionConflicts.get(junctionId);
+    const jCoord = parseJunctionCoord(junctionId);
+    const road = level[junctionId]?.road;
+    fn = (a, b) => {
+      if (a.entryArm === b.entryArm) {
+        return sameEntryConflict(a.entryArm, a.exitArm, Math.round(a.lane), b.exitArm, Math.round(b.lane));
+      }
+      if (a.exitArm === b.exitArm) {
+        const n = neighborCoord(jCoord, a.exitArm);
+        if (!n) return false;
+        const exitRoad = level[getCoordinatesId(n)]?.road;
+        if (!exitRoad) return false;
+        const approach = oppositePort(a.exitArm);
+        const la = junctionExitLane(road, a.entryArm, Math.round(a.lane), a.exitArm, exitRoad, approach, a.cls);
+        const lb = junctionExitLane(road, b.entryArm, Math.round(b.lane), b.exitArm, exitRoad, approach, b.cls);
+        return la === lb;
+      }
+      return (
+        pairs?.has(
+          conflictKey(
+            { entry: a.entryArm, exit: a.exitArm },
+            { entry: b.entryArm, exit: b.exitArm },
+          ),
+        ) ?? false
+      );
+    };
+    junctionConflictFns.set(junctionId, fn);
+    return fn;
+  }
+
   const cars: Car[] = [];
   let nextId = 0;
   let spawnClock = 0;
@@ -989,7 +1040,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (!bodyTileIds(other).has(junctionId)) continue;
       const seg = other.path.find(s => getCoordinatesId(s.coord) === junctionId);
       if (!seg || seg.exitPort === null) continue;
-      active.push({ carId: other.id, entryArm: seg.entryPort, exitArm: seg.exitPort });
+      active.push({
+        carId: other.id,
+        entryArm: seg.entryPort,
+        exitArm: seg.exitPort,
+        lane: laneOf(other),
+        cls: clsOf(other),
+      });
     }
     return active;
   }
@@ -1006,11 +1063,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const nCoord = neighborCoord(head.coord, exitPort);
       if (!nCoord || getCoordinatesId(nCoord) !== junctionId) continue;
       const entryArm = oppositePort(exitPort);
-      const myExit = carExitAt(other, nCoord) ?? roadExitPort(level, nCoord, entryArm);
+      const myExit = carExitAt(other, nCoord) ?? roadExitPort(level, nCoord, entryArm, clsOf(other));
       if (myExit === null) continue;
       waiting.push({
         entryArm,
         exitArm: myExit,
+        lane: laneOf(other),
+        cls: clsOf(other),
         priority: level[getCoordinatesId(head.coord)]?.roadPriority ?? 0,
         waitSeconds: other.waitSeconds,
       });
@@ -1178,6 +1237,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const candidate: WaitingCar = {
         entryArm: myEntry,
         exitArm: myExit,
+        lane: laneOf(car),
+        cls: clsOf(car),
         priority: level[getCoordinatesId(car.path[car.headIndex].coord)]?.roadPriority ?? 0,
         waitSeconds: car.waitSeconds,
       };
@@ -1186,7 +1247,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           candidate,
           activeMovementsAt(junctionId),
           waitingCarsAt(junctionId, car),
-          conflictPairs,
+          junctionConflictFn(junctionId),
         )
       ) {
         clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
@@ -1204,47 +1265,60 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // shares our lane and must not gate us. This is what lets two streams flow
         // past each other instead of freezing nose-to-nose on a single centreline.
         if (proj.opposing) continue;
-        // Different lane, same travel direction: cars ride side-by-side and must not
-        // gate each other. Perpendicular junction occupants are handled below.
-        if (!proj.perpendicular && !proj.opposing && p.laneIndex !== laneOf(car)) continue;
-        if (proj.perpendicular && isRoadJunction(level[p.tileId]?.road)) {
-          // A car crossing our path at a junction only blocks us if its movement
-          // actually conflicts with ours (same conflict matrix the arbiter uses).
-          // Two non-conflicting movements — e.g. perpendicular right turns — may
-          // share the junction tile, so a right-turn-only cross never blocks;
-          // genuinely crossing streams (perpendicular straights, a left turn over
-          // oncoming) still hold at the entry edge.
-          const conflictPairs = junctionConflicts.get(p.tileId);
-          const jCoord = parseJunctionCoord(p.tileId);
+        const junctionTile = isRoadJunction(level[p.tileId]?.road);
+        // Our movement through that junction tile, lane-aware. When our head is
+        // ALREADY ON it the path segment carries the exact committed exit — the
+        // routePlan turn has been CONSUMED at entry, so carExitAt would return
+        // null and the fallback would assume the default (straight) movement,
+        // freezing a committed turner on phantom conflicts. Path segment first;
+        // the plan (for junctions ahead) and the class-aware default fall back.
+        const myJunctionExit = (): Port | null => {
           const myEntry = route.get(p.tileId)?.entry;
-          // Our movement through that junction. When our head is ALREADY ON it the
-          // path segment carries the exact committed exit — and the routePlan turn
-          // has been CONSUMED at entry, so carExitAt would return null and the
-          // fallback would assume the default (straight) movement. That phantom
-          // straight conflicts with streams our real turn merges beside (e.g. a
-          // B→L left-turner re-evaluated as B→T "conflicting" with a bus R→L),
-          // freezing the car mid-junction for no reason. Path segment first; the
-          // plan (for junctions ahead) and the class-aware default are fallbacks.
+          if (myEntry == null) return null;
           const headSeg = car.path[car.headIndex];
-          const committedExit =
-            getCoordinatesId(headSeg.coord) === p.tileId ? headSeg.exitPort : null;
-          const myExit =
-            committedExit ??
-            (myEntry != null
-              ? carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry, clsOf(car))
-              : null);
-          const conflicts =
-            conflictPairs != null &&
-            myEntry != null &&
-            myExit !== null &&
-            p.exit !== null &&
-            conflictPairs.has(
-              conflictKey(
-                { entry: myEntry, exit: myExit },
-                { entry: p.entry, exit: p.exit }
-              )
-            );
-          if (conflicts) clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+          if (getCoordinatesId(headSeg.coord) === p.tileId) return headSeg.exitPort;
+          const jCoord = parseJunctionCoord(p.tileId);
+          return carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry, clsOf(car));
+        };
+        // Shares the arbiter's lane-aware predicate (cross matrix + same-arm
+        // lateral-order inversion + same-lane merge landing).
+        const junctionConflictWith = (myExit: Port): boolean =>
+          p.exit !== null &&
+          junctionConflictFn(p.tileId)(
+            { entryArm: route.get(p.tileId)!.entry, exitArm: myExit, lane: laneOf(car), cls: clsOf(car) },
+            { entryArm: p.entry, exitArm: p.exit, lane: p.laneIndex, cls: clsOf(other) },
+          );
+        if (!proj.perpendicular && p.laneIndex !== laneOf(car)) {
+          // Same travel direction, different lane: side-by-side traffic must not
+          // gate each other — EXCEPT on a junction we are still approaching, where
+          // a same-arm pair can CROSS (an inner lane turning over a kerb-ward
+          // lane's straight path — e.g. a car's right turn through a straight-
+          // going bus on the kerb bus lane). The arbiter alone misses side-by-side
+          // SIMULTANEOUS arrivals (neither is active yet when both check), so hold
+          // at the entry edge here too. Committed vehicles (lead < 0) never freeze.
+          if (junctionTile && proj.lead >= 0) {
+            const myExit = myJunctionExit();
+            if (myExit !== null && junctionConflictWith(myExit)) {
+              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+            }
+          }
+          continue;
+        }
+        if (proj.perpendicular && junctionTile) {
+          // A vehicle from another arm only blocks us if its movement actually
+          // conflicts with ours — lane-aware: genuinely CROSSING streams always
+          // hold (even committed, as a safety backstop), while a MERGE onto the
+          // same exit arm conflicts only when both land on the same lane and only
+          // gates entry (lead >= 0), so two committed mergers can't freeze each
+          // other. Non-conflicting movements (e.g. perpendicular right turns, or
+          // a bus merging onto the bus lane beside a car) share the tile freely.
+          const myExit = myJunctionExit();
+          if (myExit !== null && junctionConflictWith(myExit)) {
+            const isMerge = p.exit === myExit;
+            if (!isMerge || proj.lead >= 0) {
+              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+            }
+          }
         } else {
           clear = Math.min(clear, proj.d - CAR_GAP);
         }
