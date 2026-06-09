@@ -1487,17 +1487,25 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // Crossing OUT of a junction: choose the exit-arm lane that MATCHES this
         // movement (turn-aware, lane-count-aware), so a 1→3 fans out and a turn
         // lands in the lane its direction implies — instead of carrying the
-        // approach index across and piling everyone into lane 0. The vehicle eases
-        // into it (pendingExitLane) so the change reads as a merge, not a teleport;
-        // it starts in the nearest lane it may use (never a bus lane for a car).
+        // approach index across and piling everyone into lane 0.
         const want = junctionExitLane(
           prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
         );
-        const start = nearestUsableLaneIndex(
-          nextTile.road, nextEntry,
-          nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
-          cls,
-        );
+        // A TURN's lateral glide (couplerOffset's turn branch) physically carries
+        // the vehicle to `want` ACROSS the junction tile, so it must START there —
+        // resetting to the carried approach index made it land on its lane, snap
+        // back, then drift across again (an on-ramp car visibly dipping to the
+        // kerb before returning to its inner landing lane). Straight-through
+        // movements have no such glide (they keep the seam-taper branch), so they
+        // start at the nearest usable carried lane and ease over (pendingExitLane).
+        const turned = exitPort !== oppositePort(head.entryPort);
+        const start = turned
+          ? want
+          : nearestUsableLaneIndex(
+              nextTile.road, nextEntry,
+              nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
+              cls,
+            );
         car.laneIndex = start;
         car.targetLane = want;
         car.laneVel = 0;

@@ -15,6 +15,7 @@ import {
 import { movementsConflict, sameEntryConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
+import { overtakeloop } from "@/levels/test/scenarios/overtakeloop";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import {
   roadcross1lane,
@@ -1211,14 +1212,23 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     let busOffBus = 0;
     let carOnBus = 0;
     let carSamples = 0;
+    // Only THROUGH buses must hold the bus lane: a bus that TURNED IN from the
+    // side road legitimately lands on its movement's landing lane and changes
+    // onto the bus lane when a gap allows. Track who was already eastbound on
+    // the western approach (x ≤ 1) — those crossed straight through.
+    const throughEast = new Set<string>();
     for (let i = 0; i < 1800; i++) {
       sim.step(0.05, () => false);
       for (const c of sim.sample()) {
         const f = c.units[0].front;
+        if (f.entryPort === Position.Left && f.coord.y === 2 && f.coord.x <= 1) {
+          throughEast.add(c.id);
+        }
         if (f.coord.x !== 4 || f.coord.y !== 2 || f.entryPort !== Position.Left) continue;
         const lane = Math.round(c.laneIndex);
         if (c.units[0].part === "bus") {
-          if (lane === 0) busOnBus++; else busOffBus++;
+          if (lane === 0) busOnBus++;
+          else if (throughEast.has(c.id)) busOffBus++;
         } else {
           carSamples++;
           if (lane === 0) carOnBus++;
@@ -1226,7 +1236,7 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
       }
     }
     expect(busOnBus).toBeGreaterThan(20); // buses ran the through road on the bus lane
-    expect(busOffBus).toBe(0); // and were never off it past the cross
+    expect(busOffBus).toBe(0); // a THROUGH bus was never off it past the cross
     expect(carSamples).toBeGreaterThan(20); // cars ran the through road too
     expect(carOnBus).toBe(0); // and never strayed onto the bus lane across the cross
   });
@@ -1402,6 +1412,47 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
       }
     }
     expect(overlaps).toBe(0);
+  }, 30000);
+
+  it("overtakeloop: a ramp car lands ON its merge lane — no dip to the kerb and back", () => {
+    // User-reported: a car merging from the on-ramp (T→R, a left-side merge whose
+    // landing lane is the INNER lane 2 of the 3-lane road) visibly snapped to the
+    // kerb lane 0 at the seam and then drifted back across. The turn glide
+    // physically delivers the car onto lane 2, so its sim lane must START there:
+    // on its first samples past the merge tile the car sits on lane 2 and never
+    // dips below lane 1 in the immediate aftermath (overtaking may move it later).
+    const sim = createRoadSim({
+      level: overtakeloop.level,
+      width: overtakeloop.size!.cols,
+      height: overtakeloop.size!.rows,
+      seed: 9,
+      spawnInterval: overtakeloop.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 4, // few cars: isolate the merge, no overtaking pressure
+      overtakeFraction: 0,
+      spawnEntries: overtakeloop.traffic!.spawnEntries,
+    });
+    // Track each car's lane over its first moments on the tile after the merge
+    // (4,1 entered via Left). Every car comes from the ramp (sole spawn entry).
+    const firstLanes = new Map<string, number[]>();
+    for (let i = 0; i < 1200; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x !== 4 || f.coord.y !== 1 || f.entryPort !== Position.Left) continue;
+        if (f.t > 0.6) continue; // only the entry stretch right past the seam
+        const arr = firstLanes.get(c.id) ?? [];
+        if (arr.length < 12) arr.push(c.laneIndex);
+        firstLanes.set(c.id, arr);
+      }
+    }
+    const merged = [...firstLanes.values()].filter(a => a.length > 0);
+    expect(merged.length).toBeGreaterThan(0); // ramp cars did pass the merge
+    for (const lanes of merged) {
+      expect(Math.round(lanes[0])).toBe(2); // arrives ON the inner landing lane
+      for (const l of lanes) expect(l).toBeGreaterThan(1.5); // and never dips kerb-ward
+    }
   }, 30000);
 
   it("carcircle: feed roads zipper into the loop — the carousel keeps moving", () => {
