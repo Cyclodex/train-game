@@ -1270,6 +1270,50 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(busesOnSideRoad).toBeGreaterThan(0);
   });
 
+  it("a committed turner is not frozen mid-junction by a non-conflicting cross stream", () => {
+    // Regression (user-reported): in buscrossboth a car from the south turning
+    // LEFT (B→L) stopped ON the cross while a bus ran straight R→L — though
+    // B→L and R→L don't conflict (they merge into different lanes). Cause: when
+    // the head enters the junction its routePlan turn is CONSUMED, and the
+    // per-body conflict gate then re-derived the movement via the consumed plan's
+    // fallback — assuming STRAIGHT (B→T), which DOES conflict with R→L. The gate
+    // must use the car's own committed path segment (exact exit) instead.
+    //
+    // Keep traffic light (maxCars 4) so exit arms never queue back into the
+    // junction — then a vehicle standing still ON the junction tile for longer
+    // than the launch-reaction delay can only be a phantom conflict.
+    const sim = createRoadSim({
+      level: buscrossboth.level,
+      width: buscrossboth.size!.cols,
+      height: buscrossboth.size!.rows,
+      seed: 11,
+      spawnInterval: 0.5,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 4,
+      mix: buscrossboth.traffic!.mix,
+    });
+    const stoppedOnJunction = new Map<string, number>(); // car id -> consecutive stopped ticks
+    let worst = 0;
+    for (let i = 0; i < 4000; i++) {
+      sim.step(0.05, () => false);
+      const stopped = new Set(
+        sim.cars().filter(c => c.velocity <= 0.001 && c.tileId === "2,2").map(c => c.id),
+      );
+      for (const id of stopped) {
+        const n = (stoppedOnJunction.get(id) ?? 0) + 1;
+        stoppedOnJunction.set(id, n);
+        worst = Math.max(worst, n);
+      }
+      for (const id of [...stoppedOnJunction.keys()]) {
+        if (!stopped.has(id)) stoppedOnJunction.delete(id);
+      }
+    }
+    // 0.05s ticks: allow the 0.6s launch-reaction delay plus margin (1.5s), but a
+    // car frozen for a whole bus crossing (several seconds) must fail.
+    expect(worst).toBeLessThanOrEqual(30);
+  });
+
   it("a bus turning where the bus lane can't does not oscillate between lanes", () => {
     // In buscross the kerb bus lane permits straight + right only; a LEFT turn must
     // come from the inner car lane. A bus turning left therefore has to leave the

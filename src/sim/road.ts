@@ -1173,7 +1173,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const jCoord = parseJunctionCoord(junctionId);
       // Fall back to the road's default exit so the arbiter fires even when the
       // car has no planned turn (e.g. straight-through at a priority junction).
-      const myExit = carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry);
+      const myExit = carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry, clsOf(car));
       if (myExit === null) continue;
       const candidate: WaitingCar = {
         entryArm: myEntry,
@@ -1217,8 +1217,22 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           const conflictPairs = junctionConflicts.get(p.tileId);
           const jCoord = parseJunctionCoord(p.tileId);
           const myEntry = route.get(p.tileId)?.entry;
+          // Our movement through that junction. When our head is ALREADY ON it the
+          // path segment carries the exact committed exit — and the routePlan turn
+          // has been CONSUMED at entry, so carExitAt would return null and the
+          // fallback would assume the default (straight) movement. That phantom
+          // straight conflicts with streams our real turn merges beside (e.g. a
+          // B→L left-turner re-evaluated as B→T "conflicting" with a bus R→L),
+          // freezing the car mid-junction for no reason. Path segment first; the
+          // plan (for junctions ahead) and the class-aware default are fallbacks.
+          const headSeg = car.path[car.headIndex];
+          const committedExit =
+            getCoordinatesId(headSeg.coord) === p.tileId ? headSeg.exitPort : null;
           const myExit =
-            myEntry != null ? carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry) : null;
+            committedExit ??
+            (myEntry != null
+              ? carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry, clsOf(car))
+              : null);
           const conflicts =
             conflictPairs != null &&
             myEntry != null &&
