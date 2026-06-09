@@ -37,11 +37,16 @@
         />
       </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
+        <!-- Inside a junction the solid centre line breaks into dashes (real
+             intersections don't carry the solid divider across the box). -->
         <path
           v-for="(m, mi) in r.laneMarkings"
           :key="'lm' + i + '_' + mi"
           :d="m.d"
-          :class="['road-marking-' + m.kind, { 'road-marking-merge': m.merge }]"
+          :class="[
+            'road-marking-' + m.kind,
+            { 'road-marking-merge': m.merge, 'road-marking-junction': tileIsRoadJunction },
+          ]"
         />
       </template>
       <!-- Lane-drop gores (hatched closure triangles) and advance arrows -->
@@ -236,7 +241,14 @@ import {
   MergeArrowPath,
   LaneDropGore,
 } from "@/tiles/roadGeometry";
-import { roadEdges, laneCount, laneCountAt, seamPaintTotal, seamMismatch } from "@/tiles/lanes";
+import {
+  roadEdges,
+  laneCount,
+  laneCountAt,
+  seamPaintTotal,
+  seamMismatch,
+  isRoadJunction,
+} from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
@@ -328,6 +340,12 @@ class Tile extends Vue {
   // are derived from this tile's per-direction lane counts: a lane that
   // exists on both ends is a straight parallel; a lane that only exists on
   // the wider end tapers to the narrow side's kerb.
+  // Whether THIS tile's road is a junction (its lanes touch >2 ports). The
+  // centre-line marking dashes inside a junction box instead of running solid.
+  get tileIsRoadJunction(): boolean {
+    return isRoadJunction(this.tile.road);
+  }
+
   get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: string[]; mismatch: boolean; mismatchTip: string }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
@@ -877,6 +895,13 @@ export default toNative(Tile);
   stroke: #f4d35e;
   stroke-width: 3px;
   stroke-linecap: butt;
+}
+/* Inside a junction the centre divider is interrupted, not solid — dash it with
+   the same 25px period as the white dividers so the rhythm matches across the
+   box (tile edges land mid-gap, like .road-marking-inner). */
+.road-marking-centre.road-marking-junction {
+  stroke-dasharray: 13 12;
+  stroke-dashoffset: 19px;
 }
 .road-marking-inner {
   fill: none;
