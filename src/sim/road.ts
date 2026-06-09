@@ -709,13 +709,17 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
           const pool = cls === "bus" && busAllowed.length > 0 ? busAllowed : allow;
-          if (!pool.includes(cur)) {
-            const best = pool.reduce(
-              (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
-              pool[0],
-            );
-            return clampLane(best, curCount);
-          }
+          // Pick the nearest permitted lane (a bus prefers a permitted BUS lane).
+          // This RETURNS even when we're already on a permitted lane (best === cur):
+          // we must NOT fall through to the generic bus-lane preference below, or a
+          // bus turning where the bus lane can't (e.g. a left turn off a kerb bus
+          // lane) would be dragged back onto the bus lane every tick and oscillate.
+          // A bus only stays on the bus lane here when the bus lane actually feeds
+          // its turn (then busAllowed is non-empty and the bus lane is in `pool`).
+          const best = pool.includes(cur)
+            ? cur
+            : pool.reduce((b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b), pool[0]);
+          return clampLane(best, curCount);
         }
       }
     }
@@ -824,6 +828,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (Math.abs(diff) <= LANE_SETTLE && Math.abs(car.laneVel) <= LANE_SETTLE) {
       // Settled in the target lane and no residual lateral motion — pin it.
       car.laneIndex = car.targetLane;
+      car.laneVel = 0;
+    } else if (car.velocity <= 0.001) {
+      // Stopped: don't change lanes at a standstill (you change lanes while
+      // driving, not while stopped at a queue/junction). Hold the lateral position
+      // and kill any residual drift; the change resumes once the car rolls again.
       car.laneVel = 0;
     } else {
       const dir = Math.sign(diff);

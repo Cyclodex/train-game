@@ -1261,6 +1261,46 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     }
     expect(busesOnSideRoad).toBeGreaterThan(0);
   });
+
+  it("a bus turning where the bus lane can't does not oscillate between lanes", () => {
+    // In buscross the kerb bus lane permits straight + right only; a LEFT turn must
+    // come from the inner car lane. A bus turning left therefore has to leave the
+    // bus lane — and must STAY left, not get yanked back onto the bus lane every
+    // tick (the oscillation bug). Track each westbound bus's rounded lane on the
+    // west approach tiles (x 0,1): a clean change is 0→1 once; oscillation flips
+    // back and forth many times.
+    const sim = createRoadSim({
+      level: buscross.level,
+      width: buscross.size!.cols,
+      height: buscross.size!.rows,
+      seed: 4,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 12,
+      mix: buscross.traffic!.mix,
+    });
+    const hist = new Map<string, { last: number; changes: number; reachedInner: boolean }>();
+    for (let i = 0; i < 2400; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        if (c.units[0].part !== "bus") continue;
+        const f = c.units[0].front;
+        if (f.entryPort !== Position.Left || f.coord.x > 1) continue; // westbound approach only
+        const lane = Math.round(c.laneIndex);
+        const h = hist.get(c.id) ?? { last: lane, changes: 0, reachedInner: false };
+        if (lane !== h.last) h.changes++;
+        h.last = lane;
+        if (lane >= 1) h.reachedInner = true;
+        hist.set(c.id, h);
+      }
+    }
+    const movers = [...hist.values()].filter(h => h.reachedInner);
+    expect(movers.length).toBeGreaterThan(0); // some bus did leave the bus lane to turn
+    // No bus flips lanes more than a couple of times (a settle, not an oscillation).
+    const worst = Math.max(...[...hist.values()].map(h => h.changes));
+    expect(worst).toBeLessThanOrEqual(3);
+  });
 });
 
 describe("createRoadSim — launch reaction delay", () => {
