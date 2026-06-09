@@ -35,6 +35,12 @@ import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buses } from "@/levels/test/scenarios/buses";
 import { buscross } from "@/levels/test/scenarios/buscross";
+import {
+  buscrossboth,
+  busmedian,
+  busarterial,
+  busmedianboth,
+} from "@/levels/test/scenarios/buscrosses";
 import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
@@ -107,7 +113,11 @@ export const DOMAINS: ScenarioDomain[] = [
       },
       { id: "overtaking", label: "Overtaking", scenarios: [overtaketwolane, overtakeloop] },
       { id: "priority", label: "Priority", scenarios: [roadpriority] },
-      { id: "vehicles", label: "Vehicles", scenarios: [trucks, buslane, buses, buscross] },
+      {
+        id: "vehicles",
+        label: "Vehicles",
+        scenarios: [trucks, buslane, buses, buscross, buscrossboth, busmedian, busarterial, busmedianboth],
+      },
       {
         id: "routing",
         label: "Destinations & routing",

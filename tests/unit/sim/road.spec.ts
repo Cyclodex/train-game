@@ -23,6 +23,12 @@ import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buscross } from "@/levels/test/scenarios/buscross";
+import {
+  buscrossboth,
+  busmedian,
+  busarterial,
+  busmedianboth,
+} from "@/levels/test/scenarios/buscrosses";
 import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
@@ -1301,6 +1307,81 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     const worst = Math.max(...[...hist.values()].map(h => h.changes));
     expect(worst).toBeLessThanOrEqual(3);
   });
+});
+
+describe("bus-lane crosses flow and keep cars off the bus lane", () => {
+  // Drive each /test bus-cross scenario end-to-end. On the ARM tiles (not the
+  // junction centre, where lanes map through turns) assert the class invariant:
+  // a car NEVER drives on a bus lane, and buses DO use the bus lane — whether the
+  // bus lane is the kerb (index 0) or the median (inner) lane. Plus: traffic
+  // actually flows through (cars complete) with no broken positions or gridlock.
+  const drive = (
+    scenario: { level: Level; size?: { cols: number; rows: number }; traffic?: { mix?: Record<string, number> } },
+    centre: { x: number; y: number },
+    seed: number,
+  ) => {
+    const sim = createRoadSim({
+      level: scenario.level,
+      width: scenario.size!.cols,
+      height: scenario.size!.rows,
+      seed,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 14,
+      mix: scenario.traffic?.mix,
+    });
+    let prev = new Set<string>();
+    const completed = new Set<string>();
+    let carOnBus = 0;
+    let busOnBus = 0;
+    let busSamples = 0;
+    let badPos = 0;
+    let stuck = 0;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      const now = new Set(sim.cars().map(c => c.id));
+      for (const id of prev) if (!now.has(id)) completed.add(id);
+      prev = now;
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (!Number.isFinite(f.t) || (f.lanePos != null && !Number.isFinite(f.lanePos))) badPos++;
+        if (f.coord.x === centre.x && f.coord.y === centre.y) continue; // skip the junction tile
+        const road = scenario.level[`${f.coord.x},${f.coord.y}`]?.road;
+        const busLanes = busLaneIndices(road, f.entryPort);
+        if (busLanes.length === 0) continue;
+        const onBus = busLanes.includes(Math.round(c.laneIndex));
+        if (c.units[0].part === "bus") {
+          busSamples++;
+          if (onBus) busOnBus++;
+        } else if (onBus) {
+          carOnBus++;
+        }
+      }
+      const cars = sim.cars();
+      if (cars.length >= 3 && cars.every(c => c.velocity < 0.001)) stuck++;
+    }
+    return { completed: completed.size, carOnBus, busOnBus, busSamples, badPos, stuck };
+  };
+
+  const cases: [string, { level: Level; size?: { cols: number; rows: number }; traffic?: { mix?: Record<string, number> } }][] = [
+    ["buscrossboth", buscrossboth],
+    ["busmedian", busmedian],
+    ["busarterial", busarterial],
+    ["busmedianboth", busmedianboth],
+  ];
+
+  for (const [name, scenario] of cases) {
+    it(`${name}: cars never use a bus lane, buses do, and traffic flows`, () => {
+      const r = drive(scenario, { x: 2, y: 2 }, 7);
+      expect(r.badPos).toBe(0); // no broken/non-finite positions
+      expect(r.completed).toBeGreaterThan(5); // sustained flow through the cross
+      expect(r.stuck).toBeLessThan(80); // no permanent gridlock
+      expect(r.busSamples).toBeGreaterThan(20); // buses actually ran the arms
+      expect(r.busOnBus).toBeGreaterThan(0); // and used their bus lane
+      expect(r.carOnBus).toBe(0); // a car NEVER drove on a bus lane on the arms
+    });
+  }
 });
 
 describe("createRoadSim — launch reaction delay", () => {
