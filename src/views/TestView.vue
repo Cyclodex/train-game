@@ -23,7 +23,10 @@
 
     <!-- Level 4: a scenario is selected → show its live stage. -->
     <template v-if="scenario">
-      <p class="stage-desc">{{ scenario.description }}</p>
+      <p class="stage-desc">
+        <span class="stage-desc-icon" aria-hidden="true">ℹ️</span>
+        <span class="stage-desc-text">{{ scenario.description }}</span>
+      </p>
       <TestStage :key="scenario.id" :scenario="scenario" />
     </template>
 
@@ -303,10 +306,24 @@ export default toNative(TestView);
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+// The scenario's purpose, shown as a glass panel between the breadcrumb and the
+// stage so it reads on any map backdrop.
 .stage-desc {
-  margin: 0 0 12px;
-  max-width: 640px;
+  @include glass(8px, 12px);
+  display: flex;
+  width: fit-content;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 auto 16px;
+  padding: 10px 16px;
+  max-width: 720px;
   color: #cfd8e0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  text-align: left;
+}
+.stage-desc-icon {
+  flex: 0 0 auto;
   font-size: 14px;
 }
 </style>
