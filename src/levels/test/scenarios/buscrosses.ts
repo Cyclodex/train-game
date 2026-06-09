@@ -1,6 +1,6 @@
 import { Position } from "@/types";
 import { TestScenario } from "@/levels/test/scenario";
-import { type Lane, nWayLanes } from "@/tiles/lanes";
+import { type Lane, nWayLanes, oneWayLanes } from "@/tiles/lanes";
 
 // A family of 4-way intersections built around real-world BUS-LANE layouts. Each
 // is the smallest cross that shows its idea in isolation; toggle Debug for the
@@ -235,4 +235,115 @@ export const busmedianboth: TestScenario = {
   trains: {},
   size: { cols: 5, rows: 5 },
   traffic: { mix: { car: 1, bus: 1 }, spawnInterval: 0.7, maxCars: 14 },
+};
+
+// ---------------------------------------------------------------------------
+// 5) busonewaycross — a ONE-WAY street passing through a cross with two-way side
+//    roads. The W→E main street is one-way (cars ENTER from the west, EXIT to the
+//    east) with a 2-lane kerb bus lane in and out; the N and S arms are ordinary
+//    1-lane two-way streets. A bus on the inbound bus lane runs straight onto the
+//    OUTBOUND bus lane (bus-lane to bus-lane through the junction); a bus turning
+//    onto a side road leaves it. Nothing ever exits west, so no movement targets W.
+// ---------------------------------------------------------------------------
+const ewOneWayBus = (): Cell => ({
+  connections: [],
+  road: [
+    { from: L, to: [R], index: 0, kind: "bus" }, // kerb bus lane, eastbound only
+    { from: L, to: [R], index: 1 },
+  ],
+});
+
+export const busonewaycross: TestScenario = {
+  id: "busonewaycross",
+  name: "Cross: one-way bus street through two-way sides",
+  description:
+    "A one-way W→E street (2 lanes, kerb bus lane) runs straight through a cross of " +
+    "ordinary 1-lane two-way side roads. Buses ride the inbound bus lane onto the " +
+    "outbound bus lane; turning buses leave it. Cars never exit west (one-way) and " +
+    "never touch the bus lane. Enable Debug to see the lanes line up in and out.",
+  level: {
+    "0,2": ewOneWayBus(), // west: one-way INBOUND (eastbound)
+    "1,2": ewOneWayBus(),
+    "3,2": ewOneWayBus(), // east: one-way OUTBOUND (eastbound, away)
+    "4,2": ewOneWayBus(),
+    "2,0": ns1(),
+    "2,1": ns1(),
+    "2,3": ns1(),
+    "2,4": ns1(),
+    "2,2": {
+      connections: [],
+      road: [
+        // W inbound (2 lanes): kerb bus straight+right; inner car straight+both.
+        { from: L, to: [R, B], index: 0, kind: "bus" },
+        { from: L, to: [R, T, B], index: 1 },
+        // N/S two-way 1-lane: straight or onto the eastbound exit, never west.
+        { from: T, to: [B, R], index: 0 },
+        { from: B, to: [T, R], index: 0 },
+      ],
+    },
+  },
+  trains: {},
+  size: { cols: 5, rows: 5 },
+  traffic: { mix: { car: 1, bus: 1 }, spawnInterval: 0.7, maxCars: 12 },
+};
+
+// ---------------------------------------------------------------------------
+// 6) busmegacross — the kitchen sink: every arm a different width AND a different
+//    one-way/two-way + bus-lane treatment.
+//      N: 1-lane one-way INBOUND (no bus lane)
+//      E: 3-lane two-way, KERB bus lane
+//      S: 2-lane one-way OUTBOUND (no bus lane)
+//      W: 2-lane two-way, MEDIAN (inner) bus lane
+//    Nothing exits north (inbound-only) and nothing enters from the south
+//    (outbound-only); everything else fans/merges across mismatched widths while
+//    cars stay off both the kerb bus lane (E) and the median bus lane (W).
+// ---------------------------------------------------------------------------
+const eKerbBus3 = (): Cell => ({
+  connections: [],
+  road: [
+    { from: L, to: [R], index: 0, kind: "bus" },
+    { from: L, to: [R], index: 1 },
+    { from: L, to: [R], index: 2 },
+    { from: R, to: [L], index: 0, kind: "bus" },
+    { from: R, to: [L], index: 1 },
+    { from: R, to: [L], index: 2 },
+  ],
+});
+
+export const busmegacross: TestScenario = {
+  id: "busmegacross",
+  name: "Cross: mega-mix (one-way + 1/2/3 lanes + kerb & median bus)",
+  description:
+    "Every arm different: a 1-lane one-way INBOUND from the north, a 3-lane two-way " +
+    "with a kerb bus lane east, a 2-lane one-way OUTBOUND south, and a 2-lane two-way " +
+    "with a median bus lane west. Traffic fans and merges across mismatched widths; " +
+    "nothing exits north or enters from the south; cars stay off both bus lanes. The " +
+    "stress test for one-way + mixed-width + bus-lane junctions.",
+  level: {
+    "2,0": { connections: [], road: oneWayLanes(T, B, 1) }, // N: one-way inbound (southbound)
+    "2,1": { connections: [], road: oneWayLanes(T, B, 1) },
+    "3,2": eKerbBus3(), // E: 3-lane two-way, kerb bus
+    "4,2": eKerbBus3(),
+    "2,3": { connections: [], road: oneWayLanes(T, B, 2) }, // S: one-way outbound (southbound)
+    "2,4": { connections: [], road: oneWayLanes(T, B, 2) },
+    "0,2": ewMedianBus(), // W: 2-lane two-way, median bus
+    "1,2": ewMedianBus(),
+    "2,2": {
+      connections: [],
+      road: [
+        // from N (1 lane, inbound): fan to S / E / W (never back north).
+        { from: T, to: [B, R, L], index: 0 },
+        // from E (3 lanes, kerb bus): exit west or south (never north / east-self).
+        { from: R, to: [L, B], index: 0, kind: "bus" },
+        { from: R, to: [L, B], index: 1 },
+        { from: R, to: [L, B], index: 2 },
+        // from W (2 lanes, median bus): exit east or south (never north / west-self).
+        { from: L, to: [R, B], index: 0 },
+        { from: L, to: [R, B], index: 1, kind: "bus" },
+      ],
+    },
+  },
+  trains: {},
+  size: { cols: 5, rows: 5 },
+  traffic: { mix: { car: 1, bus: 1 }, spawnInterval: 0.6, maxCars: 16 },
 };

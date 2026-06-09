@@ -40,6 +40,8 @@ import {
   busmedian,
   busarterial,
   busmedianboth,
+  busonewaycross,
+  busmegacross,
 } from "@/levels/test/scenarios/buscrosses";
 import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
@@ -116,7 +118,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "vehicles",
         label: "Vehicles",
-        scenarios: [trucks, buslane, buses, buscross, buscrossboth, busmedian, busarterial, busmedianboth],
+        scenarios: [trucks, buslane, buses, buscross, buscrossboth, busmedian, busarterial, busmedianboth, busonewaycross, busmegacross],
       },
       {
         id: "routing",

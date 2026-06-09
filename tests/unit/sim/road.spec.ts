@@ -28,6 +28,8 @@ import {
   busmedian,
   busarterial,
   busmedianboth,
+  busonewaycross,
+  busmegacross,
 } from "@/levels/test/scenarios/buscrosses";
 import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits } from "@/tiles/lanes";
 
@@ -1369,6 +1371,8 @@ describe("bus-lane crosses flow and keep cars off the bus lane", () => {
     ["busmedian", busmedian],
     ["busarterial", busarterial],
     ["busmedianboth", busmedianboth],
+    ["busonewaycross", busonewaycross],
+    ["busmegacross", busmegacross],
   ];
 
   for (const [name, scenario] of cases) {
