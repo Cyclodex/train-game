@@ -14,6 +14,7 @@ import {
 } from "@/sim/road";
 import { movementsConflict, sameEntryConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
+import { carcircle } from "@/levels/test/scenarios/carcircle";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import {
   roadcross1lane,
@@ -1325,13 +1326,14 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(overlaps).toBe(0);
   }, 30000);
 
-  it("merging movements landing on the SAME exit lane never share the junction", () => {
+  it("merging movements landing on the SAME exit lane never overlap (yield-and-slot)", () => {
     // User-reported: vehicles from DIFFERENT arms exiting onto the same arm can
     // overlap when they land on the same lane (e.g. a westbound straight car and
-    // a south left-turner both landing the west arm's car lane). Merging onto
-    // DIFFERENT lanes (bus → bus lane beside car → car lane) is fine and must
-    // stay concurrent. Assert: no two vehicles simultaneously on the junction
-    // with the same exit arm AND the same landing lane (per junctionExitLane).
+    // a south left-turner both landing the west arm's car lane). Merging is
+    // yield-and-slot: they MAY share the junction (the later one trails the
+    // earlier through the merge point), but their bodies must never overlap in
+    // the shared distance-to-exit-edge coordinate. Merging onto DIFFERENT lanes
+    // (bus → bus lane beside car → car lane) is unconstrained.
     const sim = createRoadSim({
       level: buscrossboth.level,
       width: buscrossboth.size!.cols,
@@ -1374,11 +1376,66 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
             centre, fb.entryPort, Math.round(B.laneIndex), exit, arm, ap,
             B.units[0].part === "bus" ? "bus" : "car",
           );
-          if (la === lb) overlaps++;
+          if (la !== lb) continue; // different landing lanes: unconstrained
+          // Body interval in distance-to-exit-edge space: front sits 1−t before
+          // the shared exit edge; a rear coupler still on the approach tile means
+          // the body extends back to (at least) the junction's entry edge (d=1).
+          const span = (c: (typeof onJunction)[number]) => {
+            const front = 1 - c.units[0].front.t;
+            const rearOnJ =
+              c.units[0].rear.coord.x === 2 && c.units[0].rear.coord.y === 2;
+            const rear = rearOnJ ? 1 - c.units[0].rear.t : 1;
+            return [front, rear] as const; // front <= rear in this coordinate
+          };
+          const [af, ar] = span(A);
+          const [bf, br] = span(B);
+          const eps = 1e-6;
+          // d-interval intersection mid-tile across DIFFERENT arms is benign
+          // (the curves haven't converged yet); a real clash is an intersection
+          // inside the CONVERGED zone next to the shared exit edge, where both
+          // paths are already on the same line.
+          const CONVERGED = 0.25; // tile-distance from the exit edge
+          const lo = Math.max(af, bf);
+          const hi = Math.min(ar, br);
+          if (lo < hi - eps && lo < CONVERGED) overlaps++;
         }
       }
     }
     expect(overlaps).toBe(0);
+  }, 30000);
+
+  it("carcircle: feed roads zipper into the loop — the carousel keeps moving", () => {
+    // User-reported: merge exclusion blocked the carcircle feeds a whole tile
+    // early and stuttered the loop. Merging is yield-and-slot now, so once the
+    // loop has filled, traffic must keep flowing: across the measurement window
+    // a healthy majority of cars are in motion on average, and the loop never
+    // freezes outright (every car stopped) for long.
+    const sim = createRoadSim({
+      level: carcircle.level,
+      width: carcircle.size!.cols,
+      height: carcircle.size!.rows,
+      seed: 2,
+      spawnInterval: carcircle.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: carcircle.traffic!.maxCars,
+      spawnEntries: carcircle.traffic!.spawnEntries,
+    });
+    for (let i = 0; i < 1200; i++) sim.step(0.05, () => false); // fill the loop
+    expect(sim.cars().length).toBeGreaterThanOrEqual(8);
+    let movingFraction = 0;
+    let frozenTicks = 0;
+    const WINDOW = 1200;
+    for (let i = 0; i < WINDOW; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      const moving = cars.filter(c => c.velocity > 0.001).length;
+      movingFraction += moving / Math.max(1, cars.length);
+      if (moving === 0 && cars.length > 0) frozenTicks++;
+    }
+    movingFraction /= WINDOW;
+    expect(movingFraction).toBeGreaterThan(0.5); // the carousel flows
+    expect(frozenTicks).toBeLessThan(WINDOW * 0.05); // and never seizes up
   }, 30000);
 
   it("a committed turner is not frozen mid-junction by a non-conflicting cross stream", () => {

@@ -557,38 +557,49 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
   const arbiter: JunctionArbiter = fcfsWithPriorityArbiter;
 
+  // Do two movements merging onto the same exit arm LAND on the same lane
+  // (junctionExitLane, class-aware)? Same-lane mergers can collide and must
+  // coordinate; different-lane mergers (a bus onto the bus lane beside a car
+  // onto the car lane) stay fully concurrent.
+  function mergeLandsSameLane(
+    junctionId: string,
+    a: { entryArm: Port; exitArm: Port; lane: number; cls: VehicleClass },
+    b: { entryArm: Port; exitArm: Port; lane: number; cls: VehicleClass },
+  ): boolean {
+    const jCoord = parseJunctionCoord(junctionId);
+    const n = neighborCoord(jCoord, a.exitArm);
+    if (!n) return false;
+    const exitRoad = level[getCoordinatesId(n)]?.road;
+    if (!exitRoad) return false;
+    const road = level[junctionId]?.road;
+    const approach = oppositePort(a.exitArm);
+    const la = junctionExitLane(road, a.entryArm, Math.round(a.lane), a.exitArm, exitRoad, approach, a.cls);
+    const lb = junctionExitLane(road, b.entryArm, Math.round(b.lane), b.exitArm, exitRoad, approach, b.cls);
+    return la === lb;
+  }
+
   // The lane-aware conflict predicate for one junction, used by the arbiter.
-  // Three cases, in increasing need of lane context:
+  // Conflicting movements EXCLUDE each other (the later one holds at the entry):
   //  • different entry + different exit — genuinely crossing streams: the
   //    pre-computed geometric matrix decides (port pairs suffice).
   //  • SAME entry — two vehicles side by side on one approach: they cross only
   //    when their lateral order inverts (an inner lane turning across a
   //    kerb-ward lane's straight/left path — e.g. a car's right turn through a
   //    straight-going bus on the kerb bus lane). Pure lane/turn-rank maths.
-  //  • SAME exit (a merge) — they collide only when they LAND on the same lane
-  //    of the exit arm (junctionExitLane, class-aware). A bus merging onto the
-  //    bus lane beside a car merging onto the car lane stays concurrent.
+  //  • SAME exit (a merge) is NOT a conflict: merging is yield-and-slot, not
+  //    exclusion — the later vehicle trails the earlier one through the merge
+  //    point (see clearAhead's per-body merge clamp), so a feed road zippers
+  //    into a busy loop instead of both streams blocking a tile early.
   const junctionConflictFns = new Map<string, ConflictFn>();
   function junctionConflictFn(junctionId: string): ConflictFn {
     let fn = junctionConflictFns.get(junctionId);
     if (fn) return fn;
     const pairs = junctionConflicts.get(junctionId);
-    const jCoord = parseJunctionCoord(junctionId);
-    const road = level[junctionId]?.road;
     fn = (a, b) => {
       if (a.entryArm === b.entryArm) {
         return sameEntryConflict(a.entryArm, a.exitArm, Math.round(a.lane), b.exitArm, Math.round(b.lane));
       }
-      if (a.exitArm === b.exitArm) {
-        const n = neighborCoord(jCoord, a.exitArm);
-        if (!n) return false;
-        const exitRoad = level[getCoordinatesId(n)]?.road;
-        if (!exitRoad) return false;
-        const approach = oppositePort(a.exitArm);
-        const la = junctionExitLane(road, a.entryArm, Math.round(a.lane), a.exitArm, exitRoad, approach, a.cls);
-        const lb = junctionExitLane(road, b.entryArm, Math.round(b.lane), b.exitArm, exitRoad, approach, b.cls);
-        return la === lb;
-      }
+      if (a.exitArm === b.exitArm) return false; // merge: handled by trailing
       return (
         pairs?.has(
           conflictKey(
@@ -1179,11 +1190,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // nose in a bend. Two ports ⇒ it can never be perpendicular.
       within = 1 - p.t;
       opposing = true;
-    } else if (p.entry === oppositePort(hit.entry)) {
-      within = 1 - p.t;
-      opposing = true; // travels this tile head-on to us — i.e. the oncoming lane
     } else {
-      within = 0.5; // perpendicular junction occupant: treat as mid-tile
+      // ANY other-entry occupant of a JUNCTION tile is a junction occupant — not
+      // just adjacent-arm ones. An opposite-entry vehicle here is NOT simply "the
+      // oncoming lane": with turns it can MERGE onto our exit (T→R beside B→R) or
+      // CROSS our path (a left turn over the oncoming straight), so it must flow
+      // into the junction conflict/merge logic below rather than being skipped as
+      // oncoming (the bug that let opposite-arm merges drive through each other).
+      // Two parallel straights simply aren't in the conflict matrix and still
+      // pass each other freely.
+      within = 0.5; // junction occupant: treat as mid-tile
       perpendicular = true;
     }
     return { d: hit.lead + within, lead: hit.lead, perpendicular, opposing };
@@ -1257,7 +1273,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
       if (other === car) continue;
-      for (const p of bodyPoints(other)) {
+      const otherPts = bodyPoints(other);
+      // Progress range of the other car's body per tile (min = tail-most point,
+      // max = front-most), used by the merge clamp: the merge winner is decided
+      // by its FRONT, but the loser must trail its TAIL.
+      const tRange = new Map<string, { min: number; max: number }>();
+      for (const q of otherPts) {
+        const r = tRange.get(q.tileId);
+        if (!r) tRange.set(q.tileId, { min: q.t, max: q.t });
+        else {
+          r.min = Math.min(r.min, q.t);
+          r.max = Math.max(r.max, q.t);
+        }
+      }
+      for (const p of otherPts) {
         const proj = projectPoint(route, p);
         if (!proj || proj.d < 0) continue;
         // Oncoming traffic rides its own lane (offset to its right — the far side
@@ -1305,19 +1334,56 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           continue;
         }
         if (proj.perpendicular && junctionTile) {
-          // A vehicle from another arm only blocks us if its movement actually
-          // conflicts with ours — lane-aware: genuinely CROSSING streams always
-          // hold (even committed, as a safety backstop), while a MERGE onto the
-          // same exit arm conflicts only when both land on the same lane and only
-          // gates entry (lead >= 0), so two committed mergers can't freeze each
-          // other. Non-conflicting movements (e.g. perpendicular right turns, or
-          // a bus merging onto the bus lane beside a car) share the tile freely.
           const myExit = myJunctionExit();
-          if (myExit !== null && junctionConflictWith(myExit)) {
-            const isMerge = p.exit === myExit;
-            if (!isMerge || proj.lead >= 0) {
-              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+          if (myExit === null || p.exit === null) continue;
+          const myEntry = route.get(p.tileId)!.entry;
+          if (p.exit === myExit) {
+            // MERGE partner (different arm, same exit): yield-and-slot, not
+            // exclusion. Both head for the same exit edge, so measure both in
+            // distance-to-that-edge: their body point sits 1−t before it, my
+            // head lead+1. If they reach it first, I may advance only to
+            // CAR_GAP behind them in that shared coordinate — clear =
+            // lead + t − GAP — which grows as they roll through, so I slip in
+            // right behind them instead of holding a whole tile away. Only the
+            // FOLLOWER (farther from the edge) is bound, so two committed
+            // mergers never freeze each other. Different landing lanes (a bus
+            // onto the bus lane beside a car) don't interact at all; once
+            // merged, ordinary same-lane car-following takes over downstream.
+            if (
+              mergeLandsSameLane(
+                p.tileId,
+                { entryArm: myEntry, exitArm: myExit, lane: laneOf(car), cls: clsOf(car) },
+                { entryArm: p.entry, exitArm: p.exit, lane: p.laneIndex, cls: clsOf(other) },
+              )
+            ) {
+              const r = tRange.get(p.tileId)!;
+              const otherFrontD = 1 - r.max; // their front's distance to the edge
+              const myD = proj.lead + 1; // my head's (junction tile counts as 1)
+              // Their TAIL on this junction: when their rear still hangs off the
+              // junction onto their approach arm, the on-junction minimum t
+              // understates the body (it ends at the entry edge, t = 0) — without
+              // this the follower creeps up beside the leader's overhanging rear
+              // and the roles flip into an overlap as the leader pulls away.
+              const headHere = getCoordinatesId(other.path[other.headIndex].coord) === p.tileId;
+              const rearOffTile = otherPts[otherPts.length - 1].tileId !== p.tileId;
+              const tailT = headHere && rearOffTile ? 0 : r.min;
+              // They won the merge (their FRONT is nearer the shared edge than my
+              // head): trail their TAIL — clear = lead + tailT − GAP — so my nose
+              // can never end up beside their body when the lanes converge. If
+              // I'm ahead instead, no clamp: they trail me by the same rule. A
+              // DEAD HEAT (bit-identical distances — mirrored arms of a symmetric
+              // map produce them) would leave both unclamped and let them overlap
+              // behind a common leader, so ties yield deterministically by id.
+              const tie = Math.abs(otherFrontD - myD) <= 1e-9 && other.id < car.id;
+              if (otherFrontD < myD - 1e-9 || tie) {
+                clear = Math.min(clear, Math.max(0, proj.lead + tailT - CAR_GAP));
+              }
             }
+          } else if (junctionConflictWith(myExit)) {
+            // Genuinely CROSSING streams hold at the entry edge (even committed,
+            // as a safety backstop). Non-conflicting movements (e.g.
+            // perpendicular right turns) share the tile freely.
+            clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
           }
         } else {
           clear = Math.min(clear, proj.d - CAR_GAP);
