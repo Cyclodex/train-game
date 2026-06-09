@@ -21,6 +21,8 @@ import {
   junctionExitLane,
   junctionExitOffsetPx,
 } from "@/tiles/lanes";
+import { seamBand } from "@/sim/laneOffset";
+import { mixedtee } from "@/levels/test/scenarios/mixedjunction";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
 
@@ -105,6 +107,30 @@ describe("laneCountAt", () => {
     const road: Lane[] = [turns(L, [R], 0), turns(L, [T], 1)];
     expect(laneCountAt(road, L)).toBe(2);
     expect(laneCountAt(road, R)).toBe(1);
+  });
+});
+
+describe("junction narrow-arm positioning band (mixedtee spur alignment)", () => {
+  it("seam-matches a junction's over-counted arm to the neighbour, so lanes line up", () => {
+    // /test/mixedtee: a 3-lane E-W road with a 2-lane spur south. The junction's B
+    // (spur) arm laneCountAt deliberately OVER-counts: 2 lanes entering + the 3
+    // main-road lanes that can turn onto the spur (distinct indices 0,1,2) = 5,
+    // i.e. positioning band 2.5. The actual spur is 2 lanes each way (band 2).
+    const centre = mixedtee.level["3,2"].road;
+    const spur = mixedtee.level["3,3"].road;
+    expect(laneCountAt(centre, B)).toBe(5); // over-count (correct for mismatch-suppression)
+    expect(laneCountAt(spur, T)).toBe(4); // the real arm: 2 lanes each way
+    const junctionBand = laneCountAt(centre, B) / 2; // 2.5 — wrong to POSITION with
+    const armBand = laneCountAt(spur, T) / 2; // 2 — the actual arm width
+    // The renderer (couplerOffset / lane overlay) must position the B-arm lanes
+    // with the SEAM-MATCHED band so they line up with the spur at the entrance,
+    // not half a lane out.
+    expect(seamBand(junctionBand, armBand)).toBe(2);
+    expect(seamBand(junctionBand, armBand)).not.toBe(junctionBand);
+    // The wide main-road arms are NOT over-counted relative to their neighbour, so
+    // their band is unchanged (they already lined up — the "exit is OK" side).
+    const west = mixedtee.level["2,2"].road; // 3-lane west arm
+    expect(seamBand(laneCountAt(centre, L) / 2, laneCountAt(west, R) / 2)).toBe(3);
   });
 });
 

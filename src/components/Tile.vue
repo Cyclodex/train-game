@@ -580,8 +580,19 @@ class Tile extends Vue {
           // class-aware), identical to couplerOffset's turn branch — so the arrow
           // ends on the same real lane the car drives to, never a phantom one.
           const cls = isBus ? "bus" : "car";
+          // Seam-match the ENTRY offset to the actual arm width (the neighbour
+          // entering through this approach), identical to couplerOffset's turn
+          // branch: a junction's laneCountAt over-counts a narrow arm, which would
+          // otherwise position its lanes half a lane out from the neighbour and
+          // not line up at the entrance seam (a 2-lane spur off a 3-lane road).
+          const nEntry = neighborCoord(coord, lane.from);
+          const entryBand = seamBand(
+            selfBand,
+            nEntry ? this.centeredRoadBand(nEntry, oppositePort(lane.from)) : 0,
+          );
+          const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
           const offExit = this.game.roadTurnExitOffsetPx(coord, lane.from, to, lane.index, cls);
-          out.push({ ...this.laneArrow(lane.from, to, size, off, offExit ?? off), isBus });
+          out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus });
         }
       }
     }

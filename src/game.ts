@@ -706,7 +706,19 @@ export function createGame(
     // tile and snaps at the boundary (a turn onto a narrower arm used to end
     // outside its only lane). Buses glide toward the exit arm's bus lane the same
     // way. Dead-end / map edge → hold the approach offset.
-    const offEntry = laneOffsetConstPx(lanePos, selfBand, tileSize);
+    //
+    // Seam-match the ENTRY band to the actual arm width (the neighbour entering
+    // through `entry`), like the straight branch above. A junction's own
+    // `laneCountAt` deliberately over-counts an arm (every approach lane that can
+    // turn onto it counts as an exit lane), so a narrow arm fed by a wider road —
+    // e.g. a 2-lane spur off a 3-lane road — would otherwise position its lanes
+    // half a lane out from the spur and not line up at the entrance seam.
+    const nEntry = neighborCoord(s.coord, entry);
+    const entryBand = seamBand(
+      selfBand,
+      nEntry ? centeredBandAt(nEntry, oppositePort(entry)) : 0,
+    );
+    const offEntry = laneOffsetConstPx(lanePos, entryBand, tileSize);
     if (exit === null) return offEntry;
     const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
     if (offExit === null) return offEntry;
