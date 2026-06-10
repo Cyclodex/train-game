@@ -10,7 +10,7 @@ on:
 
 jobs:
   implement:
-    if: github.event.label.name == 'status: ready-for-dev'
+    if: "github.event.label.name == 'status: ready-for-dev'"
     runs-on: ubuntu-latest
     permissions:
       contents: write

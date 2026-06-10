@@ -14,7 +14,7 @@ on:
 
 jobs:
   sync:
-    if: vars.PROJECT_NUMBER != '' && startsWith(github.event.label.name, 'status: ')
+    if: "vars.PROJECT_NUMBER != '' && startsWith(github.event.label.name, 'status: ')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
