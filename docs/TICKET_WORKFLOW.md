@@ -27,6 +27,10 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Done
 
 **Priority (set during triage):** `prio: high` · `prio: normal` · `prio: low`
 
+**Model (set during triage, optional):** `model: opus` for complex/architectural
+tickets · `model: haiku` for trivial mechanical ones · no label = Sonnet (default).
+The implement workflow reads this to pick the Claude model.
+
 ## Conventions
 
 - **Code TODOs**: a `// TODO` in code is a parking spot, not a backlog. When one

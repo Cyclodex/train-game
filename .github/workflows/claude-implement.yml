@@ -23,6 +23,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Model is chosen during triage via an optional label:
+      # "model: opus" for complex tickets, "model: haiku" for trivial ones,
+      # no label (or "model: sonnet") = Sonnet, the default.
+      - id: model
+        env:
+          LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: |
+          case ",$LABELS," in
+            *",model: opus,"*)  echo "model=claude-opus-4-8" >> "$GITHUB_OUTPUT" ;;
+            *",model: haiku,"*) echo "model=claude-haiku-4-5-20251001" >> "$GITHUB_OUTPUT" ;;
+            *)                  echo "model=claude-sonnet-4-6" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -42,4 +55,5 @@ jobs:
                closes it automatically.
             6. Replace the issue label "status: in-progress" with "status: in-review".
           claude_args: |
+            --model ${{ steps.model.outputs.model }}
             --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*)"
