@@ -10,15 +10,30 @@ import { type Lane, nWayLanes, twoWay } from "@/tiles/lanes";
 // lane-click tool: a whole bus-only STREET that changes route choice, which the
 // other bus scenarios (bus lanes BESIDE car lanes) don't demonstrate.
 //
-//   (0,0)──(1,0)──[2,0]──(3,0)──(4,0)        []  = T-junction (loop ∩ middle)
-//     │              ║              │         ──  = two-way car road
-//   (0,1)         (2,1)bus        (4,1)       ║   = bus-only middle street
-//     │              ║              │
-//   (0,2)         (2,2)bus        (4,2)
-//     │              ║              │
-//   (0,3)         (2,3)bus        (4,3)
-//     │              ║              │
-//   (0,4)──(1,4)──[2,4]──(3,4)──(4,4)
+// So traffic actually flows, the two junctions where the middle meets the loop
+// (top at 2,0, bottom at 2,4) are also the map-edge openings: each grows a CAR
+// arm off the map (north at 2,0, south at 2,4). Vehicles spawn at the north edge
+// and cross to the south edge (and vice-versa). For that north↔south trip the
+// bus-only middle street is the DIRECT path, so the class-aware router routes a
+// BUS straight down the middle while a CAR — barred from the middle — must drive
+// the long way round the loop. The off-map car arm only ever turns ONTO the loop
+// (left/right), never into the middle (the only lane permitting that turn is a
+// bus lane), so the hard guarantee holds: no car-usable lane enters the bus
+// street.
+//
+//                       north                  []  = junction (loop ∩ middle ∩ edge)
+//                         ║                     ──  = two-way car road
+//          (0,0)──(1,0)──[2,0]──(3,0)──(4,0)    ║   = bus-only middle street / car arm
+//            │              ║              │     │   = two-way car road (column)
+//          (0,1)         (2,1)bus        (4,1)
+//            │              ║              │
+//          (0,2)         (2,2)bus        (4,2)
+//            │              ║              │
+//          (0,3)         (2,3)bus        (4,3)
+//            │              ║              │
+//          (0,4)──(1,4)──[2,4]──(3,4)──(4,4)
+//                         ║
+//                       south
 //
 const T = Position.Top;
 const R = Position.Right;
@@ -36,34 +51,46 @@ const curve = (a: Position, b: Position): Cell => ({ connections: [], road: twoW
 // are kind:"bus", so cars are barred and only buses use it.
 const busVert = (): Cell => ({ connections: [], road: nWayLanes(T, B, 1, "bus") });
 
-// A loop ∩ middle-street T-junction. Each loop approach has TWO lanes: a kerb CAR
-// lane (index 0) that can ONLY go straight along the loop, and an inner BUS lane
-// (index 1, kind:"bus") that goes straight OR turns into the middle street. Because
-// the only lane permitting the turn onto the middle is a bus lane, class-aware
-// routing (usableExits) never offers a car the turn — cars stay on the loop; buses
-// may shortcut. The middle-street arrival lane is bus-only too, so it stays a bus
-// street end to end.
+// The TOP junction (2,0): the loop's top edge (L<->R) meets the bus-only middle
+// (its south arm) AND opens off the map to the north (the spawn/despawn edge).
+// Lane design enforcing the hard guarantee that a car never enters the middle:
+//  • Each loop approach (L, R) has a kerb CAR lane (index 0, straight along the
+//    loop OR off the north edge) and an inner BUS lane (index 1, additionally
+//    south into the middle).
+//  • The north edge arm is a CAR lane: a vehicle entering from the north may turn
+//    onto the loop (L/R) but its `to` never lists B, so a car can't drive into
+//    the middle. A separate BUS lane from the north additionally permits south,
+//    so a bus crossing the map drives straight down the middle.
+// The only lane whose `to` includes the middle (B) is a bus lane — class-aware
+// routing therefore never offers a car the turn onto the bus street.
 const topTee = (): Cell => ({
   connections: [],
   road: [
-    // West approach: kerb car lane straight only; inner bus lane straight + south.
-    { from: L, to: [R], index: 0 },
-    { from: L, to: [R, B], index: 1, kind: "bus" },
+    // West approach: kerb car lane (straight or off-map north); inner bus lane adds south.
+    { from: L, to: [R, T], index: 0 },
+    { from: L, to: [R, T, B], index: 1, kind: "bus" },
     // East approach: same, mirrored.
-    { from: R, to: [L], index: 0 },
-    { from: R, to: [L, B], index: 1, kind: "bus" },
-    // Middle street northbound arrival: a bus rejoins the loop either way.
-    { from: B, to: [L, R], index: 0, kind: "bus" },
+    { from: R, to: [L, T], index: 0 },
+    { from: R, to: [L, T, B], index: 1, kind: "bus" },
+    // North edge arrival: a CAR lane turns onto the loop only (never the middle);
+    // a BUS lane additionally drives straight south down the middle.
+    { from: T, to: [L, R], index: 0 },
+    { from: T, to: [L, R, B], index: 1, kind: "bus" },
+    // Middle street northbound arrival: a bus rejoins the loop or exits north.
+    { from: B, to: [L, R, T], index: 0, kind: "bus" },
   ],
 });
+// The BOTTOM junction (2,4): mirror of the top, opening off the map to the south.
 const bottomTee = (): Cell => ({
   connections: [],
   road: [
-    { from: L, to: [R], index: 0 },
-    { from: L, to: [R, T], index: 1, kind: "bus" },
-    { from: R, to: [L], index: 0 },
-    { from: R, to: [L, T], index: 1, kind: "bus" },
-    { from: T, to: [L, R], index: 0, kind: "bus" },
+    { from: L, to: [R, B], index: 0 },
+    { from: L, to: [R, B, T], index: 1, kind: "bus" },
+    { from: R, to: [L, B], index: 0 },
+    { from: R, to: [L, B, T], index: 1, kind: "bus" },
+    { from: B, to: [L, R], index: 0 },
+    { from: B, to: [L, R, T], index: 1, kind: "bus" },
+    { from: T, to: [L, R, B], index: 0, kind: "bus" },
   ],
 });
 
@@ -72,12 +99,14 @@ export const busshortcut: TestScenario = {
   name: "Bus-only shortcut street",
   description:
     "A rectangular two-way car loop with a bus-only street cutting straight across " +
-    "the middle (an H shape). Buses take the shortcut through the middle; cars are " +
-    "barred from it and must drive the long way round the loop. The whole middle " +
-    "street is a bus lane — class-aware routing means a car is never offered the " +
-    "turn onto it. Enable Debug to see the amber bus lanes and the lane arrows.",
+    "the middle (an H shape). Vehicles enter from the open north edge and leave at " +
+    "the south edge. For that north–south trip the middle is the direct path, so a " +
+    "BUS takes the shortcut straight through it while a CAR — barred from the middle " +
+    "— must drive the long way round the loop. The whole middle street is a bus lane, " +
+    "and class-aware routing means a car is never offered the turn onto it. Enable " +
+    "Debug to see the amber bus lanes and the lane arrows.",
   level: {
-    // Top edge (y=0): curve corners, straights, and the top T-junction at x=2.
+    // Top edge (y=0): curve corners, straights, and the top junction at x=2.
     "0,0": curve(R, B),
     "1,0": horiz(),
     "2,0": topTee(),
@@ -94,7 +123,7 @@ export const busshortcut: TestScenario = {
     "2,1": busVert(),
     "2,2": busVert(),
     "2,3": busVert(),
-    // Bottom edge (y=4): curve corners, straights, and the bottom T-junction.
+    // Bottom edge (y=4): curve corners, straights, and the bottom junction.
     "0,4": curve(R, T),
     "1,4": horiz(),
     "2,4": bottomTee(),

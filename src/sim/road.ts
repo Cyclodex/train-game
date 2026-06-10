@@ -1594,7 +1594,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
-    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng);
+    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
     // Lane order to try at the entry, by class:
     //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
     //    then the remaining lanes from a rotating start.

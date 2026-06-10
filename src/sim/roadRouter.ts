@@ -1,6 +1,6 @@
 import { Coordinates } from "@/types";
 import { Level } from "@/tiles/model";
-import { exitsForCar, isRoadJunction } from "@/tiles/lanes";
+import { usableExits, isRoadJunction, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { RoadEntry } from "./road";
@@ -47,6 +47,11 @@ function extractTurns(level: Level, path: PathStep[]): RouteTurn[] {
  * @param spawnEntry  The port the car enters through (from the map edge).
  * @param allEntries  All map-edge road entries (includes the spawn entry).
  * @param rng         A seeded [0, 1) uniform random function.
+ * @param cls         The vehicle's lane-access class. A "car" routes only over
+ *                    car lanes (bus-only lanes are impassable); a "bus" may also
+ *                    traverse bus lanes — so only a bus can be routed through a
+ *                    bus-only street (the bus shortcut). Defaults to "car", which
+ *                    preserves the original car-only BFS exactly.
  */
 // Return value of planRoute: the junction turns and the chosen destination entry.
 export interface RoutePlan {
@@ -60,6 +65,7 @@ export function planRoute(
   spawnEntry: Port,
   allEntries: RoadEntry[],
   rng: () => number,
+  cls: VehicleClass = "car",
 ): RoutePlan {
   // Filter out the spawn entry itself so the car doesn't immediately target
   // the hole it just entered through.
@@ -99,8 +105,9 @@ export function planRoute(
     const tile = level[getCoordinatesId(node.coord)];
     if (!tile?.road || tile.road.length === 0) continue;
 
-    // Only traverse lanes accessible to cars (skip bus-only lanes).
-    const exits = exitsForCar(tile.road, node.entryPort);
+    // Only traverse lanes this vehicle class may use (a car skips bus-only lanes;
+    // a bus may take them, so only a bus is routed through a bus-only street).
+    const exits = usableExits(tile.road, node.entryPort, cls);
 
     for (const exitPort of exits) {
       // Center has no map-edge neighbour — skip.
@@ -111,7 +118,7 @@ export function planRoute(
       const nextTile = level[nextId];
       const connectedBack =
         nextTile?.road &&
-        exitsForCar(nextTile.road, oppositePort(exitPort)).length > 0;
+        usableExits(nextTile.road, oppositePort(exitPort), cls).length > 0;
 
       if (!connectedBack) {
         // Off-grid or dead-end: check whether this is our target exit.
