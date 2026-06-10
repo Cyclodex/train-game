@@ -39,6 +39,26 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Sign-of
   the dev queue is
   [`label:"status: ready-for-dev"`](https://github.com/Cyclodex/train-game/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3A+ready-for-dev%22).
 
+## Automation (Claude Code GitHub Action)
+
+Stages 3–4 are automated via workflows in `.github/workflows/`:
+
+- **`claude-implement.yml`** — adding `status: ready-for-dev` to an issue is the
+  handover: Claude implements it on a `<type>/<number>-<name>` branch, runs
+  lint + unit tests, opens a PR (`Refs #N`) and moves the labels along.
+- **`claude-review.yml`** — every opened PR gets a first-pass review with
+  inline comments against the issue's acceptance criteria.
+- **`claude.yml`** — mention `@claude` in any issue/PR comment to request
+  changes during review (e.g. "@claude address the review comments").
+
+One-time setup (repo admin): install the [Claude GitHub App](https://github.com/apps/claude)
+and add an `ANTHROPIC_API_KEY` secret under Settings → Secrets → Actions.
+Triage (stage 2) and sign-off (stage 5) stay human on purpose.
+
+Note: PRs opened by the action don't re-trigger other workflows
+(`github-actions` actor), so the auto-review won't fire on Claude's own PRs —
+review those yourself or comment `@claude review this PR`.
+
 ## Optional: project board
 
 If you prefer a Kanban view, create a GitHub Project (repo → Projects → New
