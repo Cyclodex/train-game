@@ -51,8 +51,10 @@ Stages 3–4 are automated via workflows in `.github/workflows/`:
 - **`claude.yml`** — mention `@claude` in any issue/PR comment to request
   changes during review (e.g. "@claude address the review comments").
 
-One-time setup (repo admin): install the [Claude GitHub App](https://github.com/apps/claude)
-and add an `ANTHROPIC_API_KEY` secret under Settings → Secrets → Actions.
+One-time setup (repo admin): install the [Claude GitHub App](https://github.com/apps/claude),
+run `claude setup-token` locally (uses your Claude Pro/Max subscription) and add
+the generated token as a `CLAUDE_CODE_OAUTH_TOKEN` secret under
+Settings → Secrets → Actions. Runs then consume subscription limits, not API credits.
 Triage (stage 2) and sign-off (stage 5) stay human on purpose.
 
 Note: PRs opened by the action don't re-trigger other workflows
