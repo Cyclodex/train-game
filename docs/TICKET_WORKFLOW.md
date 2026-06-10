@@ -11,10 +11,10 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Done
 
 | Stage | Label | Who | What happens |
 |---|---|---|---|
-| 1. Capture | `status: triage` | anyone | Every idea/bug/TODO becomes an issue immediately (use the issue templates). No quality bar — capturing beats forgetting. |
+| 1. Capture | `status: triage` | anyone | Every idea/bug/TODO becomes an issue immediately (use the issue templates). No quality bar — capturing beats forgetting. **Visual issue? Attach a screenshot** (see below). |
 | 2. Review & refine | `status: triage` → `status: ready-for-dev` | product owner | Review the issue: clarify scope, write/adjust acceptance criteria, set a `prio:` label. Switching the label to `status: ready-for-dev` **is the handover to development.** Close with `not planned` if rejected. |
-| 3. Development | `status: in-progress` | developer | Assign yourself, switch the label, branch off `master` as `<type>/<issue-number>-short-name` (e.g. `fix/3-correct-signal`). Reference the issue in commits. |
-| 4. PR review & sign-off | `status: in-review` | developer + reviewer | Open a PR using the PR template, link the issue with `Closes #N`. The review verifies the acceptance criteria; **approving and merging is the sign-off** — the issue closes automatically. Found a problem after merge? Reopen the issue → back to `status: in-progress`. |
+| 3. Development | `status: in-progress` | developer | Assign yourself, switch the label, branch off `master` as `<type>/<issue-number>-short-name` (e.g. `fix/3-correct-signal`). Reference the issue in commits. **Visual change? Capture before/after screenshots** (see below) and put them in the PR. |
+| 4. PR review & sign-off | `status: in-review` | developer + reviewer | Open a PR using the PR template, link the issue with `Closes #N`. The review verifies the acceptance criteria **against the before/after screenshots** for visual work; **approving and merging is the sign-off** — the issue closes automatically. Found a problem after merge? Reopen the issue → back to `status: in-progress`. |
 
 ## Label reference
 
@@ -37,6 +37,53 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Done
   [`label:"status: triage"`](https://github.com/Cyclodex/train-game/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3A+triage%22),
   the dev queue is
   [`label:"status: ready-for-dev"`](https://github.com/Cyclodex/train-game/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3A+ready-for-dev%22).
+
+## Visual verification (screenshots)
+
+The game is visual, so anything you can *see* is verified with a picture, not
+just prose. "Visual" means anything visible on the board: a `/test` scenario,
+tile/road/lane rendering, the debug driving-line overlay, junctions, vehicles,
+signals, depots, trains.
+
+The repo ships a one-command screenshot helper so the picture is reproducible
+(same scenario, same Debug overlay, same framing) for anyone — human or the
+Claude action:
+
+```
+npm run shot -- <scenarioId> [more ids] [--label before|after] [--out dir] [--no-debug]
+```
+
+It boots the app, opens `/test/<scenarioId>` with the **Debug overlay on** (the
+cyan car / amber bus driving-lines — *where vehicles actually drive*) and a flat
+backdrop, lets traffic populate, and writes a tight PNG of just the tiles
+(default `screenshots/`, git-ignored). The `<scenarioId>` is the slug from
+`src/levels/test/index.ts` (e.g. `roadonewaylanes`, `busmegacross`, `mixedcross`).
+
+**Who attaches what, and when:**
+
+- **Capture (stage 1).** A visual *issue* includes a screenshot of the wrong
+  state — the debug overlay if the bug is about lanes/overlay/routing. Name the
+  `/test` scenario that shows it (add a scenario if none does — every mechanic
+  should have one).
+- **Development (stage 3) — the implementer provides the proof.** For a visual
+  fix, capture a **before** (on `master`, *before* your change) and an **after**
+  (*after* your change) of the affected scenario, commit them under
+  `docs/verify/issue-<N>/`, and embed both in the PR description:
+
+  ```
+  npm run shot -- roadonewaylanes --label before --out docs/verify/issue-17
+  # …make the change…
+  npm run shot -- roadonewaylanes --label after  --out docs/verify/issue-17
+  ```
+
+  Reference them in the PR body with raw URLs, e.g.
+  `https://github.com/Cyclodex/train-game/raw/<branch>/docs/verify/issue-17/roadonewaylanes-after.png`.
+- **Review (stage 4).** The reviewer checks the before/after against the issue's
+  acceptance criteria. The review does **not** re-capture — the before/after pair
+  in the PR is the evidence.
+
+Non-visual changes (sim math, pathfinding, types, tooling) don't need a
+screenshot — say "N/A — not visible on the board" on the PR checklist instead.
 
 ## Automation (Claude Code GitHub Action)
 

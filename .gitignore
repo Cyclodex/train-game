@@ -14,6 +14,10 @@ node_modules
 /playwright/.cache
 /coverage
 
+# Ad-hoc local scenario screenshots (`npm run shot`). PR before/after shots live
+# under docs/verify/ and ARE committed; this default scratch dir is not.
+/screenshots
+
 
 # local env files
 .env.local
