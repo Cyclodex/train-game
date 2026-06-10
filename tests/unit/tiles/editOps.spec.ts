@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position, ActiveIntersection } from "@/types";
-import { samePair, TileCell } from "@/tiles/model";
-import { lanesAllowingExit } from "@/tiles/lanes";
+import { samePair, TileCell, Level } from "@/tiles/model";
+import { lanesAllowingExit, nWayLanes, twoWay } from "@/tiles/lanes";
 import { validateRoads } from "@/tiles/validate";
 import {
   emptyCell,
@@ -17,6 +17,9 @@ import {
   removeRoad,
   cycleDefaultArm,
   toggleLaneKind,
+  setLaneKind,
+  streetRunLanes,
+  setLaneKindRun,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
@@ -288,5 +291,141 @@ describe("toggleLaneKind", () => {
     const before = c.road![0].kind;
     toggleLaneKind(c, Left, 0);
     expect(c.road![0].kind).toBe(before);
+  });
+});
+
+describe("streetRunLanes", () => {
+  // A straight horizontal two-way street of `n` tiles at y=0, lane index 0 each way.
+  const straightRow = (n: number): Level => {
+    const lvl: Level = {};
+    for (let x = 0; x < n; x++) lvl[`${x},0`] = { connections: [], road: nWayLanes(Left, Right, 1) };
+    return lvl;
+  };
+  // The set of "id:from" the run covers (index is constant across a run).
+  const cover = (run: { id: string; from: Position; index: number }[]) =>
+    new Set(run.map(r => `${r.id}:${r.from}`));
+
+  it("always includes the clicked lane", () => {
+    const lvl = straightRow(1);
+    const run = streetRunLanes(lvl, "0,0", Left, 0);
+    expect(run).toContainEqual({ id: "0,0", from: Left, index: 0 });
+  });
+
+  it("walks a straight run end to end in both directions", () => {
+    // 4 tiles; click the middle one's Left→Right lane. The run is that lane on
+    // every tile (the eastbound lane), found by walking forward and backward.
+    const lvl = straightRow(4);
+    const run = streetRunLanes(lvl, "1,0", Left, 0);
+    expect(cover(run)).toEqual(
+      new Set(["0,0:Left", "1,0:Left", "2,0:Left", "3,0:Left"].map(s =>
+        s.replace("Left", String(Left)))),
+    );
+    expect(run).toHaveLength(4);
+  });
+
+  it("follows the run around a curve", () => {
+    // An L-shape: a horizontal tile at (0,0) bending down at (1,0) to (1,1).
+    // The eastbound lane (from Left) at (0,0) flows into the curve, then south.
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: twoWay(Left, Bottom) }, // curve W<->S
+      "1,1": { connections: [], road: nWayLanes(Top, Bottom, 1) },
+    };
+    const run = streetRunLanes(lvl, "0,0", Left, 0);
+    const ids = new Set(run.map(r => r.id));
+    expect(ids).toEqual(new Set(["0,0", "1,0", "1,1"]));
+  });
+
+  it("stops at a junction tile", () => {
+    // A straight street running into a 4-way cross at (2,0): the run includes the
+    // straights up to the junction but not the junction tile itself.
+    const lvl = straightRow(2);
+    lvl["2,0"] = { connections: [], road: [...nWayLanes(Left, Right, 1), ...nWayLanes(Top, Bottom, 1)] };
+    const run = streetRunLanes(lvl, "0,0", Left, 0);
+    const ids = new Set(run.map(r => r.id));
+    expect(ids.has("2,0")).toBe(false); // junction not crossed
+    expect(ids.has("0,0")).toBe(true);
+    expect(ids.has("1,0")).toBe(true);
+  });
+
+  it("stops at the road end (no neighbour road)", () => {
+    const lvl = straightRow(2); // (0,0),(1,0); nothing at (2,0) or (-1,0)
+    const run = streetRunLanes(lvl, "0,0", Left, 0);
+    expect(new Set(run.map(r => r.id))).toEqual(new Set(["0,0", "1,0"]));
+  });
+
+  it("stops where the next tile lacks that lane index", () => {
+    // (0,0) has a 2-lane road; (1,0) only 1 lane. Walking the inner lane (index 1)
+    // forward stops at the seam because (1,0) has no index-1 lane.
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 2) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const run = streetRunLanes(lvl, "0,0", Left, 1);
+    expect(new Set(run.map(r => r.id))).toEqual(new Set(["0,0"]));
+  });
+
+  it("terminates on a circular street (loop guard)", () => {
+    // A 2x2 ring of curves: each tile bends the run into the next; the eastbound
+    // lane loops around. Without the loop guard the walk would never stop.
+    const lvl: Level = {
+      "0,0": { connections: [], road: twoWay(Right, Bottom) },
+      "1,0": { connections: [], road: twoWay(Left, Bottom) },
+      "1,1": { connections: [], road: twoWay(Left, Top) },
+      "0,1": { connections: [], road: twoWay(Right, Top) },
+    };
+    const run = streetRunLanes(lvl, "0,0", Right, 0);
+    // All four ring tiles, visited once each (no infinite loop / duplicates).
+    expect(run).toHaveLength(4);
+    expect(new Set(run.map(r => r.id))).toEqual(new Set(["0,0", "1,0", "1,1", "0,1"]));
+  });
+});
+
+describe("setLaneKind / setLaneKindRun", () => {
+  it("setLaneKind sets and clears a lane's kind explicitly", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = setLaneKind(c, Left, 0, "bus");
+    expect(c.road!.find(l => l.from === Left && l.index === 0)!.kind).toBe("bus");
+    c = setLaneKind(c, Left, 0, undefined);
+    expect(c.road!.find(l => l.from === Left && l.index === 0)!.kind).toBeUndefined();
+  });
+
+  it("setLaneKind is a no-op (same cell) when no lane matches", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    expect(setLaneKind(c, Left, 9, "bus")).toBe(c);
+  });
+
+  it("paints a mixed-state run to one uniform kind in a single pass", () => {
+    // 3-tile straight; the middle tile's eastbound lane is already a bus lane, the
+    // ends are normal — a half-painted street. Clicking the bus tile makes the
+    // CLICKED lane decide the target: it is bus, so the whole run becomes NORMAL.
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    // Make the middle eastbound lane a bus lane.
+    lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "bus");
+    const changed = setLaneKindRun(lvl, "1,0", Left, 0);
+    // Every tile's eastbound lane is now normal (clicked lane was bus → target normal).
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
+      expect(lane.kind).toBeUndefined();
+    }
+  });
+
+  it("clicking a normal lane paints the run to bus", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const changed = setLaneKindRun(lvl, "0,0", Left, 0);
+    for (const id of ["0,0", "1,0"]) {
+      const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
+      expect(lane.kind).toBe("bus");
+    }
+    // Only the eastbound lane (index 0 from Left) changed; the westbound lane stays.
+    expect(changed["0,0"].road!.find(l => l.from === Right)!.kind).toBeUndefined();
   });
 });
