@@ -227,11 +227,11 @@ import {
   roadSurfacePolygonPath,
   roadRibbonPolygonPath,
   roadParallelLine,
-  roadCurvePolygonPath,
+  roadCurvePolygonPathTapered,
   roadLaneBandPath,
   roadLaneMarkingPaths,
   roadKerbEdge,
-  roadCurveKerbEdge,
+  roadCurveKerbEdgeTapered,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -388,18 +388,30 @@ class Tile extends Vue {
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`
           : "";
-        // Width = the widest seam of this edge (min 2 so a one-way still reads as a
-        // road), so the turn ribbon meets its arm flush.
-        const widthTotal = Math.max(selfAtA, selfAtB, 2);
-        // Edge lines on a *simple* curve (a single bend, 2 ports): both kerbs.
-        // Junctions (T/cross, >1 road edge) are skipped — their outer outline is
-        // the union of overlapping ribbons, which needs separate handling.
-        const half = (widthTotal * LANE_W) / 2;
+        // Width PER END, each seam-matched to its own arm (seamPaintTotal against
+        // the neighbour crossing that seam, min 2 so a one-way still reads as a
+        // road) — the ribbon tapers across the bend so EACH end meets ITS arm
+        // flush. A junction's own laneCountAt deliberately over-counts an arm
+        // (every approach lane that can fan onto it counts), so the old constant
+        // max-of-both-ends width painted a narrow arm as wide as the widest one:
+        // a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of tarmac at the
+        // entrance seam, twice the road it meets.
+        const widthEndA = seamPaintTotal(Math.max(selfAtA, 2), nTotalA);
+        const widthEndB = seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
+        const widthA2 = widthEndA * LANE_W;
+        const widthB2 = widthEndB * LANE_W;
+        // Edge lines on a *simple* curve (a single bend, 2 ports): both kerbs,
+        // tapering with the surface. Junctions (T/cross, >1 road edge) are
+        // skipped — their outer outline is the union of overlapping ribbons,
+        // which needs separate handling.
         const edges = roadEdges(this.tile.road).length === 1
-          ? [roadCurveKerbEdge(a, b, size, half, 1), roadCurveKerbEdge(a, b, size, half, -1)]
+          ? [
+              roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, 1),
+              roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, -1),
+            ]
           : [];
         return {
-          surface: roadCurvePolygonPath(a, b, size, widthTotal * LANE_W),
+          surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
           edges,
           mismatch,

@@ -4,6 +4,8 @@ import {
   roadSurfacePath,
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
+  roadCurvePolygonPathTapered,
+  roadCurveKerbEdgeTapered,
   roadLaneMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
@@ -409,6 +411,48 @@ describe("roadCurvePolygonPath", () => {
       expect(dist).toBeGreaterThan(halfW * 0.98);
       expect(dist).toBeLessThan(halfW * 1.02);
     }
+  });
+});
+
+describe("roadCurvePolygonPathTapered (junction turn ribbon, per-end widths)", () => {
+  it("equal end widths reduce to the constant-width ribbon", () => {
+    const constant = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
+    const tapered = roadCurvePolygonPathTapered(Position.Left, Position.Bottom, 200, 56, 56);
+    expect(tapered).toBe(constant);
+  });
+
+  it("each end is exactly its own seam width (a 1-lane arm meets a 2-lane arm)", () => {
+    // Top→Right turn, 2 lanes wide at Top (56px) tapering to 4 at Right (112px).
+    // Entry endpoints sit at Top(100,0) ± halfA along the entry normal (x-axis);
+    // exit endpoints at Right(200,100) ± halfB along the exit normal (y-axis).
+    const d = roadCurvePolygonPathTapered(Position.Top, Position.Right, 200, 56, 112);
+    const n = d.match(/-?\d+\.?\d*/g)!.map(Number);
+    // Path layout: M ax ay Q cx1 cy1 bx1 by1 L bx2 by2 Q cx2 cy2 ax2 ay2 Z
+    const A1 = { x: n[0], y: n[1] }; // entry, +n side
+    const B1 = { x: n[4], y: n[5] }; // exit, +n side
+    const B2 = { x: n[6], y: n[7] }; // exit, -n side
+    const A2 = { x: n[10], y: n[11] }; // entry, -n side
+    expect(Math.hypot(A1.x - A2.x, A1.y - A2.y)).toBeCloseTo(56, 6); // entry width
+    expect(Math.hypot(B1.x - B2.x, B1.y - B2.y)).toBeCloseTo(112, 6); // exit width
+    // Both entry corners sit ON the Top port edge (y=0), both exit corners on the
+    // Right port edge (x=200) — the taper happens across the bend, not at a seam.
+    expect(A1.y).toBeCloseTo(0, 6);
+    expect(A2.y).toBeCloseTo(0, 6);
+    expect(B1.x).toBeCloseTo(200, 6);
+    expect(B2.x).toBeCloseTo(200, 6);
+  });
+
+  it("the tapered kerb edge endpoints sit on the ribbon's corners", () => {
+    const ribbon = roadCurvePolygonPathTapered(Position.Top, Position.Right, 200, 56, 112);
+    const rn = ribbon.match(/-?\d+\.?\d*/g)!.map(Number);
+    const outer = roadCurveKerbEdgeTapered(Position.Top, Position.Right, 200, 28, 56, 1);
+    const on = outer.match(/-?\d+\.?\d*/g)!.map(Number);
+    // Kerb: M ax ay Q cx cy bx by — must start at the ribbon's +n entry corner
+    // and end at its +n exit corner.
+    expect(on[0]).toBeCloseTo(rn[0], 6);
+    expect(on[1]).toBeCloseTo(rn[1], 6);
+    expect(on[4]).toBeCloseTo(rn[4], 6);
+    expect(on[5]).toBeCloseTo(rn[5], 6);
   });
 });
 
