@@ -562,7 +562,6 @@ class Tile extends Vue {
       // the curve band and crossed the same-direction lanes). For a straight/one-way
       // this equals (forward + backward)/2 — unchanged. See game.ts centeredBandAt.
       const selfBand = laneCountAt(road, lane.from) / 2;
-      const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       // One-way ⟺ no oncoming lanes exit through this approach. A one-way STRAIGHT
       // is a highway lane drop: lanes left-align to the run's widest count and the
       // offset is (index + 0.5 − R/2)·W, dead straight (the through lanes don't

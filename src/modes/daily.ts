@@ -91,7 +91,7 @@ export const dailyMode: GameMode = {
     "Today's puzzle — the same board for every player. Route all trains home, " +
     "earn stars for speed, restraint, and perfect colour-matching.",
 
-  setup(_ctx: ModeContext): ModeSetup {
+  setup(_: ModeContext): ModeSetup {
     const date = todayString();
     const seed = dateToSeed(date);
     const levelId = dailyLevelId(date);

@@ -363,7 +363,7 @@ describe("simulation path reservation at a junction", () => {
     "2,1": cell("TileStraight", 1),
   };
   // Intersection goes straight for both approaches.
-  const getSwitch = (coordId: string, entryPort: Position) => {
+  const getSwitch = (coordId: string, _entryPort: Position) => {
     if (coordId !== "1,1") return undefined;
     return ActiveIntersection.Straight;
   };
