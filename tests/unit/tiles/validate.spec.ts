@@ -76,7 +76,7 @@ describe("validateRoads", () => {
 });
 
 describe("validateRoads — lane invariants", () => {
-  const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+  const { Right: R, Bottom: B, Left: L } = Position;
 
   it("flags two lanes sharing the same (from, index)", () => {
     const level = {

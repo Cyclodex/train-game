@@ -3,7 +3,7 @@ import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
 import { fromPairs } from "@/tiles/lanes";
 
-const { Left, Right, Top, Bottom } = Position;
+const { Left, Right } = Position;
 const road = { connections: [], road: fromPairs([[Left, Right]]) };
 
 // "Don't block the level crossing": a car won't roll onto the rails if the road

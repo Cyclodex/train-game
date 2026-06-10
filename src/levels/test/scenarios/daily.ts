@@ -1,7 +1,6 @@
 import { TestScenario } from "@/levels/test/scenario";
 import { generateLevel } from "@/tiles/generate";
 import { trainsFromRoutes } from "@/levelStore";
-import { TrainStatus } from "@/types";
 
 // Fixed seed for the scenario so the validation test is deterministic across
 // runs (never depends on today's date). This seed reliably produces a valid

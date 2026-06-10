@@ -1,0 +1,91 @@
+name: Project board → handover label
+
+# Makes dragging an issue into the "Ready for dev" column on the project board
+# trigger the handover (Projects v2 has no native "card moved" workflow trigger,
+# so this polls the board). It ONLY promotes Triage → Ready for dev; all other
+# status transitions flow from labels to the board (see project-status-sync.yml).
+#
+# Requires:
+# - repo variable PROJECT_NUMBER (Settings → Variables → Actions), e.g. "1"
+# - secret PROJECT_SYNC_TOKEN: classic PAT with `repo` + `project` scopes
+#   (the default GITHUB_TOKEN cannot access user/org Projects, and labels it
+#   applied would not trigger the claude-implement workflow)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  handover:
+    if: vars.PROJECT_NUMBER != ''
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+        with:
+          github-token: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          script: |
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+            const { owner, repo } = context.repo;
+            const query = `
+              query ($login: String!, $number: Int!, $after: String) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    items(first: 100, after: $after) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue { name }
+                        }
+                        content {
+                          ... on Issue {
+                            number
+                            state
+                            repository { name owner { login } }
+                            labels(first: 20) { nodes { name } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+
+            let after = null;
+            const items = [];
+            while (true) {
+              const res = await github.graphql(query, { login: owner, number: projectNumber, after });
+              const page = res.user.projectV2.items;
+              items.push(...page.nodes);
+              if (!page.pageInfo.hasNextPage) break;
+              after = page.pageInfo.endCursor;
+            }
+
+            for (const item of items) {
+              const issue = item.content;
+              if (!issue || !issue.number) continue;
+              if (issue.repository.name !== repo || issue.repository.owner.login !== owner) continue;
+              if (issue.state !== 'OPEN') continue;
+              if (item.fieldValueByName?.name !== 'Ready for dev') continue;
+
+              const labels = issue.labels.nodes.map((l) => l.name);
+              if (labels.includes('status: ready-for-dev')) continue;
+              const statusLabels = labels.filter((l) => l.startsWith('status: '));
+              // Only promote from triage (or unlabeled) — later stages are
+              // owned by the implement workflow, don't fight it.
+              if (statusLabels.some((l) => l !== 'status: triage')) continue;
+
+              const newLabels = labels.filter((l) => l !== 'status: triage');
+              newLabels.push('status: ready-for-dev');
+              await github.rest.issues.setLabels({
+                owner,
+                repo,
+                issue_number: issue.number,
+                labels: newLabels,
+              });
+              core.info(`Handover: issue #${issue.number} → status: ready-for-dev`);
+            }

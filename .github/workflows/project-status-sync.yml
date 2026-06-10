@@ -1,0 +1,76 @@
+name: Status labels → project board
+
+# Mirrors `status: *` label changes onto the project board's Status column,
+# so cards move automatically when e.g. the implement workflow advances an
+# issue to in-progress / in-review. Labels are the source of truth.
+#
+# Requires the same PROJECT_NUMBER variable and PROJECT_SYNC_TOKEN secret
+# as project-handover.yml, and board Status options named exactly:
+# Triage, Ready for dev, In progress, In review, Done.
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  sync:
+    if: "vars.PROJECT_NUMBER != '' && startsWith(github.event.label.name, 'status: ')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        with:
+          github-token: ${{ secrets.PROJECT_SYNC_TOKEN }}
+          script: |
+            const labelToStatus = {
+              'status: triage': 'Triage',
+              'status: ready-for-dev': 'Ready for dev',
+              'status: in-progress': 'In progress',
+              'status: in-review': 'In review',
+            };
+            const desired = labelToStatus[process.env.LABEL_NAME];
+            if (!desired) return core.info(`No mapping for ${process.env.LABEL_NAME}`);
+
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+            const { owner, repo } = context.repo;
+            const issueNumber = context.payload.issue.number;
+
+            const res = await github.graphql(`
+              query ($owner: String!, $repo: String!, $issue: Int!, $project: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $issue) {
+                    projectItems(first: 10) {
+                      nodes { id project { id number } }
+                    }
+                  }
+                }
+                user(login: $owner) {
+                  projectV2(number: $project) {
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }`, { owner, repo, issue: issueNumber, project: projectNumber });
+
+            const item = res.repository.issue.projectItems.nodes
+              .find((n) => n.project.number === projectNumber);
+            if (!item) return core.info(`Issue #${issueNumber} is not on project ${projectNumber}`);
+
+            const field = res.user.projectV2.field;
+            const option = field.options.find((o) => o.name === desired);
+            if (!option) return core.warning(`Board has no Status option named "${desired}"`);
+
+            await github.graphql(`
+              mutation ($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project, itemId: $item, fieldId: $field,
+                  value: { singleSelectOptionId: $option }
+                }) { projectV2Item { id } }
+              }`, { project: item.project.id, item: item.id, field: field.id, option: option.id });
+            core.info(`Issue #${issueNumber} board status → ${desired}`);
