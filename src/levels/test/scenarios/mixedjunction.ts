@@ -89,3 +89,34 @@ export const mixedtee: TestScenario = {
   size: { cols: 7, rows: 6 },
   traffic: { spawnInterval: 0.7, maxCars: 14 },
 };
+
+// Cross at (2,1) fed from below by a 1-lane CURVE: a 2-lane E–W road crossed by a
+// 1-lane N–S road whose south arm bends away east. The junction's narrow-arm
+// laneCountAt over-counts (every wide-road lane that can turn onto it counts), so
+// the curve's turn glide must seam-match its target band (turnSeamBand) to the
+// band the junction actually positions entering vehicles with — or every car and
+// lane arrow eases half a lane wide and snaps sideways exactly at the entrance
+// seam (the /play sandbox bug this reproduces). Exits through the same arm were
+// always fine; watch the ENTRY: a car rounding the bend must arrive dead on the
+// junction's own lane line.
+export const curvefeed: TestScenario = {
+  id: "curvefeed",
+  name: "Cross fed by a curve (narrow arm)",
+  description:
+    "A 2-lane road crossed by a 1-lane road whose south arm immediately bends " +
+    "east through a curve. Cars rounding the bend into the junction must line up " +
+    "exactly with the junction's lane at the entrance seam — no sideways snap. " +
+    "Toggle Debug to check the curve's turn arrow meets the junction's paths.",
+  level: {
+    ...vRun(2, [0], 1), // north arm: 1 lane
+    ...hRun(1, [0, 1], 2), // west arm: 2 lanes
+    ...hRun(1, [3, 4], 2), // east arm: 2 lanes
+    "2,1": { connections: [], road: mixedCentre({ [T]: 1, [R]: 2, [B]: 1, [L]: 2 }) },
+    // South arm: a 1-lane curve bending east, fed by a 1-lane road.
+    "2,2": { connections: [], road: nWayLanes(T, R, 1) },
+    ...hRun(2, [3, 4], 1),
+  },
+  trains: {},
+  size: { cols: 5, rows: 3 },
+  traffic: { spawnInterval: 0.7, maxCars: 10 },
+};

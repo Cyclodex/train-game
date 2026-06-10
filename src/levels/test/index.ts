@@ -48,7 +48,7 @@ import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
 import { bigjunction } from "@/levels/test/scenarios/bigjunction";
 import { crossturns2lane, crossturns3lane } from "@/levels/test/scenarios/crossturns";
-import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
+import { mixedcross, mixedtee, curvefeed } from "@/levels/test/scenarios/mixedjunction";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
@@ -105,7 +105,7 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Crosses & junctions",
         scenarios: [
           roadcross, roadcross1lane, roadcross2lane, roadcross3lane,
-          crossturns2lane, crossturns3lane, mixedcross, mixedtee, turnglide, roadjunction, bigjunction,
+          crossturns2lane, crossturns3lane, mixedcross, mixedtee, curvefeed, turnglide, roadjunction, bigjunction,
         ],
       },
       {

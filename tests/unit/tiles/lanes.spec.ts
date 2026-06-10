@@ -20,8 +20,9 @@ import {
   turnKind,
   junctionExitLane,
   junctionExitOffsetPx,
+  turnSeamBand,
 } from "@/tiles/lanes";
-import { seamBand } from "@/sim/laneOffset";
+import { seamBand, laneOffsetConstPx } from "@/sim/laneOffset";
 import { mixedtee } from "@/levels/test/scenarios/mixedjunction";
 
 const { Top: T, Right: R, Bottom: B, Left: L } = Position;
@@ -131,6 +132,54 @@ describe("junction narrow-arm positioning band (mixedtee spur alignment)", () =>
     // their band is unchanged (they already lined up — the "exit is OK" side).
     const west = mixedtee.level["2,2"].road; // 3-lane west arm
     expect(seamBand(laneCountAt(centre, L) / 2, laneCountAt(west, R) / 2)).toBe(3);
+  });
+});
+
+describe("turnSeamBand (turn-glide target band entering a junction)", () => {
+  // Regression: the default sandbox map — a cross of a 2-lane E-W road and a
+  // 1-lane N-S road, fed from below by a 1-lane curve. The junction's B arm
+  // laneCountAt over-counts (1 entering + distinct turn-exit indices 0 and 1 = 3,
+  // band 1.5), but the junction POSITIONS a vehicle entering that arm with the
+  // seam-matched band (min with the curve's honest band 1). The curve's turn
+  // glide must target the SAME band, or every vehicle (and lane arrow) eases to
+  // 28px, then snaps to the junction's 14px exactly at the entrance seam.
+  const cross: Lane[] = [
+    // E-W: kerb lane goes straight or right, inner lane straight or left.
+    { from: L, to: [R, B], index: 0 },
+    { from: L, to: [R, T], index: 1 },
+    { from: R, to: [L, T], index: 0 },
+    { from: R, to: [L, B], index: 1 },
+    // N-S: single lane each way, all turns permitted.
+    { from: T, to: [B, L, R], index: 0 },
+    { from: B, to: [T, L, R], index: 0 },
+  ];
+  const curve = nWayLanes(T, R, 1); // 1-lane curve below: Top (to junction) ↔ Right
+
+  it("seam-matches the junction's over-counted arm down to the feeding curve", () => {
+    expect(laneCountAt(cross, B)).toBe(3); // over-count: band 1.5
+    expect(laneCountAt(curve, T)).toBe(2); // honest: band 1
+    expect(turnSeamBand(curve, T, cross, B)).toBe(1);
+  });
+
+  it("the curve's glide target equals the junction's own entry offset (no snap)", () => {
+    // What the junction uses to place a vehicle entering via B (couplerOffset):
+    const junctionEntryBand = seamBand(laneCountAt(cross, B) / 2, laneCountAt(curve, T) / 2);
+    const junctionEntryOff = laneOffsetConstPx(0, junctionEntryBand, 200);
+    // What the curve's turn glide eases the vehicle to at the seam:
+    const glideTarget = junctionExitOffsetPx(
+      curve, R, 0, T, cross, B, turnSeamBand(curve, T, cross, B), 200, "car",
+    );
+    expect(glideTarget).toBeCloseTo(junctionEntryOff, 6); // both 14px
+    // The raw over-counted band would have overshot to 28px — half a lane out.
+    const rawBand = laneCountAt(cross, B) / 2;
+    expect(junctionExitOffsetPx(curve, R, 0, T, cross, B, rawBand, 200, "car")).toBeCloseTo(28, 6);
+  });
+
+  it("a turn onto a non-junction arm is unchanged (the receiver's band stands)", () => {
+    // Junction turning right onto a 2-lane straight: receiver band 2, giver
+    // (junction at its L port) over-counts to 2 as well → min is still 2.
+    const straight2 = nWayLanes(L, R, 2);
+    expect(turnSeamBand(cross, L, straight2, R)).toBe(2);
   });
 });
 

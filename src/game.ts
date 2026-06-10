@@ -16,6 +16,7 @@ import {
   roadPortsOf,
   isRoadJunction,
   junctionExitOffsetPx,
+  turnSeamBand,
   VehicleClass,
 } from "@/tiles/lanes";
 import { laneOffsetPx, laneOffsetConstPx, oneWayLaneOffsetPx, seamBand } from "@/sim/laneOffset";
@@ -646,7 +647,10 @@ export function createGame(
     const exitRoad = level[getCoordinatesId(next)]?.road;
     if (!exitRoad) return null;
     const exitApproach = oppositePort(exit);
-    const exitBand = laneCountAt(exitRoad, exitApproach) / 2;
+    // Seam-match the target band to what the RECEIVING tile will use to position
+    // the vehicle once it crosses (its raw laneCountAt over-counts a junction
+    // arm), or the glide lands half a lane wide and snaps at the entrance seam.
+    const exitBand = turnSeamBand(here, exit, exitRoad, exitApproach);
     if (exitBand <= 0) return null;
     return junctionExitOffsetPx(
       here,

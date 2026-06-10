@@ -1,6 +1,6 @@
 import type { Port } from "@/tiles/model";
 import { Position } from "@/types";
-import { laneOffsetConstPx } from "@/sim/laneOffset";
+import { laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
 
 // A lane's vehicle class, for restrictions. v1 stores the field but does not
 // enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
@@ -295,6 +295,25 @@ export function junctionExitOffsetPx(
     cls,
   );
   return laneOffsetConstPx(target, exitBand, tileSize);
+}
+
+// The positioning band a turn's glide should TARGET on the exit arm: the band of
+// the receiving tile at the shared seam, seam-matched against the departing
+// tile's own band at its exit port — exactly the band the receiving tile uses to
+// position a vehicle entering through that port (couplerOffset's
+// `seamBand(selfBand, neighbourBand)`). Using the receiving tile's raw
+// `laneCountAt` instead breaks when the receiver is a JUNCTION: its per-port
+// count deliberately over-counts an arm (every approach lane that can fan onto
+// it counts), so a 1-lane curve feeding a junction arm would glide its vehicles
+// and arrows half a lane wide of where the junction then places them — a visible
+// sideways snap at the entrance seam.
+export function turnSeamBand(
+  hereRoad: Lane[] | undefined,
+  exitPort: Port,
+  exitRoad: Lane[] | undefined,
+  exitApproach: Port,
+): number {
+  return seamBand(laneCountAt(exitRoad, exitApproach) / 2, laneCountAt(hereRoad, exitPort) / 2);
 }
 
 // Every port the road touches (as an approach or an exit).

@@ -275,6 +275,7 @@ import {
   roadEdges as laneEdges,
   laneCount,
   laneCountAt,
+  turnSeamBand,
   isRoadJunction,
   junctionExitOffsetPx,
 } from "@/tiles/lanes";
@@ -348,7 +349,7 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
       const exitRoad = roadOf(next);
       if (!exitRoad) return null;
       const exitApproach = oppositePort(exit);
-      const exitBand = laneCountAt(exitRoad, exitApproach) / 2;
+      const exitBand = turnSeamBand(here, exit, exitRoad, exitApproach);
       if (exitBand <= 0) return null;
       return junctionExitOffsetPx(
         here,
