@@ -107,9 +107,13 @@ the generated token as a `CLAUDE_CODE_OAUTH_TOKEN` secret under
 Settings → Secrets → Actions. Runs then consume subscription limits, not API credits.
 Triage (stage 2) and PR approval/merge (stage 4) stay human on purpose.
 
-Note: PRs opened by the action don't re-trigger other workflows
-(`github-actions` actor), so the auto-review won't fire on Claude's own PRs —
-review those yourself or comment `@claude review this PR`.
+Note: PRs from the implement pipeline are authored by `claude[bot]`, which
+**does** trigger the auto-review — `claude-review.yml` sets
+`allowed_bots: "claude"` so the action accepts the bot-initiated run (without
+it the run fails with "Workflow initiated by non-human actor"). Label changes
+the action makes go through `gh` with `PROJECT_SYNC_TOKEN` when configured, so
+the board sync sees them; with the fallback `GITHUB_TOKEN` those events would
+trigger nothing and the card would sit in its old column.
 
 ## Optional: project board
 
@@ -118,8 +122,13 @@ to the status labels (labels remain the source of truth):
 
 - **`project-handover.yml`** — dragging a card from *Triage* into *Ready for
   dev* applies `status: ready-for-dev`, which triggers the implement
-  workflow. Polls every 5 minutes (Projects v2 has no "card moved" trigger);
-  run it manually from the Actions tab if you don't want to wait.
+  workflow. Projects v2 has no "card moved" trigger, so this **polls on a
+  cron** — and GitHub throttles scheduled workflows heavily: despite the
+  `*/5` cron, gaps of **30–50 minutes** are normal, so a dragged card can sit
+  a while before the label lands. Fast paths: add the
+  `status: ready-for-dev` label on the issue directly (instant — labels are
+  the source of truth), or run *Project board → handover label* manually from
+  the Actions tab.
 - **`project-status-sync.yml`** — whenever a `status:` label changes, the
   card moves to the matching column, so the board follows Claude's progress.
 

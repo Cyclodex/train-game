@@ -24,6 +24,10 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # PRs from the implement pipeline are authored by claude[bot]; the
+          # action refuses bot-initiated runs unless the bot is allowed
+          # ("Workflow initiated by non-human actor: claude").
+          allowed_bots: "claude"
           prompt: |
             Review PR #${{ github.event.pull_request.number }}.
 
