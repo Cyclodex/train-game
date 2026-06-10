@@ -23,14 +23,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Browser for `npm run shot` (before/after screenshots of visual issues).
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      # Model is chosen during triage via an optional label:
+      # "model: opus" for complex tickets, "model: haiku" for trivial ones,
+      # no label (or "model: sonnet") = Sonnet, the default.
+      - id: model
+        env:
+          LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: |
+          case ",$LABELS," in
+            *",model: opus,"*)  echo "model=claude-opus-4-8" >> "$GITHUB_OUTPUT" ;;
+            *",model: haiku,"*) echo "model=claude-haiku-4-5-20251001" >> "$GITHUB_OUTPUT" ;;
+            *)                  echo "model=claude-sonnet-4-6" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          # Lets Claude run `gh pr create` / `gh issue edit` for steps 2/5/6.
+          GH_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
@@ -40,26 +49,16 @@ jobs:
 
             1. Read the issue (title, body, acceptance criteria) and the referenced
                code locations.
-            2. Replace the issue label "status: ready-for-dev" with "status: in-progress".
+            2. Replace the issue label "status: ready-for-dev" with "status: in-progress"
+               (use `gh issue edit`).
             3. Implement the change on a branch named <type>/<issue-number>-<short-name>
                (e.g. fix/3-correct-signal).
-            4. If the issue is VISUAL (anything visible on the board — a scenario,
-               tile/road/lane rendering, the debug driving-line overlay, junctions,
-               vehicles, signals, depots, trains), capture proof with the screenshot
-               helper (see docs/TICKET_WORKFLOW.md → "Visual verification"):
-                 a. BEFORE making changes, capture the current (buggy) state:
-                    `npm run shot -- <scenarioId> --label before --out docs/verify/issue-${{ github.event.issue.number }}`
-                 b. AFTER your change, capture the same scenario(s):
-                    `npm run shot -- <scenarioId> --label after  --out docs/verify/issue-${{ github.event.issue.number }}`
-                 c. Commit the PNGs and embed both in the PR body with raw URLs:
-                    https://github.com/${{ github.repository }}/raw/<branch>/docs/verify/issue-${{ github.event.issue.number }}/<scenarioId>-after.png
-               Pick the `/test` scenarioId(s) from src/levels/test/index.ts that show
-               the issue. If the change is NOT visual, skip this and note
-               "N/A — not visible on the board" in the PR.
-            5. Run `npm run lint` and `npm run test:unit` and fix any failures.
-            6. Open a pull request using the PR template (fill the Before/After
-               section). Reference the issue with "Closes #${{ github.event.issue.number }}"
+            4. Run `npm run lint` and `npm run test:unit` and fix any failures.
+            5. Open a pull request with `gh pr create`, following the PR template.
+               Reference the issue with "Closes #${{ github.event.issue.number }}"
                so merging the PR closes it automatically.
-            7. Replace the issue label "status: in-progress" with "status: in-review".
+            6. Replace the issue label "status: in-progress" with "status: in-review"
+               (use `gh issue edit`).
           claude_args: |
-            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(npm run shot),Bash(npm run shot:*),Bash(npx playwright:*),Bash(git:*)"
+            --model ${{ steps.model.outputs.model }}
+            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*),Bash(gh pr create:*),Bash(gh issue edit:*)"
