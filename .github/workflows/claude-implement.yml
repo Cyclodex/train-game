@@ -37,6 +37,9 @@ jobs:
           esac
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          # Lets Claude run `gh pr create` / `gh issue edit` for steps 2/5/6.
+          GH_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
@@ -46,14 +49,16 @@ jobs:
 
             1. Read the issue (title, body, acceptance criteria) and the referenced
                code locations.
-            2. Replace the issue label "status: ready-for-dev" with "status: in-progress".
+            2. Replace the issue label "status: ready-for-dev" with "status: in-progress"
+               (use `gh issue edit`).
             3. Implement the change on a branch named <type>/<issue-number>-<short-name>
                (e.g. fix/3-correct-signal).
             4. Run `npm run lint` and `npm run test:unit` and fix any failures.
-            5. Open a pull request using the PR template. Reference the issue with
-               "Closes #${{ github.event.issue.number }}" so merging the PR
-               closes it automatically.
-            6. Replace the issue label "status: in-progress" with "status: in-review".
+            5. Open a pull request with `gh pr create`, following the PR template.
+               Reference the issue with "Closes #${{ github.event.issue.number }}"
+               so merging the PR closes it automatically.
+            6. Replace the issue label "status: in-progress" with "status: in-review"
+               (use `gh issue edit`).
           claude_args: |
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*)"
+            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*),Bash(gh pr create:*),Bash(gh issue edit:*)"
