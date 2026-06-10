@@ -27,13 +27,17 @@
         :d="b"
         class="road-bus-band"
       />
-      <!-- Road edge line where the tarmac meets the grass (per outer kerb). -->
+      <!-- Road edge line where the tarmac meets the grass (per outer kerb).
+           Across a junction box the solid kerb line breaks into dashes like the
+           other markings — the kerb is interrupted by the arm openings, so a
+           solid line through the box reads as a wall. -->
       <template v-for="(r, i) in roadPaths" :key="'re' + i">
         <path
           v-for="(e, ei) in r.edges"
           :key="'re' + i + '_' + ei"
           :d="e"
           class="road-edge"
+          :class="{ 'road-edge--junction': tileIsRoadJunction }"
         />
       </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
@@ -957,6 +961,12 @@ export default toNative(Tile);
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 2px;
   stroke-linecap: round;
+}
+/* Across a junction box the kerb line dashes in the same 25px rhythm as the
+   other markings (tile edges land mid-gap, like .road-marking-inner). */
+.road-edge--junction {
+  stroke-dasharray: 13 12;
+  stroke-dashoffset: 19px;
 }
 .road-drop-arrow-shaft {
   fill: none;
