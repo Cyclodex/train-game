@@ -6,7 +6,7 @@ name: Status labels → project board
 #
 # Requires the same PROJECT_NUMBER variable and PROJECT_SYNC_TOKEN secret
 # as project-handover.yml, and board Status options named exactly:
-# Triage, Ready for dev, In progress, In review, Sign-off, Done.
+# Triage, Ready for dev, In progress, In review, Done.
 
 on:
   issues:
@@ -29,7 +29,6 @@ jobs:
               'status: ready-for-dev': 'Ready for dev',
               'status: in-progress': 'In progress',
               'status: in-review': 'In review',
-              'status: sign-off': 'Sign-off',
             };
             const desired = labelToStatus[process.env.LABEL_NAME];
             if (!desired) return core.info(`No mapping for ${process.env.LABEL_NAME}`);

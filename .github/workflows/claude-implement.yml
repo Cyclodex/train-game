@@ -38,8 +38,8 @@ jobs:
                (e.g. fix/3-correct-signal).
             4. Run `npm run lint` and `npm run test:unit` and fix any failures.
             5. Open a pull request using the PR template. Reference the issue with
-               "Refs #${{ github.event.issue.number }}" — NOT "Closes" — the issue
-               must stay open for sign-off.
+               "Closes #${{ github.event.issue.number }}" so merging the PR
+               closes it automatically.
             6. Replace the issue label "status: in-progress" with "status: in-review".
           claude_args: |
             --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*)"

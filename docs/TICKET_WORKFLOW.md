@@ -4,7 +4,7 @@ How ideas become shipped features in this project. The flow is built on plain
 GitHub issues + labels, so it works without any external tooling.
 
 ```
-Idea → Triage → Ready for dev → In progress → In review (PR) → Sign-off → Closed
+Idea → Triage → Ready for dev → In progress → In review (PR) → Done
 ```
 
 ## Stages & labels
@@ -14,13 +14,12 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Sign-of
 | 1. Capture | `status: triage` | anyone | Every idea/bug/TODO becomes an issue immediately (use the issue templates). No quality bar — capturing beats forgetting. |
 | 2. Review & refine | `status: triage` → `status: ready-for-dev` | product owner | Review the issue: clarify scope, write/adjust acceptance criteria, set a `prio:` label. Switching the label to `status: ready-for-dev` **is the handover to development.** Close with `not planned` if rejected. |
 | 3. Development | `status: in-progress` | developer | Assign yourself, switch the label, branch off `master` as `<type>/<issue-number>-short-name` (e.g. `fix/3-correct-signal`). Reference the issue in commits. |
-| 4. PR review | `status: in-review` | developer + reviewer | Open a PR using the PR template, link the issue with `Refs #N` (**not** `Closes #N` — the issue must stay open for sign-off). Review happens on the PR; merge when approved. |
-| 5. Sign-off | `status: sign-off` | product owner | After merge, the developer switches the issue label to `status: sign-off`. The product owner verifies the result against the acceptance criteria and **closes the issue as the formal sign-off** (comment what was checked). Reopen → back to `status: in-progress` if it fails. |
+| 4. PR review & sign-off | `status: in-review` | developer + reviewer | Open a PR using the PR template, link the issue with `Closes #N`. The review verifies the acceptance criteria; **approving and merging is the sign-off** — the issue closes automatically. Found a problem after merge? Reopen the issue → back to `status: in-progress`. |
 
 ## Label reference
 
 **Status (exactly one per open issue):**
-`status: triage` · `status: ready-for-dev` · `status: in-progress` · `status: in-review` · `status: sign-off`
+`status: triage` · `status: ready-for-dev` · `status: in-progress` · `status: in-review`
 
 **Type:** `bug` · `enhancement` · `refactor` · `polish`
 
@@ -45,7 +44,7 @@ Stages 3–4 are automated via workflows in `.github/workflows/`:
 
 - **`claude-implement.yml`** — adding `status: ready-for-dev` to an issue is the
   handover: Claude implements it on a `<type>/<number>-<name>` branch, runs
-  lint + unit tests, opens a PR (`Refs #N`) and moves the labels along.
+  lint + unit tests, opens a PR (`Closes #N`) and moves the labels along.
 - **`claude-review.yml`** — every opened PR gets a first-pass review with
   inline comments against the issue's acceptance criteria.
 - **`claude.yml`** — mention `@claude` in any issue/PR comment to request
@@ -55,7 +54,7 @@ One-time setup (repo admin): install the [Claude GitHub App](https://github.com/
 run `claude setup-token` locally (uses your Claude Pro/Max subscription) and add
 the generated token as a `CLAUDE_CODE_OAUTH_TOKEN` secret under
 Settings → Secrets → Actions. Runs then consume subscription limits, not API credits.
-Triage (stage 2) and sign-off (stage 5) stay human on purpose.
+Triage (stage 2) and PR approval/merge (stage 4) stay human on purpose.
 
 Note: PRs opened by the action don't re-trigger other workflows
 (`github-actions` actor), so the auto-review won't fire on Claude's own PRs —
@@ -77,7 +76,7 @@ One-time board setup:
 
 1. Create a **Project (Board)** on your GitHub profile and link the repo.
 2. Name the Status options exactly: `Triage`, `Ready for dev`, `In progress`,
-   `In review`, `Sign-off`, `Done`.
+   `In review`, `Done`.
 3. In the project's built-in workflows, enable **Auto-add** for this repo's
    issues (set status `Triage`) and **Item closed → Done**.
 4. Add a repo **variable** `PROJECT_NUMBER` (the number in the project URL)

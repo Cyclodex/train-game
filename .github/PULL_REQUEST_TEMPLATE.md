@@ -1,5 +1,5 @@
-<!-- Use "Refs #N", not "Closes #N": the issue stays open until sign-off (see docs/TICKET_WORKFLOW.md). -->
-Refs #
+<!-- Merging closes the linked issue — approving the PR is the sign-off (see docs/TICKET_WORKFLOW.md). -->
+Closes #
 
 ## What changed
 
