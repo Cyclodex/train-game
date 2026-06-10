@@ -1,0 +1,1192 @@
+<template>
+  <div class="play-view" :class="{ debug: config.debug }">
+    <MenuDrawer id="play" title="Menu">
+      <button class="drawer-btn" @click="openPicker">
+        <span>{{ modeIcon(currentModeId) }}</span><span>Game mode</span>
+        <span class="drawer-btn__val">{{ game.mode.label }}</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <button class="drawer-btn" @click="pausePlayGame">
+        <span>{{ paused ? "▶" : "⏸" }}</span>
+        <span>{{ paused ? "Start" : "Pause" }}</span>
+      </button>
+      <button class="drawer-btn" @click="changeGlobalTimeScale">
+        <span>⏩</span><span>Speed</span>
+        <span class="drawer-btn__val">{{ globalTimeScale }}×</span>
+      </button>
+      <button class="drawer-btn" @click="cycleSwitchLock">
+        <span>🔀</span><span>Switch lock</span>
+        <span class="drawer-btn__val">{{ switchLockLabel }}</span>
+      </button>
+      <div class="drawer-slider">
+        <span>🚗</span><span>Cars</span>
+        <span class="drawer-btn__val">{{ carCountLabel }}</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          v-model.number="config.maxCars"
+          @click.stop
+        />
+      </div>
+      <div class="drawer-divider"></div>
+      <button
+        class="drawer-btn"
+        :class="{ on: config.debug }"
+        @click="switchDebugMode"
+      >
+        <span>🐞</span><span>Debug</span>
+        <span class="drawer-btn__val">{{ config.debug ? "on" : "off" }}</span>
+      </button>
+      <button class="drawer-btn" @click="cycleTheme">
+        <span>🎨</span><span>Theme</span>
+        <span class="drawer-btn__val">{{ themeIcon }}</span>
+      </button>
+      <div class="drawer-divider"></div>
+      <router-link class="drawer-btn" to="/editor">
+        <span>✏️</span><span>Editor</span>
+      </router-link>
+      <router-link class="drawer-btn" to="/test">
+        <span>🧪</span><span>Test world</span>
+      </router-link>
+    </MenuDrawer>
+    <div
+      v-if="!roadOnly"
+      class="score-card"
+      :class="{
+        'score-card--pulse': pulsing,
+        'score-card--complete': levelComplete,
+      }"
+    >
+      <div class="score-head">
+        <span class="score-icon">🚆</span>
+        <span class="score-label">Deliveries</span>
+        <span class="score-count">
+          <span class="score-now">{{ delivered }}</span>
+          <span class="score-sep">/</span>
+          <span class="score-total">{{ totalTrains }}</span>
+          <span v-if="levelComplete" class="score-check">✓</span>
+        </span>
+      </div>
+      <div class="score-bar">
+        <div class="score-bar-fill" :style="{ width: deliveredPct + '%' }"></div>
+        <span class="score-pct">{{ deliveredPct }}%</span>
+      </div>
+      <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <div
+        v-if="showCrossingFlow"
+        class="score-crossing"
+        :class="crossingFlowClass"
+        title="Longest car wait at a crossing"
+      >
+        🚗 {{ crossingWaitLabel }}
+      </div>
+      <div v-if="hud.stars" class="score-stars">
+        <span
+          v-for="s in stars"
+          :key="s.id"
+          class="star-pip"
+          :class="{ 'star-pip--on': s.earned }"
+          :title="s.label"
+          >★</span
+        >
+      </div>
+      <transition name="score-banner">
+        <div v-if="levelComplete" class="score-complete-banner">
+          ★ Level Complete ★
+        </div>
+      </transition>
+    </div>
+    <div class="world">
+    <div
+      class="level"
+      :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
+      @click="onBackgroundClick"
+    >
+      <Train
+        v-for="trainObject in trains"
+        :key="trainObject.id"
+        :train-object="trainObject"
+      />
+      <div
+        v-for="cell in gridCells"
+        :key="cell.key"
+        class="level-tile"
+        :style="{
+          width: config.tileSize + 'px',
+          height: config.tileSize + 'px',
+        }"
+      >
+        <Tile
+          v-if="cell.tile"
+          :tile="cell.tile"
+          :coord-id="cell.key"
+          class="tile-component"
+        />
+      </div>
+      <div
+        v-for="car in roadCars"
+        :key="car.id"
+        :class="['road-car', `road-car--${car.part}`, { 'road-car--inspect': config.debug }]"
+        :style="{
+          background: carColor(car.id),
+          width: `${car.widthPx}px`,
+          transform: `translate(-50%, -50%) translate(${car.x}px, ${car.y}px) rotate(${car.angle}deg)`,
+        }"
+        @mouseenter="onCarEnter(car.id)"
+        @mouseleave="onCarLeave()"
+        @click.stop="onCarClick(car.id)"
+      >
+        <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
+      </div>
+      <CarRouteOverlay
+        v-if="config.debug && carRoute"
+        :segments="carRoute.segments"
+        :color="carColor(carRoute.carId)"
+      />
+      <Crossing
+        v-for="c in crossings"
+        :key="`crossing-${c.key}`"
+        :coord-id="c.key"
+        :cell="c.cell"
+      />
+    </div>
+    </div>
+    <div v-if="hud.startOverlay && phase === 'ready'" class="game-overlay">
+      <div class="overlay-card">
+        <h2 class="overlay-title">{{ game.mode.label }}</h2>
+        <p class="overlay-desc">{{ game.mode.description }}</p>
+        <p v-if="best" class="overlay-best">
+          Best: {{ best.stars }}★ · {{ best.timeSec.toFixed(1) }}s
+        </p>
+        <button class="overlay-btn" @click="startPlaying">Start</button>
+        <button class="overlay-btn overlay-btn--ghost" @click="openPicker">
+          Change game mode
+        </button>
+      </div>
+    </div>
+    <div
+      v-if="hud.endOverlay && (phase === 'won' || phase === 'lost')"
+      class="game-overlay"
+    >
+      <div class="overlay-card">
+        <h2 class="overlay-title">
+          {{ phase === "won" ? "You win!" : "Failed" }}
+        </h2>
+        <div v-if="phase === 'won' && hud.stars" class="overlay-stars">
+          <span
+            v-for="s in stars"
+            :key="s.id"
+            class="star-pip star-pip--lg"
+            :class="{ 'star-pip--on': s.earned }"
+            :title="s.label"
+            >★</span
+          >
+        </div>
+        <p v-if="phase === 'won'" class="overlay-desc">
+          {{ earnedStars }}/{{ stars.length }} stars · {{ elapsedLabel }}
+        </p>
+        <p v-else class="overlay-desc">{{ lostReason }}</p>
+        <button class="overlay-btn" @click="retry">Retry</button>
+        <button class="overlay-btn overlay-btn--ghost" @click="openPicker">
+          Change game mode
+        </button>
+      </div>
+    </div>
+    <div v-if="pickerOpen" class="game-overlay" @click.self="closePicker">
+      <div class="picker-card">
+        <h2 class="overlay-title">Choose a game mode</h2>
+        <div class="mode-grid">
+          <button
+            v-for="m in modes"
+            :key="m.id"
+            class="mode-card"
+            :class="{ 'mode-card--active': m.id === currentModeId }"
+            @click="pickMode(m.id)"
+          >
+            <span class="mode-card__icon">{{ modeIcon(m.id) }}</span>
+            <span class="mode-card__label">{{ m.label }}</span>
+            <span class="mode-card__desc">{{ m.description }}</span>
+            <span v-if="m.id === currentModeId" class="mode-card__badge"
+              >Playing</span
+            >
+          </button>
+        </div>
+        <button class="overlay-btn overlay-btn--ghost" @click="closePicker">
+          Close
+        </button>
+      </div>
+    </div>
+    <div
+      v-if="config.debug"
+      class="event-log"
+      :class="{ 'event-log--min': logMinimized }"
+    >
+      <div class="event-log-header">
+        <span class="event-log-title">Activity log</span>
+        <button
+          class="event-log-toggle"
+          :title="logMinimized ? 'Expand' : 'Minimize'"
+          @click="logMinimized = !logMinimized"
+        >
+          {{ logMinimized ? "+" : "–" }}
+        </button>
+      </div>
+      <ul v-show="!logMinimized" class="event-log-list">
+        <li v-if="recentLog.length === 0" class="event-log-empty">
+          No events yet…
+        </li>
+        <li
+          v-for="entry in recentLog"
+          :key="entry.id"
+          class="event-log-entry"
+          :class="`log-${entry.kind}`"
+        >
+          <span class="log-time">{{ entry.time.toFixed(1) }}s</span>
+          <span class="log-train" :style="{ color: trainColor(entry.trainId) }">
+            {{ entry.trainId }}
+          </span>
+          <span class="log-text">{{ entry.text }}</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+import { markRaw } from "vue";
+import {
+  Component,
+  Inject,
+  Provide,
+  Vue,
+  Watch,
+  toNative,
+} from "vue-facing-decorator";
+import {
+  GameConfig,
+  GAME_CONFIG_KEY,
+  gameConfig,
+  SwitchLockMode,
+  setWorldTheme,
+} from "@/gameConfig";
+import { nextTheme, themeMeta } from "@/themes";
+import { TrainsDefinition, TrainStatus } from "@/types";
+import { Level, TileCell, isLevelCrossing, isRoadOnlyLevel } from "@/tiles/model";
+import { createGame, Game, TrainDef } from "@/game";
+import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
+import { takeCustomLevel } from "@/levelStore";
+import { modeById, MODES } from "@/modes/index";
+import { GameMode, ModeSetup } from "@/modes/types";
+import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
+import { scenarioById, SCENARIOS } from "@/levels/test/index";
+import { loadBest, recordResult, BestResult } from "@/objectiveStore";
+import Crossing from "@/components/Crossing.vue";
+import MenuDrawer from "@/components/MenuDrawer.vue";
+
+function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
+  return Object.values(trains).map(t => ({
+    id: t.id,
+    x: t.x,
+    y: t.y,
+    type: t.type,
+    wagonIds: (t.wagons ?? []).map(w => w.id),
+    spawnAtSec: t.spawnAtSec,
+  }));
+}
+
+// Hash history puts the route's query in location.hash, e.g.
+// "#/play?mode=puzzle&board=objectives".
+function hashParam(name: string): string | null {
+  const hash = window.location.hash;
+  const q = hash.indexOf("?");
+  if (q === -1) return null;
+  return new URLSearchParams(hash.slice(q + 1)).get(name);
+}
+
+// Modes that generate their own board (e.g. Daily) return a fully-populated
+// ModeSetup from setup(); calling setup() here lets PlayView honour that board
+// for rendering + createGame instead of the default/custom/board context.
+// Other modes' setup() is called again inside createGame — safe because setup()
+// is pure and cheap (no side effects, no DOM).
+function resolveBoard(
+  mode: ReturnType<typeof modeById>,
+  fallbackLevel: Level,
+  fallbackTrains: TrainsDefinition,
+  fallbackLevelId: string
+): { level: Level; trains: TrainsDefinition; levelId: string; setup: ModeSetup } {
+  const trainDefs = buildTrainDefs(fallbackTrains);
+  const setup = mode.setup({
+    level: fallbackLevel,
+    trains: trainDefs,
+    levelId: fallbackLevelId,
+  });
+  // If the mode returned a different level (i.e. it generated its own board),
+  // use that everywhere. Otherwise fall back to the view-resolved board.
+  if (setup.level !== fallbackLevel) {
+    // Reconstruct a TrainsDefinition from the TrainDef[] the mode produced.
+    // The view only uses TrainsDefinition for `totalTrains` (key count) and
+    // for @Provide(); the actual sim is driven from TrainDef[] in createGame.
+    const genTrains: TrainsDefinition = {};
+    for (const def of setup.trains) {
+      genTrains[def.id] = {
+        id: def.id,
+        x: def.x,
+        y: def.y,
+        status: TrainStatus.LeavingDepot,
+        type: def.type,
+        wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
+        routeDestinations: [],
+        currentRouteDestination: 0,
+      };
+    }
+    return { level: setup.level, trains: genTrains, levelId: setup.levelId, setup };
+  }
+  return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
+}
+
+@Component({ components: { Crossing, MenuDrawer } })
+class PlayView extends Vue {
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
+  speeds = [1, 2, 4];
+  levelSizeY = 6;
+  // Whether the debug activity-log panel is collapsed to just its header.
+  logMinimized = false;
+
+  // An optional named board from `?board=<scenarioId>` — lets any test-world
+  // scenario be played as a real game (e.g. a small, deterministic puzzle).
+  // Returns null unless the id matches a registered scenario.
+  private board = (() => {
+    const id = hashParam("board");
+    if (!id) return null;
+    return SCENARIOS.some(s => s.id === id) ? scenarioById(id) : null;
+  })();
+
+  // Read per instance (not at module load) so a level built in the editor and
+  // handed over right before navigation is picked up on this mount.
+  private custom = this.board ? null : takeCustomLevel();
+
+  // The active mode: an explicit ?mode= wins; otherwise reopen the mode the
+  // player last used (persisted), falling back to the default.
+  private mode = modeById(hashParam("mode") ?? loadLastModeId());
+
+  // Resolve which board the view should use. Modes that generate their own board
+  // (e.g. Daily) return a different level from setup(); resolveBoard detects this
+  // and promotes the generated board so the renderer and sim agree.
+  private _resolved = (() => {
+    const fallbackLevel = this.board
+      ? this.board.level
+      : this.custom
+        ? this.custom.level
+        : DEFAULT_LEVEL;
+    const fallbackTrains = this.board
+      ? this.board.trains
+      : this.custom
+        ? this.custom.trains
+        : defaultTrains();
+    const fallbackLevelId = this.board
+      ? `board:${this.board.id}`
+      : this.custom
+        ? "custom"
+        : "default";
+    return resolveBoard(this.mode, fallbackLevel, fallbackTrains, fallbackLevelId);
+  })();
+
+  @Provide() trains: TrainsDefinition = this._resolved.trains;
+  @Provide() level: Level = this._resolved.level;
+
+  private levelId = this._resolved.levelId;
+  best: BestResult | null = null;
+
+  @Provide("game") game: Game = markRaw(
+    createGame(
+      this._resolved.level,
+      this._resolved.setup.trains,
+      gameConfig.tileSize,
+      this.mode,
+      gameConfig.colorSeed,
+      // When the mode pinned colours (Daily's deterministic assignment), honour
+      // them so depot/train colours match the generated board exactly.
+      this._resolved.setup.colors,
+      DEFAULT_TRAFFIC,
+      this._resolved.levelId,
+      // Live car cap from the menu setting, read each spawn attempt.
+      () => gameConfig.maxCars
+    )
+  );
+
+  mounted() {
+    // Remember the mode we ended up in, so a later plain /play reopens it.
+    saveLastModeId(this.mode.id);
+    this.best = loadBest(this.levelId);
+    this.game.start(); // start the rAF loop (rendering); objective stays Ready
+    if (!this.game.mode.hud.startOverlay) this.game.startObjective();
+    // Test hook: expose the live game so e2e can read simulation state without
+    // depending on Vue's internal instance shape.
+    (window as unknown as { __game?: Game }).__game = this.game;
+  }
+
+  startPlaying() {
+    this.game.startObjective();
+  }
+
+  retry() {
+    this.game.reset();
+    this.game.startObjective();
+  }
+
+  // ---- Game-mode picker -------------------------------------------------
+  // The card grid of game types. Opened from the menu drawer or the start
+  // overlay; picking a card navigates to `#/play?mode=<id>`, which remounts the
+  // view (router-view is keyed on the full path) so the chosen mode loads fresh.
+  pickerOpen = false;
+  modes: GameMode[] = MODES;
+
+  get currentModeId(): string {
+    return this.game.mode.id;
+  }
+
+  private modeIcons: Record<string, string> = {
+    puzzle: "🧩",
+    "crossing-keeper": "🚧",
+    "time-attack": "⏱️",
+    daily: "📅",
+    sandbox: "🏖️",
+  };
+  modeIcon(id: string): string {
+    return this.modeIcons[id] ?? "🚆";
+  }
+
+  openPicker() {
+    this.pickerOpen = true;
+  }
+  closePicker() {
+    this.pickerOpen = false;
+  }
+  pickMode(id: string) {
+    this.pickerOpen = false;
+    if (id === this.currentModeId) return; // already playing this mode
+    this.$router.push({ name: "play", query: { mode: id } });
+  }
+
+  @Watch("phase")
+  onPhase(now: string) {
+    if (now === "won") {
+      const earned = this.game.objective.stars.filter(s => s.earned).length;
+      this.best = recordResult(this.levelId, {
+        stars: earned,
+        timeSec: this.game.objective.counters.elapsedSec,
+      });
+    }
+  }
+
+  get phase(): string {
+    return this.game.objective.phase;
+  }
+  get hud() {
+    return this.game.mode.hud;
+  }
+  get stars() {
+    return this.game.objective.stars;
+  }
+  get elapsedLabel(): string {
+    const t =
+      this.game.objective.timeLeftSec ??
+      this.game.objective.counters.elapsedSec;
+    return t.toFixed(1) + "s";
+  }
+  get earnedStars(): number {
+    return this.stars.filter(s => s.earned).length;
+  }
+  // The crossing-flow readout (Crossing Keeper): the live worst car wait. Shown
+  // only when the mode controls the crossing gate, so other modes' HUDs are
+  // unchanged. The colour ramps amber→red as the wait climbs (the live tension).
+  get showCrossingFlow(): boolean {
+    return this.game.mode.controls.crossingGate;
+  }
+  get crossingWaitLabel(): string {
+    return this.game.roadFrame.maxCarWaitSec.toFixed(0) + "s";
+  }
+  get crossingFlowClass(): string {
+    const w = this.game.roadFrame.maxCarWaitSec;
+    if (w >= 18) return "score-crossing--bad";
+    if (w >= 8) return "score-crossing--warn";
+    return "";
+  }
+  get lostReason(): string {
+    return this.game.objective.lostReason ?? "";
+  }
+
+  beforeUnmount() {
+    this.game.stop();
+  }
+
+  get gridCells(): { key: string; tile: Level[string] | null }[] {
+    const out: { key: string; tile: Level[string] | null }[] = [];
+    for (let y = 0; y < this.levelSizeY; y++) {
+      for (let x = 0; x < this.config.levelSizeX; x++) {
+        const key = `${x},${y}`;
+        out.push({ key, tile: this.level[key] ?? null });
+      }
+    }
+    return out;
+  }
+
+  // Level-crossing cells (rail + road on the same tile) — overlaid with the
+  // crossing furniture + cars. Derived from the shared `road?` seam.
+  get crossings(): { key: string; cell: TileCell }[] {
+    return Object.entries(this.level)
+      .filter(([, cell]) => isLevelCrossing(cell))
+      .map(([key, cell]) => ({ key, cell }));
+  }
+
+  // Live road-traffic cars, sampled to world positions by the game each frame.
+  get roadCars() {
+    return this.game.roadCars;
+  }
+
+  // The hovered/pinned car's route for the debug overlay (null when none).
+  get carRoute() {
+    return this.game.carRoute.value;
+  }
+
+  private carPalette = ["#d94c4c", "#3f7fd9", "#e0bc5c", "#e7e7e7", "#5fb37a"];
+  // Stable colour per vehicle from the number in its base id (car0, car1, …). The
+  // render id is `${carId}#${segment}`, so strip the segment suffix first — this
+  // keeps a semi's cab and trailer in one livery.
+  carColor(id: string): string {
+    const base = id.split("#")[0];
+    const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
+    return this.carPalette[n % this.carPalette.length];
+  }
+
+  // Debug route inspection: hover previews a car's route, click pins it (click
+  // again or click empty space to unpin). No-op unless the debug overlay is on.
+  // The render id is `${carId}#${unit}`; the sim wants the base car id.
+  private baseCarId(id: string): string {
+    return id.split("#")[0];
+  }
+  onCarEnter(id: string): void {
+    if (this.config.debug) this.game.setHoveredCar(this.baseCarId(id));
+  }
+  onCarLeave(): void {
+    if (this.config.debug) this.game.clearHoveredCar();
+  }
+  onCarClick(id: string): void {
+    if (this.config.debug) this.game.togglePinnedCar(this.baseCarId(id));
+  }
+  onBackgroundClick(): void {
+    if (this.config.debug) this.game.clearRouteCar();
+  }
+
+  get paused(): boolean {
+    return this.game.paused.value;
+  }
+  get globalTimeScale(): number {
+    return this.game.speed.value;
+  }
+  get delivered(): number {
+    return this.game.deliveries.value;
+  }
+
+  // True when the level has no depots and at least one road tile.
+  get roadOnly(): boolean {
+    return isRoadOnlyLevel(this.level);
+  }
+
+  // Total trains in the level — the delivery goal, since each train parks once
+  // it reaches its matching depot (so "all trains home" completes the level).
+  get totalTrains(): number {
+    return Object.keys(this.trains).length;
+  }
+
+  get deliveredPct(): number {
+    return this.totalTrains
+      ? Math.round((this.delivered / this.totalTrains) * 100)
+      : 0;
+  }
+
+  get levelComplete(): boolean {
+    return this.totalTrains > 0 && this.delivered >= this.totalTrains;
+  }
+
+  // Pop/glow the score card briefly whenever a new delivery lands.
+  pulsing = false;
+  private pulseTimer = 0;
+
+  @Watch("delivered")
+  onDelivered(now: number, prev: number) {
+    if (now <= prev) return;
+    // Restart the animation even on back-to-back deliveries: clear, then re-set
+    // on the next frame so the CSS keyframes replay.
+    this.pulsing = false;
+    requestAnimationFrame(() => (this.pulsing = true));
+    window.clearTimeout(this.pulseTimer);
+    this.pulseTimer = window.setTimeout(() => (this.pulsing = false), 700);
+  }
+
+  // The most recent activity-log entries, newest first, for the debug panel.
+  get recentLog() {
+    return this.game.eventLog.slice(-60).reverse();
+  }
+
+  // Colour a train id in the log to match its sprite.
+  trainColor(id: string): string {
+    return this.game.trainColors[id] ?? "inherit";
+  }
+
+  // The current world theme's icon, shown compactly on the drawer button.
+  get themeIcon(): string {
+    return themeMeta(this.config.worldTheme).icon;
+  }
+  cycleTheme() {
+    setWorldTheme(nextTheme(this.config.worldTheme));
+  }
+
+  switchDebugMode() {
+    this.config.debug = !this.config.debug;
+  }
+  cycleSwitchLock() {
+    const order: SwitchLockMode[] = ["off", "reserved", "occupied"];
+    const next = (order.indexOf(this.config.switchLockMode) + 1) % order.length;
+    this.config.switchLockMode = order[next];
+  }
+  get switchLockLabel(): string {
+    switch (this.config.switchLockMode) {
+      case "reserved":
+        return "reserved";
+      case "occupied":
+        return "on train";
+      default:
+        return "off";
+    }
+  }
+  // Road-traffic density %, set by the "Cars" slider (0–100). The game scales it
+  // against the map's capacity and reads it live, so dragging re-targets density
+  // immediately (100% packs the streets).
+  get carCountLabel(): string {
+    return this.config.maxCars === 0 ? "off" : `${this.config.maxCars}%`;
+  }
+  pausePlayGame() {
+    this.game.paused.value = !this.game.paused.value;
+  }
+  changeGlobalTimeScale() {
+    const currentIndex = this.speeds.indexOf(this.game.speed.value);
+    this.game.speed.value =
+      this.speeds[(currentIndex + 1) % this.speeds.length];
+  }
+}
+
+export default toNative(PlayView);
+</script>
+
+<style lang="scss" scoped>
+.level {
+  display: flex;
+  border: 1px solid green;
+  flex-wrap: wrap;
+  margin: 0 auto;
+  position: relative;
+}
+.level-tile {
+  position: relative;
+  flex: 0 0 auto;
+  .debug & {
+    outline: 1px solid red;
+  }
+}
+.road-car {
+  position: absolute;
+  z-index: 6; // above the road surface and trains; booms (crossing) sit above
+  top: 0;
+  left: 0;
+  // width is set inline per vehicle segment (car/truck/cab/trailer lengths).
+  height: 20px;
+  border-radius: 4px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
+  will-change: transform;
+  overflow: hidden;
+}
+// In debug mode cars are clickable to inspect their route.
+.road-car--inspect {
+  cursor: pointer;
+}
+// A semi's cab: a touch darker and boxier than the trailer it pulls.
+.road-car--cab {
+  filter: brightness(0.82);
+  border-radius: 4px 3px 3px 4px;
+}
+// A semi's trailer: a long boxy container, squarer corners, no windscreen.
+.road-car--trailer {
+  border-radius: 2px;
+  filter: brightness(1.05);
+}
+.road-car-glass {
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 60%; // toward the front (local +x is the direction of travel)
+  width: 26%;
+  background: rgba(185, 222, 255, 0.9);
+  border-radius: 2px;
+}
+// A rigid truck's cab is only the front of its longer body, so its windscreen is
+// a small pane right at the nose rather than a wide window like a car's.
+.road-car--truck .road-car-glass {
+  left: 76%;
+  width: 13%;
+}
+// A bus: a long, slightly taller coach. A row of side windows runs nearly the
+// whole length (a repeating glass/pillar band), so it reads as a passenger bus
+// rather than a cargo truck even before you notice it riding the bus lane.
+.road-car--bus {
+  height: 24px;
+  border-radius: 6px;
+  filter: brightness(1.08);
+}
+.road-car--bus .road-car-glass {
+  top: 22%;
+  bottom: 48%;
+  left: 10%;
+  width: 80%;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(185, 222, 255, 0.95) 0,
+    rgba(185, 222, 255, 0.95) 7px,
+    rgba(30, 44, 60, 0.55) 7px,
+    rgba(30, 44, 60, 0.55) 10px
+  );
+}
+.score-card {
+  position: fixed;
+  z-index: 2000;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 340px;
+  padding: 14px 22px 16px;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.92),
+    rgba(18, 22, 28, 0.92)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+
+  &--pulse {
+    animation: score-pop 0.6s ease;
+  }
+  &--complete {
+    border-color: rgba(224, 188, 92, 0.55);
+    animation: score-breathe 1.8s ease-in-out infinite;
+  }
+}
+.score-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.score-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+.score-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8fa3b3;
+}
+.score-count {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.score-now {
+  font-size: 38px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+
+  .score-card--complete & {
+    color: #f0cf72;
+    text-shadow: 0 0 16px rgba(240, 207, 114, 0.6);
+  }
+}
+.score-sep {
+  font-size: 22px;
+  color: #5d6b77;
+}
+.score-total {
+  font-size: 22px;
+  font-weight: 700;
+  color: #9aa7b2;
+}
+.score-check {
+  margin-left: 4px;
+  font-size: 22px;
+  color: #5fd39a;
+}
+.score-bar {
+  position: relative;
+  height: 14px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.score-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f9e6b, #5fd39a);
+  box-shadow: 0 0 12px rgba(95, 211, 154, 0.5);
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+
+  .score-card--complete & {
+    background: linear-gradient(90deg, #d6a93c, #f5d97a);
+    box-shadow: 0 0 14px rgba(245, 217, 122, 0.65);
+  }
+}
+.score-pct {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.score-complete-banner {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #f0cf72;
+  text-shadow: 0 0 14px rgba(240, 207, 114, 0.55);
+}
+.score-banner-enter-active {
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.score-banner-enter-from {
+  opacity: 0;
+  transform: scale(0.8);
+}
+
+@keyframes score-pop {
+  0% {
+    transform: translateX(-50%) scale(1);
+  }
+  35% {
+    transform: translateX(-50%) scale(1.06);
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+  }
+}
+@keyframes score-breathe {
+  0%,
+  100% {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
+      0 0 16px rgba(224, 188, 92, 0.25);
+  }
+  50% {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
+      0 0 30px rgba(224, 188, 92, 0.5);
+  }
+}
+
+.score-timer {
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #cdd7df;
+}
+.score-crossing {
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #8fd19e; // calm green while traffic flows
+  transition: color 0.3s ease;
+}
+.score-crossing--warn {
+  color: #e6c34a; // amber as a wait builds
+}
+.score-crossing--bad {
+  color: #e2574c; // red when a car is stuck dangerously long
+}
+.score-stars {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+}
+.star-pip {
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.18);
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+  &--on {
+    color: #f0cf72;
+    text-shadow: 0 0 10px rgba(240, 207, 114, 0.6);
+  }
+  &--lg {
+    font-size: 34px;
+  }
+}
+.game-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 11, 15, 0.62);
+  backdrop-filter: blur(4px);
+}
+.overlay-card {
+  min-width: 320px;
+  padding: 28px 34px;
+  text-align: center;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.97),
+    rgba(18, 22, 28, 0.97)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+.overlay-title {
+  margin: 0 0 8px;
+  font-size: 26px;
+}
+.overlay-desc {
+  margin: 8px 0 18px;
+  color: #9aa7b2;
+  max-width: 360px;
+}
+.overlay-best {
+  margin: 0 0 8px;
+  color: #f0cf72;
+  font-weight: 700;
+}
+.overlay-stars {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 8px 0;
+}
+.overlay-btn {
+  padding: 12px 28px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0d1117;
+  background: linear-gradient(90deg, #5fd39a, #2f9e6b);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  &:hover {
+    filter: brightness(1.08);
+  }
+  &--ghost {
+    margin-top: 10px;
+    color: #cdd7df;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    font-weight: 600;
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      filter: none;
+    }
+  }
+}
+
+// ---- Game-mode picker ----
+.picker-card {
+  width: min(720px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 26px 30px 22px;
+  text-align: center;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.98),
+    rgba(18, 22, 28, 0.98)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin: 18px 0 8px;
+}
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  position: relative;
+  padding: 16px 16px 18px;
+  text-align: left;
+  color: #eef2f6;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease,
+    background 0.15s ease;
+  &:hover {
+    transform: translateY(-2px);
+    border-color: rgba(95, 211, 154, 0.6);
+    background: rgba(95, 211, 154, 0.08);
+  }
+  &--active {
+    border-color: rgba(240, 207, 114, 0.7);
+    background: rgba(240, 207, 114, 0.1);
+  }
+}
+.mode-card__icon {
+  font-size: 30px;
+  line-height: 1;
+}
+.mode-card__label {
+  font-size: 17px;
+  font-weight: 800;
+}
+.mode-card__desc {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #9aa7b2;
+}
+.mode-card__badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f0cf72;
+}
+
+.event-log {
+  position: fixed;
+  z-index: 2000;
+  right: 0;
+  top: 0;
+  width: 320px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 24, 28, 0.92);
+  color: #d7dde3;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  border-bottom-left-radius: 6px;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
+}
+.event-log--min {
+  width: auto;
+}
+.event-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+
+  .event-log--min & {
+    border-bottom: none;
+  }
+}
+.event-log-title {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8fa3b3;
+}
+.event-log-toggle {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  line-height: 18px;
+  padding: 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d7dde3;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+}
+.event-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+.event-log-empty {
+  padding: 8px 10px;
+  color: #6b7782;
+  font-style: italic;
+}
+.event-log-entry {
+  display: flex;
+  gap: 6px;
+  padding: 2px 10px;
+  white-space: nowrap;
+  border-left: 3px solid transparent;
+  text-align: left;
+
+  &.log-blocked {
+    border-left-color: #e0564b;
+  }
+  &.log-proceeding {
+    border-left-color: #4caf78;
+  }
+  &.log-reserved {
+    border-left-color: #5b8dd6;
+  }
+  &.log-arrived {
+    border-left-color: #d6b14c;
+  }
+}
+.log-time {
+  color: #6b7782;
+  flex: 0 0 auto;
+  min-width: 38px;
+}
+.log-train {
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+.log-text {
+  color: #d7dde3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>

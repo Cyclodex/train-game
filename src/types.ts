@@ -19,6 +19,9 @@ export interface TrainObject extends Coordinates {
   currentRouteDestination?: number;
   type: "people" | "fraight";
   trainColor?: string;
+  // Time Attack: when set (>0), this train is injected by the mode's spawner at
+  // this sim-time instead of being present from the start (a predefined schedule).
+  spawnAtSec?: number;
 }
 
 export interface RouteDestinations {
@@ -129,6 +132,7 @@ export interface TileObject extends Coordinates {
   activeRoutes?: ActiveIntersectionPerPosition;
   disabledRoutes?: DisabledIntersectionsPerPosition;
   trafficLights?: TrafficLight[];
+  enableTrafficLight?: boolean;
 }
 
 export interface CheckStatusFeedback {

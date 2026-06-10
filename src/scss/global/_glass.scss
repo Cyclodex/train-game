@@ -1,0 +1,39 @@
+// The frosted dark-glass surface shared by the score-card, the menu drawer and
+// the tool dock — one source of truth for the look. Include it on any panel
+// that should read as part of the game's HUD.
+@mixin glass($blur: 8px, $radius: 16px) {
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.92),
+    rgba(18, 22, 28, 0.92)
+  );
+  backdrop-filter: blur($blur);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: $radius;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  color: #eef2f6;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+// A pill/segment button living inside a glass panel: muted by default, brighter
+// on hover, with `.on` for the active state. Shared by drawer + dock.
+@mixin glass-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: #cfd8e0;
+  font: 600 14px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.06s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+  &:active {
+    transform: translateY(1px);
+  }
+}

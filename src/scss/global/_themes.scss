@@ -1,0 +1,80 @@
+// Themable world backdrop. The active theme is a class on #app
+// (`theme-meadow` | `theme-table`) set from `config.worldTheme`. Only the area
+// around the board changes — the glass menus stay consistent across themes.
+//
+// Adding a theme: append an entry in `src/themes.ts` and one `.theme-<id>`
+// block here (plus its `.theme-<id> .level` framing).
+
+// The wrapper around the board grid. Fills the viewport behind the fixed menus
+// and centers the fixed-size grid, leaving room for the score-card (top) and
+// the tool dock (bottom).
+.world {
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 180px 24px 128px;
+}
+
+// ---- Meadow (default) -------------------------------------------------------
+// Rolling green countryside dotted with little trees; the board sits raised on
+// it. The trees are a procedurally generated, seamless SVG tile (varied size,
+// shape, tint and jittered placement — see `src/utils/meadowBackdrop.ts`),
+// supplied via the `--meadow-trees` custom property on #app and laid over a
+// soft grass gradient. A faint mottling breaks up the flat ground colour.
+.theme-meadow {
+  background-color: #6aac6a;
+  background-image:
+    var(--meadow-trees),
+    radial-gradient(
+      circle at 30% 20%,
+      rgba(255, 255, 255, 0.06),
+      transparent 60%
+    ),
+    linear-gradient(160deg, #8ecb8e, #6aac6a);
+  background-size:
+    680px 680px,
+    100% 100%,
+    100% 100%;
+  background-position:
+    0 0,
+    0 0,
+    0 0;
+}
+.theme-meadow .world .level {
+  border-radius: 10px;
+  box-shadow: 0px 0px 20px 20px rgb(31 69 29);
+}
+
+// ---- Table (wooden model-railway baseboard) --------------------------------
+// A warm wooden table frame; the board is an inset playfield with a finer,
+// lighter, cross-grained wood so it reads as a distinct panel within the table.
+.theme-table {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.06) 0 2px,
+      transparent 2px 24px
+    ),
+    linear-gradient(160deg, #c49355, #9c7038);
+}
+.theme-table .world .level {
+  border: 7px solid #5f4220;
+  border-radius: 10px;
+  background-color: #cda567;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.05) 0 1px,
+      transparent 1px 8px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 0 2px,
+      transparent 2px 30px
+    );
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.5),
+    0 0 0 12px rgba(95, 66, 32, 0.4);
+}

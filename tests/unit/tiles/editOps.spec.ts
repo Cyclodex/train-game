@@ -1,0 +1,292 @@
+import { describe, it, expect } from "vitest";
+import { Position, ActiveIntersection } from "@/types";
+import { samePair, TileCell } from "@/tiles/model";
+import { lanesAllowingExit } from "@/tiles/lanes";
+import { validateRoads } from "@/tiles/validate";
+import {
+  emptyCell,
+  toggleConnection,
+  addConnection,
+  removeConnection,
+  setDepot,
+  rotateDepot,
+  depotFacing,
+  toggleSignalPort,
+  toggleRoad,
+  addRoad,
+  removeRoad,
+  cycleDefaultArm,
+  toggleLaneKind,
+} from "@/tiles/editOps";
+
+const { Top, Right, Bottom, Left, Center } = Position;
+const CROSS_FULL: [Position, Position][] = [
+  [Top, Bottom],
+  [Left, Right],
+  [Top, Right],
+  [Right, Bottom],
+  [Bottom, Left],
+  [Left, Top],
+];
+const TJUNCTION: [Position, Position][] = [
+  [Left, Right],
+  [Left, Top],
+  [Right, Top],
+];
+const has = (cell: { connections: [Position, Position][] }, p: [Position, Position]) =>
+  cell.connections.some(c => samePair(c, p));
+// A road edge is present as a two-way edge when both directed lane movements
+// (a->b and b->a) exist among the cell's lanes.
+const hasRoadPair = (cell: TileCell, p: [Position, Position]) => {
+  const road = cell.road ?? [];
+  const ab = road.some(l => l.from === p[0] && l.to.includes(p[1]));
+  const ba = road.some(l => l.from === p[1] && l.to.includes(p[0]));
+  return ab && ba;
+};
+
+describe("toggleConnection", () => {
+  it("adds when absent and removes when present, order-independent", () => {
+    let c = emptyCell();
+    c = toggleConnection(c, Top, Bottom);
+    expect(has(c, [Top, Bottom])).toBe(true);
+    // Toggling the reversed pair removes it.
+    c = toggleConnection(c, Bottom, Top);
+    expect(has(c, [Top, Bottom])).toBe(false);
+  });
+
+  it("accumulates distinct connections into a junction", () => {
+    let c = emptyCell();
+    c = toggleConnection(c, Left, Right);
+    c = toggleConnection(c, Left, Top);
+    c = toggleConnection(c, Right, Top);
+    expect(c.connections).toHaveLength(3);
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = emptyCell();
+    toggleConnection(c, Top, Bottom);
+    expect(c.connections).toHaveLength(0);
+  });
+});
+
+describe("addConnection", () => {
+  it("adds when absent", () => {
+    const c = addConnection(emptyCell(), Top, Bottom);
+    expect(has(c, [Top, Bottom])).toBe(true);
+  });
+
+  it("is idempotent — re-adding the same pair does not remove it", () => {
+    let c = addConnection(emptyCell(), Top, Bottom);
+    c = addConnection(c, Bottom, Top); // reversed, already present
+    expect(has(c, [Top, Bottom])).toBe(true);
+    expect(c.connections).toHaveLength(1);
+  });
+
+  it("accumulates distinct pairs into a junction", () => {
+    let c = addConnection(emptyCell(), Left, Right);
+    c = addConnection(c, Top, Bottom);
+    expect(c.connections).toHaveLength(2);
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = emptyCell();
+    addConnection(c, Top, Bottom);
+    expect(c.connections).toHaveLength(0);
+  });
+});
+
+describe("removeConnection", () => {
+  it("removes a specific pair regardless of order", () => {
+    let c = emptyCell();
+    c = toggleConnection(c, Top, Right);
+    c = removeConnection(c, Right, Top);
+    expect(c.connections).toHaveLength(0);
+  });
+});
+
+describe("depot ops", () => {
+  it("setDepot makes a border<->Center depot with role", () => {
+    const c = setDepot(emptyCell(), Right);
+    expect(has(c, [Right, Center])).toBe(true);
+    expect(c.role).toBe("depot");
+    expect(depotFacing(c)).toBe(Right);
+  });
+
+  it("rotateDepot cycles facing N->E->S->W", () => {
+    let c = setDepot(emptyCell(), Top);
+    c = rotateDepot(c);
+    expect(depotFacing(c)).toBe(Right);
+    c = rotateDepot(c);
+    expect(depotFacing(c)).toBe(Bottom);
+  });
+
+  it("depotFacing is null for non-depot cells", () => {
+    expect(depotFacing(emptyCell())).toBeNull();
+  });
+});
+
+describe("toggleSignalPort", () => {
+  it("adds then removes a port", () => {
+    let c = emptyCell();
+    c = toggleSignalPort(c, Right);
+    expect(c.signals).toEqual([Right]);
+    c = toggleSignalPort(c, Right);
+    expect(c.signals).toEqual([]);
+  });
+});
+
+describe("cycleDefaultArm", () => {
+  it("from no authored arm, advances past the computed first-valid arm", () => {
+    // Full cross: all three arms valid at Top, computed first-valid is Left.
+    const c = cycleDefaultArm({ connections: CROSS_FULL }, Top);
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Straight);
+  });
+
+  it("advances through valid arms and wraps", () => {
+    let c: TileCell = { connections: CROSS_FULL };
+    c = cycleDefaultArm(c, Top); // -> Straight
+    c = cycleDefaultArm(c, Top); // -> Right
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Right);
+    c = cycleDefaultArm(c, Top); // wraps -> Left
+    expect(c.defaultArms?.[Top]).toBe(ActiveIntersection.Left);
+  });
+
+  it("skips arms whose exit is not a real partner", () => {
+    // T-junction Left entry: only Left (->Top) and Straight (->Right) are valid;
+    // Right (->Bottom) is not a partner, so cycling never lands on it.
+    let c: TileCell = { connections: TJUNCTION };
+    c = cycleDefaultArm(c, Left); // computed first-valid Left -> next Straight
+    expect(c.defaultArms?.[Left]).toBe(ActiveIntersection.Straight);
+    c = cycleDefaultArm(c, Left); // Straight -> wraps to Left (Right skipped)
+    expect(c.defaultArms?.[Left]).toBe(ActiveIntersection.Left);
+  });
+
+  it("is a no-op on a non-junction entry", () => {
+    const c = cycleDefaultArm({ connections: [[Top, Bottom]] }, Top);
+    expect(c.defaultArms).toBeUndefined();
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = { connections: CROSS_FULL };
+    cycleDefaultArm(c, Top);
+    expect((c as { defaultArms?: unknown }).defaultArms).toBeUndefined();
+  });
+});
+
+describe("road ops", () => {
+  it("toggleRoad adds when absent and removes when present, order-independent", () => {
+    let c = emptyCell();
+    c = toggleRoad(c, Top, Bottom);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+    c = toggleRoad(c, Bottom, Top); // reversed pair removes it
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(false);
+  });
+
+  it("road is independent of rail connections on the same cell", () => {
+    let c = toggleConnection(emptyCell(), Left, Right); // rail
+    c = toggleRoad(c, Top, Bottom); // road crossing it -> a level crossing
+    expect(has(c, [Left, Right])).toBe(true);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+  });
+
+  it("addRoad is idempotent and accumulates a road junction", () => {
+    // Each two-way edge is one index-0 lane per approach. A single edge L<->R is
+    // two lanes (from L, from R); adding a crossing edge makes four (a junction).
+    let c = addRoad(emptyCell(), Left, Right);
+    c = addRoad(c, Right, Left); // reversed, already present — idempotent
+    expect(hasRoadPair(c, [Left, Right])).toBe(true);
+    expect(c.road).toHaveLength(2); // lanes from L and from R
+    c = addRoad(c, Top, Bottom);
+    expect(hasRoadPair(c, [Top, Bottom])).toBe(true);
+    expect(c.road).toHaveLength(4); // + lanes from T and from B
+  });
+
+  it("wires turns onto EVERY lane of a multi-lane junction (not just lane 0)", () => {
+    // Build a 2-lane 4-way cross, then draw the four turn edges with the lane
+    // picker at 2. Every lane of every approach must permit each turn — the bug
+    // was that turns landed only on lane index 0, so lane 1 couldn't turn.
+    const T = Position.Top, R = Position.Right, B = Position.Bottom, L = Position.Left;
+    let c = addRoad(emptyCell(), L, R, 2);
+    c = addRoad(c, T, B, 2); // straight 2-lane cross
+    for (const [a, b] of [[L, T], [L, B], [R, T], [R, B]] as [Position, Position][]) {
+      c = addRoad(c, a, b, 2);
+    }
+    // Each approach has two car lanes (0 and 1), and BOTH permit every turn.
+    for (const from of [T, R, B, L]) {
+      for (const exit of [T, R, B, L].filter(p => p !== from)) {
+        expect(lanesAllowingExit(c.road, from, exit)).toEqual([0, 1]);
+      }
+    }
+    // The resulting layer is structurally valid (contiguous indices, every lane exits).
+    expect(validateRoads({ "0,0": c }).issues).toEqual([]);
+  });
+
+  it("addRoad oneWay lays lanes only in the drawn direction", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    expect(c.road).toHaveLength(1);
+    expect(c.road![0]).toMatchObject({ from: Left, to: [Right], index: 0 });
+    // Not a two-way edge: there is no Right->Left movement.
+    expect(hasRoadPair(c, [Left, Right])).toBe(false);
+    // Multi-lane one-way: only the forward direction's lanes exist.
+    const w = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    expect(w.road).toHaveLength(2);
+    expect(w.road!.every(l => l.from === Left && l.to.includes(Right))).toBe(true);
+    expect(validateRoads({ "0,0": w }).issues).toEqual([]);
+  });
+
+  it("redrawing a two-way edge as one-way strips the reverse direction", () => {
+    let c = addRoad(emptyCell(), Left, Right); // two-way
+    expect(hasRoadPair(c, [Left, Right])).toBe(true);
+    c = addRoad(c, Left, Right, 1, 0, true); // repaint one-way L->R
+    expect(c.road).toHaveLength(1);
+    expect(c.road![0]).toMatchObject({ from: Left, to: [Right] });
+  });
+
+  it("removeRoad removes a specific pair regardless of order", () => {
+    let c = toggleRoad(emptyCell(), Top, Right);
+    c = removeRoad(c, Right, Top);
+    expect(c.road).toHaveLength(0);
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = emptyCell();
+    toggleRoad(c, Top, Bottom);
+    expect(c.road).toBeUndefined();
+  });
+});
+
+describe("toggleLaneKind", () => {
+  const laneAt = (cell: TileCell, from: Position, index: number) =>
+    cell.road!.find(l => l.from === from && l.index === index)!;
+
+  it("marks a normal lane as a bus lane and back, identified by from+index", () => {
+    // A 2-lane one-way road L->R (index 0 kerb, index 1 inboard).
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    expect(laneAt(c, Left, 0).kind).toBeUndefined();
+    c = toggleLaneKind(c, Left, 0); // mark the kerb lane as bus
+    expect(laneAt(c, Left, 0).kind).toBe("bus");
+    expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the other lane is untouched
+    c = toggleLaneKind(c, Left, 0); // toggle back to normal
+    expect(laneAt(c, Left, 0).kind).toBeUndefined();
+  });
+
+  it("keeps the lane's movements and index when flipping kind", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = toggleLaneKind(c, Left, 1);
+    const lane = laneAt(c, Left, 1);
+    expect(lane).toMatchObject({ from: Left, to: [Right], index: 1, kind: "bus" });
+  });
+
+  it("is a no-op (same cell) when no lane matches", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    expect(toggleLaneKind(c, Left, 5)).toBe(c); // no lane at index 5
+    expect(toggleLaneKind(emptyCell(), Left, 0)).toBeDefined(); // no road at all
+  });
+
+  it("does not mutate the input cell", () => {
+    const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    const before = c.road![0].kind;
+    toggleLaneKind(c, Left, 0);
+    expect(c.road![0].kind).toBe(before);
+  });
+});
