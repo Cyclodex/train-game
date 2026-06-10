@@ -31,5 +31,11 @@ jobs:
               referenced in the PR description ("Refs #N").
             - Look for correctness bugs, broken train/traffic-light behaviour,
               and deviations from the existing code style.
+            - For a VISUAL change, confirm the PR's "Before / After" section has a
+              before/after screenshot pair (under docs/verify/issue-<N>/) that
+              actually shows the acceptance criteria met. Flag it if the pair is
+              missing, doesn't match the scenario, or the "after" still shows the
+              bug. Don't re-capture — the implementer provides the proof
+              (docs/TICKET_WORKFLOW.md → "Visual verification").
             - Post your findings as inline review comments. Be concise; skip
               nitpicks that prettier/eslint already cover.
