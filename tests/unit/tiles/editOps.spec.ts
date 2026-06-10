@@ -323,6 +323,36 @@ describe("streetRunLanes", () => {
     expect(run).toHaveLength(4);
   });
 
+  it("collects ALL upstream tiles when clicking deep into a long street", () => {
+    // Regression: clicking tile 4 of a 6-tile straight street must sweep the whole
+    // upstream chain (0..3), not just one tile back. The backward walk steps tile
+    // by tile rather than delegating to the forward walk (which would immediately
+    // turn around at the first upstream tile and stop).
+    const lvl = straightRow(6);
+    const run = streetRunLanes(lvl, "4,0", Left, 0);
+    expect(run.map(r => r.id).sort()).toEqual(
+      ["0,0", "1,0", "2,0", "3,0", "4,0", "5,0"],
+    );
+  });
+
+  it("walks backward around a curve (click downstream of a bend)", () => {
+    // L-shape: horizontal at (0,0), bend down at (1,0), vertical at (1,1),(1,2).
+    // Click the LAST tile (1,2); the backward walk must follow the bend and pick
+    // up the tiles before it ((1,1),(1,0),(0,0)), where the approach side changes
+    // from Top to Left across the curve.
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: twoWay(Left, Bottom) }, // curve W<->S
+      "1,1": { connections: [], road: nWayLanes(Top, Bottom, 1) },
+      "1,2": { connections: [], road: nWayLanes(Top, Bottom, 1) },
+    };
+    // Southbound lane on the last tile enters from Top.
+    const run = streetRunLanes(lvl, "1,2", Top, 0);
+    expect(new Set(run.map(r => r.id))).toEqual(
+      new Set(["0,0", "1,0", "1,1", "1,2"]),
+    );
+  });
+
   it("follows the run around a curve", () => {
     // An L-shape: a horizontal tile at (0,0) bending down at (1,0) to (1,1).
     // The eastbound lane (from Left) at (0,0) flows into the curve, then south.

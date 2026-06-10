@@ -311,14 +311,13 @@ function throughLane(cell: TileCell | undefined, from: Port, index: number): Lan
   return lane;
 }
 
-// Walk the run in ONE direction from the lane `(id, from, index)` and append each
+// Walk the run DOWNSTREAM from the lane `(id, from, index)` and append each
 // further lane to `acc` (the seed lane is assumed already pushed by the caller).
 // `seen` guards against revisiting a tile so a circular street terminates. The
 // step rule: the current lane exits by `lane.to[0]`; the neighbour beyond that
 // exit continues the run as the lane entering through `oppositePort(exit)` at the
-// SAME index. Walking backward is the same routine called with the lane reversed
-// (enter through the current lane's exit, exit through its entry) — handled by the
-// caller seeding both directions.
+// SAME index. A bend is followed because the next tile's entry port is derived
+// from the exit, not assumed equal to `from`.
 function walkRun(
   level: Level,
   start: LaneRef,
@@ -350,6 +349,60 @@ function walkRun(
   }
 }
 
+// Walk the run UPSTREAM from the lane `(id, from, index)` and append each further
+// lane to `acc` (the seed lane is assumed already pushed by the caller). Stepping
+// upstream means moving to the neighbour on the current lane's ENTRY side (`from`)
+// and finding the through-lane there (at the same index) whose exit points back
+// toward us (`to[0] === oppositePort(from)`) — that lane is the one that flows
+// INTO the current tile, so it is the same physical street one tile back. Its own
+// `from` becomes the next upstream entry port, which is how a bend is followed:
+// on a curve the upstream tile's approach side differs from ours, so it is read
+// off the lane found rather than assumed. Same stop conditions as walkRun
+// (junction, road end, missing lane, fork, loop guard).
+function walkRunBack(
+  level: Level,
+  start: LaneRef,
+  acc: LaneRef[],
+  seen: Set<string>,
+): void {
+  let id = start.id;
+  let from = start.from;
+  const index = start.index;
+  for (;;) {
+    const backCoord = neighborCoord(parseCoordId(id), from);
+    if (!backCoord) return; // entry is off-map (e.g. Center): road end
+    const backId = getCoordinatesId(backCoord);
+    if (seen.has(backId)) return; // loop guard: circular street closes
+    // The upstream lane enters the neighbour through some port and exits toward us
+    // (oppositePort(from)) at the same index. We don't know its entry port a priori
+    // (a bend changes it), so search the neighbour's through-lanes for the one that
+    // exits back toward this tile.
+    const wantExit = oppositePort(from);
+    const upLane = throughLaneExiting(level[backId], wantExit, index);
+    if (!upLane) return; // missing lane / junction / fork / not flowing toward us
+    seen.add(backId);
+    acc.push({ id: backId, from: upLane.from, index });
+    id = backId;
+    from = upLane.from;
+  }
+}
+
+// The through-lane on `cell` at `index` whose single exit is `exit`, or null. Like
+// throughLane but keyed by the EXIT port (we know where the lane must flow, not
+// which side it enters) — used by the upstream walk, where a bend means the entry
+// side is unknown until the lane is found.
+function throughLaneExiting(
+  cell: TileCell | undefined,
+  exit: Port,
+  index: number,
+): Lane | null {
+  if (!cell || isRoadJunction(cell.road)) return null;
+  const lane = (cell.road ?? []).find(
+    l => l.index === index && l.to.length === 1 && l.to[0] === exit,
+  );
+  return lane ?? null;
+}
+
 // The whole street run containing the clicked lane `(id, from, index)`: the lane
 // itself plus every lane it flows into forward (following its exit) and backward
 // (following the oncoming side), across straights and curves, stopping at
@@ -372,25 +425,10 @@ export function streetRunLanes(
   const seen = new Set<string>([id]);
   // Forward: follow the clicked lane's exit downstream.
   walkRun(level, { id, from, index }, out, seen);
-  // Backward: the upstream tile is the neighbour on the lane's ENTRY side
-  // (`from`); there the same physical lane enters through the same `from` port at
-  // the same index (a straight street keeps its approach side) and exits toward
-  // `oppositePort(from)`, i.e. back toward us. Walking that lane forward from the
-  // upstream tile sweeps the rest of the street, so one routine covers both ways.
-  const back = neighborCoord(parseCoordId(id), from);
-  if (back) {
-    const backId = getCoordinatesId(back);
-    if (!seen.has(backId) && throughLane(level[backId], from, index)) {
-      // The upstream lane must actually flow toward us (exit oppositePort(from)),
-      // otherwise it is a different street that merely shares an index.
-      const upLane = lanesFrom(level[backId]?.road, from).find(l => l.index === index);
-      if (upLane && upLane.to[0] === oppositePort(from)) {
-        seen.add(backId);
-        out.push({ id: backId, from, index });
-        walkRun(level, { id: backId, from, index }, out, seen);
-      }
-    }
-  }
+  // Backward: step upstream tile by tile, following the physical lane that flows
+  // INTO each tile (across bends), until the run stops (junction / road end /
+  // missing lane / fork / loop). One loop sweeps the whole upstream street.
+  walkRunBack(level, { id, from, index }, out, seen);
   return out;
 }
 
