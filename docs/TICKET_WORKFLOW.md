@@ -63,7 +63,28 @@ review those yourself or comment `@claude review this PR`.
 
 ## Optional: project board
 
-If you prefer a Kanban view, create a GitHub Project (repo → Projects → New
-project → Board) with one column per status label and an automation that
-mirrors the labels. The labels stay the source of truth, so the board is
-optional and can be added anytime.
+If you prefer a Kanban view, two sync workflows connect a GitHub Project board
+to the status labels (labels remain the source of truth):
+
+- **`project-handover.yml`** — dragging a card from *Triage* into *Ready for
+  dev* applies `status: ready-for-dev`, which triggers the implement
+  workflow. Polls every 5 minutes (Projects v2 has no "card moved" trigger);
+  run it manually from the Actions tab if you don't want to wait.
+- **`project-status-sync.yml`** — whenever a `status:` label changes, the
+  card moves to the matching column, so the board follows Claude's progress.
+
+One-time board setup:
+
+1. Create a **Project (Board)** on your GitHub profile and link the repo.
+2. Name the Status options exactly: `Triage`, `Ready for dev`, `In progress`,
+   `In review`, `Sign-off`, `Done`.
+3. In the project's built-in workflows, enable **Auto-add** for this repo's
+   issues (set status `Triage`) and **Item closed → Done**.
+4. Add a repo **variable** `PROJECT_NUMBER` (the number in the project URL)
+   under Settings → Secrets and variables → Actions → Variables.
+5. Add a **secret** `PROJECT_SYNC_TOKEN`: a classic personal access token with
+   `repo` + `project` scopes. (The default workflow token can't access
+   Projects, and labels it applies wouldn't trigger other workflows.)
+
+Until `PROJECT_NUMBER` is set, both sync workflows skip silently, so the
+board is opt-in.
