@@ -430,9 +430,19 @@ class Tile extends Vue {
                   dashed: false,
                 },
               ];
+        // Markings. A simple curve keeps its centre + parallel dividers. On a
+        // JUNCTION the symmetric ribbon parallels looked wrong — the inner ones
+        // dove almost through the middle of the box, crossing every corridor —
+        // so a turn edge instead paints one guide per turning LANE, on the
+        // exact lane-to-lane glide curve the cars drive (entry-lane offset →
+        // landing-lane offset): a clean curve from one street's lane to the
+        // other's, like real intersection guide lines.
+        const laneMarkings = this.tileIsRoadJunction
+          ? this.junctionTurnGuides(coord, a, b, size)
+          : roadLaneMarkingPaths(a, b, size, selfA, selfB);
         return {
           surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
-          laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
+          laneMarkings,
           edges,
           mismatch,
           mismatchTip,
@@ -589,6 +599,49 @@ class Tile extends Vue {
     // where the oncoming lanes enter from the adjacent port, not oppositePort
     // (which carries none) — see game.ts centeredBandAt.
     return this.game.roadLaneCountAt(coord, port) / 2;
+  }
+
+  // The always-on turn guides inside a junction box for the turn edge [a, b]:
+  // ONE dashed curve per turn MOVEMENT and direction, on the EXACT lane-to-lane
+  // glide path the cars drive (seam-matched entry offset → landing-lane exit
+  // offset, identical to couplerOffset's turn branch and the debug lane arrows).
+  // The guide is drawn for the lane real signage would mark — the kerb-most
+  // allowed lane of a right turn, the inner-most of a left — not for every lane
+  // (a 2-lane cross would paint 16 curves, pure confetti). Replaces the old
+  // symmetric ribbon parallels, whose inner lines dove through the middle of
+  // the box instead of curving street-to-street.
+  private junctionTurnGuides(
+    coord: ReturnType<typeof parseCoordId>,
+    a: Position,
+    b: Position,
+    size: number,
+  ): LaneMarkingPath[] {
+    const road = this.tile.road ?? [];
+    const out: LaneMarkingPath[] = [];
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as [Position, Position][]) {
+      const lanes = road.filter(l => l.from === from && l.to.includes(to));
+      if (lanes.length === 0) continue;
+      const lane = lanes.reduce((best, l) =>
+        turnKind(from, to) === "right"
+          ? l.index < best.index ? l : best // right turn: the kerb-most lane
+          : l.index > best.index ? l : best, // left turn: the inner-most lane
+      );
+      const selfBand = laneCountAt(road, from) / 2;
+      const nEntry = neighborCoord(coord, from);
+      const entryBand = seamBand(
+        selfBand,
+        nEntry ? this.centeredRoadBand(nEntry, oppositePort(from)) : 0,
+      );
+      const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      const cls = lane.kind === "bus" ? "bus" : "car";
+      const offExit =
+        this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? offEntry;
+      out.push({ d: laneSegmentPathD(from, to, size, offEntry, offExit), kind: "centre" });
+    }
+    return out;
   }
 
   get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
