@@ -6,6 +6,7 @@ import {
   roadCurvePolygonPath,
   roadCurvePolygonPathTapered,
   roadCurveKerbEdgeTapered,
+  flankPort,
   roadLaneMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
@@ -411,6 +412,24 @@ describe("roadCurvePolygonPath", () => {
       expect(dist).toBeGreaterThan(halfW * 0.98);
       expect(dist).toBeLessThan(halfW * 1.02);
     }
+  });
+});
+
+describe("flankPort (which port flanks a straight edge on each side)", () => {
+  it("Right→Left edge: +1 is Top, -1 is Bottom", () => {
+    // roadEdges normalises a horizontal edge to [Right, Left] (1 < 3).
+    expect(flankPort(Position.Right, Position.Left, 1)).toBe(Position.Top);
+    expect(flankPort(Position.Right, Position.Left, -1)).toBe(Position.Bottom);
+  });
+
+  it("Top→Bottom edge: +1 is Left, -1 is Right", () => {
+    expect(flankPort(Position.Top, Position.Bottom, 1)).toBe(Position.Left);
+    expect(flankPort(Position.Top, Position.Bottom, -1)).toBe(Position.Right);
+  });
+
+  it("flipping the traversal flips the sides", () => {
+    expect(flankPort(Position.Left, Position.Right, 1)).toBe(Position.Bottom);
+    expect(flankPort(Position.Bottom, Position.Top, 1)).toBe(Position.Right);
   });
 });
 

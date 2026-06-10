@@ -28,16 +28,15 @@
         class="road-bus-band"
       />
       <!-- Road edge line where the tarmac meets the grass (per outer kerb).
-           Across a junction box the solid kerb line breaks into dashes like the
-           other markings — the kerb is interrupted by the arm openings, so a
-           solid line through the box reads as a wall. -->
+           On a junction these are the SOLID corner-fillet kerbs (plus the flat
+           side of a T); they trace the curved concrete, never the box interior,
+           which carries only dashed markings — like a real intersection. -->
       <template v-for="(r, i) in roadPaths" :key="'re' + i">
         <path
           v-for="(e, ei) in r.edges"
           :key="'re' + i + '_' + ei"
           :d="e"
           class="road-edge"
-          :class="{ 'road-edge--junction': tileIsRoadJunction }"
         />
       </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
@@ -236,6 +235,7 @@ import {
   roadLaneMarkingPaths,
   roadKerbEdge,
   roadCurveKerbEdgeTapered,
+  flankPort,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -252,6 +252,7 @@ import {
   seamPaintTotal,
   seamMismatch,
   isRoadJunction,
+  turnKind,
 } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
@@ -404,16 +405,26 @@ class Tile extends Vue {
         const widthEndB = seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
-        // Edge lines on a *simple* curve (a single bend, 2 ports): both kerbs,
-        // tapering with the surface. Junctions (T/cross, >1 road edge) are
-        // skipped — their outer outline is the union of overlapping ribbons,
-        // which needs separate handling.
-        const edges = roadEdges(this.tile.road).length === 1
-          ? [
-              roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, 1),
-              roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, -1),
-            ]
-          : [];
+        // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
+        // tapering with the surface. On a JUNCTION a turn edge contributes its
+        // CORNER FILLET kerb — the solid white line tracing the curved concrete
+        // between two adjacent arms (the bend's inner side, toward the shared
+        // tile corner: the left side of a left turn, right of a right turn).
+        // The straight kerbs that used to run across the box are gone (see the
+        // straight branch), so the box outline is exactly the real pavement
+        // boundary: solid round corners, open arm mouths.
+        const edges =
+          roadEdges(this.tile.road).length === 1
+            ? [
+                roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, 1),
+                roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, -1),
+              ]
+            : [
+                roadCurveKerbEdgeTapered(
+                  a, b, size, widthA2 / 2, widthB2 / 2,
+                  turnKind(a, b) === "right" ? 1 : -1,
+                ),
+              ];
         return {
           surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
           laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
@@ -505,8 +516,20 @@ class Tile extends Vue {
       const goreA = selfA > 0 && d1A > 0 && d1A < selfA;
       const goreB = selfB > 0 && d1B > 0 && d1B < selfB;
       const edges: string[] = [];
-      if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
-      if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
+      if (this.tileIsRoadJunction) {
+        // On a junction a straight edge keeps its kerb only on a side with NO
+        // arm (a T-junction's flat side — a real, uninterrupted kerb). A side
+        // with an arm is open: its boundary is the corner fillets (drawn by
+        // the turn edges), not a line across the mouth.
+        for (const s of [1, -1] as const) {
+          if (laneCountAt(this.tile.road, flankPort(a, b, s)) === 0) {
+            edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, s));
+          }
+        }
+      } else {
+        if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
+        if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
+      }
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
@@ -961,12 +984,6 @@ export default toNative(Tile);
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 2px;
   stroke-linecap: round;
-}
-/* Across a junction box the kerb line dashes in the same 25px rhythm as the
-   other markings (tile edges land mid-gap, like .road-marking-inner). */
-.road-edge--junction {
-  stroke-dasharray: 13 12;
-  stroke-dashoffset: 19px;
 }
 .road-drop-arrow-shaft {
   fill: none;

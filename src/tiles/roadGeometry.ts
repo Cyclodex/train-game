@@ -246,6 +246,32 @@ export function roadCurveKerbEdgeTapered(
   return curvedParallelPathTapered(entry, exit, size, side * halfA, side * halfB);
 }
 
+// The port flanking a STRAIGHT road edge on the given side (+1 = right of
+// entry→exit travel, -1 = left): e.g. for a Right→Left edge, +1 is Top. A
+// junction uses this to decide whether a straight kerb line may be drawn on a
+// side: no arm there → a real, uninterrupted kerb (a T-junction's flat side);
+// an arm there → the kerb is broken by the arm's opening and is drawn by the
+// corner fillets instead.
+export function flankPort(entry: Port, exit: Port, side: 1 | -1): Port {
+  const S = 2; // any size — the geometry is scale-free
+  const a = portPoint(entry, S);
+  const b = portPoint(exit, S);
+  const c = portPoint(Position.Center, S);
+  const n = perpUnit(a, b);
+  const ports: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
+  let best = ports[0];
+  let bestDot = -Infinity;
+  for (const p of ports) {
+    const q = portPoint(p, S);
+    const d = ((q.x - c.x) * n.x + (q.y - c.y) * n.y) * side;
+    if (d > bestDot) {
+      bestDot = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
 // The paved-surface polygon for a road edge whose width tapers linearly from
 // `widthA` at the entry end to `widthB` at the exit end. Used by the tile
 // renderer to draw a road whose width changes at a seam (a merge or a split):
