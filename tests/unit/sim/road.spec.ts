@@ -895,7 +895,7 @@ describe("createRoadSim — multi-lane crosses keep flowing", () => {
         const now = new Set(sim.cars().map(c => c.id));
         for (const id of now) allIds.add(id);
         for (const id of prev) {
-          if (!now.has(id)) (i < STEPS / 2 ? firstHalf++ : secondHalf++);
+          if (!now.has(id)) { if (i < STEPS / 2) firstHalf++; else secondHalf++; }
         }
         prev = now;
       }

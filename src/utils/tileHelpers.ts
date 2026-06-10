@@ -50,7 +50,6 @@ export function getIntersectionSwitch(
   entrancePosition: Position,
   leavingPosition: Position
 ) {
-  const diff = leavingPosition - entrancePosition;
   switch (leavingPosition) {
   case Position.Top:
     return { x: 0, y: -1 };

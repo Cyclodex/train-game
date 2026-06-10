@@ -1,5 +1,4 @@
 import { Position } from "@/types";
-import { Level } from "@/tiles/model";
 import { TestScenario } from "@/levels/test/scenario";
 import { nWayLanes } from "@/tiles/lanes";
 
