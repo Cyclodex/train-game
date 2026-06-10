@@ -1,8 +1,17 @@
 name: Status labels → project board
 
-# Mirrors `status: *` label changes onto the project board's Status column,
-# so cards move automatically when e.g. the implement workflow advances an
-# issue to in-progress / in-review. Labels are the source of truth.
+# Mirrors issue state onto the project board's Status column, so cards move
+# automatically when e.g. the implement workflow advances an issue to
+# in-progress / in-review, or a merged PR closes its issue. Labels (and the
+# open/closed state) are the source of truth.
+#
+# Handles:
+# - issues.labeled    → column matching the new `status: *` label
+# - issues.closed     → Done  (covers boards where the built-in
+#                       "Item closed → Done" project workflow isn't enabled)
+# - issues.reopened   → column matching the issue's current `status: *` label
+# - workflow_dispatch → re-sync a single issue by number (repair tool: run it
+#                       from the Actions tab when a card is out of sync)
 #
 # Requires the same PROJECT_NUMBER variable and PROJECT_SYNC_TOKEN secret
 # as project-handover.yml, and board Status options named exactly:
@@ -10,17 +19,25 @@ name: Status labels → project board
 
 on:
   issues:
-    types: [labeled]
+    types: [labeled, closed, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to re-sync onto the board"
+        required: true
 
 jobs:
   sync:
-    if: "vars.PROJECT_NUMBER != '' && startsWith(github.event.label.name, 'status: ')"
+    if: >-
+      vars.PROJECT_NUMBER != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.action != 'labeled' ||
+       startsWith(github.event.label.name, 'status: '))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         env:
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
-          LABEL_NAME: ${{ github.event.label.name }}
         with:
           github-token: ${{ secrets.PROJECT_SYNC_TOKEN }}
           script: |
@@ -30,12 +47,38 @@ jobs:
               'status: in-progress': 'In progress',
               'status: in-review': 'In review',
             };
-            const desired = labelToStatus[process.env.LABEL_NAME];
-            if (!desired) return core.info(`No mapping for ${process.env.LABEL_NAME}`);
+            const statusFromLabels = (labels) => {
+              const name = labels
+                .map((l) => (typeof l === 'string' ? l : l.name))
+                .find((n) => labelToStatus[n]);
+              return name ? labelToStatus[name] : undefined;
+            };
 
             const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
             const { owner, repo } = context.repo;
-            const issueNumber = context.payload.issue.number;
+
+            let issueNumber;
+            let desired;
+            if (context.eventName === 'workflow_dispatch') {
+              issueNumber = parseInt(context.payload.inputs.issue_number, 10);
+              const { data: issue } = await github.rest.issues.get({
+                owner, repo, issue_number: issueNumber,
+              });
+              if (issue.pull_request) {
+                return core.warning(`#${issueNumber} is a pull request — only issue cards are synced`);
+              }
+              desired = issue.state === 'closed' ? 'Done' : statusFromLabels(issue.labels);
+            } else if (context.payload.action === 'closed') {
+              issueNumber = context.payload.issue.number;
+              desired = 'Done';
+            } else if (context.payload.action === 'reopened') {
+              issueNumber = context.payload.issue.number;
+              desired = statusFromLabels(context.payload.issue.labels) ?? 'Triage';
+            } else {
+              issueNumber = context.payload.issue.number;
+              desired = labelToStatus[context.payload.label.name];
+            }
+            if (!desired) return core.info(`No status mapping for issue #${issueNumber}`);
 
             const res = await github.graphql(`
               query ($owner: String!, $repo: String!, $issue: Int!, $project: Int!) {

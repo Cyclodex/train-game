@@ -131,6 +131,10 @@ to the status labels (labels remain the source of truth):
   the Actions tab.
 - **`project-status-sync.yml`** — whenever a `status:` label changes, the
   card moves to the matching column, so the board follows Claude's progress.
+  It also moves the card to **Done when the issue closes** (so the board
+  doesn't depend on the project's built-in "Item closed → Done" workflow) and
+  back to the matching column on reopen. A card out of sync? Run this
+  workflow manually from the Actions tab with the issue number to re-sync it.
 
 One-time board setup:
 
