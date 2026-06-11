@@ -255,6 +255,7 @@ import {
   seamMismatch,
   isRoadJunction,
   turnKind,
+  laneAllExits,
 } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
@@ -622,7 +623,7 @@ class Tile extends Vue {
       [a, b],
       [b, a],
     ] as [Position, Position][]) {
-      const lanes = road.filter(l => l.from === from && l.to.includes(to));
+      const lanes = road.filter(l => l.from === from && laneAllExits(l).includes(to));
       if (lanes.length === 0) continue;
       const lane = lanes.reduce((best, l) =>
         turnKind(from, to) === "right"
@@ -636,7 +637,8 @@ class Tile extends Vue {
         nEntry ? this.centeredRoadBand(nEntry, oppositePort(from)) : 0,
       );
       const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
-      const cls = lane.kind === "bus" ? "bus" : "car";
+      // A movement reached only via busTo is bus-only even on a shared car lane.
+      const cls = lane.kind === "bus" || !lane.to.includes(to) ? "bus" : "car";
       const offExit =
         this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? offEntry;
       out.push({ d: laneSegmentPathD(from, to, size, offEntry, offExit), kind: "centre" });
@@ -668,17 +670,23 @@ class Tile extends Vue {
       // move; the right lane ends). See sim/laneOffset.ts oneWayLaneOffsetPx.
       const oneWay = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
-      const cls = isBus ? "bus" : "car";
-      for (const to of lane.to) {
+      // busTo exits are movements only buses may take off a shared car lane —
+      // drawn like any other movement but class "bus" (and amber).
+      const moves = [
+        ...lane.to.map(to => ({ to, busOnly: false })),
+        ...(lane.busTo ?? []).map(to => ({ to, busOnly: true })),
+      ];
+      for (const { to, busOnly } of moves) {
+        const cls = isBus || busOnly ? "bus" : "car";
         // Colour a movement amber only when it actually LANDS on a bus lane on the
         // exit arm. Through a junction a bus lane can fan onto a car-only arm (a
         // median bus turning right onto a kerb car lane); the sim drives it on that
         // car lane, so the overlay must read cyan there, not paint a phantom amber
         // line onto an arm with no bus lane. Off a junction the lane keeps its kind.
         const moveIsBus =
-          isBus && this.tileIsRoadJunction
+          (isBus || busOnly) && this.tileIsRoadJunction
             ? this.game.roadTurnExitIsBusLane(coord, lane.from, to, lane.index, cls)
-            : isBus;
+            : isBus || busOnly;
         if (oppositePort(lane.from) === to) {
           if (oneWay) {
             const R = this.game.roadOneWayRunMax(coord, lane.from);

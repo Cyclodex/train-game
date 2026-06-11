@@ -16,15 +16,16 @@ const R = Position.Right;
 const B = Position.Bottom;
 
 // One car lane N–S, plus a bus lane on the east arm that matches the adjacent
-// bus-only road. Car lanes only permit straight movement (no east exit); the bus
-// lane handles connections from the east arm so the debug overlay shows amber
-// arrows matching the bus-only neighbor tiles.
+// bus-only road. Cars only go straight; the SAME physical N–S lanes carry the
+// bus-only turn into the east arm via `busTo` (one lane per (from, index), so
+// validation passes, and the east seam carries a lane each way so the junction
+// geometry lands on real lane positions instead of a single centred point).
 function junctionCenter(): { connections: []; road: Lane[] } {
   return {
     connections: [],
     road: [
-      { from: T, to: [B], index: 0 },                 // car from north: straight only
-      { from: B, to: [T], index: 0 },                 // car from south: straight only
+      { from: T, to: [B], busTo: [R], index: 0 },     // car straight; bus may turn east
+      { from: B, to: [T], busTo: [R], index: 0 },     // car straight; bus may turn east
       { from: R, to: [T, B], index: 0, kind: "bus" }, // bus from east: go N or S
     ],
   };

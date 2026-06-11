@@ -21,6 +21,10 @@ import {
   junctionExitLane,
   junctionExitOffsetPx,
   turnSeamBand,
+  usableExits,
+  lanesAllowingExitFor,
+  laneExits,
+  laneAllExits,
 } from "@/tiles/lanes";
 import { seamBand, laneOffsetConstPx } from "@/sim/laneOffset";
 import { mixedtee } from "@/levels/test/scenarios/mixedjunction";
@@ -405,5 +409,48 @@ describe("junctionExitOffsetPx (turn-glide target offset)", () => {
     expect(car).toBeCloseTo(0, 6);
     expect(bus).toBeCloseTo(28, 6);
     expect(bus).toBeGreaterThan(car); // bus sits further toward the kerb
+  });
+});
+
+describe("busTo: bus-only exits on a shared lane", () => {
+  // The busjunction T: cars N–S straight only, buses may also turn east, and the
+  // east arm is a bus lane. One physical lane per (from, index) — no validator clash.
+  const tee: Lane[] = [
+    { from: T, to: [B], busTo: [R], index: 0 },
+    { from: B, to: [T], busTo: [R], index: 0 },
+    { from: R, to: [T, B], index: 0, kind: "bus" },
+  ];
+
+  it("laneExits gives buses the extra exits, cars only `to`", () => {
+    const lane = tee[0];
+    expect(laneExits(lane, "car")).toEqual([B]);
+    expect(laneExits(lane, "bus")).toEqual([B, R]);
+    expect(laneAllExits(lane)).toEqual([B, R]);
+  });
+
+  it("usableExits: cars cannot leave east, buses can", () => {
+    expect(usableExits(tee, T, "car")).toEqual([B]);
+    expect(usableExits(tee, T, "bus").sort()).toEqual([B, R].sort());
+    expect(usableExits(tee, B, "car")).toEqual([T]);
+    expect(usableExits(tee, B, "bus").sort()).toEqual([T, R].sort());
+  });
+
+  it("lanesAllowingExitFor: the shared lane allows the east turn only for buses", () => {
+    expect(lanesAllowingExitFor(tee, T, R, "car")).toEqual([]);
+    expect(lanesAllowingExitFor(tee, T, R, "bus")).toEqual([0]);
+  });
+
+  it("laneCountAt counts the bus turn as a physical seam lane (no centred point)", () => {
+    // East seam: 1 entering (R approach) + 1 distinct exiting index via busTo = 2,
+    // matching the adjacent 1+1 bus-only street — lanes land at real positions.
+    expect(laneCountAt(tee, R)).toBe(2);
+  });
+
+  it("structural derivations include busTo movements", () => {
+    expect(roadPortsOf(tee).sort()).toEqual([T, R, B].sort());
+    expect(isRoadJunction(tee)).toBe(true);
+    expect(laneMovements(tee)).toContainEqual({ from: T, to: R });
+    expect(laneMovements(tee)).toContainEqual({ from: B, to: R });
+    expect(roadEdges(tee)).toContainEqual([T, R]);
   });
 });

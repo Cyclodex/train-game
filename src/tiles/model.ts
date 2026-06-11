@@ -181,6 +181,7 @@ export function kindOf(cell: TileCell): TileKind {
     for (const lane of road) {
       ports.add(lane.from);
       for (const to of lane.to) ports.add(to);
+      for (const to of lane.busTo ?? []) ports.add(to);
     }
     if (ports.size >= 4) return "road-cross";
     if (ports.size === 3) return "road-tjunction";
