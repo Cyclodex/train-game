@@ -686,13 +686,13 @@ class Tile extends Vue {
     }
     const ab = moves.get(a);
     const ba = moves.get(b);
-    if (ab && ba && laneCount(road, a) <= 1 && laneCount(road, b) <= 1) {
-      // The single centre divider of the two-way bend: at each seam, midway
-      // between the two opposing streams. Offsets are right-of-travel, so the
-      // opposite direction's position in the a→b frame is its NEGATED offset.
-      const centreA = (ab.offEntry - ba.offExit) / 2;
-      const centreB = (ab.offExit - ba.offEntry) / 2;
-      return [{ d: laneSegmentPathD(a, b, size, centreA, centreB), kind: "centre" }];
+    if (ab && ba && (laneCount(road, a) <= 1 || laneCount(road, b) <= 1)) {
+      // When either arm is a single lane both movement arcs share the same
+      // physical endpoints (one end is the 1-lane centre, the other is the
+      // multi-lane turn lane). Draw ONE guide using the a→b direction so each
+      // end lands at its correct lane position. This also covers 1L×1L where
+      // both offsets are ≈ 0 anyway.
+      return [{ d: laneSegmentPathD(a, b, size, ab.offEntry, ab.offExit), kind: "centre" }];
     }
     const out: LaneMarkingPath[] = [];
     for (const [from, to] of [
