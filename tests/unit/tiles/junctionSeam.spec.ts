@@ -21,10 +21,14 @@ import type { Port } from "@/tiles/model";
 // that authors a taper next to a junction — or a change that reintroduces the
 // junction-laneCountAt over/under-count at a seam — fails CI.
 
-// The painted total a plain straight road tile shows across one through edge,
-// flooring at the min-2 a one-way still draws. Equals the road's own width.
-function roadSelfTotal(road: Lane[], a: Port, b: Port): number {
-  return Math.max(laneCount(road, a) + laneCount(road, b), 2);
+// The painted total a road tile (straight OR curve) shows at the seam on `port`:
+// its real crossing width there, floored at the min-2 a one-way still draws.
+// For a straight this equals laneCount(a)+laneCount(b); for a curve the facing
+// laneCountAt (its opposite port carries no lanes, so the two-term sum would
+// under-count). With a junction neighbour the road keeps exactly this width
+// (roadSeamPaintTotal junction exemption), so it doubles as the expected value.
+function roadFacingTotal(road: Lane[], port: Port): number {
+  return Math.max(laneCountAt(road, port), 2);
 }
 
 describe("junctionArmPaintTotal / roadSeamPaintTotal", () => {
@@ -76,9 +80,9 @@ describe("no painted taper at a junction seam (every scenario)", () => {
             laneCountAt(nb.road, fp),
             false,
           );
-          // The road keeps its own width at a junction seam.
+          // The road keeps its own facing width at a junction seam.
           const roadW = roadSeamPaintTotal(
-            roadSelfTotal(nb.road, fp, oppositePort(fp)),
+            roadFacingTotal(nb.road, fp),
             laneCountAt(jRoad, p),
             true,
           );

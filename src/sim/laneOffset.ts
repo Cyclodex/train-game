@@ -41,6 +41,31 @@ export function seamBand(selfBand: number, neighbourBand: number): number {
   return neighbourBand > 0 ? Math.min(selfBand, neighbourBand) : selfBand;
 }
 
+// The positioning band at a seam, junction-aware — the band-side counterpart of
+// the painting rule in tiles/lanes.ts (roadSeamPaintTotal/junctionArmPaintTotal):
+// at a junction↔road seam the ROAD's real band is authoritative on BOTH sides,
+// because a junction's per-arm `laneCountAt` tallies the movements that fan
+// through the arm, not the arm's real width. Min-ing against it (plain seamBand)
+// only corrects an over-count; an under-counted arm (some road lanes never
+// targeted) would position vehicles and guides on a narrower band than the
+// painted road — half a lane off the markings right at the junction mouth.
+//   junction meeting a road  → the road's band (the junction adopts the road)
+//   road meeting a junction  → its own band   (a junction never pinches a road)
+//   road↔road                → min            (the legit lane-change taper)
+//   junction↔junction        → min            (symmetric on both sides)
+//   no neighbour road        → own band       (an open road end keeps its width)
+export function seamPositioningBand(
+  selfBand: number,
+  selfIsJunction: boolean,
+  neighbourBand: number,
+  neighbourIsJunction: boolean,
+): number {
+  if (neighbourBand <= 0) return selfBand;
+  if (selfIsJunction && !neighbourIsJunction) return neighbourBand;
+  if (!selfIsJunction && neighbourIsJunction) return selfBand;
+  return Math.min(selfBand, neighbourBand);
+}
+
 // The lateral offset (px, right-of-travel) of lane position `lanePos` at a seam
 // where this tile's same-direction band (`selfBand` lanes) meets a band of
 // `seamWidth` lanes (the min-seam result). 0 = kerb-side, selfBand-1 = centre.
