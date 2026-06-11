@@ -183,6 +183,29 @@
       />
     </svg>
 
+    <!-- Road-junction traffic signals (#38): one head per approach arm, coloured
+         by that arm's current aspect; a small chip shows the live mode. Clicking
+         either cycles the mode live in play (off → two-phase → +bus → round-robin
+         → +bus → off), mirroring the junction-switch's live toggle. -->
+    <template v-if="config.roads && tileIsRoadJunction">
+      <div
+        v-for="h in roadSignalHeads"
+        :key="'rsig' + h.arm"
+        class="road-signal"
+        :class="`road-signal--${h.arm}`"
+        @click.stop="cycleRoadSignal"
+      >
+        <span class="road-signal-dot" :class="`road-signal-dot--${h.aspect}`" />
+      </div>
+      <div
+        class="road-signal-chip"
+        :class="{ 'road-signal-chip--off': !roadSignalActive }"
+        @click.stop="cycleRoadSignal"
+      >
+        {{ roadSignalLabel }}
+      </div>
+    </template>
+
     <!-- Depot -->
     <template v-if="isDepot">
       <img class="depot-building" :src="depotBuildingImg" />
@@ -258,7 +281,9 @@ import {
   isRoadJunction,
   turnKind,
   laneAllExits,
+  roadPortsOf,
 } from "@/tiles/lanes";
+import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
@@ -938,6 +963,36 @@ class Tile extends Vue {
     this.game.cycleSignal(this.coordId, exitPort);
   }
 
+  // --- road-junction signals (#38) ---
+  // The live signal of this junction from the running game, falling back to the
+  // tile's AUTHORED signal so the editor's chip shows the mode being authored
+  // (the editor's stub game carries no live signal state).
+  get roadSignal() {
+    return this.game.roadSignals?.[this.coordId] ?? this.tile.signal;
+  }
+  // One head per approach arm, coloured by that arm's live aspect. Only shown when
+  // the running game is driving live aspects (in the editor there is no phase
+  // clock, so the chip alone indicates the authored mode).
+  get roadSignalHeads(): { arm: Position; aspect: string }[] {
+    if (!this.game.roadSignals?.[this.coordId]) return [];
+    return roadPortsOf(this.tile.road).map(arm => ({
+      arm,
+      aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
+    }));
+  }
+  // Whether this road junction is currently signalised (a mode other than off).
+  get roadSignalActive(): boolean {
+    const sig = this.roadSignal;
+    return !!sig && sig.mode !== "off";
+  }
+  // The mode chip text, e.g. "two-phase +bus" or "off".
+  get roadSignalLabel(): string {
+    return signalModeLabel(this.roadSignal);
+  }
+  cycleRoadSignal() {
+    this.game.cycleRoadSignal?.(this.coordId);
+  }
+
   // --- switches ---
   switchArmEnabled(entry: Position, arm: ActiveIntersection): boolean {
     const exit = armExit(entry, arm);
@@ -1189,6 +1244,81 @@ $signal-offset: 20px;
   left: 2px;
   top: calc(50% - #{$signal-offset});
   transform: translateY(-50%);
+}
+
+/* --- road-junction traffic signals (#38) --- */
+.road-signal {
+  position: absolute;
+  z-index: 15;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.road-signal-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid #111;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  background: #5a1512;
+}
+.road-signal-dot--green {
+  background: #34c759;
+  box-shadow: 0 0 6px #34c759;
+}
+.road-signal-dot--amber {
+  background: #ffcc00;
+  box-shadow: 0 0 6px #ffcc00;
+}
+.road-signal-dot--red {
+  background: #ff3b30;
+  box-shadow: 0 0 6px #ff3b30;
+}
+/* Each head sits just inside its arm's stop line (the kerb where cars wait). */
+.road-signal--0 {
+  top: 24%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.road-signal--1 {
+  right: 24%;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.road-signal--2 {
+  bottom: 24%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.road-signal--3 {
+  left: 24%;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.road-signal-chip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 16;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.road-signal-chip--off {
+  color: #aaa;
+  background: rgba(20, 20, 20, 0.45);
 }
 
 /* --- switches (from TileIntersectionComplete.vue) --- */

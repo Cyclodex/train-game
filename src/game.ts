@@ -9,6 +9,7 @@ import {
   SimEvent,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
+import { JunctionSignal } from "@/sim/junctionSignal";
 import {
   laneCount,
   laneCountAt,
@@ -186,6 +187,13 @@ export interface Game {
   carJunctions: Record<string, string>;
   // In debug mode: destination tile id -> car id for cars heading there.
   carDestinations: Record<string, string>;
+  // Street-junction traffic signals (#38). Per-arm aspect of each signalised road
+  // junction, keyed `${tileId}:${arm}` → green/amber/red, refreshed each frame.
+  roadSignalAspects: Record<string, "green" | "amber" | "red">;
+  // The live signal (mode + bus-priority) of each road junction whose mode is not
+  // "off", keyed by tile id. Absent ⟺ not signalised. The renderer reads this to
+  // decide whether to draw signal heads + a mode chip.
+  roadSignals: Record<string, JunctionSignal>;
   // In debug mode: the route of the hovered/pinned car (null when none). The view
   // sets the active car via the methods below (only while debug is on) and draws
   // this as a highlighted line. Pinned takes precedence over hovered.
@@ -267,6 +275,9 @@ export interface Game {
   clearHoveredCar(): void; // hover left a car
   togglePinnedCar(carId: string): void; // click: pin this car's route (or unpin)
   clearRouteCar(): void; // click empty space: drop hover + pin
+  // Cycle a road junction's traffic-signal mode live in play (off → two-phase →
+  // two-phase+bus → round-robin → round-robin+bus → off). No-op off a road junction.
+  cycleRoadSignal(tileId: string): void;
 }
 
 export function createGame(
@@ -434,6 +445,32 @@ export function createGame(
   // is derived live; the renderer reads it to highlight a held junction in debug.
   const carJunctions = reactive({}) as Record<string, string>;
   const carDestinations = reactive({}) as Record<string, string>;
+  // Street-junction traffic signals (#38). The road junction tile ids (computed
+  // once), and the reactive per-arm aspect + live-signal maps the renderer reads.
+  const roadJunctionTiles = Object.entries(level)
+    .filter(([, tile]) => isRoadJunction(tile.road))
+    .map(([id, tile]) => ({ id, arms: roadPortsOf(tile.road) }));
+  const roadSignalAspects = reactive({}) as Record<
+    string,
+    "green" | "amber" | "red"
+  >;
+  const roadSignals = reactive({}) as Record<string, JunctionSignal>;
+
+  // Refresh the road-signal aspects + live signals from the road sim each frame
+  // (in place, so Vue only notifies on real changes).
+  function updateRoadSignals() {
+    for (const { id, arms } of roadJunctionTiles) {
+      const sig = roadSim.signalOf(id);
+      if (sig && sig.mode !== "off") roadSignals[id] = sig;
+      else if (id in roadSignals) delete roadSignals[id];
+      for (const arm of arms) {
+        const key = `${id}:${arm}`;
+        const aspect = roadSim.signalAspect(id, arm);
+        if (aspect) roadSignalAspects[key] = aspect;
+        else if (key in roadSignalAspects) delete roadSignalAspects[key];
+      }
+    }
+  }
   // Debug route overlay: which car's route to draw. `pinned` (a click) wins over
   // `hovered`; the per-frame updateRoadCars resolves the active id to `carRoute`.
   let hoveredCarId: string | null = null;
@@ -960,6 +997,7 @@ export function createGame(
     renderTrains();
     updateRoadCars();
     updateSignalAspects();
+    updateRoadSignals();
     updateReservations();
     raf = requestAnimationFrame(frame);
   }
@@ -978,6 +1016,8 @@ export function createGame(
     roadCars,
     carJunctions,
     carDestinations,
+    roadSignalAspects,
+    roadSignals,
     carRoute,
     eventLog,
     paused,
@@ -1102,6 +1142,10 @@ export function createGame(
     clearRouteCar() {
       hoveredCarId = null;
       pinnedCarId = null;
+    },
+    cycleRoadSignal(tileId: string) {
+      roadSim.cycleSignal(tileId);
+      updateRoadSignals();
     },
   };
 }

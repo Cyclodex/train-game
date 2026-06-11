@@ -1,7 +1,15 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, roadPortsOf, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
+import {
+  JunctionSignal,
+  JunctionSignalController,
+  SignalAspect,
+  createJunctionSignal,
+  cycleJunctionSignal,
+  BUS_PRIORITY_TILES,
+} from "./junctionSignal";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { roadSegmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
@@ -478,6 +486,18 @@ export interface RoadSim {
   // junction tile, so the map is effectively tileId → the car that owns it now.
   // Exposed purely so the renderer can highlight a held junction in debug mode.
   junctionOccupancy(): Record<string, string>;
+  // The current light an approach `arm` shows at the signalised road junction
+  // `tileId` (green/amber/red), or null when that junction is not signalised. The
+  // renderer reads this per arm to colour the signal heads.
+  signalAspect(tileId: string, arm: Port): SignalAspect | null;
+  // The live signal of a road junction (mode + bus-priority), or null if the tile
+  // is not a road junction. Used for the mode chip and to know whether to render
+  // signal heads at all.
+  signalOf(tileId: string): JunctionSignal | null;
+  // Cycle a road junction's signal mode live in play (off → two-phase →
+  // two-phase+bus → round-robin → round-robin+bus → off). Returns the new signal,
+  // or null if the tile is not a road junction.
+  cycleSignal(tileId: string): JunctionSignal | null;
 }
 
 const DEFAULT_SPAWN_INTERVAL = 2.5;
@@ -585,6 +605,23 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
   }
   const arbiter: JunctionArbiter = fcfsWithPriorityArbiter;
+
+  // Per-junction traffic-signal controllers (#38). One for EVERY road junction so
+  // a junction can be cycled from "off" to a timed mode live in play; an "off"
+  // controller reports green for all arms, so the gate below is a no-op there. The
+  // arms are the ports the junction's lanes touch (each is an approach). The phase
+  // clock advances on sim time in step(), fed the set of arms with an approaching
+  // bus for transit signal priority.
+  const signals = new Map<string, JunctionSignalController>();
+  for (const [id, tile] of Object.entries(level)) {
+    if (isRoadJunction(tile.road)) {
+      signals.set(
+        id,
+        createJunctionSignal(roadPortsOf(tile.road), tile.signal ?? { mode: "off" }),
+      );
+    }
+  }
+  const EMPTY_ARMS: ReadonlySet<Port> = new Set();
 
   // Do two movements merging onto the same exit arm LAND on the same lane
   // (junctionExitLane, class-aware)? Same-lane mergers can collide and must
@@ -1280,6 +1317,23 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // car has no planned turn (e.g. straight-through at a priority junction).
       const myExit = carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, myEntry, clsOf(car));
       if (myExit === null) continue;
+      // Traffic-signal gate (#38): an approach may only be ENTERED on green. On a
+      // red / all-red hold at the stop line (the junction entry edge). On amber a
+      // car that can still brake to the line stops; one already too close commits
+      // (a real amber interval, decision 4). Green falls through to the conflict
+      // arbiter below, which still keeps permitted movements from colliding. An
+      // "off" junction reports green for every arm, so this is a no-op there.
+      const signalCtrl = signals.get(junctionId);
+      if (signalCtrl) {
+        const aspect = signalCtrl.aspect(myEntry);
+        if (aspect === "red") {
+          clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+        } else if (aspect === "amber") {
+          const stopDist =
+            (car.velocity * car.velocity) / (2 * Math.max(car.brake, 1e-6));
+          if (stopDist <= lead) clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+        }
+      }
       const candidate: WaitingCar = {
         entryArm: myEntry,
         exitArm: myExit,
@@ -1739,8 +1793,45 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t: 0 };
   }
 
+  // Arms with an APPROACHING bus per signalised junction, for transit signal
+  // priority (#38). For each bus, the first junction within BUS_PRIORITY_TILES
+  // ahead along its committed path counts as an approach on the arm it will enter
+  // through. Only junctions that have a controller are kept; the controllers use
+  // it to extend / bring forward that arm's green.
+  function busApproaches(): Map<string, Set<Port>> {
+    const out = new Map<string, Set<Port>>();
+    for (const car of cars) {
+      if (clsOf(car) !== "bus") continue;
+      const head = car.path[car.headIndex];
+      const ahead = junctionAhead(
+        head.coord,
+        head.entryPort,
+        head.exitPort,
+        BUS_PRIORITY_TILES,
+        "bus",
+      );
+      if (!ahead) continue;
+      const id = getCoordinatesId(ahead.coord);
+      if (!signals.has(id)) continue;
+      let set = out.get(id);
+      if (!set) {
+        set = new Set();
+        out.set(id, set);
+      }
+      set.add(ahead.entry);
+    }
+    return out;
+  }
+
   return {
     step(dt: number, closed: CrossingClosed) {
+      // Advance the junction signal phase clocks on sim time (deterministic),
+      // feeding each its approaching buses for transit signal priority. Done
+      // before cars move so this tick's aspects gate this tick's entries.
+      const approaches = busApproaches();
+      for (const [id, ctrl] of signals) {
+        ctrl.step(dt, approaches.get(id) ?? EMPTY_ARMS);
+      }
       if (fillFast) {
         // Fill toward the cap as fast as the road physically clears: each tick,
         // keep attempting spawns until the cap is hit or a run of attempts all
@@ -1817,6 +1908,22 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         }
       }
       return out;
+    },
+    signalAspect(tileId: string, arm: Port): SignalAspect | null {
+      const ctrl = signals.get(tileId);
+      if (!ctrl || ctrl.signal().mode === "off") return null;
+      return ctrl.aspect(arm);
+    },
+    signalOf(tileId: string): JunctionSignal | null {
+      const ctrl = signals.get(tileId);
+      return ctrl ? ctrl.signal() : null;
+    },
+    cycleSignal(tileId: string): JunctionSignal | null {
+      const ctrl = signals.get(tileId);
+      if (!ctrl) return null;
+      const next = cycleJunctionSignal(ctrl.signal());
+      ctrl.setSignal(next);
+      return next;
     },
     routePath(carId: string): RoadSegment[] {
       const car = cars.find(c => c.id === carId);

@@ -279,6 +279,7 @@ import {
   rotateDepot,
   toggleSignalPort,
   cycleDefaultArm,
+  cycleJunctionSignalMode,
   toggleLaneKind,
   setLaneKindRun,
   syncJunctionBusGatesAround,
@@ -304,7 +305,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 import { takeEditorSeed } from "@/editorSeed";
 
-type Tool = "connect" | "depot" | "signal" | "erase" | "road" | "buslane";
+type Tool = "connect" | "depot" | "signal" | "erase" | "road" | "buslane" | "signalise";
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
@@ -329,6 +330,8 @@ const HINTS: Record<Tool, string> = {
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
   buslane:
     "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
+  signalise:
+    "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -346,7 +349,10 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
     occupied: empty,
     signalAspects: empty,
     signalOverrides: empty,
+    roadSignalAspects: empty,
+    roadSignals: empty,
     cycleSignal: () => {},
+    cycleRoadSignal: () => {},
     // roadLaneCount / roadLaneCountAt are both called by Tile.vue's roadPaths
     // computed when a road tile is present. Read the live level (same as the play
     // game) so neighbour-aware tapering and the road-taper label work in-editor.
@@ -425,13 +431,14 @@ class EditorView extends Vue {
   levelSizeY = 6;
   // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
   // unaffected by order.
-  tools: Tool[] = ["connect", "road", "buslane", "depot", "signal", "erase"];
+  tools: Tool[] = ["connect", "road", "buslane", "signalise", "depot", "signal", "erase"];
   tool: Tool = "connect";
   // Big, kid-friendly icon + label for each build tool, shown in the dock.
   toolMeta: Record<Tool, { icon: string; label: string }> = {
     connect: { icon: "🚂", label: "Rail" },
     road: { icon: "🚗", label: "Road" },
     buslane: { icon: "🚌", label: "Bus lane" },
+    signalise: { icon: "🚥", label: "Signalise" },
     depot: { icon: "🏠", label: "Depot" },
     signal: { icon: "🚦", label: "Signal" },
     erase: { icon: "🧽", label: "Erase" },
@@ -926,6 +933,10 @@ class EditorView extends Vue {
       delete this.level[id];
       this.syncBusGates([id]); // an erased bus street un-gates its junctions
       this.persist();
+    } else if (this.tool === "signalise") {
+      // Cycle the road junction's traffic-signal mode (no-op off a junction).
+      const cur = this.level[id];
+      if (cur) this.commit(id, cycleJunctionSignalMode(cur));
     }
   }
   // Face the first neighbour that already has track on the shared border.
