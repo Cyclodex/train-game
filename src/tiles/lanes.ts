@@ -478,6 +478,39 @@ export function seamPaintTotal(selfTotal: number, neighbourCrossing: number): nu
   return Math.min(selfTotal, Math.max(neighbourCrossing, 2));
 }
 
+// The painted total a STRAIGHT road tile shows at one end. A JUNCTION neighbour
+// must never pinch the road: a junction fans/merges unequal arms INSIDE its box,
+// so its per-arm `laneCountAt` deliberately over/under-counts (it tallies the
+// movements that fan through an arm, not the arm's real width). Meeting that
+// count flush would paint a taper/reducer hard against the junction — exactly
+// what a lane-count change next to a junction must NOT do (#30). So at a junction
+// seam the road keeps its OWN full width (the junction adopts the road, below).
+// Against a real road or an off-map edge it meets the neighbour flush as before.
+export function roadSeamPaintTotal(
+  selfTotal: number,
+  neighbourCrossing: number,
+  neighbourIsJunction: boolean,
+): number {
+  if (neighbourIsJunction) return selfTotal;
+  return seamPaintTotal(selfTotal, neighbourCrossing);
+}
+
+// The painted total a JUNCTION arm shows where it meets a neighbour. Against a
+// real road it ADOPTS the road's facing width (`neighbourCrossing`, the road's
+// `laneCountAt` = its true both-way lane total), so the arm stub equals the road
+// exactly and no taper is painted at the seam (#30). The junction's own per-arm
+// count is intentionally ignored here — it over/under-counts the fan/merge. With
+// a junction neighbour (junction abutting junction) or no neighbour road (off-map
+// edge, count 0) it falls back to its own floored count via `seamPaintTotal`.
+export function junctionArmPaintTotal(
+  selfAtArm: number,
+  neighbourCrossing: number,
+  neighbourIsJunction: boolean,
+): number {
+  if (neighbourCrossing > 0 && !neighbourIsJunction) return Math.max(neighbourCrossing, 2);
+  return seamPaintTotal(Math.max(selfAtArm, 2), neighbourCrossing);
+}
+
 // A road junction is a tile whose road touches more than two ports (so a car has
 // a real routing choice / streams cross). Straights and one-ways touch exactly
 // two ports.
