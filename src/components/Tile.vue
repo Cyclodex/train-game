@@ -582,8 +582,25 @@ class Tile extends Vue {
         if (oppositePort(lane.from) === to) {
           if (oneWay) {
             const R = this.game.roadOneWayRunMax(coord, lane.from);
-            const owOff = (lane.index + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
-            out.push({ ...this.laneArrow(lane.from, to, size, owOff, owOff), isBus: moveIsBus });
+            // Seam-taper: at a lane-count change the dropping lane's arrow angles
+            // into the last surviving lane, matching the car's easing lanePos.
+            // Compute lane counts at each seam (min of this tile and its neighbour).
+            const localCount = laneCount(road, lane.from);
+            const nEntry = neighborCoord(coord, lane.from);
+            const nExit = neighborCoord(coord, to);
+            const nEntryFwd = nEntry
+              ? this.game.roadLaneCountAt(nEntry, oppositePort(lane.from))
+              : 0;
+            const nExitFwd = nExit
+              ? this.game.roadLaneCountAt(nExit, oppositePort(to))
+              : 0;
+            const entrySeam = nEntryFwd > 0 ? Math.min(localCount, nEntryFwd) : localCount;
+            const exitSeam = nExitFwd > 0 ? Math.min(localCount, nExitFwd) : localCount;
+            const entryLane = Math.min(lane.index, Math.max(1, entrySeam) - 1);
+            const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
+            const offEntry = (entryLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
+            const offExit = (exitLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
+            out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus });
             continue;
           }
           // Bidirectional straight on a tapering tile: clamp each end inward so the
