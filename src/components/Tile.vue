@@ -611,6 +611,13 @@ class Tile extends Vue {
   // (a 2-lane cross would paint 16 curves, pure confetti). Replaces the old
   // symmetric ribbon parallels, whose inner lines dove through the middle of
   // the box instead of curving street-to-street.
+  //
+  // EXCEPT a plain 1+1 bend: when both directions cross the edge and each arm
+  // is a single lane each way, the edge is just a two-way street turning
+  // through the box. There is no lane to guide into, and the two per-movement
+  // curves cross each other and the centre dash — reading as broken middle
+  // lines. Real paint there is the street's centre divider continuing around
+  // the bend (like the adjacent curve tile), so draw that ONE dashed curve.
   private junctionTurnGuides(
     coord: ReturnType<typeof parseCoordId>,
     a: Position,
@@ -618,7 +625,8 @@ class Tile extends Vue {
     size: number,
   ): LaneMarkingPath[] {
     const road = this.tile.road ?? [];
-    const out: LaneMarkingPath[] = [];
+    // Per-direction glide offsets for the edge's two possible movements.
+    const moves = new Map<Position, { offEntry: number; offExit: number }>();
     for (const [from, to] of [
       [a, b],
       [b, a],
@@ -641,7 +649,25 @@ class Tile extends Vue {
       const cls = lane.kind === "bus" || !lane.to.includes(to) ? "bus" : "car";
       const offExit =
         this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? offEntry;
-      out.push({ d: laneSegmentPathD(from, to, size, offEntry, offExit), kind: "centre" });
+      moves.set(from, { offEntry, offExit });
+    }
+    const ab = moves.get(a);
+    const ba = moves.get(b);
+    if (ab && ba && laneCount(road, a) <= 1 && laneCount(road, b) <= 1) {
+      // The single centre divider of the two-way bend: at each seam, midway
+      // between the two opposing streams. Offsets are right-of-travel, so the
+      // opposite direction's position in the a→b frame is its NEGATED offset.
+      const centreA = (ab.offEntry - ba.offExit) / 2;
+      const centreB = (ab.offExit - ba.offEntry) / 2;
+      return [{ d: laneSegmentPathD(a, b, size, centreA, centreB), kind: "centre" }];
+    }
+    const out: LaneMarkingPath[] = [];
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as [Position, Position][]) {
+      const m = moves.get(from);
+      if (m) out.push({ d: laneSegmentPathD(from, to, size, m.offEntry, m.offExit), kind: "centre" });
     }
     return out;
   }
