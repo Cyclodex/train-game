@@ -297,6 +297,35 @@ export function junctionExitOffsetPx(
   return laneOffsetConstPx(target, exitBand, tileSize);
 }
 
+// Does a class-`cls` vehicle in approach lane `entryLane` LAND on a bus lane on the
+// EXIT arm of the movement entryPort→exitPort? The single rule the debug overlay
+// uses to colour an arrow: amber iff this holds, cyan otherwise. Through a junction
+// a bus lane can fan onto a car-only arm (a median bus turning right onto a kerb
+// car lane) — the sim drives it on that car lane (junctionExitLane), so the arrow
+// must read cyan, never paint a phantom amber line onto an arm with no bus lane.
+// False when the exit arm has no road (dead-end / map edge).
+export function turnLandsOnBusLane(
+  junctionRoad: Lane[] | undefined,
+  entryPort: Port,
+  entryLane: number,
+  exitPort: Port,
+  exitRoad: Lane[] | undefined,
+  exitApproach: Port,
+  cls: VehicleClass,
+): boolean {
+  if (!exitRoad) return false;
+  const target = junctionExitLane(
+    junctionRoad,
+    entryPort,
+    Math.round(entryLane),
+    exitPort,
+    exitRoad,
+    exitApproach,
+    cls,
+  );
+  return busLaneIndices(exitRoad, exitApproach).includes(target);
+}
+
 // The positioning band a turn's glide should TARGET on the exit arm: the band of
 // the receiving tile at the shared seam, seam-matched against the departing
 // tile's own band at its exit port — exactly the band the receiving tile uses to

@@ -34,7 +34,7 @@ import {
   busonewaycross,
   busmegacross,
 } from "@/levels/test/scenarios/buscrosses";
-import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits } from "@/tiles/lanes";
+import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits, turnLandsOnBusLane } from "@/tiles/lanes";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -1649,6 +1649,83 @@ describe("bus-lane crosses flow and keep cars off the bus lane", () => {
       expect(r.carOnBus).toBe(0); // a car NEVER drove on a bus lane on the arms
     });
   }
+});
+
+describe("bus-lane overlay colours a junction movement by where it LANDS", () => {
+  // The debug overlay (Tile.vue) paints an arrow amber only when the movement
+  // lands on a real bus lane on the EXIT arm — the rule lives in
+  // `turnLandsOnBusLane`, shared by game.ts + the editor. Regression for #18: a
+  // median bus turning right onto a car-only arm (busmegacross W→S) was painted
+  // amber even though the bus lands on a CAR lane there. Drive the shared rule
+  // against every shipped bus-cross centre so an amber arrow can never again be
+  // drawn onto a lane the bus doesn't occupy as a bus lane.
+  const T = Position.Top;
+  const R = Position.Right;
+  const B = Position.Bottom;
+  const L = Position.Left;
+  // The exit arm's road for a movement leaving the centre tile (2,2) via `exit`.
+  const armRoad = (level: Level, exit: Position) =>
+    level[
+      `${2 + (exit === R ? 1 : exit === L ? -1 : 0)},${
+        2 + (exit === B ? 1 : exit === T ? -1 : 0)
+      }`
+    ]?.road;
+
+  const family: [string, typeof buscross][] = [
+    ["buscross", buscross],
+    ["buscrossboth", buscrossboth],
+    ["busmedian", busmedian],
+    ["busarterial", busarterial],
+    ["busmedianboth", busmedianboth],
+    ["busonewaycross", busonewaycross],
+    ["busmegacross", busmegacross],
+  ];
+
+  it("every amber bus movement lands on a bus lane; car-lane fallbacks exist (cyan)", () => {
+    let amber = 0;
+    let fallback = 0;
+    for (const [, scn] of family) {
+      const centre = scn.level["2,2"].road;
+      for (const lane of centre!) {
+        if (lane.kind !== "bus") continue; // only bus-lane approaches go amber
+        for (const to of lane.to) {
+          const exitRoad = armRoad(scn.level, to);
+          const exitApproach = oppositePort(to);
+          if (turnLandsOnBusLane(centre, lane.from, lane.index, to, exitRoad, exitApproach, "bus")) {
+            amber++;
+            // Honesty: an amber arrow really ends on a bus lane of the exit arm.
+            const landing = junctionExitLane(
+              centre, lane.from, lane.index, to, exitRoad, exitApproach, "bus",
+            );
+            expect(busLaneIndices(exitRoad, exitApproach)).toContain(landing);
+          } else {
+            fallback++; // a bus movement that lands on a car lane → rendered cyan
+          }
+        }
+      }
+    }
+    expect(amber).toBeGreaterThan(0); // amber is still used where it's earned
+    expect(fallback).toBeGreaterThan(0); // and the buggy class (car-lane fallback) is present
+  });
+
+  it("busmegacross: the median bus's right turn onto the car-only south arm is NOT amber", () => {
+    // W median bus lane (from L, index 1) turning to the south (B). The south arm
+    // is a 2-lane one-way OUTBOUND with no bus lane — the original phantom amber.
+    const centre = busmegacross.level["2,2"].road;
+    const south = armRoad(busmegacross.level, B);
+    expect(
+      turnLandsOnBusLane(centre, L, 1, B, south, oppositePort(B), "bus"),
+    ).toBe(false);
+  });
+
+  it("busmedianboth: a median bus left turn lands on the cross street's median bus lane (amber)", () => {
+    // The positive case: median→median is a true bus-lane-to-bus-lane movement.
+    const centre = busmedianboth.level["2,2"].road;
+    const north = armRoad(busmedianboth.level, T);
+    expect(
+      turnLandsOnBusLane(centre, L, 1, T, north, oppositePort(T), "bus"),
+    ).toBe(true);
+  });
 });
 
 describe("createRoadSim — launch reaction delay", () => {
