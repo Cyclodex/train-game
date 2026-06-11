@@ -568,7 +568,17 @@ class Tile extends Vue {
       // move; the right lane ends). See sim/laneOffset.ts oneWayLaneOffsetPx.
       const oneWay = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
+      const cls = isBus ? "bus" : "car";
       for (const to of lane.to) {
+        // Colour a movement amber only when it actually LANDS on a bus lane on the
+        // exit arm. Through a junction a bus lane can fan onto a car-only arm (a
+        // median bus turning right onto a kerb car lane); the sim drives it on that
+        // car lane, so the overlay must read cyan there, not paint a phantom amber
+        // line onto an arm with no bus lane. Off a junction the lane keeps its kind.
+        const moveIsBus =
+          isBus && this.tileIsRoadJunction
+            ? this.game.roadTurnExitIsBusLane(coord, lane.from, to, lane.index, cls)
+            : isBus;
         if (oppositePort(lane.from) === to) {
           if (oneWay) {
             const R = this.game.roadOneWayRunMax(coord, lane.from);
@@ -590,7 +600,7 @@ class Tile extends Vue {
             const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
             const offEntry = (entryLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
             const offExit = (exitLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
-            out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus });
+            out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus });
             continue;
           }
           // Bidirectional straight on a tapering tile: clamp each end inward so the
@@ -607,13 +617,12 @@ class Tile extends Vue {
           );
           const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, false);
           const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, false);
-          out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus });
+          out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
           // lane the vehicle lands in on the EXIT arm (game.roadTurnExitOffsetPx,
           // class-aware), identical to couplerOffset's turn branch — so the arrow
           // ends on the same real lane the car drives to, never a phantom one.
-          const cls = isBus ? "bus" : "car";
           // Seam-match the ENTRY offset to the actual arm width (the neighbour
           // entering through this approach), identical to couplerOffset's turn
           // branch: a junction's laneCountAt over-counts a narrow arm, which would
@@ -626,7 +635,7 @@ class Tile extends Vue {
           );
           const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
           const offExit = this.game.roadTurnExitOffsetPx(coord, lane.from, to, lane.index, cls);
-          out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus });
+          out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus: moveIsBus });
         }
       }
     }

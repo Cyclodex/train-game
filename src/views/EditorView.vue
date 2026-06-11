@@ -278,6 +278,7 @@ import {
   turnSeamBand,
   isRoadJunction,
   junctionExitOffsetPx,
+  turnLandsOnBusLane,
 } from "@/tiles/lanes";
 import type { VehicleClass } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -360,6 +361,27 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
         exitApproach,
         exitBand,
         getTileSize(),
+        cls,
+      );
+    },
+    // Mirrors game.ts so the overlay colours a turn arrow amber only when the
+    // movement lands on a real bus lane on the exit arm (else cyan) — in-editor too.
+    roadTurnExitIsBusLane: (
+      coord: Coordinates,
+      entry: Position,
+      exit: Position,
+      entryLane: number,
+      cls: VehicleClass,
+    ): boolean => {
+      const next = neighborCoord(coord, exit);
+      if (!next) return false;
+      return turnLandsOnBusLane(
+        roadOf(coord),
+        entry,
+        entryLane,
+        exit,
+        roadOf(next),
+        oppositePort(exit),
         cls,
       );
     },
