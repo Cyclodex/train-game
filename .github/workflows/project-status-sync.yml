@@ -84,6 +84,7 @@ jobs:
               query ($owner: String!, $repo: String!, $issue: Int!, $project: Int!) {
                 repository(owner: $owner, name: $repo) {
                   issue(number: $issue) {
+                    id
                     projectItems(first: 10) {
                       nodes { id project { id number } }
                     }
@@ -91,6 +92,7 @@ jobs:
                 }
                 user(login: $owner) {
                   projectV2(number: $project) {
+                    id
                     field(name: "Status") {
                       ... on ProjectV2SingleSelectField {
                         id
@@ -101,9 +103,23 @@ jobs:
                 }
               }`, { owner, repo, issue: issueNumber, project: projectNumber });
 
-            const item = res.repository.issue.projectItems.nodes
+            const projectId = res.user.projectV2.id;
+            let item = res.repository.issue.projectItems.nodes
               .find((n) => n.project.number === projectNumber);
-            if (!item) return core.info(`Issue #${issueNumber} is not on project ${projectNumber}`);
+            if (!item) {
+              // Not on the board yet — the built-in auto-add lags behind label
+              // events (a freshly created issue can be labeled before its card
+              // exists, and the sync would no-op). Add the card ourselves;
+              // re-adding an existing item is a safe no-op returning the item.
+              const added = await github.graphql(`
+                mutation ($project: ID!, $content: ID!) {
+                  addProjectV2ItemById(input: { projectId: $project, contentId: $content }) {
+                    item { id }
+                  }
+                }`, { project: projectId, content: res.repository.issue.id });
+              item = { id: added.addProjectV2ItemById.item.id, project: { id: projectId, number: projectNumber } };
+              core.info(`Issue #${issueNumber} added to project ${projectNumber}`);
+            }
 
             const field = res.user.projectV2.field;
             const option = field.options.find((o) => o.name === desired);
