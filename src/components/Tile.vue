@@ -195,7 +195,9 @@
         :class="`road-signal--${h.arm}`"
         @click.stop="cycleRoadSignal"
       >
-        <span class="road-signal-dot" :class="`road-signal-dot--${h.aspect}`" />
+        <span class="road-signal-lens road-signal-lens--red"   :class="{ 'road-signal-lens--lit': h.aspect === 'red' }" />
+        <span class="road-signal-lens road-signal-lens--amber" :class="{ 'road-signal-lens--lit': h.aspect === 'amber' }" />
+        <span class="road-signal-lens road-signal-lens--green" :class="{ 'road-signal-lens--lit': h.aspect === 'green' }" />
       </div>
       <div
         class="road-signal-chip"
@@ -1247,56 +1249,66 @@ $signal-offset: 20px;
 }
 
 /* --- road-junction traffic signals (#38) --- */
+// Black housing containing three stacked lenses (R/A/G). Each head sits at
+// the stop-line of its arm, offset to the right-hand incoming lane
+// (right-hand traffic: right of travel = kerb side). One lane = 14% of
+// tileSize, so lane centre is 7% from tile centre; signal (5px half-width)
+// centre sits at 50% ± 12px.
 .road-signal {
   position: absolute;
   z-index: 15;
-  width: 14px;
-  height: 14px;
   cursor: pointer;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-}
-.road-signal-dot {
+  justify-content: space-between;
   width: 10px;
-  height: 10px;
+  height: 28px;
+  background: #111;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 3px 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+.road-signal-lens {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  border: 1px solid #111;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
-  background: #5a1512;
+  flex-shrink: 0;
 }
-.road-signal-dot--green {
-  background: #34c759;
-  box-shadow: 0 0 6px #34c759;
-}
-.road-signal-dot--amber {
-  background: #ffcc00;
-  box-shadow: 0 0 6px #ffcc00;
-}
-.road-signal-dot--red {
-  background: #ff3b30;
-  box-shadow: 0 0 6px #ff3b30;
-}
-/* Each head sits just inside its arm's stop line (the kerb where cars wait). */
+.road-signal-lens--red   { background: #3a0000; }
+.road-signal-lens--amber { background: #1e1000; }
+.road-signal-lens--green { background: #001400; }
+.road-signal-lens--lit.road-signal-lens--red   { background: #ff3b30; box-shadow: 0 0 5px #ff3b30; }
+.road-signal-lens--lit.road-signal-lens--amber { background: #ffcc00; box-shadow: 0 0 5px #ffcc00; }
+.road-signal-lens--lit.road-signal-lens--green { background: #34c759; box-shadow: 0 0 5px #34c759; }
+// N arm: near top edge, incoming lane is west of centre (cars drive south)
 .road-signal--0 {
-  top: 24%;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 7%;
+  left: calc(50% - 19px);
 }
+// E arm: near right edge, incoming lane is north of centre (cars drive west);
+// housing rotates horizontal so lenses read along the kerb
 .road-signal--1 {
-  right: 24%;
-  top: 50%;
-  transform: translateY(-50%);
+  right: 7%;
+  top: calc(50% - 19px);
+  flex-direction: row;
+  width: 28px;
+  height: 10px;
 }
+// S arm: near bottom edge, incoming lane is east of centre (cars drive north)
 .road-signal--2 {
-  bottom: 24%;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 7%;
+  left: calc(50% + 9px);
 }
+// W arm: near left edge, incoming lane is south of centre (cars drive east);
+// housing rotates horizontal so lenses read along the kerb
 .road-signal--3 {
-  left: 24%;
-  top: 50%;
-  transform: translateY(-50%);
+  left: 7%;
+  top: calc(50% + 9px);
+  flex-direction: row;
+  width: 28px;
+  height: 10px;
 }
 .road-signal-chip {
   position: absolute;
