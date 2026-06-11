@@ -20,6 +20,8 @@ import {
   setLaneKind,
   streetRunLanes,
   setLaneKindRun,
+  syncJunctionBusGates,
+  syncJunctionBusGatesAround,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
@@ -457,5 +459,79 @@ describe("setLaneKind / setLaneKindRun", () => {
     }
     // Only the eastbound lane (index 0 from Left) changed; the westbound lane stays.
     expect(changed["0,0"].road!.find(l => l.from === Right)!.kind).toBeUndefined();
+  });
+});
+
+describe("syncJunctionBusGates (bus-only street gates its junctions)", () => {
+  const { Top: T, Right: R, Bottom: B, Left: L } = Position;
+  // The user-map shape: a W-E street whose EAST part is bus-only, with a curve
+  // branching south. Junction at 1,0 with arms L (car street), R (bus street),
+  // B (car street).
+  const tee = (): TileCell => ({
+    connections: [],
+    road: [
+      { from: L, to: [R, B], index: 0 },
+      { from: R, to: [L], index: 0 },
+      { from: B, to: [L, R], index: 0 },
+    ],
+  });
+  const street = (a: Position, b: Position, kind?: "bus"): TileCell => ({
+    connections: [],
+    road: kind ? nWayLanes(a, b, 1, kind) : nWayLanes(a, b, 1),
+  });
+  const mkLevel = (eastBus: boolean): Level => ({
+    "0,0": street(L, R),
+    "1,0": tee(),
+    "2,0": street(L, R, eastBus ? "bus" : undefined),
+    "1,1": street(T, B),
+  });
+
+  it("moves car exits toward a bus-only arm from `to` to `busTo`", () => {
+    const level = mkLevel(true);
+    const synced = syncJunctionBusGates(level, "1,0");
+    const fromWest = synced.road!.find(l => l.from === L)!;
+    expect(fromWest.to).toEqual([B]); // cars: south only
+    expect(fromWest.busTo).toEqual([R]); // buses: may still go east
+    const fromSouth = synced.road!.find(l => l.from === B)!;
+    expect(fromSouth.to).toEqual([L]);
+    expect(fromSouth.busTo).toEqual([R]);
+    // The arm coming FROM the bus street is untouched (only buses arrive there).
+    const fromEast = synced.road!.find(l => l.from === R)!;
+    expect(fromEast.to).toEqual([L]);
+    expect(fromEast.busTo).toBeUndefined();
+    // The level stays valid: one lane per (from, index), every lane has an exit.
+    expect(validateRoads({ ...level, "1,0": synced }).ok).toBe(true);
+  });
+
+  it("is idempotent", () => {
+    const level = mkLevel(true);
+    const once = syncJunctionBusGates(level, "1,0");
+    const twice = syncJunctionBusGates({ ...level, "1,0": once }, "1,0");
+    expect(twice).toBe(once); // same reference: no further change
+  });
+
+  it("restores `to` when the street regains car lanes", () => {
+    const level = mkLevel(true);
+    const gated = syncJunctionBusGates(level, "1,0");
+    const back: Level = { ...mkLevel(false), "1,0": gated };
+    const restored = syncJunctionBusGates(back, "1,0");
+    const fromWest = restored.road!.find(l => l.from === L)!;
+    expect([...fromWest.to].sort()).toEqual([R, B].sort());
+    expect(fromWest.busTo).toBeUndefined();
+  });
+
+  it("leaves non-junction tiles and unrelated junctions alone", () => {
+    const level = mkLevel(true);
+    expect(syncJunctionBusGates(level, "0,0")).toBe(level["0,0"]);
+    const out = syncJunctionBusGatesAround(level, ["2,0"]);
+    expect(Object.keys(out)).toEqual(["1,0"]); // only the adjoining junction
+  });
+
+  it("does not gate against an open map edge or an empty tile", () => {
+    const level = mkLevel(false);
+    // 1,0's north neighbour does not exist: the junction must not gate T even
+    // though no car lane "enters from" a missing tile.
+    const synced = syncJunctionBusGates(level, "1,0");
+    expect(synced).toBe(level["1,0"]);
   });
 });

@@ -23,8 +23,24 @@ export function laneUsableBy(lane: Lane, cls: VehicleClass): boolean {
 export interface Lane {
   from: Port; // approach edge the car enters through
   to: Port[]; // permitted exit edges (turn options); length 1 on a plain road / one-way
+  busTo?: Port[]; // extra exits ONLY buses may take from this lane (e.g. a turn
+  // into a bus-only side street). Lets a shared physical lane carry a bus-only
+  // movement without a second Lane at the same (from, index) — which the
+  // validator rightly rejects as a clash.
   index: number; // physical position within the `from` approach, 0 = kerb side
   kind?: LaneKind; // reserved for restrictions; default "all"
+}
+
+// The exits a vehicle of class `cls` may take from `lane`: everyone gets `to`;
+// buses additionally get `busTo`. (Whole-lane access is laneUsableBy's job.)
+export function laneExits(lane: Lane, cls: VehicleClass): Port[] {
+  return cls === "bus" && lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
+}
+
+// Every exit the lane physically connects to, regardless of vehicle class. Use
+// for structural derivations (edges, ports, seam lane counts, conflict matrix).
+export function laneAllExits(lane: Lane): Port[] {
+  return lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
 }
 
 // --- Authoring helpers -------------------------------------------------------
@@ -78,7 +94,7 @@ export function lanesFrom(road: Lane[] | undefined, from: Port): Lane[] {
 // The union of permitted exit ports from an approach (across all its lanes).
 export function exitsFrom(road: Lane[] | undefined, from: Port): Port[] {
   const out = new Set<Port>();
-  for (const lane of lanesFrom(road, from)) for (const to of lane.to) out.add(to);
+  for (const lane of lanesFrom(road, from)) for (const to of laneAllExits(lane)) out.add(to);
   return [...out];
 }
 
@@ -92,7 +108,7 @@ export function usableExits(
   const out = new Set<Port>();
   for (const lane of lanesFrom(road, from)) {
     if (!laneUsableBy(lane, cls)) continue;
-    for (const to of lane.to) out.add(to);
+    for (const to of laneExits(lane, cls)) out.add(to);
   }
   return [...out];
 }
@@ -168,7 +184,7 @@ export function lanesAllowingExitFor(
   cls: VehicleClass,
 ): number[] {
   return lanesFrom(road, from)
-    .filter(l => laneUsableBy(l, cls) && l.to.includes(exit))
+    .filter(l => laneUsableBy(l, cls) && laneExits(l, cls).includes(exit))
     .map(l => l.index)
     .sort((a, b) => a - b);
 }
@@ -350,7 +366,7 @@ export function roadPortsOf(road: Lane[] | undefined): Port[] {
   const out = new Set<Port>();
   for (const lane of road ?? []) {
     out.add(lane.from);
-    for (const to of lane.to) out.add(to);
+    for (const to of laneAllExits(lane)) out.add(to);
   }
   return [...out];
 }
@@ -363,7 +379,7 @@ export function laneMovements(
   const seen = new Set<string>();
   const out: { from: Port; to: Port }[] = [];
   for (const lane of road ?? []) {
-    for (const to of lane.to) {
+    for (const to of laneAllExits(lane)) {
       const key = `${lane.from}:${to}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -381,7 +397,7 @@ export function roadEdges(road: Lane[] | undefined): [Port, Port][] {
   const seen = new Set<string>();
   const out: [Port, Port][] = [];
   for (const lane of road ?? []) {
-    for (const to of lane.to) {
+    for (const to of laneAllExits(lane)) {
       const key = lane.from < to ? `${lane.from}-${to}` : `${to}-${lane.from}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -413,7 +429,7 @@ export function laneCountAt(road: Lane[] | undefined, port: Port): number {
   // funnel into the same index-0 exit lane, so counting movements would over-count
   // the seam (3 turns sharing one lane != 3 lanes). Distinct indices handles both.
   const exitingCount = new Set(
-    (road ?? []).filter(l => l.to.includes(port)).map(l => l.index),
+    (road ?? []).filter(l => laneAllExits(l).includes(port)).map(l => l.index),
   ).size;
   return entering + exitingCount;
 }

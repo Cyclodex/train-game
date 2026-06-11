@@ -161,7 +161,7 @@ export function validateRoads(level: Level): {
     // Lane invariants: unique index per approach; every approach permits an exit.
     const indexByFrom = new Map<string, Set<number>>();
     for (const lane of road) {
-      if (lane.to.length === 0) {
+      if (lane.to.length === 0 && (lane.busTo?.length ?? 0) === 0) {
         issues.push({
           type: "lane-no-exit",
           tileId: id,

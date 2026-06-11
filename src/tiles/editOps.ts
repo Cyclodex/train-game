@@ -460,3 +460,80 @@ export function setLaneKindRun(
   }
   return out;
 }
+
+// --- Junction bus gates ---------------------------------------------------------
+// When a street becomes bus-only, the junctions at its ends must stop OFFERING
+// cars the turn into it — not just rely on the router avoiding it. The gate is
+// the lane model itself: on every NON-bus junction lane, the exit toward a
+// bus-only arm moves from `to` (everyone) to `busTo` (buses only), and moves
+// back when the street regains a car lane. Re-derived from the neighbours, so
+// it is idempotent and self-healing: painting, unpainting and re-painting a
+// street always converges to the same junction state.
+
+// Does the street tile `n` admit CARS through the seam it shares with a
+// junction arm? True when a car-usable lane enters `n` from that side (the
+// continuing lane of the street). No road/tile → not gated (an open map edge
+// stays drivable; gating is only for real bus-only streets).
+function armAdmitsCars(n: TileCell | undefined, seamPort: Port): boolean {
+  if (!n?.road?.length) return true;
+  const entering = lanesFrom(n.road, seamPort);
+  if (entering.length === 0) return true; // no lanes face the seam: not a bus street
+  return entering.some(l => l.kind !== "bus");
+}
+
+// Recompute one junction cell's bus gates from its current neighbours. Returns
+// the same cell when nothing changes (so callers can skip the commit).
+export function syncJunctionBusGates(level: Level, id: string): TileCell {
+  const cell = level[id];
+  if (!cell?.road || !isRoadJunction(cell.road)) return cell;
+  const coord = parseCoordId(id);
+  // The arm ports whose street is bus-only at the seam.
+  const busArms = new Set<Port>();
+  for (const p of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
+    const nc = neighborCoord(coord, p);
+    const n = nc ? level[getCoordinatesId(nc)] : undefined;
+    if (!armAdmitsCars(n, oppositePort(p))) busArms.add(p);
+  }
+  let changed = false;
+  const road = cell.road.map(l => {
+    if (l.kind === "bus") return l; // a bus lane's exits are already bus-only
+    const to = l.to.filter(p => !busArms.has(p));
+    const gated = l.to.filter(p => busArms.has(p));
+    const kept = (l.busTo ?? []).filter(p => busArms.has(p));
+    const restored = (l.busTo ?? []).filter(p => !busArms.has(p));
+    if (gated.length === 0 && restored.length === 0) return l;
+    changed = true;
+    const busTo = [...kept, ...gated];
+    const next: Lane = { ...l, to: [...to, ...restored] };
+    if (busTo.length > 0) next.busTo = busTo;
+    else delete next.busTo;
+    return next;
+  });
+  return changed ? { ...cell, road } : cell;
+}
+
+// All junctions whose gates may be affected by edits to `ids`: the edited tiles
+// themselves plus their direct neighbours. Returns the changed cells keyed by
+// id (empty when every junction was already in sync). `level` must already
+// contain the lane edits.
+export function syncJunctionBusGatesAround(
+  level: Level,
+  ids: string[],
+): Record<string, TileCell> {
+  const candidates = new Set<string>(ids);
+  for (const id of ids) {
+    const coord = parseCoordId(id);
+    for (const p of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
+      const nc = neighborCoord(coord, p);
+      if (nc) candidates.add(getCoordinatesId(nc));
+    }
+  }
+  const out: Record<string, TileCell> = {};
+  for (const id of candidates) {
+    const cell = level[id];
+    if (!cell) continue;
+    const synced = syncJunctionBusGates(level, id);
+    if (synced !== cell) out[id] = synced;
+  }
+  return out;
+}

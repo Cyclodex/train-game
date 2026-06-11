@@ -281,6 +281,7 @@ import {
   cycleDefaultArm,
   toggleLaneKind,
   setLaneKindRun,
+  syncJunctionBusGatesAround,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -726,7 +727,17 @@ class EditorView extends Vue {
     } else {
       this.level[id] = cell;
     }
+    // Bus gates are DERIVED state: whatever the edit was (road tool, lane click,
+    // a delete), the junctions around it re-derive their busTo gates so they can
+    // never go stale against the streets they face.
+    this.syncBusGates([id]);
     this.persist();
+  }
+  // Re-derive the busTo gates of every junction around `ids` and write the
+  // changed cells straight into the level (not via commit — no recursion).
+  syncBusGates(ids: string[]) {
+    const gates = syncJunctionBusGatesAround(this.level, ids);
+    for (const [gid, gcell] of Object.entries(gates)) this.level[gid] = gcell;
   }
 
   // Lay every connection of the route from `from` to `to`. For the first
@@ -898,11 +909,11 @@ class EditorView extends Vue {
   // Click a lane: Ctrl/Meta toggles only this tile's lane; a plain click paints
   // the whole street run to one uniform kind, committed as one level update.
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
-    if (ev.ctrlKey || ev.metaKey) {
-      this.commit(id, toggleLaneKind(this.cellOf(id), from, index));
-      return;
-    }
-    const changed = setLaneKindRun(this.level, id, from, index);
+    const changed =
+      ev.ctrlKey || ev.metaKey
+        ? { [id]: toggleLaneKind(this.cellOf(id), from, index) }
+        : setLaneKindRun(this.level, id, from, index);
+    // commit re-derives the adjoining junctions' busTo gates per tile.
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }
 
@@ -913,6 +924,7 @@ class EditorView extends Vue {
       this.commit(id, cur?.role === "depot" ? rotateDepot(cur) : setDepot(emptyCell(), this.autoFacing(id)));
     } else if (this.tool === "erase") {
       delete this.level[id];
+      this.syncBusGates([id]); // an erased bus street un-gates its junctions
       this.persist();
     }
   }
@@ -944,6 +956,10 @@ class EditorView extends Vue {
   };
   mounted() {
     window.addEventListener("keydown", this.onKeydown);
+    // Self-heal: levels saved before a gate-affecting edit path existed (or
+    // edited externally) may carry stale busTo gates — re-derive them all once.
+    this.syncBusGates(Object.keys(this.level));
+    this.persist();
   }
   unmounted() {
     window.removeEventListener("keydown", this.onKeydown);
@@ -988,6 +1004,7 @@ class EditorView extends Vue {
       const parsed = JSON.parse(this.ioText) as Level;
       for (const k of Object.keys(this.level)) delete this.level[k];
       Object.assign(this.level, parsed);
+      this.syncBusGates(Object.keys(this.level)); // imported gates may be stale
       this.persist();
       this.showIo = false;
     } catch {
