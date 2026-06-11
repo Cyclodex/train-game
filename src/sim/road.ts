@@ -3,7 +3,7 @@ import { Level, isLevelCrossing } from "@/tiles/model";
 import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { segmentLength } from "./pathGeometry";
+import { roadSegmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
@@ -1674,7 +1674,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
   function segLen(seg: RoadSegment): number {
-    return segmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
+    return roadSegmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
   }
 
   function sampleAtArc(car: Car, arcBack: number): CarSample {

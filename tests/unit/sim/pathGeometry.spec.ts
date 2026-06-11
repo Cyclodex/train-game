@@ -96,10 +96,13 @@ describe("laneSegmentPointAt", () => {
     expect(m.tangentDeg).toBeCloseTo((Math.atan2(28, 200) * 180) / Math.PI, 2);
   });
 
-  it("a zero-offset curve follows the centreline Bézier; apex heads 45°", () => {
+  it("a zero-offset curve follows the corner arc; apex heads 45°", () => {
+    // A road turn Top→Right is a quarter-circle around the wrapped NE corner
+    // (200,0), radius 100: the apex (t=0.5, angle 135°) sits at
+    // (200−100/√2, 100/√2) ≈ (129.29, 70.71), heading SE.
     const p = laneSegmentPointAt(Position.Top, Position.Right, 200, 0, 0, 0.5);
-    expect(p.x).toBeCloseTo(125, 6);
-    expect(p.y).toBeCloseTo(75, 6);
+    expect(p.x).toBeCloseTo(200 - 100 / Math.SQRT2, 6);
+    expect(p.y).toBeCloseTo(100 / Math.SQRT2, 6);
     expect(p.tangentDeg).toBeCloseTo(45, 2); // SE at the apex of a Top→Right bend
   });
 });

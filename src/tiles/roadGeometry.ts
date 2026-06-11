@@ -1,6 +1,11 @@
 import { Position } from "@/types";
 import { Port, oppositePort } from "@/sim/topology";
-import { segmentPathD, portPoint } from "@/sim/pathGeometry";
+import {
+  roadSegmentPathD,
+  laneSegmentPathD,
+  laneRibbonPathD,
+  portPoint,
+} from "@/sim/pathGeometry";
 
 // Road rendering is the sibling of tiles/geometry.ts (rail): both derive their
 // SVG from a cell's port pairs. A road carries no two flanking rails — it is a
@@ -8,9 +13,10 @@ import { segmentPathD, portPoint } from "@/sim/pathGeometry";
 // (the same geometry trains follow, segmentPathD), stroked wide by the renderer.
 
 // The paved-surface path for a road pair: a straight line for opposite/Center
-// links, a quadratic through the tile centre for adjacent ports. Stroke it wide.
+// links, a quarter-circle around the wrapped corner for adjacent ports (the
+// road-turn geometry — see sim/pathGeometry.ts roadSegmentPathD). Stroke wide.
 export function roadSurfacePath(entry: Port, exit: Port, size: number): string {
-  return segmentPathD(entry, exit, size);
+  return roadSegmentPathD(entry, exit, size);
 }
 
 // The unit right-hand-of-travel perpendicular to the entry→exit centreline in
@@ -233,7 +239,7 @@ export function roadCurveKerbEdge(
 }
 
 // The kerb edge of a TAPERED curved ribbon (roadCurvePolygonPathTapered): the
-// offset Bézier blends from `halfA` at the entry to `halfB` at the exit, so the
+// offset arc blends from `halfA` at the entry to `halfB` at the exit, so the
 // white edge line traces exactly where the tapering tarmac meets the grass.
 export function roadCurveKerbEdgeTapered(
   entry: Port,
@@ -243,7 +249,7 @@ export function roadCurveKerbEdgeTapered(
   halfB: number,
   side: 1 | -1,
 ): string {
-  return curvedParallelPathTapered(entry, exit, size, side * halfA, side * halfB);
+  return laneSegmentPathD(entry, exit, size, side * halfA, side * halfB);
 }
 
 // The port flanking a STRAIGHT road edge on the given side (+1 = right of
@@ -516,7 +522,7 @@ export function roadLaneMarkingPaths(
   }
 
   // Centre divider always present (bidirectional road)
-  out.push({ d: segmentPathD(entry, exit, size), kind: "centre" });
+  out.push({ d: roadSegmentPathD(entry, exit, size), kind: "centre" });
 
   if (isStraight) {
     const lo = Math.min(lanesA, lanesB);
@@ -590,10 +596,11 @@ export function roadCurvePolygonPath(entry: Port, exit: Port, size: number, widt
 }
 
 // The curved road ribbon with a DIFFERENT width at each end: `widthA` at the
-// entry port tapering to `widthB` at the exit port, the half-offsets blended
-// along the bend. A junction's turn edge needs this: each end must meet ITS arm
-// flush (a 1-lane arm and a 2-lane arm on the same turn), where a constant-width
-// ribbon paints the narrow arm as wide as the widest one.
+// entry port tapering to `widthB` at the exit port. A junction's turn edge
+// needs this: each end must meet ITS arm flush (a 1-lane arm and a 2-lane arm
+// on the same turn). Built on the SHARED road-turn geometry (laneRibbonPathD —
+// the quarter-circle around the wrapped corner with a lateral offset), so the
+// painted bend is exactly the curve the cars drive.
 export function roadCurvePolygonPathTapered(
   entry: Port,
   exit: Port,
@@ -601,89 +608,12 @@ export function roadCurvePolygonPathTapered(
   widthA: number,
   widthB: number,
 ): string {
-  const a = portPoint(entry, size);
-  const b = portPoint(exit, size);
-  const c = portPoint(Position.Center, size);
-  const halfA = widthA / 2;
-  const halfB = widthB / 2;
-  // The control-point offset blends the two end half-widths (the quadratic's
-  // apex is the midpoint influence), scaled by k — see controlOffsetFactor().
-  const halfC = (halfA + halfB) / 2;
-
-  // Unit right-hand perpendiculars at t=0 (entry tangent: a→c) and t=1 (exit tangent: c→b).
-  const nA = perpUnit(a, c);
-  const nB = perpUnit(c, b);
-  // Average direction for the Bézier control-point offset, then normalize.
-  const avgX = nA.x + nB.x;
-  const avgY = nA.y + nB.y;
-  const avgMag = Math.hypot(avgX, avgY) || 1;
-  const nC = { x: avgX / avgMag, y: avgY / avgMag };
-  // Offsetting a quadratic Bézier by moving its control point straight out by
-  // the half-width under-shoots the true offset at the apex (the ribbon pinches
-  // ~15% narrower mid-curve). Scaling the control offset by k = 2 − ½·|nA + nB|
-  // makes the offset curve hit the target distance at the apex too, so the
-  // road keeps its width through the bend. See controlOffsetFactor().
-  const k = controlOffsetFactor(avgMag);
-
-  // Outer edge: offset by +half (right side of travel), entry→exit.
-  const ax = a.x + nA.x * halfA, ay = a.y + nA.y * halfA;
-  const cx1 = c.x + nC.x * halfC * k, cy1 = c.y + nC.y * halfC * k;
-  const bx1 = b.x + nB.x * halfB, by1 = b.y + nB.y * halfB;
-  // Inner edge: offset by -half (left side of travel), traversed in reverse.
-  const bx2 = b.x - nB.x * halfB, by2 = b.y - nB.y * halfB;
-  const cx2 = c.x - nC.x * halfC * k, cy2 = c.y - nC.y * halfC * k;
-  const ax2 = a.x - nA.x * halfA, ay2 = a.y - nA.y * halfA;
-
-  return (
-    `M ${ax} ${ay} ` +
-    `Q ${cx1} ${cy1} ${bx1} ${by1} ` +
-    `L ${bx2} ${by2} ` +
-    `Q ${cx2} ${cy2} ${ax2} ${ay2} ` +
-    `Z`
-  );
+  return laneRibbonPathD(entry, exit, size, -widthA / 2, -widthB / 2, widthA / 2, widthB / 2);
 }
 
 // An offset quadratic Bézier path for a curved lane marking at perpendicular
 // offset `d` from the centreline. Used for inner lane dividers on curved tiles.
 // Positive `d` = right of travel direction; negative = left.
 function curvedParallelPath(entry: Port, exit: Port, size: number, d: number): string {
-  return curvedParallelPathTapered(entry, exit, size, d, d);
-}
-
-// The tapered generalisation: offset `dA` at the entry blending to `dB` at the
-// exit (the control point takes the blend's midpoint, k-corrected at the apex).
-function curvedParallelPathTapered(
-  entry: Port,
-  exit: Port,
-  size: number,
-  dA: number,
-  dB: number,
-): string {
-  const a = portPoint(entry, size);
-  const b = portPoint(exit, size);
-  const c = portPoint(Position.Center, size);
-
-  const nA = perpUnit(a, c);
-  const nB = perpUnit(c, b);
-  const avgX = nA.x + nB.x;
-  const avgY = nA.y + nB.y;
-  const avgMag = Math.hypot(avgX, avgY) || 1;
-  const nC = { x: avgX / avgMag, y: avgY / avgMag };
-  const k = controlOffsetFactor(avgMag);
-  const dC = (dA + dB) / 2;
-
-  const ax = a.x + nA.x * dA, ay = a.y + nA.y * dA;
-  const cx = c.x + nC.x * dC * k, cy = c.y + nC.y * dC * k;
-  const bx = b.x + nB.x * dB, by = b.y + nB.y * dB;
-
-  return `M ${ax} ${ay} Q ${cx} ${cy} ${bx} ${by}`;
-}
-
-// How far to push a quadratic Bézier's control point (as a multiple of the
-// desired perpendicular offset) so the offset curve sits at the target distance
-// at the apex, not just at the endpoints. `avgMag` is |nA + nB| for the two
-// unit endpoint normals: for a 90° tile curve it is √2, giving k ≈ 1.293; as a
-// bend straightens (normals align) avgMag → 2 and k → 1 (no correction needed).
-function controlOffsetFactor(avgMag: number): number {
-  return 2 - 0.5 * avgMag;
+  return laneSegmentPathD(entry, exit, size, d, d);
 }
