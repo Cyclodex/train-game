@@ -204,7 +204,16 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
         !offGrid &&
         !!neigh?.road &&
         neigh.road.some(l => l.kind !== "bus" && l.to.includes(back));
-      if (offGrid || !neighFeeds) {
+      // Mirror of roadExits's busOnlyBarrier: if the upstream tile only has
+      // bus lanes toward this port, a car cannot have come from that direction —
+      // skip this entry (cars must not appear to spawn from a bus-only seam).
+      const busOnlyUpstream =
+        !offGrid &&
+        !!neigh?.road &&
+        neigh.road.length > 0 &&
+        neigh.road.some(l => l.to.includes(back)) &&
+        !neigh.road.some(l => l.kind !== "bus" && l.to.includes(back));
+      if (offGrid || (!neighFeeds && !busOnlyUpstream)) {
         out.push({ coord, entryPort: port });
       }
     }
@@ -1058,10 +1067,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     coord: Coordinates,
     entry: Port,
     plan: RouteTurn[],
+    cls: VehicleClass,
   ): Port | null {
     const jId = getCoordinatesId(coord);
     const turn = plan.find(t => t.junctionId === jId);
-    return turn?.exitArm ?? roadExitPort(level, coord, entry);
+    return turn?.exitArm ?? roadExitPort(level, coord, entry, cls);
   }
 
   // Return the ActiveMovements currently held by cars *inside* `junctionId`.
@@ -1655,7 +1665,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
     // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
-    const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan);
+    const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan, cls);
     cars.push({
       id: `car${nextId++}`,
       kind,
