@@ -281,6 +281,7 @@ import {
   cycleDefaultArm,
   toggleLaneKind,
   setLaneKindRun,
+  syncJunctionBusGatesAround,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -898,12 +899,16 @@ class EditorView extends Vue {
   // Click a lane: Ctrl/Meta toggles only this tile's lane; a plain click paints
   // the whole street run to one uniform kind, committed as one level update.
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
-    if (ev.ctrlKey || ev.metaKey) {
-      this.commit(id, toggleLaneKind(this.cellOf(id), from, index));
-      return;
-    }
-    const changed = setLaneKindRun(this.level, id, from, index);
+    const changed =
+      ev.ctrlKey || ev.metaKey
+        ? { [id]: toggleLaneKind(this.cellOf(id), from, index) }
+        : setLaneKindRun(this.level, id, from, index);
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
+    // A street that just became (or stopped being) bus-only changes which turns
+    // the adjoining junctions may offer cars: re-derive their busTo gates so the
+    // restriction lives in the lane model, not only in the router.
+    const gates = syncJunctionBusGatesAround(this.level, Object.keys(changed));
+    for (const [cid, cell] of Object.entries(gates)) this.commit(cid, cell);
   }
 
   // --- depot / erase (cell-level click) ---
