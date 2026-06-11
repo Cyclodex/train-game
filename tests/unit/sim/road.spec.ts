@@ -117,6 +117,29 @@ describe("roadEntries", () => {
     const entries = roadEntries(lvl, 3, 1);
     expect(entries).toEqual([{ coord: { x: 0, y: 0 }, entryPort: Position.Left }]);
   });
+
+  it("does not add a car spawn entry adjacent to a bus-only upstream road", () => {
+    // Regular road (0,0) — bus-only segment (1,0) — regular road (2,0).
+    // Issue #33: before the fix, 0,0's Right edge and 2,0's Left edge were
+    // incorrectly treated as spawn entries because the bus-only neighbour has
+    // no *car* lane feeding them. Cars would then appear to spawn from the
+    // bus-lane seam. After the fix, only the true map-edge entries remain.
+    const busOnly = [
+      { from: Position.Left, to: [Position.Right], index: 0, kind: "bus" as const },
+      { from: Position.Right, to: [Position.Left], index: 0, kind: "bus" as const },
+    ];
+    const lvl: Level = {
+      "0,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+      "1,0": { connections: [], road: busOnly },
+      "2,0": { connections: [], road: fromPairs([[Position.Left, Position.Right]]) },
+    };
+    const entries = roadEntries(lvl, 3, 1);
+    expect(entries).toContainEqual({ coord: { x: 0, y: 0 }, entryPort: Position.Left });
+    expect(entries).toContainEqual({ coord: { x: 2, y: 0 }, entryPort: Position.Right });
+    // These must NOT appear — they border the bus-only tile, not the map edge.
+    expect(entries).not.toContainEqual({ coord: { x: 0, y: 0 }, entryPort: Position.Right });
+    expect(entries).not.toContainEqual({ coord: { x: 2, y: 0 }, entryPort: Position.Left });
+  });
 });
 
 describe("createRoadSim — spawning + movement", () => {
