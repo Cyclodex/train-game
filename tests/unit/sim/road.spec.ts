@@ -1763,7 +1763,7 @@ describe("unequal-arm junctions: every car movement lands on a real exit lane", 
       from: Position;
       index: number;
       exit: Position;
-      exitRoad: ReturnType<typeof mixedcross.level[string]["road"]> | undefined;
+      exitRoad: Level[string]["road"];
       exitApproach: Position;
     }[] = [];
     for (const [coordId, cell] of Object.entries(level)) {
