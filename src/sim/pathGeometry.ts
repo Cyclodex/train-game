@@ -147,6 +147,98 @@ function curveUnitLength(): number {
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+// --- Turn lane path: the corner FILLET of the two offset lane lines ----------
+//
+// A turning lane's path used to be the port-to-port quarter-arc pushed sideways
+// by lerp(offEntry, offExit, t). With EQUAL offsets that is a clean concentric
+// arc, but with UNEQUAL ones (any turn between arms of different lane counts)
+// the linear drift breaks the tangent at both ends: the path leaves the entry
+// road at an angle — a visible kink right at the seam — and spirals to the
+// exit. That was the "strange bend" on every mixed-width junction, while
+// equal-arm junctions looked fine.
+//
+// A real turn is the corner fillet of the two LANE LINES: follow the entry
+// lane line straight, take the largest constant-radius arc tangent to both
+// lane lines, then follow the exit lane line straight to the seam — exactly
+// how a driver corners between two streets. It is tangent-continuous at the
+// entry seam, around the arc, and at the exit seam, for ANY offset pair. With
+// equal offsets the straight legs collapse to zero and the arc IS the old
+// concentric arc, so equal-arm turns are pixel-identical.
+interface TurnLaneFrame {
+  a2: Pt; // entry seam point on the lane line
+  tE: Pt; // entry travel direction (unit)
+  tX: Pt; // exit travel direction (unit)
+  tp2: Pt; // arc end on the exit lane line
+  centre: Pt; // fillet arc centre
+  rf: number; // fillet radius
+  angA: number; // arc start angle (at tp1, from centre)
+  turn: number; // +1 right turn, −1 left (also the arc sweep sign)
+  lenIn: number; // straight leg on the entry lane line
+  lenArc: number; // quarter-arc length, rf·π/2
+  lenOut: number; // straight leg on the exit lane line
+  total: number;
+}
+
+function turnLaneFrame(
+  entryPort: Port,
+  exitPort: Port,
+  size: number,
+  offEntry: number,
+  offExit: number
+): TurnLaneFrame | null {
+  const a = portPoint(entryPort, size);
+  const b = portPoint(exitPort, size);
+  const c = size / 2;
+  // Unit travel directions: in via the entry port (toward the centre), out via
+  // the exit port (away from the centre). Port points sit mid-edge, so these
+  // are axis-aligned units.
+  const tE = { x: (c - a.x) / c, y: (c - a.y) / c };
+  const tX = { x: (b.x - c) / c, y: (b.y - c) / c };
+  // Right-of-travel normals (screen coords, y down): right of (tx,ty) is (-ty,tx).
+  const nE = { x: -tE.y, y: tE.x };
+  const nX = { x: -tX.y, y: tX.x };
+  const a2 = { x: a.x + nE.x * offEntry, y: a.y + nE.y * offEntry };
+  const b2 = { x: b.x + nX.x * offExit, y: b.y + nX.y * offExit };
+  // The lane lines are perpendicular; their corner P lies `s` along the entry
+  // line from a2 and `u` back along the exit line from b2.
+  const dx = b2.x - a2.x;
+  const dy = b2.y - a2.y;
+  const s = dx * tE.x + dy * tE.y;
+  const u = dx * tX.x + dy * tX.y;
+  if (s <= 1e-6 || u <= 1e-6) return null; // degenerate offsets: caller falls back
+  const rf = Math.min(s, u);
+  const lenIn = s - rf;
+  const lenOut = u - rf;
+  const lenArc = (Math.PI / 2) * rf;
+  const tp1 = { x: a2.x + tE.x * lenIn, y: a2.y + tE.y * lenIn };
+  const tp2 = { x: b2.x - tX.x * lenOut, y: b2.y - tX.y * lenOut };
+  const turn = Math.sign(tE.x * tX.y - tE.y * tX.x) || 1;
+  const centre = { x: tp1.x + nE.x * rf * turn, y: tp1.y + nE.y * rf * turn };
+  const angA = Math.atan2(tp1.y - centre.y, tp1.x - centre.x);
+  return { a2, tE, tX, tp2, centre, rf, angA, turn, lenIn, lenArc, lenOut, total: lenIn + lenArc + lenOut };
+}
+
+// Point + exact unit tangent on the fillet path at arc-length fraction t
+// (uniform speed). The tangent is analytic per piece — entry direction, arc
+// derivative, exit direction — so a vehicle or arrowhead at a seam aims
+// EXACTLY along the road it is joining (no finite-difference wobble).
+function turnLanePointAt(f: TurnLaneFrame, t: number): { p: Pt; tx: number; ty: number } {
+  const d = t * f.total;
+  if (d <= f.lenIn) {
+    return { p: { x: f.a2.x + f.tE.x * d, y: f.a2.y + f.tE.y * d }, tx: f.tE.x, ty: f.tE.y };
+  }
+  if (d <= f.lenIn + f.lenArc) {
+    const ang = f.angA + (f.turn * (d - f.lenIn)) / f.rf;
+    return {
+      p: { x: f.centre.x + f.rf * Math.cos(ang), y: f.centre.y + f.rf * Math.sin(ang) },
+      tx: -Math.sin(ang) * f.turn,
+      ty: Math.cos(ang) * f.turn,
+    };
+  }
+  const d2 = d - f.lenIn - f.lenArc;
+  return { p: { x: f.tp2.x + f.tX.x * d2, y: f.tp2.y + f.tX.y * d2 }, tx: f.tX.x, ty: f.tX.y };
+}
+
 // Centreline point + (un-normalised) tangent at parameter t∈[0,1]: a straight
 // line for opposite/Center ports, the quarter-CIRCLE around the wrapped tile
 // corner for adjacent ports (the same curve roadSegmentPathD draws — a road
@@ -189,7 +281,13 @@ function centrelineAt(
   };
 }
 
-// The lane point at t: centreline pushed right-of-travel by lerp(offEntry,offExit).
+// The lane point at t. Straights (and Center links) are the centreline pushed
+// right-of-travel by lerp(offEntry, offExit) — exact, since an affine offset of
+// a straight line is itself straight. TURNS (adjacent ports) follow the corner
+// fillet of the two lane lines (turnLaneFrame above): tangent-continuous at
+// both seams for any offset pair, identical to the old concentric arc when
+// offEntry === offExit. The pre-fillet lerp remains only as a fallback for
+// degenerate offsets (a lane line at or beyond the corner point).
 function laneOffsetPointAt(
   entryPort: Port,
   exitPort: Port,
@@ -198,6 +296,14 @@ function laneOffsetPointAt(
   offExit: number,
   t: number
 ): Pt {
+  const isTurn =
+    entryPort !== Position.Center &&
+    exitPort !== Position.Center &&
+    oppositePort(entryPort) !== exitPort;
+  if (isTurn) {
+    const f = turnLaneFrame(entryPort, exitPort, size, offEntry, offExit);
+    if (f) return turnLanePointAt(f, t).p;
+  }
   const { p, tx, ty } = centrelineAt(entryPort, exitPort, size, t);
   const off = lerp(offEntry, offExit, t);
   if (off === 0) return p;
@@ -218,6 +324,19 @@ export function laneSegmentPointAt(
   offExit: number,
   t: number
 ): { x: number; y: number; tangentDeg: number } {
+  const isTurn =
+    entryPort !== Position.Center &&
+    exitPort !== Position.Center &&
+    oppositePort(entryPort) !== exitPort;
+  if (isTurn) {
+    // Fillet turns carry an exact analytic tangent per piece, so a sprite or
+    // arrowhead at a seam aims precisely along the road it joins.
+    const f = turnLaneFrame(entryPort, exitPort, size, offEntry, offExit);
+    if (f) {
+      const { p, tx, ty } = turnLanePointAt(f, t);
+      return { x: p.x, y: p.y, tangentDeg: (Math.atan2(ty, tx) * 180) / Math.PI };
+    }
+  }
   const here = laneOffsetPointAt(entryPort, exitPort, size, offEntry, offExit, t);
   const eps = 1e-3;
   const pa = laneOffsetPointAt(entryPort, exitPort, size, offEntry, offExit, Math.max(0, t - eps));

@@ -147,3 +147,61 @@ describe("arrowHeadD", () => {
     );
   });
 });
+
+// --- Corner-fillet turns (unequal entry/exit offsets) -------------------------
+//
+// A turn whose entry and exit lane offsets DIFFER (any turn between arms of
+// different lane counts) follows the corner fillet of the two lane lines:
+// straight leg → constant-radius arc tangent to both → straight leg. The old
+// model (fixed arc + linear offset lerp) broke the tangent at both seams — the
+// path left the road at an angle, the "strange bend" on mixed-width junctions.
+describe("laneSegmentPointAt — corner-fillet turns", () => {
+  // Bottom→Right (a right turn wrapping the SE corner), tile 200. Kerb lane of a
+  // 3-lane band enters at +70; the 1-lane exit arm receives at +14.
+  const B = Position.Bottom;
+  const R = Position.Right;
+
+  it("starts exactly on the entry lane line, heading along the entry road", () => {
+    const p = laneSegmentPointAt(B, R, 200, 70, 14, 0);
+    expect(p.x).toBeCloseTo(170, 6); // 100 + 70 right-of-travel (north → east side)
+    expect(p.y).toBeCloseTo(200, 6);
+    // Heading north (−90°): tangent-continuous with the straight road below.
+    expect(p.tangentDeg).toBeCloseTo(-90, 1);
+  });
+
+  it("ends exactly on the exit lane line, heading along the exit road", () => {
+    const p = laneSegmentPointAt(B, R, 200, 70, 14, 1);
+    expect(p.x).toBeCloseTo(200, 6);
+    expect(p.y).toBeCloseTo(114, 6); // 100 + 14 right-of-travel (east → south side)
+    expect(p.tangentDeg).toBeCloseTo(0, 1); // east: continuous with the exit road
+  });
+
+  it("rides the entry lane line straight before the arc (no early drift)", () => {
+    // The fillet for (70→14) is radius 30 centred (200,144): the path holds
+    // x = 170 until the arc begins at y = 144.
+    const f = laneSegmentPointAt(B, R, 200, 70, 14, 0.15);
+    expect(f.x).toBeCloseTo(170, 3);
+    expect(f.y).toBeGreaterThan(144);
+  });
+
+  it("equal offsets stay the plain concentric arc (equal-arm turns unchanged)", () => {
+    // off 14 both ends: a circle of radius 100−14 = 86 around the SE corner.
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const p = laneSegmentPointAt(B, R, 200, 14, 14, t);
+      const r = Math.hypot(p.x - 200, p.y - 200);
+      expect(r).toBeCloseTo(86, 6);
+    }
+  });
+
+  it("a LEFT turn with unequal offsets is tangent-continuous at both seams too", () => {
+    // Left→Top through a junction: inner lane of a 1-lane band (+14) lands on
+    // the inner lane of a 3-lane arm (+14 there too would be equal — use a
+    // 2-lane landing at +42 to force inequality).
+    const a = laneSegmentPointAt(Position.Left, Position.Top, 200, 14, 42, 0);
+    expect(a.tangentDeg).toBeCloseTo(0, 1); // entering heading east
+    const b = laneSegmentPointAt(Position.Left, Position.Top, 200, 14, 42, 1);
+    expect(b.tangentDeg).toBeCloseTo(-90, 1); // leaving heading north
+    expect(b.x).toBeCloseTo(100 + 42, 6); // on the exit lane line
+    expect(b.y).toBeCloseTo(0, 6);
+  });
+});
