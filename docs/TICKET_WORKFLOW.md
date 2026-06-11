@@ -12,14 +12,14 @@ Idea → Triage → Ready for dev → In progress → In review (PR) → Done
 | Stage | Label | Who | What happens |
 |---|---|---|---|
 | 1. Capture | `status: triage` | anyone | Every idea/bug/TODO becomes an issue immediately (use the issue templates). No quality bar — capturing beats forgetting. **Visual issue? Attach a screenshot** (see below). |
-| 2. Review & refine | `status: triage` → `status: ready-for-dev` | product owner | Review the issue: clarify scope, write/adjust acceptance criteria, set a `prio:` label. Switching the label to `status: ready-for-dev` **is the handover to development.** Close with `not planned` if rejected. |
-| 3. Development | `status: in-progress` | developer | Assign yourself, switch the label, branch off `master` as `<type>/<issue-number>-short-name` (e.g. `fix/3-correct-signal`). Reference the issue in commits. **Visual change? Capture before/after screenshots** (see below) and put them in the PR. |
+| 2. Review & refine | `status: triage` → `status: ready-for-dev` | product owner | Review the issue: clarify scope, write/adjust acceptance criteria, set a `prio:` label. Switching the label to `status: ready-for-dev` **is the handover to development.** **`ready-for-dev` is the automated implement pipeline's queue** — it will branch `claude/issue-<N>-…` and open a PR, so only move a ticket here when you want the pipeline to build it (see **Ownership** below). Close with `not planned` if rejected. |
+| 3. Development | `status: in-progress` | developer | Assign yourself, switch the label, branch off `master` as `<type>/<issue-number>-short-name` (e.g. `fix/3-correct-signal`). Switching to `in-progress` **claims** the ticket — it is the mutex: whoever starts first (the pipeline *or* a person/session) flips it, and nobody else starts a ticket already `in-progress`/`in-review`. Reference the issue in commits. **Visual change? Capture before/after screenshots** (see below) and put them in the PR. |
 | 4. PR review & sign-off | `status: in-review` | developer + reviewer | Open a PR using the PR template, link the issue with `Closes #N`. The review verifies the acceptance criteria **against the before/after screenshots** for visual work; **approving and merging is the sign-off** — the issue closes automatically. Found a problem after merge? Reopen the issue → back to `status: in-progress`. |
 
 ## Label reference
 
 **Status (exactly one per open issue):**
-`status: triage` · `status: ready-for-dev` · `status: in-progress` · `status: in-review`
+`status: triage` · `status: ready-for-dev` *(the implement pipeline's queue — see Ownership)* · `status: in-progress` *(claimed; the mutex)* · `status: in-review`
 
 **Type:** `bug` · `enhancement` · `refactor` · `polish`
 
@@ -37,6 +37,19 @@ The implement workflow reads this to pick the Claude model.
   survives the PR it came from, turn it into an issue and reference the issue
   number in the comment (`// TODO(#12): ...`).
 - **One issue, one PR** where possible. Split big issues during triage.
+- **Ownership — never double-build a ticket.** `status: ready-for-dev` is the
+  automated **implement pipeline's** queue: moving an issue there hands it to the
+  pipeline, which branches `claude/issue-<N>-…` and opens a PR. To avoid two
+  developers (the pipeline *and* a person/session) building the same ticket:
+  - **Before you implement ANY issue, check for an existing `claude/issue-<N>-…`
+    branch or an open PR that closes it.** If one exists, the pipeline already
+    owns it — **review that PR instead** of building a parallel one.
+  - `status: in-progress` is the **mutex**. Don't start a ticket that's already
+    `in-progress` or `in-review`.
+  - Want to implement a ticket **yourself** (e.g. in a Claude session) instead of
+    the pipeline? **Claim it `in-progress` first and leave it out of
+    `ready-for-dev`** — never set a ticket to `ready-for-dev` and also build it
+    yourself, or the pipeline will pick it up in parallel.
 - **Filtering**: the review queue is
   [`label:"status: triage"`](https://github.com/Cyclodex/train-game/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3A+triage%22),
   the dev queue is
