@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: master
           fetch-depth: 0
 
       # Flip the status label deterministically before Claude starts, so the
@@ -100,11 +101,15 @@ jobs:
                the issue. If the change is NOT visual, skip this and note
                "N/A — not visible on the board" in the PR.
             4. Run `npm run lint` and `npm run test:unit` and fix any failures.
-            5. Open a pull request with `gh pr create`, following the PR template
-               (fill in the Before/After section). Reference the issue with
-               "Closes #${{ github.event.issue.number }}" so merging the PR
-               closes it automatically.
-            6. Replace the issue label "status: in-progress" with "status: in-review"
+            5. Before opening the PR, rebase onto latest master so the branch
+               is never stale:
+                 `git fetch origin && git rebase origin/master`
+               Resolve any conflicts, then continue with the PR.
+            6. Open a pull request with `gh pr create --base master`, following
+               the PR template (fill in the Before/After section). Reference
+               the issue with "Closes #${{ github.event.issue.number }}" so
+               merging the PR closes it automatically.
+            7. Replace the issue label "status: in-progress" with "status: in-review"
                (use `gh issue edit`).
           claude_args: |
             --model ${{ steps.model.outputs.model }}
