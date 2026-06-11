@@ -1,0 +1,25 @@
+name: CI
+
+# Lint + unit tests on every PR and on master pushes. Guards the pipeline
+# itself: PR #25 merged a scenario the road validator rejects and master's
+# suite went red unnoticed, because nothing ran the tests outside the Claude
+# actions (#28). Note: GitHub does not create pull_request runs for PRs with
+# merge conflicts — resolve the conflict to get a CI verdict.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint:nofix
+      - run: npm run test:unit
