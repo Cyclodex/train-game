@@ -63,7 +63,9 @@ export const SCENARIO_ICONS: Record<string, string> = {
   // Streets — traffic signals
   signaltwophase: "🚥",
   signalroundrobin: "🔃",
+  signalbuslane1l: "🚌",
   signalbuspriority: "🚌",
+  signalbuslane3l: "🚌",
   // Streets — routing
   cardestination: "📍",
   carroute: "🗺️",
