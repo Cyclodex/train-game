@@ -24,6 +24,9 @@ import {
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
+import { crossturns2lane, crossturns3lane } from "@/levels/test/scenarios/crossturns";
+import { roadjunction } from "@/levels/test/scenarios/roadjunction";
+import { bigjunction } from "@/levels/test/scenarios/bigjunction";
 import { buslane } from "@/levels/test/scenarios/buslane";
 import { buscross } from "@/levels/test/scenarios/buscross";
 import {
@@ -34,7 +37,10 @@ import {
   busonewaycross,
   busmegacross,
 } from "@/levels/test/scenarios/buscrosses";
-import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits, turnLandsOnBusLane } from "@/tiles/lanes";
+import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits, turnLandsOnBusLane, isRoadJunction, laneCount, usableLaneIndices } from "@/tiles/lanes";
+import { neighborCoord } from "@/sim/topology";
+import { parseCoordId } from "@/tiles/model";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
@@ -1726,6 +1732,97 @@ describe("bus-lane overlay colours a junction movement by where it LANDS", () =>
       turnLandsOnBusLane(centre, L, 1, T, north, oppositePort(T), "bus"),
     ).toBe(true);
   });
+});
+
+describe("unequal-arm junctions: every car movement lands on a real exit lane", () => {
+  // Companion to the bus-side landing guarantee (#18): on junctions whose arms
+  // carry different lane counts, every CAR movement that fans onto a wider arm or
+  // merges onto a narrower one must resolve to a CONCRETE lane that actually
+  // exists on the exit arm — never an index ≥ the arm's lane count. The sim drives
+  // the car to `junctionExitLane(...)` when it crosses out of a junction
+  // (road.ts), and the debug overlay arrow ends at that same lane
+  // (`roadTurnExitOffsetPx` → `junctionExitOffsetPx` → `junctionExitLane`), so
+  // pinning the landing lane here locks BOTH the routing and the overlay to a real
+  // lane. Regression coverage for #26 across every shipped unequal-arm scenario.
+  const family: [string, Level][] = [
+    ["mixedcross", mixedcross.level],
+    ["mixedtee", mixedtee.level],
+    ["crossturns2lane", crossturns2lane.level],
+    ["crossturns3lane", crossturns3lane.level],
+    ["roadjunction", roadjunction.level],
+    ["bigjunction", bigjunction.level],
+  ];
+
+  // Every (junction tile, car approach lane, permitted exit) movement in a level,
+  // paired with the exit arm's road and the port the car enters it through. Only
+  // junction tiles (a real routing choice) and car-usable approach lanes are
+  // walked — the case where junctionExitLane must fan/merge onto the exit arm.
+  function carMovements(level: Level) {
+    const out: {
+      coordId: string;
+      from: Position;
+      index: number;
+      exit: Position;
+      exitRoad: Level[string]["road"];
+      exitApproach: Position;
+    }[] = [];
+    for (const [coordId, cell] of Object.entries(level)) {
+      const road = cell.road;
+      if (!isRoadJunction(road)) continue;
+      const coord = parseCoordId(coordId);
+      for (const lane of road!) {
+        if (lane.kind === "bus") continue; // a car can't take a bus-only approach lane
+        for (const exit of lane.to) {
+          const next = neighborCoord(coord, exit);
+          if (!next) continue;
+          out.push({
+            coordId,
+            from: lane.from,
+            index: lane.index,
+            exit,
+            exitRoad: level[getCoordinatesId(next)]?.road,
+            exitApproach: oppositePort(exit),
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  for (const [name, level] of family) {
+    it(`${name}: every car turn/cross resolves to a real car lane on the exit arm`, () => {
+      const moves = carMovements(level);
+      expect(moves.length).toBeGreaterThan(0); // the scenario actually has junction movements
+      for (const m of moves) {
+        const carLanesOut = carLaneIndices(m.exitRoad, m.exitApproach);
+        // The exit arm must offer the car a lane at all — no car movement may fan
+        // onto an arm with no car lane (that would be an un-takeable movement).
+        expect(
+          carLanesOut.length,
+          `${name} ${m.coordId} ${m.from}#${m.index}→${m.exit}: exit arm has no car lane`,
+        ).toBeGreaterThan(0);
+        const landing = junctionExitLane(
+          level[m.coordId].road,
+          m.from,
+          m.index,
+          m.exit,
+          m.exitRoad,
+          m.exitApproach,
+          "car",
+        );
+        // The landing index must be a CONCRETE lane of the exit arm: present in
+        // its car-usable lane set and strictly below its lane count (never an
+        // off-the-edge index the car/overlay would draw outside the road).
+        expect(
+          carLanesOut,
+          `${name} ${m.coordId} ${m.from}#${m.index}→${m.exit}: landing ${landing} is not a real car lane of ${JSON.stringify(carLanesOut)}`,
+        ).toContain(landing);
+        expect(landing).toBeLessThan(laneCount(m.exitRoad, m.exitApproach));
+        // And the car may legally drive in the lane it lands on (not a bus lane).
+        expect(usableLaneIndices(m.exitRoad, m.exitApproach, "car")).toContain(landing);
+      }
+    });
+  }
 });
 
 describe("createRoadSim — launch reaction delay", () => {
