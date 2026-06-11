@@ -252,6 +252,8 @@ import {
   laneCount,
   laneCountAt,
   seamPaintTotal,
+  roadSeamPaintTotal,
+  junctionArmPaintTotal,
   seamMismatch,
   isRoadJunction,
   turnKind,
@@ -307,9 +309,14 @@ class Tile extends Vue {
       const selfTotal = Math.max(laneCount(road, a) + laneCount(road, b), 2);
       const na = neighborCoord(coord, a);
       const nb = neighborCoord(coord, b);
+      const jA = na ? this.game.roadIsJunctionAt(na) : false;
+      const jB = nb ? this.game.roadIsJunctionAt(nb) : false;
       const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
       const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
-      return seamPaintTotal(selfTotal, crossingA) !== seamPaintTotal(selfTotal, crossingB);
+      return (
+        roadSeamPaintTotal(selfTotal, crossingA, jA) !==
+        roadSeamPaintTotal(selfTotal, crossingB, jB)
+      );
     });
   }
   // Debug suffix on the tile-kind label: the configured lane amount of a road
@@ -403,8 +410,16 @@ class Tile extends Vue {
         // max-of-both-ends width painted a narrow arm as wide as the widest one:
         // a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of tarmac at the
         // entrance seam, twice the road it meets.
-        const widthEndA = seamPaintTotal(Math.max(selfAtA, 2), nTotalA);
-        const widthEndB = seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
+        // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
+        // so the arm mouth — straight or turning — meets the road flush, no taper
+        // at the seam (#30). A simple curve (not a junction) keeps the per-end
+        // seam taper so a bend still narrows/widens between unequal straights.
+        const widthEndA = this.tileIsRoadJunction
+          ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
+          : seamPaintTotal(Math.max(selfAtA, 2), nTotalA);
+        const widthEndB = this.tileIsRoadJunction
+          ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
+          : seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -467,6 +482,12 @@ class Tile extends Vue {
       // narrowed 3+-lane roads as they ran off the play area).
       const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
       const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
+      // A junction neighbour never pinches the straight (it adopts the road's
+      // width inside its box, see the junction arm branch above): the road keeps
+      // its own full width at that seam, so no taper is painted next to a
+      // junction (#30). Off-map / real-road seams meet flush as before.
+      const jA = na ? this.game.roadIsJunctionAt(na) : false;
+      const jB = nb ? this.game.roadIsJunctionAt(nb) : false;
 
       // One-way HIGHWAY tile: left-align to the run's widest lane count so the
       // through lanes run dead straight and lanes are added / dropped on the RIGHT
@@ -479,8 +500,12 @@ class Tile extends Vue {
         const m = Math.max(selfA, selfB);
         const crossEntry = fwdA ? crossingA : crossingB;
         const crossExit = fwdA ? crossingB : crossingA;
-        const entryCount = crossEntry > 0 ? Math.min(m, crossEntry) : m;
-        const exitCount = crossExit > 0 ? Math.min(m, crossExit) : m;
+        // A junction seam keeps the run's full width m (the junction adopts the
+        // road, no taper next to it, #30); a real-road seam meets flush.
+        const jEntry = fwdA ? jA : jB;
+        const jExit = fwdA ? jB : jA;
+        const entryCount = !jEntry && crossEntry > 0 ? Math.min(m, crossEntry) : m;
+        const exitCount = !jExit && crossExit > 0 ? Math.min(m, crossExit) : m;
         const R = this.game.roadOneWayRunMax(coord, entry);
         const leftOff = -(R / 2) * LANE_W; // constant through-side kerb
         // The closing-lane tarmac stays FULL width across a narrowing tile (the
@@ -518,8 +543,16 @@ class Tile extends Vue {
       }
 
       // Bidirectional straight road: centred symmetric taper (min-seam rule).
-      const totalA = seamPaintTotal(selfTotal, crossingA);
-      const totalB = seamPaintTotal(selfTotal, crossingB);
+      // A junction seam keeps the road's full width (no taper next to a junction).
+      // The JUNCTION's own through-corridor adopts each adjoining road's width at
+      // its mouth (junctionArmPaintTotal), so the arm meets the road flush and the
+      // width change (unequal arms) happens INSIDE the box, never at the seam (#30).
+      const totalA = this.tileIsRoadJunction
+        ? junctionArmPaintTotal(laneCountAt(this.tile.road, a), crossingA, jA)
+        : roadSeamPaintTotal(selfTotal, crossingA, jA);
+      const totalB = this.tileIsRoadJunction
+        ? junctionArmPaintTotal(laneCountAt(this.tile.road, b), crossingB, jB)
+        : roadSeamPaintTotal(selfTotal, crossingB, jB);
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       // Road edge line where the tarmac meets the grass — one per outer kerb,
