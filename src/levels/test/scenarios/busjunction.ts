@@ -15,10 +15,10 @@ const T = Position.Top;
 const R = Position.Right;
 const B = Position.Bottom;
 
-// One car lane N–S, plus bus lanes on the east arm that match the adjacent
-// bus-only road. Car lanes only permit straight movement (no east exit); bus
-// lanes handle all connections to/from the east arm so the debug overlay shows
-// them in amber, matching the bus-only neighbor tiles.
+// One car lane N–S, plus a bus lane on the east arm that matches the adjacent
+// bus-only road. Car lanes only permit straight movement (no east exit); the bus
+// lane handles connections from the east arm so the debug overlay shows amber
+// arrows matching the bus-only neighbor tiles.
 function junctionCenter(): { connections: []; road: Lane[] } {
   return {
     connections: [],
@@ -26,8 +26,6 @@ function junctionCenter(): { connections: []; road: Lane[] } {
       { from: T, to: [B], index: 0 },                 // car from north: straight only
       { from: B, to: [T], index: 0 },                 // car from south: straight only
       { from: R, to: [T, B], index: 0, kind: "bus" }, // bus from east: go N or S
-      { from: T, to: [R], index: 0, kind: "bus" },    // bus from north: go east
-      { from: B, to: [R], index: 0, kind: "bus" },    // bus from south: go east
     ],
   };
 }
