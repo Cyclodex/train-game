@@ -224,3 +224,19 @@ work, `npm run dev` and open http://localhost:5173 (debug overlay is on by
 default). When you add a feature, verify it in its `/test/:id` scenario (see
 **Feature test world** above) — that is the required check that the mechanic
 works in isolation.
+
+**Visual changes need a screenshot.** Anything visible on the board (a scenario,
+tile/road/lane rendering, the debug driving-line overlay, junctions, vehicles,
+signals, depots, trains) is verified with a picture, not just prose. Use the
+committed helper:
+
+```
+npm run shot -- <scenarioId> --label before     # baseline, before your change
+npm run shot -- <scenarioId> --label after       # after — same scenario
+```
+
+It loads `/test/<scenarioId>` in a real browser with the **Debug overlay on**
+(cyan car / amber bus driving-lines) and a flat backdrop, then writes a tight PNG
+(default `screenshots/`). A visual **issue** carries a screenshot of the wrong
+state; a visual **fix PR** carries a **before/after** pair (the implementer
+provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.

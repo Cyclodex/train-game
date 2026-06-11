@@ -23,6 +23,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Flip the status label deterministically before Claude starts, so the
+      # board shows "In progress" for the whole run. (When this was left to
+      # the prompt, the model did the bookkeeping at the very end of the run
+      # and the card sat in "Ready for dev" the entire time.)
+      - name: Mark issue in-progress
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN || github.token }}
+        run: |
+          # gh does not auto-create labels (the REST set-labels path does),
+          # so make sure the label exists before using it.
+          gh label create "status: in-progress" \
+            --repo "${{ github.repository }}" \
+            --color "FBCA04" --description "Being implemented" 2>/dev/null || true
+          gh issue edit "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --remove-label "status: ready-for-dev" \
+            --add-label "status: in-progress"
+
       # Model is chosen during triage via an optional label:
       # "model: opus" for complex tickets, "model: haiku" for trivial ones,
       # no label (or "model: sonnet") = Sonnet, the default.
@@ -36,29 +54,58 @@ jobs:
             *)                  echo "model=claude-sonnet-4-6" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # Browser + deps so `npm run shot` can capture before/after screenshots
+      # of visual issues (docs/TICKET_WORKFLOW.md → "Visual verification").
+      # .npmrc sets ignore-scripts, so the browser is never fetched implicitly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
       - uses: anthropics/claude-code-action@v1
         env:
-          # Lets Claude run `gh pr create` / `gh issue edit` for steps 2/5/6.
-          GH_TOKEN: ${{ github.token }}
+          # Lets Claude run `gh pr create` / `gh issue edit` for steps 2/6/7.
+          # Prefer the PAT: label changes made with the default github.token
+          # never trigger other workflows, so the project board would not
+          # follow in-progress/in-review. With the PAT, status-sync fires.
+          GH_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN || github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
+          # The handover label may be applied by automation (board-sync poll,
+          # Claude session) — without this the action refuses to start for
+          # non-human actors ("Workflow initiated by non-human actor").
+          allowed_bots: "claude"
           prompt: |
             Implement issue #${{ github.event.issue.number }} following the process
             in docs/TICKET_WORKFLOW.md.
 
             1. Read the issue (title, body, acceptance criteria) and the referenced
-               code locations.
-            2. Replace the issue label "status: ready-for-dev" with "status: in-progress"
-               (use `gh issue edit`).
-            3. Implement the change on a branch named <type>/<issue-number>-<short-name>
+               code locations. (The issue label is already at "status: in-progress" —
+               the workflow set it before you started.)
+            2. Implement the change on a branch named <type>/<issue-number>-<short-name>
                (e.g. fix/3-correct-signal).
+            3. If the issue is VISUAL (anything visible on the board — a scenario,
+               tile/road/lane rendering, the debug driving-line overlay, junctions,
+               vehicles, signals, depots, trains), capture proof with the screenshot
+               helper (see docs/TICKET_WORKFLOW.md → "Visual verification"):
+                 a. BEFORE changing any code, capture the current (buggy) state:
+                    `npm run shot -- <scenarioId> --label before --out docs/verify/issue-${{ github.event.issue.number }}`
+                 b. AFTER your change, capture the same scenario(s):
+                    `npm run shot -- <scenarioId> --label after  --out docs/verify/issue-${{ github.event.issue.number }}`
+                 c. Commit the PNGs and embed both in the PR body with raw URLs:
+                    https://github.com/${{ github.repository }}/raw/<branch>/docs/verify/issue-${{ github.event.issue.number }}/<scenarioId>-after.png
+               Pick the `/test` scenarioId(s) from src/levels/test/index.ts that show
+               the issue. If the change is NOT visual, skip this and note
+               "N/A — not visible on the board" in the PR.
             4. Run `npm run lint` and `npm run test:unit` and fix any failures.
-            5. Open a pull request with `gh pr create`, following the PR template.
-               Reference the issue with "Closes #${{ github.event.issue.number }}"
-               so merging the PR closes it automatically.
+            5. Open a pull request with `gh pr create`, following the PR template
+               (fill in the Before/After section). Reference the issue with
+               "Closes #${{ github.event.issue.number }}" so merging the PR
+               closes it automatically.
             6. Replace the issue label "status: in-progress" with "status: in-review"
                (use `gh issue edit`).
           claude_args: |
             --model ${{ steps.model.outputs.model }}
-            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*),Bash(gh pr create:*),Bash(gh issue edit:*)"
+            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(npm run shot),Bash(npm run shot:*),Bash(npx playwright:*),Bash(git:*),Bash(gh pr create:*),Bash(gh issue edit:*)"

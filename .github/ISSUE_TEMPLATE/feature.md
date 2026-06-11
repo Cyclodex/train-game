@@ -16,6 +16,12 @@ labels: ["status: triage"]
 
 <!-- Rough direction if you already have one. -->
 
+## Screenshot / mockup (if visual)
+
+<!-- If this changes anything on the board, show the current state (or a sketch
+of the target). `npm run shot -- <scenarioId>` captures a /test scenario with the
+debug overlay. See docs/TICKET_WORKFLOW.md → "Visual verification". -->
+
 ## Acceptance criteria
 
 <!-- Refined during triage — a first draft helps. -->

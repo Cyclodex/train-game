@@ -126,6 +126,19 @@ function roadExitPort(
   const exits = usableExits(tile.road, entryPort, cls);
   if (exits.length === 0) return null;
   // Single exit (straight/curve/one-way) — or pick the first for a junction.
+  // At a junction with multiple exits, prefer exits whose next tile actually
+  // carries lanes this vehicle class can use. A car must never take a junction
+  // arm whose neighbour is a bus-only road (it would immediately despawn there).
+  if (exits.length > 1) {
+    const traversable = exits.filter(exit => {
+      const n = neighborCoord(coord, exit);
+      if (!n) return true; // off-map edge — vehicle exits here
+      const nTile = level[getCoordinatesId(n)];
+      if (!nTile?.road?.length) return true; // no road neighbour — off-map
+      return usableExits(nTile.road, oppositePort(exit), cls).length > 0;
+    });
+    if (traversable.length > 0) return traversable[0];
+  }
   return exits[0];
 }
 
@@ -225,7 +238,14 @@ export function roadExits(level: Level, width: number, height: number): RoadEntr
       const neigh = level[getCoordinatesId(n)];
       const continues =
         !offGrid && neigh?.road && exitsForCar(neigh.road, oppositePort(port)).length > 0;
-      if (offGrid || !continues) out.push({ coord, entryPort: port });
+      // Don't add an exit toward an in-grid bus-only road: a car would despawn
+      // immediately there (no car lanes), causing spurious routing destinations.
+      const busOnlyBarrier =
+        !offGrid &&
+        !!neigh?.road &&
+        neigh.road.length > 0 &&
+        exitsForCar(neigh.road, oppositePort(port)).length === 0;
+      if ((offGrid || !continues) && !busOnlyBarrier) out.push({ coord, entryPort: port });
     }
   }
   out.sort((a, b) => {

@@ -16,6 +16,7 @@ import {
   roadPortsOf,
   isRoadJunction,
   junctionExitOffsetPx,
+  turnLandsOnBusLane,
   turnSeamBand,
   VehicleClass,
 } from "@/tiles/lanes";
@@ -250,6 +251,17 @@ export interface Game {
     entryLane: number,
     cls: VehicleClass,
   ): number | null;
+  // Whether a class-`cls` vehicle making the TURN entry→exit through `coord` lands
+  // on a BUS lane on the exit arm. The debug overlay paints a movement amber only
+  // when this holds, so an amber arrow always ends on a real bus lane (a bus
+  // falling back to a car lane renders cyan — overlay == where it drives).
+  roadTurnExitIsBusLane(
+    coord: Coordinates,
+    entry: Position,
+    exit: Position,
+    entryLane: number,
+    cls: VehicleClass,
+  ): boolean;
   // Debug route overlay — the view drives these on car hover/click (debug only):
   setHoveredCar(carId: string): void; // preview this car's route while hovering
   clearHoveredCar(): void; // hover left a car
@@ -668,6 +680,35 @@ export function createGame(
     );
   }
 
+  // Does a class-`cls` vehicle in approach lane `entryLane` LAND on a bus lane on
+  // the EXIT arm of a TURN through `coord` (entry→exit adjacent)? The debug
+  // overlay colours an arrow amber only when this is true, so an arrow is amber
+  // iff it ends on a real bus lane — a bus whose movement falls back to a car lane
+  // (e.g. a median bus turning right onto a car-only arm) renders cyan, matching
+  // where the vehicle actually drives (junctionExitLane), never a phantom amber
+  // line onto an arm with no bus lane. False at a dead-end / map edge.
+  function turnExitOnBusLane(
+    coord: Coordinates,
+    entry: Position,
+    exit: Position,
+    entryLane: number,
+    cls: VehicleClass,
+  ): boolean {
+    const here = level[getCoordinatesId(coord)]?.road;
+    const next = neighborCoord(coord, exit);
+    if (!next) return false;
+    const exitRoad = level[getCoordinatesId(next)]?.road;
+    return turnLandsOnBusLane(
+      here,
+      entry,
+      entryLane,
+      exit,
+      exitRoad,
+      oppositePort(exit),
+      cls,
+    );
+  }
+
   // Seam-aware lateral offset (px, right-of-travel) for one coupler. On a STRAIGHT
   // tile whose neighbour has a different lane count, the painted surface tapers
   // across the tile (min-seam rule); the coupler's offset interpolates the same
@@ -1039,6 +1080,15 @@ export function createGame(
       cls: VehicleClass,
     ): number | null {
       return turnExitOffsetPx(coord, entry, exit, entryLane, cls);
+    },
+    roadTurnExitIsBusLane(
+      coord: Coordinates,
+      entry: Position,
+      exit: Position,
+      entryLane: number,
+      cls: VehicleClass,
+    ): boolean {
+      return turnExitOnBusLane(coord, entry, exit, entryLane, cls);
     },
     setHoveredCar(carId: string) {
       hoveredCarId = carId;
