@@ -3,7 +3,7 @@ import { Level, isLevelCrossing } from "@/tiles/model";
 import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { segmentLength } from "./pathGeometry";
+import { roadSegmentLength } from "./pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
@@ -1614,7 +1614,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
-    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng);
+    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
     // Lane order to try at the entry, by class:
     //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
     //    then the remaining lanes from a rotating start.
@@ -1694,7 +1694,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
   function segLen(seg: RoadSegment): number {
-    return segmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
+    return roadSegmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
   }
 
   function sampleAtArc(car: Car, arcBack: number): CarSample {

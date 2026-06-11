@@ -3,12 +3,17 @@ import {
   Port,
   PortPair,
   TileCell,
+  Level,
   samePair,
   armExit,
   partnersOf,
   defaultArmFor,
+  parseCoordId,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
+import { isRoadJunction, lanesFrom } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // Lanes for a SINGLE direction from -> to: `count` lanes at indices
 // startIndex..startIndex+count-1, optionally tagged with a lane `kind`.
@@ -254,4 +259,204 @@ export function toggleLaneKind(cell: TileCell, from: Port, index: number): TileC
     return { ...l, kind: "bus" as LaneKind };
   });
   return { ...cell, road: next };
+}
+
+// Set a single lane's kind explicitly (rather than toggling): "bus" tags it as a
+// bus-only lane, undefined makes it a normal lane. Same identity (from + index) as
+// toggleLaneKind, but the target state is given, so a whole run can be painted to
+// one uniform state in one pass. No-op (returns the same cell) when no such lane
+// exists, so a missing tile in a run leaves it untouched.
+export function setLaneKind(
+  cell: TileCell,
+  from: Port,
+  index: number,
+  kind: LaneKind | undefined,
+): TileCell {
+  const road = cell.road;
+  if (!road || !road.some(l => l.from === from && l.index === index)) return cell;
+  const next = road.map(l => {
+    if (l.from !== from || l.index !== index) return l;
+    if (kind == null) return { from: l.from, to: l.to, index: l.index }; // → normal
+    return { ...l, kind };
+  });
+  return { ...cell, road: next };
+}
+
+// --- Street-run traversal -----------------------------------------------------
+// A "street run" is the contiguous chain of one physical lane as it flows from
+// tile to tile along a street — the unit the bus-lane tool paints in one click.
+// Starting from a clicked lane it walks both ways, following the lane through
+// straights and curves, and stops where the lane stops being a single continuous
+// through-lane: at a junction tile (a real routing choice), the road's end, a
+// neighbour that lacks the continuing lane, or a lane that itself has multiple
+// exits (junction-style movement). The result is the set of (tile, approach,
+// index) triples the click should treat as one street.
+
+// One reference to a physical lane: the tile it lives on, the port a vehicle
+// enters that lane through, and the lane's index within that approach.
+export interface LaneRef {
+  id: string;
+  from: Port;
+  index: number;
+}
+
+// Find the lane on `cell` entering through `from` at `index`, or null. A run only
+// ever follows a lane that is a single continuous through-lane, so a lane with
+// more than one exit (a junction movement) is treated as absent here — the walk
+// stops rather than stepping through a fork.
+function throughLane(cell: TileCell | undefined, from: Port, index: number): Lane | null {
+  if (!cell || isRoadJunction(cell.road)) return null;
+  const lane = lanesFrom(cell.road, from).find(l => l.index === index);
+  if (!lane || lane.to.length !== 1) return null;
+  return lane;
+}
+
+// Walk the run DOWNSTREAM from the lane `(id, from, index)` and append each
+// further lane to `acc` (the seed lane is assumed already pushed by the caller).
+// `seen` guards against revisiting a tile so a circular street terminates. The
+// step rule: the current lane exits by `lane.to[0]`; the neighbour beyond that
+// exit continues the run as the lane entering through `oppositePort(exit)` at the
+// SAME index. A bend is followed because the next tile's entry port is derived
+// from the exit, not assumed equal to `from`.
+function walkRun(
+  level: Level,
+  start: LaneRef,
+  acc: LaneRef[],
+  seen: Set<string>,
+): void {
+  let id = start.id;
+  let from = start.from;
+  const index = start.index;
+  // The seed tile is already in `seen`/`acc`; advance from it.
+  for (;;) {
+    const cell = level[id];
+    const lane = throughLane(cell, from, index);
+    if (!lane) return; // missing lane / junction / multi-exit: stop
+    const exit = lane.to[0];
+    const nextCoord = neighborCoord(parseCoordId(id), exit);
+    if (!nextCoord) return; // exits off the map (e.g. toward Center): road end
+    const nextId = getCoordinatesId(nextCoord);
+    if (seen.has(nextId)) return; // loop guard: circular street closes
+    const nextCell = level[nextId];
+    const nextFrom = oppositePort(exit);
+    // The continuing lane must exist on the neighbour at the same index, and be a
+    // plain through-lane (the neighbour mustn't be a junction). Otherwise stop.
+    if (!throughLane(nextCell, nextFrom, index)) return;
+    seen.add(nextId);
+    acc.push({ id: nextId, from: nextFrom, index });
+    id = nextId;
+    from = nextFrom;
+  }
+}
+
+// Walk the run UPSTREAM from the lane `(id, from, index)` and append each further
+// lane to `acc` (the seed lane is assumed already pushed by the caller). Stepping
+// upstream means moving to the neighbour on the current lane's ENTRY side (`from`)
+// and finding the through-lane there (at the same index) whose exit points back
+// toward us (`to[0] === oppositePort(from)`) — that lane is the one that flows
+// INTO the current tile, so it is the same physical street one tile back. Its own
+// `from` becomes the next upstream entry port, which is how a bend is followed:
+// on a curve the upstream tile's approach side differs from ours, so it is read
+// off the lane found rather than assumed. Same stop conditions as walkRun
+// (junction, road end, missing lane, fork, loop guard).
+function walkRunBack(
+  level: Level,
+  start: LaneRef,
+  acc: LaneRef[],
+  seen: Set<string>,
+): void {
+  let id = start.id;
+  let from = start.from;
+  const index = start.index;
+  for (;;) {
+    const backCoord = neighborCoord(parseCoordId(id), from);
+    if (!backCoord) return; // entry is off-map (e.g. Center): road end
+    const backId = getCoordinatesId(backCoord);
+    if (seen.has(backId)) return; // loop guard: circular street closes
+    // The upstream lane enters the neighbour through some port and exits toward us
+    // (oppositePort(from)) at the same index. We don't know its entry port a priori
+    // (a bend changes it), so search the neighbour's through-lanes for the one that
+    // exits back toward this tile.
+    const wantExit = oppositePort(from);
+    const upLane = throughLaneExiting(level[backId], wantExit, index);
+    if (!upLane) return; // missing lane / junction / fork / not flowing toward us
+    seen.add(backId);
+    acc.push({ id: backId, from: upLane.from, index });
+    id = backId;
+    from = upLane.from;
+  }
+}
+
+// The through-lane on `cell` at `index` whose single exit is `exit`, or null. Like
+// throughLane but keyed by the EXIT port (we know where the lane must flow, not
+// which side it enters) — used by the upstream walk, where a bend means the entry
+// side is unknown until the lane is found.
+function throughLaneExiting(
+  cell: TileCell | undefined,
+  exit: Port,
+  index: number,
+): Lane | null {
+  if (!cell || isRoadJunction(cell.road)) return null;
+  const lane = (cell.road ?? []).find(
+    l => l.index === index && l.to.length === 1 && l.to[0] === exit,
+  );
+  return lane ?? null;
+}
+
+// The whole street run containing the clicked lane `(id, from, index)`: the lane
+// itself plus every lane it flows into forward (following its exit) and backward
+// (following the oncoming side), across straights and curves, stopping at
+// junctions, road ends, missing lanes and forks (see walkRun). The result always
+// contains at least the clicked lane and never visits a tile twice.
+export function streetRunLanes(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): LaneRef[] {
+  const seed = level[id];
+  // No such lane to click: return just the requested ref so callers always get a
+  // non-empty list (the editor's hit paths only fire on real lanes anyway).
+  const lane = seed && !isRoadJunction(seed.road)
+    ? lanesFrom(seed.road, from).find(l => l.index === index)
+    : undefined;
+  const out: LaneRef[] = [{ id, from, index }];
+  if (!lane) return out;
+  const seen = new Set<string>([id]);
+  // Forward: follow the clicked lane's exit downstream.
+  walkRun(level, { id, from, index }, out, seen);
+  // Backward: step upstream tile by tile, following the physical lane that flows
+  // INTO each tile (across bends), until the run stops (junction / road end /
+  // missing lane / fork / loop). One loop sweeps the whole upstream street.
+  walkRunBack(level, { id, from, index }, out, seen);
+  return out;
+}
+
+// Paint a whole street run to one uniform lane kind: from the CLICKED lane decide
+// the target (a bus lane becomes normal, anything else becomes bus), then SET that
+// kind on every lane of the run. Returns the cells that changed, keyed by id, as
+// fresh TileCells — the editor commits them in one go. A half-painted street
+// therefore becomes uniform in a single click instead of inverting tile by tile.
+export function setLaneKindRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  const seed = level[id];
+  const clicked = seed && !isRoadJunction(seed.road)
+    ? lanesFrom(seed.road, from).find(l => l.index === index)
+    : undefined;
+  const target: LaneKind | undefined = clicked?.kind === "bus" ? undefined : "bus";
+  const run = streetRunLanes(level, id, from, index);
+  const out: Record<string, TileCell> = {};
+  for (const ref of run) {
+    // A run may touch the same tile twice (both directions of a two-way street use
+    // the same physical lane only once, but be defensive): build on the latest
+    // version so multiple lanes on one tile all land.
+    const base = out[ref.id] ?? level[ref.id];
+    if (!base) continue;
+    out[ref.id] = setLaneKind(base, ref.from, ref.index, target);
+  }
+  return out;
 }

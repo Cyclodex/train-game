@@ -27,13 +27,18 @@
         :d="b"
         class="road-bus-band"
       />
-      <!-- Road edge line where the tarmac meets the grass (per outer kerb). -->
+      <!-- Road edge line where the tarmac meets the grass (per outer kerb).
+           On a junction the real kerbs are SOLID corner fillets tracing the
+           curved concrete (plus the flat side of a T); across the open box the
+           kerb continues as a DASHED guide line for through traffic — like a
+           real intersection. -->
       <template v-for="(r, i) in roadPaths" :key="'re' + i">
         <path
           v-for="(e, ei) in r.edges"
           :key="'re' + i + '_' + ei"
-          :d="e"
+          :d="e.d"
           class="road-edge"
+          :class="{ 'road-edge--dashed': e.dashed }"
         />
       </template>
       <template v-for="(r, i) in roadPaths" :key="'rm' + i">
@@ -227,11 +232,12 @@ import {
   roadSurfacePolygonPath,
   roadRibbonPolygonPath,
   roadParallelLine,
-  roadCurvePolygonPath,
+  roadCurvePolygonPathTapered,
   roadLaneBandPath,
   roadLaneMarkingPaths,
   roadKerbEdge,
-  roadCurveKerbEdge,
+  roadCurveKerbEdgeTapered,
+  flankPort,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -248,6 +254,7 @@ import {
   seamPaintTotal,
   seamMismatch,
   isRoadJunction,
+  turnKind,
 } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
@@ -346,7 +353,7 @@ class Tile extends Vue {
     return isRoadJunction(this.tile.road);
   }
 
-  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: string[]; mismatch: boolean; mismatchTip: string }[] {
+  get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: { d: string; dashed: boolean }[]; mismatch: boolean; mismatchTip: string }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
     const coord = parseCoordId(this.coordId);
@@ -388,19 +395,54 @@ class Tile extends Vue {
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`
           : "";
-        // Width = the widest seam of this edge (min 2 so a one-way still reads as a
-        // road), so the turn ribbon meets its arm flush.
-        const widthTotal = Math.max(selfAtA, selfAtB, 2);
-        // Edge lines on a *simple* curve (a single bend, 2 ports): both kerbs.
-        // Junctions (T/cross, >1 road edge) are skipped — their outer outline is
-        // the union of overlapping ribbons, which needs separate handling.
-        const half = (widthTotal * LANE_W) / 2;
-        const edges = roadEdges(this.tile.road).length === 1
-          ? [roadCurveKerbEdge(a, b, size, half, 1), roadCurveKerbEdge(a, b, size, half, -1)]
-          : [];
+        // Width PER END, each seam-matched to its own arm (seamPaintTotal against
+        // the neighbour crossing that seam, min 2 so a one-way still reads as a
+        // road) — the ribbon tapers across the bend so EACH end meets ITS arm
+        // flush. A junction's own laneCountAt deliberately over-counts an arm
+        // (every approach lane that can fan onto it counts), so the old constant
+        // max-of-both-ends width painted a narrow arm as wide as the widest one:
+        // a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of tarmac at the
+        // entrance seam, twice the road it meets.
+        const widthEndA = seamPaintTotal(Math.max(selfAtA, 2), nTotalA);
+        const widthEndB = seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
+        const widthA2 = widthEndA * LANE_W;
+        const widthB2 = widthEndB * LANE_W;
+        // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
+        // tapering with the surface. On a JUNCTION a turn edge contributes its
+        // CORNER FILLET kerb — the solid white line tracing the curved concrete
+        // between two adjacent arms (the bend's inner side, toward the shared
+        // tile corner: the left side of a left turn, right of a right turn).
+        // The straight kerbs that used to run across the box are gone (see the
+        // straight branch), so the box outline is exactly the real pavement
+        // boundary: solid round corners, open arm mouths.
+        const edges =
+          roadEdges(this.tile.road).length === 1
+            ? [
+                { d: roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, 1), dashed: false },
+                { d: roadCurveKerbEdgeTapered(a, b, size, widthA2 / 2, widthB2 / 2, -1), dashed: false },
+              ]
+            : [
+                {
+                  d: roadCurveKerbEdgeTapered(
+                    a, b, size, widthA2 / 2, widthB2 / 2,
+                    turnKind(a, b) === "right" ? 1 : -1,
+                  ),
+                  dashed: false,
+                },
+              ];
+        // Markings. A simple curve keeps its centre + parallel dividers. On a
+        // JUNCTION the symmetric ribbon parallels looked wrong — the inner ones
+        // dove almost through the middle of the box, crossing every corridor —
+        // so a turn edge instead paints one guide per turning LANE, on the
+        // exact lane-to-lane glide curve the cars drive (entry-lane offset →
+        // landing-lane offset): a clean curve from one street's lane to the
+        // other's, like real intersection guide lines.
+        const laneMarkings = this.tileIsRoadJunction
+          ? this.junctionTurnGuides(coord, a, b, size)
+          : roadLaneMarkingPaths(a, b, size, selfA, selfB);
         return {
-          surface: roadCurvePolygonPath(a, b, size, widthTotal * LANE_W),
-          laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB),
+          surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
+          laneMarkings,
           edges,
           mismatch,
           mismatchTip,
@@ -467,8 +509,8 @@ class Tile extends Vue {
           surface: roadRibbonPolygonPath(entry, exit, size, leftOff, rightEntry, leftOff, rightExit),
           laneMarkings: owMarkings,
           edges: [
-            roadParallelLine(entry, exit, size, leftOff, leftOff),
-            roadParallelLine(entry, exit, size, rightEntry, rightExit),
+            { d: roadParallelLine(entry, exit, size, leftOff, leftOff), dashed: false },
+            { d: roadParallelLine(entry, exit, size, rightEntry, rightExit), dashed: false },
           ],
           mismatch: false,
           mismatchTip: "",
@@ -488,9 +530,24 @@ class Tile extends Vue {
       const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
       const goreA = selfA > 0 && d1A > 0 && d1A < selfA;
       const goreB = selfB > 0 && d1B > 0 && d1B < selfB;
-      const edges: string[] = [];
-      if (!goreA) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1));
-      if (!goreB) edges.push(roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1));
+      const edges: { d: string; dashed: boolean }[] = [];
+      if (this.tileIsRoadJunction) {
+        // On a junction a straight edge keeps a SOLID kerb only on a side with
+        // NO arm (a T-junction's flat side — a real, uninterrupted kerb). A
+        // side with an arm is open: its real boundary is the corner fillets
+        // (drawn by the turn edges), and the kerb line continues across the
+        // box as a DASHED guide line for through traffic.
+        for (const s of [1, -1] as const) {
+          const open = laneCountAt(this.tile.road, flankPort(a, b, s)) > 0;
+          edges.push({
+            d: roadKerbEdge(a, b, size, widthA / 2, widthB / 2, s),
+            dashed: open,
+          });
+        }
+      } else {
+        if (!goreA) edges.push({ d: roadKerbEdge(a, b, size, widthA / 2, widthB / 2, 1), dashed: false });
+        if (!goreB) edges.push({ d: roadKerbEdge(a, b, size, widthA / 2, widthB / 2, -1), dashed: false });
+      }
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
         laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
@@ -542,6 +599,49 @@ class Tile extends Vue {
     // where the oncoming lanes enter from the adjacent port, not oppositePort
     // (which carries none) — see game.ts centeredBandAt.
     return this.game.roadLaneCountAt(coord, port) / 2;
+  }
+
+  // The always-on turn guides inside a junction box for the turn edge [a, b]:
+  // ONE dashed curve per turn MOVEMENT and direction, on the EXACT lane-to-lane
+  // glide path the cars drive (seam-matched entry offset → landing-lane exit
+  // offset, identical to couplerOffset's turn branch and the debug lane arrows).
+  // The guide is drawn for the lane real signage would mark — the kerb-most
+  // allowed lane of a right turn, the inner-most of a left — not for every lane
+  // (a 2-lane cross would paint 16 curves, pure confetti). Replaces the old
+  // symmetric ribbon parallels, whose inner lines dove through the middle of
+  // the box instead of curving street-to-street.
+  private junctionTurnGuides(
+    coord: ReturnType<typeof parseCoordId>,
+    a: Position,
+    b: Position,
+    size: number,
+  ): LaneMarkingPath[] {
+    const road = this.tile.road ?? [];
+    const out: LaneMarkingPath[] = [];
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as [Position, Position][]) {
+      const lanes = road.filter(l => l.from === from && l.to.includes(to));
+      if (lanes.length === 0) continue;
+      const lane = lanes.reduce((best, l) =>
+        turnKind(from, to) === "right"
+          ? l.index < best.index ? l : best // right turn: the kerb-most lane
+          : l.index > best.index ? l : best, // left turn: the inner-most lane
+      );
+      const selfBand = laneCountAt(road, from) / 2;
+      const nEntry = neighborCoord(coord, from);
+      const entryBand = seamBand(
+        selfBand,
+        nEntry ? this.centeredRoadBand(nEntry, oppositePort(from)) : 0,
+      );
+      const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      const cls = lane.kind === "bus" ? "bus" : "car";
+      const offExit =
+        this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? offEntry;
+      out.push({ d: laneSegmentPathD(from, to, size, offEntry, offExit), kind: "centre" });
+    }
+    return out;
   }
 
   get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
@@ -971,6 +1071,16 @@ export default toNative(Tile);
   stroke: rgba(255, 255, 255, 0.85);
   stroke-width: 2px;
   stroke-linecap: round;
+}
+/* The kerb's continuation across an open junction box: a dashed guide line for
+   through traffic, in the same 25px rhythm as the other markings (tile edges
+   land mid-gap, like .road-marking-inner). The real kerbs — the corner fillets
+   and a T's flat side — stay solid. */
+.road-edge--dashed {
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-dasharray: 13 12;
+  stroke-dashoffset: 19px;
+  stroke-linecap: butt;
 }
 .road-drop-arrow-shaft {
   fill: none;

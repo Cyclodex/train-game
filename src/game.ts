@@ -23,7 +23,7 @@ import {
 import { laneOffsetPx, laneOffsetConstPx, oneWayLaneOffsetPx, seamBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { segmentPathD } from "@/sim/pathGeometry";
+import { segmentPathD, roadSegmentPathD } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
 import { makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
@@ -469,9 +469,12 @@ export function createGame(
   // (px) shifts the point perpendicular to its direction of travel, toward the
   // right-hand side — used so road cars drive in the right lane rather than on the
   // centreline. Trains pass 0 and stay on the rail centreline.
-  function sampleWorld(s: SampledUnit, offsetRight = 0) {
+  function sampleWorld(s: SampledUnit, offsetRight = 0, road = false) {
     const exit = s.exitPort ?? s.entryPort;
-    const path = pathFor(segmentPathD(s.entryPort, exit, tileSize));
+    // Trains follow the rail quad through the tile centre; road vehicles follow
+    // the road path, whose turns are quarter-circles around the wrapped corner.
+    const pathD = road ? roadSegmentPathD : segmentPathD;
+    const path = pathFor(pathD(s.entryPort, exit, tileSize));
     const len = path.getTotalLength();
     const here = s.t * len;
     const at = path.getPointAtLength(here);
@@ -508,9 +511,9 @@ export function createGame(
   // on curves (the body leans into the curve) instead of overlapping. When the
   // chord collapses (a unit bunched at a depot exit before the train extends),
   // fall back to the front point's tangent to avoid an atan2(0,0) flip.
-  function positionUnit(body: UnitChord, offsetFront = 0, offsetRear = offsetFront) {
-    const f = sampleWorld(body.front, offsetFront);
-    const r = sampleWorld(body.rear, offsetRear);
+  function positionUnit(body: UnitChord, offsetFront = 0, offsetRear = offsetFront, road = false) {
+    const f = sampleWorld(body.front, offsetFront, road);
+    const r = sampleWorld(body.rear, offsetRear, road);
     const dx = f.x - r.x;
     const dy = f.y - r.y;
     const chord = Math.hypot(dx, dy);
@@ -790,7 +793,7 @@ export function createGame(
         const offsetFront = couplerOffset(unit.front, curIndex, cls);
         const offsetRear = couplerOffset(unit.rear, curIndex, cls);
 
-        const { x, y, angle } = positionUnit(unit as unknown as UnitChord, offsetFront, offsetRear);
+        const { x, y, angle } = positionUnit(unit as unknown as UnitChord, offsetFront, offsetRear, true);
         const widthPx = unit.lengthTiles * tileSize;
         const existing = roadCars.find(c => c.id === id);
         if (existing) {
@@ -840,7 +843,7 @@ export function createGame(
         carRoute.value = {
           carId: activeId,
           segments: segs.map(s => ({
-            d: segmentPathD(s.entryPort, s.exitPort ?? s.entryPort, tileSize),
+            d: roadSegmentPathD(s.entryPort, s.exitPort ?? s.entryPort, tileSize),
             x: s.coord.x * tileSize,
             y: s.coord.y * tileSize,
           })),

@@ -46,6 +46,60 @@ export function segmentPathD(
   return `M ${a.x} ${a.y} Q ${c.x} ${c.y} ${b.x} ${b.y}`;
 }
 
+// --- Road turn geometry: a circular arc around the wrapped tile corner -------
+//
+// RAIL curves sweep through the tile centre (the quadratic above) — right for
+// trains. A ROAD turn between adjacent arms is different: a real street corner
+// is a 90° arc centred on the TILE CORNER the turn wraps, tangent to both
+// streets exactly at the port edges. The centre-quad version bulged into the
+// junction box (every turn looked like it dipped toward the middle); the
+// corner-centred arc is the "perfect curve from one street to the other".
+
+// The tile corner shared by two adjacent ports — the corner a road turn wraps.
+// (a + b − centre works for every adjacent pair: Top+Right → the NE corner.)
+export function turnCornerPoint(a: Port, b: Port, size: number): Pt {
+  const pa = portPoint(a, size);
+  const pb = portPoint(b, size);
+  const c = portPoint(Position.Center, size);
+  return { x: pa.x + pb.x - c.x, y: pa.y + pb.y - c.y };
+}
+
+// The SVG path a ROAD vehicle follows across one tile: a straight line for
+// opposite/Center ports (same as segmentPathD), a quarter-CIRCLE around the
+// wrapped corner for adjacent ports (radius size/2, exact `A` arc — tangent to
+// both arms at the port edges). The rail path (segmentPathD) keeps its quad.
+export function roadSegmentPathD(entryPort: Port, exitPort: Port, size: number): string {
+  const a = portPoint(entryPort, size);
+  const b = portPoint(exitPort, size);
+  const isCenter = entryPort === Position.Center || exitPort === Position.Center;
+  if (isCenter || oppositePort(entryPort) === exitPort) {
+    return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+  }
+  const k = turnCornerPoint(entryPort, exitPort, size);
+  const r = size / 2;
+  // SVG sweep flag: 1 = clockwise in screen coords (y down). The arc bends the
+  // way the corner lies: cross of (a−k)×(b−k) gives the orientation.
+  const cross = (a.x - k.x) * (b.y - k.y) - (a.y - k.y) * (b.x - k.x);
+  const sweep = cross > 0 ? 1 : 0;
+  return `M ${a.x} ${a.y} A ${r} ${r} 0 0 ${sweep} ${b.x} ${b.y}`;
+}
+
+// The true arc length of a ROAD tile segment (same units as size): straights
+// are the chord; an adjacent-port turn is the quarter-circle around the corner,
+// (π/2)·(size/2). The rail version (segmentLength) keeps the quad's length.
+export function roadSegmentLength(entryPort: Port, exitPort: Port, size = 1): number {
+  if (
+    entryPort === Position.Center ||
+    exitPort === Position.Center ||
+    oppositePort(entryPort) === exitPort
+  ) {
+    const a = portPoint(entryPort, size);
+    const b = portPoint(exitPort, size);
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  return (Math.PI / 2) * (size / 2);
+}
+
 // Numerically integrate the arc length of a quadratic Bézier a -> c -> b.
 function quadLength(a: Pt, c: Pt, b: Pt, samples = 64): number {
   let len = 0;
@@ -94,8 +148,10 @@ function curveUnitLength(): number {
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 // Centreline point + (un-normalised) tangent at parameter t∈[0,1]: a straight
-// line for opposite/Center ports, the quadratic Bézier a→centre→b for adjacent
-// ports (the same curve segmentPathD draws).
+// line for opposite/Center ports, the quarter-CIRCLE around the wrapped tile
+// corner for adjacent ports (the same curve roadSegmentPathD draws — a road
+// turn, not the rail quad). A circle's parameter is proportional to arc length,
+// so this t matches the renderer's arc-length DOM sampler exactly.
 function centrelineAt(
   entryPort: Port,
   exitPort: Port,
@@ -115,15 +171,21 @@ function centrelineAt(
       ty: b.y - a.y,
     };
   }
-  const c = portPoint(Position.Center, size);
-  const u = 1 - t;
+  const k = turnCornerPoint(entryPort, exitPort, size);
+  const r = size / 2;
+  const angA = Math.atan2(a.y - k.y, a.x - k.x);
+  // Signed sweep to the exit angle: adjacent ports are always ±90° apart around
+  // their shared corner, oriented by the cross product (screen coords, y down).
+  const cross = (a.x - k.x) * (b.y - k.y) - (a.y - k.y) * (b.x - k.x);
+  const delta = cross > 0 ? Math.PI / 2 : -Math.PI / 2;
+  const ang = angA + delta * t;
+  const cos = Math.cos(ang);
+  const sin = Math.sin(ang);
   return {
-    p: {
-      x: u * u * a.x + 2 * u * t * c.x + t * t * b.x,
-      y: u * u * a.y + 2 * u * t * c.y + t * t * b.y,
-    },
-    tx: 2 * u * (c.x - a.x) + 2 * t * (b.x - c.x),
-    ty: 2 * u * (c.y - a.y) + 2 * t * (b.y - c.y),
+    p: { x: k.x + r * cos, y: k.y + r * sin },
+    // Tangent = d/dt of the arc point: r·delta·(−sin, cos).
+    tx: -sin * delta,
+    ty: cos * delta,
   };
 }
 

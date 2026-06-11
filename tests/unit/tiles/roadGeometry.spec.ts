@@ -4,6 +4,9 @@ import {
   roadSurfacePath,
   roadSurfacePolygonPath,
   roadCurvePolygonPath,
+  roadCurvePolygonPathTapered,
+  roadCurveKerbEdgeTapered,
+  flankPort,
   roadLaneMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
@@ -23,9 +26,10 @@ describe("roadSurfacePath", () => {
     expect(d).toBe("M 100 200 L 100 100");
   });
 
-  it("curves adjacent ports through the tile centre", () => {
+  it("curves adjacent ports on a quarter-circle around the wrapped corner", () => {
+    // Left↔Bottom wraps the SW corner (0,200): radius 100 arc port to port.
     const d = roadSurfacePath(Position.Left, Position.Bottom, 200);
-    expect(d).toBe("M 0 100 Q 100 100 100 200");
+    expect(d).toBe("M 0 100 A 100 100 0 0 1 100 200");
   });
 });
 
@@ -313,13 +317,21 @@ describe("roadKerbEdge", () => {
 });
 
 describe("roadCurveKerbEdge", () => {
-  it("traces an offset Bézier kerb on each side of a curve", () => {
-    const outer = roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, 1);
-    const inner = roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, -1);
-    // Quadratic Bézier offset curves (one Q each), offset to opposite sides.
-    expect(outer).toContain("Q");
-    expect(inner).toContain("Q");
-    expect(outer).not.toBe(inner);
+  // Parse "M x y L x y L ..." into points.
+  const pts = (d: string) => {
+    const n = d.match(/-?\d+\.?\d*/g)!.map(Number);
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i < n.length; i += 2) out.push({ x: n[i], y: n[i + 1] });
+    return out;
+  };
+
+  it("each kerb keeps a constant distance from the wrapped corner (circular)", () => {
+    // Left↔Bottom wraps the SW corner (0,200). The offset of a circle is a
+    // circle: every sampled point of each kerb sits at radius 100∓28.
+    const outer = pts(roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, 1));
+    const inner = pts(roadCurveKerbEdge(Position.Left, Position.Bottom, 200, 28, -1));
+    for (const p of outer) expect(Math.hypot(p.x - 0, p.y - 200)).toBeCloseTo(72, 1);
+    for (const p of inner) expect(Math.hypot(p.x - 0, p.y - 200)).toBeCloseTo(128, 1);
   });
 });
 
@@ -347,17 +359,18 @@ describe("laneDropGore", () => {
 });
 
 describe("roadCurvePolygonPath", () => {
+  // Parse every "x y" number pair of a path d-string into points.
+  const pts = (d: string) => {
+    const n = d.match(/-?\d+\.?\d*/g)!.map(Number);
+    const out: { x: number; y: number }[] = [];
+    for (let i = 0; i + 1 < n.length; i += 2) out.push({ x: n[i], y: n[i + 1] });
+    return out;
+  };
+
   it("returns a closed path (starts with M, ends with Z)", () => {
     const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
     expect(d.trimStart().startsWith("M")).toBe(true);
     expect(d.trimEnd().endsWith("Z")).toBe(true);
-  });
-
-  it("contains a quadratic Bézier segment (Q) for both outer and inner edges", () => {
-    const d = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
-    // Should have outer Q and inner Q (two Q commands total).
-    const qCount = (d.match(/Q/g) ?? []).length;
-    expect(qCount).toBe(2);
   });
 
   it("is wider than the centreline (offset points differ from centrepoints)", () => {
@@ -374,40 +387,92 @@ describe("roadCurvePolygonPath", () => {
     expect(marks.filter(m => m.kind === "inner")).toHaveLength(2);
   });
 
-  it("inner Bézier markings on curved roads contain Q command", () => {
+  it("inner markings on curved roads are constant-radius arcs around the corner", () => {
+    // Left↔Bottom wraps the SW corner (0,200). Each inner divider is the offset
+    // of the corner circle — itself a circle, so every sampled point keeps one
+    // radius (100±28 for the 2-lane dividers).
     const marks = roadLaneMarkingPaths(Position.Left, Position.Bottom, 200, 2, 2);
     const inners = marks.filter(m => m.kind === "inner");
     for (const inner of inners) {
-      expect(inner.d).toContain("Q");
+      const radii = pts(inner.d).map(p => Math.hypot(p.x - 0, p.y - 200));
+      for (const r of radii) expect(r).toBeCloseTo(radii[0], 1);
+      expect(Math.abs(radii[0] - 100)).toBeCloseTo(28, 1);
     }
   });
 
-  it("keeps a near-constant half-width through the bend (no apex pinch)", () => {
-    // Regression: offsetting the control point by exactly halfW under-shoots at
-    // the apex (the ribbon pinched to ~85% mid-curve). The control-offset factor
-    // restores constant width — the outer edge must stay within ~2% of halfW all
-    // along the curve, not just at the seam endpoints.
+  it("keeps an exactly constant half-width through the bend (no apex pinch)", () => {
+    // The ribbon edges are offsets of the corner circle — circles themselves —
+    // so the half-width is exact everywhere, not just at the seam endpoints.
+    // Top↔Right wraps the NE corner (200,0): edges at radius 100±56.
     const halfW = 56;
     const d = roadCurvePolygonPath(Position.Top, Position.Right, 200, halfW * 2);
-    // Parse: "M ax ay Q cx1 cy1 bx1 by1 L ... Q ... Z". The outer edge is the
-    // first M + first Q (control cx1,cy1 ; end bx1,by1).
+    const radii = pts(d).map(p => Math.hypot(p.x - 200, p.y - 0));
+    for (const r of radii) {
+      expect(Math.abs(r - 100)).toBeGreaterThan(halfW * 0.99);
+      expect(Math.abs(r - 100)).toBeLessThan(halfW * 1.01);
+    }
+  });
+});
+
+describe("flankPort (which port flanks a straight edge on each side)", () => {
+  it("Right→Left edge: +1 is Top, -1 is Bottom", () => {
+    // roadEdges normalises a horizontal edge to [Right, Left] (1 < 3).
+    expect(flankPort(Position.Right, Position.Left, 1)).toBe(Position.Top);
+    expect(flankPort(Position.Right, Position.Left, -1)).toBe(Position.Bottom);
+  });
+
+  it("Top→Bottom edge: +1 is Left, -1 is Right", () => {
+    expect(flankPort(Position.Top, Position.Bottom, 1)).toBe(Position.Left);
+    expect(flankPort(Position.Top, Position.Bottom, -1)).toBe(Position.Right);
+  });
+
+  it("flipping the traversal flips the sides", () => {
+    expect(flankPort(Position.Left, Position.Right, 1)).toBe(Position.Bottom);
+    expect(flankPort(Position.Bottom, Position.Top, 1)).toBe(Position.Right);
+  });
+});
+
+describe("roadCurvePolygonPathTapered (junction turn ribbon, per-end widths)", () => {
+  it("equal end widths reduce to the constant-width ribbon", () => {
+    const constant = roadCurvePolygonPath(Position.Left, Position.Bottom, 200, 56);
+    const tapered = roadCurvePolygonPathTapered(Position.Left, Position.Bottom, 200, 56, 56);
+    expect(tapered).toBe(constant);
+  });
+
+  it("each end is exactly its own seam width (a 1-lane arm meets a 2-lane arm)", () => {
+    // Top→Right turn, 2 lanes wide at Top (56px) tapering to 4 at Right (112px).
+    // Entry endpoints sit at Top(100,0) ± halfA along the entry normal (x-axis);
+    // exit endpoints at Right(200,100) ± halfB along the exit normal (y-axis).
+    const d = roadCurvePolygonPathTapered(Position.Top, Position.Right, 200, 56, 112);
     const n = d.match(/-?\d+\.?\d*/g)!.map(Number);
-    const outer = { a: { x: n[0], y: n[1] }, c: { x: n[2], y: n[3] }, b: { x: n[4], y: n[5] } };
-    // Centreline through Top(100,0) -> Center(100,100) -> Right(200,100).
-    const cl = { a: { x: 100, y: 0 }, c: { x: 100, y: 100 }, b: { x: 200, y: 100 } };
-    const bez = (
-      p: { a: { x: number; y: number }; c: { x: number; y: number }; b: { x: number; y: number } },
-      t: number,
-    ) => ({
-      x: (1 - t) * (1 - t) * p.a.x + 2 * (1 - t) * t * p.c.x + t * t * p.b.x,
-      y: (1 - t) * (1 - t) * p.a.y + 2 * (1 - t) * t * p.c.y + t * t * p.b.y,
-    });
-    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-      const o = bez(outer, t);
-      const m = bez(cl, t);
-      const dist = Math.hypot(o.x - m.x, o.y - m.y);
-      expect(dist).toBeGreaterThan(halfW * 0.98);
-      expect(dist).toBeLessThan(halfW * 1.02);
+    const pts: { x: number; y: number }[] = [];
+    for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i], y: n[i + 1] });
+    // Polyline ribbon layout (laneRibbonPathD): right edge entry→exit (half the
+    // points), then left edge exit→entry, closed. With N+1 samples per edge:
+    const half = pts.length / 2;
+    const A1 = pts[0]; // entry, right side
+    const B1 = pts[half - 1]; // exit, right side
+    const B2 = pts[half]; // exit, left side
+    const A2 = pts[pts.length - 1]; // entry, left side
+    expect(Math.hypot(A1.x - A2.x, A1.y - A2.y)).toBeCloseTo(56, 1); // entry width
+    expect(Math.hypot(B1.x - B2.x, B1.y - B2.y)).toBeCloseTo(112, 1); // exit width
+    // Both entry corners sit ON the Top port edge (y=0), both exit corners on the
+    // Right port edge (x=200) — the taper happens across the bend, not at a seam.
+    expect(A1.y).toBeCloseTo(0, 1);
+    expect(A2.y).toBeCloseTo(0, 1);
+    expect(B1.x).toBeCloseTo(200, 1);
+    expect(B2.x).toBeCloseTo(200, 1);
+  });
+
+  it("the tapered kerb edge traces the ribbon's +n edge exactly", () => {
+    // Same sampling, same offsets → the kerb polyline IS the ribbon's right
+    // edge (the first half of the closed polygon's points).
+    const ribbon = roadCurvePolygonPathTapered(Position.Top, Position.Right, 200, 56, 112);
+    const rn = ribbon.match(/-?\d+\.?\d*/g)!.map(Number);
+    const outer = roadCurveKerbEdgeTapered(Position.Top, Position.Right, 200, 28, 56, 1);
+    const on = outer.match(/-?\d+\.?\d*/g)!.map(Number);
+    for (let i = 0; i < on.length; i++) {
+      expect(on[i]).toBeCloseTo(rn[i], 6);
     }
   });
 });

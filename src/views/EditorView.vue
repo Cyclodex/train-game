@@ -115,7 +115,7 @@
 
           <!-- Edge hit-zones: the whole tile is clickable, split into four
                triangles (one per edge) for big, kid-friendly targets. -->
-          <template v-if="tool === 'connect' || tool === 'road' || tool === 'signal' || tool === 'buslane'">
+          <template v-if="tool === 'connect' || tool === 'road' || tool === 'signal'">
             <path
               v-for="p in EDGES"
               :key="'z' + p"
@@ -132,6 +132,21 @@
               @click.stop="onZoneClick(cell.key, p)"
               @mouseenter="onZoneEnter(cell.key, p)"
               @mouseleave="onZoneLeave(cell.key, p)"
+            />
+          </template>
+
+          <!-- Bus-lane mode: one invisible wide-stroke hit path along each road
+               lane's real centreline, so the author clicks the exact lane they
+               want (hover highlights it). This replaces the edge zones for the
+               buslane tool — a lane, not a tile edge, is the thing being toggled. -->
+          <template v-if="tool === 'buslane' && cell.tile">
+            <path
+              v-for="(hl, i) in laneHits(cell.key)"
+              :key="'lh' + i"
+              :d="hl.d"
+              class="lane-hit"
+              :class="{ 'lane-hit--bus': hl.isBus }"
+              @click.stop="onLaneClick($event, cell.key, hl.from, hl.index)"
             />
           </template>
 
@@ -265,6 +280,7 @@ import {
   toggleSignalPort,
   cycleDefaultArm,
   toggleLaneKind,
+  setLaneKindRun,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -281,6 +297,7 @@ import {
   turnLandsOnBusLane,
 } from "@/tiles/lanes";
 import type { VehicleClass } from "@/tiles/lanes";
+import { laneSegmentPathD } from "@/sim/pathGeometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
@@ -298,6 +315,9 @@ const EDGES: Port[] = [
   Position.Bottom,
   Position.Left,
 ];
+// Lane width as a fraction of the tile, matching Tile.vue's LANE_WIDTH_PX_FRAC so
+// the editor's lane hit paths sit on the same centrelines the renderer draws.
+const LANE_WIDTH_PX_FRAC = 0.14;
 
 const HINTS: Record<Tool, string> = {
   connect:
@@ -307,7 +327,7 @@ const HINTS: Record<Tool, string> = {
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
   buslane:
-    "Click a road edge to mark its kerb lane (the one entering from that side) as a BUS lane — click again to make it a normal lane. Each direction's kerb lane toggles independently.",
+    "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -770,12 +790,6 @@ class EditorView extends Vue {
       this.commit(id, toggleSignalPort(this.cellOf(id), port));
       return;
     }
-    if (this.tool === "buslane") {
-      // Toggle the kerb lane (index 0) of the approach entering from this edge
-      // between bus-only and normal. No-op if there's no road there.
-      this.commit(id, toggleLaneKind(this.cellOf(id), port, 0));
-      return;
-    }
     if (!this.drawing) return;
     const head = this.armed;
     if (!head) {
@@ -842,6 +856,54 @@ class EditorView extends Vue {
   }
   deleteRoad(id: string, road: PortPair) {
     this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));
+  }
+
+  // --- bus-lane tool: per-lane hit paths -------------------------------------
+  // One invisible, wide-stroke hit path per road lane of a tile, traced along the
+  // lane's real centreline (offset right-of-travel so adjacent lanes are
+  // distinguishable), with the lane's identity (approach `from` + `index`) and
+  // current bus state. Mirrors Tile.vue's lane overlay closely enough to click the
+  // right lane; an exact-geometry trace isn't needed for hit-testing. Junction
+  // tiles are excluded — a run never paints through one, so their lanes aren't
+  // individually clickable here (Ctrl-click a straight/curve lane instead).
+  laneHits(id: string): { d: string; from: Port; index: number; isBus: boolean }[] {
+    const tile = this.level[id];
+    if (!tile?.road?.length || isRoadJunction(tile.road)) return [];
+    const size = this.config.tileSize;
+    const out: { d: string; from: Port; index: number; isBus: boolean }[] = [];
+    const seen = new Set<string>();
+    for (const lane of tile.road) {
+      // One hit path per physical lane (its single through exit). A lane with
+      // several exits is a junction movement and is skipped above; defensively
+      // take the first exit as the centreline to trace.
+      const to = lane.to[0];
+      if (to == null) continue;
+      const key = `${lane.from}:${lane.index}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // Lateral offset (px, right-of-travel) for this lane: same formula as the
+      // renderer/overlay — (band - 0.5 - index)·LANE·size, 0 = kerb. Using the
+      // tile's own both-direction band keeps the path on the lane the car drives.
+      const band = laneCountAt(tile.road, lane.from) / 2;
+      const off = (band - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      out.push({
+        d: laneSegmentPathD(lane.from, to, size, off, off),
+        from: lane.from,
+        index: lane.index,
+        isBus: lane.kind === "bus",
+      });
+    }
+    return out;
+  }
+  // Click a lane: Ctrl/Meta toggles only this tile's lane; a plain click paints
+  // the whole street run to one uniform kind, committed as one level update.
+  onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
+    if (ev.ctrlKey || ev.metaKey) {
+      this.commit(id, toggleLaneKind(this.cellOf(id), from, index));
+      return;
+    }
+    const changed = setLaneKindRun(this.level, id, from, index);
+    for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }
 
   // --- depot / erase (cell-level click) ---
@@ -1077,6 +1139,24 @@ export default toNative(EditorView);
 }
 .zone--signal {
   fill: rgba(255, 59, 48, 0.28);
+}
+// Bus-lane hit paths: a wide, near-invisible stroke along each lane's centreline,
+// so the whole lane is an easy click target. Hover paints it amber (the bus-lane
+// colour) so the author sees exactly which lane a click will flip; a lane that is
+// already a bus lane shows a faint amber tint at rest.
+.lane-hit {
+  fill: none;
+  stroke: rgba(255, 179, 0, 0.001); // effectively invisible but still hit-tested
+  stroke-width: 22;
+  stroke-linecap: round;
+  cursor: pointer;
+  transition: stroke 0.08s;
+}
+.lane-hit--bus {
+  stroke: rgba(255, 179, 0, 0.22);
+}
+.lane-hit:hover {
+  stroke: rgba(255, 179, 0, 0.55);
 }
 // Junction switch zone: an invisible-but-clickable spot over the switch widget
 // (a transparent fill still receives pointer events). A soft amber wash on hover

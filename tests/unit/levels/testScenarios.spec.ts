@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SCENARIOS } from "@/levels/test";
 import { scenarioRoutes, scenarioGrid } from "@/levels/test/scenario";
 import { validateLevel, validateRoads } from "@/tiles/validate";
+import { roadEntries } from "@/sim/road";
 
 describe("feature test world", () => {
   it("has unique, url-safe scenario ids", () => {
@@ -28,6 +29,20 @@ describe("feature test world", () => {
           const start = scenario.level[`${train.x},${train.y}`];
           expect(start?.role).toBe("depot");
         }
+      });
+
+      it("if it declares traffic, the road actually has a spawn entry", () => {
+        // A scenario that declares `traffic` but whose road is a CLOSED map (no
+        // road port opening off the grid) spawns ZERO vehicles — the feature is
+        // silently dead. Reuse the sim's own spawn-entry derivation (roadEntries)
+        // so the rule can't drift from how the sim actually spawns. A scenario may
+        // supply explicit `spawnEntries`, which bypass edge detection — accept those.
+        if (!scenario.traffic) return;
+        const explicit = scenario.traffic.spawnEntries ?? [];
+        if (explicit.length > 0) return;
+        const { cols, rows } = scenarioGrid(scenario);
+        const entries = roadEntries(scenario.level, cols, rows);
+        expect(entries.length).toBeGreaterThan(0);
       });
 
       it("fits within its derived grid", () => {
