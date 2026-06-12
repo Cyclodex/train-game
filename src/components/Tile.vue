@@ -198,6 +198,11 @@
         <span class="road-signal-lens road-signal-lens--red"   :class="{ 'road-signal-lens--lit': h.aspect === 'red' }" />
         <span class="road-signal-lens road-signal-lens--amber" :class="{ 'road-signal-lens--lit': h.aspect === 'amber' }" />
         <span class="road-signal-lens road-signal-lens--green" :class="{ 'road-signal-lens--lit': h.aspect === 'green' }" />
+        <span
+          v-if="h.busAspect"
+          class="road-signal-lens road-signal-lens--transit"
+          :class="{ 'road-signal-lens--lit': h.busAspect === 'green' }"
+        >B</span>
       </div>
       <div
         class="road-signal-chip"
@@ -284,6 +289,7 @@ import {
   laneAllExits,
   roadPortsOf,
   approachPortsOf,
+  busLaneIndices,
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -1008,12 +1014,23 @@ class Tile extends Vue {
   // One head per approach arm, coloured by that arm's live aspect. Only shown when
   // the running game is driving live aspects (in the editor there is no phase
   // clock, so the chip alone indicates the authored mode).
-  get roadSignalHeads(): { arm: Position; aspect: string }[] {
-    if (!this.game.roadSignals?.[this.coordId]) return [];
-    return approachPortsOf(this.tile.road).map(arm => ({
-      arm,
-      aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
-    }));
+  get roadSignalHeads(): { arm: Position; aspect: string; busAspect?: string }[] {
+    const sig = this.game.roadSignals?.[this.coordId];
+    if (!sig) return [];
+    return approachPortsOf(this.tile.road).map(arm => {
+      const head: { arm: Position; aspect: string; busAspect?: string } = {
+        arm,
+        aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
+      };
+      // The separate TRANSIT lens: only with bus priority, and only on arms
+      // that actually carry a bus lane. During the head start it is green
+      // while the car lenses still show red — the bus pulls away first.
+      if (sig.busPriority && busLaneIndices(this.tile.road, arm).length > 0) {
+        head.busAspect =
+          this.game.roadSignalAspects?.[`${this.coordId}:${arm}:bus`] ?? "red";
+      }
+      return head;
+    });
   }
   // Whether this road junction is currently signalised (a mode other than off).
   get roadSignalActive(): boolean {
@@ -1315,6 +1332,21 @@ $signal-offset: 20px;
 .road-signal-lens--lit.road-signal-lens--red   { background: #ff3b30; box-shadow: 0 0 5px #ff3b30; }
 .road-signal-lens--lit.road-signal-lens--amber { background: #ffcc00; box-shadow: 0 0 5px #ffcc00; }
 .road-signal-lens--lit.road-signal-lens--green { background: #34c759; box-shadow: 0 0 5px #34c759; }
+/* The separate transit (bus) lens: a tiny "B" below the car lenses. Lit white-
+   green during the bus head start / green; dark otherwise. */
+.road-signal-lens--transit {
+  background: #101010;
+  color: #444;
+  font-size: 5px;
+  line-height: 6px;
+  text-align: center;
+  font-weight: 700;
+}
+.road-signal-lens--lit.road-signal-lens--transit {
+  background: #c8f7d0;
+  color: #0a5a1f;
+  box-shadow: 0 0 5px #c8f7d0;
+}
 // N arm: near top edge, incoming lane is west of centre (cars drive south)
 .road-signal--0 {
   top: 7%;

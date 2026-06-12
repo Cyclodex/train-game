@@ -475,6 +475,12 @@ export function createGame(
         const aspect = roadSim.signalAspect(id, arm);
         if (aspect) roadSignalAspects[key] = aspect;
         else if (key in roadSignalAspects) delete roadSignalAspects[key];
+        // The separate transit signal: during a bus HEAD START this is green
+        // while the car aspect is still red. Rendered as a small bus lens.
+        const busKey = `${key}:bus`;
+        const busAspect = roadSim.signalAspect(id, arm, "bus");
+        if (busAspect) roadSignalAspects[busKey] = busAspect;
+        else if (busKey in roadSignalAspects) delete roadSignalAspects[busKey];
       }
     }
   }

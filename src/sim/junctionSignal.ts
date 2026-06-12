@@ -36,6 +36,11 @@ export const ALL_RED_SEC = 1;
 // Bus-priority tuning (transit signal priority, decision 2 layer).
 // A bus within this many tiles of the junction on an arm counts as "approaching".
 export const BUS_PRIORITY_TILES = 4;
+// Bus HEAD START (separate transit signal): when the upcoming phase carries an
+// approaching/waiting bus, its arms show green FOR BUSES this many seconds
+// before the cars get their green — the bus clears its lane before
+// right-turning cars cross it, like a real transit pre-signal.
+export const BUS_HEADSTART_SEC = 3;
 // The most a green may be held past its base duration to let an approaching bus
 // through (a hard cap so cross traffic is never starved).
 export const GREEN_EXTEND_MAX_SEC = 5;
@@ -93,7 +98,7 @@ export function signalModeLabel(sig: JunctionSignal | undefined): string {
   return sig.busPriority ? `${sig.mode} +bus` : sig.mode;
 }
 
-type Stage = "green" | "amber" | "allred";
+type Stage = "green" | "amber" | "allred" | "headstart";
 
 // A stateful per-junction signal controller. Advances on sim time; `aspect(arm)`
 // is derived from the active phase each tick. Bus-priority (when enabled) extends
@@ -104,9 +109,11 @@ export interface JunctionSignalController {
   setSignal(sig: JunctionSignal): void;
   // Advance one tick; `approaching` = arms with a bus within BUS_PRIORITY_TILES.
   step(dt: number, approaching: ReadonlySet<Port>): void;
-  // The current light for an approach arm. An arm absent from the plan (or "off")
+  // The current light for an approach arm, per vehicle class: during the bus
+  // HEAD START stage the active arms are green for buses but still red for
+  // cars (the separate transit signal). An arm absent from the plan (or "off")
   // shows green so the gate is a no-op there.
-  aspect(arm: Port): SignalAspect;
+  aspect(arm: Port, cls?: "car" | "bus"): SignalAspect;
 }
 
 export function createJunctionSignal(
@@ -133,10 +140,11 @@ export function createJunctionSignal(
   }
 
   // The duration of the current stage. Green can be extended for an approaching
-  // bus up to the cap; amber / all-red are fixed clearance intervals.
+  // bus up to the cap; amber / all-red / head-start are fixed intervals.
   function stageDuration(approaching: ReadonlySet<Port>): number {
     if (stage === "amber") return AMBER_SEC;
     if (stage === "allred") return ALL_RED_SEC;
+    if (stage === "headstart") return BUS_HEADSTART_SEC;
     // green
     if (sig.busPriority && busOnActive(approaching)) {
       return GREEN_SEC + GREEN_EXTEND_MAX_SEC; // hold while a bus is coming (capped)
@@ -166,9 +174,16 @@ export function createJunctionSignal(
   function advanceStage(approaching: ReadonlySet<Port>): void {
     if (stage === "green") stage = "amber";
     else if (stage === "amber") stage = "allred";
+    else if (stage === "headstart") stage = "green";
     else {
-      stage = "green";
+      // End of all-red: switch to the next phase. With bus priority, a bus
+      // approaching/waiting on the NEW phase's arms gets its HEAD START first
+      // (transit pre-signal: buses roll, cars still held), then full green.
       phaseIndex = nextPhaseIndex(approaching);
+      stage =
+        sig.busPriority && (plan[phaseIndex] ?? []).some(a => approaching.has(a))
+          ? "headstart"
+          : "green";
     }
   }
 
@@ -194,11 +209,12 @@ export function createJunctionSignal(
         advanceStage(approaching);
       }
     },
-    aspect(arm: Port): SignalAspect {
+    aspect(arm: Port, cls: "car" | "bus" = "car"): SignalAspect {
       if (sig.mode === "off" || plan.length === 0) return "green";
       if (!activeArms().includes(arm)) return "red";
       if (stage === "green") return "green";
       if (stage === "amber") return "amber";
+      if (stage === "headstart") return cls === "bus" ? "green" : "red";
       return "red"; // all-red clearance
     },
   };
