@@ -50,5 +50,5 @@ describe("busshortcut scenario — traffic flows, the bus shortcut is bus-only",
     expect(carInMiddle).toBe(false);
     // (c) At least one bus took the middle shortcut.
     expect(busInMiddle).toBe(true);
-  });
+  }, 30000); // heavy sim loop — fine alone, can exceed 5s under full-suite load
 });
