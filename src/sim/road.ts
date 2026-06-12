@@ -179,7 +179,8 @@ export function roadTraverse(
 
 export interface RoadEntry {
   coord: Coordinates;
-  entryPort: Port; // the edge the car enters through (an open road port)
+  entryPort: Port; // the edge the vehicle enters through (an open road port)
+  busOnly?: boolean; // only buses may spawn/route here (a bus-only street's open end)
 }
 
 const EDGES: Port[] = [
@@ -196,34 +197,25 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
     const [xs, ys] = id.split(",").map(Number);
     const coord = { x: xs, y: ys };
     for (const port of EDGES) {
-      // `port` is a car-accessible road port and points off the grid -> a spawn entry.
-      if (exitsForCar(tile.road, port).length === 0) continue;
+      // Which classes could ENTER through this port: a car needs a car-usable
+      // lane from it, a bus any lane (so a bus-only street's open end is a
+      // BUS entry — previously it produced no entry at all and buses never
+      // spawned on bus-only border streets).
+      const carCan = exitsForCar(tile.road, port).length > 0;
+      const busCan = usableExits(tile.road, port, "bus").length > 0;
+      if (!carCan && !busCan) continue;
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
-      // The upstream neighbour feeds this edge only if some car lane of it drives
-      // TOWARD the shared seam (its `to` includes our matching port) — not merely
-      // if it has a lane entering from that seam. On a two-way road both hold, but
-      // on a one-way road the upstream neighbour exits toward us without any lane
-      // leaving from that port, so the old `exitsForCar(neigh, opposite)` test
-      // wrongly flagged every interior one-way tile as an open spawn edge.
+      // An entry is an OPEN end: no upstream lane of ANY class drives toward
+      // the shared seam (the exit-toward test, not "has a lane entering from
+      // it" — on a one-way road only the former holds; the latter wrongly
+      // flagged every interior one-way tile as an open spawn edge).
       const back = oppositePort(port);
-      const neighFeeds =
-        !offGrid &&
-        !!neigh?.road &&
-        neigh.road.some(l => l.kind !== "bus" && l.to.includes(back));
-      // Mirror of roadExits's busOnlyBarrier: if the upstream tile only has
-      // bus lanes toward this port, a car cannot have come from that direction —
-      // skip this entry (cars must not appear to spawn from a bus-only seam).
-      const busOnlyUpstream =
-        !offGrid &&
-        !!neigh?.road &&
-        neigh.road.length > 0 &&
-        neigh.road.some(l => l.to.includes(back)) &&
-        !neigh.road.some(l => l.kind !== "bus" && l.to.includes(back));
-      if (offGrid || (!neighFeeds && !busOnlyUpstream)) {
-        out.push({ coord, entryPort: port });
-      }
+      const feedsAny =
+        !offGrid && !!neigh?.road && neigh.road.some(l => l.to.includes(back));
+      if (!offGrid && feedsAny) continue;
+      out.push(carCan ? { coord, entryPort: port } : { coord, entryPort: port, busOnly: true });
     }
   }
   // Deterministic order (sorted by coord then port) so seeded spawns are stable.
@@ -248,21 +240,30 @@ export function roadExits(level: Level, width: number, height: number): RoadEntr
     const [xs, ys] = id.split(",").map(Number);
     const coord = { x: xs, y: ys };
     for (const port of EDGES) {
-      // Some car-accessible lane of this tile leaves via `port`.
-      if (!tile.road.some(l => l.kind !== "bus" && l.to.includes(port))) continue;
+      // Which classes can DRIVE OUT via this port: cars via a car lane, buses
+      // via any lane (incl. busTo) — so a bus-only street's open end is a BUS
+      // routing destination (previously missing: planRoute could never target
+      // it and buses ignored bus-only streets at the map edge).
+      const carOut = tile.road.some(l => l.kind !== "bus" && l.to.includes(port));
+      const busOut = tile.road.some(
+        l => l.to.includes(port) || (l.busTo ?? []).includes(port),
+      );
+      if (!carOut && !busOut) continue;
       const n = neighborCoord(coord, port)!;
       const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
       const neigh = level[getCoordinatesId(n)];
-      const continues =
-        !offGrid && neigh?.road && exitsForCar(neigh.road, oppositePort(port)).length > 0;
-      // Don't add an exit toward an in-grid bus-only road: a car would despawn
-      // immediately there (no car lanes), causing spurious routing destinations.
-      const busOnlyBarrier =
-        !offGrid &&
-        !!neigh?.road &&
-        neigh.road.length > 0 &&
-        exitsForCar(neigh.road, oppositePort(port)).length === 0;
-      if ((offGrid || !continues) && !busOnlyBarrier) out.push({ coord, entryPort: port });
+      const neighHasRoad = !offGrid && !!neigh?.road && neigh.road.length > 0;
+      const back = oppositePort(port);
+      const continuesCar = neighHasRoad && exitsForCar(neigh!.road, back).length > 0;
+      const continuesBus =
+        neighHasRoad && usableExits(neigh!.road, back, "bus").length > 0;
+      // An exit for a class: it can drive out AND the road genuinely ends for
+      // it there (off-grid, or a dead end with no continuing road). A car never
+      // exits toward an in-grid bus-only road (it would despawn into it).
+      const carExit = carOut && (offGrid || (!continuesCar && !neighHasRoad));
+      const busExit = busOut && (offGrid || (!continuesBus && !neighHasRoad));
+      if (carExit) out.push({ coord, entryPort: port });
+      else if (busExit) out.push({ coord, entryPort: port, busOnly: true });
     }
   }
   out.sort((a, b) => {
@@ -1832,8 +1833,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // placed, so the fill-fast loop knows whether the road still has room.
   function trySpawn(closed: CrossingClosed): boolean {
     if (entries.length === 0 || cars.length >= maxCarsOf()) return false;
-    // Pick an entry deterministically.
-    const entry = entries[Math.floor(rng() * entries.length)];
+    // Decide the vehicle kind FIRST (it fixes the lane-access class), then pick
+    // a class-compatible entry: a car never draws a bus-only street's open end,
+    // and buses can spawn there at all (previously such edges had no entry).
+    const kind = pickKind();
+    const cls = vehicleClassOf(kind);
+    const pool = cls === "bus" ? entries : entries.filter(e => !e.busOnly);
+    if (pool.length === 0) return false;
+    const entry = pool[Math.floor(rng() * pool.length)];
     const id = getCoordinatesId(entry.coord);
     if (closed(id)) return false;
     // Spawn only into a lane with clear road at the entry. We probe each lane of
@@ -1847,12 +1854,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // (the road is saturated — better to drop the spawn than stack cars). Two-lane
     // note: clearAhead skips oncoming-lane cars, so an opposing car on the entry
     // tile never blocks a spawn — right when both directions share the tile.
-    // Decide the vehicle kind up front: it fixes the lane-access class, which in
-    // turn decides the lanes this vehicle may start in (a bus may also use — and
-    // prefers — the bus lane, a car never may). Drawn here so the probe runs with
-    // the right class.
-    const kind = pickKind();
-    const cls = vehicleClassOf(kind);
     const exit = roadExitPort(level, entry.coord, entry.entryPort, cls);
     // The lanes this vehicle class may start in. A car gets only car lanes (the
     // bus lane is off-limits); a bus gets every lane, and prefers the bus lane below.
