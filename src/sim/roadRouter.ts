@@ -71,7 +71,10 @@ export function planRoute(
   // the hole it just entered through.
   const spawnId = getCoordinatesId(spawnCoord);
   const targets = allEntries.filter(
-    e => !(getCoordinatesId(e.coord) === spawnId && e.entryPort === spawnEntry),
+    e =>
+      !(getCoordinatesId(e.coord) === spawnId && e.entryPort === spawnEntry) &&
+      // A bus-only street's open end is a destination only buses may take.
+      (cls === "bus" || !e.busOnly),
   );
   if (targets.length === 0) return { turns: [], destination: null };
 
