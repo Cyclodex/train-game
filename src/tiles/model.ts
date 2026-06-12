@@ -1,6 +1,7 @@
 import { Position, Coordinates, ActiveIntersection } from "@/types";
 import { oppositePort } from "@/sim/topology";
 import type { Lane } from "./lanes";
+import type { JunctionSignal } from "@/sim/junctionSignal";
 
 export type Port = Position;
 export type PortPair = [Port, Port];
@@ -36,6 +37,12 @@ export interface TileCell {
   road?: Lane[];
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
+  // Street-junction traffic signals (ROAD / cars only). When present and not
+  // "off", the road junction is signalised: cars obey per-arm green/amber/red on
+  // top of the conflict-matrix yield. Only meaningful on a road junction; ignored
+  // elsewhere. Round-trips through level JSON like `road`/`signals`. See
+  // src/sim/junctionSignal.ts and the issue #38 design.
+  signal?: JunctionSignal;
   // Authored starting switch arm per junction entry port (keyed by Port). Absent
   // entries fall back to the auto-computed first-valid arm. Only meaningful on a
   // switchable junction (cross / T-junction); ignored elsewhere. Round-trips

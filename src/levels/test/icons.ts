@@ -26,6 +26,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/lanes": "🛣️",
   "streets/crosses": "✖️",
   "streets/turning": "↩️",
+  "streets/signals": "🚥",
   "streets/overtaking": "🏎️",
   "streets/priority": "⚠️",
   "streets/vehicles": "🚌",
@@ -59,6 +60,12 @@ export const SCENARIO_ICONS: Record<string, string> = {
   overtaketwolane: "🏎️",
   overtakeloop: "🏎️",
   roadpriority: "⚠️",
+  // Streets — traffic signals
+  signaltwophase: "🚥",
+  signalroundrobin: "🔃",
+  signalbuslane1l: "🚌",
+  signalbuspriority: "🚌",
+  signalbuslane3l: "🚌",
   // Streets — routing
   cardestination: "📍",
   carroute: "🗺️",

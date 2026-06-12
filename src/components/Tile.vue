@@ -183,6 +183,31 @@
       />
     </svg>
 
+    <!-- Road-junction traffic signals (#38): one head per approach arm, coloured
+         by that arm's current aspect; a small chip shows the live mode. Clicking
+         either cycles the mode live in play (off → two-phase → +bus → round-robin
+         → +bus → off), mirroring the junction-switch's live toggle. -->
+    <template v-if="config.roads && tileIsRoadJunction">
+      <div
+        v-for="h in roadSignalHeads"
+        :key="'rsig' + h.arm"
+        class="road-signal"
+        :class="`road-signal--${h.arm}`"
+        @click.stop="cycleRoadSignal"
+      >
+        <span class="road-signal-lens road-signal-lens--red"   :class="{ 'road-signal-lens--lit': h.aspect === 'red' }" />
+        <span class="road-signal-lens road-signal-lens--amber" :class="{ 'road-signal-lens--lit': h.aspect === 'amber' }" />
+        <span class="road-signal-lens road-signal-lens--green" :class="{ 'road-signal-lens--lit': h.aspect === 'green' }" />
+      </div>
+      <div
+        class="road-signal-chip"
+        :class="{ 'road-signal-chip--off': !roadSignalActive }"
+        @click.stop="cycleRoadSignal"
+      >
+        {{ roadSignalLabel }}
+      </div>
+    </template>
+
     <!-- Depot -->
     <template v-if="isDepot">
       <img class="depot-building" :src="depotBuildingImg" />
@@ -257,7 +282,9 @@ import {
   isRoadJunction,
   turnKind,
   laneAllExits,
+  roadPortsOf,
 } from "@/tiles/lanes";
+import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
@@ -947,6 +974,36 @@ class Tile extends Vue {
     this.game.cycleSignal(this.coordId, exitPort);
   }
 
+  // --- road-junction signals (#38) ---
+  // The live signal of this junction from the running game, falling back to the
+  // tile's AUTHORED signal so the editor's chip shows the mode being authored
+  // (the editor's stub game carries no live signal state).
+  get roadSignal() {
+    return this.game.roadSignals?.[this.coordId] ?? this.tile.signal;
+  }
+  // One head per approach arm, coloured by that arm's live aspect. Only shown when
+  // the running game is driving live aspects (in the editor there is no phase
+  // clock, so the chip alone indicates the authored mode).
+  get roadSignalHeads(): { arm: Position; aspect: string }[] {
+    if (!this.game.roadSignals?.[this.coordId]) return [];
+    return roadPortsOf(this.tile.road).map(arm => ({
+      arm,
+      aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
+    }));
+  }
+  // Whether this road junction is currently signalised (a mode other than off).
+  get roadSignalActive(): boolean {
+    const sig = this.roadSignal;
+    return !!sig && sig.mode !== "off";
+  }
+  // The mode chip text, e.g. "two-phase +bus" or "off".
+  get roadSignalLabel(): string {
+    return signalModeLabel(this.roadSignal);
+  }
+  cycleRoadSignal() {
+    this.game.cycleRoadSignal?.(this.coordId);
+  }
+
   // --- switches ---
   switchArmEnabled(entry: Position, arm: ActiveIntersection): boolean {
     const exit = armExit(entry, arm);
@@ -1198,6 +1255,91 @@ $signal-offset: 20px;
   left: 2px;
   top: calc(50% - #{$signal-offset});
   transform: translateY(-50%);
+}
+
+/* --- road-junction traffic signals (#38) --- */
+// Black housing containing three stacked lenses (R/A/G). Each head sits at
+// the stop-line of its arm, offset to the right-hand incoming lane
+// (right-hand traffic: right of travel = kerb side). One lane = 14% of
+// tileSize, so lane centre is 7% from tile centre; signal (5px half-width)
+// centre sits at 50% ± 12px.
+.road-signal {
+  position: absolute;
+  z-index: 15;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 10px;
+  height: 28px;
+  background: #111;
+  border: 1px solid #444;
+  border-radius: 3px;
+  padding: 3px 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+}
+.road-signal-lens {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.road-signal-lens--red   { background: #3a0000; }
+.road-signal-lens--amber { background: #1e1000; }
+.road-signal-lens--green { background: #001400; }
+.road-signal-lens--lit.road-signal-lens--red   { background: #ff3b30; box-shadow: 0 0 5px #ff3b30; }
+.road-signal-lens--lit.road-signal-lens--amber { background: #ffcc00; box-shadow: 0 0 5px #ffcc00; }
+.road-signal-lens--lit.road-signal-lens--green { background: #34c759; box-shadow: 0 0 5px #34c759; }
+// N arm: near top edge, incoming lane is west of centre (cars drive south)
+.road-signal--0 {
+  top: 7%;
+  left: calc(50% - 19px);
+}
+// E arm: near right edge, incoming lane is north of centre (cars drive west);
+// housing rotates horizontal so lenses read along the kerb
+.road-signal--1 {
+  right: 7%;
+  top: calc(50% - 19px);
+  flex-direction: row;
+  width: 28px;
+  height: 10px;
+}
+// S arm: near bottom edge, incoming lane is east of centre (cars drive north)
+.road-signal--2 {
+  bottom: 7%;
+  left: calc(50% + 9px);
+}
+// W arm: near left edge, incoming lane is south of centre (cars drive east);
+// housing rotates horizontal so lenses read along the kerb
+.road-signal--3 {
+  left: 7%;
+  top: calc(50% + 9px);
+  flex-direction: row;
+  width: 28px;
+  height: 10px;
+}
+.road-signal-chip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 16;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgba(20, 20, 20, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.road-signal-chip--off {
+  color: #aaa;
+  background: rgba(20, 20, 20, 0.45);
 }
 
 /* --- switches (from TileIntersectionComplete.vue) --- */

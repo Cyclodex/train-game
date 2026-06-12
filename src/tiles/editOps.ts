@@ -12,6 +12,7 @@ import {
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
 import { isRoadJunction, lanesFrom } from "@/tiles/lanes";
+import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -130,6 +131,20 @@ export function cycleDefaultArm(cell: TileCell, entry: Port): TileCell {
   const idx = valid.indexOf(current);
   const next = valid[(idx + 1) % valid.length];
   return { ...cell, defaultArms: { ...cell.defaultArms, [entry]: next } };
+}
+
+// Cycle a road junction's traffic-signal mode (the editor's "Signalise" tool):
+// off → two-phase → two-phase+bus → round-robin → round-robin+bus → off. Only a
+// road junction (lanes touching >2 ports) can be signalised; a no-op otherwise.
+// "off" is stored as an absent `signal` so a plain junction round-trips cleanly.
+export function cycleJunctionSignalMode(cell: TileCell): TileCell {
+  if (!isRoadJunction(cell.road)) return cell;
+  const next = nextJunctionSignal(cell.signal);
+  if (next.mode === "off") {
+    const { signal: _drop, ...rest } = cell;
+    return { ...rest };
+  }
+  return { ...cell, signal: next };
 }
 
 // --- Road layer editing -------------------------------------------------------

@@ -11,6 +11,7 @@ import {
   specLength,
   vehicleClassOf,
   CarChord,
+  type TrafficConfig,
 } from "@/sim/road";
 import { movementsConflict, sameEntryConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
@@ -2748,7 +2749,7 @@ describe("createRoadSim — overtaking & swept-body collision robustness (#39)",
   // deterministic per-interval spawn cadence (no fillFast) so the run replays
   // identically for a fixed seed — the basis for the swept-body assertion.
   function simFor(
-    scenario: { level: Level; size?: { cols: number; rows: number }; traffic?: Record<string, unknown> },
+    scenario: { level: Level; size?: { cols: number; rows: number }; traffic?: TrafficConfig },
     seed: number,
   ) {
     const t = (scenario.traffic ?? {}) as {
