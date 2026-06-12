@@ -637,12 +637,14 @@ class Tile extends Vue {
     const size = this.config.tileSize;
     const half = 0.5 * LANE_WIDTH_PX_FRAC * size;
     const out: string[] = [];
+    const coord = parseCoordId(this.coordId);
     for (const lane of road) {
       if (lane.kind !== "bus") continue;
-      const selfBand = positioningBand(
-        laneCount(road, lane.from),
-        laneCount(road, oppositePort(lane.from)),
-      );
+      // The JUNCTION-aware band, exactly like the cars and the markings: on a
+      // junction tile the raw per-port lane counts are skewed by turn-only
+      // movements, which shifted one direction's gold band off its lane (the
+      // 3L T-junction bug: westbound band sat mid-road, eastbound was fine).
+      const selfBand = this.positioningBandAt(coord, lane.from);
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       for (const to of lane.to) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
@@ -1523,15 +1525,15 @@ $signal-offset: 20px;
 /* Car-junction hold (debug overlay): an amber wash + dashed ring on a road
    junction a car currently owns. Sits above the road surface but below the cars
    (z6) so the owning car still reads on top of its own highlight. */
+/* Just an anchor for the occupant-ids chip. The former full-tile amber wash
+   (+ pulsing dashed border) is gone: since the car sprites carry their own id
+   labels, the wash only drowned the board — the chip alone says which box is
+   occupied and by whom. */
 .car-junction-hold {
   position: absolute;
   inset: 0;
   z-index: 5;
   pointer-events: none;
-  background: rgba(255, 176, 32, 0.28);
-  border: 3px dashed rgba(255, 176, 32, 0.95);
-  box-sizing: border-box;
-  animation: car-junction-pulse 0.9s ease-in-out infinite;
 }
 .car-junction-label {
   position: absolute;
@@ -1543,14 +1545,5 @@ $signal-offset: 20px;
   background: rgba(255, 176, 32, 0.95);
   padding: 0 3px;
   border-radius: 3px;
-}
-@keyframes car-junction-pulse {
-  0%,
-  100% {
-    background: rgba(255, 176, 32, 0.18);
-  }
-  50% {
-    background: rgba(255, 176, 32, 0.38);
-  }
 }
 </style>
