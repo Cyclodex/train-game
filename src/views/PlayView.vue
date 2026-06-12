@@ -102,7 +102,7 @@
     <div class="world">
     <div
       class="level"
-      :style="{ width: config.tileSize * config.levelSizeX + 'px' }"
+      :style="{ gridTemplateColumns: `repeat(${config.levelSizeX}, ${config.tileSize}px)`, width: config.tileSize * config.levelSizeX + 'px' }"
       @click="onBackgroundClick"
     >
       <Train
@@ -684,9 +684,8 @@ export default toNative(PlayView);
 
 <style lang="scss" scoped>
 .level {
-  display: flex;
+  display: grid;
   border: 1px solid green;
-  flex-wrap: wrap;
   margin: 0 auto;
   position: relative;
 }
