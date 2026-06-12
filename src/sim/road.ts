@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, roadPortsOf, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -649,7 +649,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (isRoadJunction(tile.road)) {
       signals.set(
         id,
-        createJunctionSignal(roadPortsOf(tile.road), tile.signal ?? { mode: "off" }),
+        createJunctionSignal(approachPortsOf(tile.road), tile.signal ?? { mode: "off" }),
       );
     }
   }
