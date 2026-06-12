@@ -581,6 +581,9 @@ const CAR_LOOKAHEAD = 2;
 // every box-keep-clear hold waits on space that is itself behind another hold —
 // the patience override breaks that circular wait.
 const BOX_KEEP_CLEAR_PATIENCE = 4;
+// A bound moving faster than this (tiles/sec; cruise is ~0.6) counts as a
+// ROLLING queue for the box keep-clear rule — follow it through the junction.
+const ROLLING_QUEUE_EPS = 0.05;
 // Reaction time (seconds) a stopped car waits before it starts moving once the
 // way ahead clears — the "wait a beat after the car in front pulls away" delay.
 // This staggers a queue's release so cars spread out (e.g. don't bunch up nose-
@@ -1376,6 +1379,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // away" apart from "open road", which matters when a jam is one tile past a
     // crossing that sits at the edge of the look-ahead.
     let clear = Number.POSITIVE_INFINITY;
+    // The speed of whatever currently bounds `clear`. Only a SAME-DIRECTION
+    // leader (the car ahead in our own stream) reports its velocity; everything
+    // else — signals, the arbiter, closed crossings, merge partners, crossing
+    // streams — counts as static (0). The box keep-clear rule reads it: a
+    // rolling PLATOON LEADER means the queue is draining and the car may follow
+    // it through the junction nose-to-tail (the whole green phase crosses);
+    // a standing queue whose end would trap the body in the box holds it out.
+    let boundVel = 0;
+    const bind = (d: number, vel: number) => {
+      if (d < clear) {
+        clear = d;
+        boundVel = vel;
+      }
+    };
     // The distance to the nearest closed crossing ahead, tracked separately so we
     // can tell whether the crossing is what ultimately binds the car's movement.
     let crossingClear = Number.POSITIVE_INFINITY;
@@ -1385,7 +1402,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     for (const [tileId, { lead }] of route) {
       if (lead >= 0 && closed(tileId)) crossingClear = Math.min(crossingClear, lead);
     }
-    clear = Math.min(clear, crossingClear);
+    bind(crossingClear, 0);
     // Junction arbiter: for each upcoming junction on the route, ask whether
     // this car may enter given the current conflict geometry and waiting cars.
     for (const [junctionId, { lead, entry: myEntry }] of route) {
@@ -1408,11 +1425,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (signalCtrl) {
         const aspect = signalCtrl.aspect(myEntry);
         if (aspect === "red") {
-          clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+          bind(Math.max(0, lead - CAR_GAP), 0);
         } else if (aspect === "amber") {
           const stopDist =
             (car.velocity * car.velocity) / (2 * Math.max(car.brake, 1e-6));
-          if (stopDist <= lead) clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+          if (stopDist <= lead) bind(Math.max(0, lead - CAR_GAP), 0);
         }
       }
       const candidate: WaitingCar = {
@@ -1431,7 +1448,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           junctionConflictFn(junctionId),
         )
       ) {
-        clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+        bind(Math.max(0, lead - CAR_GAP), 0);
       }
     }
 
@@ -1478,7 +1495,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // merge/follow (which would, e.g., keep a bus off its preferred lane).
         if (dFront >= 0 && dRear < CAR_GAP) {
           const latSep = Math.max(0, Math.max(myLatLo, otherLatLo) - Math.min(myLatHi, otherLatHi));
-          if (latSep < CLIP_LANES) clear = Math.min(clear, Math.max(0, dRear - CAR_GAP));
+          if (latSep < CLIP_LANES) bind(Math.max(0, dRear - CAR_GAP), other.velocity);
         }
       }
       // Progress range of the other car's body per tile (min = tail-most point,
@@ -1535,7 +1552,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           if (junctionTile && proj.lead >= 0) {
             const myExit = myJunctionExit();
             if (myExit !== null && junctionConflictWith(myExit)) {
-              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+              bind(Math.max(0, proj.lead - CAR_GAP), 0);
             }
           }
           continue;
@@ -1583,7 +1600,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
               // behind a common leader, so ties yield deterministically by id.
               const tie = Math.abs(otherFrontD - myD) <= 1e-9 && other.id < car.id;
               if (otherFrontD < myD - 1e-9 || tie) {
-                clear = Math.min(clear, Math.max(0, proj.lead + tailT - CAR_GAP));
+                bind(Math.max(0, proj.lead + tailT - CAR_GAP), 0);
               }
             }
           } else if (junctionConflictWith(myExit)) {
@@ -1596,11 +1613,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             // the smaller id rolls through, the other holds until it has passed.
             const bothInside = proj.lead < 0;
             if (!(bothInside && car.id < other.id)) {
-              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+              bind(Math.max(0, proj.lead - CAR_GAP), 0);
             }
           }
         } else {
-          clear = Math.min(clear, proj.d - CAR_GAP);
+          bind(proj.d - CAR_GAP, other.velocity);
         }
       }
     }
@@ -1630,6 +1647,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // would itself gridlock the loop.
         if (onBox && !onCrossing) {
           if (car.waitSeconds > BOX_KEEP_CLEAR_PATIENCE) continue;
+          // A ROLLING bound: the obstacle limiting us is itself moving, so the
+          // queue ahead is draining — follow it through the box nose-to-tail
+          // (the whole green-phase platoon crosses). Only a STANDING queue
+          // whose end would trap our body in the box holds us at the entry.
+          if (boundVel > ROLLING_QUEUE_EPS) continue;
           const pairs = junctionConflicts.get(tileId);
           if (!pairs) continue;
           const jCoord = parseJunctionCoord(tileId);
