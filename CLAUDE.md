@@ -240,3 +240,19 @@ It loads `/test/<scenarioId>` in a real browser with the **Debug overlay on**
 (default `screenshots/`). A visual **issue** carries a screenshot of the wrong
 state; a visual **fix PR** carries a **before/after** pair (the implementer
 provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.
+
+## Ticket ownership (don't double-build)
+
+`status: ready-for-dev` is the **automated implement pipeline's** queue: an issue
+moved there gets auto-branched (`claude/issue-<N>-…`) and a PR opened. So, before
+implementing **any** issue:
+
+- **Check first.** Look for an existing `claude/issue-<N>-…` branch or an open PR
+  that closes the issue. If one exists, the pipeline already owns it — **review
+  that PR, don't build a parallel one.** `in-progress`/`in-review` = already taken.
+- **Claim before you build.** If you (a session) are going to implement a ticket
+  yourself, set it `status: in-progress` first and **leave it out of
+  `ready-for-dev`** — never set a ticket to `ready-for-dev` *and* build it
+  yourself, or the pipeline picks it up in parallel (this is the double-work trap).
+
+Full rules: `docs/TICKET_WORKFLOW.md` → **Stages & labels** / **Ownership**.
