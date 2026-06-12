@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import {
+  approachPortsOf,
   Lane,
   fromPairs,
   oneWay,
@@ -452,5 +453,27 @@ describe("busTo: bus-only exits on a shared lane", () => {
     expect(laneMovements(tee)).toContainEqual({ from: T, to: R });
     expect(laneMovements(tee)).toContainEqual({ from: B, to: R });
     expect(roadEdges(tee)).toContainEqual([T, R]);
+  });
+});
+
+// approachPortsOf: only arms traffic ENTERS from. An exit-only arm (one-way
+// outbound) must not get a signal phase or a signal head (see junctionSignal).
+describe("approachPortsOf", () => {
+  const T = Position.Top;
+  const B = Position.Bottom;
+  const L = Position.Left;
+  const R = Position.Right;
+  it("excludes exit-only arms, keeps every entering arm", () => {
+    // T-junction: traffic enters from L and R; B is OUTBOUND-only (exit-only).
+    const road = [
+      { from: L, to: [R, B], index: 0 },
+      { from: R, to: [L, B], index: 0 },
+    ];
+    expect(approachPortsOf(road).sort()).toEqual([L, R].sort());
+    expect(roadPortsOf(road).sort()).toEqual([L, R, B].sort()); // structural superset
+  });
+  it("empty road has no approaches", () => {
+    expect(approachPortsOf([])).toEqual([]);
+    expect(approachPortsOf(undefined)).toEqual([]);
   });
 });

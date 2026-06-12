@@ -376,6 +376,16 @@ export function roadPortsOf(road: Lane[] | undefined): Port[] {
   return [...out];
 }
 
+// Only the APPROACH arms: ports some lane actually enters the tile FROM. An
+// exit-only arm (a one-way outbound street) carries no incoming traffic, so a
+// traffic signal must neither plan a green phase for it (8s of dead time per
+// round-robin cycle) nor render a head facing it.
+export function approachPortsOf(road: Lane[] | undefined): Port[] {
+  const out = new Set<Port>();
+  for (const lane of road ?? []) out.add(lane.from);
+  return [...out];
+}
+
 // Expand the road into directed movements (one per lane × permitted exit),
 // deduplicated. Feeds the junction conflict matrix.
 export function laneMovements(

@@ -283,6 +283,7 @@ import {
   turnKind,
   laneAllExits,
   roadPortsOf,
+  approachPortsOf,
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -1009,7 +1010,7 @@ class Tile extends Vue {
   // clock, so the chip alone indicates the authored mode).
   get roadSignalHeads(): { arm: Position; aspect: string }[] {
     if (!this.game.roadSignals?.[this.coordId]) return [];
-    return roadPortsOf(this.tile.road).map(arm => ({
+    return approachPortsOf(this.tile.road).map(arm => ({
       arm,
       aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
     }));
