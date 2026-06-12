@@ -1680,8 +1680,42 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         break;
       }
       const nextEntry = oppositePort(exitPort);
-      const nextExit =
+      let nextExit =
         carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry, cls);
+      // LANE DISCIPLINE at a junction: the turn-lane pre-sorting (F) is a
+      // wish, not a guarantee — in traffic a car can reach the junction in a
+      // lane that doesn't permit its planned movement (the gap for the lane
+      // change never opened). A real driver doesn't swerve across the box:
+      // they MISS the turn, take a movement their lane allows (straight when
+      // possible), and re-plan the route from there.
+      if (nextExit !== null && isRoadJunction(nextTile.road)) {
+        const approachCount = laneCount(nextTile.road, nextEntry);
+        const myLane = Math.max(0, Math.min(laneOf(car), approachCount - 1));
+        const allowed = lanesAllowingExitFor(nextTile.road, nextEntry, nextExit, cls);
+        if (allowed.length > 0 && !allowed.includes(myLane)) {
+          const myExits = usableExits(nextTile.road, nextEntry, cls).filter(p =>
+            lanesAllowingExitFor(nextTile.road, nextEntry, p, cls).includes(myLane),
+          );
+          if (myExits.length > 0) {
+            const straightOn = oppositePort(nextEntry);
+            nextExit = myExits.includes(straightOn) ? straightOn : myExits[0];
+            // The remaining plan assumed the missed turn — re-plan from the
+            // tile beyond the junction along the detour.
+            const onward = neighborCoord(nextCoord, nextExit);
+            if (onward) {
+              const replan = planRoute(
+                level, onward, oppositePort(nextExit), allMapExits, routeRng, cls,
+              );
+              car.routePlan = replan.turns;
+              car.routeStep = 0;
+              if (replan.destination) car.destination = replan.destination;
+            } else {
+              car.routePlan = [];
+              car.routeStep = 0;
+            }
+          }
+        }
+      }
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
       const prevRoad = level[getCoordinatesId(head.coord)]?.road; // the tile we leave
       const nextLaneCount = laneCount(nextTile.road, nextEntry);
