@@ -1110,10 +1110,10 @@ class Tile extends Vue {
   }
 
   // --- car junction overlay (debug) ---
-  // The id of the car currently holding this road junction, if any. Cars have no
-  // stored reservation (unlike trains): this is derived live from car positions
-  // by the road sim. Shown only in debug to make the otherwise-invisible "one car
-  // owns the junction at a time" interlock visible on the tile.
+  // The car(s) whose bodies currently overlap this road junction (space-
+  // separated ids). Derived live from car positions by the road sim. Debug-only:
+  // makes visible WHO is physically inside the box — multiple non-conflicting
+  // movements may share it, so this is occupancy, not exclusive ownership.
   get carJunctionOwner(): string | undefined {
     if (!this.config.debug) return undefined;
     return this.game.carJunctions?.[this.coordId];

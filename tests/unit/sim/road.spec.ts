@@ -896,9 +896,11 @@ describe("createRoadSim — road junction interlock", () => {
       const ids = Object.keys(held);
       // Only the actual crossing tile (2,2) is ever reported, never an approach.
       for (const id of ids) expect(id).toBe("2,2");
-      // It is held by a real, currently-live car.
+      // Every reported occupant is a real, currently-live car (the value
+      // lists ALL bodies in the box, space-separated).
       const liveIds = new Set(sim.cars().map(c => c.id));
-      for (const id of ids) expect(liveIds.has(held[id])).toBe(true);
+      for (const id of ids)
+        for (const cid of held[id].split(" ")) expect(liveIds.has(cid)).toBe(true);
       if (ids.length > 0) everHeld = true;
     }
     expect(everHeld).toBe(true); // cars do pass through, so it gets held

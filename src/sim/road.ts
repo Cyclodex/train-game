@@ -496,9 +496,10 @@ export interface RoadSim {
   }[];
   // Road-junction tiles a car body currently occupies, keyed by tile id → car id.
   // There is no stored reservation for cars (unlike trains): occupancy is derived
-  // live from car positions. The junction interlock keeps this at most one car per
-  // junction tile, so the map is effectively tileId → the car that owns it now.
-  // Exposed purely so the renderer can highlight a held junction in debug mode.
+  // live from car positions. Multiple non-conflicting movements may share the
+  // box, so the value lists EVERY car whose body currently overlaps the tile
+  // (space-separated). Exposed so the debug overlay can show who is actually
+  // inside a junction — "owner" is the wrong mental model since lanes landed.
   junctionOccupancy(): Record<string, string>;
   // The current light an approach `arm` shows at the signalised road junction
   // `tileId` (green/amber/red), or null when that junction is not signalised. The
@@ -578,10 +579,13 @@ const TURN_LANE_LOOKAHEAD = 4;
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
 // How long (seconds) a car honours "don't block the box" while held at a
-// junction entry before it gives up and rolls in anyway. On a saturated ring
-// every box-keep-clear hold waits on space that is itself behind another hold —
-// the patience override breaks that circular wait.
-const BOX_KEEP_CLEAR_PATIENCE = 4;
+// junction entry before it gives up and rolls in anyway. The override only
+// ever matters when live CROSS demand exists (without it the hold is skipped
+// entirely), and entering then parks a body across that demand — the observed
+// two-junction gridlock was seeded exactly this way (car70 rolling into a
+// standing right-turn queue after 4s). Keep it as a rare LAST-RESORT
+// anti-freeze valve, not a routine bypass.
+const BOX_KEEP_CLEAR_PATIENCE = 30;
 // A bound moving faster than this (tiles/sec; cruise is ~0.6) counts as a
 // ROLLING queue for the box keep-clear rule — follow it through the junction.
 // Deliberately strict (~40% of cruise): a COMPRESSING queue still creeps at
@@ -2138,7 +2142,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const out: Record<string, string> = {};
       for (const c of cars) {
         for (const tileId of bodyTileIds(c)) {
-          if (isRoadJunction(level[tileId]?.road)) out[tileId] = c.id;
+          if (isRoadJunction(level[tileId]?.road))
+            out[tileId] = out[tileId] ? `${out[tileId]} ${c.id}` : c.id;
         }
       }
       return out;
