@@ -27,8 +27,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Browser + deps so `npm run shot` can capture before/after screenshots
+      # when a PR comment asks for visual proof (same setup as claude-implement;
+      # .npmrc sets ignore-scripts, so the browser is never fetched implicitly).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
-            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(git:*)"
+            --allowedTools "Bash(npm install),Bash(npm ci),Bash(npm run lint),Bash(npm run lint:*),Bash(npm run test:unit),Bash(npm run shot),Bash(npm run shot:*),Bash(npx playwright:*),Bash(git:*),Bash(gh pr:*)"
