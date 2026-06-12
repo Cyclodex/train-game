@@ -469,6 +469,9 @@ export interface RoadSim {
     headProgress: number;
     speed: number; // this car's preferred (cruise) speed — varies car-to-car
     velocity: number; // its current speed (capped by the leader when following)
+    laneIndex: number; // continuous lateral lane position (float during a change)
+    targetLane: number; // the integer lane it is easing toward
+    overtakePhase: Car["overtakePhase"]; // "none" | "passing" | "returning"
   }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
@@ -480,6 +483,16 @@ export interface RoadSim {
   // car will actually take) and the single straight/curve exit elsewhere. Used by
   // the renderer to draw a debug "where is this car going" overlay.
   routePath(carId: string): RoadSegment[];
+  // Each live car's body sampled as occupancy points along its whole length —
+  // the SAME points the following/conflict gates use internally: the tile id, the
+  // integer lane the car occupies, the port it entered that tile through (so
+  // same-direction bodies are comparable), and the progress `t` within the tile.
+  // Exposed so a test can assert no two same-lane bodies physically overlap on any
+  // tick of a deterministic run (a swept-body regression guard).
+  bodies(): {
+    id: string;
+    points: { tileId: string; lane: number; entry: Port; t: number; lanePos: number }[];
+  }[];
   // Road-junction tiles a car body currently occupies, keyed by tile id → car id.
   // There is no stored reservation for cars (unlike trains): occupancy is derived
   // live from car positions. The junction interlock keeps this at most one car per
@@ -547,6 +560,16 @@ const LANE_CHANGE_RATE = 2.2;
 const LANE_CHANGE_ACCEL = 5.5;
 const LANE_CHANGE_GAP = 0.18;
 const LANE_SETTLE = 1e-3;
+// Lateral separation (in lanes) below which two same-direction bodies physically
+// CLIP — a car's rendered width (~20px) over the lane width (~28px) is ~0.71 lane,
+// so bodies whose lane centres are closer than this overlap sideways. Used by the
+// swept-body overlap-recovery clamp in clearAhead: a car that ends up within this
+// of another (a half-finished overtake pull-out/return, or two cars merged onto
+// one lane) is held its following gap behind that body so the overlap can't
+// persist. Set at the true body-width ratio so steady traffic a full lane apart is
+// never gated, but anything closer is — this is also the threshold the swept-body
+// test asserts against.
+const CLIP_LANES = 0.72;
 // How many tiles ahead a car looks for the junction it must be lane-sorted for,
 // so it starts moving into its turn lane with room to spare (sub-project F).
 const TURN_LANE_LOOKAHEAD = 4;
@@ -809,10 +832,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
 
     // Overtaking (G+): while passing aim for the lane left of home; while
-    // returning aim back at home. Above turn-lane sorting, but the merge/junction
-    // guards above still win (safety). considerOvertake drives the phase.
+    // returning aim back toward the KERB-most legal lane (keep-right discipline),
+    // not merely the lane we pulled out of — so on a 3-lane road a pass from the
+    // middle lane tucks all the way back to the kerb instead of loitering inner.
+    // Above turn-lane sorting, but the merge/junction guards above still win
+    // (safety). considerOvertake drives the phase.
     if (car.overtakePhase === "passing") return clampLane(car.overtakeHomeLane + 1, curCount);
-    if (car.overtakePhase === "returning") return clampLane(car.overtakeHomeLane, curCount);
+    if (car.overtakePhase === "returning")
+      return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
 
     // (F) A junction is coming up — get into a lane that permits the turn the
     // route takes there, as early as a few tiles out so there's room to change.
@@ -966,7 +993,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const dir = Math.sign(diff);
       // Starting from a settled lane, only begin the change once the lane we'd
       // cross into is clear (gap acceptance). Once mid-crossing (fractional
-      // position) we are committed and finish — the gap was checked when we set off.
+      // position) we are committed and finish — the gap was checked when we set
+      // off, and the longitudinal overlap-recovery clamp in clearAhead is the
+      // backstop that drops us behind any body we would otherwise slide level with.
       const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
       const blocked = atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir);
       // Desired lateral velocity follows an S-curve motion profile: cruise at
@@ -1052,6 +1081,33 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return maxD < -(car.length + CAR_GAP);
   }
 
+  // True once our nose has drawn level with the leader being passed — its
+  // rear-most point is at or behind our head. Past this point we are committed:
+  // aborting the pass (swerving back behind it) would be a worse manoeuvre than
+  // finishing, so the abort guard only fires BEFORE we reach alongside.
+  function isAlongside(car: Car, otherId: string | null): boolean {
+    if (!otherId) return false;
+    const other = cars.find(c => c.id === otherId);
+    if (!other) return false;
+    const route = forwardRoute(car);
+    let minD = Infinity;
+    for (const p of bodyPoints(other)) {
+      const proj = projectPoint(route, p);
+      if (proj) minD = Math.min(minD, proj.d);
+    }
+    if (minD === Infinity) return true; // off our route → already past it
+    return minD <= 0;
+  }
+
+  // The kerb-most lane a car of class `cls` may legally ride on this approach —
+  // the lane an overtaker returns to (keep-right discipline) once a pass is done.
+  // Lane 0 is the kerb; if the kerb lane is bus-only a car's home is the lowest
+  // car lane instead. Falls back to lane 0 when the road carries no usable lane.
+  function kerbMostLane(road: Level[string]["road"], entry: Port, cls: VehicleClass): number {
+    const usable = usableLaneIndices(road, entry, cls);
+    return usable.length > 0 ? Math.min(...usable) : 0;
+  }
+
   // Same-direction overtaking (sub-project G+). An impatient/faster driver held
   // behind a slower leader pulls into the lane to its left to pass, then returns —
   // but only when the passing lane is clear and it isn't about to need its lane
@@ -1061,14 +1117,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const count = laneCount(level[getCoordinatesId(head.coord)]?.road, head.entryPort);
 
     if (car.overtakePhase === "passing") {
+      const passLane = car.overtakeHomeLane + 1;
       // Bail out if the passing lane vanished (a drop) or we've cleared the car.
-      if (car.overtakeHomeLane + 1 > count - 1 || isPast(car, car.overtakeOf)) {
+      if (passLane > count - 1 || isPast(car, car.overtakeOf)) {
+        car.overtakePhase = "returning";
+        return;
+      }
+      // Gap acceptance / graceful abort: BEFORE we draw level with the leader,
+      // if the passing lane is no longer clear ahead (a slower car has appeared
+      // in it that we'd only get stuck behind, i.e. the gap we pulled out for has
+      // closed), give up on the pass and ease back to the kerb lane rather than
+      // completing a marginal manoeuvre. Once alongside/ahead of the leader we
+      // are committed — finishing is safer than swerving back behind it. The
+      // return is the same eased, gap-gated lateral glide (updateLateral), so an
+      // abort never snaps the car's lane position.
+      if (!isAlongside(car, car.overtakeOf) && !passingWindowClear(car, passLane)) {
         car.overtakePhase = "returning";
       }
       return;
     }
     if (car.overtakePhase === "returning") {
-      if (Math.abs(car.laneIndex - car.overtakeHomeLane) <= LANE_SETTLE) {
+      const home = kerbMostLane(level[getCoordinatesId(head.coord)]?.road, head.entryPort, clsOf(car));
+      if (Math.abs(car.laneIndex - home) <= LANE_SETTLE) {
         car.overtakePhase = "none";
         car.overtakeOf = null;
       }
@@ -1217,18 +1287,24 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // on it, so a crossing car sees it occupied and holds off the tile.
   function bodyPoints(
     car: Car
-  ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] {
-    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number }[] = [];
+  ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number; lanePos: number }[] {
+    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number; lanePos: number }[] = [];
     // Lane identity for following/conflict is the integer lane the car occupies
     // (its continuous position rounded) — a mid-change car counts as in the lane
-    // it is closest to.
+    // it is closest to. `lanePos` keeps the CONTINUOUS lateral position at that
+    // body point (lagged like the rendered body) for swept-body overlap checks.
     const lane = laneOf(car);
-    for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) {
-      const s = sampleAtArc(car, a);
-      pts.push({ tileId: getCoordinatesId(s.coord), entry: s.entryPort, exit: s.exitPort, t: s.t, laneIndex: lane });
-    }
-    const tail = sampleAtArc(car, car.length); // always include the exact tail
-    pts.push({ tileId: getCoordinatesId(tail.coord), entry: tail.entryPort, exit: tail.exitPort, t: tail.t, laneIndex: lane });
+    const add = (a: number, s: CarSample) =>
+      pts.push({
+        tileId: getCoordinatesId(s.coord),
+        entry: s.entryPort,
+        exit: s.exitPort,
+        t: s.t,
+        laneIndex: lane,
+        lanePos: lanePosAt(car, a, s),
+      });
+    for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) add(a, sampleAtArc(car, a));
+    add(car.length, sampleAtArc(car, car.length)); // always include the exact tail
     return pts;
   }
 
@@ -1354,10 +1430,52 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
     }
 
+    // My own body's lateral (lanePos) extent — head plus the lagging tail — so the
+    // swept following clamp below compares true body-to-body lateral separation
+    // (which captures a leaning tail sweeping the lane it is leaving), not just the
+    // head's lane index.
+    const myTailLanePos = lanePosAt(car, car.length, sampleAtArc(car, car.length));
+    const myLatLo = Math.min(car.laneIndex, myTailLanePos);
+    const myLatHi = Math.max(car.laneIndex, myTailLanePos);
+
     // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
       if (other === car) continue;
       const otherPts = bodyPoints(other);
+      // Swept-body following, overlap-RECOVERING: keep our head a gap behind the
+      // REAR-most point of any same-direction body whose lateral extent is within a
+      // body width of ours — even one we have wrongly drawn level with. The
+      // per-point gate below stops at the nearest point AHEAD of us, so once a
+      // follower's nose slips past a leader's tail (e.g. two cars merging onto one
+      // lane, or a lane-change that drew level) it would keep nosing up THROUGH the
+      // body to the head. Gating on the rear-most point — which sits behind us when
+      // we overlap, giving a clear of 0 — instead drops us back behind the tail, so
+      // an overlap can never persist or deepen. Skips opposing/perpendicular and
+      // junction-tile points (handled by their own gates).
+      {
+        let dRear = Number.POSITIVE_INFINITY;
+        let dFront = Number.NEGATIVE_INFINITY;
+        let otherLatLo = Number.POSITIVE_INFINITY;
+        let otherLatHi = Number.NEGATIVE_INFINITY;
+        for (const p of otherPts) {
+          if (isRoadJunction(level[p.tileId]?.road)) continue;
+          const proj = projectPoint(route, p);
+          if (!proj || proj.opposing || proj.perpendicular) continue;
+          dRear = Math.min(dRear, proj.d);
+          dFront = Math.max(dFront, proj.d);
+          otherLatLo = Math.min(otherLatLo, p.lanePos);
+          otherLatHi = Math.max(otherLatHi, p.lanePos);
+        }
+        // Fire only when the other body actually ABUTS or overlaps us (its rear is
+        // within a gap of our nose, or behind it) — a genuine clip to recover from.
+        // A leader comfortably ahead (dRear ≥ CAR_GAP) is left to the ordinary
+        // per-point follow gate below, so this never adds caution to a normal
+        // merge/follow (which would, e.g., keep a bus off its preferred lane).
+        if (dFront >= 0 && dRear < CAR_GAP) {
+          const latSep = Math.max(0, Math.max(myLatLo, otherLatLo) - Math.min(myLatHi, otherLatHi));
+          if (latSep < CLIP_LANES) clear = Math.min(clear, Math.max(0, dRear - CAR_GAP));
+        }
+      }
       // Progress range of the other car's body per tile (min = tail-most point,
       // max = front-most), used by the merge clamp: the merge winner is decided
       // by its FRONT, but the loser must trail its TAIL.
@@ -1880,6 +1998,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         headProgress: c.headProgress,
         speed: c.speed,
         velocity: c.velocity,
+        laneIndex: c.laneIndex,
+        targetLane: c.targetLane,
+        overtakePhase: c.overtakePhase,
       }));
     },
     sample() {
@@ -1899,6 +2020,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const curLaneCount = laneCount(level[getCoordinatesId(headSeg.coord)]?.road, headSeg.entryPort);
         return { id: c.id, units, laneIndex: c.laneIndex, laneCount: Math.max(1, curLaneCount), destination: c.destination };
       });
+    },
+    bodies() {
+      return cars.map(c => ({
+        id: c.id,
+        points: bodyPoints(c).map(p => ({
+          tileId: p.tileId,
+          lane: p.laneIndex,
+          entry: p.entry,
+          t: p.t,
+          lanePos: p.lanePos,
+        })),
+      }));
     },
     junctionOccupancy() {
       const out: Record<string, string> = {};

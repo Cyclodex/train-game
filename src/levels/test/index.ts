@@ -35,6 +35,7 @@ import { crosslanes } from "@/levels/test/scenarios/crosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
 import { overtaketwolane } from "@/levels/test/scenarios/overtaketwolane";
 import { overtakeloop } from "@/levels/test/scenarios/overtakeloop";
+import { overtakeabort } from "@/levels/test/scenarios/overtakeabort";
 import { rightturncross } from "@/levels/test/scenarios/rightturncross";
 import { noleftturn } from "@/levels/test/scenarios/noleftturn";
 import { roadpriority } from "@/levels/test/scenarios/roadpriority";
@@ -59,6 +60,7 @@ import { carroute } from "@/levels/test/scenarios/carroute";
 import { bigjunction } from "@/levels/test/scenarios/bigjunction";
 import { crossturns2lane, crossturns3lane } from "@/levels/test/scenarios/crossturns";
 import { mixedcross, mixedtee, curvefeed } from "@/levels/test/scenarios/mixedjunction";
+import { turngallery } from "@/levels/test/scenarios/turngallery";
 import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
@@ -115,7 +117,7 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Crosses & junctions",
         scenarios: [
           roadcross, roadcross1lane, roadcross2lane, roadcross3lane,
-          crossturns2lane, crossturns3lane, mixedcross, mixedtee, curvefeed, turnglide, roadjunction, bigjunction,
+          crossturns2lane, crossturns3lane, mixedcross, mixedtee, curvefeed, turngallery, turnglide, roadjunction, bigjunction,
         ],
       },
       {
@@ -128,7 +130,7 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Traffic signals",
         scenarios: [signaltwophase, signalroundrobin, signalbuslane1l, signalbuspriority, signalbuslane3l],
       },
-      { id: "overtaking", label: "Overtaking", scenarios: [overtaketwolane, overtakeloop] },
+      { id: "overtaking", label: "Overtaking", scenarios: [overtaketwolane, overtakeloop, overtakeabort] },
       { id: "priority", label: "Priority", scenarios: [roadpriority] },
       {
         id: "vehicles",

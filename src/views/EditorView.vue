@@ -295,6 +295,7 @@ import {
   laneCountAt,
   turnSeamBand,
   isRoadJunction,
+  oneWayRunMax,
   junctionExitOffsetPx,
   turnLandsOnBusLane,
 } from "@/tiles/lanes";
@@ -359,6 +360,10 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
     roadLaneCount: (coord: Coordinates, port: Position) => laneCount(roadOf(coord), port),
     roadLaneCountAt: (coord: Coordinates, port: Position) => laneCountAt(roadOf(coord), port),
     roadIsJunctionAt: (coord: Coordinates) => isRoadJunction(roadOf(coord)),
+    // Tile.vue calls this for every ONE-WAY straight (surface + overlay); without
+    // it, drawing a one-way road in the editor threw. Shares the game's walk.
+    roadOneWayRunMax: (coord: Coordinates, entry: Position) =>
+      oneWayRunMax(roadOf, coord, entry),
     // Tile.vue's laneGraphOverlay (the debug lane-arrow overlay, on by default)
     // calls this for every TURN/junction movement to glide the arrow to the lane
     // the car lands in on the exit arm. Mirrors game.ts's turnExitOffsetPx exactly

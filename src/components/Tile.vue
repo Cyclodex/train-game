@@ -276,7 +276,6 @@ import {
   roadEdges,
   laneCount,
   laneCountAt,
-  seamPaintTotal,
   roadSeamPaintTotal,
   junctionArmPaintTotal,
   seamMismatch,
@@ -287,7 +286,7 @@ import {
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
-import { seamBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
+import { seamPositioningBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -441,13 +440,14 @@ class Tile extends Vue {
         // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
         // so the arm mouth — straight or turning — meets the road flush, no taper
         // at the seam (#30). A simple curve (not a junction) keeps the per-end
-        // seam taper so a bend still narrows/widens between unequal straights.
+        // seam taper between unequal straights, but a junction neighbour never
+        // pinches it (roadSeamPaintTotal) — the junction adopts the curve.
         const widthEndA = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
-          : seamPaintTotal(Math.max(selfAtA, 2), nTotalA);
+          : roadSeamPaintTotal(Math.max(selfAtA, 2), nTotalA, aJunction);
         const widthEndB = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
-          : seamPaintTotal(Math.max(selfAtB, 2), nTotalB);
+          : roadSeamPaintTotal(Math.max(selfAtB, 2), nTotalB, bJunction);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -662,6 +662,24 @@ class Tile extends Vue {
     return this.game.roadLaneCountAt(coord, port) / 2;
   }
 
+  // The junction-aware positioning band of THIS tile at `port` against the
+  // neighbour there — mirrors game.ts positioningBandAt exactly (see
+  // sim/laneOffset.ts seamPositioningBand: a junction adopts a road neighbour's
+  // real band, a road keeps its own band at a junction, road↔road seams keep
+  // the min-taper), so the overlay arrows and turn guides sit precisely where
+  // the renderer puts the cars.
+  private positioningBandAt(coord: ReturnType<typeof parseCoordId>, port: Position): number {
+    const selfBand = laneCountAt(this.tile.road, port) / 2;
+    const nb = neighborCoord(coord, port);
+    if (!nb) return selfBand;
+    return seamPositioningBand(
+      selfBand,
+      isRoadJunction(this.tile.road),
+      this.centeredRoadBand(nb, oppositePort(port)),
+      this.game.roadIsJunctionAt(nb),
+    );
+  }
+
   // The always-on turn guides inside a junction box for the turn edge [a, b]:
   // ONE dashed curve per turn MOVEMENT and direction, on the EXACT lane-to-lane
   // glide path the cars drive (seam-matched entry offset → landing-lane exit
@@ -698,12 +716,7 @@ class Tile extends Vue {
           ? l.index < best.index ? l : best // right turn: the kerb-most lane
           : l.index > best.index ? l : best, // left turn: the inner-most lane
       );
-      const selfBand = laneCountAt(road, from) / 2;
-      const nEntry = neighborCoord(coord, from);
-      const entryBand = seamBand(
-        selfBand,
-        nEntry ? this.centeredRoadBand(nEntry, oppositePort(from)) : 0,
-      );
+      const entryBand = this.positioningBandAt(coord, from);
       const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       // A movement reached only via busTo is bus-only even on a shared car lane.
       const cls = lane.kind === "bus" || !lane.to.includes(to) ? "bus" : "car";
@@ -788,8 +801,14 @@ class Tile extends Vue {
             const nExitFwd = nExit
               ? this.game.roadLaneCountAt(nExit, oppositePort(to))
               : 0;
-            const entrySeam = nEntryFwd > 0 ? Math.min(localCount, nEntryFwd) : localCount;
-            const exitSeam = nExitFwd > 0 ? Math.min(localCount, nExitFwd) : localCount;
+            // A junction seam keeps the run's full count (the junction adopts
+            // the road — no pinch next to a junction, matching roadPaths).
+            const jEntry = nEntry ? this.game.roadIsJunctionAt(nEntry) : false;
+            const jExit = nExit ? this.game.roadIsJunctionAt(nExit) : false;
+            const entrySeam =
+              !jEntry && nEntryFwd > 0 ? Math.min(localCount, nEntryFwd) : localCount;
+            const exitSeam =
+              !jExit && nExitFwd > 0 ? Math.min(localCount, nExitFwd) : localCount;
             const entryLane = Math.min(lane.index, Math.max(1, entrySeam) - 1);
             const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
             const offEntry = (entryLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
@@ -799,34 +818,24 @@ class Tile extends Vue {
           }
           // Bidirectional straight on a tapering tile: clamp each end inward so the
           // kerb lane merges and inner lanes hold, tracking the surface taper.
-          const nEntry = neighborCoord(coord, lane.from);
-          const nExit = neighborCoord(coord, to);
-          const bandEntry = seamBand(
-            selfBand,
-            nEntry ? this.centeredRoadBand(nEntry, oppositePort(lane.from)) : 0,
-          );
-          const bandExit = seamBand(
-            selfBand,
-            nExit ? this.centeredRoadBand(nExit, oppositePort(to)) : 0,
-          );
+          // Junction-aware bands (positioningBandAt): a junction neighbour never
+          // pinches the road's lanes; a junction's own straight-through corridor
+          // positions on each adjoining road's real band.
+          const bandEntry = this.positioningBandAt(coord, lane.from);
+          const bandExit = this.positioningBandAt(coord, to);
           const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, false);
           const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, false);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
           // lane the vehicle lands in on the EXIT arm (game.roadTurnExitOffsetPx,
-          // class-aware), identical to couplerOffset's turn branch — so the arrow
+          // class-aware), identical to couplerOffsets' turn branch — so the arrow
           // ends on the same real lane the car drives to, never a phantom one.
-          // Seam-match the ENTRY offset to the actual arm width (the neighbour
-          // entering through this approach), identical to couplerOffset's turn
-          // branch: a junction's laneCountAt over-counts a narrow arm, which would
-          // otherwise position its lanes half a lane out from the neighbour and
-          // not line up at the entrance seam (a 2-lane spur off a 3-lane road).
-          const nEntry = neighborCoord(coord, lane.from);
-          const entryBand = seamBand(
-            selfBand,
-            nEntry ? this.centeredRoadBand(nEntry, oppositePort(lane.from)) : 0,
-          );
+          // The entry band is junction-aware (positioningBandAt): a junction's own
+          // laneCountAt counts movements, not the arm's real width, so the arm
+          // positions its lanes on the adjoining road's band and lines up at the
+          // entrance seam (a 2-lane spur off a 3-lane road).
+          const entryBand = this.positioningBandAt(coord, lane.from);
           const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
           const offExit = this.game.roadTurnExitOffsetPx(coord, lane.from, to, lane.index, cls);
           out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus: moveIsBus });

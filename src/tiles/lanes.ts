@@ -1,6 +1,7 @@
 import type { Port } from "@/tiles/model";
-import { Position } from "@/types";
-import { laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
+import { Position, type Coordinates } from "@/types";
+import { laneOffsetConstPx, seamPositioningBand } from "@/sim/laneOffset";
+import { neighborCoord, oppositePort } from "@/sim/topology";
 
 // A lane's vehicle class, for restrictions. v1 stores the field but does not
 // enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
@@ -342,23 +343,27 @@ export function turnLandsOnBusLane(
   return busLaneIndices(exitRoad, exitApproach).includes(target);
 }
 
-// The positioning band a turn's glide should TARGET on the exit arm: the band of
-// the receiving tile at the shared seam, seam-matched against the departing
-// tile's own band at its exit port — exactly the band the receiving tile uses to
-// position a vehicle entering through that port (couplerOffset's
-// `seamBand(selfBand, neighbourBand)`). Using the receiving tile's raw
-// `laneCountAt` instead breaks when the receiver is a JUNCTION: its per-port
-// count deliberately over-counts an arm (every approach lane that can fan onto
-// it counts), so a 1-lane curve feeding a junction arm would glide its vehicles
-// and arrows half a lane wide of where the junction then places them — a visible
-// sideways snap at the entrance seam.
+// The positioning band a turn's glide should TARGET on the exit arm: the band
+// the RECEIVING tile will use to position the vehicle once it crosses the seam
+// (couplerOffset's entry band), so the glide lands exactly where the next tile
+// picks the vehicle up — no sideways snap at the entrance seam. Junction-aware
+// (seamPositioningBand): a plain road next to a junction keeps its OWN band
+// (the junction's per-arm `laneCountAt` over- or under-counts the movements
+// fanning through the arm, never the road's real width), a junction receiving
+// from a road adopts the road's band, and road↔road / junction↔junction seams
+// keep the min rule.
 export function turnSeamBand(
   hereRoad: Lane[] | undefined,
   exitPort: Port,
   exitRoad: Lane[] | undefined,
   exitApproach: Port,
 ): number {
-  return seamBand(laneCountAt(exitRoad, exitApproach) / 2, laneCountAt(hereRoad, exitPort) / 2);
+  return seamPositioningBand(
+    laneCountAt(exitRoad, exitApproach) / 2,
+    isRoadJunction(exitRoad),
+    laneCountAt(hereRoad, exitPort) / 2,
+    isRoadJunction(hereRoad),
+  );
 }
 
 // Every port the road touches (as an approach or an exit).
@@ -412,6 +417,45 @@ export function roadEdges(road: Lane[] | undefined): [Port, Port][] {
 export function laneCount(road: Lane[] | undefined, from: Port): number {
   const lanes = lanesFrom(road, from);
   return lanes.length === 0 ? 0 : Math.max(...lanes.map(l => l.index)) + 1;
+}
+
+// Is `road` a ONE-WAY STRAIGHT carrying travel in via `entry` (lanes
+// entry→oppositePort(entry), none oncoming, not a junction)? The unit of a
+// one-way highway run.
+export function isOneWayStraight(road: Lane[] | undefined, entry: Port): boolean {
+  if (!road || isRoadJunction(road)) return false;
+  const exit = oppositePort(entry);
+  return (
+    laneCount(road, entry) > 0 &&
+    laneCount(road, exit) === 0 && // one-way: no oncoming stream
+    road.some(l => l.from === entry && l.to.includes(exit)) // straight movement
+  );
+}
+
+// The widest lane count along the contiguous one-way straight run through the
+// tile at `coord` (walking upstream + downstream in the travel direction).
+// One-way roads left-align to this width so the through lanes run straight and
+// lanes drop on the right (see sim/laneOffset.ts oneWayLaneOffsetPx). `roadAt`
+// supplies each tile's road layer — the game reads its level, the editor its
+// working copy — so both views share the exact same walk.
+export function oneWayRunMax(
+  roadAt: (coord: Coordinates) => Lane[] | undefined,
+  coord: Coordinates,
+  entry: Port,
+): number {
+  const exit = oppositePort(entry);
+  let max = 0;
+  let c: Coordinates | null = coord;
+  for (let k = 0; k < 64 && c && isOneWayStraight(roadAt(c), entry); k++) {
+    max = Math.max(max, laneCount(roadAt(c), entry));
+    c = neighborCoord(c, exit);
+  }
+  c = neighborCoord(coord, entry);
+  for (let k = 0; k < 64 && c && isOneWayStraight(roadAt(c), entry); k++) {
+    max = Math.max(max, laneCount(roadAt(c), entry));
+    c = neighborCoord(c, entry);
+  }
+  return max || laneCount(roadAt(coord), entry);
 }
 
 // Total physical lanes crossing a port boundary: lanes entering FROM the port

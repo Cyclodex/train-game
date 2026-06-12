@@ -4,7 +4,7 @@ import { Level } from "@/tiles/model";
 import { nWayLanes, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { laneOffsetPx, laneOffsetConstPx, seamBand } from "@/sim/laneOffset";
+import { laneOffsetPx, laneOffsetConstPx, seamBand, seamPositioningBand } from "@/sim/laneOffset";
 import { Coordinates } from "@/types";
 
 // These tests pin the lateral-offset continuity that fixes the "cars snap
@@ -238,5 +238,32 @@ describe("one-way centred band — substitution (lanes connect, highest index me
     expect(off(0)).toBeCloseTo(0, 5);
     expect(off(1)).toBeCloseTo(0, 5);
     expect(off(2)).toBeCloseTo(0, 5);
+  });
+});
+
+describe("seamPositioningBand — junction-aware band at a seam", () => {
+  // The band-side counterpart of the junction paint rule (#30): the ROAD's real
+  // band is authoritative at any junction↔road seam, on both sides.
+  it("a junction meeting a plain road adopts the road's band", () => {
+    // Junction arm under-counts (band 2.5) but the road is really 3 wide.
+    expect(seamPositioningBand(2.5, true, 3, false)).toBe(3);
+    // Over-count: arm counts 2, the road is 1 — still the road's band.
+    expect(seamPositioningBand(2, true, 1, false)).toBe(1);
+  });
+
+  it("a plain road keeps its own band at a junction seam (never pinched)", () => {
+    expect(seamPositioningBand(3, false, 2.5, true)).toBe(3);
+    expect(seamPositioningBand(1, false, 2, true)).toBe(1);
+  });
+
+  it("road↔road keeps the min-seam taper; junction↔junction keeps min", () => {
+    expect(seamPositioningBand(3, false, 2, false)).toBe(2);
+    expect(seamPositioningBand(2, false, 3, false)).toBe(2);
+    expect(seamPositioningBand(3, true, 2.5, true)).toBe(2.5);
+  });
+
+  it("no neighbour road: an open end keeps its own band", () => {
+    expect(seamPositioningBand(3, false, 0, true)).toBe(3);
+    expect(seamPositioningBand(2.5, true, 0, false)).toBe(2.5);
   });
 });
