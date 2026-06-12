@@ -576,6 +576,11 @@ const TURN_LANE_LOOKAHEAD = 4;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
+// How long (seconds) a car honours "don't block the box" while held at a
+// junction entry before it gives up and rolls in anyway. On a saturated ring
+// every box-keep-clear hold waits on space that is itself behind another hold —
+// the patience override breaks that circular wait.
+const BOX_KEEP_CLEAR_PATIENCE = 4;
 // Reaction time (seconds) a stopped car waits before it starts moving once the
 // way ahead clears — the "wait a beat after the car in front pulls away" delay.
 // This staggers a queue's release so cars spread out (e.g. don't bunch up nose-
@@ -1585,7 +1590,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             // Genuinely CROSSING streams hold at the entry edge (even committed,
             // as a safety backstop). Non-conflicting movements (e.g.
             // perpendicular right turns) share the tile freely.
-            clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+            // COMMITTED vs COMMITTED (both bodies already inside the box —
+            // a same-tick double entry the arbiter race lets through): if both
+            // held, they'd freeze each other forever. Deterministic tie-break:
+            // the smaller id rolls through, the other holds until it has passed.
+            const bothInside = proj.lead < 0;
+            if (!(bothInside && car.id < other.id)) {
+              clear = Math.min(clear, Math.max(0, proj.lead - CAR_GAP));
+            }
           }
         } else {
           clear = Math.min(clear, proj.d - CAR_GAP);
@@ -1600,14 +1612,39 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // the whole crossing in one go. Only meaningful when a real obstacle bounds us
     // (clear is finite); on open road the car rolls straight through.
     if (Number.isFinite(clear)) {
-      for (const [tileId, { lead }] of route) {
+      for (const [tileId, { lead, entry: keepEntry }] of route) {
         if (lead < 0) continue; // already on/past this tile — committed, can't undo
         const cell = level[tileId];
-        if (!cell || !isLevelCrossing(cell)) continue;
+        const onCrossing = !!cell && isLevelCrossing(cell);
+        const onBox = !!cell && isRoadJunction(cell.road);
+        if (!onCrossing && !onBox) continue;
         const farEdge = lead + 1; // the crossing tile spans [lead, lead+1]
-        if (clear > lead && clear - car.length < farEdge) {
-          clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
+        if (!(clear > lead && clear - car.length < farEdge)) continue;
+        // Junction boxes get the same rule ("don't block the box") — but only
+        // when resting in the box would actually BLOCK someone: a waiting or
+        // active movement from another arm that conflicts with ours. Plain
+        // queueing through an empty-cross-traffic junction (a carousel loop,
+        // a right-turn-only cross) keeps flowing bumper-to-bumper as before.
+        // And a car already held back for a while enters anyway — when space
+        // is scarce everywhere (saturated ring), insisting on an empty box
+        // would itself gridlock the loop.
+        if (onBox && !onCrossing) {
+          if (car.waitSeconds > BOX_KEEP_CLEAR_PATIENCE) continue;
+          const pairs = junctionConflicts.get(tileId);
+          if (!pairs) continue;
+          const jCoord = parseJunctionCoord(tileId);
+          const myExit =
+            carExitAt(car, jCoord) ?? roadExitPort(level, jCoord, keepEntry, clsOf(car));
+          if (myExit === null) continue;
+          const me = { entryArm: keepEntry, exitArm: myExit, lane: laneOf(car), cls: clsOf(car) };
+          const conflicts = junctionConflictFn(tileId);
+          const blocked = [
+            ...activeMovementsAt(tileId),
+            ...waitingCarsAt(tileId, car),
+          ].some(m => m.entryArm !== keepEntry && conflicts(me, m));
+          if (!blocked) continue;
         }
+        clear = Math.min(clear, Math.max(0, lead - CAR_GAP));
       }
     }
     const finalClear = Math.max(0, Math.min(clear, CAR_LOOKAHEAD));
@@ -1680,8 +1717,42 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         break;
       }
       const nextEntry = oppositePort(exitPort);
-      const nextExit =
+      let nextExit =
         carExitAtConsume(car, nextCoord) ?? roadExitPort(level, nextCoord, nextEntry, cls);
+      // LANE DISCIPLINE at a junction: the turn-lane pre-sorting (F) is a
+      // wish, not a guarantee — in traffic a car can reach the junction in a
+      // lane that doesn't permit its planned movement (the gap for the lane
+      // change never opened). A real driver doesn't swerve across the box:
+      // they MISS the turn, take a movement their lane allows (straight when
+      // possible), and re-plan the route from there.
+      if (nextExit !== null && isRoadJunction(nextTile.road)) {
+        const approachCount = laneCount(nextTile.road, nextEntry);
+        const myLane = Math.max(0, Math.min(laneOf(car), approachCount - 1));
+        const allowed = lanesAllowingExitFor(nextTile.road, nextEntry, nextExit, cls);
+        if (allowed.length > 0 && !allowed.includes(myLane)) {
+          const myExits = usableExits(nextTile.road, nextEntry, cls).filter(p =>
+            lanesAllowingExitFor(nextTile.road, nextEntry, p, cls).includes(myLane),
+          );
+          if (myExits.length > 0) {
+            const straightOn = oppositePort(nextEntry);
+            nextExit = myExits.includes(straightOn) ? straightOn : myExits[0];
+            // The remaining plan assumed the missed turn — re-plan from the
+            // tile beyond the junction along the detour.
+            const onward = neighborCoord(nextCoord, nextExit);
+            if (onward) {
+              const replan = planRoute(
+                level, onward, oppositePort(nextExit), allMapExits, routeRng, cls,
+              );
+              car.routePlan = replan.turns;
+              car.routeStep = 0;
+              if (replan.destination) car.destination = replan.destination;
+            } else {
+              car.routePlan = [];
+              car.routeStep = 0;
+            }
+          }
+        }
+      }
       car.path.push({ coord: nextCoord, entryPort: nextEntry, exitPort: nextExit });
       const prevRoad = level[getCoordinatesId(head.coord)]?.road; // the tile we leave
       const nextLaneCount = laneCount(nextTile.road, nextEntry);

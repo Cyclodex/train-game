@@ -282,7 +282,7 @@ import {
   cycleJunctionSignalMode,
   toggleLaneKind,
   setLaneKindRun,
-  syncJunctionBusGatesAround,
+  syncJunctionLanesAround,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -745,11 +745,12 @@ class EditorView extends Vue {
     this.syncBusGates([id]);
     this.persist();
   }
-  // Re-derive the busTo gates of every junction around `ids` and write the
+  // Re-derive every junction around `ids` — car lane movements from the
+  // arms' widths (capacity rule) first, busTo gates second — and write the
   // changed cells straight into the level (not via commit — no recursion).
   syncBusGates(ids: string[]) {
-    const gates = syncJunctionBusGatesAround(this.level, ids);
-    for (const [gid, gcell] of Object.entries(gates)) this.level[gid] = gcell;
+    const synced = syncJunctionLanesAround(this.level, ids);
+    for (const [gid, gcell] of Object.entries(synced)) this.level[gid] = gcell;
   }
 
   // Lay every connection of the route from `from` to `to`. For the first

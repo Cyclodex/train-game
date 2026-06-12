@@ -11,7 +11,7 @@ import {
   parseCoordId,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
-import { isRoadJunction, lanesFrom } from "@/tiles/lanes";
+import { isRoadJunction, lanesFrom, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -549,6 +549,175 @@ export function syncJunctionBusGatesAround(
     if (!cell) continue;
     const synced = syncJunctionBusGates(level, id);
     if (synced !== cell) out[id] = synced;
+  }
+  return out;
+}
+
+// --- Junction lane capacity ------------------------------------------------
+// Derives WHICH lanes of a junction approach may turn where, from the
+// receiving arms' widths (the real-world rule: never more turning lanes toward
+// a destination than it has receiving lanes; everything lane-true). Design:
+// docs/superpowers/specs/2026-06-12-junction-lane-capacity-design.md
+//
+// Like syncJunctionBusGates this is DERIVED state: the editor re-runs it on
+// every road edit and on load, so junction movements always match the streets
+// around them. It only re-distributes the exits an approach already reaches
+// (the union of to+busTo over its lanes), so intentionally removed movements
+// stay removed. Bus lanes are untouched; capacities count CAR lanes (a
+// bus-only arm falls back to its total so the bus-gate sync can demote the
+// movement to busTo right after).
+
+function carLanesFrom(road: Lane[], from: Port): Lane[] {
+  return road
+    .filter(l => l.from === from && l.kind !== "bus")
+    .sort((a, b) => a.index - b.index); // 0 = kerb side
+}
+
+function receivingCarCapacity(level: Level, id: string, exit: Port): number {
+  const coord = parseCoordId(id);
+  const nc = neighborCoord(coord, exit);
+  const n = nc ? level[getCoordinatesId(nc)] : undefined;
+  if (n?.road?.length) {
+    const receiving = lanesFrom(n.road, oppositePort(exit));
+    if (receiving.length > 0) {
+      const cars = receiving.filter(l => l.kind !== "bus").length;
+      return cars > 0 ? cars : receiving.length; // bus-only arm: gate sync demotes after
+    }
+  }
+  // No neighbour street (map edge): the junction's own opposing approach is
+  // the best width estimate; a one-way outbound arm has none, assume 1.
+  const own = (level[id]?.road ?? []).filter(l => l.from === exit && l.kind !== "bus").length;
+  return own > 0 ? own : 1;
+}
+
+export function deriveJunctionCarLanes(level: Level, id: string): TileCell {
+  const cell = level[id];
+  if (!cell?.road || !isRoadJunction(cell.road)) return cell;
+  let changed = false;
+  const next: Lane[] = [];
+  for (const lane of cell.road) if (lane.kind === "bus") next.push(lane);
+  for (const from of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
+    const lanes = carLanesFrom(cell.road, from);
+    const N = lanes.length;
+    if (N === 0) continue;
+    // The exits this approach reaches today (to + busTo union) — we only
+    // re-distribute them across lanes, never invent or drop an arm.
+    const allowed = new Set<Port>();
+    for (const l of lanes) {
+      for (const p of l.to) allowed.add(p);
+      for (const p of l.busTo ?? []) allowed.add(p);
+    }
+    allowed.delete(from);
+    const straightExit = oppositePort(from);
+    const S: Port | null = allowed.has(straightExit) ? straightExit : null;
+    let L: Port | null = null;
+    let R: Port | null = null;
+    for (const p of allowed) {
+      if (p === straightExit) continue;
+      if (turnKind(from, p) === "right") R = p;
+      else L = p;
+    }
+    const assign: Port[][] = lanes.map(() => []);
+    if (N === 1) {
+      // A single lane gets every present movement (nearest-lane landings).
+      assign[0] = [...allowed];
+    } else {
+      const cR = R !== null ? receivingCarCapacity(level, id, R) : 0;
+      const cL = L !== null ? receivingCarCapacity(level, id, L) : 0;
+      const cS = S !== null ? receivingCarCapacity(level, id, S) : 0;
+      // Dedicated turn blocks: expand into receiving capacity but always
+      // leave one lane per other movement; the max(1,..) floor marks a SHARED
+      // lane when the approach is too narrow for a dedicated one.
+      const nR = R !== null
+        ? Math.min(N, Math.max(1, Math.min(cR, N - (L !== null ? 1 : 0) - (S !== null ? 1 : 0))))
+        : 0;
+      const nL = L !== null
+        ? Math.min(N - nR, Math.max(1, Math.min(cL, N - nR - (S !== null ? 1 : 0))))
+        : 0;
+      for (let i = 0; i < nR; i++) assign[i].push(R as Port);
+      for (let i = 0; i < nL; i++) assign[N - 1 - i].push(L as Port);
+      if (S !== null) {
+        // Straight: the middle block, kerb-side priority, capped at cS.
+        let straights = 0;
+        for (let i = nR; i <= N - 1 - nL && straights < cS; i++) {
+          assign[i].push(S);
+          straights++;
+        }
+        // A single right lane shares S+R (the standard kerb marking); dual
+        // right turns stay exclusive (real dual-turn signage).
+        if (nR === 1 && straights < cS) {
+          assign[0].push(S);
+          straights++;
+        }
+        // Small approaches (<=2 lanes) may share the inner lane L+S; on >=3
+        // lanes the inner lane is LEFT-ONLY (a waiting left-turner must not
+        // block a through lane).
+        if (N <= 2 && nL >= 1 && straights < cS) {
+          assign[N - 1].push(S);
+          straights++;
+        }
+      }
+      // No lane may end up unable to move: widen turns into leftover
+      // capacity, else overflow straight (the validator's business).
+      for (let i = 0; i < N; i++) {
+        if (assign[i].length > 0) continue;
+        if (L !== null && assign.filter(a => a.includes(L as Port)).length < cL) assign[i].push(L as Port);
+        else if (R !== null && assign.filter(a => a.includes(R as Port)).length < cR) assign[i].push(R as Port);
+        else if (S !== null) assign[i].push(S);
+        else if (L !== null) assign[i].push(L as Port);
+        else if (R !== null) assign[i].push(R as Port);
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      const lane = lanes[i];
+      const to = assign[i];
+      const same =
+        lane.to.length === to.length &&
+        to.every(p => lane.to.includes(p)) &&
+        !(lane.busTo?.length);
+      if (!same) changed = true;
+      const rebuilt: Lane = { from: lane.from, to, index: lane.index };
+      if (lane.kind) rebuilt.kind = lane.kind;
+      next.push(same ? lane : rebuilt);
+    }
+  }
+  return changed ? { ...cell, road: next } : cell;
+}
+
+// Derive + re-gate every junction in `ids` and their direct neighbours.
+// Replaces syncJunctionBusGatesAround as the editor's one-stop sync: car
+// movements first (from arm widths), bus gates second (reading the result).
+export function syncJunctionLanesAround(
+  level: Level,
+  ids: string[],
+): Record<string, TileCell> {
+  const candidates = new Set<string>(ids);
+  for (const id of ids) {
+    const coord = parseCoordId(id);
+    for (const p of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
+      const nc = neighborCoord(coord, p);
+      if (nc) candidates.add(getCoordinatesId(nc));
+    }
+  }
+  const out: Record<string, TileCell> = {};
+  const work: Level = { ...level };
+  for (const id of candidates) {
+    const cell = work[id];
+    if (!cell) continue;
+    const derived = deriveJunctionCarLanes(work, id);
+    if (derived !== cell) {
+      work[id] = derived;
+      out[id] = derived;
+    }
+  }
+  for (const id of candidates) {
+    const cell = work[id];
+    if (!cell) continue;
+    const gated = syncJunctionBusGates(work, id);
+    if (gated !== cell) {
+      work[id] = gated;
+      out[id] = gated;
+    }
   }
   return out;
 }

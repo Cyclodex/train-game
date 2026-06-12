@@ -89,7 +89,7 @@ describe("signalised road junction — cars obey the lights", () => {
     }
     // The gate must not have frozen the junction: cars kept crossing (go on green).
     expect(entries).toBeGreaterThan(10);
-  });
+  }, 30000); // heavy sim loop — runs ~4.5s alone, over 5s under full-suite load
 
   it("an off junction reports no aspect (the gate is inert)", () => {
     const sim = createRoadSim({
