@@ -29,13 +29,19 @@ movements Left / Straight / Right with receiving capacities `cL / cS / cR`
    `nL = L ? max(1, min(cL, N − nR − (S?1:0))) : 0`
    The inner-most `nL` lanes turn left, lane-true (inner→inner receiving).
    Floored single left shares with straight (inner = L+S) **only when N ≤ 2**
-   — on N ≥ 3 approaches the inner lane is LEFT-ONLY (classic big-junction
-   rule: a waiting left-turner must not block a through lane).
+   — on N ≥ 3 approaches the inner-most lane is a dedicated LEFT pocket
+   (classic big-junction rule: a waiting left-turner must not block a through
+   lane). A DUAL left (`nL ≥ 2`) shares straight onto the left lane CLOSEST to
+   the straight block (index `N − nL`, the middle lane of a 3L→2L approach),
+   mirroring the dual-right share — two through lanes survive, the inner-most
+   stays the dedicated left pocket.
 3. **Straight block:** the middle lanes between the blocks go straight,
    lane-true from the kerb side (kerb→kerb, index→index), capped at `cS`
-   (kerb-side priority when dropping). Additionally the kerb S+R share from
-   rule 1 applies only when `nR == 1` — dual right turns (`nR ≥ 2`) are
-   exclusive, no straight share (real dual-turn signage).
+   (kerb-side priority when dropping). Additionally the right-turn lane
+   CLOSEST to the straight block (index `nR − 1`) shares S+R when straight
+   capacity remains — for a single right turn that is the kerb lane, for a
+   DUAL right turn it is the inner of the two right lanes (the middle lane of
+   a 3L→2L approach), so two through lanes survive instead of one.
 4. **Fan-out (1L approach / nearest-lane rule):** a movement always lands in
    its nearest receiving lane — right→kerb-most, left→inner-most,
    straight→kerb-aligned index. Wider destinations leave their middle lanes
@@ -51,7 +57,8 @@ movements Left / Straight / Right with receiving capacities `cL / cS / cR`
 | 2L | S(2) R(1) | inner = S · kerb = S+R |
 | 2L cross | L(1) S(2) R(1) | inner = L+S · kerb = S+R |
 | 2L cross | L(1) S(1) R(1) | inner = L · kerb = S+R |
-| 3L T | S(3) R(2) | inner = S · mid = R · kerb = R (dual right, lane-true) |
+| 3L T | S(3) R(2) | inner = S · mid = R+S · kerb = R (dual right, mid shares straight) |
+| 3L T | L(2) S(3) | inner = L · mid = L+S · kerb = S (dual left, mid shares straight) |
 | 3L cross | L(any) S(≥2) R(1) | inner = L only · mid = S · kerb = S+R (single left even if cL ≥ 2) |
 | 1L → nL | any | the single lane gets all present movements, nearest-lane landings |
 

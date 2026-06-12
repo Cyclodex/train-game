@@ -82,7 +82,7 @@ describe("deriveJunctionCarLanes (junction lane capacity)", () => {
     expect(toSet(out, Left, 0)).toEqual(new Set([Right, Bottom])); // kerb: S+R
   });
 
-  it("3L T with right 2L: inner=S, mid=R, kerb=R (dual right, exclusive)", () => {
+  it("3L T with right 2L: inner=S, mid=R+S, kerb=R (dual right, mid shares straight)", () => {
     const level: Level = {
       "1,1": {
         connections: [],
@@ -94,8 +94,28 @@ describe("deriveJunctionCarLanes (junction lane capacity)", () => {
     };
     const out = deriveJunctionCarLanes(level, "1,1");
     expect(toSet(out, Left, 2)).toEqual(new Set([Right])); // inner: straight only
-    expect(toSet(out, Left, 1)).toEqual(new Set([Bottom])); // mid: right only
+    expect(toSet(out, Left, 1)).toEqual(new Set([Bottom, Right])); // mid: R+S (shares straight)
     expect(toSet(out, Left, 0)).toEqual(new Set([Bottom])); // kerb: right only
+  });
+
+  it("3L T with left 2L: inner=L, mid=L+S, kerb=S (dual left, mid shares straight)", () => {
+    // Mirror of the dual-right case: from Left, the side arm is on Top, which
+    // is a LEFT turn. Receiving 2L -> dual left (nL=2). The inner-most lane is
+    // a dedicated left pocket; the middle left lane shares L+S so two through
+    // lanes survive (the user-requested relax, symmetric to dual right).
+    const level: Level = {
+      "1,1": {
+        connections: [],
+        road: [...allTo(Left, [Top, Right], 3), ...allTo(Right, [Left], 3)],
+      },
+      "0,1": street(Left, Right, 3),
+      "2,1": street(Left, Right, 3),
+      "1,0": street(Top, Bottom, 2), // left dest 2L
+    };
+    const out = deriveJunctionCarLanes(level, "1,1");
+    expect(toSet(out, Left, 2)).toEqual(new Set([Top])); // inner: left only (pocket)
+    expect(toSet(out, Left, 1)).toEqual(new Set([Top, Right])); // mid: L+S (shares straight)
+    expect(toSet(out, Left, 0)).toEqual(new Set([Right])); // kerb: straight only
   });
 
   it("3L cross: inner=L only (even with left cap 2), mid=S, kerb=S+R", () => {

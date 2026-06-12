@@ -663,17 +663,28 @@ export function deriveJunctionCarLanes(
           assign[i].push(S);
           straights++;
         }
-        // A single right lane shares S+R (the standard kerb marking); dual
-        // right turns stay exclusive (real dual-turn signage).
-        if (nR === 1 && straights < cS) {
-          assign[0].push(S);
+        // The right-turn lane CLOSEST to the straight block shares S+R (the
+        // standard kerb marking) when straight capacity remains. For a single
+        // right lane that is the kerb lane (index 0); for a DUAL right turn it
+        // is the inner of the two right lanes (index nR-1, the middle lane of a
+        // 3L→2L approach), so two through lanes survive instead of one.
+        if (nR >= 1 && straights < cS) {
+          assign[nR - 1].push(S);
           straights++;
         }
         // Small approaches (<=2 lanes) may share the inner lane L+S; on >=3
-        // lanes the inner lane is LEFT-ONLY (a waiting left-turner must not
-        // block a through lane).
+        // lanes the inner-most lane is a dedicated LEFT pocket (a waiting
+        // left-turner must not block a through lane).
         if (N <= 2 && nL >= 1 && straights < cS) {
           assign[N - 1].push(S);
+          straights++;
+        }
+        // Dual left turn (nL >= 2), mirror of the dual-right share: the left
+        // lane CLOSEST to the straight block (index N-nL, the middle lane of a
+        // 3L→2L approach) shares L+S, so two through lanes survive. The
+        // inner-most left lane stays a dedicated left pocket (above rule).
+        if (nL >= 2 && straights < cS) {
+          assign[N - nL].push(S);
           straights++;
         }
       }
