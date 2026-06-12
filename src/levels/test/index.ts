@@ -66,6 +66,22 @@ import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { daily } from "@/levels/test/scenarios/daily";
+import { syncJunctionLanesAround } from "@/tiles/editOps";
+
+// Every scenario level passes through the same junction sync the editor runs
+// on save/load: car-lane movements derived from the arms' widths (the
+// receiving-capacity rule), busTo gates second. Hand-authored maps thereby
+// always match what the editor would build, and the /test gallery doubles as
+// a visual regression test of the derivation. Movements an author removed
+// stay removed (the derivation only re-distributes exits a lane already
+// reaches — see docs/superpowers/specs/2026-06-12-junction-lane-capacity-design.md).
+function deriveJunctions(s: TestScenario): TestScenario {
+  const level = { ...s.level };
+  const changed = syncJunctionLanesAround(level, Object.keys(level));
+  if (Object.keys(changed).length === 0) return s;
+  for (const [id, cell] of Object.entries(changed)) level[id] = cell;
+  return { ...s, level };
+}
 
 // The feature test world is a three-level tree: domain → category → scenario,
 // rendered as a drill-down gallery at /test (see TestView.vue). Add a new feature
@@ -155,6 +171,14 @@ export const DOMAINS: ScenarioDomain[] = [
 
 // Flat registry, in picker order. Kept for lookup-by-id and the validation test
 // that iterates every scenario; derived from the tree so there's one source.
+// Apply the junction derivation to every scenario in the tree (in place, so
+// the picker tree and the flat registry agree).
+for (const d of DOMAINS) {
+  for (const c of d.categories) {
+    c.scenarios = c.scenarios.map(deriveJunctions);
+  }
+}
+
 export const SCENARIOS: TestScenario[] = DOMAINS.flatMap(d => d.categories).flatMap(
   c => c.scenarios
 );
