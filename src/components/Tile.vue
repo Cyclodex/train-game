@@ -646,9 +646,16 @@ class Tile extends Vue {
       // 3L T-junction bug: westbound band sat mid-road, eastbound was fine).
       const selfBand = this.positioningBandAt(coord, lane.from);
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      let hasStraight = false;
       for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
+        hasStraight = true;
         out.push(roadLaneBandPath(lane.from, to, size, off, half));
+      }
+      // Junction turning-only bus arm: draw a half-stub from the arm seam to
+      // the tile centre so the gold visually connects with the adjacent bus road.
+      if (!hasStraight && isRoadJunction(road)) {
+        out.push(roadLaneBandPath(lane.from, Position.Center, size, off, half));
       }
     }
     return out;
