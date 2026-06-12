@@ -736,16 +736,23 @@ class Tile extends Vue {
       // present); a one-way turn has no centre divider.
       const turn: LaneMarkingPath[] = [];
       if (ab && ba) turn.push({ d: laneSegmentPathD(a, b, size, 0, 0), kind: "centre" });
-      // Then a WHITE DASHED guide per ALLOWED turning movement, on the
-      // lane-to-lane fillet the cars actually drive (the same corner-fillet
-      // path) — like the painted turn-guide lines in a real intersection. Only
-      // for movements a lane permits; none where the turn is disallowed.
-      for (const [from, to] of [
-        [a, b],
-        [b, a],
-      ] as [Position, Position][]) {
-        const m = moves.get(from);
-        if (m) turn.push({ d: laneSegmentPathD(from, to, size, m.offEntry, m.offExit), kind: "inner" });
+      // Then a WHITE DASHED guide per ALLOWED turning movement — like the
+      // painted turn-guide lines in a real intersection. Only for movements a
+      // lane permits; none where the turn is disallowed. And only when an arm
+      // is MULTI-lane: a 1L↔1L corner has a single stream per direction with
+      // nothing to guide into — the yellow divider says it all.
+      // The guide continues the lane's RIGHT dashed divider line through the
+      // turn (real paint extends the lane EDGE, not the lane centre), so shift
+      // the driving fillet half a lane right-of-travel.
+      if (laneCount(road, a) > 1 || laneCount(road, b) > 1) {
+        const edge = 0.5 * LANE_WIDTH_PX_FRAC * size;
+        for (const [from, to] of [
+          [a, b],
+          [b, a],
+        ] as [Position, Position][]) {
+          const m = moves.get(from);
+          if (m) turn.push({ d: laneSegmentPathD(from, to, size, m.offEntry + edge, m.offExit + edge), kind: "inner" });
+        }
       }
       return turn;
     }
