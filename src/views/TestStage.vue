@@ -41,7 +41,7 @@
 
     <div
       class="level"
-      :style="{ width: cols * config.tileSize + 'px' }"
+      :style="{ gridTemplateColumns: `repeat(${cols}, ${config.tileSize}px)`, width: cols * config.tileSize + 'px' }"
       @click="onBackgroundClick"
     >
       <Train
@@ -339,9 +339,8 @@ export default toNative(TestStage);
   font-weight: 600;
 }
 .level {
-  display: flex;
+  display: grid;
   border: 1px solid green;
-  flex-wrap: wrap;
   position: relative;
 }
 .level-tile {

@@ -74,7 +74,7 @@
     <div class="world">
     <div
       class="level editor-grid"
-      :style="{ width: config.tileSize * gridCols + 'px' }"
+      :style="{ gridTemplateColumns: `repeat(${gridCols}, ${config.tileSize}px)`, width: config.tileSize * gridCols + 'px' }"
       @mouseup="pressFrom = null"
       @mouseleave="pressFrom = null"
     >
@@ -1082,8 +1082,7 @@ export default toNative(EditorView);
 
 <style lang="scss" scoped>
 .level {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   margin: 0 auto;
   position: relative;
   border: 1px solid green;
