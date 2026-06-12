@@ -83,6 +83,19 @@
           <path :d="arr.head" class="road-drop-arrow-head" />
         </template>
       </template>
+      <!-- Per-lane direction arrows: white road arrows on a straight tile that
+           feeds a junction, showing each lane's permitted turns (↑ ↰ ↱). Only
+           painted when the lanes are sorted (their movement sets differ). -->
+      <template v-for="(arr, ai) in laneDirectionArrows" :key="'lda' + ai">
+        <path :d="arr.shaft" class="road-lane-arrow" :class="{ 'road-lane-arrow--bus': arr.bus }" />
+        <path
+          v-for="(h, hi) in arr.heads"
+          :key="'ldah' + ai + '_' + hi"
+          :d="h"
+          class="road-lane-arrow"
+          :class="{ 'road-lane-arrow--bus': arr.bus }"
+        />
+      </template>
     </svg>
 
     <!-- Lane graph debug overlay: directed arrows from port→port for each road
@@ -183,27 +196,39 @@
       />
     </svg>
 
-    <!-- Road-junction traffic signals (#38): one head per approach arm, coloured
-         by that arm's current aspect; a small chip shows the live mode. Clicking
-         either cycles the mode live in play (off → two-phase → +bus → round-robin
-         → +bus → off), mirroring the junction-switch's live toggle. -->
+    <!-- Road-junction traffic signals (#38): per-lane signal heads on a dark
+         gantry bar, with a white stop line across each signalised approach. One
+         head per incoming LANE (a bus lane gets its own, lit by the transit
+         aspect during a head start). A small chip shows the live mode; clicking
+         any of it cycles the mode live (off → two-phase → +bus → round-robin →
+         +bus → off), mirroring the junction-switch's live toggle. -->
     <template v-if="config.roads && tileIsRoadJunction">
-      <div
-        v-for="h in roadSignalHeads"
-        :key="'rsig' + h.arm"
-        class="road-signal"
-        :class="`road-signal--${h.arm}`"
+      <svg
+        v-if="roadSignalArms.length"
+        class="road-layer road-signal-layer"
+        :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
         @click.stop="cycleRoadSignal"
       >
-        <span class="road-signal-lens road-signal-lens--red"   :class="{ 'road-signal-lens--lit': h.aspect === 'red' }" />
-        <span class="road-signal-lens road-signal-lens--amber" :class="{ 'road-signal-lens--lit': h.aspect === 'amber' }" />
-        <span class="road-signal-lens road-signal-lens--green" :class="{ 'road-signal-lens--lit': h.aspect === 'green' }" />
-        <span
-          v-if="h.busAspect"
-          class="road-signal-lens road-signal-lens--transit"
-          :class="{ 'road-signal-lens--lit': h.busAspect === 'green' }"
-        >B</span>
-      </div>
+        <template v-for="(arm, ai) in roadSignalArms" :key="'rsa' + ai">
+          <path :d="arm.stopLine" class="road-stop-line" />
+          <path :d="arm.gantry" class="road-signal-gantry" />
+          <g
+            v-for="(h, hi) in arm.heads"
+            :key="'rsh' + ai + '_' + hi"
+            :transform="`translate(${h.cx} ${h.cy}) rotate(${h.angle})`"
+          >
+            <rect
+              class="road-signal-housing"
+              :class="{ 'road-signal-housing--bus': h.bus }"
+              x="-8.5" y="-4" width="17" height="8" rx="2"
+            />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-red':   h.aspect === 'red' }"   cx="-4.5" cy="0" r="2.4" />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-amber': h.aspect === 'amber' }" cx="0"    cy="0" r="2.4" />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-green': h.aspect === 'green' }" cx="4.5"  cy="0" r="2.4" />
+            <circle v-if="h.bus" class="road-signal-bus-dot" cx="7" cy="-6.4" r="1.6" />
+          </g>
+        </template>
+      </svg>
       <div
         class="road-signal-chip"
         :class="{ 'road-signal-chip--off': !roadSignalActive }"
@@ -273,9 +298,13 @@ import {
   laneDropGore,
   oneWayClosingGore,
   oneWayMergeArrowPath,
+  junctionApproachSignalGeom,
+  laneDirectionArrowPath,
+  classifyMove,
   LaneMarkingPath,
   MergeArrowPath,
   LaneDropGore,
+  LaneMove,
 } from "@/tiles/roadGeometry";
 import {
   roadEdges,
@@ -286,10 +315,10 @@ import {
   seamMismatch,
   isRoadJunction,
   turnKind,
+  lanesFrom,
   laneAllExits,
   roadPortsOf,
   approachPortsOf,
-  busLaneIndices,
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -1017,26 +1046,104 @@ class Tile extends Vue {
   get roadSignal() {
     return this.game.roadSignals?.[this.coordId] ?? this.tile.signal;
   }
-  // One head per approach arm, coloured by that arm's live aspect. Only shown when
-  // the running game is driving live aspects (in the editor there is no phase
-  // clock, so the chip alone indicates the authored mode).
-  get roadSignalHeads(): { arm: Position; aspect: string; busAspect?: string }[] {
+  // Per approach arm: the white stop line, the dark gantry bar and one signal
+  // head per incoming lane (a bus lane's head is lit by the transit aspect during
+  // a head start). Only shown when the running game is driving live aspects (in
+  // the editor there is no phase clock, so the chip alone indicates the mode).
+  get roadSignalArms(): {
+    stopLine: string;
+    gantry: string;
+    heads: { cx: number; cy: number; angle: number; aspect: string; bus: boolean }[];
+  }[] {
     const sig = this.game.roadSignals?.[this.coordId];
-    if (!sig) return [];
-    return approachPortsOf(this.tile.road).map(arm => {
-      const head: { arm: Position; aspect: string; busAspect?: string } = {
-        arm,
-        aspect: this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red",
-      };
-      // The separate TRANSIT lens: only with bus priority, and only on arms
-      // that actually carry a bus lane. During the head start it is green
-      // while the car lenses still show red — the bus pulls away first.
-      if (sig.busPriority && busLaneIndices(this.tile.road, arm).length > 0) {
-        head.busAspect =
-          this.game.roadSignalAspects?.[`${this.coordId}:${arm}:bus`] ?? "red";
+    const road = this.tile.road;
+    if (!sig || !road) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const out: {
+      stopLine: string;
+      gantry: string;
+      heads: { cx: number; cy: number; angle: number; aspect: string; bus: boolean }[];
+    }[] = [];
+    for (const arm of approachPortsOf(road)) {
+      const lanes = lanesFrom(road, arm).map(l => ({
+        index: l.index,
+        kind: (l.kind === "bus" ? "bus" : "all") as "all" | "bus",
+      }));
+      if (!lanes.length) continue;
+      const band = this.positioningBandAt(coord, arm);
+      const geom = junctionApproachSignalGeom(arm, size, band, lanes);
+      const carAspect = this.game.roadSignalAspects?.[`${this.coordId}:${arm}`] ?? "red";
+      const busAspect = this.game.roadSignalAspects?.[`${this.coordId}:${arm}:bus`];
+      out.push({
+        stopLine: geom.stopLine,
+        gantry: geom.gantry,
+        heads: geom.heads.map(h => ({
+          cx: h.cx,
+          cy: h.cy,
+          angle: h.angle,
+          bus: h.kind === "bus",
+          // A bus-lane head follows its own transit aspect when one is published
+          // (bus priority / head start); otherwise it tracks the arm's aspect.
+          aspect: h.kind === "bus" && busAspect ? busAspect : carAspect,
+        })),
+      });
+    }
+    return out;
+  }
+
+  // White per-lane direction arrows on a STRAIGHT road tile that feeds a junction:
+  // each incoming lane is painted with the turns its downstream junction lane
+  // permits (↑ ↰ ↱). Painted only when the lanes are SORTED — the lanes' movement
+  // sets differ — so plain "any lane, any turn" roads stay clean (no confetti),
+  // matching how real roads only mark dedicated turn lanes. Mirrors the lane-drop
+  // arrows: guidance on the approach tile, one tile ahead of the junction.
+  get laneDirectionArrows(): { shaft: string; heads: string[]; bus: boolean }[] {
+    const road = this.tile.road;
+    if (!this.config.roads || !road?.length) return [];
+    // Only straight road tiles carry these (the lane-arrow approach geometry is
+    // straight); a junction or curve is skipped.
+    if (isRoadJunction(road)) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const out: { shaft: string; heads: string[]; bus: boolean }[] = [];
+
+    for (const [a, b] of roadEdges(road)) {
+      if (oppositePort(a) !== b) continue; // straight edges only
+      for (const [entry, exit] of [[a, b], [b, a]] as [Position, Position][]) {
+        const nb = neighborCoord(coord, exit);
+        if (!nb || !this.game.roadIsJunctionAt(nb)) continue;
+        const jRoad = this.game.roadAt?.(nb);
+        if (!jRoad) continue;
+        const jEntry = oppositePort(exit); // the port the car enters the junction by
+        // Each incoming lane's movement set at the junction ahead, by lane index.
+        const byIndex = new Map<number, LaneMove[]>();
+        for (const jl of lanesFrom(jRoad, jEntry)) {
+          const moves: LaneMove[] = [];
+          for (const e of laneAllExits(jl)) {
+            const m = classifyMove(exit, e);
+            if (m && !moves.includes(m)) moves.push(m);
+          }
+          if (moves.length) byIndex.set(jl.index, moves);
+        }
+        if (byIndex.size < 2) continue; // need ≥2 lanes to be "sorted"
+        // Sorted only when the lanes don't all permit the identical movement set.
+        const sig = (ms: LaneMove[]) => [...ms].sort().join(",");
+        const sigs = new Set([...byIndex.values()].map(sig));
+        if (sigs.size < 2) continue;
+
+        const band = this.positioningBandAt(coord, exit);
+        const W = LANE_WIDTH_PX_FRAC * size;
+        for (const [index, moves] of byIndex) {
+          // This tile must actually carry that lane in this travel direction.
+          if (!lanesFrom(road, entry).some(l => l.index === index)) continue;
+          const off = (band - 0.5 - index) * W;
+          const { shaft, heads } = laneDirectionArrowPath(entry, exit, size, off, moves);
+          out.push({ shaft, heads, bus: false });
+        }
       }
-      return head;
-    });
+    }
+    return out;
   }
   // Whether this road junction is currently signalised (a mode other than off).
   get roadSignalActive(): boolean {
@@ -1275,6 +1382,19 @@ export default toNative(Tile);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* Per-lane direction arrows (lane-turn guidance) painted on a straight approach
+   tile: same slim white open-chevron style as the lane-drop arrows. A bus-lane
+   arrow is tinted amber to match the bus-lane band / debug arrows. */
+.road-lane-arrow {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 2.2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.road-lane-arrow--bus {
+  stroke: rgba(255, 179, 64, 0.95);
+}
 
 /* --- signals (from TileStraight.vue) --- */
 .signal {
@@ -1305,81 +1425,53 @@ $signal-offset: 20px;
 }
 
 /* --- road-junction traffic signals (#38) --- */
-// Black housing containing three stacked lenses (R/A/G). Each head sits at
-// the stop-line of its arm, offset to the right-hand incoming lane
-// (right-hand traffic: right of travel = kerb side). One lane = 14% of
-// tileSize, so lane centre is 7% from tile centre; signal (5px half-width)
-// centre sits at 50% ± 12px.
-.road-signal {
+/* Per-lane signal heads live in an SVG overlay sized to the tile, so each head
+   sits exactly on the lane its cars drive. A dark gantry bar threads the heads
+   of an arm together; a solid white stop line is painted across the approach. */
+.road-signal-layer {
   position: absolute;
+  inset: 0;
   z-index: 15;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  width: 10px;
-  height: 28px;
-  background: #111;
-  border: 1px solid #444;
-  border-radius: 3px;
-  padding: 3px 2px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  overflow: visible;
 }
-.road-signal-lens {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.road-signal-layer > * { pointer-events: auto; cursor: pointer; }
+/* Solid white stop bar across the incoming lanes. */
+.road-stop-line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 6px;
+  stroke-linecap: butt;
 }
-.road-signal-lens--red   { background: #3a0000; }
-.road-signal-lens--amber { background: #1e1000; }
-.road-signal-lens--green { background: #001400; }
-.road-signal-lens--lit.road-signal-lens--red   { background: #ff3b30; box-shadow: 0 0 5px #ff3b30; }
-.road-signal-lens--lit.road-signal-lens--amber { background: #ffcc00; box-shadow: 0 0 5px #ffcc00; }
-.road-signal-lens--lit.road-signal-lens--green { background: #34c759; box-shadow: 0 0 5px #34c759; }
-/* The separate transit (bus) lens: a tiny "B" below the car lenses. Lit white-
-   green during the bus head start / green; dark otherwise. */
-.road-signal-lens--transit {
-  background: #101010;
-  color: #444;
-  font-size: 5px;
-  line-height: 6px;
-  text-align: center;
-  font-weight: 700;
+/* The gantry: a dark grey-black bar the heads hang on. */
+.road-signal-gantry {
+  fill: #15171b;
+  stroke: #3a3f47;
+  stroke-width: 1px;
 }
-.road-signal-lens--lit.road-signal-lens--transit {
-  background: #c8f7d0;
-  color: #0a5a1f;
-  box-shadow: 0 0 5px #c8f7d0;
+/* Per-lane head: a dark rounded housing with three lenses; only the active one
+   lights. The housing is rotated to face the oncoming driver (green forward). */
+.road-signal-housing {
+  fill: #0d0e10;
+  stroke: #3a3f47;
+  stroke-width: 1px;
 }
-// N arm: near top edge, incoming lane is west of centre (cars drive south)
-.road-signal--0 {
-  top: 7%;
-  left: calc(50% - 19px);
+.road-signal-housing--bus {
+  stroke: #ffb340;
+  stroke-width: 1.4px;
 }
-// E arm: near right edge, incoming lane is north of centre (cars drive west);
-// housing rotates horizontal so lenses read along the kerb
-.road-signal--1 {
-  right: 7%;
-  top: calc(50% - 19px);
-  flex-direction: row;
-  width: 28px;
-  height: 10px;
+.road-signal-lens-svg {
+  fill: #1a1a1a;
+  stroke: #2a2a2a;
+  stroke-width: 0.5px;
 }
-// S arm: near bottom edge, incoming lane is east of centre (cars drive north)
-.road-signal--2 {
-  bottom: 7%;
-  left: calc(50% + 9px);
-}
-// W arm: near left edge, incoming lane is south of centre (cars drive east);
-// housing rotates horizontal so lenses read along the kerb
-.road-signal--3 {
-  left: 7%;
-  top: calc(50% + 9px);
-  flex-direction: row;
-  width: 28px;
-  height: 10px;
+.road-signal-lens-svg--lit-red   { fill: #ff3b30; filter: drop-shadow(0 0 2px #ff3b30); }
+.road-signal-lens-svg--lit-amber { fill: #ffcc00; filter: drop-shadow(0 0 2px #ffcc00); }
+.road-signal-lens-svg--lit-green { fill: #34c759; filter: drop-shadow(0 0 2px #34c759); }
+/* A small amber dot marking a bus-lane head. */
+.road-signal-bus-dot {
+  fill: #ffb340;
+  stroke: none;
 }
 .road-signal-chip {
   position: absolute;

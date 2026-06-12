@@ -13,6 +13,9 @@ import {
   laneDropGore,
   roadKerbEdge,
   roadCurveKerbEdge,
+  junctionApproachSignalGeom,
+  laneDirectionArrowPath,
+  classifyMove,
 } from "@/tiles/roadGeometry";
 
 describe("roadSurfacePath", () => {
@@ -477,3 +480,63 @@ describe("roadCurvePolygonPathTapered (junction turn ribbon, per-end widths)", (
   });
 });
 
+
+describe("classifyMove", () => {
+  const { Top, Right, Bottom, Left } = Position;
+  it("classifies straight / left / right / U-turn relative to the heading", () => {
+    // Heading south (exit Bottom). Right-hand traffic: right = west = Left port.
+    expect(classifyMove(Bottom, Bottom)).toBe("straight");
+    expect(classifyMove(Bottom, Left)).toBe("right");
+    expect(classifyMove(Bottom, Right)).toBe("left");
+    expect(classifyMove(Bottom, Top)).toBeNull(); // U-turn — never painted
+  });
+  it("works for every heading (north approach: right = east)", () => {
+    expect(classifyMove(Top, Top)).toBe("straight");
+    expect(classifyMove(Top, Right)).toBe("right");
+    expect(classifyMove(Top, Left)).toBe("left");
+    expect(classifyMove(Left, Top)).toBe("right"); // heading west, right = north
+    expect(classifyMove(Right, Bottom)).toBe("right"); // heading east, right = south
+  });
+});
+
+describe("junctionApproachSignalGeom", () => {
+  const { Top } = Position;
+  it("emits one head per incoming lane, kerb→centre, with the lane's kind", () => {
+    const g = junctionApproachSignalGeom(Top, 200, 3, [
+      { index: 0, kind: "bus" },
+      { index: 1, kind: "all" },
+      { index: 2, kind: "all" },
+    ]);
+    expect(g.heads).toHaveLength(3);
+    expect(g.heads.map(h => h.index)).toEqual([0, 1, 2]);
+    expect(g.heads[0].kind).toBe("bus");
+    // Top arm: incoming (southbound) lanes sit on the WEST half (x < centre 100),
+    // kerb lane (index 0) furthest from centre.
+    expect(g.heads[0].cx).toBeLessThan(g.heads[2].cx);
+    expect(g.heads.every(h => h.cx < 100)).toBe(true);
+    expect(g.heads.every(h => h.angle === 90)).toBe(true); // facing south, into the box
+  });
+  it("paints the stop line across only the incoming side (centreline → kerb)", () => {
+    const g = junctionApproachSignalGeom(Top, 200, 3, [
+      { index: 0 },
+      { index: 1 },
+      { index: 2 },
+    ]);
+    // "M <x0> <y0> L <x1> <y1>": starts at the centreline (x=100), ends at the
+    // west kerb (x<100), spanning only the incoming southbound lanes.
+    const n = g.stopLine.match(/-?\d+\.?\d*/g)!.map(Number);
+    expect(n[0]).toBeCloseTo(100, 5);
+    expect(n[2]).toBeLessThan(100);
+  });
+});
+
+describe("laneDirectionArrowPath", () => {
+  const { Top, Bottom } = Position;
+  it("draws one barbed head per movement plus a shaft", () => {
+    const a = laneDirectionArrowPath(Bottom, Top, 200, 0, ["straight"]);
+    expect(a.heads).toHaveLength(1);
+    expect(a.shaft.startsWith("M")).toBe(true);
+    const b = laneDirectionArrowPath(Bottom, Top, 200, 0, ["left", "straight", "right"]);
+    expect(b.heads).toHaveLength(3);
+  });
+});

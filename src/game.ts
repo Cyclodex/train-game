@@ -22,6 +22,7 @@ import {
   turnLandsOnBusLane,
   turnSeamBand,
   VehicleClass,
+  type Lane,
 } from "@/tiles/lanes";
 import {
   laneSeamOffsetPx,
@@ -249,6 +250,10 @@ export interface Game {
   // flagged as a lane-count mismatch — a junction fans/merges unequal arms by
   // design, on either side of the seam.
   roadIsJunctionAt(coord: Coordinates): boolean;
+  // The directed lanes of the road tile at `coord` (undefined if none). Lets the
+  // renderer read a neighbour junction's per-lane turns to paint lane-direction
+  // arrows on the approach tile.
+  roadAt(coord: Coordinates): Lane[] | undefined;
   // The widest lane count along the contiguous one-way straight run through this
   // tile in the travel direction entered via `entry`. One-way roads left-align to
   // this width (highway lane drop): the through lanes run straight and the right
@@ -1149,6 +1154,9 @@ export function createGame(
     },
     roadIsJunctionAt(coord: Coordinates): boolean {
       return isRoadJunction(level[getCoordinatesId(coord)]?.road);
+    },
+    roadAt(coord: Coordinates): Lane[] | undefined {
+      return level[getCoordinatesId(coord)]?.road;
     },
     roadOneWayRunMax(coord: Coordinates, entry: Position): number {
       return oneWayRunMaxAt(coord, entry);

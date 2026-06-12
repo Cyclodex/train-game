@@ -617,3 +617,170 @@ export function roadCurvePolygonPathTapered(
 function curvedParallelPath(entry: Port, exit: Port, size: number, d: number): string {
   return laneSegmentPathD(entry, exit, size, d, d);
 }
+
+// --- Signalised-junction markings (stop line + per-lane signal gantry) --------
+// A signalised road junction paints, on each signal-controlled approach arm:
+//   • a solid white STOP LINE across the incoming lanes, near the arm's mouth;
+//   • a dark GANTRY bar spanning those lanes just behind the stop line;
+//   • one small signal HEAD per incoming lane, centred on the lane and facing the
+//     oncoming driver (so a 3-lane arm shows three heads, not one head per arm).
+// Everything is derived from the approach port, the tile size and the per-lane
+// list (index + kind) so each head lands exactly where the lane's cars drive —
+// the same (band − 0.5 − index)·W offset the renderer uses for the cars.
+
+export type HeadLaneKind = "all" | "bus";
+
+export interface JunctionSignalHead {
+  cx: number;
+  cy: number;
+  angle: number; // travel-direction heading (deg) — rotates the head housing
+  index: number;
+  kind: HeadLaneKind;
+}
+
+export interface JunctionApproachSignalGeom {
+  stopLine: string; // white transverse bar (stroked)
+  gantry: string; // dark bar polygon (filled)
+  heads: JunctionSignalHead[];
+}
+
+export function junctionApproachSignalGeom(
+  port: Port,
+  size: number,
+  band: number,
+  lanes: { index: number; kind?: HeadLaneKind }[],
+): JunctionApproachSignalGeom {
+  const LANE_W = size * 0.14;
+  const a = portPoint(port, size);
+  const c = portPoint(Position.Center, size);
+  const dx = c.x - a.x, dy = c.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const f = { x: dx / len, y: dy / len }; // forward, into the junction box
+  const n = perpUnit(a, c); // right-of-travel
+  const r = (v: number) => Math.round(v * 100) / 100;
+
+  const offs = lanes.map(l => (band - 0.5 - l.index) * LANE_W);
+  const lo = Math.min(...offs) - 0.5 * LANE_W; // incoming side, near the centreline
+  const hi = Math.max(...offs) + 0.5 * LANE_W; // incoming side, near the kerb
+
+  // Stop line: a transverse segment across just the incoming lanes, set a short
+  // way inside the arm mouth (where cars actually stop, before the conflict box).
+  const sAlong = size * 0.3;
+  const sBase = { x: a.x + f.x * sAlong, y: a.y + f.y * sAlong };
+  const sp0 = { x: sBase.x + n.x * lo, y: sBase.y + n.y * lo };
+  const sp1 = { x: sBase.x + n.x * hi, y: sBase.y + n.y * hi };
+  const stopLine = `M ${r(sp0.x)} ${r(sp0.y)} L ${r(sp1.x)} ${r(sp1.y)}`;
+
+  // Gantry bar: a thin filled rectangle along the same transverse line, set a
+  // touch behind the stop line (toward the driver) so the heads sit on it.
+  const gAlong = sAlong - size * 0.045;
+  const gThick = size * 0.05;
+  const gBase = { x: a.x + f.x * gAlong, y: a.y + f.y * gAlong };
+  const corner = (o: number, t: number) => ({
+    x: gBase.x + n.x * o + f.x * t,
+    y: gBase.y + n.y * o + f.y * t,
+  });
+  const g0 = corner(lo, -gThick / 2), g1 = corner(hi, -gThick / 2);
+  const g2 = corner(hi, gThick / 2), g3 = corner(lo, gThick / 2);
+  const gantry =
+    `M ${r(g0.x)} ${r(g0.y)} L ${r(g1.x)} ${r(g1.y)} ` +
+    `L ${r(g2.x)} ${r(g2.y)} L ${r(g3.x)} ${r(g3.y)} Z`;
+
+  const angle = (Math.atan2(f.y, f.x) * 180) / Math.PI;
+  const heads: JunctionSignalHead[] = lanes.map((l, i) => ({
+    cx: r(gBase.x + n.x * offs[i]),
+    cy: r(gBase.y + n.y * offs[i]),
+    angle: r(angle),
+    index: l.index,
+    kind: l.kind ?? "all",
+  }));
+
+  return { stopLine, gantry, heads };
+}
+
+// --- Per-lane direction arrows (lane-turn guidance) ---------------------------
+// A car-lane direction arrow painted on a STRAIGHT road tile that approaches a
+// junction, telling the driver which movements the lane ahead permits — the
+// white road arrows real lanes carry ("↑", "↰", "↱", or combinations). Drawn in
+// the same slim white open-chevron style as the lane-drop arrows, on the exact
+// lane the cars drive (centreOff px right-of-travel). `movements` is the lane's
+// permitted turn set classified relative to the travel direction (entry→exit).
+// The arrow is a forward stem with one barbed head per movement.
+
+export type LaneMove = "left" | "straight" | "right";
+
+export function laneDirectionArrowPath(
+  entry: Port,
+  exit: Port,
+  size: number,
+  centreOff: number,
+  movements: LaneMove[],
+  alongT = 0.7,
+): { shaft: string; heads: string[] } {
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const f = { x: dx / len, y: dy / len }; // forward (travel)
+  const n = perpUnit(a, b); // right-of-travel
+  const r = (v: number) => Math.round(v * 100) / 100;
+
+  const STEM = size * 0.1; // shaft length back from the split point
+  const REACH = size * 0.055; // barb reach from the split point
+  const HEAD = size * 0.042; // chevron barb length
+  const SPLAY = 0.62; // chevron half-angle (radians)
+
+  // The split point: where the stem ends and the movement barbs fan out.
+  const split = {
+    x: a.x + f.x * (alongT * len) + n.x * centreOff,
+    y: a.y + f.y * (alongT * len) + n.y * centreOff,
+  };
+  const tail = { x: split.x - f.x * STEM, y: split.y - f.y * STEM };
+  const shaft = `M ${r(tail.x)} ${r(tail.y)} L ${r(split.x)} ${r(split.y)}`;
+
+  // Heading unit vector per movement: straight = forward; right/left lean forward
+  // and to the side so the barb reads as a turn, not a sideways stub.
+  const dir = (m: LaneMove): { x: number; y: number } => {
+    if (m === "straight") return f;
+    const s = m === "right" ? 1 : -1;
+    const vx = f.x * 0.55 + n.x * s, vy = f.y * 0.55 + n.y * s;
+    const mag = Math.hypot(vx, vy) || 1;
+    return { x: vx / mag, y: vy / mag };
+  };
+
+  const heads = movements.map(m => {
+    const d = dir(m);
+    const tip = { x: split.x + d.x * REACH, y: split.y + d.y * REACH };
+    const ang = Math.atan2(d.y, d.x);
+    const a1 = ang + Math.PI - SPLAY;
+    const a2 = ang + Math.PI + SPLAY;
+    // Branch line split→tip, then the open chevron at the tip.
+    return (
+      `M ${r(split.x)} ${r(split.y)} L ${r(tip.x)} ${r(tip.y)} ` +
+      `M ${r(tip.x + Math.cos(a1) * HEAD)} ${r(tip.y + Math.sin(a1) * HEAD)} ` +
+      `L ${r(tip.x)} ${r(tip.y)} ` +
+      `L ${r(tip.x + Math.cos(a2) * HEAD)} ${r(tip.y + Math.sin(a2) * HEAD)}`
+    );
+  });
+
+  return { shaft, heads };
+}
+
+// Classify a junction exit port `e` relative to a car travelling in heading
+// direction `exit` (the port it leaves through): straight (same heading), a right
+// turn, a left turn, or a U-turn (returns null — never a painted movement). Uses
+// the screen-space cross product (y-down): a clockwise turn (cross > 0) is a
+// right turn under right-hand traffic.
+export function classifyMove(exit: Port, e: Port): LaneMove | null {
+  const c = portPoint(Position.Center, 2);
+  const h = portPoint(exit, 2);
+  const t = portPoint(e, 2);
+  const hx = h.x - c.x, hy = h.y - c.y;
+  const tx = t.x - c.x, ty = t.y - c.y;
+  const hm = Math.hypot(hx, hy) || 1, tm = Math.hypot(tx, ty) || 1;
+  const dot = (hx * tx + hy * ty) / (hm * tm);
+  if (dot > 0.7) return "straight";
+  if (dot < -0.7) return null; // U-turn / back the way it came
+  const cross = hx * ty - hy * tx;
+  return cross > 0 ? "right" : "left";
+}

@@ -24,6 +24,7 @@ import {
   roadcross3lane,
 } from "@/levels/test/scenarios/roadcrosslanes";
 import { roadjunction } from "@/levels/test/scenarios/roadjunction";
+import { signalturnlanes } from "@/levels/test/scenarios/signalturnlanes";
 import {
   signaltwophase,
   signalroundrobin,
@@ -144,7 +145,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "signals",
         label: "Traffic signals",
-        scenarios: [signaltwophase, signalroundrobin, signalbuslane1l, signalbuspriority, signalbuslane3l],
+        scenarios: [signaltwophase, signalroundrobin, signalturnlanes, signalbuslane1l, signalbuspriority, signalbuslane3l],
       },
       { id: "overtaking", label: "Overtaking", scenarios: [overtaketwolane, overtakeloop, overtakeabort] },
       { id: "priority", label: "Priority", scenarios: [roadpriority] },
