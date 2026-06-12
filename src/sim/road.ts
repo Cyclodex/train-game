@@ -11,7 +11,8 @@ import {
   BUS_PRIORITY_TILES,
 } from "./junctionSignal";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { roadSegmentLength } from "./pathGeometry";
+import { laneSegmentLength } from "./pathGeometry";
+import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
@@ -544,6 +545,15 @@ const DEFAULT_CAR_BRAKE = 1.2;
 // the sprite corners pinch closer than the centerline gap — keep a touch of slack
 // so following cars don't visibly touch through a bend.
 const CAR_GAP = 0.06;
+// Trailing gap a vehicle keeps behind a same-lane MERGE partner it is yielding to
+// through a junction (the loser trails the winner's tail). A touch larger than the
+// straight-road CAR_GAP: a merge measures the follower's head in tile-index space
+// against the leader's tail at an offset-path `t`, and the two converging arms
+// drive different-length offset fillets across the box — that metric seam can let
+// the follower's drawn nose creep up to ~a CAR_GAP into the leader near the
+// convergence point. The extra slack absorbs the seam so the rendered bodies never
+// overlap as the lanes merge, without holding the follower a whole tile back.
+const MERGE_TRAIL_GAP = 2 * CAR_GAP;
 // Lane-change (lateral) motion. A car eases sideways toward its target lane on
 // an S-curve: lateral velocity ramps up and back down under a bounded lateral
 // acceleration (LANE_CHANGE_ACCEL) instead of snapping to full speed, capped at
@@ -608,9 +618,22 @@ const STOP_EPS = 1e-3;
 // covers gets at least one point, so a trailer straddling a crossing blocks cars
 // from entering it. Cars are few, so the extra points are cheap.
 const BODY_SAMPLE_STEP = 0.25;
+// Corner-speed ease: the cruise-speed cap while a car's head is on a sharp,
+// single-tile turn (a 90° bend), as a fraction of its cruise speed. A small,
+// bounded touch of real cornering — the car eases into the bend and accelerates
+// out via the normal accel/brake ramp — NOT the old per-tile-shape penalty (that
+// is removed by normalising the advance to each segment's true driven length).
+// A straight-through / sweeping movement keeps full cruise; only the tight bend
+// eases. Kept within the ±10% world-speed bound the constant-speed test asserts.
+const CORNER_SPEED_FACTOR = 0.92;
 
 export function createRoadSim(config: RoadSimConfig): RoadSim {
   const { level, width, height } = config;
+  // Lane-offset geometry in TILE units (size = 1) — the SAME offsets the renderer
+  // (game.ts) draws cars on, so a segment's measured driven length matches the
+  // path on screen. Used by segLen to hold a constant world speed and keep coupled
+  // bodies a constant gap apart through bends (issues #36 / #37).
+  const laneGeo = createLaneGeometry(level, 1);
   const rng = makeRng(config.seed ?? 1);
   // A second, independent RNG stream for route planning. Keeping routing off the
   // main `rng` means the per-car kind/speed draw sequence is unaffected by how
@@ -1612,7 +1635,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
               // behind a common leader, so ties yield deterministically by id.
               const tie = Math.abs(otherFrontD - myD) <= 1e-9 && other.id < car.id;
               if (otherFrontD < myD - 1e-9 || tie) {
-                bind(Math.max(0, proj.lead + tailT - CAR_GAP), 0);
+                bind(Math.max(0, proj.lead + tailT - MERGE_TRAIL_GAP), 0);
               }
             }
           } else if (junctionConflictWith(myExit)) {
@@ -1718,9 +1741,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // Ramp the velocity toward the cap instead of snapping to cruise: accelerate
       // from rest, and brake smoothly so the car can still stop within `clear`
       // (vSafe is the fastest speed that still brakes to rest in that distance).
-      // Same model as the train sim (simulation.ts).
+      // Same model as the train sim (simulation.ts). On a sharp single-tile turn
+      // the cap eases to CORNER_SPEED_FACTOR of cruise — a small, bounded touch of
+      // cornering (brake in, accelerate out via this same ramp); the per-tile-shape
+      // speed penalty itself is removed by the arc-length normalisation below.
+      const headSeg = car.path[car.headIndex];
+      const segLenHead = segLen(car, headSeg);
+      const cornerCap = isTurnSeg(headSeg) ? car.speed * CORNER_SPEED_FACTOR : car.speed;
       const vSafe = Math.sqrt(2 * car.brake * clear);
-      const vCap = Math.min(car.speed, vSafe);
+      const vCap = Math.min(cornerCap, vSafe);
       if (car.velocity < vCap) {
         car.velocity = Math.min(vCap, car.velocity + car.accel * dt);
       } else if (car.velocity > vCap) {
@@ -1728,7 +1757,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
       if (car.velocity < 0) car.velocity = 0;
       car.waitSeconds = 0; // reset: the car is moving
-      move = Math.min(car.velocity * dt, clear); // never roll past the stop line
+      // `velocity` is a WORLD speed (real arc / sec). Advancing `headProgress` (a
+      // 0..1 tile-index fraction) means dividing the world arc moved this tick by
+      // the segment's true driven length, so a short curve's progress ticks up
+      // faster and the car holds a constant world speed across straights and turns
+      // (#36). Still capped by `clear` (tile-index) so it never rolls past the stop
+      // line. On a straight (segLenHead ≈ 1) this is the original behaviour.
+      move = Math.min((car.velocity * dt) / segLenHead, clear);
     }
     const cls = clsOf(car);
     car.headProgress += move;
@@ -1980,13 +2015,62 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return true;
   }
 
-  function segLen(seg: RoadSegment): number {
-    return roadSegmentLength(seg.entryPort, seg.exitPort ?? seg.entryPort, 1);
+  // Is this segment a sharp single-tile TURN (adjacent ports — a 90° bend), as
+  // opposed to a straight / Center link? A dead-end (no exit) renders straight.
+  function isTurnSeg(seg: RoadSegment): boolean {
+    const exit = seg.exitPort;
+    if (exit === null) return false;
+    return (
+      seg.entryPort !== Position.Center &&
+      exit !== Position.Center &&
+      oppositePort(seg.entryPort) !== exit
+    );
   }
 
+  // The TRUE driven length of a path segment for `car` — the length of the
+  // lane-OFFSET path it actually drives (the corner fillet on a turn, the tapered
+  // straight elsewhere), in tile units, NOT the bare centreline. Uses the car's
+  // current lane and the exact same offset math the renderer draws with, so the
+  // sim advances per real arc (constant world speed, #36) and spaces coupled
+  // bodies by real driven distance (constant gap through bends, #37). A dead-end
+  // (no exit) is measured as the straight entry→opposite, matching the renderer.
+  //
+  // Memoised: the level is static, so a segment's driven length depends only on
+  // (tile, entry, exit, integer lane, class). segLen is called O(cars²) per tick
+  // (every body point of every car, in each car's following scan) and couplerOffsets
+  // is comparatively heavy (neighbour lookups + band/junction-exit math), so caching
+  // by that key keeps the hot path a Map lookup. The lane is rounded — a sub-lane
+  // offset changes a segment's length by well under a percent, and a coupled body
+  // shares its head's rounded lane so cab and trailer still measure equal.
+  const segLenCache = new Map<string, number>();
+  function segLen(car: Car, seg: RoadSegment): number {
+    const lane = Math.round(car.laneIndex);
+    const cls = clsOf(car);
+    const key = `${getCoordinatesId(seg.coord)}|${seg.entryPort}|${seg.exitPort ?? "x"}|${lane}|${cls}`;
+    let v = segLenCache.get(key);
+    if (v === undefined) {
+      const exitPort = seg.exitPort ?? oppositePort(seg.entryPort);
+      const { offEntry, offExit } = laneGeo.couplerOffsets(
+        { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, lanePos: lane },
+        lane,
+        cls,
+      );
+      v = laneSegmentLength(seg.entryPort, exitPort, 1, offEntry, offExit);
+      segLenCache.set(key, v);
+    }
+    return v;
+  }
+
+  // Sample the car's body at `arcBack` tiles behind its head, as a tile + within-
+  // tile `t`. Walks back along the path by the lane-OFFSET driven length (the path
+  // the renderer draws), so the rendered body spacing — and the body-occupancy /
+  // following gate that shares these samples — both use the real driven distance:
+  // coupled bodies hold a constant on-screen gap through bends (#37), and the
+  // following clamp measures separation on the same path the player sees.
   function sampleAtArc(car: Car, arcBack: number): CarSample {
+    const len = (seg: RoadSegment): number => segLen(car, seg);
     let idx = car.headIndex;
-    const withinHead = car.headProgress * segLen(car.path[idx]);
+    const withinHead = car.headProgress * len(car.path[idx]);
     let remaining = Math.max(0, arcBack);
     if (remaining <= withinHead) {
       const seg = car.path[idx];
@@ -1994,13 +2078,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         coord: seg.coord,
         entryPort: seg.entryPort,
         exitPort: seg.exitPort,
-        t: (withinHead - remaining) / segLen(seg),
+        t: (withinHead - remaining) / len(seg),
       };
     }
     remaining -= withinHead;
     idx -= 1;
     while (idx >= 0) {
-      const L = segLen(car.path[idx]);
+      const L = len(car.path[idx]);
       const seg = car.path[idx];
       if (remaining <= L)
         return {
@@ -2114,6 +2198,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const units: CarUnit[] = [];
         let lead = 0; // arc distance from the head to this segment's leading edge
         for (const seg of spec.segments) {
+          // Rendered spacing uses the lane-offset driven length so the cab and
+          // trailer keep a constant on-screen gap through a bend (#37).
           const front = sampleAtArc(c, lead);
           const rear = sampleAtArc(c, lead + seg.length);
           front.lanePos = lanePosAt(c, lead, front);
