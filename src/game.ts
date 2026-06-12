@@ -436,15 +436,24 @@ export function createGame(
       ...(traffic?.spawnInterval !== undefined && {
         spawnInterval: traffic.spawnInterval,
       }),
-      // Per-level mix wins; otherwise a level that contains bus lanes gets
-      // buses in the default mix — a bus line drawn in the editor must carry
-      // buses in play without hand-editing a traffic config (previously the
-      // default was cars-only and bus-only streets stayed empty forever).
-      ...(traffic?.mix !== undefined
-        ? { mix: traffic.mix }
-        : Object.values(level).some(t => t.road?.some(l => l.kind === "bus"))
-          ? { mix: { car: 1, bus: 0.3 } }
-          : {}),
+      // A level that contains bus lanes must carry buses in play — a bus line
+      // drawn in the editor may never stay empty. PlayView always passes
+      // DEFAULT_TRAFFIC (cars/trucks/semis, no bus), so merely defaulting when
+      // no mix is given was not enough: when the supplied mix has NO bus entry
+      // at all, add one (~20% of the total weight). An explicit bus weight —
+      // including a deliberate bus: 0 — always wins untouched.
+      ...(() => {
+        const hasBusLanes = Object.values(level).some(t =>
+          t.road?.some(l => l.kind === "bus"),
+        );
+        const mixIn = traffic?.mix;
+        if (mixIn !== undefined) {
+          if (!hasBusLanes || mixIn.bus !== undefined) return { mix: mixIn };
+          const total = Object.values(mixIn).reduce((a, b) => a + (b ?? 0), 0);
+          return { mix: { ...mixIn, bus: Math.max(1, total * 0.25) } };
+        }
+        return hasBusLanes ? { mix: { car: 1, bus: 0.3 } } : {};
+      })(),
       ...(traffic?.overtakeFraction !== undefined && { overtakeFraction: traffic.overtakeFraction }),
       // A level may pin exact spawn entries (e.g. a divided road with each lane
       // one-way in opposite directions), overriding the default edge detection.
