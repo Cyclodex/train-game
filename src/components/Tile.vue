@@ -646,16 +646,9 @@ class Tile extends Vue {
       // 3L T-junction bug: westbound band sat mid-road, eastbound was fine).
       const selfBand = this.positioningBandAt(coord, lane.from);
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
-      let hasStraight = false;
       for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
-        hasStraight = true;
         out.push(roadLaneBandPath(lane.from, to, size, off, half));
-      }
-      // Junction turning-only bus arm: draw a half-stub from the arm seam to
-      // the tile centre so the gold visually connects with the adjacent bus road.
-      if (!hasStraight && isRoadJunction(road)) {
-        out.push(roadLaneBandPath(lane.from, Position.Center, size, off, half));
       }
     }
     return out;
@@ -862,8 +855,12 @@ class Tile extends Vue {
           // positions on each adjoining road's real band.
           const bandEntry = this.positioningBandAt(coord, lane.from);
           const bandExit = this.positioningBandAt(coord, to);
-          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size, false);
-          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size, false);
+          // On a junction tile, laneCountAt/2 under-counts the seam when some lanes
+          // turn off — use the arm's road-positioning band as selfBand so inner
+          // straight-through lanes don't collapse to the centreline (the 3L+2L bug).
+          const bandSelf = this.tileIsRoadJunction ? bandEntry : selfBand;
+          const offA = laneSeamOffsetPx(lane.index, bandSelf, bandEntry, size, false);
+          const offB = laneSeamOffsetPx(lane.index, bandSelf, bandExit, size, false);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
