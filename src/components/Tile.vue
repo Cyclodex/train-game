@@ -646,7 +646,7 @@ class Tile extends Vue {
       // 3L T-junction bug: westbound band sat mid-road, eastbound was fine).
       const selfBand = this.positioningBandAt(coord, lane.from);
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
-      for (const to of lane.to) {
+      for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
         out.push(roadLaneBandPath(lane.from, to, size, off, half));
       }
