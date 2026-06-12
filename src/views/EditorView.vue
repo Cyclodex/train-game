@@ -749,7 +749,7 @@ class EditorView extends Vue {
   // arms' widths (capacity rule) first, busTo gates second — and write the
   // changed cells straight into the level (not via commit — no recursion).
   syncBusGates(ids: string[]) {
-    const synced = syncJunctionLanesAround(this.level, ids);
+    const synced = syncJunctionLanesAround(this.level, ids, true);
     for (const [gid, gcell] of Object.entries(synced)) this.level[gid] = gcell;
   }
 
