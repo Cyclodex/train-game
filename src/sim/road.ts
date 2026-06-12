@@ -584,7 +584,12 @@ const CAR_LOOKAHEAD = 2;
 const BOX_KEEP_CLEAR_PATIENCE = 4;
 // A bound moving faster than this (tiles/sec; cruise is ~0.6) counts as a
 // ROLLING queue for the box keep-clear rule — follow it through the junction.
-const ROLLING_QUEUE_EPS = 0.05;
+// Deliberately strict (~40% of cruise): a COMPRESSING queue still creeps at
+// low speed, and following a creeping leader strands the follower inside the
+// box when the queue stalls right past it (the observed two-junction ring
+// gridlock: a bus dies mid-box, its corridor never drains). Only a properly
+// flowing platoon is worth following through.
+const ROLLING_QUEUE_EPS = 0.25;
 // Reaction time (seconds) a stopped car waits before it starts moving once the
 // way ahead clears — the "wait a beat after the car in front pulls away" delay.
 // This staggers a queue's release so cars spread out (e.g. don't bunch up nose-

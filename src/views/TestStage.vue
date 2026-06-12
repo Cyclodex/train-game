@@ -76,6 +76,11 @@
         @click.stop="onCarClick(car.id)"
       >
         <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
+        <span
+          v-if="config.debug && car.part !== 'trailer'"
+          class="road-car-id"
+          :style="{ transform: `translate(-50%, -50%) rotate(${-car.angle}deg)` }"
+        >{{ car.id }}</span>
       </div>
       <CarRouteOverlay
         v-if="config.debug && carRoute"
@@ -363,6 +368,24 @@ export default toNative(TestStage);
   overflow: hidden;
 }
 // In debug mode cars are clickable to inspect their route.
+/* Debug: the car id pinned to the sprite (counter-rotated so it stays
+   readable whatever way the car points). Identifies the cars the junction
+   owner / hold chips talk about. */
+.road-car-id {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 3px;
+  padding: 1px 2px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 7;
+}
 .road-car--inspect {
   cursor: pointer;
 }
