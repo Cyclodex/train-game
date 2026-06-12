@@ -436,7 +436,15 @@ export function createGame(
       ...(traffic?.spawnInterval !== undefined && {
         spawnInterval: traffic.spawnInterval,
       }),
-      ...(traffic?.mix !== undefined && { mix: traffic.mix }),
+      // Per-level mix wins; otherwise a level that contains bus lanes gets
+      // buses in the default mix — a bus line drawn in the editor must carry
+      // buses in play without hand-editing a traffic config (previously the
+      // default was cars-only and bus-only streets stayed empty forever).
+      ...(traffic?.mix !== undefined
+        ? { mix: traffic.mix }
+        : Object.values(level).some(t => t.road?.some(l => l.kind === "bus"))
+          ? { mix: { car: 1, bus: 0.3 } }
+          : {}),
       ...(traffic?.overtakeFraction !== undefined && { overtakeFraction: traffic.overtakeFraction }),
       // A level may pin exact spawn entries (e.g. a divided road with each lane
       // one-way in opposite directions), overriding the default edge detection.

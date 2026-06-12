@@ -167,6 +167,47 @@ describe("deriveJunctionCarLanes (junction lane capacity)", () => {
     expect(toSet(out, Left, 0)).toEqual(new Set([Right, Bottom])); // kerb: S+R
   });
 
+
+  it("allArms (editor heal) restores movements an older sync ate", () => {
+    // A user-reported T-junction of bus-only streets where the R approach had
+    // lost its straight-through (busTo only [Top]) — the editor invariant is
+    // all arms reach all arms, so the editor-heal restores Right -> Left.
+    const busStreetEW = (): TileCell => ({
+      connections: [],
+      road: [
+        { from: Left, to: [Right], index: 0, kind: "bus" },
+        { from: Right, to: [Left], index: 0, kind: "bus" },
+      ],
+    });
+    const busStreetNS = (): TileCell => ({
+      connections: [],
+      road: [
+        { from: Top, to: [Bottom], index: 0, kind: "bus" },
+        { from: Bottom, to: [Top], index: 0, kind: "bus" },
+      ],
+    });
+    const level: Level = {
+      "1,1": {
+        connections: [],
+        road: [
+          { from: Top, to: [], busTo: [Right, Left], index: 0 },
+          { from: Right, to: [], busTo: [Top], index: 0 }, // straight to Left LOST
+          { from: Left, to: [], busTo: [Right, Top], index: 0 },
+        ],
+      },
+      "1,0": busStreetNS(),
+      "0,1": busStreetEW(),
+      "2,1": busStreetEW(),
+    };
+    // Default derivation preserves the damage (it never invents movements).
+    const kept = deriveJunctionCarLanes(level, "1,1");
+    expect(toSet(kept, Right, 0).has(Left)).toBe(false);
+    // The editor heal (allArms) restores the editor invariant.
+    const healed = deriveJunctionCarLanes(level, "1,1", true);
+    expect(toSet(healed, Right, 0).has(Left)).toBe(true);
+    expect(toSet(healed, Top, 0)).toEqual(new Set([Right, Left]));
+  });
+
   it("is idempotent and preserves removed movements", () => {
     const level: Level = {
       "1,1": {

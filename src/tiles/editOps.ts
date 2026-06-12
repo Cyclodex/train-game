@@ -590,23 +590,43 @@ function receivingCarCapacity(level: Level, id: string, exit: Port): number {
   return own > 0 ? own : 1;
 }
 
-export function deriveJunctionCarLanes(level: Level, id: string): TileCell {
+export function deriveJunctionCarLanes(
+  level: Level,
+  id: string,
+  // The EDITOR invariant: a drawn junction connects every arm to every other
+  // arm (there is no tool that removes a single movement), so the editor's
+  // self-heal passes `allArms` to RESTORE movements an older buggy sync may
+  // have eaten (e.g. a straight-through that vanished next to a bus arm).
+  // Hand-authored scenarios (which DO remove movements deliberately, like
+  // noleftturn) keep the default: only re-distribute what a lane reaches.
+  allArms = false,
+): TileCell {
   const cell = level[id];
   if (!cell?.road || !isRoadJunction(cell.road)) return cell;
   let changed = false;
   const next: Lane[] = [];
   for (const lane of cell.road) if (lane.kind === "bus") next.push(lane);
+  const armPorts = new Set<Port>();
+  if (allArms) {
+    for (const l of cell.road) {
+      armPorts.add(l.from);
+      for (const p of l.to) armPorts.add(p);
+      for (const p of l.busTo ?? []) armPorts.add(p);
+    }
+  }
   for (const from of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
     const lanes = carLanesFrom(cell.road, from);
     const N = lanes.length;
     if (N === 0) continue;
-    // The exits this approach reaches today (to + busTo union) — we only
-    // re-distribute them across lanes, never invent or drop an arm.
+    // The exits this approach reaches today (to + busTo union) — by default we
+    // only re-distribute them across lanes, never invent or drop an arm. With
+    // `allArms` (editor) every other arm of the junction is reachable.
     const allowed = new Set<Port>();
     for (const l of lanes) {
       for (const p of l.to) allowed.add(p);
       for (const p of l.busTo ?? []) allowed.add(p);
     }
+    if (allArms) for (const p of armPorts) allowed.add(p);
     allowed.delete(from);
     const straightExit = oppositePort(from);
     const S: Port | null = allowed.has(straightExit) ? straightExit : null;
@@ -690,6 +710,7 @@ export function deriveJunctionCarLanes(level: Level, id: string): TileCell {
 export function syncJunctionLanesAround(
   level: Level,
   ids: string[],
+  allArms = false,
 ): Record<string, TileCell> {
   const candidates = new Set<string>(ids);
   for (const id of ids) {
@@ -704,7 +725,7 @@ export function syncJunctionLanesAround(
   for (const id of candidates) {
     const cell = work[id];
     if (!cell) continue;
-    const derived = deriveJunctionCarLanes(work, id);
+    const derived = deriveJunctionCarLanes(work, id, allArms);
     if (derived !== cell) {
       work[id] = derived;
       out[id] = derived;
