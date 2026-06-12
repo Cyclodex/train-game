@@ -726,14 +726,30 @@ class Tile extends Vue {
     }
     const ab = moves.get(a);
     const ba = moves.get(b);
-    if (ab && ba && laneCount(road, a) <= 1 && laneCount(road, b) <= 1) {
-      // The single centre divider of the two-way bend: at each seam, midway
-      // between the two opposing streams. Offsets are right-of-travel, so the
-      // opposite direction's position in the a→b frame is its NEGATED offset.
-      const centreA = (ab.offEntry - ba.offExit) / 2;
-      const centreB = (ab.offExit - ba.offEntry) / 2;
-      return [{ d: laneSegmentPathD(a, b, size, centreA, centreB), kind: "centre" }];
+    const isStraight = oppositePort(a) === b;
+    if (!isStraight) {
+      // A TURN corner. The yellow centre divider continues around the bend —
+      // ONE line on the corridor centreline (offset 0 connects arm a's centre
+      // line to arm b's; with equal entry/exit offsets the corner-fillet's
+      // straight legs collapse to the pure concentric arc), exactly like a
+      // simple curve tile. Drawn only for a two-way corridor (both directions
+      // present); a one-way turn has no centre divider.
+      const turn: LaneMarkingPath[] = [];
+      if (ab && ba) turn.push({ d: laneSegmentPathD(a, b, size, 0, 0), kind: "centre" });
+      // Then a WHITE DASHED guide per ALLOWED turning movement, on the
+      // lane-to-lane fillet the cars actually drive (the same corner-fillet
+      // path) — like the painted turn-guide lines in a real intersection. Only
+      // for movements a lane permits; none where the turn is disallowed.
+      for (const [from, to] of [
+        [a, b],
+        [b, a],
+      ] as [Position, Position][]) {
+        const m = moves.get(from);
+        if (m) turn.push({ d: laneSegmentPathD(from, to, size, m.offEntry, m.offExit), kind: "inner" });
+      }
+      return turn;
     }
+    // A STRAIGHT-through edge: the centre line(s) continue across the box.
     const out: LaneMarkingPath[] = [];
     for (const [from, to] of [
       [a, b],
