@@ -503,7 +503,7 @@ export interface RoadSim {
   // The current light an approach `arm` shows at the signalised road junction
   // `tileId` (green/amber/red), or null when that junction is not signalised. The
   // renderer reads this per arm to colour the signal heads.
-  signalAspect(tileId: string, arm: Port): SignalAspect | null;
+  signalAspect(tileId: string, arm: Port, cls?: VehicleClass): SignalAspect | null;
   // The live signal of a road junction (mode + bus-priority), or null if the tile
   // is not a road junction. Used for the mode chip and to know whether to render
   // signal heads at all.
@@ -1424,7 +1424,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // "off" junction reports green for every arm, so this is a no-op there.
       const signalCtrl = signals.get(junctionId);
       if (signalCtrl) {
-        const aspect = signalCtrl.aspect(myEntry);
+        // Class-aware: during a bus HEAD START the arm is green for buses
+        // (they roll first, clearing the bus lane) and still red for cars.
+        const aspect = signalCtrl.aspect(myEntry, clsOf(car));
         if (aspect === "red") {
           bind(Math.max(0, lead - CAR_GAP), 0);
         } else if (aspect === "amber") {
@@ -2136,10 +2138,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
       return out;
     },
-    signalAspect(tileId: string, arm: Port): SignalAspect | null {
+    signalAspect(tileId: string, arm: Port, cls: VehicleClass = "car"): SignalAspect | null {
       const ctrl = signals.get(tileId);
       if (!ctrl || ctrl.signal().mode === "off") return null;
-      return ctrl.aspect(arm);
+      return ctrl.aspect(arm, cls);
     },
     signalOf(tileId: string): JunctionSignal | null {
       const ctrl = signals.get(tileId);

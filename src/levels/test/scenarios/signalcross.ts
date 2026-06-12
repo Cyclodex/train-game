@@ -205,9 +205,10 @@ export const signalbuspriority: TestScenario = {
   name: "Signals: bus priority (2L: kerb bus + 1 car)",
   description:
     "Signalised cross with dedicated bus lanes: each arm has a kerb bus lane (index 0) + " +
-    "1 car lane (index 1) per direction. An approaching bus extends / brings forward its " +
-    "arm's green so it sails through; cars still obey the lights. Enable Debug to see " +
-    "the amber bus-lane arrows and watch buses hold the kerb lane across the junction.",
+    "1 car lane (index 1) per direction. A waiting bus gets a HEAD START: its arm's small " +
+    "transit lens turns green ~3s before the cars' green, so the bus clears its lane " +
+    "before right-turning cars cross it. The green is also extended / brought forward " +
+    "for approaching buses. Watch the bus pull away while the cars still hold.",
   level: busCrossLevel(1, { mode: "two-phase", busPriority: true }),
   trains: {},
   size: { cols: 5, rows: 5 },

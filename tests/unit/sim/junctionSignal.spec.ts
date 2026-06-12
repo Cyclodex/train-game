@@ -9,6 +9,7 @@ import {
   GREEN_SEC,
   AMBER_SEC,
   ALL_RED_SEC,
+  BUS_HEADSTART_SEC,
 } from "@/sim/junctionSignal";
 
 const { Top, Right, Bottom, Left } = Position;
@@ -166,9 +167,43 @@ describe("bus priority", () => {
     // waiting on Bottom and bus-priority on, the Bottom phase is brought forward.
     const prio = createJunctionSignal(FOUR, { mode: "round-robin", busPriority: true });
     const bus = new Set<Port>([Bottom]);
-    // Run through Top's green+amber+all-red into the next green.
-    run(prio, GREEN_SEC + AMBER_SEC + ALL_RED_SEC + GREEN_SEC / 2, bus);
+    // Run through Top's green+amber+all-red and the bus HEAD START into the
+    // brought-forward phase's full green.
+    run(prio, GREEN_SEC + AMBER_SEC + ALL_RED_SEC + BUS_HEADSTART_SEC + GREEN_SEC / 2, bus);
     expect(prio.aspect(Bottom)).toBe("green");
     expect(prio.aspect(Right)).toBe("red");
+  });
+});
+
+describe("bus head start (separate transit signal)", () => {
+  it("buses get green before cars when their phase starts with a bus waiting", () => {
+    // Round-robin with a bus waiting on Bottom: after Top is served, the Bottom
+    // phase is brought forward AND starts with the HEAD START stage — green for
+    // buses, still red for cars — before the full green.
+    const prio = createJunctionSignal(FOUR, { mode: "round-robin", busPriority: true });
+    const bus = new Set<Port>([Bottom]);
+    // Through Top green (extended while... no bus on Top: base) + amber + all-red,
+    // landing INSIDE the head-start stage of the Bottom phase.
+    run(prio, GREEN_SEC + AMBER_SEC + ALL_RED_SEC + BUS_HEADSTART_SEC / 2, bus);
+    expect(prio.aspect(Bottom, "bus")).toBe("green"); // the bus rolls
+    expect(prio.aspect(Bottom, "car")).toBe("red"); // cars still held
+    expect(prio.aspect(Bottom)).toBe("red"); // default class is car
+    // After the head start the cars get their green too.
+    run(prio, BUS_HEADSTART_SEC, bus);
+    expect(prio.aspect(Bottom, "car")).toBe("green");
+    expect(prio.aspect(Bottom, "bus")).toBe("green");
+  });
+
+  it("no head start without a bus — cars go green straight after all-red", () => {
+    const prio = createJunctionSignal(FOUR, { mode: "round-robin", busPriority: true });
+    run(prio, GREEN_SEC + AMBER_SEC + ALL_RED_SEC + 0.5);
+    expect(prio.aspect(Right, "car")).toBe("green"); // natural next phase, no delay
+  });
+
+  it("without busPriority there is never a head start", () => {
+    const plain = createJunctionSignal(FOUR, { mode: "round-robin" });
+    const bus = new Set<Port>([Right]);
+    run(plain, GREEN_SEC + AMBER_SEC + ALL_RED_SEC + 0.5, bus);
+    expect(plain.aspect(Right, "car")).toBe("green");
   });
 });
