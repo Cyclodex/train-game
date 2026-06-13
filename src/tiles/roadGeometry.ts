@@ -664,12 +664,12 @@ export function junctionApproachSignalGeom(
   const hi = Math.max(...offs) + 0.5 * LANE_W; // incoming side, near the kerb
 
   // Cars are held at the ARM MOUTH (the junction-tile boundary), so the stop line
-  // is painted right there — where the leading car's bumper waits. The signal
-  // heads sit just INSIDE the mouth (a touch junction-ward), so the white line
-  // reads in front of the signals as the driver approaches, and the heads land
-  // right by the cars rather than deep in the tile.
-  const sAlong = size * 0.075; // stop line at the mouth
-  const gAlong = size * 0.155; // heads just inside, by the cars
+  // is painted right at the edge — where the leading car's bumper waits. The
+  // signal heads sit just INSIDE the mouth (a touch junction-ward), so the white
+  // line reads in front of the signals as the driver approaches, and the heads
+  // land right at the cars rather than deep in the tile.
+  const sAlong = size * 0.03; // stop line at the mouth edge, at the bumper
+  const gAlong = size * 0.1; // heads just inside, by the cars
   const sBase = { x: a.x + f.x * sAlong, y: a.y + f.y * sAlong };
   const sp0 = { x: sBase.x + n.x * lo, y: sBase.y + n.y * lo };
   const sp1 = { x: sBase.x + n.x * hi, y: sBase.y + n.y * hi };
