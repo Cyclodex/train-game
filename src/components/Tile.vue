@@ -220,12 +220,12 @@
             <rect
               class="road-signal-housing"
               :class="{ 'road-signal-housing--bus': h.bus }"
-              x="-8.5" y="-4" width="17" height="8" rx="2"
+              x="-6.6" y="-3.4" width="13.2" height="6.8" rx="1.8"
             />
-            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-red':   h.aspect === 'red' }"   cx="-4.5" cy="0" r="2.4" />
-            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-amber': h.aspect === 'amber' }" cx="0"    cy="0" r="2.4" />
-            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-green': h.aspect === 'green' }" cx="4.5"  cy="0" r="2.4" />
-            <circle v-if="h.bus" class="road-signal-bus-dot" cx="7" cy="-6.4" r="1.6" />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-red':   h.aspect === 'red' }"   cx="-3.6" cy="0" r="2" />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-amber': h.aspect === 'amber' }" cx="0"    cy="0" r="2" />
+            <circle class="road-signal-lens-svg" :class="{ 'road-signal-lens-svg--lit-green': h.aspect === 'green' }" cx="3.6"  cy="0" r="2" />
+            <circle v-if="h.bus" class="road-signal-bus-dot" cx="5.4" cy="-5.2" r="1.5" />
           </g>
         </template>
       </svg>

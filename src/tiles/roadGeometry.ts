@@ -663,17 +663,20 @@ export function junctionApproachSignalGeom(
   const lo = Math.min(...offs) - 0.5 * LANE_W; // incoming side, near the centreline
   const hi = Math.max(...offs) + 0.5 * LANE_W; // incoming side, near the kerb
 
-  // Stop line: a transverse segment across just the incoming lanes, set a short
-  // way inside the arm mouth (where cars actually stop, before the conflict box).
-  const sAlong = size * 0.3;
+  // Cars are held at the ARM MOUTH (the junction-tile boundary), so the stop line
+  // is painted right there — where the leading car's bumper waits. The signal
+  // heads sit just INSIDE the mouth (a touch junction-ward), so the white line
+  // reads in front of the signals as the driver approaches, and the heads land
+  // right by the cars rather than deep in the tile.
+  const sAlong = size * 0.075; // stop line at the mouth
+  const gAlong = size * 0.155; // heads just inside, by the cars
   const sBase = { x: a.x + f.x * sAlong, y: a.y + f.y * sAlong };
   const sp0 = { x: sBase.x + n.x * lo, y: sBase.y + n.y * lo };
   const sp1 = { x: sBase.x + n.x * hi, y: sBase.y + n.y * hi };
   const stopLine = `M ${r(sp0.x)} ${r(sp0.y)} L ${r(sp1.x)} ${r(sp1.y)}`;
 
-  // Gantry bar: a thin filled rectangle along the same transverse line, set a
-  // touch behind the stop line (toward the driver) so the heads sit on it.
-  const gAlong = sAlong - size * 0.045;
+  // Gantry bar: a thin filled rectangle just inside the stop line, by the cars,
+  // with the heads sitting on it (the white line reads in front of it).
   const gThick = size * 0.05;
   const gBase = { x: a.x + f.x * gAlong, y: a.y + f.y * gAlong };
   const corner = (o: number, t: number) => ({

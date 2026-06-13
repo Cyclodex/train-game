@@ -527,6 +527,17 @@ describe("junctionApproachSignalGeom", () => {
     const n = g.stopLine.match(/-?\d+\.?\d*/g)!.map(Number);
     expect(n[0]).toBeCloseTo(100, 5);
     expect(n[2]).toBeLessThan(100);
+    // Painted near the arm mouth (small y), where the held car's bumper waits —
+    // not deep in the tile.
+    expect(n[1]).toBeLessThan(20);
+  });
+
+  it("places the heads just inside the mouth, junction-ward of the stop line", () => {
+    const g = junctionApproachSignalGeom(Top, 200, 3, [{ index: 0 }, { index: 1 }, { index: 2 }]);
+    const line = g.stopLine.match(/-?\d+\.?\d*/g)!.map(Number);
+    // Heads sit a touch INSIDE the line (larger y, toward the junction) so the
+    // white line reads in front of the signals as the driver approaches.
+    expect(g.heads.every(h => h.cy > line[1])).toBe(true);
   });
 });
 
