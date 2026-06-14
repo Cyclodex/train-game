@@ -96,6 +96,15 @@
           :class="{ 'road-lane-arrow--bus': arr.bus }"
         />
       </template>
+      <!-- Signalised-junction STOP LINES live in the road layer (on the street,
+           UNDER the cars and debug arrows). The signal heads + gantry are a
+           separate overlay above the cars (see below). -->
+      <path
+        v-for="(arm, ai) in roadSignalArms"
+        :key="'rsl' + ai"
+        :d="arm.stopLine"
+        class="road-stop-line"
+      />
     </svg>
 
     <!-- Lane graph debug overlay: directed arrows from port→port for each road
@@ -210,7 +219,6 @@
         @click.stop="cycleRoadSignal"
       >
         <template v-for="(arm, ai) in roadSignalArms" :key="'rsa' + ai">
-          <path :d="arm.stopLine" class="road-stop-line" />
           <path :d="arm.gantry" class="road-signal-gantry" />
           <g
             v-for="(h, hi) in arm.heads"
