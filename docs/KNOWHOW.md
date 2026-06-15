@@ -88,6 +88,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+- ADOPTING / continuing half-built work (the #1 silent trap): a feature can be
+  scaffolded but only HALF-wired — state declared+read but never WRITTEN. A field
+  declared+read yet never init'd/mutated is `undefined` at runtime → silent no-op
+  (`undefined >= N` is false), so the feature does nothing. `npm run dev`/`npm run
+  shot` DON'T type-check — they run happily with it; only `npm run build` (vue-tsc)
+  catches a constructor/spawn literal missing the field. So after picking up partial
+  work: (1) `npm run build`, never trust a green dev server; (2) grep each new field —
+  it must be INIT'd at every spawn/ctor AND mutated by its producer (reset+increment),
+  not just read; (3) a behavioural unit test must exercise it end-to-end (a passing
+  render proves nothing). Cause: `tilesSinceJunction` shipped declared+read but never
+  reset/incremented → keep-right never fired even though it "looked" implemented.
 - Every feature ships `/test/<id>` scenario (CLAUDE.md rule); registry test fails CI
   on a broken map. Debug from the scenario, not the full level.
 - Visual change ⇒ `npm run shot -- <id> --label before|after` (overlay on, flat bg).
