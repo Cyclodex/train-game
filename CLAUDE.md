@@ -2,6 +2,12 @@
 
 Guidance for working in this repository.
 
+> **Read `docs/KNOWHOW.md` first** — the dense engineering canon (rail-vs-road
+> curves, junction lane rules, road rendering, recurring traps, verification).
+> **Upkeep is part of every task:** when you learn, correct, or disprove something
+> in it, edit `docs/KNOWHOW.md` in the same commit (add/fix/prune one-line facts).
+> It only stays useful if each task tends it.
+
 ## What this is
 
 A browser-based **train simulation game** built with **Vue 3 + TypeScript**. A
