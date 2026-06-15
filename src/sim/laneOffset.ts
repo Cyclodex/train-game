@@ -52,7 +52,15 @@ export function seamBand(selfBand: number, neighbourBand: number): number {
 //   junction meeting a road  → the road's band (the junction adopts the road)
 //   road meeting a junction  → its own band   (a junction never pinches a road)
 //   road↔road                → min            (the legit lane-change taper)
-//   junction↔junction        → min            (symmetric on both sides)
+//   junction↔junction        → MAX band       (two stacked junctions both adopt the
+//                                WIDER arm — a junction is never pinched by a
+//                                neighbour, road OR junction. The wider side is the
+//                                full approach count; the narrower side is only the
+//                                straight-through movements the junction below
+//                                carries. Using the max keeps BOTH sides on the same
+//                                band, so the through-lanes stay continuous across
+//                                the seam AND a turn entry sits on its real lanes
+//                                instead of being squeezed inward.)
 //   no neighbour road        → own band       (an open road end keeps its width)
 export function seamPositioningBand(
   selfBand: number,
@@ -63,6 +71,7 @@ export function seamPositioningBand(
   if (neighbourBand <= 0) return selfBand;
   if (selfIsJunction && !neighbourIsJunction) return neighbourBand;
   if (!selfIsJunction && neighbourIsJunction) return selfBand;
+  if (selfIsJunction && neighbourIsJunction) return Math.max(selfBand, neighbourBand);
   return Math.min(selfBand, neighbourBand);
 }
 

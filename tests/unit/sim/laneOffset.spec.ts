@@ -300,10 +300,19 @@ describe("seamPositioningBand — junction-aware band at a seam", () => {
     expect(seamPositioningBand(1, false, 2, true)).toBe(1);
   });
 
-  it("road↔road keeps the min-seam taper; junction↔junction keeps min", () => {
+  it("road↔road keeps the min-seam taper", () => {
     expect(seamPositioningBand(3, false, 2, false)).toBe(2);
     expect(seamPositioningBand(2, false, 3, false)).toBe(2);
-    expect(seamPositioningBand(3, true, 2.5, true)).toBe(2.5);
+  });
+
+  it("junction↔junction adopts the WIDER band (stacked junctions never pinch each other)", () => {
+    // Two stacked junctions both position on the wider arm — the full approach
+    // count, not the (narrower, straight-through-only) count the junction below
+    // carries — so the through-lanes stay continuous AND a turn entry stays on its
+    // real lanes. Symmetric: both sides resolve to the same (max) band.
+    expect(seamPositioningBand(3, true, 2.5, true)).toBe(3);
+    expect(seamPositioningBand(1, true, 1.5, true)).toBe(1.5); // narrower self adopts wider neighbour
+    expect(seamPositioningBand(1.5, true, 1, true)).toBe(1.5); // and vice-versa — same band both ways
   });
 
   it("no neighbour road: an open end keeps its own band", () => {

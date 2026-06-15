@@ -62,6 +62,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Don't "fix" blind — true per-arm width = `roadCurvePolygonPath` refactor, user-watched.
 - Box crossing gated by conflict-matrix arbiter (`roadArbiter.ts`, `roadJunction.ts`);
   `conflictKey` lane-indexed ⇒ parallel lanes cross independently.
+- STACKED junctions (a junction directly above another, no road tile between —
+  `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
+  min. A junction's exit-port `laneCountAt` counts only the straight-through
+  movements (narrower than its arm), so min squeezed the upper junction's turn
+  ENTRY inward (entered at the kerb edge, x58 instead of the lane x72 — looked
+  "broken" for 3L→1L/2L turns, fine for 3L→3L by coincidence). MAX makes both
+  stacked sides adopt the wider approach band ⇒ turn entries land on their real
+  lanes AND the through-lanes stay continuous across the seam. Cyan==car (shared
+  `positioningBandAt`). Isolated junctions (road neighbours) unaffected.
 
 ## ROADS
 - `LANE_WIDTH_FRAC=0.14` (`laneOffset.ts`). Same offset fns feed cars+paint+markings
