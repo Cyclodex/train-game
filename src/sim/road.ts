@@ -350,6 +350,12 @@ export interface Car {
   // it's set — unless a nearer junction needs a different turn lane — and it clears
   // once reached. Null when the vehicle has no pending exit-lane to match.
   pendingExitLane: number | null;
+  // Tiles travelled on the current run since the last junction (0 = on/just off a
+  // junction; counts up each tile advanced on plain track). Gates the keep-right
+  // drift so a car only eases back to the kerb after it has settled past a junction
+  // exit — never on the immediate exit arm (which would re-create the post-junction
+  // "dip"). Reset to 0 each time the car crosses out of a junction.
+  tilesSinceJunction: number;
 }
 
 // Driver behaviour tuning (same-direction overtaking).
@@ -585,6 +591,12 @@ const CLIP_LANES = 0.72;
 // How many tiles ahead a car looks for the junction it must be lane-sorted for,
 // so it starts moving into its turn lane with room to spare (sub-project F).
 const TURN_LANE_LOOKAHEAD = 4;
+// How many tiles a car must travel past a junction (with no junction ahead within
+// TURN_LANE_LOOKAHEAD) before keep-right kicks in and it eases back to the kerb
+// lane. Set above the typical short exit arm so it never disturbs the post-junction
+// exit-lane match (the "no dip to the kerb" invariant) — keep-right is for the open
+// stretch between junctions, not the seam right after one.
+const KEEP_RIGHT_AFTER_TILES = 3;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
@@ -943,13 +955,17 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         return clampLane(nearest, curCount);
       }
     }
-    // No junction to sort for, no pending exit lane, no bus-lane preference: hold the
-    // current lane. Keep-right is already delivered where it matters — branch (F)
-    // above sorts straight/right movements to the kerb on a junction APPROACH, the
-    // junction-exit match kerb-aligns straight-through exits, and overtake-return
-    // pulls a passer back to the kerb — so a car between junctions keeps the lane its
-    // last movement put it in rather than weaving (which would re-create the
-    // post-junction "dip to the kerb and back" an on-ramp merge previously showed).
+    // Keep-right on the open stretch: with no junction to sort for, no pending exit
+    // lane and no bus-lane preference, ease back toward the kerb-most usable lane —
+    // but only once the car has travelled a few tiles past its last junction
+    // (KEEP_RIGHT_AFTER_TILES). The delay keeps the immediate exit arm untouched, so
+    // a freshly turned/merged car settles on its matched lane first and never dips
+    // (the post-junction "dip to the kerb and back" an on-ramp merge once showed).
+    // Branch (F) above already handles keep-right on a junction APPROACH; this is the
+    // long-haul drift in between.
+    if (car.pendingExitLane == null && car.tilesSinceJunction >= KEEP_RIGHT_AFTER_TILES) {
+      return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
+    }
     return clampLane(cur, curCount);
   }
 
@@ -1861,11 +1877,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         car.targetLane = want;
         car.laneVel = 0;
         car.pendingExitLane = want;
+        // Just left a junction — restart the keep-right clock so the exit arm is
+        // left untouched until the car has settled a few tiles past the seam.
+        car.tilesSinceJunction = 0;
       } else if (nextLaneCount > 0) {
         // Straight / curve: keep the lane, only clamping down when the road narrows
         // (a backstop for a car that hadn't finished merging before the drop).
         car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
         car.targetLane = Math.min(car.targetLane, nextLaneCount - 1);
+        car.tilesSinceJunction += 1; // one more tile of open road since the junction
       }
       car.headIndex += 1;
       car.headProgress -= 1;
@@ -1942,6 +1962,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       overtakeHomeLane: 0,
       destination: null,
       pendingExitLane: null,
+      tilesSinceJunction: 0,
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
@@ -2020,6 +2041,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       overtakeHomeLane: chosenLane,
       destination,
       pendingExitLane: null,
+      tilesSinceJunction: 0,
     });
     return true;
   }

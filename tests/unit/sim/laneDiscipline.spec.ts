@@ -94,3 +94,47 @@ describe("createRoadSim — turn-aware lane discipline on an unrestricted cross"
     expect(straightNotKerb).toBe(0);
   });
 });
+
+// A long open one-way 3-lane road with NO junction anywhere. Cars spawn rotating
+// across all three lanes; keep-right discipline must drift them back to the kerb
+// lane after a few tiles, so by the far end of the road every car runs on lane 0.
+function longOpenRoad(): Level {
+  const lvl: Level = {};
+  for (let x = 0; x < 8; x++) {
+    lvl[`${x},0`] = { connections: [], road: oneWayN(L, R, 3) }; // eastbound, 3 lanes
+  }
+  return lvl;
+}
+
+describe("createRoadSim — keep-right on an open stretch", () => {
+  it("drifts cars back to the kerb lane on a long junctionless road", () => {
+    const sim = createRoadSim({
+      level: longOpenRoad(),
+      width: 8,
+      height: 1,
+      seed: 7,
+      spawnInterval: 0.6,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: 8,
+      overtakeFraction: 0, // no overtaking — the only lateral motion is keep-right
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: L }],
+    });
+
+    // Sample the lane of every car whose head is well onto the far end of the road
+    // (x >= 6, past enough tiles for keep-right to have settled them).
+    let onKerb = 0;
+    let offKerb = 0;
+    for (let i = 0; i < 3000; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.sample()) {
+        const f = c.units[0].front;
+        if (f.coord.x < 6) continue;
+        if (Math.round(c.laneIndex) === 0) onKerb++;
+        else offKerb++;
+      }
+    }
+    expect(onKerb).toBeGreaterThan(50); // cars actually reached the far end…
+    expect(offKerb).toBe(0); // …and every one of them had drifted to the kerb lane
+  });
+});

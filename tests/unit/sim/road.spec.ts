@@ -391,11 +391,13 @@ describe("createRoadSim — spawning + movement", () => {
         overtakeFraction,
         spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }], // eastbound only
       });
-      // Cars spawn into either lane (rotating), so "overtook" means a car CHANGED
-      // lane from where it started — on this map only an overtake does that.
+      // Cars spawn into either lane (rotating). The discipline signal is PULLING OUT
+      // — riding a lane INNER of where the car started: on this map only an overtake
+      // does that. (Keep-right moves a car the other way, toward the kerb, which is
+      // not a pull-out — so it doesn't count here.)
       const firstLane = new Map<string, number>();
-      const changedLane = new Set<string>();
-      const returnedHome = new Set<string>();
+      const pulledOut = new Set<string>(); // ever rode a lane inner of its start (a pass)
+      const returnedKerb = new Set<string>(); // after a pull-out, came back to the kerb
       let stacked = 0;
       for (let i = 0; i < 1500; i++) {
         sim.step(0.05, () => false);
@@ -405,23 +407,25 @@ describe("createRoadSim — spawning + movement", () => {
           const lane = Math.round(c.laneIndex);
           if (!firstLane.has(c.id)) firstLane.set(c.id, lane);
           const home = firstLane.get(c.id)!;
-          if (lane !== home) changedLane.add(c.id);
-          else if (changedLane.has(c.id)) returnedHome.add(c.id); // back where it began
+          if (lane > home) pulledOut.add(c.id); // moved to an inner lane = overtaking
+          else if (lane === 0 && pulledOut.has(c.id)) returnedKerb.add(c.id);
           const key = `${f.coord.x},${f.coord.y}:${lane}:${Math.round(f.t * 40)}`;
           if (pos.has(key)) stacked++;
           pos.add(key);
         }
       }
-      return { changed: changedLane.size, returned: returnedHome.size, stacked };
+      return { pulledOut: pulledOut.size, returnedKerb: returnedKerb.size, stacked };
     };
 
     const overtakers = run(1);
-    expect(overtakers.changed).toBeGreaterThan(0); // passes happen
-    expect(overtakers.returned).toBeGreaterThan(0); // and the car pulls back in
+    expect(overtakers.pulledOut).toBeGreaterThan(0); // passes happen
+    expect(overtakers.returnedKerb).toBeGreaterThan(0); // and the car pulls back in
     expect(overtakers.stacked).toBe(0); // never overlaps another car
 
     const disciplined = run(0);
-    expect(disciplined.changed).toBe(0); // nobody ever changes lane (no overtakes)
+    // No overtaking → no car ever pulls out to an inner lane (it may keep-right toward
+    // the kerb, but it never moves AWAY from it).
+    expect(disciplined.pulledOut).toBe(0);
   });
 
   it("never puts a car in a bus-only lane (cars confined to car lanes)", () => {

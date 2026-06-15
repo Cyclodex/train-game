@@ -74,11 +74,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (max idx), RIGHT/STRAIGHT→kerb (min idx). Works for both dedicated turn pockets
   (`allow` already a subset) AND unrestricted crosses (every lane permits → side is
   pure discipline). Test: `/test/lane-discipline`, `laneDiscipline.spec.ts`.
-- Keep-right is delivered by F (kerb-most for straight/right on a junction APPROACH)
-  + `junctionExitLane` kerb-aligning straight exits + overtake-return — NOT a blanket
-  always-on kerb pull. A blanket `desiredLane` fallthrough→kerbMost RE-CREATES the
-  post-junction "dip to kerb and back" (overtakeloop/fan-1→3 tests) — keep the
-  fallthrough = hold `cur`.
+- Keep-right (`desiredLane` fallthrough): ease to kerb-most usable lane, but ONLY
+  after `Car.tilesSinceJunction >= KEEP_RIGHT_AFTER_TILES` (=3) and `pendingExitLane
+  == null`. `tilesSinceJunction` resets to 0 on crossing OUT of a junction, +1 per
+  plain-tile advance (spawn=0). The delay is LOAD-BEARING: a blanket always-on kerb
+  pull RE-CREATES the post-junction "dip to kerb and back" (overtakeloop) and breaks
+  the 1→3 left-turn fan-out (left-turner must hold inner across its short exit arm) —
+  3 sits above those short arms (junction→far tile = 2). Plus F kerb-sorts
+  straight/right on APPROACH, `junctionExitLane` kerb-aligns straight exits, overtake
+  returns to kerb. Test: keep-right on an open stretch in `laneDiscipline.spec.ts`.
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 

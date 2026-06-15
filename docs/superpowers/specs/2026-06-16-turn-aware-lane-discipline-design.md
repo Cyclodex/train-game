@@ -150,31 +150,41 @@ The registry test `tests/unit/levels/testScenarios.spec.ts` validates the map
 
 Branch 4 (directional pick) shipped as designed and is the core fix.
 
-**Branch 7 keep-right was NOT shipped as a blanket `kerbMostLane` pull.** During
-implementation the aggressive always-on version broke five existing road tests,
-two of which encode invariants we must keep:
+**Branch 7 keep-right shipped as a DISTANCE-GATED kerb pull**, not the blanket
+always-on version. The first attempt (always pull to the kerb-most lane whenever
+there's no junction to sort for) broke five road tests, two of which encode
+invariants we must keep:
 
-- `fans 1→3: a left-turner reaches the inner lane …` — the matched exit lane must
-  hold across the exit arm.
+- `fans 1→3: a left-turner reaches the inner lane …` — a left-turn must hold the
+  inner exit lane across its (short) exit arm.
 - `overtakeloop: a ramp car lands ON its merge lane — no dip to the kerb and back`
-  — a **user-reported** regression; the blanket kerb-pull yanks a freshly-merged
-  car off lane 2 and re-creates the exact "dip" that bug fixed.
+  — a **user-reported** regression; a blanket kerb-pull yanks a freshly-merged car
+  off lane 2 and re-creates the exact "dip" that bug fixed.
 
-The only non-regressive way to keep an always-on kerb-pull is to hold the matched
-exit lane across the whole arm (sticky `pendingExitLane`), which in turn suppresses
-buses drifting onto bus lanes — a cascade of risk for marginal benefit.
+Both failures share a cause: keep-right firing on the **immediate exit arm**, right
+after a junction. The fix is exactly the user's "länger keine Kreuzung … 3-5 tiles"
+rule — a per-car `tilesSinceJunction` counter (reset to 0 when crossing out of a
+junction, +1 per plain-tile advance, 0 at spawn). Keep-right engages only when
+`tilesSinceJunction >= KEEP_RIGHT_AFTER_TILES` (=3) **and** `pendingExitLane == null`:
 
-Decision: keep-right is delivered where it is correct — branch 4 already sorts
-straight/right movements to the kerb on a junction **approach**, `junctionExitLane`
-kerb-aligns straight-through exits, and overtake-return pulls a passer back — so the
-branch-7 fallthrough stays `return cur` (hold the lane the last movement set). A car
-between junctions therefore keeps its lane (after a straight/right it is already
-kerb-most; after a left turn it holds the inner lane until the next approach re-sorts
-it), instead of weaving. This honours "keep-right is generally OK" without the dip.
+```
+if (car.pendingExitLane == null && car.tilesSinceJunction >= KEEP_RIGHT_AFTER_TILES) {
+  return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
+}
+return clampLane(cur, curCount);
+```
 
-A blanket "drift any inner-lane car to the kerb on a junctionless stretch" remains
-possible as a follow-up if desired, but requires the sticky-exit-lane + bus-reorder
-work above and test updates; deliberately out of scope here.
+3 sits above the short exit arms in the tests (junction → far observed tile = 2
+tiles), so the exit-lane match is left untouched (no dip, fan-out intact), while a
+car on an open stretch tucks back to the kerb after a few tiles. Buses are unaffected
+— the bus-lane preference runs in an earlier branch, so a bus never reaches this
+fallthrough while it has a bus lane to prefer.
+
+The `overtakers … disciplined drivers don't` test was updated: under keep-right a
+disciplined car may drift toward the kerb, so the invariant is now "a disciplined
+driver never PULLS OUT to an inner lane" (only an overtake does), not "never changes
+lane." Verified by `laneDiscipline.spec.ts` → "keep-right on an open stretch" (every
+car on lane 0 by the far end of a long junctionless road).
 
 ## KNOWHOW upkeep
 
