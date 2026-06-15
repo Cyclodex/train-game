@@ -81,10 +81,12 @@ async function main() {
   const base = `http://localhost:${opt.port}`;
 
   // Start a dedicated dev server (strict port so we never hit a stale one).
+  // On Windows `npm` is a .cmd shim that bare spawn() can't resolve (ENOENT), so
+  // run it through the shell there.
   const server = spawn(
-    "npm",
+    process.platform === "win32" ? "npm.cmd" : "npm",
     ["run", "dev", "--", "--port", String(opt.port), "--strictPort"],
-    { stdio: "ignore" },
+    { stdio: "ignore", shell: process.platform === "win32" },
   );
   const shutdown = () => {
     try {

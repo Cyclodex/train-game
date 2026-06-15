@@ -66,6 +66,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (`road.ts desiredLane` merges highest idx down). Renderer-only fork
   (`oneWayLaneOffsetPx`, `roadRibbonPolygonPath`, `oneWayClosingGore`). Centred
   symmetric squeeze = WRONG model, abandoned.
+- BUG (one-way turn-lane offset mismatch): CANON = `index 0 = kerb, highest =
+  centre` (`editOps.ts:222`, `laneOffset.ts`). TWO-WAY junctions obey this for BOTH
+  straight and turn (each lane's straight+turn arrow start at the SAME x — verified:
+  rightmost lane straight-N and turn-E both at x170 in `crossturns3lane`), so they
+  look right. ONE-WAY breaks it: the STRAIGHT offset `oneWayLaneOffsetPx (i+0.5−R/2)`
+  puts index0 on the LEFT, but the TURN/curve offset `laneOffsetConstPx (band−0.5−i)`
+  (in `couplerOffsets`/overlay turn branch `Tile.vue:912`) keeps index0 on the kerb
+  (RIGHT) — so on a one-way approach a lane's straight and turn split to opposite
+  sides (`turnfan` @3,3: index0 straight x72-left, its east-turn x128-right). The
+  one-way STRAIGHT left-align is the mirror; it collides with canon. CAVEAT: the
+  left-align + lane-drop-island-on-the-right presentation was built around index0=
+  left, so unifying to index0=kerb needs the lane-drop side reworked too. Fix
+  car-renderer + overlay together. Fixtures: `/test/turnfan` vs `/test/crossturns3lane`.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
