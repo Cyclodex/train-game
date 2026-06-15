@@ -246,9 +246,9 @@ export interface Game {
   // arrows on the approach tile.
   roadAt(coord: Coordinates): Lane[] | undefined;
   // The widest lane count along the contiguous one-way straight run through this
-  // tile in the travel direction entered via `entry`. One-way roads left-align to
-  // this width (highway lane drop): the through lanes run straight and the right
-  // lane ends. Returns this tile's own one-way count when it is not a one-way run.
+  // tile in the travel direction entered via `entry`. One-way roads kerb-anchor
+  // (index 0) to this width (highway lane drop): the through lanes run straight and
+  // the centre lane ends. Returns this tile's own one-way count when not a one-way run.
   roadOneWayRunMax(coord: Coordinates, entry: Position): number;
   // The lateral offset (px, right-of-travel) a class-`cls` vehicle in approach
   // lane `entryLane` lands at on the EXIT arm of a TURN through `coord` (a curve /
@@ -685,7 +685,7 @@ export function createGame(
   // vehicle contributes one render box per body segment (a semi → cab + trailer),
   // each keyed `${carId}#${i}` and sized to its segment length.
   // Lane-offset geometry — where a car body sits laterally on each tile (seam
-  // tapers, the one-way highway left-align, the corner-fillet turn glide). Shared
+  // tapers, the one-way highway kerb-anchor, the corner-fillet turn glide). Shared
   // Vue-free with the road sim (sim/laneGeometry.ts) so the renderer and the sim
   // draw/measure the EXACT same offset path; built with the px `tileSize` here.
   const { couplerOffsets, turnExitOffsetPx, oneWayRunMaxAt } = createLaneGeometry(

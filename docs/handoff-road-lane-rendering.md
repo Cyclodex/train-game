@@ -13,19 +13,24 @@ only (other direction's `laneCount` is 0); "bidirectional" = both.
   ORIGINAL code. Lanes anchor to the tile **centreline**; the outer/kerb lane
   drops; gore = `laneDropGore()` (point upstream, widens downstream). This was
   already correct and is the reference look.
-- **One-way** (`/test/.../roadonewaylanes`): NEW code I added. Lanes **left-align
-  to the run's widest lane count** so the through lanes are dead straight and the
-  road drops/adds lanes on the RIGHT (motorway style). Gore = `oneWayClosingGore()`
-  (now also point-upstream/widen-downstream after a fix).
+- **One-way** (`/test/.../roadonewaylanes`): lanes **kerb-anchor (index 0 = kerb,
+  +n right-of-travel) to the run's widest lane count** so the through lanes are dead
+  straight and the road drops/adds lanes on the LEFT / centre side (−n). This matches
+  the canonical `index 0 = kerb` used by the editor, sim and two-way junctions, so a
+  one-way junction reads left-lane→left / mid→straight / right-lane→right like a normal
+  cross. Gore = `oneWayClosingGore()` (point-upstream/widen-downstream).
+  (Until 2026-06-15 one-way counted index0=LEFT, which split a junction lane's straight
+  and turn arrows to opposite sides — fixed by flipping `oneWayLaneOffsetPx`, render only.)
 
 ## Key files / functions
 
 - `src/sim/laneOffset.ts`
-  - `oneWayLaneOffsetPx(lanePos, runMax, tileSize)` = `(lanePos + 0.5 - runMax/2)·W`.
-    The **car driving-line lateral offset for one-way**: lane 0 = leftmost
-    (through), highest index = right kerb (the lane that ends). No seam taper —
-    a surviving lane has the same offset on every tile of the run, so it's
-    straight; a merging car eases left as its fractional `lanePos` drops.
+  - `oneWayLaneOffsetPx(lanePos, runMax, tileSize)` = `(runMax/2 - 0.5 - lanePos)·W`.
+    The **car driving-line lateral offset for one-way**: lane 0 = kerb (right of
+    travel), highest index = centre/left (the lane that ends). Same form as
+    `laneOffsetConstPx`. No seam taper — a surviving lane has the same offset on
+    every tile of the run, so it's straight; a merging car eases toward the kerb as
+    its fractional `lanePos` drops.
   - `laneOffsetPx(...)` + `laneSeamOffsetPx(..., centred)`: the **bidirectional**
     offset (centred clamp). NOTE: the `centred=true` branch (an old one-way
     "band-substitution" attempt) is now **unused in production** — dead-ish code,
@@ -38,19 +43,20 @@ only (other direction's `laneCount` is 0); "bidirectional" = both.
   - `oneWayRunMaxAt(coord, entry)` + `isOneWayStraightAt`: walk the contiguous
     one-way straight run for its max lane count. Exposed as `game.roadOneWayRunMax`.
   - The **simulation is unchanged**: `src/sim/road.ts` `desiredLane` keeps lanes
-    `0..n-1` and merges the highest index down → under left-align that's "keep the
-    left/through lanes, drop the right". The renderer must match the sim's lane
-    indexing, not the other way round.
+    `0..n-1` and merges the highest index down → under kerb-anchor (index0=kerb)
+    that's "keep the kerb lanes, drop the centre". The sim is pure index-space; the
+    renderer defines which physical side an index sits on, so the renderer matches
+    the sim's lane indexing, not the other way round.
 - `src/components/Tile.vue`
   - `roadPaths` (surface + kerb edges + lane-divider markings): has a one-way
-    branch (left-aligned ribbon `roadRibbonPolygonPath`, straight left kerb,
-    survivor dividers via `roadParallelLine`, opening dividers on a widen) and the
-    bidirectional branch below it.
-  - `laneGraphOverlay` (the cyan debug lines, debug mode): one-way uses
-    `oneWayLaneOffsetPx`-equivalent; **must stay identical to `couplerOffset`** or
-    the debug lines lie about where cars drive.
+    branch (kerb-anchored ribbon `roadRibbonPolygonPath`, straight right/+n kerb,
+    centre (−n) edge tapers, survivor dividers via `roadParallelLine`, opening
+    dividers on a widen) and the bidirectional branch below it.
+  - `laneGraphOverlay` (the cyan debug lines, debug mode): one-way calls the SAME
+    `oneWayLaneOffsetPx` as the car (not a re-derived formula) — **must stay
+    identical to `couplerOffset`** or the debug lines lie about where cars drive.
   - `laneDropOverlay` (gore + merge arrows): one-way branch uses `oneWayClosingGore`
-    + `oneWayMergeArrowPath` on the +n (right) side.
+    + `oneWayMergeArrowPath` on the −n (centre) side.
 - `src/tiles/roadGeometry.ts`: `roadRibbonPolygonPath`, `roadParallelLine`,
   `oneWayClosingGore`, `oneWayMergeArrowPath` (one-way); `laneDropGore`,
   `laneDropArrowPath/Plan`, `roadSurfacePolygonPath`, `roadLaneMarkingPaths`

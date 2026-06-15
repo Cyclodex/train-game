@@ -3,7 +3,7 @@
 //
 // A road vehicle drives the tile centreline pushed sideways (right-of-travel) by
 // a lateral offset that follows the painted lane markings: a seam taper on a
-// straight, the highway left-align on a one-way road, the corner-fillet glide on
+// straight, the highway kerb-anchor on a one-way road, the corner-fillet glide on
 // a turn. The renderer positions each car body on that offset path; the sim must
 // know the SAME offset to measure the real driven length of a segment (so a car
 // holds a constant world speed across straights and turns, and a semi's cab and
@@ -135,8 +135,8 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     const entry = s.entryPort;
     const exit = s.exitPort;
     if (bandAt(s.coord, entry) <= 0) return { offEntry: 0, offExit: 0 };
-    // One-way STRAIGHT: highway lane drop. Left-align to the run's widest count so
-    // the through lanes are dead straight and the right lane ends.
+    // One-way STRAIGHT: highway lane drop. Kerb-anchor (index 0) to the run's widest
+    // count so the through lanes are dead straight and the centre lane ends.
     if (exit !== null && exit === oppositePort(entry) && isOneWayStraightAt(s.coord, entry)) {
       const off = oneWayLaneOffsetPx(lanePos, oneWayRunMaxAt(s.coord, entry), tileSize);
       return { offEntry: off, offExit: off };

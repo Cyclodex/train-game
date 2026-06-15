@@ -4,7 +4,13 @@ import { Level } from "@/tiles/model";
 import { nWayLanes, laneCount, laneCountAt } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { laneOffsetPx, laneOffsetConstPx, seamBand, seamPositioningBand } from "@/sim/laneOffset";
+import {
+  laneOffsetPx,
+  laneOffsetConstPx,
+  oneWayLaneOffsetPx,
+  seamBand,
+  seamPositioningBand,
+} from "@/sim/laneOffset";
 import { Coordinates } from "@/types";
 
 // These tests pin the lateral-offset continuity that fixes the "cars snap
@@ -192,6 +198,44 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
     const level = laneRoad([2, 2, 1]);
     const offs = sweepOffsets(level, 3, 0.5); // a half-merged car
     expect(maxStep(offs)).toBeLessThan(W * 0.12);
+  });
+});
+
+describe("oneWayLaneOffsetPx — kerb-anchored (index 0 = kerb, right-of-travel)", () => {
+  const W = TILE * 0.14; // 28px lane width at TILE=200
+
+  // The live one-way car/overlay offset. Lane 0 MUST sit on the kerb (+n,
+  // right-of-travel) and the highest index on the centre side (−n), matching the
+  // canonical `index 0 = kerb` used by the editor, the sim (kerbMostLane = min
+  // index) and two-way junctions. This is the regression guard for the one-way ↔
+  // canon unification: if anyone reverts to the old left-align `(i+0.5−R/2)`,
+  // index 0 lands on the LEFT and these fail.
+  it("places lane 0 on the kerb (+n) and the highest index on the centre (−n)", () => {
+    expect(oneWayLaneOffsetPx(0, 3, TILE)).toBeCloseTo(+W, 5); // kerb
+    expect(oneWayLaneOffsetPx(1, 3, TILE)).toBeCloseTo(0, 5); // middle
+    expect(oneWayLaneOffsetPx(2, 3, TILE)).toBeCloseTo(-W, 5); // centre/left
+  });
+
+  it("is identical to laneOffsetConstPx(band = runMax/2) — one canon for every lane", () => {
+    for (const runMax of [1, 2, 3, 4, 5]) {
+      for (let i = 0; i < runMax; i++) {
+        expect(oneWayLaneOffsetPx(i, runMax, TILE)).toBeCloseTo(
+          laneOffsetConstPx(i, runMax / 2, TILE),
+          9,
+        );
+      }
+    }
+  });
+
+  it("a 1-lane one-way run sits centred (offset 0)", () => {
+    expect(oneWayLaneOffsetPx(0, 1, TILE)).toBeCloseTo(0, 5);
+  });
+
+  it("is run-constant (no seam taper): same offset for any runMax-anchored lane", () => {
+    // Lane 0 is always at +(runMax/2−0.5)·W regardless of the local tile count —
+    // the kerb lane runs dead straight along the run.
+    expect(oneWayLaneOffsetPx(0, 4, TILE)).toBeCloseTo((4 / 2 - 0.5) * W, 5);
+    expect(oneWayLaneOffsetPx(0, 2, TILE)).toBeCloseTo((2 / 2 - 0.5) * W, 5);
   });
 });
 

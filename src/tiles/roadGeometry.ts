@@ -307,12 +307,14 @@ export function roadSurfacePolygonPath(
   return `M ${ax} ${ay} L ${bx} ${by} L ${cx} ${cy} L ${dx} ${dy} Z`;
 }
 
-// A left-anchored road ribbon for a ONE-WAY HIGHWAY tile: the surface fills
-// between a LEFT edge and a RIGHT edge whose offsets (px along +n, right of
-// travel) are given independently at the entry and exit ends. One-way roads
-// left-align to the run's widest count, so the left edge is a straight constant
-// offset and the right edge tapers in (a lane drop) or out (a lane added) — the
-// motorway look, vs the symmetric trapezoid of `roadSurfacePolygonPath`.
+// A kerb-anchored road ribbon for a ONE-WAY HIGHWAY tile: the surface fills
+// between a centre (left, −n) edge and a kerb (right, +n) edge whose offsets (px
+// along +n, right of travel) are given independently at the entry and exit ends.
+// One-way roads anchor to the kerb (index 0) at the run's widest count, so the
+// kerb edge is a straight constant offset and the centre edge tapers in (a lane
+// drop) or out (a lane added) — the motorway look, vs the symmetric trapezoid of
+// `roadSurfacePolygonPath`. (The four offset params are plain +n distances; the
+// caller decides which edge is constant — this fn is side-neutral.)
 export function roadRibbonPolygonPath(
   entry: Port,
   exit: Port,
@@ -342,12 +344,13 @@ export function roadParallelLine(entry: Port, exit: Port, size: number, dA: numb
   return taperedParallel(entry, exit, size, dA, dB);
 }
 
-// A lane-closure gore (Sperrfläche) for a ONE-WAY HIGHWAY narrowing, on the RIGHT
-// (+n) side where the road sheds its outermost lane. The closed region is the
-// band between the closing lane's INNER divider and the OUTER kerb; offsets are
-// px along +n at each end. Where the lane has fully closed the inner and kerb
-// offsets coincide and the quad degenerates to a triangle. Returns the closed
-// polygon + clipped diagonal hatch, like `laneDropGore`.
+// A lane-closure gore (Sperrfläche) for a ONE-WAY HIGHWAY narrowing, on the centre
+// (LEFT, −n) side where a kerb-anchored road sheds its centre-most lane. The closed
+// region is the band between the closing lane's INNER divider and the OUTER (centre)
+// edge; offsets are px along +n at each end (negative = the −n centre side). Where
+// the lane has fully closed the inner and outer offsets coincide and the quad
+// degenerates to a triangle. Returns the closed polygon + clipped diagonal hatch,
+// like `laneDropGore`. Side-neutral: the caller's offset signs choose the side.
 export function oneWayClosingGore(
   entry: Port,
   exit: Port,
@@ -412,12 +415,15 @@ export function oneWayMergeArrowPath(
   const dx = b.x - a.x, dy = b.y - a.y;
   const len = Math.hypot(dx, dy) || 1;
   const fx = dx / len, fy = dy / len;
-  const n = perpUnit(a, b); // +n right-of-travel; closing lane is on +n
+  const n = perpUnit(a, b); // +n right-of-travel
   const along0 = alongT * len;
-  // Tail sits further out (+n), head leans inward (toward the centreline) so the
-  // chevron points the way the closing lane merges (left).
-  const tailOff = laneOff + 0.3 * LANE_W;
-  const headOff = laneOff - 0.3 * LANE_W;
+  // The chevron leans toward the centreline (the merge direction): the head sits
+  // closer to centre (smaller |offset|), the tail further out. `toward` is the sign
+  // of the closing lane's side, so the lean is correct whichever side the lane
+  // closes on (a kerb-anchored one-way drops its centre lane on −n).
+  const toward = Math.sign(laneOff) || 1;
+  const tailOff = laneOff + toward * 0.3 * LANE_W; // further from centre
+  const headOff = laneOff - toward * 0.3 * LANE_W; // toward centre (merge direction)
   const tail = { x: a.x + fx * (along0 - HALF) + n.x * tailOff, y: a.y + fy * (along0 - HALF) + n.y * tailOff };
   const head = { x: a.x + fx * (along0 + HALF) + n.x * headOff, y: a.y + fy * (along0 + HALF) + n.y * headOff };
   const ang = Math.atan2(head.y - tail.y, head.x - tail.x);

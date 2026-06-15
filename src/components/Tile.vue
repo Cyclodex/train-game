@@ -330,7 +330,7 @@ import {
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
-import { seamPositioningBand, laneSeamOffsetPx, positioningBand } from "@/sim/laneOffset";
+import { seamPositioningBand, laneSeamOffsetPx, positioningBand, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -561,10 +561,11 @@ class Tile extends Vue {
       const jA = na ? this.game.roadIsJunctionAt(na) : false;
       const jB = nb ? this.game.roadIsJunctionAt(nb) : false;
 
-      // One-way HIGHWAY tile: left-align to the run's widest lane count so the
-      // through lanes run dead straight and lanes are added / dropped on the RIGHT
-      // (+n). The left kerb is a constant offset; the right kerb tapers. See
-      // sim/laneOffset.ts oneWayLaneOffsetPx for the matching car offset.
+      // One-way HIGHWAY tile: anchor the run's widest lane count to the KERB (index
+      // 0, +n right-of-travel) so the through lanes run dead straight and lanes are
+      // added / dropped on the LEFT / centre side (−n). The right kerb is a constant
+      // offset; the left (centre) kerb tapers. See sim/laneOffset.ts
+      // oneWayLaneOffsetPx for the matching car offset (index 0 = kerb).
       if (selfA === 0 || selfB === 0) {
         const fwdA = selfA > 0; // carrying direction a→b?
         const entry = fwdA ? a : b;
@@ -579,35 +580,36 @@ class Tile extends Vue {
         const entryCount = !jEntry && crossEntry > 0 ? Math.min(m, crossEntry) : m;
         const exitCount = !jExit && crossExit > 0 ? Math.min(m, crossExit) : m;
         const R = this.game.roadOneWayRunMax(coord, entry);
-        const leftOff = -(R / 2) * LANE_W; // constant through-side kerb
+        const kerbOff = (R / 2) * LANE_W; // constant kerb (right, +n, index 0 side)
         // The closing-lane tarmac stays FULL width across a narrowing tile (the
         // lane is closed by the hatched gore, not by the kerb tapering — a real
-        // motorway lane drop); it only grows on a WIDENING. So the right kerb runs
-        // at the wider of the two seam counts and is straight on a narrowing.
-        const rightEntry = leftOff + entryCount * LANE_W;
-        const rightExit = leftOff + Math.max(entryCount, exitCount) * LANE_W;
+        // motorway lane drop); it only grows on a WIDENING. So the centre (left)
+        // edge runs at the wider of the two seam counts and is straight on a narrowing.
+        const innerEntry = kerbOff - entryCount * LANE_W;
+        const innerExit = kerbOff - Math.max(entryCount, exitCount) * LANE_W;
         const owMarkings: LaneMarkingPath[] = [];
         // Survivor dividers — straight lines between through-lanes present at both
-        // ends (lane k boundary at (k − R/2)·W). The boundary of the dropping lane
-        // is drawn by the closure gore (laneDropOverlay), so stop before it.
+        // ends (lane k boundary at (R/2 − k)·W, measured from the kerb). The
+        // boundary of the dropping lane is drawn by the closure gore
+        // (laneDropOverlay), so stop before it.
         const survivors = Math.min(entryCount, exitCount);
         for (let k = 1; k < survivors; k++) {
-          const d = (k - R / 2) * LANE_W;
+          const d = (R / 2 - k) * LANE_W;
           owMarkings.push({ d: roadParallelLine(entry, exit, size, d, d), kind: "inner" });
         }
-        // A widening opens new lanes on the right: their dividers fan out from the
-        // entry kerb to their straight line.
+        // A widening opens new lanes on the LEFT (centre side): their dividers fan
+        // out from the entry kerb-aligned edge to their straight line.
         for (let k = entryCount; k < exitCount; k++) {
-          const dOpen = (entryCount - R / 2) * LANE_W;
-          const dStraight = (k - R / 2) * LANE_W;
+          const dOpen = (R / 2 - entryCount) * LANE_W;
+          const dStraight = (R / 2 - k) * LANE_W;
           owMarkings.push({ d: roadParallelLine(entry, exit, size, dOpen, dStraight), kind: "inner" });
         }
         return {
-          surface: roadRibbonPolygonPath(entry, exit, size, leftOff, rightEntry, leftOff, rightExit),
+          surface: roadRibbonPolygonPath(entry, exit, size, innerEntry, kerbOff, innerExit, kerbOff),
           laneMarkings: owMarkings,
           edges: [
-            { d: roadParallelLine(entry, exit, size, leftOff, leftOff), dashed: false },
-            { d: roadParallelLine(entry, exit, size, rightEntry, rightExit), dashed: false },
+            { d: roadParallelLine(entry, exit, size, kerbOff, kerbOff), dashed: false },
+            { d: roadParallelLine(entry, exit, size, innerEntry, innerExit), dashed: false },
           ],
           mismatch: false,
           mismatchTip: "",
@@ -833,9 +835,10 @@ class Tile extends Vue {
       // this equals (forward + backward)/2 — unchanged. See game.ts centeredBandAt.
       const selfBand = laneCountAt(road, lane.from) / 2;
       // One-way ⟺ no oncoming lanes exit through this approach. A one-way STRAIGHT
-      // is a highway lane drop: lanes left-align to the run's widest count and the
-      // offset is (index + 0.5 − R/2)·W, dead straight (the through lanes don't
-      // move; the right lane ends). See sim/laneOffset.ts oneWayLaneOffsetPx.
+      // is a highway lane drop: lanes anchor (kerb, index 0) to the run's widest
+      // count, dead straight (the through lanes don't move; the centre lane ends).
+      // The offset is computed by the SAME `oneWayLaneOffsetPx` the car uses, so
+      // the overlay can never drift from where a vehicle drives.
       const oneWay = laneCount(road, lane.from) === laneCountAt(road, lane.from);
 
       // busTo exits are movements only buses may take off a shared car lane —
@@ -880,8 +883,8 @@ class Tile extends Vue {
               !jExit && nExitFwd > 0 ? Math.min(localCount, nExitFwd) : localCount;
             const entryLane = Math.min(lane.index, Math.max(1, entrySeam) - 1);
             const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
-            const offEntry = (entryLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
-            const offExit = (exitLane + 0.5 - R / 2) * LANE_WIDTH_PX_FRAC * size;
+            const offEntry = oneWayLaneOffsetPx(entryLane, R, size);
+            const offExit = oneWayLaneOffsetPx(exitLane, R, size);
             out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus });
             continue;
           }
@@ -959,10 +962,11 @@ class Tile extends Vue {
       if (oppositePort(a) !== b) continue;
       const selfA = laneCount(this.tile.road, a);
       const selfB = laneCount(this.tile.road, b);
-      // One-way HIGHWAY edge: the road left-aligns and sheds its outermost lane on
-      // the RIGHT (+n). Paint the closing lane as a hatched Sperrfläche island
-      // (between the survivors' divider and the tapering right kerb) with merge
-      // arrows leaning left. See roadPaths for the matching left-aligned surface.
+      // One-way HIGHWAY edge: the road is kerb-anchored (index 0, +n) and sheds its
+      // centre-most lane on the LEFT (−n). Paint the closing lane as a hatched
+      // Sperrfläche island (between the survivors' divider and the tapering left /
+      // centre edge) with merge arrows leaning right toward the kerb-side survivors.
+      // See roadPaths for the matching kerb-anchored surface.
       if (selfA === 0 || selfB === 0) {
         const fwdA = selfA > 0;
         const entry = fwdA ? a : b;
@@ -982,17 +986,17 @@ class Tile extends Vue {
           // a real motorway lane drop, not a tarmac that pinches. Bounded below by
           // the full-width kerb (straight) and above by a line diverging from that
           // kerb (upstream point) to the survivors' boundary (downstream).
-          const kerbOff = (entryCount - R / 2) * W; // full-width kerb (closing-lane outer)
-          const innerOff = (exitCount - R / 2) * W; // survivors' boundary (gore inner, downstream)
+          const kerbOff = (R / 2 - entryCount) * W; // full-width centre edge (closing-lane outer, −n)
+          const innerOff = (R / 2 - exitCount) * W; // survivors' boundary (gore inner, downstream)
           gores.push({
-            // (innerEntry, kerbEntry, innerExit, kerbExit): point at the kerb
+            // (innerEntry, kerbEntry, innerExit, kerbExit): point at the centre edge
             // upstream (inner==kerb), widening to inner..kerb downstream.
             ...oneWayClosingGore(entry, exit, size, kerbOff, kerbOff, innerOff, kerbOff),
             clipId: `gore-${this.coordId}-${entry}-${exit}`,
           });
           // Merge arrows in the still-open part of the closing lane, leaning toward
           // the through lanes (the merge direction).
-          const laneOff = (entryCount - 0.5 - R / 2) * W; // closing lane centre
+          const laneOff = (R / 2 + 0.5 - entryCount) * W; // closing lane centre (−n side)
           for (const alongT of [0.2, 0.42]) {
             arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
           }

@@ -60,25 +60,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
   +overlay — keep lockstep.
 - Bidirectional: lanes anchor to YELLOW centreline; kerb lane drops; gore
   `laneDropGore` (point upstream, widen down).
-- One-way: no centreline; LEFT-ALIGN to run's widest count (`oneWayRunMaxAt`,
-  `game.roadOneWayRunMax`) = motorway drop; RIGHTmost lane(s) end w/ hatched island
-  (Sperrfläche)+arrows on +n. lane i offset=(i+0.5−R/2)·W. SIM UNCHANGED
-  (`road.ts desiredLane` merges highest idx down). Renderer-only fork
-  (`oneWayLaneOffsetPx`, `roadRibbonPolygonPath`, `oneWayClosingGore`). Centred
-  symmetric squeeze = WRONG model, abandoned.
-- BUG (one-way turn-lane offset mismatch): CANON = `index 0 = kerb, highest =
-  centre` (`editOps.ts:222`, `laneOffset.ts`). TWO-WAY junctions obey this for BOTH
-  straight and turn (each lane's straight+turn arrow start at the SAME x — verified:
-  rightmost lane straight-N and turn-E both at x170 in `crossturns3lane`), so they
-  look right. ONE-WAY breaks it: the STRAIGHT offset `oneWayLaneOffsetPx (i+0.5−R/2)`
-  puts index0 on the LEFT, but the TURN/curve offset `laneOffsetConstPx (band−0.5−i)`
-  (in `couplerOffsets`/overlay turn branch `Tile.vue:912`) keeps index0 on the kerb
-  (RIGHT) — so on a one-way approach a lane's straight and turn split to opposite
-  sides (`turnfan` @3,3: index0 straight x72-left, its east-turn x128-right). The
-  one-way STRAIGHT left-align is the mirror; it collides with canon. CAVEAT: the
-  left-align + lane-drop-island-on-the-right presentation was built around index0=
-  left, so unifying to index0=kerb needs the lane-drop side reworked too. Fix
-  car-renderer + overlay together. Fixtures: `/test/turnfan` vs `/test/crossturns3lane`.
+- One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
+  widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
+  (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i
+  offset=(R/2−0.5−i)·W (= `laneOffsetConstPx` form — MATCHES editor/sim/turns/two-way).
+  SIM UNCHANGED (`road.ts desiredLane` merges highest idx down = drops the centre lane;
+  the sim is pure index-space, the RENDER defines which physical side an index sits).
+  Renderer-only (`oneWayLaneOffsetPx` + `Tile.vue` one-way surface/markings/overlay/gore
+  + `oneWayMergeArrowPath` sign-aware lean). Centred symmetric squeeze = WRONG, abandoned.
+- index0 = kerb is the ONE canon for ALL lanes (`lanes.ts:31`, `editOps.ts:222`,
+  `kerbMostLane`=min idx). The overlay straight branch calls the SAME
+  `oneWayLaneOffsetPx` as the car (`Tile.vue` ~883) — never re-derive the formula, or
+  cyan drifts from where cars drive.
+- FIXED 2026-06-15 (one-way↔canon unify): one-way lanes used to count index0=LEFT while
+  everything else counts index0=KERB → at a one-way junction a lane's straight & turn
+  arrows split to opposite sides, and overtake/keep-right read the wrong physical side.
+  Flipped `oneWayLaneOffsetPx` to index0=kerb (render-only, no sim change). Now
+  left-lane→left, mid→straight, right-lane→right like a normal junction; lane-drop island
+  moved to the centre side (cosmetic, more realistic = median lane ends). Verified on
+  `/test/turnfan` (junctions: L=west,M=straight,R=east+straight, arrows lane-aligned),
+  `/test/roadonewaylanes` (drop coherent), `/test/crossturns3lane` (two-way, unchanged);
+  1327 unit tests green incl. keep-right overtake.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).

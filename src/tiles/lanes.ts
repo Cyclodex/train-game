@@ -444,8 +444,9 @@ export function isOneWayStraight(road: Lane[] | undefined, entry: Port): boolean
 
 // The widest lane count along the contiguous one-way straight run through the
 // tile at `coord` (walking upstream + downstream in the travel direction).
-// One-way roads left-align to this width so the through lanes run straight and
-// lanes drop on the right (see sim/laneOffset.ts oneWayLaneOffsetPx). `roadAt`
+// One-way roads kerb-anchor (index 0) to this width so the through lanes run
+// straight and lanes drop on the centre/left side (see sim/laneOffset.ts
+// oneWayLaneOffsetPx). `roadAt`
 // supplies each tile's road layer — the game reads its level, the editor its
 // working copy — so both views share the exact same walk.
 export function oneWayRunMax(
