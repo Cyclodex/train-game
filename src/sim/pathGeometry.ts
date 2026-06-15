@@ -100,6 +100,41 @@ export function roadSegmentLength(entryPort: Port, exitPort: Port, size = 1): nu
   return (Math.PI / 2) * (size / 2);
 }
 
+// The TRUE driven length of the lane-offset path a road vehicle follows across
+// one tile, in the same units as `size` — the offset counterpart of
+// roadSegmentLength (which is the bare centreline). A vehicle does NOT drive the
+// centreline: since #32 it drives the lane offset (a turn follows the corner
+// fillet of the two lane lines, whose length grows on an outer lane and shrinks
+// on an inner one). The sim uses this to (a) hold a constant WORLD speed across
+// straights and turns and (b) space a semi's cab and trailer by real driven
+// distance so their gap stays constant through a bend (issues #36 / #37).
+//
+//  • TURN (adjacent ports): the fillet length lenIn + lenArc + lenOut
+//    (turnLaneFrame.total). Degenerate offsets fall back to the centreline arc.
+//  • STRAIGHT / Center link: the offset path is itself a straight line (an affine
+//    offset of a straight is straight), so its length is the distance between its
+//    two offset endpoints — exact, and = `size` for a uniform centred lane.
+export function laneSegmentLength(
+  entryPort: Port,
+  exitPort: Port,
+  size: number,
+  offEntry: number,
+  offExit: number
+): number {
+  const isTurn =
+    entryPort !== Position.Center &&
+    exitPort !== Position.Center &&
+    oppositePort(entryPort) !== exitPort;
+  if (isTurn) {
+    const f = turnLaneFrame(entryPort, exitPort, size, offEntry, offExit);
+    if (f) return f.total;
+    return roadSegmentLength(entryPort, exitPort, size); // degenerate: centreline arc
+  }
+  const p0 = laneOffsetPointAt(entryPort, exitPort, size, offEntry, offExit, 0);
+  const p1 = laneOffsetPointAt(entryPort, exitPort, size, offEntry, offExit, 1);
+  return Math.hypot(p1.x - p0.x, p1.y - p0.y);
+}
+
 // Numerically integrate the arc length of a quadratic Bézier a -> c -> b.
 function quadLength(a: Pt, c: Pt, b: Pt, samples = 64): number {
   let len = 0;

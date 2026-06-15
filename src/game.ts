@@ -16,20 +16,11 @@ import {
   carLaneIndices,
   roadPortsOf,
   isRoadJunction,
-  isOneWayStraight,
-  oneWayRunMax,
-  junctionExitOffsetPx,
   turnLandsOnBusLane,
-  turnSeamBand,
   VehicleClass,
   type Lane,
 } from "@/tiles/lanes";
-import {
-  laneSeamOffsetPx,
-  laneOffsetConstPx,
-  oneWayLaneOffsetPx,
-  seamPositioningBand,
-} from "@/sim/laneOffset";
+import { createLaneGeometry } from "@/sim/laneGeometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
@@ -693,74 +684,14 @@ export function createGame(
   // and reconcile the reactive list by id so Vue reuses the car DOM nodes. A
   // vehicle contributes one render box per body segment (a semi → cab + trailer),
   // each keyed `${carId}#${i}` and sized to its segment length.
-  // The same-direction lane band of the road tile at `coord` entered via `port`
-  // (0 if there is no road / no lanes from that port). The band a car drives in
-  // is the lanes sharing its travel direction, i.e. those entering via `port`.
-  function bandAt(coord: Coordinates, port: Position): number {
-    const id = getCoordinatesId(coord);
-    return laneCount(level[id]?.road, port);
-  }
-
-  // The lane-positioning band a car drives in: half the lanes physically crossing
-  // this port's boundary (both directions), so a car sits inside its own half of
-  // the ribbon. `laneCountAt(port)` counts forward (entering) PLUS backward
-  // (exiting-through) lanes, which is correct on a CURVE too — there the oncoming
-  // lanes enter from the adjacent exit port, not oppositePort(port) (which carries
-  // no lanes, the bug that halved the curve band and crossed the lanes). For a
-  // straight/one-way this equals (forward + backward)/2, so those are unchanged.
-  function centeredBandAt(coord: Coordinates, port: Position): number {
-    const road = level[getCoordinatesId(coord)]?.road;
-    return laneCountAt(road, port) / 2;
-  }
-
-  // One-way straight detection + run-widest walk, shared with the editor's stub
-  // game (tiles/lanes.ts isOneWayStraight / oneWayRunMax) so both views agree.
-  function isOneWayStraightAt(coord: Coordinates, entry: Position): boolean {
-    return isOneWayStraight(level[getCoordinatesId(coord)]?.road, entry);
-  }
-
-  function oneWayRunMaxAt(coord: Coordinates, entry: Position): number {
-    return oneWayRunMax(c => level[getCoordinatesId(c)]?.road, coord, entry);
-  }
-
-  // The lateral offset (px, right-of-travel, this tile's frame) a vehicle of class
-  // `cls` in approach lane `entryLane` should arrive at on the EXIT arm of a TURN
-  // through `coord` (entry→exit adjacent — a curve or junction movement). It is the
-  // offset of the lane the vehicle lands in on the exit arm (junctionExitLane),
-  // measured on that arm's centred band, so a turn onto a narrower/wider arm — or a
-  // bus turning toward a bus lane — glides to a REAL lane instead of holding the
-  // approach offset and snapping at the boundary. Returns null when the move has no
-  // road exit arm (dead-end / map edge): the caller then holds the approach offset.
-  function turnExitOffsetPx(
-    coord: Coordinates,
-    entry: Position,
-    exit: Position,
-    entryLane: number,
-    cls: VehicleClass,
-  ): number | null {
-    const here = level[getCoordinatesId(coord)]?.road;
-    const next = neighborCoord(coord, exit);
-    if (!next) return null;
-    const exitRoad = level[getCoordinatesId(next)]?.road;
-    if (!exitRoad) return null;
-    const exitApproach = oppositePort(exit);
-    // Seam-match the target band to what the RECEIVING tile will use to position
-    // the vehicle once it crosses (its raw laneCountAt over-counts a junction
-    // arm), or the glide lands half a lane wide and snaps at the entrance seam.
-    const exitBand = turnSeamBand(here, exit, exitRoad, exitApproach);
-    if (exitBand <= 0) return null;
-    return junctionExitOffsetPx(
-      here,
-      entry,
-      entryLane,
-      exit,
-      exitRoad,
-      exitApproach,
-      exitBand,
-      tileSize,
-      cls,
-    );
-  }
+  // Lane-offset geometry — where a car body sits laterally on each tile (seam
+  // tapers, the one-way highway left-align, the corner-fillet turn glide). Shared
+  // Vue-free with the road sim (sim/laneGeometry.ts) so the renderer and the sim
+  // draw/measure the EXACT same offset path; built with the px `tileSize` here.
+  const { couplerOffsets, turnExitOffsetPx, oneWayRunMaxAt } = createLaneGeometry(
+    level,
+    tileSize,
+  );
 
   // Does a class-`cls` vehicle in approach lane `entryLane` LAND on a bus lane on
   // the EXIT arm of a TURN through `coord` (entry→exit adjacent)? The debug
@@ -789,71 +720,6 @@ export function createGame(
       oppositePort(exit),
       cls,
     );
-  }
-
-  // The junction-aware positioning band of the tile at `coord` where its `port`
-  // seam meets the neighbour there: the road's real band is authoritative at a
-  // junction↔road seam (see sim/laneOffset.ts seamPositioningBand) — a junction's
-  // own per-arm `laneCountAt` counts movements, not road width, so plain min-ing
-  // against it mis-positions lanes whenever it under-counts an arm.
-  function positioningBandAt(coord: Coordinates, port: Position): number {
-    const selfBand = centeredBandAt(coord, port);
-    const nb = neighborCoord(coord, port);
-    if (!nb) return selfBand;
-    return seamPositioningBand(
-      selfBand,
-      isRoadJunction(level[getCoordinatesId(coord)]?.road),
-      centeredBandAt(nb, oppositePort(port)),
-      isRoadJunction(level[getCoordinatesId(nb)]?.road),
-    );
-  }
-
-  // Seam-aware lateral offsets (px, right-of-travel) for one coupler: the offset
-  // at the tile's entry seam and at its exit seam. The PATH between them is the
-  // shared lane geometry (sim/pathGeometry.ts laneSegmentPointAt): a straight
-  // interpolates linearly (a continuing lane glides as the painted kerb shifts);
-  // a TURN follows the corner fillet of the two lane lines, easing from the
-  // approach lane to the lane it lands in on the exit arm (turnExitOffsetPx) —
-  // tangent-continuous at both seams even between arms of different widths.
-  // Reads the coupler's OWN tile, so front and rear couplers straddling a seam
-  // each follow their own tile's geometry (preserving the body lean).
-  function couplerOffsets(
-    s: CarSample,
-    fallbackLane: number,
-    cls: VehicleClass,
-  ): { offEntry: number; offExit: number } {
-    const lanePos = s.lanePos ?? fallbackLane;
-    const entry = s.entryPort;
-    const exit = s.exitPort;
-    if (bandAt(s.coord, entry) <= 0) return { offEntry: 0, offExit: 0 };
-    // One-way STRAIGHT: highway lane drop. Left-align to the run's widest count
-    // so the through lanes are dead straight and the right lane ends (see
-    // sim/laneOffset.ts oneWayLaneOffsetPx). A merging car's fractional lane index
-    // eases it left onto the surviving lane; no seam taper is needed.
-    if (exit !== null && exit === oppositePort(entry) && isOneWayStraightAt(s.coord, entry)) {
-      const off = oneWayLaneOffsetPx(lanePos, oneWayRunMaxAt(s.coord, entry), tileSize);
-      return { offEntry: off, offExit: off };
-    }
-    const selfBand = centeredBandAt(s.coord, entry);
-    // Bidirectional straight tile: taper the band from the entry seam to the exit
-    // seam so a continuing lane glides as the kerb shifts (the kerb lane merges
-    // inward, inner lanes hold — the clamp in laneSeamOffsetPx).
-    if (exit !== null && exit === oppositePort(entry)) {
-      return {
-        offEntry: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, entry), tileSize),
-        offExit: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, exit), tileSize),
-      };
-    }
-    // Curve / junction: a uniform straight-through curve keeps a constant offset
-    // (offEntry === offExit — the fillet is the plain concentric arc), but a TURN
-    // onto a different arm eases to the lane it lands in on the exit arm, so it
-    // never holds the wide-arm offset across the tile and snaps at the boundary.
-    // Buses glide toward the exit arm's bus lane the same way. Dead-end / map
-    // edge → hold the approach offset.
-    const offEntry = laneOffsetConstPx(lanePos, positioningBandAt(s.coord, entry), tileSize);
-    if (exit === null) return { offEntry, offExit: offEntry };
-    const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
-    return { offEntry, offExit: offExit ?? offEntry };
   }
 
   function updateRoadCars() {
