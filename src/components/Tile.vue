@@ -755,9 +755,25 @@ class Tile extends Vue {
     size: number,
   ): LaneMarkingPath[] {
     const road = this.tile.road ?? [];
+    // The SOLID dedicated-turn-lane guide is reserved for ONE-WAY junctions (no arm
+    // carries oncoming traffic): every port is either an entry OR an exit, never
+    // both. A normal two-way junction keeps the all-dashed look the user expects.
+    const oneWayJunction = (() => {
+      const ports = new Set<Position>();
+      for (const l of road) {
+        ports.add(l.from);
+        for (const e of laneAllExits(l)) ports.add(e);
+      }
+      for (const p of ports) {
+        const enters = road.some(l => l.from === p);
+        const exits = road.some(l => laneAllExits(l).includes(p));
+        if (enters && exits) return false; // a bidirectional arm → normal junction
+      }
+      return true;
+    })();
     // Per-direction glide offsets for the edge's two possible movements.
-    // `dedicated` = the turning lane may ONLY turn here (no straight-through), so
-    // its guide is drawn SOLID — a line you don't cross — rather than dashed.
+    // `dedicated` = the turning lane may ONLY turn here (no straight-through), so on
+    // a ONE-WAY junction its guide is drawn SOLID — a line you don't cross.
     const moves = new Map<
       Position,
       { offEntry: number; offExit: number; dedicated: boolean }
@@ -816,7 +832,7 @@ class Tile extends Vue {
             turn.push({
               d: laneSegmentPathD(from, to, size, m.offEntry + edge, m.offExit + edge),
               kind: "inner",
-              solid: m.dedicated,
+              solid: m.dedicated && oneWayJunction,
             });
         }
       }

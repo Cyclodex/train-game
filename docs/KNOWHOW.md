@@ -45,13 +45,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   onto the lane nearest the straight block. 1L→nL = nearest-lane landings, no fan-
   out. Capacities PER vehicle class (skip bus lanes for cars). Full table:
   `docs/superpowers/specs/2026-06-12-junction-lane-capacity-design.md`.
-- Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): a DEDICATED
-  turn lane (its derived `to` does NOT include the straight `oppositePort(from)`,
-  e.g. the N≥3 inner LEFT pocket) draws a SOLID line (`marking.solid` →
-  `.road-marking-inner.road-marking-solid`, no dasharray) — a line you don't cross.
-  A SHARED lane (turn + straight) stays dashed. Check the DERIVED road (`roadAt`),
-  not raw authored lanes — `crossturns3lane`/`turnlanes` author all-turns but derive
-  a solid left pocket; `crossturns2lane` derives none (0 solid).
+- Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): ONLY at a
+  ONE-WAY junction (no arm carries oncoming ⇒ no port is both entry AND exit;
+  `oneWayJunction` flag). There, a DEDICATED turn lane (its DERIVED `to` excludes the
+  straight `oppositePort(from)`, e.g. the N≥3 inner LEFT pocket) draws a SOLID line
+  (`marking.solid` → `.road-marking-inner.road-marking-solid`, no dasharray) — a line
+  you don't cross. SHARED lanes, and EVERY guide at a NORMAL two-way junction, stay
+  dashed. Check the DERIVED road (`roadAt`), not raw authored lanes: turnfan/turnlanes
+  (one-way) → solid left pocket; crossturns3lane/bigjunction (two-way) → 0 solid.
 - Junctions NEVER lane-count-mismatch. `laneCountAt` over-counts a junction port ⇒
   naive seam check paints junctions+adjacent curves RED (recurring bug). Guard:
   `lanes.ts seamMismatch` + `game.ts roadIsJunctionAt`. Only simple curves must
