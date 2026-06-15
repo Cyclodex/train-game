@@ -2,8 +2,14 @@
 node_modules
 /dist
 
-# Claude Code local state (worktrees, hooks, session settings)
-.claude/
+# Claude Code local state (worktrees, per-user session settings) stays local,
+# but the shared, checked-in config — the SessionStart hook that installs deps
+# in web sessions, plus its registration — is re-included so every session gets
+# it. Per-user overrides live in .claude/settings.local.json (ignored).
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
 
 # Brainstorm / visual-companion mockups (Superpowers)
 .superpowers

@@ -1,10 +1,12 @@
 name: CI
 
-# Lint + unit tests on every PR and on master pushes. Guards the pipeline
-# itself: PR #25 merged a scenario the road validator rejects and master's
-# suite went red unnoticed, because nothing ran the tests outside the Claude
-# actions (#28). Note: GitHub does not create pull_request runs for PRs with
-# merge conflicts — resolve the conflict to get a CI verdict.
+# Lint + type-check + unit tests on every PR and on master pushes. Guards the
+# pipeline itself: PR #25 merged a scenario the road validator rejects and
+# master's suite went red unnoticed, because nothing ran the tests outside the
+# Claude actions (#28). The build step runs vue-tsc, the project's fastest
+# correctness check (see CLAUDE.md) — without it, TypeScript type errors pass CI
+# green. Note: GitHub does not create pull_request runs for PRs with merge
+# conflicts — resolve the conflict to get a CI verdict.
 
 on:
   pull_request:
@@ -22,4 +24,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint:nofix
+      - run: npm run build
       - run: npm run test:unit
