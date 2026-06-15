@@ -22,3 +22,14 @@ app.component("CarRouteOverlay", CarRouteOverlay);
 
 app.use(router);
 app.mount("#app");
+
+// Dev-only: expose the flat test-scenario id list so tooling can enumerate every
+// /test scenario without importing the app graph (the e2e render sweep in
+// tests/e2e/scenarios.spec.ts). The dynamic import keeps the scenario data out
+// of the production bundle.
+if (import.meta.env.DEV) {
+  void import("@/levels/test").then(({ SCENARIOS }) => {
+    (window as Window & { __scenarioIds?: string[] }).__scenarioIds =
+      SCENARIOS.map(s => s.id);
+  });
+}
