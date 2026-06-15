@@ -1691,6 +1691,73 @@ describe("bus-lane crosses flow and keep cars off the bus lane", () => {
   }
 });
 
+describe("bus-rule wiring audit (#16): kerb bus → straight+right, median bus → straight+left", () => {
+  // The buscrosses.ts header states the rule (right-hand traffic, kerb = lane 0):
+  // a KERB bus lane naturally feeds straight + the kerb-side RIGHT turn; a MEDIAN
+  // (inner) bus lane feeds straight + the median-side LEFT turn. This locks that
+  // wiring in across the whole family so a future edit can't silently re-point a
+  // bus lane at the wrong arm. busmegacross is the ONE documented exception (its
+  // north arm is inbound-only, so the natural turn target doesn't exist) — it is
+  // audited separately below.
+  const T = Position.Top, R = Position.Right, B = Position.Bottom, L = Position.Left;
+  const C = Position.Center; // never an edge port on a road lane — present only to satisfy the map type.
+  // Exit ports relative to a vehicle entering via `from` (right-hand traffic).
+  const STRAIGHT: Record<Position, Position> = { [L]: R, [R]: L, [T]: B, [B]: T, [C]: C };
+  const RIGHT: Record<Position, Position> = { [L]: B, [R]: T, [T]: L, [B]: R, [C]: C };
+  const LEFT: Record<Position, Position> = { [L]: T, [R]: B, [T]: R, [B]: L, [C]: C };
+
+  const compliant: [string, typeof buscross][] = [
+    ["buscrossboth", buscrossboth],
+    ["busmedian", busmedian],
+    ["busarterial", busarterial],
+    ["busmedianboth", busmedianboth],
+    ["busonewaycross", busonewaycross],
+  ];
+
+  for (const [name, scn] of compliant) {
+    it(`${name}: every centre bus lane feeds only straight + its kerb/median-side turn`, () => {
+      const centre = scn.level["2,2"].road!;
+      let busLanes = 0;
+      for (const lane of centre) {
+        if (lane.kind !== "bus") continue;
+        busLanes++;
+        // index 0 = kerb (straight + right); any higher index = median (straight + left).
+        const turn = lane.index === 0 ? RIGHT[lane.from] : LEFT[lane.from];
+        const allowed = new Set([STRAIGHT[lane.from], turn]);
+        for (const to of lane.to) {
+          // Every movement the bus lane offers is either straight or its own-side turn.
+          expect(allowed.has(to)).toBe(true);
+        }
+      }
+      expect(busLanes).toBeGreaterThan(0); // the scenario really has bus lanes to audit
+    });
+  }
+
+  it("busmegacross: the documented exception — north is inbound-only, so each bus lane's natural turn falls back across the rule", () => {
+    const centre = busmegacross.level["2,2"].road!;
+    // Nothing in the junction exits north (the N arm is one-way INBOUND): this is
+    // exactly why the natural kerb/median turn target is unavailable.
+    for (const lane of centre) expect(lane.to).not.toContain(T);
+
+    // Each bus lane has at least one `to` that breaks the kerb/median rule — and
+    // that broken movement is precisely the one whose own-side turn would have gone
+    // north (now impossible), so it falls back onto the south (car-only) arm.
+    let violations = 0;
+    for (const lane of centre) {
+      if (lane.kind !== "bus") continue;
+      const turn = lane.index === 0 ? RIGHT[lane.from] : LEFT[lane.from];
+      const allowed = new Set([STRAIGHT[lane.from], turn]);
+      const offside = lane.to.filter(to => !allowed.has(to));
+      for (const to of offside) {
+        violations++;
+        expect(to).toBe(B); // the fallback always lands on the south arm
+        expect(turn).toBe(T); // because the rule-correct turn target was north
+      }
+    }
+    expect(violations).toBeGreaterThan(0); // the exception is real, not vacuous
+  });
+});
+
 describe("bus-lane overlay colours a junction movement by where it LANDS", () => {
   // The debug overlay (Tile.vue) paints an arrow amber only when the movement
   // lands on a real bus lane on the EXIT arm — the rule lives in
@@ -2743,6 +2810,19 @@ describe("mixed-lane junctions route end-to-end", () => {
     expect(r.throughCentre).toBeGreaterThan(0);
     expect(r.completed).toBeGreaterThan(10);
     expect(r.allStuckTicks).toBeLessThan(80);
+  });
+
+  it("bigjunction (4-way × 3-lane dedicated turn lanes): cars cross the centre and exit, no gridlock", () => {
+    // The largest unequal-movement junction in the epic (#16 acceptance criterion):
+    // 12 directed lanes, each wired to exactly one exit (kerb→right, middle→straight,
+    // inner→left) on all four 3-lane arms. Drive it under load (maxCars 16, the
+    // `drive` default, well above the scenario's own cap of 12) and confirm cars
+    // sort, cross the centre, and clear off the far side without locking up.
+    const r = drive(bigjunction, { x: 3, y: 3 }, 7);
+    expect(r.badPos).toBe(0); // no broken positions through the dedicated turn lanes
+    expect(r.throughCentre).toBeGreaterThan(0); // cars actually traverse the crossroads
+    expect(r.completed).toBeGreaterThan(10); // sustained flow off the far side
+    expect(r.allStuckTicks).toBeLessThan(80); // no permanent deadlock under load
   });
 });
 
