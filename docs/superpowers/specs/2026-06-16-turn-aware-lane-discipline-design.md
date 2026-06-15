@@ -146,6 +146,36 @@ The registry test `tests/unit/levels/testScenarios.spec.ts` validates the map
   (debug overlay on, flat backdrop) showing the car in the correct lane on the
   approach.
 
+## Implementation amendment (what actually shipped)
+
+Branch 4 (directional pick) shipped as designed and is the core fix.
+
+**Branch 7 keep-right was NOT shipped as a blanket `kerbMostLane` pull.** During
+implementation the aggressive always-on version broke five existing road tests,
+two of which encode invariants we must keep:
+
+- `fans 1→3: a left-turner reaches the inner lane …` — the matched exit lane must
+  hold across the exit arm.
+- `overtakeloop: a ramp car lands ON its merge lane — no dip to the kerb and back`
+  — a **user-reported** regression; the blanket kerb-pull yanks a freshly-merged
+  car off lane 2 and re-creates the exact "dip" that bug fixed.
+
+The only non-regressive way to keep an always-on kerb-pull is to hold the matched
+exit lane across the whole arm (sticky `pendingExitLane`), which in turn suppresses
+buses drifting onto bus lanes — a cascade of risk for marginal benefit.
+
+Decision: keep-right is delivered where it is correct — branch 4 already sorts
+straight/right movements to the kerb on a junction **approach**, `junctionExitLane`
+kerb-aligns straight-through exits, and overtake-return pulls a passer back — so the
+branch-7 fallthrough stays `return cur` (hold the lane the last movement set). A car
+between junctions therefore keeps its lane (after a straight/right it is already
+kerb-most; after a left turn it holds the inner lane until the next approach re-sorts
+it), instead of weaving. This honours "keep-right is generally OK" without the dip.
+
+A blanket "drift any inner-lane car to the kerb on a junctionless stretch" remains
+possible as a follow-up if desired, but requires the sticky-exit-lane + bus-reorder
+work above and test updates; deliberately out of scope here.
+
 ## KNOWHOW upkeep
 
 Add one line under ROADS in `docs/KNOWHOW.md`: lane discipline on an approach is

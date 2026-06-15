@@ -40,6 +40,7 @@ import { overtakeloop } from "@/levels/test/scenarios/overtakeloop";
 import { overtakeabort } from "@/levels/test/scenarios/overtakeabort";
 import { rightturncross } from "@/levels/test/scenarios/rightturncross";
 import { noleftturn } from "@/levels/test/scenarios/noleftturn";
+import { laneDiscipline } from "@/levels/test/scenarios/laneDiscipline";
 import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { trucks } from "@/levels/test/scenarios/trucks";
 import { buslane } from "@/levels/test/scenarios/buslane";
@@ -141,7 +142,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "turning",
         label: "Turning rules",
-        scenarios: [turnlanes, rightturncross, noleftturn],
+        scenarios: [turnlanes, laneDiscipline, rightturncross, noleftturn],
       },
       {
         id: "signals",

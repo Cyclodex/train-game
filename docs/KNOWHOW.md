@@ -69,6 +69,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
+- Approach lane discipline (`road.ts desiredLane` branch F): among the lanes that
+  permit the upcoming turn (`lanesAllowingExitFor`), pick by `turnKind` — LEFT→inner
+  (max idx), RIGHT/STRAIGHT→kerb (min idx). Works for both dedicated turn pockets
+  (`allow` already a subset) AND unrestricted crosses (every lane permits → side is
+  pure discipline). Test: `/test/lane-discipline`, `laneDiscipline.spec.ts`.
+- Keep-right is delivered by F (kerb-most for straight/right on a junction APPROACH)
+  + `junctionExitLane` kerb-aligning straight exits + overtake-return — NOT a blanket
+  always-on kerb pull. A blanket `desiredLane` fallthrough→kerbMost RE-CREATES the
+  post-junction "dip to kerb and back" (overtakeloop/fan-1→3 tests) — keep the
+  fallthrough = hold `cur`.
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 

@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -905,17 +905,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
           const pool = cls === "bus" && busAllowed.length > 0 ? busAllowed : allow;
-          // Pick the nearest permitted lane (a bus prefers a permitted BUS lane).
-          // This RETURNS even when we're already on a permitted lane (best === cur):
-          // we must NOT fall through to the generic bus-lane preference below, or a
-          // bus turning where the bus lane can't (e.g. a left turn off a kerb bus
-          // lane) would be dragged back onto the bus lane every tick and oscillate.
-          // A bus only stays on the bus lane here when the bus lane actually feeds
-          // its turn (then busAllowed is non-empty and the bus lane is in `pool`).
-          const best = pool.includes(cur)
-            ? cur
-            : pool.reduce((b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b), pool[0]);
-          return clampLane(best, curCount);
+          // Turn-direction lane discipline: among the permitted lanes, a LEFT turn
+          // takes the innermost (highest index), a RIGHT turn or STRAIGHT takes the
+          // kerb-most (lowest index, keep-right). This holds whether the junction has
+          // dedicated turn pockets (then `pool` is already a subset, so the pick lands
+          // in the pocket) or is unrestricted (every lane permits the move, so the
+          // discipline alone decides the side) — fixing the "sit on the kerb then cut
+          // across to turn left" case. It always RETURNS a definite `pool` lane, so we
+          // never fall through to the generic bus-lane preference below: a bus turning
+          // where the bus lane can't feed the move has no bus lane in `pool`, so it is
+          // not dragged back onto the bus lane and never oscillates.
+          const kind = turnKind(ahead.entry, myExit);
+          const pick = kind === "left" ? Math.max(...pool) : Math.min(...pool);
+          return clampLane(pick, curCount);
         }
       }
     }
@@ -941,6 +943,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         return clampLane(nearest, curCount);
       }
     }
+    // No junction to sort for, no pending exit lane, no bus-lane preference: hold the
+    // current lane. Keep-right is already delivered where it matters — branch (F)
+    // above sorts straight/right movements to the kerb on a junction APPROACH, the
+    // junction-exit match kerb-aligns straight-through exits, and overtake-return
+    // pulls a passer back to the kerb — so a car between junctions keeps the lane its
+    // last movement put it in rather than weaving (which would re-create the
+    // post-junction "dip to the kerb and back" an on-ramp merge previously showed).
     return clampLane(cur, curCount);
   }
 
