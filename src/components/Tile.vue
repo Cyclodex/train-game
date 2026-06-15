@@ -50,7 +50,11 @@
           :d="m.d"
           :class="[
             'road-marking-' + m.kind,
-            { 'road-marking-merge': m.merge, 'road-marking-junction': tileIsRoadJunction },
+            {
+              'road-marking-merge': m.merge,
+              'road-marking-solid': m.solid,
+              'road-marking-junction': tileIsRoadJunction,
+            },
           ]"
         />
       </template>
@@ -752,7 +756,12 @@ class Tile extends Vue {
   ): LaneMarkingPath[] {
     const road = this.tile.road ?? [];
     // Per-direction glide offsets for the edge's two possible movements.
-    const moves = new Map<Position, { offEntry: number; offExit: number }>();
+    // `dedicated` = the turning lane may ONLY turn here (no straight-through), so
+    // its guide is drawn SOLID — a line you don't cross — rather than dashed.
+    const moves = new Map<
+      Position,
+      { offEntry: number; offExit: number; dedicated: boolean }
+    >();
     for (const [from, to] of [
       [a, b],
       [b, a],
@@ -770,7 +779,10 @@ class Tile extends Vue {
       const cls = lane.kind === "bus" || !lane.to.includes(to) ? "bus" : "car";
       const offExit =
         this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? offEntry;
-      moves.set(from, { offEntry, offExit });
+      // Dedicated turn lane: the chosen lane does not also permit the straight
+      // movement (oppositePort) — so it is a turn-only pocket, not a shared lane.
+      const dedicated = !laneAllExits(lane).includes(oppositePort(from));
+      moves.set(from, { offEntry, offExit, dedicated });
     }
     const ab = moves.get(a);
     const ba = moves.get(b);
@@ -789,9 +801,10 @@ class Tile extends Vue {
       // lane permits; none where the turn is disallowed. And only when an arm
       // is MULTI-lane: a 1L↔1L corner has a single stream per direction with
       // nothing to guide into — the yellow divider says it all.
-      // The guide continues the lane's RIGHT dashed divider line through the
-      // turn (real paint extends the lane EDGE, not the lane centre), so shift
-      // the driving fillet half a lane right-of-travel.
+      // The guide continues the lane's RIGHT divider line through the turn (real
+      // paint extends the lane EDGE, not the lane centre), so shift the driving
+      // fillet half a lane right-of-travel. A DEDICATED turn lane's guide is SOLID
+      // (you may not leave a turn-only pocket); a SHARED lane's stays dashed.
       if (laneCount(road, a) > 1 || laneCount(road, b) > 1) {
         const edge = 0.5 * LANE_WIDTH_PX_FRAC * size;
         for (const [from, to] of [
@@ -799,7 +812,12 @@ class Tile extends Vue {
           [b, a],
         ] as [Position, Position][]) {
           const m = moves.get(from);
-          if (m) turn.push({ d: laneSegmentPathD(from, to, size, m.offEntry + edge, m.offExit + edge), kind: "inner" });
+          if (m)
+            turn.push({
+              d: laneSegmentPathD(from, to, size, m.offEntry + edge, m.offExit + edge),
+              kind: "inner",
+              solid: m.dedicated,
+            });
         }
       }
       return turn;
@@ -1346,6 +1364,13 @@ export default toNative(Tile);
 .road-marking-merge {
   stroke-dasharray: 7 13;
   stroke-dashoffset: 13.5px;
+}
+/* A DEDICATED turn lane (turn-only pocket) is bounded by a SOLID line drivers may
+   not cross — unlike the dashed divider of a lane that may ALSO go straight. The
+   two-class selector overrides the dashed .road-marking-inner inside a junction. */
+.road-marking-inner.road-marking-solid {
+  stroke-dasharray: none;
+  stroke: rgba(255, 255, 255, 0.85);
 }
 /* The closing-lane gore is paved (concrete), matching the road surface, with
    white diagonal hatching and a white closing edge — the real lane-drop look. */

@@ -38,6 +38,11 @@ export interface LaneMarkingPath {
   // tile (a 3→2 / 2→1 taper), which merging cars cross. The view paints these
   // with a tighter dash than ordinary continuing lane dividers.
   merge?: boolean;
+  // True for a SOLID (unbroken) divider — a line drivers may not cross. Used at a
+  // junction for a DEDICATED turn lane (a lane that may only turn, not go
+  // straight): the guide separating it from the through lanes is solid, so the
+  // dashed "you may also continue straight" reading is reserved for shared lanes.
+  solid?: boolean;
 }
 
 // One painted lane-drop arrow: a stroked shaft plus an open (two-stroke)
