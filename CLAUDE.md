@@ -11,6 +11,13 @@ traffic signals and switchable intersection routes. A deterministic simulation
 moves the trains; the renderer draws each loco/wagon at its sampled point along
 the per-tile SVG path.
 
+It has since grown a parallel **road layer** — multi-lane roads carrying cars,
+trucks and buses, with lane-aware junctions, junction traffic signals and
+level crossings where road meets rail (`src/sim/road*.ts`, `src/tiles/lanes.ts`)
+— and a **game-modes framework** (`src/modes/`: sandbox, puzzle, daily, time
+attack, crossing keeper) layered over the same simulation, plus swappable world
+**themes** (`src/themes.ts`). The road layer is gated by `gameConfig.roads`.
+
 It started life as the Emergency Room team's `vue-base` starter (see README).
 The starter scaffolding (the `counterExample` Vuex module, `HelloWorld.vue`, the
 unused `TileIntersection.vue` variant) has been removed.
@@ -19,8 +26,9 @@ unused `TileIntersection.vue` variant) has been removed.
 
 - Vue 3.5, class components via **`vue-facing-decorator`** (the maintained Vue 3
   successor to `vue-property-decorator`).
-- **`vue-router`** (hash history) with two routes: `/play` (the game) and
-  `/editor` (the level editor).
+- **`vue-router`** (hash history) with three routes: `/play` (the game),
+  `/editor` (the level editor) and `/test/:domain?/:category?/:scenario?` (the
+  feature-test gallery); `/` redirects to `/play`.
 - TypeScript 5.
 - A hand-written `requestAnimationFrame` loop drives movement (GSAP was removed
   when the simulation took over).
@@ -77,6 +85,16 @@ renderer import this module, so topology is defined exactly once. See
   depots / per-train route checks.
 - `generate.ts` — `generateLevel(seed, opts)`: seeded procedural levels (a track
   loop + depot spurs), gated by `validateLevel`.
+- `lanes.ts` — the road lane model: `Lane` (from/to ports, index, optional
+  kind/restrictions), per-vehicle-class access (`laneUsableBy`, `laneExits`,
+  `usableExits`, `busLaneIndices`), and authoring sugar (`oneWay`, `turns`,
+  `twoWay`, `fromPairs`).
+- `roadGeometry.ts` — SVG road rendering: lane-marking paths (centre/inner
+  dividers, kerbs, merge/lane-drop arrows). Complements `sim/pathGeometry.ts`,
+  which produces the car centreline a vehicle actually drives.
+- `routePlanner.ts` — the editor's track route builder (pure/headless):
+  `planRoute()` runs Dijkstra over `(tile, entry direction)` for the shortest,
+  turn-minimised path, returning the per-cell connections to lay (or `null`).
 
 ### Simulation (`src/sim/`)
 
@@ -92,8 +110,38 @@ renderer import this module, so topology is defined exactly once. See
   manual `toggleHold()`; an occupancy backstop covers unsignalled track. Depots
   park on a colour match or bounce on a mismatch and emit events. `sampleTrain()`
   returns loco+wagon positions for rendering. See `docs/signaling-design.md`.
-- `pathGeometry.ts` — `segmentPathD()`: the SVG path a train follows across a
-  tile, derived purely from its entry+exit ports.
+- `pathGeometry.ts` — `segmentPathD()`: the SVG path a train (or car) follows
+  across a tile, derived purely from its entry+exit ports.
+- `physics.ts` — `trainDynamics()`: derives accel/brake rates from train mass
+  (loco + wagons, scaled by wagon type) so heavier trains start/stop more gently.
+- `trainDimensions.ts` — single source of truth for loco/wagon sprite pixel
+  widths + coupling gap, with px↔tile conversion helpers.
+- `objectives.ts` — `createObjectiveTracker()`: the mode-agnostic objective state
+  machine (ready/playing/won/lost), counter accumulation (deliveries, mismatches,
+  elapsed, crossings) and star/fail-predicate evaluation used by `src/modes/`.
+
+#### Road traffic (`src/sim/road*.ts`, gated by `gameConfig.roads`)
+
+A second vehicle simulation reuses the same tile/lane topology and runs each
+tick alongside the trains. Cars/trucks/buses follow lane centrelines as
+`(segment, progress)` with continuous lateral lane position (overtaking is a
+lane-change state machine).
+
+- `road.ts` — the `RoadSim` core: vehicle kinds + specs, spawn/despawn, lane
+  dynamics, and the API (`step`, `sample`, `bodies`, `routePath`,
+  `junctionOccupancy`, `signalAspect`, `cycleSignal`).
+- `roadRouter.ts` — `planRoute()`: seeded BFS from a spawn entry to a random exit,
+  vehicle-class aware (cars skip bus-only lanes), returning per-junction turns.
+- `roadJunction.ts` — the lane-aware conflict matrix (`movementsConflict`,
+  `sameEntryConflict`, `buildConflictMatrix`): which movements geometrically
+  cross inside a junction tile.
+- `roadArbiter.ts` — `fcfsWithPriorityArbiter`: first-come-first-served junction
+  arbitration with road-priority yielding and a starvation backstop.
+- `junctionSignal.ts` — `createJunctionSignal()`/`cycleJunctionSignal()`: timed
+  green/amber/all-red controller (two-phase or round-robin, optional bus
+  priority) for signalised junctions.
+- `laneOffset.ts` — lateral pixel-offset math for lanes, handling road tapering
+  at tile seams (min-seam rule) so merges read smoothly.
 
 ### Renderer
 
@@ -119,14 +167,20 @@ Game state is seeded in `src/views/PlayView.vue` via `@Provide()` / `@Inject()`:
 Global config is a reactive object in `src/gameConfig.ts`, provided once at the
 app level in `src/main.ts` and injected into components as `config`: `tileSize`
 (200px), `levelSizeX` (7), `debug`, `automaticTrafficLights`,
-`automaticRoutePlanning`, `railDistanceFromPath`. Toggle `debug` in the UI to see
-per-tile coordinates and route overlays.
+`automaticRoutePlanning`, `railDistanceFromPath`, `switchLockMode`
+(`off`/`reserved`/`occupied` interlocking strictness), `colorSeed` (deterministic
+depot/train colour assignment), `roads` (master switch for the road layer),
+`roadScoring`, `maxCars` (road density as a % of map capacity, read live),
+`worldTheme` (persisted backdrop theme) and `plainBackdrop` (debug: strip the
+themed backdrop for flat ground). Toggle `debug` in the UI to see per-tile
+coordinates and route overlays. `setWorldTheme()` mutates + persists the theme.
 
 Key files:
 
 - `src/main.ts` — `createApp`, provides `gameConfig`, registers `Tile`/`TileRail`/
-  `Train`/`DebugShowRoutes` globally, installs the router.
-- `src/router.ts` — `/play` (PlayView) + `/editor` (EditorView), hash history.
+  `Train`/`DebugShowRoutes`/`CarRouteOverlay` globally, installs the router.
+- `src/router.ts` — `/play` (PlayView) + `/editor` (EditorView) + `/test/…`
+  (TestView gallery), hash history.
 - `src/App.vue` — thin shell: `<router-view>`.
 - `src/views/PlayView.vue` — level + train definitions, creates/provides the game,
   pause/play and speed (1x/2x/4x scale the loop's `dt`), delivery count, layout.
@@ -141,6 +195,18 @@ Key files:
   switches, depot), replacing the old per-kind components.
 - `src/components/Train.vue` — pure loco/wagon sprite renderer (positioned by the
   game loop).
+- Other components: `Crossing.vue` (level-crossing booms/lights),
+  `CarRouteOverlay.vue` (debug car-route line), `MenuDrawer.vue`/`ToolDock.vue`
+  (frosted-glass HUD chrome), `ScenarioThumb.vue` (static test-gallery preview).
+- `src/modes/` — the game-modes framework. `types.ts` defines the `GameMode`
+  contract (setup, controls gating, `createObjective`, optional `Spawner`, HUD);
+  `index.ts` is the registry; one file per mode (`sandbox`, `puzzle`, `daily`,
+  `time-attack`, `crossing-keeper`); `lastMode.ts` persists the last-opened mode.
+- `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
+  `src/utils/meadowBackdrop.ts` builds the seamless meadow backdrop SVG.
+- `src/objectiveStore.ts` — per-level best-result (stars/time) persistence;
+  `src/gameLog.ts` — humanises `SimEvent`s into an activity log;
+  `src/utils/colorAssignment.ts` — deterministic, solvable depot/train colours.
 - `src/types.ts` — all enums/interfaces (TrainStatus, TrafficLight, Position,
   Route, Rotations, etc.). Read this first to understand the domain.
 - `src/utils/tileHelpers.ts`, `trainHelpers.ts`, `globalHelpers.ts` — coordinate
@@ -180,8 +246,10 @@ travel.
 ## Feature test world (REQUIRED for every feature)
 
 There is a feature test harness at the `/test` route: a registry of tiny,
-isolated maps — **one per game mechanic** — with a picker, deep-linkable at
-`/test/:id`. It's both the manual-QA gallery and a debugging aid: a feature in
+isolated maps — **one per game mechanic** — presented as a drill-down gallery
+(`domain → category → scenario`) and deep-linkable at
+`/test/:domain/:category/:scenario` (bare `/test/:scenarioId` back-compat links
+still resolve). It's both the manual-QA gallery and a debugging aid: a feature in
 isolation on a 3-tile map is far easier to reason about than the same feature
 buried in `DEFAULT_LEVEL`.
 
@@ -194,17 +262,20 @@ for its scenario first.
   `scenarioGrid`, `scenarioRoutes` helpers.
 - `src/levels/test/scenarios/*.ts` — one file per feature (straight, curve,
   depot, signals, junction, cross, crossing, …).
-- `src/levels/test/index.ts` — the `SCENARIOS` registry (picker order).
+- `src/levels/test/index.ts` — the `DOMAINS` tree (domain → category → scenario,
+  picker order); `SCENARIOS` is the flattened lookup-by-id list derived from it,
+  with `locate()`/`firstScenarioOf()` helpers.
 - `src/views/TestView.vue` (picker) + `src/views/TestStage.vue` (keyed per
   scenario; creates/provides a fresh `markRaw` game and sizes the grid to the
-  map). `createGame`'s optional 5th arg `colors?: ColorAssignment` pins
-  depot/train colours when a scenario needs a determined outcome (e.g. a
+  map). `createGame`'s optional `colors?: ColorAssignment` arg (after `colorSeed`)
+  pins depot/train colours when a scenario needs a determined outcome (e.g. a
   depot-mismatch bounce).
 
 **To add a feature's scenario:** keep it as small as the mechanic allows (a
 single lane for simple features; a 2D pocket with two trains for contention
 features like signals/crossing, which only *mean* something when trains compete).
-Add one `scenarios/<feature>.ts` and one line in `index.ts`. The unit test
+Add one `scenarios/<feature>.ts` and register it in the right category of the
+`DOMAINS` tree in `index.ts`. The unit test
 `tests/unit/levels/testScenarios.spec.ts` iterates the registry and validates
 every map (connectivity, route reachability, trains-in-depots, grid fit), so a
 broken scenario fails CI. Design notes:
@@ -218,8 +289,9 @@ See `IMPROVEMENTS.md` for the prioritised backlog.
 
 `npm run build` (vue-tsc + vite) is the fastest correctness check, and
 `npm run test:unit` covers the coordinate math. For behaviour, `npm run test:e2e`
-boots a real browser and asserts the level renders 40 tiles + 2 trains, the
-trains physically leave their depots, and there are no console errors. For visual
+boots a real browser and asserts the level renders 41 tiles + 2 trains, the
+trains physically leave their depots, no two trains share a tile, a puzzle-mode
+run reaches its win overlay, and there are no console errors. For visual
 work, `npm run dev` and open http://localhost:5173 (debug overlay is on by
 default). When you add a feature, verify it in its `/test/:id` scenario (see
 **Feature test world** above) — that is the required check that the mechanic
