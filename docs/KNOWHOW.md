@@ -45,14 +45,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
   onto the lane nearest the straight block. 1L→nL = nearest-lane landings, no fan-
   out. Capacities PER vehicle class (skip bus lanes for cars). Full table:
   `docs/superpowers/specs/2026-06-12-junction-lane-capacity-design.md`.
-- Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): ONLY at a
-  ONE-WAY junction (no arm carries oncoming ⇒ no port is both entry AND exit;
-  `oneWayJunction` flag). There, a DEDICATED turn lane (its DERIVED `to` excludes the
-  straight `oppositePort(from)`, e.g. the N≥3 inner LEFT pocket) draws a SOLID line
-  (`marking.solid` → `.road-marking-inner.road-marking-solid`, no dasharray) — a line
-  you don't cross. SHARED lanes, and EVERY guide at a NORMAL two-way junction, stay
-  dashed. Check the DERIVED road (`roadAt`), not raw authored lanes: turnfan/turnlanes
-  (one-way) → solid left pocket; crossturns3lane/bigjunction (two-way) → 0 solid.
+- ONE-WAY junction turn-offs paint LANE-ANCHORED slip CHANNELS, not the full-box
+  arm-width fan (`Tile.vue oneWayTurnChannel`, gated by the `isOneWayJunction`
+  getter = no port is both entry AND exit). The channel covers ONLY the lanes that
+  take the movement (`road.filter l.from===from && exits.includes(to)`), swept on the
+  real car glide path: `laneRibbonPathD` between the turning-lane GROUP's two edge
+  offsets (entry band `positioningBandAt` → `roadTurnExitOffsetPx` landing), plus ONE
+  kerb edge on the bend's tight side. `laneMarkings:[]` (the channel's solid kerb IS
+  the guide). The straight corridor still paints full width (it's `isStraight`, the
+  one-way highway branch). Box corners no lane uses become grass — the realistic
+  "only where there's a lane" look the user asked for. TWO-WAY junctions are
+  UNTOUCHED: the gate returns early ONLY for one-way, so they keep the box-filling
+  `roadCurvePolygonPathTapered` ribbon (verified pixel-identical: crossturns3lane
+  before==after bar moving cars). A slip into a WIDER arm (arm lanes > turning lanes)
+  NECKS at the seam — size exit arms to the lanes that actually turn for a flush demo
+  (turnlanes' 3-lane W/E exits fed by 1 turn lane each was over-provisioned; the old
+  full-box paint masked it by painting the arm 3 wide even though 1 lane ever drove it).
+- Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): now reached for
+  TWO-WAY junctions only (one-way junctions return the slip channel first). Two-way
+  guides stay all-dashed. The `oneWayJunction = this.isOneWayJunction` / `marking.solid`
+  dedicated-lane path is retained (single-source-of-truth getter) but unreached for
+  one-way in practice — the channel kerb replaced it. crossturns3lane/bigjunction
+  (two-way) → 0 solid, all dashed, as before.
 - Turn-guide SHIFT (`junctionTurnGuides`): the guide traces the lane's divider on
   the THROUGH-LANE side, NOT the outer kerb (which is already the solid road-edge).
   Shift ½ lane AWAY from the bend's outer kerb: right turn (kerb-most lane, kerb on

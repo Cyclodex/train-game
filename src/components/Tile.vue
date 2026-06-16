@@ -292,6 +292,7 @@ import {
   segmentPathD,
   laneSegmentPathD,
   laneSegmentPointAt,
+  laneRibbonPathD,
   arrowHeadD,
 } from "@/sim/pathGeometry";
 import { railPathsFor } from "@/tiles/geometry";
@@ -435,6 +436,80 @@ class Tile extends Vue {
     return isRoadJunction(this.tile.road);
   }
 
+  // A ONE-WAY junction has no arm carrying oncoming traffic: every port it
+  // touches is EITHER an entry OR an exit, never both (a bidirectional arm makes
+  // it a normal two-way junction). This gates the lane-anchored turn-off paint
+  // (slip-lane channels) so two-way junctions render exactly as before — same
+  // detection junctionTurnGuides uses for the solid dedicated-lane guide.
+  get isOneWayJunction(): boolean {
+    const road = this.tile.road;
+    if (!road || !isRoadJunction(road)) return false;
+    const ports = new Set<Position>();
+    for (const l of road) {
+      ports.add(l.from);
+      for (const e of laneAllExits(l)) ports.add(e);
+    }
+    for (const p of ports) {
+      const enters = road.some(l => l.from === p);
+      const exits = road.some(l => laneAllExits(l).includes(p));
+      if (enters && exits) return false;
+    }
+    return true;
+  }
+
+  // The lane-anchored turn-off CHANNEL for a ONE-WAY junction edge {p1,p2}: a
+  // concrete ribbon covering ONLY the lanes that actually make the turn, swept
+  // along the exact car glide path (entry-lane offsets → landing-lane offsets) —
+  // not the full-box arm-width fan. Resolves the one-way direction itself (the
+  // entry port is whichever side has lanes exiting to the other). Returns the
+  // surface polygon + ONE kerb edge on the bend's tight (corner-fillet) side, the
+  // road edge between the slip lane and the now-grass box corner. null when no
+  // lane uses either direction of the edge (caller falls back to the box paint).
+  private oneWayTurnChannel(
+    coord: ReturnType<typeof parseCoordId>,
+    p1: Position,
+    p2: Position,
+    size: number,
+  ): { surface: string; edges: { d: string; dashed: boolean }[] } | null {
+    const road = this.tile.road ?? [];
+    const W = LANE_WIDTH_PX_FRAC * size;
+    let from = p1;
+    let to = p2;
+    let lanes = road.filter(l => l.from === from && laneAllExits(l).includes(to));
+    if (!lanes.length) {
+      from = p2;
+      to = p1;
+      lanes = road.filter(l => l.from === from && laneAllExits(l).includes(to));
+    }
+    if (!lanes.length) return null;
+    const entryBand = this.positioningBandAt(coord, from);
+    // Span the turning-lane GROUP's physical edges (centre ± half a lane) at both
+    // ends, so the ribbon is exactly as wide as the lanes that turn, no wider.
+    let loE = Infinity;
+    let hiE = -Infinity;
+    let loX = Infinity;
+    let hiX = -Infinity;
+    for (const lane of lanes) {
+      const cEntry = (entryBand - 0.5 - lane.index) * W;
+      const cls = lane.kind === "bus" || !lane.to.includes(to) ? "bus" : "car";
+      const cExit = this.game.roadTurnExitOffsetPx(coord, from, to, lane.index, cls) ?? cEntry;
+      loE = Math.min(loE, cEntry - W / 2);
+      hiE = Math.max(hiE, cEntry + W / 2);
+      loX = Math.min(loX, cExit - W / 2);
+      hiX = Math.max(hiX, cExit + W / 2);
+    }
+    // The bend's tight (corner) side carries the kerb: +n (hi) for a right turn,
+    // −n (lo) for a left turn. The corridor-facing side blends into the through
+    // corridor / arm tarmac and needs no line.
+    const tightHi = turnKind(from, to) === "right";
+    const outerEntry = tightHi ? hiE : loE;
+    const outerExit = tightHi ? hiX : loX;
+    return {
+      surface: laneRibbonPathD(from, to, size, loE, loX, hiE, hiX),
+      edges: [{ d: laneSegmentPathD(from, to, size, outerEntry, outerExit), dashed: false }],
+    };
+  }
+
   get roadPaths(): { surface: string; laneMarkings: LaneMarkingPath[]; edges: { d: string; dashed: boolean }[]; mismatch: boolean; mismatchTip: string }[] {
     const size = this.config.tileSize;
     const LANE_W = size * LANE_WIDTH_PX_FRAC;
@@ -477,6 +552,25 @@ class Tile extends Vue {
         const mismatchTip = mismatch
           ? `Lane-count mismatch: this side has ${badA ? selfAtA : selfAtB} lane(s), neighbour has ${badA ? nTotalA : nTotalB}. Draw over with a matching lane count to fix.`
           : "";
+        // ONE-WAY junction: paint the turn-off as a lane-anchored slip CHANNEL —
+        // only the lanes that actually turn, on the real car glide path — instead
+        // of the full-box arm-width fan that paved the whole junction. The
+        // straight corridor still paints full width (it is `isStraight`, handled
+        // by the one-way highway branch below). Two-way junctions are untouched:
+        // they keep the box-filling turn ribbon (the `roadCurvePolygonPathTapered`
+        // path further down), so nothing there can break.
+        if (this.tileIsRoadJunction && this.isOneWayJunction) {
+          const ch = this.oneWayTurnChannel(coord, a, b, size);
+          if (ch) {
+            return {
+              surface: ch.surface,
+              laneMarkings: [],
+              edges: ch.edges,
+              mismatch,
+              mismatchTip,
+            };
+          }
+        }
         // Width PER END, each seam-matched to its own arm (seamPaintTotal against
         // the neighbour crossing that seam, min 2 so a one-way still reads as a
         // road) — the ribbon tapers across the bend so EACH end meets ITS arm
@@ -756,21 +850,10 @@ class Tile extends Vue {
   ): LaneMarkingPath[] {
     const road = this.tile.road ?? [];
     // The SOLID dedicated-turn-lane guide is reserved for ONE-WAY junctions (no arm
-    // carries oncoming traffic): every port is either an entry OR an exit, never
-    // both. A normal two-way junction keeps the all-dashed look the user expects.
-    const oneWayJunction = (() => {
-      const ports = new Set<Position>();
-      for (const l of road) {
-        ports.add(l.from);
-        for (const e of laneAllExits(l)) ports.add(e);
-      }
-      for (const p of ports) {
-        const enters = road.some(l => l.from === p);
-        const exits = road.some(l => laneAllExits(l).includes(p));
-        if (enters && exits) return false; // a bidirectional arm → normal junction
-      }
-      return true;
-    })();
+    // carries oncoming traffic). One-way junctions now paint lane-anchored slip
+    // channels and return before reaching here, so in practice this is a two-way
+    // junction; the flag stays correct (and self-documenting) via the shared getter.
+    const oneWayJunction = this.isOneWayJunction;
     // Per-direction glide offsets for the edge's two possible movements.
     // `dedicated` = the turning lane may ONLY turn here (no straight-through), so on
     // a ONE-WAY junction its guide is drawn SOLID — a line you don't cross.
