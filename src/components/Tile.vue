@@ -817,10 +817,13 @@ class Tile extends Vue {
       // lane permits; none where the turn is disallowed. And only when an arm
       // is MULTI-lane: a 1L↔1L corner has a single stream per direction with
       // nothing to guide into — the yellow divider says it all.
-      // The guide continues the lane's RIGHT divider line through the turn (real
-      // paint extends the lane EDGE, not the lane centre), so shift the driving
-      // fillet half a lane right-of-travel. A DEDICATED turn lane's guide is SOLID
-      // (you may not leave a turn-only pocket); a SHARED lane's stays dashed.
+      // The guide continues the lane's divider on the THROUGH-LANE side through the
+      // turn (real paint extends the lane EDGE, not the centre) — never the outer
+      // kerb edge, which is already the solid road-edge line. So shift the driving
+      // fillet half a lane AWAY from the bend's outer kerb: a right turn's lane is
+      // kerb-most (kerb on the right) ⇒ shift left (−edge); a left turn's lane is
+      // inner-most (median on the left) ⇒ shift right (+edge). A DEDICATED turn
+      // lane's guide is SOLID (you may not leave a turn-only pocket); SHARED stays dashed.
       if (laneCount(road, a) > 1 || laneCount(road, b) > 1) {
         const edge = 0.5 * LANE_WIDTH_PX_FRAC * size;
         for (const [from, to] of [
@@ -828,12 +831,13 @@ class Tile extends Vue {
           [b, a],
         ] as [Position, Position][]) {
           const m = moves.get(from);
-          if (m)
-            turn.push({
-              d: laneSegmentPathD(from, to, size, m.offEntry + edge, m.offExit + edge),
-              kind: "inner",
-              solid: m.dedicated && oneWayJunction,
-            });
+          if (!m) continue;
+          const shift = turnKind(from, to) === "right" ? -edge : edge;
+          turn.push({
+            d: laneSegmentPathD(from, to, size, m.offEntry + shift, m.offExit + shift),
+            kind: "inner",
+            solid: m.dedicated && oneWayJunction,
+          });
         }
       }
       return turn;

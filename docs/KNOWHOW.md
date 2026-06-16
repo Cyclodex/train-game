@@ -53,6 +53,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   you don't cross. SHARED lanes, and EVERY guide at a NORMAL two-way junction, stay
   dashed. Check the DERIVED road (`roadAt`), not raw authored lanes: turnfan/turnlanes
   (one-way) → solid left pocket; crossturns3lane/bigjunction (two-way) → 0 solid.
+- Turn-guide SHIFT (`junctionTurnGuides`): the guide traces the lane's divider on
+  the THROUGH-LANE side, NOT the outer kerb (which is already the solid road-edge).
+  Shift ½ lane AWAY from the bend's outer kerb: right turn (kerb-most lane, kerb on
+  right) → −edge; left turn (inner lane, median on left) → +edge. Wrong sign put a
+  right-turn dash on the kerb edge (looked like a stray line) instead of from the
+  left of the kerb lane to the top of the exit arm.
 - Junctions NEVER lane-count-mismatch. `laneCountAt` over-counts a junction port ⇒
   naive seam check paints junctions+adjacent curves RED (recurring bug). Guard:
   `lanes.ts seamMismatch` + `game.ts roadIsJunctionAt`. Only simple curves must
