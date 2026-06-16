@@ -579,6 +579,16 @@ export function junctionArmPaintTotal(
   neighbourIsJunction: boolean,
 ): number {
   if (neighbourCrossing > 0 && !neighbourIsJunction) return Math.max(neighbourCrossing, 2);
+  // Junction abutting junction (stacked, no road between): adopt the WIDER arm, to
+  // match `seamPositioningBand`'s junction↔junction = MAX. A junction's exit-port
+  // `roadLaneCountAt` counts only the straight-through movements (narrower than the
+  // arm), so min painted the arm — and thus the corner-fillet kerb — half a lane
+  // too narrow, landing the kerb on the lane CENTRE instead of the road edge while
+  // the lanes were positioned on the wider band. Max keeps paint and positioning in
+  // lockstep so the kerb sits on the real road edge.
+  if (neighbourCrossing > 0 && neighbourIsJunction) {
+    return Math.max(selfAtArm, neighbourCrossing, 2);
+  }
   return seamPaintTotal(Math.max(selfAtArm, 2), neighbourCrossing);
 }
 

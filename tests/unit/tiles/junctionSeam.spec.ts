@@ -43,8 +43,12 @@ describe("junctionArmPaintTotal / roadSeamPaintTotal", () => {
     expect(junctionArmPaintTotal(5, 6, false)).toBe(6);
     // a 1-lane side road faces at 2 → the arm paints 2, never the over-count.
     expect(junctionArmPaintTotal(5, 2, false)).toBe(2);
-    // junction-abutting-junction or off-map (0) falls back to its own count.
-    expect(junctionArmPaintTotal(4, 6, true)).toBe(Math.min(4, 6));
+    // junction-abutting-junction (stacked) adopts the WIDER arm — matches
+    // seamPositioningBand's junction↔junction MAX, so the kerb fillet and the
+    // lane positioning stay in lockstep (the kerb sits on the real road edge).
+    expect(junctionArmPaintTotal(4, 6, true)).toBe(Math.max(4, 6));
+    expect(junctionArmPaintTotal(3, 2, true)).toBe(3); // narrow straight-through count doesn't pinch
+    // off-map (0) falls back to its own count.
     expect(junctionArmPaintTotal(3, 0, false)).toBe(3);
   });
 });

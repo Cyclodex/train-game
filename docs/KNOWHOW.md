@@ -77,6 +77,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   stacked sides adopt the wider approach band ⇒ turn entries land on their real
   lanes AND the through-lanes stay continuous across the seam. Cyan==car (shared
   `positioningBandAt`). Isolated junctions (road neighbours) unaffected.
+  PAINT must match: `junctionArmPaintTotal` junction↔junction = MAX too (it was min)
+  — else the corner-fillet kerb (`roadCurveKerbEdgeTapered`, width = arm paint/2)
+  paints half a lane narrow and the SOLID kerb lands on the lane CENTRE while the
+  lanes sit on the wider band. Keep paint (`junctionArmPaintTotal`) and positioning
+  (`seamPositioningBand`) in lockstep for stacked junctions.
 
 ## ROADS
 - `LANE_WIDTH_FRAC=0.14` (`laneOffset.ts`). Same offset fns feed cars+paint+markings
