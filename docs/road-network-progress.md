@@ -110,6 +110,8 @@ acceptance**, so traffic sorts and merges instead of queueing (`src/sim/road.ts`
 - Editor: is JSON import still needed, or is the visual lane authoring complete
   enough to drop it?
 
+See `docs/road-future-improvements.md` for a structured breakdown of these opportunities and a recommended priority order.
+
 ## History (superseded detail)
 Sub-projects A and B+C were built on `worktree-road-junction-routing` and folded
 into `develop` via fast-forward; that branch is no longer the source of truth.

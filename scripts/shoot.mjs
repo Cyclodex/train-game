@@ -81,12 +81,14 @@ async function main() {
   const base = `http://localhost:${opt.port}`;
 
   // Start a dedicated dev server (strict port so we never hit a stale one).
-  // On Windows `npm` is a .cmd shim that bare spawn() can't resolve (ENOENT), so
-  // run it through the shell there.
+  // On Windows the npm launcher is `npm.cmd`; spawning bare "npm" there ENOENTs.
+  // On Windows the npm launcher is `npm.cmd`, and Node ≥18 requires shell:true to
+  // spawn a `.cmd` (bare "npm" ENOENTs, npm.cmd without a shell EINVALs).
+  const onWin = process.platform === "win32";
   const server = spawn(
-    process.platform === "win32" ? "npm.cmd" : "npm",
+    onWin ? "npm.cmd" : "npm",
     ["run", "dev", "--", "--port", String(opt.port), "--strictPort"],
-    { stdio: "ignore", shell: process.platform === "win32" },
+    { stdio: "ignore", shell: onWin },
   );
   const shutdown = () => {
     try {
@@ -112,7 +114,9 @@ async function main() {
 
     for (const id of ids) {
       await page.goto(`${base}/#/test/${id}`);
-      await page.waitForFunction(() => !!window.__game, null, { timeout: 8000 });
+      // Generous wait: a cold Vite dev server compiles modules on first load,
+      // which can take well over 8s before the stage sets window.__game.
+      await page.waitForFunction(() => !!window.__game, null, { timeout: 30000 });
 
       // Flat backdrop (unless --backdrop): click the 🌳 BG button.
       if (!opt.backdrop) {
