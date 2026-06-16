@@ -568,17 +568,19 @@ export function roadSeamPaintTotal(
 
 // The painted total a JUNCTION arm shows where it meets a neighbour. Against a
 // real road it ADOPTS the road's facing width (`neighbourCrossing`, the road's
-// `laneCountAt` = its true both-way lane total), so the arm stub equals the road
-// exactly and no taper is painted at the seam (#30). The junction's own per-arm
-// count is intentionally ignored here — it over/under-counts the fan/merge. With
-// a junction neighbour (junction abutting junction) or no neighbour road (off-map
-// edge, count 0) it falls back to its own floored count via `seamPaintTotal`.
+// `laneCountAt` = its true lane total), so the arm stub equals the road EXACTLY and
+// no taper is painted at the seam (#30). A 1-lane one-way road is now drawn one lane
+// wide (kerb-anchored), so the arm must be 1 too — flooring at 2 (the old min, from
+// when a 1L road was drawn 2 wide) painted the turn-off arm wider than the road it
+// meets. The junction's own per-arm count is intentionally ignored here — it
+// over/under-counts the fan/merge. With a junction neighbour (junction abutting
+// junction) or no neighbour road (off-map edge, count 0) it falls back below.
 export function junctionArmPaintTotal(
   selfAtArm: number,
   neighbourCrossing: number,
   neighbourIsJunction: boolean,
 ): number {
-  if (neighbourCrossing > 0 && !neighbourIsJunction) return Math.max(neighbourCrossing, 2);
+  if (neighbourCrossing > 0 && !neighbourIsJunction) return neighbourCrossing;
   // Junction abutting junction (stacked, no road between): adopt the WIDER arm, to
   // match `seamPositioningBand`'s junction↔junction = MAX. A junction's exit-port
   // `roadLaneCountAt` counts only the straight-through movements (narrower than the

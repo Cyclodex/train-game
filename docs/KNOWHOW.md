@@ -66,6 +66,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Arm flare is REALISTIC not a defect: junction sizes turn ribbon to widest arm
   (`max(laneCountAt(a),laneCountAt(b),2)`); narrow arm into wide mouth = flare.
   Don't "fix" blind — true per-arm width = `roadCurvePolygonPath` refactor, user-watched.
+- Junction arm = the adjoining road's EXACT width (`junctionArmPaintTotal` returns
+  `neighbourCrossing` = `laneCountAt`, NO min-2 floor). `laneCountAt`=entering+exiting,
+  so a TWO-WAY road is always ≥2 (floor never mattered) but a ONE-WAY 1L road is 1 —
+  and it's drawn 1 wide (kerb-anchored), so the arm must be 1 too. The old `max(.,2)`
+  floor painted a 1L one-way turn-off arm 2 wide (wider than the 1-lane road it meets).
+  ONLY one-way 1L exits change; normal/two-way junctions untouched (test `junctionSeam`
+  iterates every scenario). Don't reintroduce the floor — it pinches nothing real.
 - Box crossing gated by conflict-matrix arbiter (`roadArbiter.ts`, `roadJunction.ts`);
   `conflictKey` lane-indexed ⇒ parallel lanes cross independently.
 - STACKED junctions (a junction directly above another, no road tile between —

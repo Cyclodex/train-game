@@ -22,13 +22,15 @@ import type { Port } from "@/tiles/model";
 // junction-laneCountAt over/under-count at a seam — fails CI.
 
 // The painted total a road tile (straight OR curve) shows at the seam on `port`:
-// its real crossing width there, floored at the min-2 a one-way still draws.
-// For a straight this equals laneCount(a)+laneCount(b); for a curve the facing
-// laneCountAt (its opposite port carries no lanes, so the two-term sum would
-// under-count). With a junction neighbour the road keeps exactly this width
-// (roadSeamPaintTotal junction exemption), so it doubles as the expected value.
+// its real crossing width there = `laneCountAt` (entering + exiting). A TWO-WAY
+// road always has both ⇒ ≥ 2; a ONE-WAY road's count is its one-direction lane
+// total, and it is drawn EXACTLY that wide (kerb-anchored), so a 1-lane one-way is
+// 1 wide — NOT floored at 2 (that floor was a relic of when a 1L road was drawn 2
+// wide, and it made a turn-off arm wider than the road it meets). For a curve this
+// is the facing `laneCountAt` (its opposite port carries no lanes). With a junction
+// neighbour the road keeps exactly this width, so it doubles as the expected value.
 function roadFacingTotal(road: Lane[], port: Port): number {
-  return Math.max(laneCountAt(road, port), 2);
+  return laneCountAt(road, port);
 }
 
 describe("junctionArmPaintTotal / roadSeamPaintTotal", () => {
@@ -41,8 +43,11 @@ describe("junctionArmPaintTotal / roadSeamPaintTotal", () => {
   it("a junction arm adopts its adjoining road's width (no taper at the seam)", () => {
     // arm's own laneCountAt under-counts to 5; the 3-lane road faces it at 6.
     expect(junctionArmPaintTotal(5, 6, false)).toBe(6);
-    // a 1-lane side road faces at 2 → the arm paints 2, never the over-count.
+    // adopt the road's EXACT facing width, never the junction's own over-count.
     expect(junctionArmPaintTotal(5, 2, false)).toBe(2);
+    // a 1-lane one-way exit is drawn 1 wide → the arm paints 1, not a floored 2,
+    // so the turn-off road is not wider than the lane it merges onto.
+    expect(junctionArmPaintTotal(3, 1, false)).toBe(1);
     // junction-abutting-junction (stacked) adopts the WIDER arm — matches
     // seamPositioningBand's junction↔junction MAX, so the kerb fillet and the
     // lane positioning stay in lockstep (the kerb sits on the real road edge).
