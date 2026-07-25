@@ -69,6 +69,24 @@
           title="One-way road (lanes only in the drawn direction)"
         >➡️</button>
       </div>
+      <!-- The world grows right and down simply by drawing into the empty margin.
+           These add room on the other two sides, by shifting what is already
+           there — the engine anchors the world at 0,0. -->
+      <div class="grow-picker">
+        <button
+          class="dock-btn lane-btn"
+          title="Add a column before the left edge (shifts the world right)"
+          @click="growLeft"
+        >⬅︎+</button>
+        <button
+          class="dock-btn lane-btn"
+          title="Add a row above the top edge (shifts the world down)"
+          @click="growUp"
+        >⬆︎+</button>
+        <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
+          {{ gridCols - 2 }}×{{ gridRows - 2 }}
+        </span>
+      </div>
     </ToolDock>
 
     <div class="world">
@@ -269,6 +287,7 @@ import {
   parseCoordId,
   isRoadOnlyLevel,
 } from "@/tiles/model";
+import { levelBounds, translateLevel } from "@/tiles/bounds";
 import {
   emptyCell,
   addConnection,
@@ -321,6 +340,10 @@ const EDGES: Port[] = [
 // Lane width as a fraction of the tile, matching Tile.vue's LANE_WIDTH_PX_FRAC so
 // the editor's lane hit paths sit on the same centrelines the renderer draws.
 const LANE_WIDTH_PX_FRAC = 0.14;
+
+// Empty cells kept beyond the level's content so there is always somewhere to
+// draw. Two is enough to see where you are going without a sea of blank grid.
+const GROW_MARGIN = 2;
 
 const HINTS: Record<Tool, string> = {
   connect:
@@ -505,18 +528,39 @@ class EditorView extends Vue {
     return this.routes.length > 0 && this.valid.ok;
   }
 
-  // The editor grid sizes to the configured board, but grows to fit a larger
-  // loaded level — e.g. a /test scenario handed over for correction (carroute is
-  // 7×7, roadlanemerge is 9 tall) — so every authored tile stays editable.
+  // The editor grid sizes to the level's own content (so a larger loaded level —
+  // a /test scenario handed over for correction, or the 20x14 demo world — stays
+  // fully editable), plus a margin of empty cells to draw into.
+  //
+  // That margin is what makes the world unbounded: paint into it and the content
+  // grows, so next render the margin has moved out again. There is no maximum
+  // board size anywhere — the old 7x6 was a rendering cap, not an engine one.
+  // Growing UP and LEFT is `growLeft`/`growUp` below, since the engine anchors
+  // the world at 0,0.
   get gridCols(): number {
-    let cols = this.config.levelSizeX;
-    for (const id of Object.keys(this.level)) cols = Math.max(cols, parseCoordId(id).x + 1);
-    return cols;
+    return levelBounds(this.level, { cols: this.config.levelSizeX, rows: this.levelSizeY }).cols + GROW_MARGIN;
   }
   get gridRows(): number {
-    let rows = this.levelSizeY;
-    for (const id of Object.keys(this.level)) rows = Math.max(rows, parseCoordId(id).y + 1);
-    return rows;
+    return levelBounds(this.level, { cols: this.config.levelSizeX, rows: this.levelSizeY }).rows + GROW_MARGIN;
+  }
+
+  // Make room before the origin by shifting everything that is already there.
+  // The alternative — negative coordinates — would have to be understood by
+  // `roadEntries`' off-grid test, the generator and the validator alike, so the
+  // world is re-based instead and they keep their "the world starts at 0,0"
+  // assumption. Trains move with it or they end up off their depots.
+  growLeft(): void {
+    this.growBy(1, 0);
+  }
+  growUp(): void {
+    this.growBy(0, 1);
+  }
+  private growBy(dx: number, dy: number): void {
+    const moved = translateLevel(this.level, dx, dy);
+    for (const key of Object.keys(this.level)) delete this.level[key];
+    Object.assign(this.level, moved);
+    this.armed = null;
+    this.pressFrom = null;
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
@@ -1261,6 +1305,23 @@ export default toNative(EditorView);
   margin-left: 8px;
   padding-left: 10px;
   border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+// World-growth controls: extend the board before the origin, and read off the
+// current size. Growing right/down needs no button — just draw into the margin.
+.grow-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+.grow-size {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4a5a4a;
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
 }
 .lane-btn {
   min-width: 38px;

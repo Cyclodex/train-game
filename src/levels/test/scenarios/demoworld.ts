@@ -94,16 +94,25 @@ function build(): Level {
     }
   }
 
-  // Signals around the ring, so the interlocking has something to do on a circuit
-  // several trains share. Placed just past each corner in the direction of travel.
+  // Signals around the ring. A train reserves the whole route to the NEXT signal,
+  // so signal spacing is block length: with only one per side a single train locks
+  // most of the circuit and holds the level crossings on it shut for as long as it
+  // takes to get round. Two per side keeps the blocks short enough that three
+  // trains share the ring and the crossings reopen between them.
   for (const [id, ports] of [
-    [`${RING_LEFT + 2},${RING_TOP}`, [Right, Left]],
-    [`${RING_RIGHT - 2},${RING_BOTTOM}`, [Right, Left]],
-    [`${RING_LEFT},${RING_TOP + 2}`, [Top, Bottom]],
-    [`${RING_RIGHT},${RING_BOTTOM - 2}`, [Top, Bottom]],
+    [`${RING_LEFT + 3},${RING_TOP}`, [Right, Left]],
+    [`${RING_RIGHT - 3},${RING_TOP}`, [Right, Left]],
+    [`${RING_LEFT + 3},${RING_BOTTOM}`, [Right, Left]],
+    [`${RING_RIGHT - 3},${RING_BOTTOM}`, [Right, Left]],
+    [`${RING_LEFT},${RING_TOP + 3}`, [Top, Bottom]],
+    [`${RING_LEFT},${RING_BOTTOM - 3}`, [Top, Bottom]],
+    [`${RING_RIGHT},${RING_TOP + 3}`, [Top, Bottom]],
+    [`${RING_RIGHT},${RING_BOTTOM - 3}`, [Top, Bottom]],
   ] as [string, Position[]][]) {
     const cell = level[id];
-    if (cell) level[id] = { ...cell, signals: ports };
+    // Only ever onto a plain straight: a signal on a crossing or a spur junction
+    // would gate the wrong thing.
+    if (cell && !cell.road && cell.role !== "depot") level[id] = { ...cell, signals: ports };
   }
 
   // --- Depot spurs -----------------------------------------------------------

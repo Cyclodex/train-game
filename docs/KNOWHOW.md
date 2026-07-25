@@ -10,6 +10,32 @@ disproved anything here → edit this file in the same commit. Add a fact, fix a
 wrong one, delete a dead one. One-line bullets, cite `file.ts:symbol`. Keep it
 lean — prune as much as you add. This file only stays useful if every task tends it.
 
+## WORLD SIZE + CAMERA
+- A world is as big as its CONTENT. `levelBounds(level, min?)` (`tiles/bounds.ts`)
+  derives cols/rows from the tile coordinates; the views render that, not a fixed
+  size. `gameConfig.levelSizeX` / the views' `levelSizeY` are now only the MINIMUM
+  canvas a new board starts on. The old 7x6 cap was purely a rendering one —
+  `game.ts` always sized the sim from the coordinates.
+- Engine anchors the world at 0,0 (`roadEntries` off-grid test, generator,
+  validator). To grow UP/LEFT, RE-BASE with `normaliseLevel`/`translateLevel`
+  rather than introducing negative coords — and move the trains with
+  `translateTrains` or every train ends up off its depot while the level still validates.
+- Editor grows by drawing: grid = content + `GROW_MARGIN` (2) empty cells. The
+  ⬅︎+ / ⬆︎+ dock buttons re-base for the other two sides.
+- CAMERA (`camera.ts` pure maths + `cameraController.ts` DOM glue, shared by
+  PlayView and TestStage): board renders at the NATIVE 200px tile (all road
+  geometry is in those px — scaling tiles would mean re-deriving it) and the
+  camera moves a window over it. Fits on mount. `.level` is `position:absolute` +
+  `transform-origin: 0 0` inside an `overflow:hidden` viewport; the camera owns
+  centring, so no `margin:auto` (they fight).
+- TRAP: build the controller in `created()`, NOT as a class field. vue-facing-
+  decorator collects data off a THROWAWAY instance, so a field initialiser's
+  closures capture a `this` whose injected `config` is undefined → first render
+  dies inside `worldSize()` with a null `subTree`. And `markRaw` it (CLAUDE.md).
+- Anything measuring tile positions on screen must read the pitch off a rendered
+  tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
+  path data inside a tile stays in its own viewBox units and is unaffected.
+
 ## RENDER LAYOUT (the board is a CSS grid — mind what else is in it)
 - `.level` is `display:grid`; `<Train>`/car divs are its DIRECT CHILDREN, emitted
   BEFORE the `.level-tile` divs. Anything in there that generates a box is a GRID
