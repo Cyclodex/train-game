@@ -1068,11 +1068,20 @@ class Tile extends Vue {
   // Lane-drop gores and advance arrows for straight reducer tiles.
   // A gore is the hatched closed triangle painted over the lanes that end at
   // this tile's exit seam. Arrows warn drivers one tile in advance.
+  //
+  // JUNCTIONS ARE NOT REDUCERS. A junction's arms differ in width by design —
+  // that is what the junction's own arm paint and turn geometry express — so it
+  // must never be read as a road that narrows. Without this guard the loop below
+  // sees a cross's opposite-port pairs (Top,Bottom) and (Left,Right) as an
+  // ordinary straight edge and, on mixed-width arms, paints a Sperrfläche and
+  // merge arrows straight across the middle of the crossroads (mixedcross: a
+  // 3-lane south arm against a 1-lane north arm read as a "3->1 drop").
   get laneDropOverlay(): {
     gores: (LaneDropGore & { clipId: string })[];
     arrows: MergeArrowPath[];
   } {
     if (!this.tile.road?.length) return { gores: [], arrows: [] };
+    if (isRoadJunction(this.tile.road)) return { gores: [], arrows: [] };
     const size = this.config.tileSize;
     const coord = parseCoordId(this.coordId);
     const gores: (LaneDropGore & { clipId: string })[] = [];
@@ -1151,11 +1160,18 @@ class Tile extends Vue {
       const na = neighborCoord(coord, a);
       const nb2 = nb ? neighborCoord(nb, b) : null;
       const na2 = na ? neighborCoord(na, a) : null;
-      // Downstream lane counts in the a→b and b→a travel directions.
-      const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
-      const d2A = nb2 ? this.game.roadLaneCount(nb2, oppositePort(b)) : 0;
-      const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
-      const d2B = na2 ? this.game.roadLaneCount(na2, oppositePort(a)) : 0;
+      // Downstream lane counts in the a→b and b→a travel directions. A JUNCTION
+      // downstream counts as 0 — the same as no road at all — because a junction
+      // is not a narrowing: its arms are sized independently and it paints its own
+      // transitions. Reading its count let a 3-lane approach to a junction whose
+      // far arm is 1 lane paint advance merge arrows for a "drop" that the
+      // junction, not the road, actually performs.
+      const countAt = (c: ReturnType<typeof neighborCoord>, port: Position) =>
+        c && !this.game.roadIsJunctionAt(c) ? this.game.roadLaneCount(c, port) : 0;
+      const d1A = countAt(nb, oppositePort(b));
+      const d2A = countAt(nb2, oppositePort(b));
+      const d1B = countAt(na, oppositePort(a));
+      const d2B = countAt(na2, oppositePort(a));
 
       if (selfA > 0 && d1A > 0 && d1A < selfA) {
         gores.push({ ...laneDropGore(a, b, size, d1A, selfA), clipId: `gore-${this.coordId}-${a}-${b}` });

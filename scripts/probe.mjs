@@ -87,8 +87,22 @@ function auditInPage(tile) {
   const arrowFaults = [];
   tiles.forEach((t, i) => {
     const shafts = t.querySelectorAll(".road-drop-arrow-shaft");
-    if (!shafts.length) return;
     const at = `tile (${i % cols},${Math.floor(i / cols)})`;
+    // A junction is never a reducer: its arms are sized independently and it
+    // paints its own width transitions. A lane-drop gore or merge arrow on a
+    // junction tile means the drop logic mistook the junction's opposite-port
+    // pairs for an ordinary straight edge and drew a Sperrfläche across the
+    // middle of the crossroads.
+    const kind = (t.firstElementChild?.getAttribute("class") || "").match(/tile-kind--([a-z-]+)/)?.[1] ?? "";
+    if (/cross|junction/.test(kind)) {
+      const gores = t.querySelectorAll(".road-gore-border").length;
+      if (gores || shafts.length) {
+        arrowFaults.push(
+          `${at}: lane-drop marking painted on a ${kind} tile (${gores} gore(s), ${shafts.length} arrow(s))`,
+        );
+      }
+    }
+    if (!shafts.length) return;
     for (const s of shafts) {
       const n = (s.getAttribute("d") || "").match(/-?\d+\.?\d*/g)?.map(Number);
       if (!n || n.length < 4) continue;
