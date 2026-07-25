@@ -69,12 +69,51 @@
           title="One-way road (lanes only in the drawn direction)"
         >➡️</button>
       </div>
+      <!-- The world grows right and down simply by drawing into the empty margin.
+           These add room on the other two sides, by shifting what is already
+           there — the engine anchors the world at 0,0. -->
+      <div class="grow-picker">
+        <button
+          class="dock-btn lane-btn"
+          title="Add a column before the left edge (shifts the world right)"
+          @click="growLeft"
+        >⬅︎+</button>
+        <button
+          class="dock-btn lane-btn"
+          title="Add a row above the top edge (shifts the world down)"
+          @click="growUp"
+        >⬆︎+</button>
+        <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
+          {{ gridCols - 2 }}×{{ gridRows - 2 }}
+        </span>
+      </div>
     </ToolDock>
 
     <div class="world">
     <div
+      ref="viewport"
+      class="world-viewport"
+      :class="{ 'world-viewport--panning': panning }"
+      @pointerdown="onViewportPointerDown"
+      @pointermove="onViewportPointerMove"
+      @pointerup="onViewportPointerUp"
+      @pointercancel="onViewportPointerUp"
+      @wheel.prevent="onViewportWheel"
+    >
+    <div class="world-zoom">
+      <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
+      <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
+        {{ Math.round(camera.zoom * 100) }}%
+      </button>
+      <button class="zoom-btn" title="Zoom in" @click.stop="zoomBy(1.25)">+</button>
+    </div>
+    <div
       class="level editor-grid"
-      :style="{ gridTemplateColumns: `repeat(${gridCols}, ${config.tileSize}px)`, width: config.tileSize * gridCols + 'px' }"
+      :style="{
+        gridTemplateColumns: `repeat(${gridCols}, ${config.tileSize}px)`,
+        width: config.tileSize * gridCols + 'px',
+        transform: levelTransform,
+      }"
       @mouseup="pressFrom = null"
       @mouseleave="pressFrom = null"
     >
@@ -239,6 +278,7 @@
       </div>
     </div>
     </div>
+    </div>
 
     <textarea
       v-if="showIo"
@@ -269,6 +309,9 @@ import {
   parseCoordId,
   isRoadOnlyLevel,
 } from "@/tiles/model";
+import { levelBounds, translateLevel } from "@/tiles/bounds";
+import { type Camera, type Size } from "@/camera";
+import { createCameraController, type CameraController } from "@/cameraController";
 import {
   emptyCell,
   addConnection,
@@ -321,6 +364,10 @@ const EDGES: Port[] = [
 // Lane width as a fraction of the tile, matching Tile.vue's LANE_WIDTH_PX_FRAC so
 // the editor's lane hit paths sit on the same centrelines the renderer draws.
 const LANE_WIDTH_PX_FRAC = 0.14;
+
+// Empty cells kept beyond the level's content so there is always somewhere to
+// draw. Two is enough to see where you are going without a sea of blank grid.
+const GROW_MARGIN = 2;
 
 const HINTS: Record<Tool, string> = {
   connect:
@@ -505,18 +552,118 @@ class EditorView extends Vue {
     return this.routes.length > 0 && this.valid.ok;
   }
 
-  // The editor grid sizes to the configured board, but grows to fit a larger
-  // loaded level — e.g. a /test scenario handed over for correction (carroute is
-  // 7×7, roadlanemerge is 9 tall) — so every authored tile stays editable.
+  // --- Camera ---------------------------------------------------------------
+  // Same shared controller as the play board and the test stage. Built in
+  // `created()` (a field initialiser would capture a throwaway `this`, see
+  // cameraController.ts) and markRaw'd per CLAUDE.md.
+  //
+  // The editor draws with the mouse, so panning is deliberately kept to the
+  // MIDDLE button and space-drag: a left-drag belongs to the connect tool
+  // (edge dot -> edge dot), and stealing it would make the board unbuildable.
+  private cam!: CameraController;
+
+  created() {
+    this.cam = markRaw(
+      createCameraController(
+        () => this.worldSize,
+        () => this.viewportSize,
+      ),
+    );
+  }
+
+  get camera(): Camera {
+    return this.cam.state.camera;
+  }
+  get panning(): boolean {
+    return this.cam.state.panning;
+  }
+  get levelTransform(): string {
+    return this.cam.transform;
+  }
+  get worldSize(): Size {
+    return {
+      width: this.gridCols * this.config.tileSize,
+      height: this.gridRows * this.config.tileSize,
+    };
+  }
+  get viewportSize(): Size {
+    const el = this.$refs.viewport as HTMLElement | undefined;
+    return el
+      ? { width: el.clientWidth, height: el.clientHeight }
+      : { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  fitWorld(): void {
+    this.cam.fit();
+  }
+  onWindowResize(): void {
+    this.cam.reclamp();
+  }
+  zoomBy(factor: number): void {
+    this.cam.zoomBy(factor);
+  }
+  onViewportWheel(e: WheelEvent): void {
+    this.cam.onWheel(e, this.$refs.viewport as HTMLElement | undefined);
+  }
+  // Space held = "pan mode", the convention every drawing tool uses.
+  spaceHeld = false;
+
+  onViewportPointerDown(e: PointerEvent): void {
+    if (e.button !== 1 && !(e.button === 0 && this.spaceHeld)) return;
+    e.preventDefault();
+    this.cam.onPointerDown(e);
+  }
+
+  onEditorKeyDown(e: KeyboardEvent): void {
+    if (e.code === "Space" && !this.spaceHeld) {
+      this.spaceHeld = true;
+      // Stop the page scrolling under the board while space is the pan modifier.
+      e.preventDefault();
+    }
+  }
+  onEditorKeyUp(e: KeyboardEvent): void {
+    if (e.code === "Space") this.spaceHeld = false;
+  }
+  onViewportPointerMove(e: PointerEvent): void {
+    this.cam.onPointerMove(e);
+  }
+  onViewportPointerUp(e: PointerEvent): void {
+    this.cam.onPointerUp(e);
+  }
+
+  // The editor grid sizes to the level's own content (so a larger loaded level —
+  // a /test scenario handed over for correction, or the 20x14 demo world — stays
+  // fully editable), plus a margin of empty cells to draw into.
+  //
+  // That margin is what makes the world unbounded: paint into it and the content
+  // grows, so next render the margin has moved out again. There is no maximum
+  // board size anywhere — the old 7x6 was a rendering cap, not an engine one.
+  // Growing UP and LEFT is `growLeft`/`growUp` below, since the engine anchors
+  // the world at 0,0.
   get gridCols(): number {
-    let cols = this.config.levelSizeX;
-    for (const id of Object.keys(this.level)) cols = Math.max(cols, parseCoordId(id).x + 1);
-    return cols;
+    return levelBounds(this.level, { cols: this.config.levelSizeX, rows: this.levelSizeY }).cols + GROW_MARGIN;
   }
   get gridRows(): number {
-    let rows = this.levelSizeY;
-    for (const id of Object.keys(this.level)) rows = Math.max(rows, parseCoordId(id).y + 1);
-    return rows;
+    return levelBounds(this.level, { cols: this.config.levelSizeX, rows: this.levelSizeY }).rows + GROW_MARGIN;
+  }
+
+  // Make room before the origin by shifting everything that is already there.
+  // The alternative — negative coordinates — would have to be understood by
+  // `roadEntries`' off-grid test, the generator and the validator alike, so the
+  // world is re-based instead and they keep their "the world starts at 0,0"
+  // assumption. Trains move with it or they end up off their depots.
+  growLeft(): void {
+    this.growBy(1, 0);
+  }
+  growUp(): void {
+    this.growBy(0, 1);
+  }
+  private growBy(dx: number, dy: number): void {
+    const moved = translateLevel(this.level, dx, dy);
+    for (const key of Object.keys(this.level)) delete this.level[key];
+    Object.assign(this.level, moved);
+    this.armed = null;
+    this.pressFrom = null;
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
@@ -973,6 +1120,12 @@ class EditorView extends Vue {
   };
   mounted() {
     window.addEventListener("keydown", this.onKeydown);
+    window.addEventListener("keydown", this.onEditorKeyDown);
+    window.addEventListener("keyup", this.onEditorKeyUp);
+    window.addEventListener("resize", this.onWindowResize);
+    // Frame the board before the first paint: a big level would otherwise open
+    // on its top-left corner.
+    this.$nextTick(() => this.fitWorld());
     // Self-heal: levels saved before a gate-affecting edit path existed (or
     // edited externally) may carry stale busTo gates — re-derive them all once.
     this.syncBusGates(Object.keys(this.level));
@@ -980,6 +1133,9 @@ class EditorView extends Vue {
   }
   unmounted() {
     window.removeEventListener("keydown", this.onKeydown);
+    window.removeEventListener("keydown", this.onEditorKeyDown);
+    window.removeEventListener("keyup", this.onEditorKeyUp);
+    window.removeEventListener("resize", this.onWindowResize);
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];
@@ -1083,9 +1239,14 @@ export default toNative(EditorView);
 <style lang="scss" scoped>
 .level {
   display: grid;
-  margin: 0 auto;
-  position: relative;
   border: 1px solid green;
+  // Positioned by the camera inside `.world-viewport` (see cameraController.ts):
+  // the camera owns the offset, so no `margin: auto` to fight it, and the
+  // transform origin must be the corner its maths is expressed from.
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 .editor-grid {
   // A very light green ground so empty cells read as part of the board rather
@@ -1261,6 +1422,23 @@ export default toNative(EditorView);
   margin-left: 8px;
   padding-left: 10px;
   border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+// World-growth controls: extend the board before the origin, and read off the
+// current size. Growing right/down needs no button — just draw into the margin.
+.grow-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(0, 0, 0, 0.15);
+}
+.grow-size {
+  font-size: 12px;
+  font-weight: 700;
+  color: #4a5a4a;
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
 }
 .lane-btn {
   min-width: 38px;

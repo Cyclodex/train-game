@@ -40,8 +40,29 @@
     </div>
 
     <div
+      ref="viewport"
+      class="stage-viewport"
+      :class="{ 'stage-viewport--panning': panning }"
+      @pointerdown="onViewportPointerDown"
+      @pointermove="onViewportPointerMove"
+      @pointerup="onViewportPointerUp"
+      @pointercancel="onViewportPointerUp"
+      @wheel.prevent="onViewportWheel"
+    >
+    <div class="world-zoom" v-if="worldOverflows">
+      <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
+      <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
+        {{ Math.round(camera.zoom * 100) }}%
+      </button>
+      <button class="zoom-btn" title="Zoom in" @click.stop="zoomBy(1.25)">+</button>
+    </div>
+    <div
       class="level"
-      :style="{ gridTemplateColumns: `repeat(${cols}, ${config.tileSize}px)`, width: cols * config.tileSize + 'px' }"
+      :style="{
+        gridTemplateColumns: `repeat(${cols}, ${config.tileSize}px)`,
+        width: cols * config.tileSize + 'px',
+        transform: levelTransform,
+      }"
       @click="onBackgroundClick"
     >
       <Train
@@ -94,6 +115,7 @@
         :cell="c.cell"
       />
     </div>
+    </div>
 
     <div v-if="config.debug" class="event-log">
       <div class="event-log-title">Activity log</div>
@@ -130,6 +152,8 @@ import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
+import { type Camera, type Size } from "@/camera";
+import { createCameraController, type CameraController } from "@/cameraController";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -176,6 +200,77 @@ class TestStage extends Vue {
     )
   );
 
+  // --- Camera ---------------------------------------------------------------
+  // Same behaviour as the play board (shared controller): a scenario bigger than
+  // the window — the demo world is 4000x2800px — is panned and zoomed rather than
+  // clipped by the page.
+  // Built in `created()`, NOT as a field initialiser: a field initialiser runs
+  // while vue-facing-decorator is collecting data off a throwaway instance, so
+  // the closures below would capture THAT `this` — one whose injected `config` is
+  // still undefined. The first render calls `overflows` → `worldSize()` and dies
+  // on it. `created()` runs on the real instance, before the first render.
+  //
+  // markRaw: a plain controller in component state must not be deep-proxied
+  // (CLAUDE.md). Its own `state` is `reactive()`, so the camera still drives
+  // re-renders.
+  private cam!: CameraController;
+
+  created() {
+    this.cam = markRaw(
+      createCameraController(
+        () => this.worldSize,
+        () => this.viewportSize,
+      ),
+    );
+  }
+
+  get camera(): Camera {
+    return this.cam.state.camera;
+  }
+  get panning(): boolean {
+    return this.cam.state.panning;
+  }
+  get levelTransform(): string {
+    return this.cam.transform;
+  }
+  get worldOverflows(): boolean {
+    return this.cam.overflows;
+  }
+
+  get worldSize(): Size {
+    return {
+      width: this.cols * this.config.tileSize,
+      height: this.rows * this.config.tileSize,
+    };
+  }
+
+  get viewportSize(): Size {
+    const el = this.$refs.viewport as HTMLElement | undefined;
+    return el
+      ? { width: el.clientWidth, height: el.clientHeight }
+      : { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  fitWorld(): void {
+    this.cam.fit();
+  }
+  zoomBy(factor: number): void {
+    this.cam.zoomBy(factor);
+  }
+  onViewportWheel(e: WheelEvent): void {
+    this.cam.onWheel(e, this.$refs.viewport as HTMLElement | undefined);
+  }
+  onViewportPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // left drag pans the board
+    this.cam.onPointerDown(e);
+  }
+  onViewportPointerMove(e: PointerEvent): void {
+    this.cam.onPointerMove(e);
+  }
+  onViewportPointerUp(e: PointerEvent): void {
+    this.cam.onPointerUp(e);
+  }
+
   get cols(): number {
     return scenarioGrid(this.scenario).cols;
   }
@@ -184,6 +279,10 @@ class TestStage extends Vue {
   }
 
   mounted() {
+    // Frame the board before the first paint: a scenario larger than the window
+    // would otherwise open on its top-left corner and read as a broken map.
+    this.$nextTick(() => this.fitWorld());
+    window.addEventListener("resize", this.onWindowResize);
     this.game.start();
     // The test world has no start overlay, so drive the objective to Playing
     // immediately — this is what lets mode mechanics that only run while live
@@ -193,6 +292,11 @@ class TestStage extends Vue {
   }
   beforeUnmount() {
     this.game.stop();
+    window.removeEventListener("resize", this.onWindowResize);
+  }
+
+  onWindowResize(): void {
+    this.cam.reclamp();
   }
 
   get gridCells(): { key: string; tile: TileCell | null }[] {
@@ -291,11 +395,31 @@ export default toNative(TestStage);
 
 <style lang="scss" scoped>
 .test-stage {
+  // A column: controls on top, then the camera viewport taking the rest. The
+  // board can be far bigger than the window (the demo world is 4000x2800px), so
+  // the viewport clips and the camera moves the board inside it.
   display: flex;
   flex-direction: column;
-  align-items: center;
+  height: 100vh;
+  box-sizing: border-box;
   gap: 16px;
 }
+.stage-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  // The board is dragged to pan; without this the browser's own touch scrolling
+  // and text selection race the pointer handlers.
+  touch-action: none;
+  cursor: grab;
+
+  &--panning {
+    cursor: grabbing;
+    user-select: none;
+  }
+}
+
 .stage-controls {
   display: flex;
   align-items: center;
@@ -346,7 +470,13 @@ export default toNative(TestStage);
 .level {
   display: grid;
   border: 1px solid green;
-  position: relative;
+  // Positioned by the camera inside `.stage-viewport`; the camera owns the offset
+  // (it centres a board smaller than the window itself) and `transform-origin`
+  // must be the corner its `scale() translate()` maths is expressed from.
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 .level-tile {
   position: relative;

@@ -58,12 +58,18 @@ async function waitForServer(url, timeoutMs) {
 }
 
 // Runs in the page. Returns the findings for the scenario currently loaded.
-function auditInPage(tile) {
+function auditInPage(TILE_UNITS) {
   const grid = document.querySelector(".level");
   if (!grid) return { fatal: "no .level element" };
   const gr = grid.getBoundingClientRect();
   const cols = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
   const tiles = Array.from(grid.children).filter(k => k.classList.contains("level-tile"));
+
+  // The board is scaled by the camera when a world is bigger than the window, so
+  // the grid pitch is read off a rendered tile rather than assumed to be the
+  // native 200px — otherwise every check below just measures the zoom level.
+  const pitch = tiles.length ? tiles[0].getBoundingClientRect().width : 0;
+  const tile = pitch > 1 ? pitch : 200;
 
   // layout: gridCells is emitted row-major, so DOM index i must sit at
   // (i % cols, floor(i / cols)).
@@ -128,8 +134,10 @@ function auditInPage(tile) {
       // lean toward the centre line of its own carriageway, never off the road.
       // In tile-local coordinates the carriageway centre is TILE/2 on the lateral
       // axis; leaning toward it means the lateral sign points at the centre.
+      // Path data is in the tile's own SVG viewBox (always TILE units), which the
+      // CSS scale does not touch — so this uses TILE, not the measured pitch.
       const lateralPos = horizontal ? (y0 + y1) / 2 : (x0 + x1) / 2;
-      const towardCentre = Math.sign(tile / 2 - lateralPos);
+      const towardCentre = Math.sign(TILE_UNITS / 2 - lateralPos);
       // A one-way road's lanes are all on one side of the tile centre, so
       // "toward the centre" is the merge direction there too: it is the side the
       // through lanes sit on. Only flag a clear contradiction.

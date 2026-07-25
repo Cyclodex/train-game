@@ -10,6 +10,42 @@ disproved anything here → edit this file in the same commit. Add a fact, fix a
 wrong one, delete a dead one. One-line bullets, cite `file.ts:symbol`. Keep it
 lean — prune as much as you add. This file only stays useful if every task tends it.
 
+## WORLD SIZE + CAMERA
+- A world is as big as its CONTENT. `levelBounds(level, min?)` (`tiles/bounds.ts`)
+  derives cols/rows from the tile coordinates; the views render that, not a fixed
+  size. `gameConfig.levelSizeX` / the views' `levelSizeY` are now only the MINIMUM
+  canvas a new board starts on. The old 7x6 cap was purely a rendering one —
+  `game.ts` always sized the sim from the coordinates.
+- Engine anchors the world at 0,0 (`roadEntries` off-grid test, generator,
+  validator). To grow UP/LEFT, RE-BASE with `normaliseLevel`/`translateLevel`
+  rather than introducing negative coords — and move the trains with
+  `translateTrains` or every train ends up off its depot while the level still validates.
+- Editor grows by drawing: grid = content + `GROW_MARGIN` (2) empty cells. The
+  ⬅︎+ / ⬆︎+ dock buttons re-base for the other two sides.
+- CAMERA (`camera.ts` pure maths + `cameraController.ts` DOM glue, shared by
+  PlayView and TestStage): board renders at the NATIVE 200px tile (all road
+  geometry is in those px — scaling tiles would mean re-deriving it) and the
+  camera moves a window over it. Fits on mount. `.level` is `position:absolute` +
+  `transform-origin: 0 0` inside an `overflow:hidden` viewport; the camera owns
+  centring, so no `margin:auto` (they fight).
+- TRAP: build the controller in `created()`, NOT as a class field. vue-facing-
+  decorator collects data off a THROWAWAY instance, so a field initialiser's
+  closures capture a `this` whose injected `config` is undefined → first render
+  dies inside `worldSize()` with a null `subTree`. And `markRaw` it (CLAUDE.md).
+- Anything measuring tile positions on screen must read the pitch off a rendered
+  tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
+  path data inside a tile stays in its own viewBox units and is unaffected.
+- WHICH BUTTON pans is the CALLER's policy, not the controller's: play boards pan
+  on a plain left drag; the EDITOR pans on middle-drag / space-drag, because a
+  left drag there belongs to the connect tool (edge dot → edge dot) and stealing
+  it makes the board unbuildable.
+- BACKDROP vs GROUND: anything with recognisable scale must be painted on the
+  BOARD element (the camera transforms it, so it pans/zooms with the tiles).
+  `#app`'s themed background is the FAR distance only — fixed to the viewport, so
+  a tree there would sit still while the board slid past it. Splitting these is
+  what made the camera read correctly; the next step is terrain as tile data, see
+  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`.
+
 ## RENDER LAYOUT (the board is a CSS grid — mind what else is in it)
 - `.level` is `display:grid`; `<Train>`/car divs are its DIRECT CHILDREN, emitted
   BEFORE the `.level-tile` divs. Anything in there that generates a box is a GRID
@@ -269,6 +305,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   unit tests. To eyeball render: `window.__game.stop()` FIRST, then push synthetic
   entries into reactive arrays.
 - `config.plainBackdrop` (🌳 BG in /test) = flat green for reading kerbs/markings/gores.
+
+## STATE (2026-07-25) — read before picking up work
+- Nothing is PUSHED. `master` holds the merged road-rendering work; branch
+  `claude/bigger-worlds` is ahead of it with worlds+camera+demoworld. Check
+  `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
+- OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
+  (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
+  `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
+  MEASURED WORSE — read the issue before attempting a third.
+- NEXT UP (agreed): terrain as tile data, spec written and not started —
+  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`. Cosmetic
+  first; bridges are the prize. See IMPROVEMENTS.md item 1.
+- The gallery is 69 scenarios. `npm run probe` + the road sweep both iterate the
+  registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.

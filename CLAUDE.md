@@ -153,6 +153,24 @@ lane-change state machine).
 - `laneOffset.ts` — lateral pixel-offset math for lanes, handling road tapering
   at tile seams (min-seam rule) so merges read smoothly.
 
+### World size + camera
+
+A world is as big as its content: `src/tiles/bounds.ts` (`levelBounds`) derives
+the grid from the level's own tile coordinates, and both boards render that. The
+simulation always worked this way — the old fixed 7x6 was a rendering cap in the
+views alone. `normaliseLevel`/`translateLevel`/`translateTrains` re-base a level
+so it can grow up and left while the engine keeps its "the world starts at 0,0"
+assumption.
+
+Because a world can now be far larger than the screen, PlayView and TestStage
+share a camera (`src/camera.ts` for the maths, `src/cameraController.ts` for the
+pointer/wheel glue): drag to pan, scroll to zoom about the cursor, fit on open.
+The board renders at the native 200px tile and the camera moves a window over it.
+The editor grows by drawing into a two-cell margin, plus ⬅︎+ / ⬆︎+ to extend
+before the origin. `src/levels/test/scenarios/demoworld.ts` is the 20x14 demo:
+a signalled rail ring with depot spurs over a street grid, meeting at eight level
+crossings — playable at `/#/play?board=demoworld`.
+
 ### Renderer
 
 - `src/game.ts` — `createGame()` owns the sim, the switch/signal/colour state,
@@ -176,7 +194,9 @@ Game state is seeded in `src/views/PlayView.vue` via `@Provide()` / `@Inject()`:
 
 Global config is a reactive object in `src/gameConfig.ts`, provided once at the
 app level in `src/main.ts` and injected into components as `config`: `tileSize`
-(200px), `levelSizeX` (7), `debug`, `automaticTrafficLights`,
+(200px), `levelSizeX` (7 — now only the MINIMUM canvas a new board starts on; a
+world's real size is derived from its tiles by `levelBounds`, see
+`src/tiles/bounds.ts`), `debug`, `automaticTrafficLights`,
 `automaticRoutePlanning`, `railDistanceFromPath`, `switchLockMode`
 (`off`/`reserved`/`occupied` interlocking strictness), `colorSeed` (deterministic
 depot/train colour assignment), `roads` (master switch for the road layer),
