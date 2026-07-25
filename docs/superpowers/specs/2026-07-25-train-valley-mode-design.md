@@ -93,14 +93,40 @@ all sit on this. *New:* `src/sim/economy.ts` (a pure ledger: `balance`, `earn`,
 `spend`, entry log) + money fields on `Counters` so star predicates can read them.
 **Size: S–M. Risk: low.** It is a plain reducer next to `objectives.ts`.
 
-**G2 — The level is immutable once the game starts.** This is the real work.
-`createSimulation({ level, … })` snapshots derived state at construction:
-`signalTiles`, `initialSwitches`, the road lane geometry (`createLaneGeometry`),
-and road capacity are all computed once in `createGame`. Building a tile mid-run
-must invalidate and rebuild those. *New:* a `game.applyEdit(edits)` that mutates
-the level and re-derives, plus a `sim` API to accept new tiles without dropping
-train positions. **Size: M–L. Risk: the highest in this plan** — it is the one
-place where "levels are data" was true only at t=0. Do it first and alone.
+**G2 — The level is only partly immutable once the game starts.** Investigated
+2026-07-26; the first draft of this doc called it "M–L, the highest risk in this
+plan" and that was wrong. **The simulation already reads the level live:**
+`traverse`, `resolveExitPort`, `routeToNextSignal` and `isBoundary` all index
+`level[…]` on every call, against the object handed to `createSimulation`, which
+is never copied. Track laid mid-run is routable on the next tick with no rebuild.
+**Size: S–M.** What *is* frozen, and the traps:
+
+- **`signalTiles`** — a `Set` snapshotted in the sim constructor. Best fix: drop
+  the snapshot and derive it live from `level[id].signals`, which is exactly how
+  `game.ts` computes it today. `config.signalTiles` survives as a test override.
+- **The switch map** — and this one bites. `connectionsToExitPort` returns
+  **`null`** when an entry has more than one partner and no arm is set
+  (`tiles/model.ts`). A newly-built junction has no entry in `switches`, so its
+  exit resolves to null and **the train stops dead on that tile**.
+  `initialSwitches` must be re-run and *merged* per edit, so new junctions gain a
+  default arm while the player's existing choices survive.
+- **All road derivations** (`roadEntries`, lane geometry, capacity, junction list)
+  are computed once in `createGame`. **Rail-only edits at first**; road editing
+  belongs with phase 6.
+- **The reactivity trap.** `createGame` receives the raw level object;
+  `@Provide() level` is Vue's reactive proxy of that same target. Mutate the raw
+  one and the sim sees it but the board never re-renders. Do **not** hand the game
+  the proxy — every `level[…]` lookup in the hot loop would go through it,
+  thousands per tick. Instead publish a `levelVersion` ref the game bumps per
+  edit, which `gridCells` reads. Explicit invalidation, no proxy in the hot path,
+  consistent with the existing `markRaw` discipline.
+- **The safety invariant (a free win).** A train's `path[headIndex]` caches the
+  `exitPort` from when it entered, and reservations cache tile ids; editing a tile
+  a train occupies or has reserved makes both stale. `sim.occupiedBy` and
+  `sim.reservedBy` already exist, so: **an edit touching an occupied or reserved
+  tile is rejected** — which is also the rule a player expects (you cannot rip up
+  track under a moving train). The correctness guard and the game rule are the
+  same line of code.
 
 **G3 — Trains never wait.** `TrainState` is `running | parking | parked`; a train
 leaves its depot the moment it exists. M5 needs a `waiting` state and
@@ -155,16 +181,32 @@ That is the obvious place to *not* clone. See §4.
 Seven phases. Each ends in something playable, and each ships its own `/test`
 scenario (project rule) plus a before/after screenshot where it's visible.
 
-### Phase 0 — Make the world mutable (G2) · M–L · **do this alone, first**
+> **Sequencing decision (2026-07-26).** Terrain — item 1 of `IMPROVEMENTS.md`,
+> spec at `2026-07-25-terrain-as-tile-data-design.md` — goes **before** phases 0–2,
+> not at phase 3. Reasons: (a) a build tool with nothing to route *around* is not a
+> puzzle — Train Valley's level 1 is entirely "get round the lake"; (b) `terrain`
+> is a field on `TileCell`, and every phase below eventually asks "what is here?"
+> (build cost, buildable mask, clearing price, bridge vs level crossing, town
+> demand), so adding it late means re-authoring whatever was built meanwhile;
+> (c) it is the missing third axis of the tile model — a cell says what *crosses*
+> it (`connections`, `road`) but not what it *is*. Phase 0 is parked until just
+> before phase 2, which is the first thing that needs it; the analysis above is
+> already banked, so nothing is lost by waiting.
 
-Rebuild-on-edit inside `createGame`: `applyEdit(edits: RouteStep[])` mutates
-`level`, re-derives `signalTiles` / switches / lane geometry, and hands the sim the
-new tiles without disturbing running trains. No player-facing change yet — verify
-with a unit test that lays track under a running sim and with a scenario that grows
-a spur mid-run.
+### Phase 0 — Make the world mutable (G2) · S–M · *parked until phase 2*
 
-*Why first:* every later phase depends on it, and it is the only item that could
-force an architectural rethink. Find that out on day one, not in phase 4.
+`applyEdits(steps: RouteStep[]): EditResult` on the game: guard (reject any edit
+touching an occupied or reserved tile, per G2) → mutate the level → merge new
+switch entries → bump `levelVersion`. Plus `canEdit(tileIds)` so a build preview
+can grey out illegal cells, and deriving `signalTiles` live in the sim instead of
+snapshotting it. **Adding track only** — bulldozing waits for phase 3, where
+clearing gets a price and the "what if a reserved block runs through the deleted
+tile" question is worth answering.
+
+Verify with unit tests (track laid under a running sim gets used; occupied and
+reserved edits are rejected; a new junction does not stall a train) and a
+`livebuild` scenario that closes a gap mid-run on a timer, so it is
+screenshot-verifiable.
 
 ### Phase 1 — Economy + waiting trains + destinations (G1, G3, G4) · M
 
@@ -172,6 +214,12 @@ force an architectural rethink. Find that out on day one, not in phase 4.
 `TrainState` gains `waiting` and `sim.dispatch(id)`; `TrainDef.destination`; the
 fare decays from a per-train `baseFare` at a per-level rate. HUD: a money readout
 and a price badge on each waiting station.
+
+Two amendments from the TV2 review (§5): the load is a **cargo type** with a
+derived colour, not a bare colour — same structure, but icons are legible where
+colour is not, and retrofitting it after fares and goals reference it is
+needlessly painful. And a train can be **held and resumed** mid-run (the cheap
+half of TV2's train control; see §5 for why the other half is not in scope).
 
 **Playable after this phase:** the level-1 loop minus building — click trains out,
 route them, watch fares decay, watch the balance move. Worth playtesting on its own
@@ -186,9 +234,10 @@ insufficient balance blocks the commit. Reuse the editor's ghost preview.
 
 **Playable after this phase:** Train Valley level 1, on a flat map with no terrain.
 
-### Phase 3 — Terrain, plots and clearing (G5) · M
+### Phase 3 — Build rules over terrain: plots and clearing (G5) · M
 
-Land the existing terrain spec, then: `buildable(coord)` feeds `planRoute`'s
+The terrain *data* landed ahead of phase 0 (see the sequencing decision above);
+this phase adds the *rules*: `buildable(coord)` feeds `planRoute`'s
 `passable`; non-buildable terrain renders as such; green plots mark buildable land;
 clearing scenery costs money.
 
@@ -207,6 +256,9 @@ clock; annual tax; a three-level campaign with unlocks over `objectiveStore`.
 Player-called extra trains (a button that spends money and pays a premium) and
 recurring demand from a fixed pre-declared pool, via the existing `Spawner`. Only
 lift the dynamic-sprite limitation (G6) if an endless mode actually needs it.
+
+**Non-goal: reversing.** Levels are authored as loops and through-stations so the
+need never arises. See §5.
 
 ### Phase 6 — The twist: make the road layer part of the economy · M–L
 
@@ -247,10 +299,92 @@ earlier ones because the hard simulation is done.
 
 ---
 
+## 5. Train Valley 2 — what changed, and what we are deliberately not taking
+
+Reviewed 2026-07-26 from screenshots of TV2's "Der Forstbetrieb" mission plus
+public write-ups. The interaction verbs are identical to TV1 — build track, click
+a station to send a train, click switches to steer. Everything around them changed.
+
+| TV1 | TV2 |
+|---|---|
+| Procedural trains to randomised destinations — adapt on the fly | **Pre-set supply lines** planned in advance |
+| Deliver N trains | **Production chains**: furniture ← glass + boards ← sand + logs |
+| — | Nearly every industry also needs **workers**; some need **electricity** from a connected power plant |
+| Coloured stations | **Typed cargo** with icons and demand counters (`0/4`, `7/10`) |
+| "Call an extra train", bankruptcy, boiler-pressure gauge | **All removed**; replaced by a small owned **fleet** you buy and repair |
+| Money as the master pressure | **Time limits** as the master pressure |
+| Flat valley | **Bridges and tunnels**, limited in scope |
+| A dispatched train runs until it arrives or crashes | **Per-train control: stop, resume, reverse** |
+
+Scoring also changed: five stars per level (three time tiers + an earnings target
++ avoid-crashes), and the player *builds* industries (a $10 000 "build production
+facility" button) rather than only track.
+
+### Not taking, and why
+
+1. **Production chains.** In TV2 the hard part is deciding what to build in what
+   order; trains degenerate into short shuttles on dedicated lines. It is a
+   build-order puzzle in a train costume, and it exercises none of what this engine
+   is good at (routing, blocks, interlocking). A later *mode*, sketched in
+   `docs/brainstorm/03`.
+2. **Reversing.** ★ the important one. TV2 did not add it for feel — it added it
+   because its maps are dead-end industry spurs, so a train must back out of the
+   sawmill. The mechanic is a *consequence of level topology*, not a feature. The
+   two halves cost wildly different amounts here: **stopping is nearly free** (we
+   have signal holds, and phase 1 adds a `waiting` state anyway) while **reversing
+   is weeks** — `path` is append-only with a forward `headIndex`, reservations are
+   directional, and the entire interlocking model assumes forward motion. So: take
+   the stop, skip the reverse, and author loops and through-stations so the need
+   never arises. Avoiding a mechanic by level design is cheaper than building it.
+3. **Five-star scoring with three time tiers.** Makes every level a stopwatch and
+   rewards grinding one level. Our three stars already reward *playing differently*
+   (speedrun / hands-off / perfect match). Keep three, keep them orthogonal.
+4. **A 24-level hand-authored campaign.** The hidden cost of both games, and the
+   classic place a side project dies. We have procgen, an editor and shareable
+   exports: 3–5 hand-made teaching levels, then generated content.
+5. **TV2's HUD density.** Counters, cargo pins, demand badges, price tags and a
+   roster panel all on screen at once. Our board is SVG tiles that now pan and zoom
+   over unbounded worlds; that much chrome will not survive it. One badge per
+   station, one per train, nothing else.
+6. **Loco repair/purchase upkeep** ($5 000 wrench per engine). Clicks, not
+   decisions.
+7. **Crashes** — reaffirming §2.2 G7.
+
+### Worth stealing
+
+- **Typed cargo with icons instead of colour matching** — the best idea in TV2,
+  and crucially it **does not require chains**. Fixes the colour-accessibility
+  problem in `brainstorm/06` too. Folded into phase 1.
+- **Demand counters on buildings** (`0/4 logs`): all the readability of a supply
+  chain with none of the simulation. A station wants four loads; deliver four.
+- **Bridges and tunnels** — already backlog item 6, and what makes terrain pay off.
+- **The fare pin over the train**, not only over the station. Phase 1 HUD.
+
+### What we would be betting on instead
+
+1. **The living city under the tracks.** Neither TV game simulates road traffic;
+   ours does. "Your crossing decisions strangle the town" is a pitch neither can
+   answer.
+2. **A real railway under a casual skin.** TV has switches and nothing else — no
+   blocks, no aspects, no reservations. The hardcore end (OpenTTD, Rail Route) has
+   those and is dry. We have both halves already; that gap is a position.
+3. **A browser game with a deterministic sim.** Daily seeded puzzles, shareable
+   level links, ghost replays and leaderboards are nearly free here (`levelStore`
+   exports; the sim replays identically) and structurally impossible for a paid
+   desktop title.
+4. **The editor as content strategy**, so we never have to hand-build 24 levels.
+
+---
+
 ## Sources
 
 - [The Challenge of Train Valley — The Ancient Gaming Noob](https://tagn.wordpress.com/2017/01/23/the-challenge-of-train-valley/)
 - [Train Valley review — Geeky Hobbies](https://www.geekyhobbies.com/train-valley-indie-game-review/)
 - [Train Valley review — GameSpew](https://www.gamespew.com/2015/10/train-valley-review/)
 - [Train Valley 2 review — oprainfall](https://operationrainfall.com/2019/05/08/review-train-valley-2/)
-- Player screenshots of the German build, level "See" (supplied 2026-07-25).
+- [Train Valley 2 — Wikipedia](https://en.wikipedia.org/wiki/Train_Valley_2)
+- [Train Valley 2 review — Save or Quit](https://saveorquit.com/2019/04/19/review-train-valley-2/)
+- [TV2 vs 1, pros and cons — Steam discussion](https://steamcommunity.com/app/602320/discussions/1/1812044473327192731/)
+- [What's the difference to TV2 — Steam discussion](https://steamcommunity.com/app/2244470/discussions/0/4146194656549996098/)
+- Player screenshots: TV1 level "See" (2026-07-25) and TV2 "Der Forstbetrieb"
+  (2026-07-26).
