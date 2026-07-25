@@ -9,6 +9,12 @@ files involved.
 > [`docs/road-future-improvements.md`](docs/road-future-improvements.md). That is
 > the primary forward-looking doc — this file is the cross-cutting backlog.
 >
+> **Target for the first real mode:** a Train Valley–style build+dispatch mode —
+> teardown of the reference game, gap analysis against this engine, and a seven-phase
+> plan — lives in
+> [`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`](docs/superpowers/specs/2026-07-25-train-valley-mode-design.md).
+> Its phase 0 (making the level mutable mid-run) is the one architectural unknown.
+>
 > **Wider brainstorm:** for a broader (less filtered) exploration of future
 > directions — objectives & game modes, terrain (tunnels, bridges, level
 > crossings, stations, obstacles), trains/cargo/economy, atmosphere, advanced

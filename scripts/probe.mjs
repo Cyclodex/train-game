@@ -160,6 +160,62 @@ function auditInPage(TILE_UNITS) {
   };
 }
 
+// Drag the board to each extreme and check the matching world edge comes flush
+// with the viewport. Skipped when the board already fits — there is nothing to
+// reach. Uses the real mouse so the pointer handlers see genuine movementX/Y.
+async function checkCameraReach(page) {
+  const vpSel = ".world-viewport, .stage-viewport";
+  const box = await page.evaluate(sel => {
+    const vp = document.querySelector(sel);
+    const lvl = document.querySelector(".level");
+    if (!vp || !lvl) return null;
+    const v = vp.getBoundingClientRect();
+    const l = lvl.getBoundingClientRect();
+    return {
+      overflows: l.width > v.width + 2 || l.height > v.height + 2,
+      cx: v.left + v.width / 2,
+      cy: v.top + v.height / 2,
+      w: v.width,
+      h: v.height,
+    };
+  }, vpSel);
+  if (!box || !box.overflows) return [];
+
+  // Drag from the viewport centre toward one edge, in steps, then read the gap.
+  const dragTo = async (dx, dy) => {
+    await page.mouse.move(box.cx, box.cy);
+    await page.mouse.down();
+    for (let i = 0; i < 12; i++) {
+      await page.mouse.move(box.cx + dx * (i + 1) * 0.08, box.cy + dy * (i + 1) * 0.08);
+    }
+    await page.mouse.up();
+  };
+  const gaps = () =>
+    page.evaluate(sel => {
+      const v = document.querySelector(sel).getBoundingClientRect();
+      const l = document.querySelector(".level").getBoundingClientRect();
+      return {
+        bottom: l.bottom - v.bottom,
+        right: l.right - v.right,
+        top: v.top - l.top,
+        left: v.left - l.left,
+      };
+    }, vpSel);
+
+  const faults = [];
+  const SLACK = 4; // the board's 1px border plus rounding
+  // Drag UP/LEFT moves the view toward the bottom/right of the world.
+  await dragTo(-box.w * 3, -box.h * 3);
+  const far = await gaps();
+  if (far.bottom > SLACK) faults.push(`${Math.round(far.bottom)}px of world below the viewport is unreachable`);
+  if (far.right > SLACK) faults.push(`${Math.round(far.right)}px of world right of the viewport is unreachable`);
+  await dragTo(box.w * 3, box.h * 3);
+  const near = await gaps();
+  if (near.top > SLACK) faults.push(`${Math.round(near.top)}px of world above the viewport is unreachable`);
+  if (near.left > SLACK) faults.push(`${Math.round(near.left)}px of world left of the viewport is unreachable`);
+  return faults;
+}
+
 async function main() {
   const { ids: only, opt } = parseArgs(process.argv.slice(2));
   const base = `http://localhost:${opt.port}`;
@@ -233,8 +289,17 @@ async function main() {
       await page.waitForTimeout(opt.settle);
       const r = await page.evaluate(auditInPage, TILE);
 
+      // camera: on a board bigger than the window, every edge of the world must
+      // be reachable by panning. This is invisible to unit tests — the clamp
+      // maths is right in isolation; what broke it was `viewportSize` being a
+      // CACHED computed reading non-reactive `$refs`, so it clamped against the
+      // whole window and left the bottom of a big world unreachable by exactly
+      // the chrome's height.
+      const cameraFaults = await checkCameraReach(page);
+
       const problems = [];
       if (r.fatal) problems.push(r.fatal);
+      for (const c of cameraFaults) problems.push(`camera: ${c}`);
       for (const m of r.misplaced ?? []) problems.push(`layout: ${m}`);
       if (r.mismatch) problems.push(`mismatch: ${r.mismatch} tile(s) paint the red lane-count mismatch`);
       for (const a of r.arrowFaults ?? []) problems.push(`arrows: ${a}`);

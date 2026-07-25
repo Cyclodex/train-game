@@ -28,6 +28,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   camera moves a window over it. Fits on mount. `.level` is `position:absolute` +
   `transform-origin: 0 0` inside an `overflow:hidden` viewport; the camera owns
   centring, so no `margin:auto` (they fight).
+- TRAP: a class GETTER becomes a CACHED computed (vue-facing-decorator). Anything
+  reading a NON-REACTIVE source — `$refs`, `clientWidth/Height`, `window.*` — must
+  be a METHOD, or it caches its first value forever. `viewportSize` was a getter:
+  first evaluated during the initial render, BEFORE mount with `$refs` still
+  empty, so it cached the `window.innerHeight` fallback and the camera clamped
+  against the whole window. The bottom of a big world was then unreachable by
+  exactly the chrome height (~310px). Guarded by `npm run probe`'s camera check
+  (pans to each extreme, asserts the world edge comes flush).
 - TRAP: build the controller in `created()`, NOT as a class field. vue-facing-
   decorator collects data off a THROWAWAY instance, so a field initialiser's
   closures capture a `this` whose injected `config` is undefined → first render
@@ -89,6 +97,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   old "strange bend" on mixed-width junctions). =concentric arc when offsets equal.
 
 ## JUNCTIONS
+- AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
+  (`demoworld.ts fourWayCross`). `twoWay(L,R) + twoWay(T,B)` looks identical on
+  the tile but is a FLYOVER — every car goes straight through, nobody can turn,
+  and the junction sync cannot rescue it because it only re-distributes exits a
+  lane ALREADY reaches. Assert the behaviour (`demoworld.spec.ts` counts turns vs
+  straights at the junctions), not the authoring.
 - Lanes DERIVED by `deriveJunctionLanes` (`editOps.ts`), receiving-capacity rule:
   never more turning lanes than the dest has receiving lanes; every movement lane-
   true (no crossing arcs). idx0=kerb, high=inner. R-block kerb side, L-block inner

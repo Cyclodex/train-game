@@ -566,7 +566,7 @@ class EditorView extends Vue {
     this.cam = markRaw(
       createCameraController(
         () => this.worldSize,
-        () => this.viewportSize,
+        () => this.viewportSize(),
       ),
     );
   }
@@ -586,7 +586,13 @@ class EditorView extends Vue {
       height: this.gridRows * this.config.tileSize,
     };
   }
-  get viewportSize(): Size {
+  // A METHOD, not a getter: vue-facing-decorator turns a class getter into a
+  // CACHED computed, and `$refs` is not reactive — so as a getter this was
+  // evaluated once during the first render (before mount, `$refs` still empty),
+  // cached the window fallback, and never invalidated. The camera then clamped
+  // against the whole window instead of the viewport, and the bottom of a big
+  // world became unreachable by exactly the chrome's height.
+  viewportSize(): Size {
     const el = this.$refs.viewport as HTMLElement | undefined;
     return el
       ? { width: el.clientWidth, height: el.clientHeight }

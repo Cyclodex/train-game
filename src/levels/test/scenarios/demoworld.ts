@@ -2,7 +2,7 @@ import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
-import { twoWay } from "@/tiles/lanes";
+import { twoWay, type Lane } from "@/tiles/lanes";
 
 const { Top, Right, Bottom, Left } = Position;
 
@@ -57,6 +57,17 @@ const SPURS = [
   // East side: branch west. The depot sits west of its link, so it opens EAST.
   { junction: "17,8", jRot: 3, link: "16,8", lRot: 1, depot: "15,8", dRot: 1 },
 ] as const;
+
+// A real four-way junction: every arm reaches every OTHER arm, so a car may turn
+// left or right as well as go straight. Authoring only the opposite-port pairs
+// (`twoWay(L,R) + twoWay(T,B)`) makes a crossroads that no one can turn at — and
+// the registry's junction sync cannot rescue it, because it only re-distributes
+// exits a lane already reaches. The sync then narrows these back to the movements
+// each arm can actually receive.
+function fourWayCross(): Lane[] {
+  const arms = [Top, Right, Bottom, Left];
+  return arms.map(from => ({ from, to: arms.filter(p => p !== from), index: 0 }));
+}
 
 function build(): Level {
   const level: Level = {};
@@ -134,14 +145,7 @@ function build(): Level {
   for (const y of AVENUES_Y) {
     for (let x = 0; x < cols; x++) {
       const onStreet = STREETS_X.includes(x);
-      roadCell(
-        `${x},${y}`,
-        onStreet
-          ? // Four-way road junction: every arm reaches every other. The registry's
-            // junction sync narrows these to the movements the arms can receive.
-            [...twoWay(Left, Right), ...twoWay(Top, Bottom)]
-          : twoWay(Left, Right),
-      );
+      roadCell(`${x},${y}`, onStreet ? fourWayCross() : twoWay(Left, Right));
     }
   }
   for (const x of STREETS_X) {

@@ -110,7 +110,7 @@
       @pointercancel="onViewportPointerUp"
       @wheel.prevent="onViewportWheel"
     >
-    <div class="world-zoom" v-if="worldOverflows">
+    <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
         {{ Math.round(camera.zoom * 100) }}%
@@ -607,7 +607,7 @@ class PlayView extends Vue {
     this.cam = markRaw(
       createCameraController(
         () => this.worldSize,
-        () => this.viewportSize,
+        () => this.viewportSize(),
       ),
     );
   }
@@ -621,7 +621,8 @@ class PlayView extends Vue {
   get levelTransform(): string {
     return this.cam.transform;
   }
-  get worldOverflows(): boolean {
+  // Also a method: it reads `viewportSize()`, which is not a reactive dependency.
+  worldOverflows(): boolean {
     return this.cam.overflows;
   }
 
@@ -630,7 +631,13 @@ class PlayView extends Vue {
     return { width: cols * this.config.tileSize, height: rows * this.config.tileSize };
   }
 
-  get viewportSize(): Size {
+  // A METHOD, not a getter: vue-facing-decorator turns a class getter into a
+  // CACHED computed, and `$refs` is not reactive — so as a getter this was
+  // evaluated once during the first render (before mount, `$refs` still empty),
+  // cached the window fallback, and never invalidated. The camera then clamped
+  // against the whole window instead of the viewport, and the bottom of a big
+  // world became unreachable by exactly the chrome's height.
+  viewportSize(): Size {
     const el = this.$refs.viewport as HTMLElement | undefined;
     return el
       ? { width: el.clientWidth, height: el.clientHeight }
