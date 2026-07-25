@@ -306,6 +306,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   entries into reactive arrays.
 - `config.plainBackdrop` (🌳 BG in /test) = flat green for reading kerbs/markings/gores.
 
+## STATE (2026-07-25) — read before picking up work
+- Nothing is PUSHED. `master` holds the merged road-rendering work; branch
+  `claude/bigger-worlds` is ahead of it with worlds+camera+demoworld. Check
+  `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
+- OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
+  (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
+  `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
+  MEASURED WORSE — read the issue before attempting a third.
+- NEXT UP (agreed): terrain as tile data, spec written and not started —
+  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`. Cosmetic
+  first; bridges are the prize. See IMPROVEMENTS.md item 1.
+- The gallery is 69 scenarios. `npm run probe` + the road sweep both iterate the
+  registry, so a new scenario is covered the day it is added.
+
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
 - `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
