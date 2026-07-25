@@ -459,7 +459,6 @@ describe("busTo: bus-only exits on a shared lane", () => {
 // approachPortsOf: only arms traffic ENTERS from. An exit-only arm (one-way
 // outbound) must not get a signal phase or a signal head (see junctionSignal).
 describe("approachPortsOf", () => {
-  const T = Position.Top;
   const B = Position.Bottom;
   const L = Position.Left;
   const R = Position.Right;

@@ -90,36 +90,24 @@ export function seamPositioningBand(
 // to merge — and crucially NO lane is ever pushed to a negative offset across
 // the centreline into oncoming traffic (the bug the old band-substitution
 // `(seamWidth - 0.5 - lanePos)·W` produced for every inner lane).
-// `centred` distinguishes the two band layouts. A BIDIRECTIONAL road owns one
-// half (lanes on the +n side, the centreline is the divider with oncoming): a
-// narrowing drops the OUTER kerb lane, so the offset is clamped inward
-// (`min(natural, seamWidth - 0.5)`) — inner lanes hold, the kerb lane merges,
-// and no lane crosses the centreline.
+// This is the BIDIRECTIONAL rule: the road owns one half (lanes on the +n side,
+// the centreline is the divider with oncoming), so a narrowing drops the OUTER
+// kerb lane and the offset is clamped inward (`min(natural, seamWidth - 0.5)`) —
+// inner lanes hold, the kerb lane merges, and no lane crosses the centreline.
 //
-// A ONE-WAY road has its lanes CENTRED about the centreline (no oncoming half to
-// anchor against), and there is no median to avoid crossing, so band SUBSTITUTION
-// is correct here (the bug it caused for bidirectional roads — pushing inner
-// lanes across the median — cannot happen one-way). A surviving lane takes the
-// offset it will have on the narrower side, `(seamWidth - 0.5 - lanePos)·W`, so
-// it lands EXACTLY on its downstream neighbour's lane (no half-lane gap at the
-// seam — the discontinuity the old `natural · seamWidth/selfBand` scaling left).
-// The dropped lanes are the highest indices (the side away from lane 0, matching
-// the sim's merge in road.ts which drops `lane > nCount-1`): they are clamped to
-// the innermost surviving lane (`seamCount - 1`) so they ramp onto its line and
-// merge. `seamCount = 2·seamWidth` is the lane count of the narrower band.
+// ONE-WAY roads do NOT come through here: they are kerb-anchored to their run's
+// widest lane count (`oneWayLaneOffsetPx` below), so their through-lanes are
+// run-constant and no seam adjustment applies at all. A `centred` band-
+// substitution variant used to live here for one-way; it was superseded by the
+// run-max kerb anchor and is gone.
 export function laneSeamOffsetPx(
   lanePos: number,
   selfBand: number,
   seamWidth: number,
   tileSize: number,
-  centred = false,
 ): number {
   const natural = selfBand - 0.5 - lanePos;
-  const seamCount = Math.max(1, Math.round(2 * seamWidth)); // lanes at the narrow seam
-  const adjusted = centred
-    ? seamWidth - 0.5 - Math.min(lanePos, seamCount - 1)
-    : Math.min(natural, seamWidth - 0.5);
-  return adjusted * tileSize * LANE_WIDTH_FRAC;
+  return Math.min(natural, seamWidth - 0.5) * tileSize * LANE_WIDTH_FRAC;
 }
 
 // Lateral offset (px, right-of-travel) for a coupler at continuous lane position
@@ -140,10 +128,9 @@ export function laneOffsetPx(
   bandExit: number,
   t: number,
   tileSize: number,
-  centred = false,
 ): number {
-  const offEntry = laneSeamOffsetPx(lanePos, selfBand, bandEntry, tileSize, centred);
-  const offExit = laneSeamOffsetPx(lanePos, selfBand, bandExit, tileSize, centred);
+  const offEntry = laneSeamOffsetPx(lanePos, selfBand, bandEntry, tileSize);
+  const offExit = laneSeamOffsetPx(lanePos, selfBand, bandExit, tileSize);
   return offEntry + (offExit - offEntry) * t;
 }
 

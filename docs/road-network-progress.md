@@ -1,7 +1,8 @@
 # Road Network — Sub-project Progress
 
-_Last updated: 2026-06-07 (all work below is **merged to `develop`**, pushed to
-`origin/develop`; `master` is intentionally far behind — we iterate on `develop`)._
+_Last updated: 2026-07-25. All work below is **on `master`**, which is the trunk:
+the repo went trunk-based master-only on 2026-06-11 and `develop` is dead (285
+commits behind). Branch from and PR to `master`._
 
 The road network is the "big plan": grow the game from rail-only into a
 Transport-Fever-like world where cars drive a real multi-lane road network with

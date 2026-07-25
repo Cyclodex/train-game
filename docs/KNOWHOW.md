@@ -58,9 +58,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   UNTOUCHED: the gate returns early ONLY for one-way, so they keep the box-filling
   `roadCurvePolygonPathTapered` ribbon (verified pixel-identical: crossturns3lane
   before==after bar moving cars). A slip into a WIDER arm (arm lanes > turning lanes)
-  NECKS at the seam — size exit arms to the lanes that actually turn for a flush demo
-  (turnlanes' 3-lane W/E exits fed by 1 turn lane each was over-provisioned; the old
-  full-box paint masked it by painting the arm 3 wide even though 1 lane ever drove it).
+  NECKS at the seam — ARM WIDTH MUST EQUAL THE LANES THAT TAKE THAT MOVEMENT. Probe
+  it: `road.filter(l=>l.to.includes(exit)).length` vs `roadLaneCountAt(armCoord,port)`,
+  and every `roadTurnExitOffsetPx` landing must sit on an arm lane centre
+  ((n/2−0.5−i)·W). FIXED 2026-07-25 in `turnlanes` (was uniform 3-lane arms fed by
+  1 west / 2 straight / 1 east ⇒ 4 lanes of tarmac no car drove; now 1/2/1 and every
+  arm flush). The old full-box paint masked it by painting the arm 3 wide regardless.
 - Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): now reached for
   TWO-WAY junctions only (one-way junctions return the slip channel first). Two-way
   guides stay all-dashed. The `oneWayJunction = this.isOneWayJunction` / `marking.solid`
@@ -109,6 +112,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
   +overlay — keep lockstep.
 - Bidirectional: lanes anchor to YELLOW centreline; kerb lane drops; gore
   `laneDropGore` (point upstream, widen down).
+- ONE gore primitive for both road types: `laneClosureGore(entry,exit,size,
+  {outerEntry,innerEntry,outerExit,innerExit})` — explicit px bounds, `outer` =
+  closing side, `inner` = survivor side. `laneDropGore` is a thin wrapper (kerb
+  anchor); one-way passes NEGATIVE offsets (centre anchor). The hatch side is
+  DERIVED (`sign(inner−outer)` at the wide end), so it can't be passed backwards —
+  the separate `oneWayClosingGore` had no test and shipped reversed once. Only the
+  ANCHOR forks; the geometry never does.
+- `laneSeamOffsetPx` is BIDIRECTIONAL-ONLY (min-seam clamp). Its `centred`
+  band-substitution branch was one-way's old model — dead since the run-max kerb
+  anchor, removed 2026-07-25 with its 4 tests. One-way never seam-adjusts:
+  `oneWayLaneOffsetPx` is run-constant.
 - One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
   widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
   (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i
@@ -152,6 +166,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+- LIVE-MODEL PROBE (fastest visual-bug loop, no screenshot needed): `preview_start`
+  the `traingame` config in `.claude/launch.json` (dev server :5173), navigate to
+  `#/test/<id>`, then run JS against `window.__game`. Works with the browser pane
+  HIDDEN — only pixel screenshots need it displayed. `__game` exposes the real road
+  API: `roadAt(coord)` (derived lanes), `roadLaneCountAt(coord,port)`,
+  `roadOneWayRunMax`, `roadTurnExitOffsetPx(coord,entry,exit,lane,cls)` (where a
+  turner LANDS), `roadIsJunctionAt`. Ports are the numeric `Position` enum
+  (Top=0,Right=1,Bottom=2,Left=3,Center=4) — passing strings silently returns
+  0/null. This gives EXACT numbers (lane offsets, landings, arm widths) where a
+  screenshot only gives an impression; edit → HMR → re-query is seconds. Use it to
+  FIND/diagnose; use `npm run shot` before/after to PROVE the paint changed.
+- `npm run shot` needs `npx playwright install chromium` ONCE per machine (`.npmrc`
+  sets `ignore-scripts`, so the browser is never auto-downloaded) — a fresh clone
+  fails with "Please run npx playwright install", not with a code error.
 - ADOPTING / continuing half-built work (the #1 silent trap): a feature can be
   scaffolded but only HALF-wired — state declared+read but never WRITTEN. A field
   declared+read yet never init'd/mutated is `undefined` at runtime → silent no-op
@@ -174,6 +202,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
+- `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
+  path `"C:\Program Files\GitHub CLI\gh.exe"`. Bare `gh` ENOENTs and the REST API
+  404s unauthenticated (private repo) — don't conclude "no GitHub access" from either.
 - Commit your scoped change as soon as done+green, unasked. Heavy parallel editing
   of same files (`road.ts`, `editOps.ts`, scenario `index.ts`) — stage only your
   hunks. NO AI attribution in commit msgs.

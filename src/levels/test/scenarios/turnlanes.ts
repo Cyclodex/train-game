@@ -7,13 +7,15 @@ import { Lane } from "@/tiles/lanes";
 // road spawns at the south edge and OPENS UP from 1 → 2 → 3 lanes as it climbs,
 // then meets a full crossroads and fans out straight / left / right.
 //
-// The whole layout is a UNIFORM one-way system: every arm carries the same three
-// one-way lanes, so every seam is the same width and nothing tapers. (A one-way
-// road is half the width of a two-way one, so feeding a two-way cross — or fanning
-// 3 lanes into 1-lane exits — leaves the junction pinched and painted with
-// lane-drop hatching; matching the arm widths is what keeps it flush.) Each of the
-// three approach lanes may take any turn through the centre. Toggle Debug for the
-// per-lane turn arrows.
+// Each EXIT ARM is sized to the lanes that actually take its movement, which is
+// what keeps the junction flush. `syncJunctionLanesAround` derives the movements
+// from the arm widths (receiving-capacity rule), so the 3 approach lanes split
+// inner→left, middle→straight, kerb→right+straight: 1 lane turns west, 1 turns
+// east, 2 go straight. The arms are therefore 1 / 2 / 1 lanes wide, not a uniform
+// 3 — a one-way junction paints LANE-ANCHORED slip channels covering only the
+// turning lanes, so a 1-lane turn into a 3-lane arm necks visibly at the seam and
+// leaves two lanes of tarmac no car ever drives. Match arm width to turning lanes
+// and every painted lane carries traffic. Toggle Debug for the per-lane turn arrows.
 
 const T = Position.Top;
 const B = Position.Bottom;
@@ -25,9 +27,9 @@ function oneWayN(from: Port, to: Port, n: number): Lane[] {
   return Array.from({ length: n }, (_, i) => ({ from, to: [to], index: i }));
 }
 
-// The crossroads centre: the three inbound (south) lanes each fan out to all three
-// exits (straight north, left west, right east). Three lanes cross every seam, so
-// every arm — inbound or outbound — is the same width.
+// The crossroads centre: the three inbound (south) lanes reach all three exits.
+// `syncJunctionLanesAround` then narrows each lane to the movements its arm can
+// receive (inner→left, middle→straight, kerb→right+straight).
 function crossCentre(): Lane[] {
   return Array.from({ length: 3 }, (_, i) => ({ from: B, to: [T, L, R], index: i }));
 }
@@ -37,9 +39,10 @@ export const turnlanes: TestScenario = {
   name: "Turn lanes: one-way widens 1→2→3 into a cross",
   description:
     "A single one-way road spawns at the south edge and opens up from 1 to 2 to 3 " +
-    "lanes as it climbs into a full 4-way crossroads, then fans out straight, left " +
-    "and right. Every arm is a uniform 3-lane one-way road, so all four seams stay " +
-    "flush — no pinching or lane-drop hatching. Toggle Debug for the turn arrows.",
+    "lanes as it climbs into a full 4-way crossroads, then fans out left, straight " +
+    "and right. Each exit arm is as wide as the number of lanes that actually turn " +
+    "into it (1 west, 2 north, 1 east), so every slip channel meets its arm flush " +
+    "and no lane is painted that cars never use. Toggle Debug for the turn arrows.",
   level: {
     // South arm: one-way northbound, widening toward the junction.
     "3,7": { connections: [], road: oneWayN(B, T, 1) }, // single lane (spawn here)
@@ -48,18 +51,18 @@ export const turnlanes: TestScenario = {
     "3,4": { connections: [], road: oneWayN(B, T, 3) }, // 3-lane approach
     // The crossroads.
     "3,3": { connections: [], road: crossCentre() },
-    // North exit arm (straight): one-way northbound, 3 lanes.
-    "3,2": { connections: [], road: oneWayN(B, T, 3) },
-    "3,1": { connections: [], road: oneWayN(B, T, 3) },
-    "3,0": { connections: [], road: oneWayN(B, T, 3) },
-    // West exit arm (left turn): one-way westbound, 3 lanes.
-    "2,3": { connections: [], road: oneWayN(R, L, 3) },
-    "1,3": { connections: [], road: oneWayN(R, L, 3) },
-    "0,3": { connections: [], road: oneWayN(R, L, 3) },
-    // East exit arm (right turn): one-way eastbound, 3 lanes.
-    "4,3": { connections: [], road: oneWayN(L, R, 3) },
-    "5,3": { connections: [], road: oneWayN(L, R, 3) },
-    "6,3": { connections: [], road: oneWayN(L, R, 3) },
+    // North exit arm (straight): 2 lanes — the two approach lanes that go straight.
+    "3,2": { connections: [], road: oneWayN(B, T, 2) },
+    "3,1": { connections: [], road: oneWayN(B, T, 2) },
+    "3,0": { connections: [], road: oneWayN(B, T, 2) },
+    // West exit arm (left turn): 1 lane — only the inner approach lane turns left.
+    "2,3": { connections: [], road: oneWayN(R, L, 1) },
+    "1,3": { connections: [], road: oneWayN(R, L, 1) },
+    "0,3": { connections: [], road: oneWayN(R, L, 1) },
+    // East exit arm (right turn): 1 lane — only the kerb approach lane turns right.
+    "4,3": { connections: [], road: oneWayN(L, R, 1) },
+    "5,3": { connections: [], road: oneWayN(L, R, 1) },
+    "6,3": { connections: [], road: oneWayN(L, R, 1) },
   },
   trains: {},
   size: { cols: 7, rows: 8 },
