@@ -88,6 +88,18 @@ export default toNative(Train);
 </template>
 
 <style lang="scss" scoped>
+// A composition is a pure wrapper — every unit inside it is absolutely positioned
+// against the `.level` grid by the game loop, so the wrapper itself must generate
+// NO box. Without this it is a plain static div and therefore a GRID ITEM, eating
+// one 200px cell each: the whole board slid one tile to the right per train and
+// wrapped its tail onto an extra row (2 trains on /play started the level at
+// column 2). `display: contents` removes the box without changing the units'
+// containing block, which stays `.level` — do not swap it for `position:
+// absolute`, that would re-anchor every transform the game loop writes.
+.train-composition {
+  display: contents;
+}
+
 .train {
   position: absolute;
   z-index: 10;
