@@ -88,6 +88,18 @@ export default toNative(Train);
 </template>
 
 <style lang="scss" scoped>
+// A composition is a pure wrapper — every unit inside it is absolutely positioned
+// against the `.level` grid by the game loop, so the wrapper itself must generate
+// NO box. Without this it is a plain static div and therefore a GRID ITEM, eating
+// one 200px cell each: the whole board slid one tile to the right per train and
+// wrapped its tail onto an extra row (2 trains on /play started the level at
+// column 2). `display: contents` removes the box without changing the units'
+// containing block, which stays `.level` — do not swap it for `position:
+// absolute`, that would re-anchor every transform the game loop writes.
+.train-composition {
+  display: contents;
+}
+
 .train {
   position: absolute;
   z-index: 10;
@@ -153,7 +165,11 @@ export default toNative(Train);
   position: absolute;
   color: black;
   width: 100%;
-  transform: translate(-50%, -50%);
+  // Cancel the unit's own rotation so the id stays upright and readable whichever
+  // way the train is running (`--unit-angle` is published by the game loop next to
+  // the transform it belongs to). Westbound trains sit at ~180deg, which used to
+  // render their ids mirrored and upside down.
+  transform: translate(-50%, -50%) rotate(calc(-1 * var(--unit-angle, 0deg)));
   top: 50%;
   left: 50%;
 }

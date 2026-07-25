@@ -11,6 +11,8 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
+  laneClosureGore,
+  oneWayMergeArrowPath,
   roadKerbEdge,
   roadCurveKerbEdge,
   junctionApproachSignalGeom,
@@ -358,6 +360,107 @@ describe("laneDropGore", () => {
     // survivors=1, selfN=3 → innerOff 28 (y128), outerOff 84 (y184).
     const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 3);
     expect(gore.triangle).toBe("M 0 184 L 200 184 L 200 128 Z");
+  });
+});
+
+describe("oneWayMergeArrowPath — always leans toward the survivors", () => {
+  // Left→Right, size 200: forward = +x, +n (right-of-travel) = +y (DOWN on screen).
+  // A kerb-anchored one-way sheds its CENTRE lane, so survivors are kerb-side:
+  // mergeDir = +1, and every arrow head must sit BELOW its tail.
+  const lean = (laneOff: number) => {
+    const a = oneWayMergeArrowPath(Position.Left, Position.Right, 200, laneOff, 0.3, 1);
+    const n = a.shaft.match(/-?\d+\.?\d*/g)!.map(Number); // M tailX tailY L headX headY
+    return { dx: n[2] - n[0], dy: n[3] - n[1] };
+  };
+
+  it("leans toward the kerb for a closing lane on the centre side", () => {
+    // 3-lane run narrowing 3→2: the closing lane sits at −28 (centre side).
+    expect(Math.sign(lean(-28).dy)).toBe(1); // head below tail → merge toward kerb
+    expect(Math.sign(lean(-28).dx)).toBe(1); // and forward, never backwards
+  });
+
+  it("leans the SAME way when the closing lane straddles the centreline", () => {
+    // The regression: a 3-lane run narrowing 2→1 puts the closing lane at exactly
+    // 0. Inferring the side from `Math.sign(laneOff)` yielded 0 → fallback +1 →
+    // the arrows pointed AWAY from the survivors (visibly "upwards" on screen).
+    expect(Math.sign(lean(0).dy)).toBe(1);
+    expect(Math.sign(lean(0).dx)).toBe(1);
+  });
+
+  it("honours an explicit opposite merge direction", () => {
+    const a = oneWayMergeArrowPath(Position.Left, Position.Right, 200, 0, 0.3, -1);
+    const n = a.shaft.match(/-?\d+\.?\d*/g)!.map(Number);
+    expect(Math.sign(n[3] - n[1])).toBe(-1);
+  });
+});
+
+describe("laneClosureGore — the shared primitive (bidirectional + one-way)", () => {
+  // Left→Right, size 200: f = (1,0), n = (0,1) (right-of-travel = +y), lane
+  // width 28px. A one-way highway sheds its CENTRE lane, so its caller passes
+  // NEGATIVE offsets — the mirror of the bidirectional kerb drop.
+  const hatchDir = (gore: { hatch: string[] }) => {
+    const n = gore.hatch[0].match(/-?\d+\.?\d*/g)!.map(Number);
+    return { dx: n[2] - n[0], dy: n[3] - n[1] }; // stripe direction, tail→head
+  };
+
+  it("degenerates to the lane-drop triangle when one end has no spread", () => {
+    // Identical to laneDropGore(…, 1, 2): tip on the kerb upstream, widening in.
+    const gore = laneClosureGore(Position.Left, Position.Right, 200, {
+      outerEntry: 56,
+      innerEntry: 56,
+      outerExit: 56,
+      innerExit: 28,
+    });
+    expect(gore.triangle).toBe("M 0 156 L 200 156 L 200 128 Z");
+  });
+
+  it("keeps a real quad when both ends have spread", () => {
+    const gore = laneClosureGore(Position.Left, Position.Right, 200, {
+      outerEntry: 56,
+      innerEntry: 42,
+      outerExit: 56,
+      innerExit: 28,
+    });
+    expect(gore.triangle).toBe("M 0 142 L 0 156 L 200 156 L 200 128 Z");
+  });
+
+  it("hatches TOWARD the survivors on both sides — the sign is derived, not passed", () => {
+    // Bidirectional: closing band on +n (kerb), survivors inboard → stripes lean −n.
+    const kerbDrop = laneClosureGore(Position.Left, Position.Right, 200, {
+      outerEntry: 56,
+      innerEntry: 56,
+      outerExit: 56,
+      innerExit: 28,
+    });
+    expect(Math.sign(hatchDir(kerbDrop).dy)).toBe(-1);
+
+    // One-way: closing band on −n (centre), survivors kerbward → stripes lean +n.
+    // This is the case that silently drifted backwards before the two were unified.
+    const centreDrop = laneClosureGore(Position.Left, Position.Right, 200, {
+      outerEntry: -56,
+      innerEntry: -56,
+      outerExit: -56,
+      innerExit: -28,
+    });
+    expect(Math.sign(hatchDir(centreDrop).dy)).toBe(1);
+
+    // Both always run forward (+x here) — stripes never point back up the road.
+    expect(Math.sign(hatchDir(kerbDrop).dx)).toBe(1);
+    expect(Math.sign(hatchDir(centreDrop).dx)).toBe(1);
+  });
+
+  it("emits stripes long enough to span a gore anchored far off the centreline", () => {
+    // A 3-lane one-way sheds its centre lane at offset −84: the stripe half-length
+    // must still exceed the tile so the hatch fills the clipped polygon.
+    const gore = laneClosureGore(Position.Left, Position.Right, 200, {
+      outerEntry: -84,
+      innerEntry: -84,
+      outerExit: -84,
+      innerExit: -56,
+    });
+    expect(gore.hatch.length).toBeGreaterThan(0);
+    const { dx, dy } = hatchDir(gore);
+    expect(Math.hypot(dx, dy)).toBeGreaterThan(400); // ≥ 2 × tile size
   });
 });
 

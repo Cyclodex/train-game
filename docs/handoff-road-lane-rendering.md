@@ -85,10 +85,27 @@ yellow centreline; one-way has no centreline so it left-aligns to `runMax`.
 
 ## Open follow-ups for the driving-lines work
 
-1. Unify the gore/merge primitive (above).
-2. Remove the dead `centred` band-substitution branch in `laneSeamOffsetPx` + its
-   now-misleading tests.
+_Closed 2026-07-25 (see the "duplication" section above — it is now history):_
+
+1. ~~Unify the gore/merge primitive.~~ **Done** — `laneClosureGore(entry, exit,
+   size, {outerEntry, innerEntry, outerExit, innerExit})` is the single primitive;
+   `laneDropGore` is a thin kerb-anchored wrapper and the one-way caller passes its
+   own (negative, centre-anchored) offsets. `oneWayClosingGore` is gone. The hatch
+   side is **derived** from the bounds rather than passed, so the backwards-gore
+   drift cannot recur; it now has unit tests covering both sides.
+2. ~~Remove the dead `centred` band-substitution branch in `laneSeamOffsetPx`.~~
+   **Done** — no production caller survived the run-max kerb anchor; the branch and
+   its four tests (which documented a one-way model that no longer exists) are gone.
+   `laneSeamOffsetPx` is now explicitly bidirectional-only.
+4. ~~Advance merge arrows for one-way.~~ **Done** — a one-way tile whose *successor*
+   drops a lane now paints the merge arrows a tile early (`Tile.vue`
+   `laneDropOverlay`, the `exitCount === entryCount` branch), the counterpart of
+   `laneDropArrowPlan`'s lookahead. Verified on `roadonewaylanes`: the two tiles
+   preceding each taper gained a pair of arrows, and the widening row stays clean.
+
+_Still open:_
+
 3. Possibly give the bidirectional path the same "straight through-lanes" feel via
-   a shared anchor abstraction.
-4. Advance merge arrows (warn one tile upstream) aren't drawn for one-way yet
-   (bidirectional has `laneDropArrowPlan` lookahead; one-way only marks the taper tile).
+   a shared anchor abstraction. The anchor (centreline vs run-max kerb) is now the
+   only fork left in the closure geometry, so this is the natural next step if the
+   two ever need to converge further.

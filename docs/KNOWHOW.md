@@ -10,6 +10,21 @@ disproved anything here → edit this file in the same commit. Add a fact, fix a
 wrong one, delete a dead one. One-line bullets, cite `file.ts:symbol`. Keep it
 lean — prune as much as you add. This file only stays useful if every task tends it.
 
+## RENDER LAYOUT (the board is a CSS grid — mind what else is in it)
+- `.level` is `display:grid`; `<Train>`/car divs are its DIRECT CHILDREN, emitted
+  BEFORE the `.level-tile` divs. Anything in there that generates a box is a GRID
+  ITEM and eats a 200px cell, shifting every tile after it. `.train-composition`
+  did exactly that until 2026-07-25 — /play started at column 2 (2 trains) and
+  wrapped a 7th row onto a 6-row map; `/test/curve` drew an L as a diagonal
+  staircase. Fix is `display: contents` (NOT `position:absolute`: the units inside
+  are absolutely positioned against `.level`, and giving the wrapper a position
+  re-anchors every transform `game.ts` writes). Road cars were always fine — they
+  are absolutely positioned. `npm run probe` guards this now.
+- Debug labels sit INSIDE the rotated unit, so they rotate with it. Counter-rotate
+  them: cars do (`rotate(${-car.angle}deg)` in both views), trains do via the
+  `--unit-angle` custom property `game.ts` publishes next to the transform. Without
+  it a westbound train (~180°) renders its id mirrored and upside down.
+
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
   `road: Lane[]` = `{from,to[],index,kind?}` DIRECTED (undirected pairs can't do
@@ -57,10 +72,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   "only where there's a lane" look the user asked for. TWO-WAY junctions are
   UNTOUCHED: the gate returns early ONLY for one-way, so they keep the box-filling
   `roadCurvePolygonPathTapered` ribbon (verified pixel-identical: crossturns3lane
-  before==after bar moving cars). A slip into a WIDER arm (arm lanes > turning lanes)
-  NECKS at the seam — size exit arms to the lanes that actually turn for a flush demo
-  (turnlanes' 3-lane W/E exits fed by 1 turn lane each was over-provisioned; the old
-  full-box paint masked it by painting the arm 3 wide even though 1 lane ever drove it).
+  before==after bar moving cars). ARM SIZING HAS TWO DIFFERENT RULES — don't apply
+  one to both (learned the hard way 2026-07-25):
+  · TURN arm = the lanes that TAKE the turn. The slip channel is lane-anchored, so a
+    1-lane turn into a 3-lane arm NECKS at the seam and paints tarmac no car drives.
+    Probe: `road.filter(l=>l.to.includes(exit)).length` vs
+    `roadLaneCountAt(armCoord,port)`; every `roadTurnExitOffsetPx` landing must sit
+    on an arm lane centre ((n/2−0.5−i)·W).
+  · STRAIGHT arm = the junction's THROUGH CORRIDOR (painted to the widest arm), NOT
+    the count of straight movements. The corridor is the one-way highway branch and
+    paints full width, so a narrower straight arm tapers it and drops a hatched
+    closure gore IMMEDIATELY after the junction — worse than the unused lane it was
+    meant to remove. `turnlanes` is the worked example: 3-lane approach → W/E arms 1
+    lane each (1 lane turns each way), N arm stays 3 even though only 2 lanes go
+    straight. Sizing N to 2 "by the rule" produced exactly that gore.
 - Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): now reached for
   TWO-WAY junctions only (one-way junctions return the slip channel first). Two-way
   guides stay all-dashed. The `oneWayJunction = this.isOneWayJunction` / `marking.solid`
@@ -109,6 +134,25 @@ lean — prune as much as you add. This file only stays useful if every task ten
   +overlay — keep lockstep.
 - Bidirectional: lanes anchor to YELLOW centreline; kerb lane drops; gore
   `laneDropGore` (point upstream, widen down).
+- NEVER infer a lateral DIRECTION from the sign of an offset. `oneWayMergeArrowPath`
+  used `Math.sign(laneOff) || 1` ("lean toward the centreline"); on a 3-wide run the
+  2→1 drop's closing lane sits at EXACTLY 0, so sign()=0, the fallback picked the
+  wrong side and the merge arrows pointed AWAY from the survivors (visibly "up" on an
+  eastbound road) — while the 3→2 drop on the same road looked right, which is why it
+  survived. The direction is now a REQUIRED `mergeDir` argument (+1 = kerb side for a
+  kerb-anchored one-way, which sheds its centre lane). Same class of bug as the gore
+  hatch: geometry that reads its own side out of a magnitude breaks at zero.
+- ONE gore primitive for both road types: `laneClosureGore(entry,exit,size,
+  {outerEntry,innerEntry,outerExit,innerExit})` — explicit px bounds, `outer` =
+  closing side, `inner` = survivor side. `laneDropGore` is a thin wrapper (kerb
+  anchor); one-way passes NEGATIVE offsets (centre anchor). The hatch side is
+  DERIVED (`sign(inner−outer)` at the wide end), so it can't be passed backwards —
+  the separate `oneWayClosingGore` had no test and shipped reversed once. Only the
+  ANCHOR forks; the geometry never does.
+- `laneSeamOffsetPx` is BIDIRECTIONAL-ONLY (min-seam clamp). Its `centred`
+  band-substitution branch was one-way's old model — dead since the run-max kerb
+  anchor, removed 2026-07-25 with its 4 tests. One-way never seam-adjusts:
+  `oneWayLaneOffsetPx` is run-constant.
 - One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
   widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
   (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i
@@ -130,6 +174,21 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `/test/turnfan` (junctions: L=west,M=straight,R=east+straight, arrows lane-aligned),
   `/test/roadonewaylanes` (drop coherent), `/test/crossturns3lane` (two-way, unchanged);
   1327 unit tests green incl. keep-right overtake.
+- JUNCTION SEAM = a lane-index DISCONTINUITY. `car.laneIndex` is ONE value per
+  vehicle, but crossing out of a junction reassigns it in a single step (the exit
+  arm numbers its lanes independently). The tail is still on the approach segment
+  in its old lane, so anything deriving a lane from the car alone teleports the
+  body a full lane sideways on that tick (measured: lanePos 1.00→0.00 while still
+  on the tile being left; `sample()` feeds the renderer, so it was VISIBLE as the
+  rear flicking across the road). `Car.lanePivot` + `CarSample.pathIndex` pin the
+  far-side lane for body points behind the seam; `lanePosAt` honours it.
+  NOT yet applied to the integer lane identity the following/conflict gates read —
+  doing so is more truthful and fixes more, but un-hides collisions those gates
+  never handled (overtakeloop clean → 0.09 overlap). See issue #56.
+- Lane-change gap acceptance is evaluated on the CURRENT tile at commit time only.
+  A long vehicle crossing a seam mid-change never re-checks against the traffic it
+  arrives beside — the open half of #56. Pausing mid-change is NOT the fix: a
+  vehicle astride the line overlaps BOTH lanes and measures worse.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
@@ -152,6 +211,45 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+- `npm run probe` = RENDER-level audit of all 68 scenarios in a real browser
+  (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
+  mismatch paint, no console errors, every merge arrow forward + leaning to the
+  survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
+  after ANY renderer/layout change — it catches what a screenshot won't, across
+  maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `tests/unit/sim/roadScenarioSweep.spec.ts` = BEHAVIOURAL sweep of every road
+  scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
+  never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed
+  circuit (`carcircle`, `overtakeloop`) gridlocked when its cars are lapping fine.
+  `KNOWN_OVERLAP` there pins known defects to their measured number: read it before
+  assuming a bus overlap is new.
+- LIVE-MODEL PROBE (fastest visual-bug loop, no screenshot needed): `preview_start`
+  the `traingame` config in `.claude/launch.json` (dev server :5173), navigate to
+  `#/test/<id>`, then run JS against `window.__game`. Works with the browser pane
+  HIDDEN — only pixel screenshots need it displayed. `__game` exposes the real road
+  API: `roadAt(coord)` (derived lanes), `roadLaneCountAt(coord,port)`,
+  `roadOneWayRunMax`, `roadTurnExitOffsetPx(coord,entry,exit,lane,cls)` (where a
+  turner LANDS), `roadIsJunctionAt`. Ports are the numeric `Position` enum
+  (Top=0,Right=1,Bottom=2,Left=3,Center=4) — passing strings silently returns
+  0/null. This gives EXACT numbers (lane offsets, landings, arm widths) where a
+  screenshot only gives an impression; edit → HMR → re-query is seconds. Use it to
+  FIND/diagnose; use `npm run shot` before/after to PROVE the paint changed.
+- BROWSERS: run `npm run browsers` (NOT `npx playwright install`). `.npmrc` sets
+  `ignore-scripts` so nothing is auto-downloaded, and on this machine
+  `playwright install` HANGS: it fetches the 149MB zip in ~4s, logs "extracting
+  archive", then stalls forever in its out-of-process extractor, leaving a half-
+  written dir (chrome.dll written, chrome.exe missing) + a held `__dirlock` that
+  makes every retry hang too. `scripts/install-browsers.mjs` downloads + extracts
+  with the platform unzip (~2s) and writes the INSTALLATION_COMPLETE marker itself.
+  Needs THREE builds, not one: chromium, chromium_headless_shell (what a headless
+  `chromium.launch()` actually runs) and winldd (chromium won't start without it) —
+  discovering them one launch-error at a time is the slow path. Diagnose a stall
+  with `DEBUG=pw:install`; kill the node processes and delete `__dirlock` before retrying.
+- SHOT VIEWPORT: `shoot.mjs` grows the viewport to `scrollWidth/Height` before
+  shooting. A screenshot clip cannot reach outside the viewport, so a tall map (8
+  rows × 200px vs a 1200px viewport) was silently cropped — and the cropped part is
+  where cars spawn, so the shot also looked suspiciously empty. If a scenario looks
+  half-missing or car-free, suspect the viewport before the sim.
 - ADOPTING / continuing half-built work (the #1 silent trap): a feature can be
   scaffolded but only HALF-wired — state declared+read but never WRITTEN. A field
   declared+read yet never init'd/mutated is `undefined` at runtime → silent no-op
@@ -174,6 +272,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
+- `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
+  path `"C:\Program Files\GitHub CLI\gh.exe"`. Bare `gh` ENOENTs and the REST API
+  404s unauthenticated (private repo) — don't conclude "no GitHub access" from either.
 - Commit your scoped change as soon as done+green, unasked. Heavy parallel editing
   of same files (`road.ts`, `editOps.ts`, scenario `index.ts`) — stage only your
   hunks. NO AI attribution in commit msgs.

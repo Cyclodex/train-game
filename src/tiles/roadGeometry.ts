@@ -155,12 +155,86 @@ export interface LaneDropGore {
   hatch: string[];
 }
 
-// The closure gore for the lanes ending in one travel direction (entry→exit) on
-// a straight reducer tile. `survivors` lanes continue; lanes [survivors, selfN)
-// close. The tarmac stays full width, so the closing lanes are real road painted
-// as a gore: a triangle whose point sits at the OUTER kerb upstream and widens
-// inward to fill the closing lanes at the downstream seam — i.e. the diverging
-// line shepherds cars in toward the surviving lanes. Returned in this travel
+// The lateral bounds of a closure gore at both ends of a straight tile, in px
+// along +n (right-of-travel) from the entry→exit centreline. `outer` is the edge
+// on the CLOSING side (the kerb a bidirectional road sheds, or the centre edge a
+// one-way highway sheds); `inner` is the boundary with the SURVIVING lanes. Where
+// the two coincide at an end, the quad degenerates to a point — that is the
+// upstream tip of a normal lane drop. Signs are the caller's: whichever side the
+// lane closes on, `inner` is by definition on the survivor side of `outer`.
+export interface GoreBounds {
+  outerEntry: number;
+  innerEntry: number;
+  outerExit: number;
+  innerExit: number;
+}
+
+// THE closure-gore primitive (Swiss Sperrfläche) — one implementation for both
+// road types. The tarmac stays full width, so a closing lane is real road painted
+// as a hatched closed area: the quad outer→inner at each end, hatched diagonally
+// FORWARD + TOWARD THE SURVIVORS so the stripes lean the way cars must merge.
+// The hatch side is derived from the bounds (`inner - outer` at the wide end), so
+// a caller cannot get it backwards — the drift that made the one-way gore point
+// the wrong way before these two were unified.
+export function laneClosureGore(
+  entry: Port,
+  exit: Port,
+  size: number,
+  bounds: GoreBounds,
+): LaneDropGore {
+  const LANE_W = size * 0.14;
+  const a = portPoint(entry, size);
+  const b = portPoint(exit, size);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const f = { x: dx / len, y: dy / len }; // forward (travel) unit
+  const n = perpUnit(a, b); // right-of-travel unit
+  const P = (along: number, off: number) => ({
+    x: a.x + f.x * along + n.x * off,
+    y: a.y + f.y * along + n.y * off,
+  });
+  const r = (v: number) => Math.round(v * 100) / 100;
+
+  const { outerEntry, innerEntry, outerExit, innerExit } = bounds;
+  // Walk the closed area: inner edge upstream → outer edge upstream → outer edge
+  // downstream → inner edge downstream. A degenerate end (inner === outer) simply
+  // repeats a point, which is how a lane drop's upstream tip is expressed.
+  const A = P(0, innerEntry), B = P(0, outerEntry);
+  const C = P(len, outerExit), D = P(len, innerExit);
+  const corners = A.x === B.x && A.y === B.y ? [A, C, D] : [A, B, C, D];
+  const triangle =
+    corners.map((c, i) => `${i === 0 ? "M" : "L"} ${r(c.x)} ${r(c.y)}`).join(" ") + " Z";
+
+  // Stripe direction: forward, leaning toward the survivor side. Measure at the
+  // end where the band is widest so a degenerate end can't make the sign 0.
+  const spread = Math.abs(innerExit - outerExit) >= Math.abs(innerEntry - outerEntry)
+    ? innerExit - outerExit
+    : innerEntry - outerEntry;
+  const toward = Math.sign(spread) || 1;
+  const u = { x: f.x + toward * n.x, y: f.y + toward * n.y };
+  const um = Math.hypot(u.x, u.y) || 1;
+  u.x /= um; u.y /= um;
+  const p = { x: -u.y, y: u.x }; // perpendicular: successive stripes step along p
+  const projs = corners.map(c => (c.x - A.x) * p.x + (c.y - A.y) * p.y);
+  const sMin = Math.min(...projs), sMax = Math.max(...projs);
+  const spacing = LANE_W * 0.55;
+  const reach =
+    len + 2 * Math.max(Math.abs(outerEntry), Math.abs(outerExit)) + LANE_W;
+  const hatch: string[] = [];
+  for (let s = sMin; s <= sMax; s += spacing) {
+    const c = { x: A.x + p.x * s, y: A.y + p.y * s };
+    hatch.push(
+      `M ${r(c.x - u.x * reach)} ${r(c.y - u.y * reach)} L ${r(c.x + u.x * reach)} ${r(c.y + u.y * reach)}`,
+    );
+  }
+  return { triangle, hatch };
+}
+
+// The closure gore for the lanes ending in one travel direction (entry→exit) on a
+// BIDIRECTIONAL straight reducer tile. `survivors` lanes continue; lanes
+// [survivors, selfN) close. Lanes are anchored at the centreline and grow to the
+// kerb, so the closing band is the OUTER (kerb) one: a tip at the kerb upstream
+// widening inward to the survivors' divider downstream. Returned in this travel
 // direction's frame (lanes on the +n side), so call it once per direction.
 export function laneDropGore(
   entry: Port,
@@ -170,48 +244,14 @@ export function laneDropGore(
   selfN: number,
 ): LaneDropGore {
   const LANE_W = size * 0.14;
-  const a = portPoint(entry, size);
-  const b = portPoint(exit, size);
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const f = { x: dx / len, y: dy / len }; // forward (travel) unit
-  const n = perpUnit(a, b); // right-of-travel unit (this direction's lanes on +n)
-
-  const innerOff = survivors * LANE_W; // inner edge of the closing region
-  const outerOff = selfN * LANE_W; // outer kerb
-  const P = (along: number, off: number) => ({
-    x: a.x + f.x * along + n.x * off,
-    y: a.y + f.y * along + n.y * off,
+  const outer = selfN * LANE_W; // outer kerb — the closing side
+  const inner = survivors * LANE_W; // boundary with the surviving lanes
+  return laneClosureGore(entry, exit, size, {
+    outerEntry: outer,
+    innerEntry: outer, // tip: the gore starts as a point on the kerb
+    outerExit: outer,
+    innerExit: inner,
   });
-  const r = (v: number) => Math.round(v * 100) / 100;
-
-  // Tip at the outer kerb upstream (A); widens to the full closing band at the
-  // downstream seam (B outer, C inner).
-  const A = P(0, outerOff), B = P(len, outerOff), C = P(len, innerOff);
-  const triangle = `M ${r(A.x)} ${r(A.y)} L ${r(B.x)} ${r(B.y)} L ${r(C.x)} ${r(C.y)} Z`;
-
-  // Diagonal hatch stripes (forward + inward), spaced; the view clips them to the
-  // triangle. Iterate the stripe offset only across the triangle's own extent so
-  // we don't emit lines that fall entirely outside it.
-  const u = { x: f.x - n.x, y: f.y - n.y }; // stripe direction
-  const um = Math.hypot(u.x, u.y) || 1;
-  u.x /= um; u.y /= um;
-  const p = { x: -u.y, y: u.x }; // perpendicular: successive stripes step along p
-  const projA = 0;
-  const projB = (B.x - A.x) * p.x + (B.y - A.y) * p.y;
-  const projC = (C.x - A.x) * p.x + (C.y - A.y) * p.y;
-  const sMin = Math.min(projA, projB, projC);
-  const sMax = Math.max(projA, projB, projC);
-  const spacing = LANE_W * 0.55;
-  const reach = len + outerOff * 2;
-  const hatch: string[] = [];
-  for (let s = sMin; s <= sMax; s += spacing) {
-    const c = { x: A.x + p.x * s, y: A.y + p.y * s };
-    const s0 = { x: c.x - u.x * reach, y: c.y - u.y * reach };
-    const s1 = { x: c.x + u.x * reach, y: c.y + u.y * reach };
-    hatch.push(`M ${r(s0.x)} ${r(s0.y)} L ${r(s1.x)} ${r(s1.y)}`);
-  }
-  return { triangle, hatch };
 }
 
 // The outer kerb edge line of a straight road ribbon — the white line where the
@@ -349,67 +389,25 @@ export function roadParallelLine(entry: Port, exit: Port, size: number, dA: numb
   return taperedParallel(entry, exit, size, dA, dB);
 }
 
-// A lane-closure gore (Sperrfläche) for a ONE-WAY HIGHWAY narrowing, on the centre
-// (LEFT, −n) side where a kerb-anchored road sheds its centre-most lane. The closed
-// region is the band between the closing lane's INNER divider and the OUTER (centre)
-// edge; offsets are px along +n at each end (negative = the −n centre side). Where
-// the lane has fully closed the inner and outer offsets coincide and the quad
-// degenerates to a triangle. Returns the closed polygon + clipped diagonal hatch,
-// like `laneDropGore`. Side-neutral: the caller's offset signs choose the side.
-export function oneWayClosingGore(
-  entry: Port,
-  exit: Port,
-  size: number,
-  innerEntry: number,
-  kerbEntry: number,
-  innerExit: number,
-  kerbExit: number,
-): LaneDropGore {
-  const a = portPoint(entry, size);
-  const b = portPoint(exit, size);
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const f = { x: dx / len, y: dy / len };
-  const n = perpUnit(a, b); // +n right-of-travel; the gore sits on +n
-  const P = (along: number, off: number) => ({
-    x: a.x + f.x * along + n.x * off,
-    y: a.y + f.y * along + n.y * off,
-  });
-  const r = (v: number) => Math.round(v * 100) / 100;
-  const A = P(0, innerEntry), B = P(0, kerbEntry), C = P(len, kerbExit), D = P(len, innerExit);
-  const triangle =
-    `M ${r(A.x)} ${r(A.y)} L ${r(B.x)} ${r(B.y)} L ${r(C.x)} ${r(C.y)} L ${r(D.x)} ${r(D.y)} Z`;
-
-  // Diagonal hatch (forward + outward), clipped to the polygon by the view.
-  const u = { x: f.x + n.x, y: f.y + n.y };
-  const um = Math.hypot(u.x, u.y) || 1;
-  u.x /= um; u.y /= um;
-  const p = { x: -u.y, y: u.x };
-  const corners = [A, B, C, D];
-  const projs = corners.map(c => (c.x - A.x) * p.x + (c.y - A.y) * p.y);
-  const sMin = Math.min(...projs), sMax = Math.max(...projs);
-  const spacing = size * 0.14 * 0.55;
-  const reach = len + Math.max(kerbEntry, kerbExit) * 2 + size * 0.14;
-  const hatch: string[] = [];
-  for (let s = sMin; s <= sMax; s += spacing) {
-    const c = { x: A.x + p.x * s, y: A.y + p.y * s };
-    hatch.push(
-      `M ${r(c.x - u.x * reach)} ${r(c.y - u.y * reach)} L ${r(c.x + u.x * reach)} ${r(c.y + u.y * reach)}`,
-    );
-  }
-  return { triangle, hatch };
-}
-
 // One in-lane merge arrow for a ONE-WAY HIGHWAY closing lane: a slim open chevron
-// in the closing (right) lane at offset `laneOff` px on +n, pointing forward and
-// leaning toward the centreline (left, the merge direction). `alongT` (0..1) is
-// the arrow midpoint along the entry→exit centreline.
+// in the closing lane at offset `laneOff` px on +n, pointing forward and leaning
+// the way the car must move. `alongT` (0..1) is the arrow midpoint along the
+// entry→exit centreline. `mergeDir` is the side the SURVIVING lanes are on,
+// ±1 along n — for a kerb-anchored one-way that is always +1 (the kerb), since
+// such a road sheds its centre-most lane.
+//
+// `mergeDir` is a REQUIRED argument on purpose. It used to be inferred as
+// `Math.sign(laneOff) || 1` ("lean toward the centreline"), which silently broke
+// whenever the closing lane straddled the centreline: `Math.sign(0)` is 0, the
+// fallback picked the wrong side, and the arrows pointed away from the survivors.
+// That is exactly the 2→1 drop on a run whose widest section is 3 lanes.
 export function oneWayMergeArrowPath(
   entry: Port,
   exit: Port,
   size: number,
   laneOff: number,
   alongT: number,
+  mergeDir: 1 | -1,
 ): MergeArrowPath {
   const LANE_W = size * 0.14;
   const HALF = size * 0.075;
@@ -422,13 +420,12 @@ export function oneWayMergeArrowPath(
   const fx = dx / len, fy = dy / len;
   const n = perpUnit(a, b); // +n right-of-travel
   const along0 = alongT * len;
-  // The chevron leans toward the centreline (the merge direction): the head sits
-  // closer to centre (smaller |offset|), the tail further out. `toward` is the sign
-  // of the closing lane's side, so the lean is correct whichever side the lane
-  // closes on (a kerb-anchored one-way drops its centre lane on −n).
-  const toward = Math.sign(laneOff) || 1;
-  const tailOff = laneOff + toward * 0.3 * LANE_W; // further from centre
-  const headOff = laneOff - toward * 0.3 * LANE_W; // toward centre (merge direction)
+  // The chevron leans toward the SURVIVING lanes: the head sits on the survivor
+  // side of the lane centre, the tail on the closing side. Driven by the caller's
+  // `mergeDir`, never by the lane's own offset — a lane centred on the centreline
+  // has no sign to read.
+  const tailOff = laneOff - mergeDir * 0.3 * LANE_W; // away from the survivors
+  const headOff = laneOff + mergeDir * 0.3 * LANE_W; // toward the survivors
   const tail = { x: a.x + fx * (along0 - HALF) + n.x * tailOff, y: a.y + fy * (along0 - HALF) + n.y * tailOff };
   const head = { x: a.x + fx * (along0 + HALF) + n.x * headOff, y: a.y + fy * (along0 + HALF) + n.y * headOff };
   const ang = Math.atan2(head.y - tail.y, head.x - tail.x);

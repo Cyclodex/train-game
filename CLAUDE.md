@@ -50,14 +50,18 @@ npm run dev            # Vite dev server at http://localhost:5173
 npm run build          # vue-tsc type-check + vite build -> dist/
 npm run preview        # serve the production build
 npm run test:unit      # vitest run
-npm run test:e2e       # playwright (needs: npx playwright install chromium once)
+npm run browsers       # install the Playwright browser builds (once per machine)
+npm run test:e2e       # playwright e2e (needs `npm run browsers` first)
 npm run lint           # eslint --fix
 ```
 
 No `--openssl-legacy-provider` is needed any more; the legacy webpack toolchain
-is gone. `.npmrc` sets `ignore-scripts=true`, so Playwright's browser binary is
-not auto-downloaded — run `npx playwright install chromium` once before
-`npm run test:e2e`.
+is gone. `.npmrc` sets `ignore-scripts=true`, so Playwright's browsers are not
+auto-downloaded — run **`npm run browsers`** once before `npm run test:e2e` or
+`npm run shot`. Use that rather than `npx playwright install`: the upstream
+installer hangs during extraction on some Windows machines, leaving a half-written
+browser directory and a lock that makes every retry hang too. See
+`scripts/install-browsers.mjs` and `docs/KNOWHOW.md` → VERIFY.
 
 ## Architecture
 

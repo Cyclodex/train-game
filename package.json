@@ -11,8 +11,10 @@
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "shot": "node scripts/shoot.mjs",
+    "browsers": "node scripts/install-browsers.mjs",
     "lint": "eslint . --fix",
-    "lint:nofix": "eslint ."
+    "lint:nofix": "eslint .",
+    "probe": "node scripts/probe.mjs"
   },
   "dependencies": {
     "vue": "3.5.18",

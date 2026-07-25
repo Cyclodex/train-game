@@ -309,7 +309,7 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
-  oneWayClosingGore,
+  laneClosureGore,
   oneWayMergeArrowPath,
   junctionApproachSignalGeom,
   laneDirectionArrowPath,
@@ -330,12 +330,11 @@ import {
   turnKind,
   lanesFrom,
   laneAllExits,
-  roadPortsOf,
   approachPortsOf,
 } from "@/tiles/lanes";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
-import { seamPositioningBand, laneSeamOffsetPx, positioningBand, oneWayLaneOffsetPx } from "@/sim/laneOffset";
+import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import depotBuildingImg from "@/assets/depot.png";
 
 const ARMS = [
@@ -1020,8 +1019,8 @@ class Tile extends Vue {
           // turn off — use the arm's road-positioning band as selfBand so inner
           // straight-through lanes don't collapse to the centreline (the 3L+2L bug).
           const bandSelf = this.tileIsRoadJunction ? bandEntry : selfBand;
-          const offA = laneSeamOffsetPx(lane.index, bandSelf, bandEntry, size, false);
-          const offB = laneSeamOffsetPx(lane.index, bandSelf, bandExit, size, false);
+          const offA = laneSeamOffsetPx(lane.index, bandSelf, bandEntry, size);
+          const offB = laneSeamOffsetPx(lane.index, bandSelf, bandExit, size);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
@@ -1069,11 +1068,20 @@ class Tile extends Vue {
   // Lane-drop gores and advance arrows for straight reducer tiles.
   // A gore is the hatched closed triangle painted over the lanes that end at
   // this tile's exit seam. Arrows warn drivers one tile in advance.
+  //
+  // JUNCTIONS ARE NOT REDUCERS. A junction's arms differ in width by design —
+  // that is what the junction's own arm paint and turn geometry express — so it
+  // must never be read as a road that narrows. Without this guard the loop below
+  // sees a cross's opposite-port pairs (Top,Bottom) and (Left,Right) as an
+  // ordinary straight edge and, on mixed-width arms, paints a Sperrfläche and
+  // merge arrows straight across the middle of the crossroads (mixedcross: a
+  // 3-lane south arm against a 1-lane north arm read as a "3->1 drop").
   get laneDropOverlay(): {
     gores: (LaneDropGore & { clipId: string })[];
     arrows: MergeArrowPath[];
   } {
     if (!this.tile.road?.length) return { gores: [], arrows: [] };
+    if (isRoadJunction(this.tile.road)) return { gores: [], arrows: [] };
     const size = this.config.tileSize;
     const coord = parseCoordId(this.coordId);
     const gores: (LaneDropGore & { clipId: string })[] = [];
@@ -1110,16 +1118,40 @@ class Tile extends Vue {
           const kerbOff = (R / 2 - entryCount) * W; // full-width centre edge (closing-lane outer, −n)
           const innerOff = (R / 2 - exitCount) * W; // survivors' boundary (gore inner, downstream)
           gores.push({
-            // (innerEntry, kerbEntry, innerExit, kerbExit): point at the centre edge
-            // upstream (inner==kerb), widening to inner..kerb downstream.
-            ...oneWayClosingGore(entry, exit, size, kerbOff, kerbOff, innerOff, kerbOff),
+            // Same primitive as the bidirectional lane drop — only the ANCHOR
+            // differs (centre edge here, kerb there). A point at the centre edge
+            // upstream (outer === inner), widening to outer..inner downstream.
+            ...laneClosureGore(entry, exit, size, {
+              outerEntry: kerbOff,
+              innerEntry: kerbOff,
+              outerExit: kerbOff,
+              innerExit: innerOff,
+            }),
             clipId: `gore-${this.coordId}-${entry}-${exit}`,
           });
           // Merge arrows in the still-open part of the closing lane, leaning toward
           // the through lanes (the merge direction).
           const laneOff = (R / 2 + 0.5 - entryCount) * W; // closing lane centre (−n side)
+          // A kerb-anchored one-way sheds its CENTRE lane, so the survivors are
+          // always kerb-side (+n) — never infer this from `laneOff`, which is 0
+          // whenever the closing lane straddles the centreline.
           for (const alongT of [0.2, 0.42]) {
-            arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
+            arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT, 1));
+          }
+        } else if (exitCount === entryCount) {
+          // ADVANCE warning: this tile doesn't drop, but the NEXT one does — paint
+          // the merge arrows a tile early so a driver sees the closure before the
+          // taper (the one-way counterpart of `laneDropArrowPlan`'s lookahead).
+          // Spacing continues the taper tile's pair backwards at 0.4-tile gaps.
+          const n2 = nExit ? neighborCoord(nExit, exit) : null;
+          const cross2 = n2 ? this.game.roadLaneCountAt(n2, oppositePort(exit)) : 0;
+          if (cross2 > 0 && cross2 < exitCount) {
+            const W = size * LANE_WIDTH_PX_FRAC;
+            const R = this.game.roadOneWayRunMax(coord, entry);
+            const laneOff = (R / 2 + 0.5 - entryCount) * W; // the lane that will close
+            for (const alongT of [0.4, 0.8]) {
+              arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT, 1));
+            }
           }
         }
         continue;
@@ -1128,11 +1160,18 @@ class Tile extends Vue {
       const na = neighborCoord(coord, a);
       const nb2 = nb ? neighborCoord(nb, b) : null;
       const na2 = na ? neighborCoord(na, a) : null;
-      // Downstream lane counts in the a→b and b→a travel directions.
-      const d1A = nb ? this.game.roadLaneCount(nb, oppositePort(b)) : 0;
-      const d2A = nb2 ? this.game.roadLaneCount(nb2, oppositePort(b)) : 0;
-      const d1B = na ? this.game.roadLaneCount(na, oppositePort(a)) : 0;
-      const d2B = na2 ? this.game.roadLaneCount(na2, oppositePort(a)) : 0;
+      // Downstream lane counts in the a→b and b→a travel directions. A JUNCTION
+      // downstream counts as 0 — the same as no road at all — because a junction
+      // is not a narrowing: its arms are sized independently and it paints its own
+      // transitions. Reading its count let a 3-lane approach to a junction whose
+      // far arm is 1 lane paint advance merge arrows for a "drop" that the
+      // junction, not the road, actually performs.
+      const countAt = (c: ReturnType<typeof neighborCoord>, port: Position) =>
+        c && !this.game.roadIsJunctionAt(c) ? this.game.roadLaneCount(c, port) : 0;
+      const d1A = countAt(nb, oppositePort(b));
+      const d2A = countAt(nb2, oppositePort(b));
+      const d1B = countAt(na, oppositePort(a));
+      const d2B = countAt(na2, oppositePort(a));
 
       if (selfA > 0 && d1A > 0 && d1A < selfA) {
         gores.push({ ...laneDropGore(a, b, size, d1A, selfA), clipId: `gore-${this.coordId}-${a}-${b}` });

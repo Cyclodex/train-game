@@ -647,6 +647,10 @@ export function createGame(
         el.style.visibility = inShed ? "hidden" : "visible";
         const { x, y, angle } = positionUnit(unit);
         el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${angle}deg)`;
+        // Publish the angle so the debug label inside can cancel it out. A train
+        // running right-to-left is rotated ~180deg, which rendered its id upside
+        // down and mirrored — unreadable exactly when you most want to read it.
+        el.style.setProperty("--unit-angle", `${angle}deg`);
       }
     }
   }

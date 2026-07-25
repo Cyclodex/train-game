@@ -243,7 +243,9 @@ test.describe("Level editor", () => {
   test("signal tool places a per-direction signal", async ({ page }) => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
-    await page.getByRole("button", { name: "signal" }).click();
+    // Anchored on the icon: a plain "signal" also substring-matches the
+    // "🚥 Signalise" tool, which made this ambiguous the day that tool was added.
+    await page.getByRole("button", { name: /🚦 Signal/ }).click();
     // Toggle a signal on the East edge of the straight.
     await cell(page, "2,2").locator('.zone[data-port="1"]').click();
     await expect(cell(page, "2,2").locator(".signal")).toHaveCount(1);
