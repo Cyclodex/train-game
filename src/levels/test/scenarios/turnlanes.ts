@@ -7,15 +7,20 @@ import { Lane } from "@/tiles/lanes";
 // road spawns at the south edge and OPENS UP from 1 → 2 → 3 lanes as it climbs,
 // then meets a full crossroads and fans out straight / left / right.
 //
-// Each EXIT ARM is sized to the lanes that actually take its movement, which is
-// what keeps the junction flush. `syncJunctionLanesAround` derives the movements
-// from the arm widths (receiving-capacity rule), so the 3 approach lanes split
-// inner→left, middle→straight, kerb→right+straight: 1 lane turns west, 1 turns
-// east, 2 go straight. The arms are therefore 1 / 2 / 1 lanes wide, not a uniform
-// 3 — a one-way junction paints LANE-ANCHORED slip channels covering only the
-// turning lanes, so a 1-lane turn into a 3-lane arm necks visibly at the seam and
-// leaves two lanes of tarmac no car ever drives. Match arm width to turning lanes
-// and every painted lane carries traffic. Toggle Debug for the per-lane turn arrows.
+// Arm widths follow the two different rules a one-way junction actually paints by:
+//
+//   TURN arms match the lanes that take the turn. A one-way junction paints
+//   LANE-ANCHORED slip channels covering only the turning lanes, so a 1-lane turn
+//   into a 3-lane arm necks at the seam and leaves tarmac no car ever drives.
+//   `syncJunctionLanesAround` splits the 3 approach lanes inner→left,
+//   middle→straight, kerb→right+straight, so exactly one lane turns each way and
+//   the west and east arms are 1 lane wide.
+//
+//   The STRAIGHT arm matches the junction's THROUGH CORRIDOR, which is painted to
+//   the widest arm (here the 3-lane approach) — not the number of straight
+//   movements. Only 2 lanes go straight, but narrowing the north arm to 2 tapers
+//   the corridor and paints a closure gore right at the junction exit, so it stays
+//   3. Toggle Debug for the per-lane turn arrows.
 
 const T = Position.Top;
 const B = Position.Bottom;
@@ -40,9 +45,9 @@ export const turnlanes: TestScenario = {
   description:
     "A single one-way road spawns at the south edge and opens up from 1 to 2 to 3 " +
     "lanes as it climbs into a full 4-way crossroads, then fans out left, straight " +
-    "and right. Each exit arm is as wide as the number of lanes that actually turn " +
-    "into it (1 west, 2 north, 1 east), so every slip channel meets its arm flush " +
-    "and no lane is painted that cars never use. Toggle Debug for the turn arrows.",
+    "and right. The turn arms are 1 lane each — exactly the lanes that turn — so " +
+    "each slip channel meets its arm flush instead of necking into unused tarmac, " +
+    "while the straight arm stays 3 to match the through corridor. Toggle Debug.",
   level: {
     // South arm: one-way northbound, widening toward the junction.
     "3,7": { connections: [], road: oneWayN(B, T, 1) }, // single lane (spawn here)
@@ -51,10 +56,13 @@ export const turnlanes: TestScenario = {
     "3,4": { connections: [], road: oneWayN(B, T, 3) }, // 3-lane approach
     // The crossroads.
     "3,3": { connections: [], road: crossCentre() },
-    // North exit arm (straight): 2 lanes — the two approach lanes that go straight.
-    "3,2": { connections: [], road: oneWayN(B, T, 2) },
-    "3,1": { connections: [], road: oneWayN(B, T, 2) },
-    "3,0": { connections: [], road: oneWayN(B, T, 2) },
+    // North exit arm (straight): 3 lanes — the STRAIGHT arm matches the junction's
+    // through corridor (which is painted to the widest arm), not the number of
+    // straight movements. Narrowing it to 2 would taper the corridor and paint a
+    // closure gore immediately after the junction.
+    "3,2": { connections: [], road: oneWayN(B, T, 3) },
+    "3,1": { connections: [], road: oneWayN(B, T, 3) },
+    "3,0": { connections: [], road: oneWayN(B, T, 3) },
     // West exit arm (left turn): 1 lane — only the inner approach lane turns left.
     "2,3": { connections: [], road: oneWayN(R, L, 1) },
     "1,3": { connections: [], road: oneWayN(R, L, 1) },

@@ -57,13 +57,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   "only where there's a lane" look the user asked for. TWO-WAY junctions are
   UNTOUCHED: the gate returns early ONLY for one-way, so they keep the box-filling
   `roadCurvePolygonPathTapered` ribbon (verified pixel-identical: crossturns3lane
-  before==after bar moving cars). A slip into a WIDER arm (arm lanes > turning lanes)
-  NECKS at the seam — ARM WIDTH MUST EQUAL THE LANES THAT TAKE THAT MOVEMENT. Probe
-  it: `road.filter(l=>l.to.includes(exit)).length` vs `roadLaneCountAt(armCoord,port)`,
-  and every `roadTurnExitOffsetPx` landing must sit on an arm lane centre
-  ((n/2−0.5−i)·W). FIXED 2026-07-25 in `turnlanes` (was uniform 3-lane arms fed by
-  1 west / 2 straight / 1 east ⇒ 4 lanes of tarmac no car drove; now 1/2/1 and every
-  arm flush). The old full-box paint masked it by painting the arm 3 wide regardless.
+  before==after bar moving cars). ARM SIZING HAS TWO DIFFERENT RULES — don't apply
+  one to both (learned the hard way 2026-07-25):
+  · TURN arm = the lanes that TAKE the turn. The slip channel is lane-anchored, so a
+    1-lane turn into a 3-lane arm NECKS at the seam and paints tarmac no car drives.
+    Probe: `road.filter(l=>l.to.includes(exit)).length` vs
+    `roadLaneCountAt(armCoord,port)`; every `roadTurnExitOffsetPx` landing must sit
+    on an arm lane centre ((n/2−0.5−i)·W).
+  · STRAIGHT arm = the junction's THROUGH CORRIDOR (painted to the widest arm), NOT
+    the count of straight movements. The corridor is the one-way highway branch and
+    paints full width, so a narrower straight arm tapers it and drops a hatched
+    closure gore IMMEDIATELY after the junction — worse than the unused lane it was
+    meant to remove. `turnlanes` is the worked example: 3-lane approach → W/E arms 1
+    lane each (1 lane turns each way), N arm stays 3 even though only 2 lanes go
+    straight. Sizing N to 2 "by the rule" produced exactly that gore.
 - Turn-guide marking SOLID vs dashed (`Tile.vue junctionTurnGuides`): now reached for
   TWO-WAY junctions only (one-way junctions return the slip channel first). Two-way
   guides stay all-dashed. The `oneWayJunction = this.isOneWayJunction` / `marking.solid`
@@ -112,6 +119,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   +overlay — keep lockstep.
 - Bidirectional: lanes anchor to YELLOW centreline; kerb lane drops; gore
   `laneDropGore` (point upstream, widen down).
+- NEVER infer a lateral DIRECTION from the sign of an offset. `oneWayMergeArrowPath`
+  used `Math.sign(laneOff) || 1` ("lean toward the centreline"); on a 3-wide run the
+  2→1 drop's closing lane sits at EXACTLY 0, so sign()=0, the fallback picked the
+  wrong side and the merge arrows pointed AWAY from the survivors (visibly "up" on an
+  eastbound road) — while the 3→2 drop on the same road looked right, which is why it
+  survived. The direction is now a REQUIRED `mergeDir` argument (+1 = kerb side for a
+  kerb-anchored one-way, which sheds its centre lane). Same class of bug as the gore
+  hatch: geometry that reads its own side out of a magnitude breaks at zero.
 - ONE gore primitive for both road types: `laneClosureGore(entry,exit,size,
   {outerEntry,innerEntry,outerExit,innerExit})` — explicit px bounds, `outer` =
   closing side, `inner` = survivor side. `laneDropGore` is a thin wrapper (kerb
@@ -177,9 +192,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   0/null. This gives EXACT numbers (lane offsets, landings, arm widths) where a
   screenshot only gives an impression; edit → HMR → re-query is seconds. Use it to
   FIND/diagnose; use `npm run shot` before/after to PROVE the paint changed.
-- `npm run shot` needs `npx playwright install chromium` ONCE per machine (`.npmrc`
-  sets `ignore-scripts`, so the browser is never auto-downloaded) — a fresh clone
-  fails with "Please run npx playwright install", not with a code error.
+- BROWSERS: run `npm run browsers` (NOT `npx playwright install`). `.npmrc` sets
+  `ignore-scripts` so nothing is auto-downloaded, and on this machine
+  `playwright install` HANGS: it fetches the 149MB zip in ~4s, logs "extracting
+  archive", then stalls forever in its out-of-process extractor, leaving a half-
+  written dir (chrome.dll written, chrome.exe missing) + a held `__dirlock` that
+  makes every retry hang too. `scripts/install-browsers.mjs` downloads + extracts
+  with the platform unzip (~2s) and writes the INSTALLATION_COMPLETE marker itself.
+  Needs THREE builds, not one: chromium, chromium_headless_shell (what a headless
+  `chromium.launch()` actually runs) and winldd (chromium won't start without it) —
+  discovering them one launch-error at a time is the slow path. Diagnose a stall
+  with `DEBUG=pw:install`; kill the node processes and delete `__dirlock` before retrying.
+- SHOT VIEWPORT: `shoot.mjs` grows the viewport to `scrollWidth/Height` before
+  shooting. A screenshot clip cannot reach outside the viewport, so a tall map (8
+  rows × 200px vs a 1200px viewport) was silently cropped — and the cropped part is
+  where cars spawn, so the shot also looked suspiciously empty. If a scenario looks
+  half-missing or car-free, suspect the viewport before the sim.
 - ADOPTING / continuing half-built work (the #1 silent trap): a feature can be
   scaffolded but only HALF-wired — state declared+read but never WRITTEN. A field
   declared+read yet never init'd/mutated is `undefined` at runtime → silent no-op

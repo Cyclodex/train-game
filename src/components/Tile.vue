@@ -1123,8 +1123,11 @@ class Tile extends Vue {
           // Merge arrows in the still-open part of the closing lane, leaning toward
           // the through lanes (the merge direction).
           const laneOff = (R / 2 + 0.5 - entryCount) * W; // closing lane centre (−n side)
+          // A kerb-anchored one-way sheds its CENTRE lane, so the survivors are
+          // always kerb-side (+n) — never infer this from `laneOff`, which is 0
+          // whenever the closing lane straddles the centreline.
           for (const alongT of [0.2, 0.42]) {
-            arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
+            arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT, 1));
           }
         } else if (exitCount === entryCount) {
           // ADVANCE warning: this tile doesn't drop, but the NEXT one does — paint
@@ -1138,7 +1141,7 @@ class Tile extends Vue {
             const R = this.game.roadOneWayRunMax(coord, entry);
             const laneOff = (R / 2 + 0.5 - entryCount) * W; // the lane that will close
             for (const alongT of [0.4, 0.8]) {
-              arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT));
+              arrows.push(oneWayMergeArrowPath(entry, exit, size, laneOff, alongT, 1));
             }
           }
         }

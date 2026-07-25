@@ -390,15 +390,24 @@ export function roadParallelLine(entry: Port, exit: Port, size: number, dA: numb
 }
 
 // One in-lane merge arrow for a ONE-WAY HIGHWAY closing lane: a slim open chevron
-// in the closing (right) lane at offset `laneOff` px on +n, pointing forward and
-// leaning toward the centreline (left, the merge direction). `alongT` (0..1) is
-// the arrow midpoint along the entry→exit centreline.
+// in the closing lane at offset `laneOff` px on +n, pointing forward and leaning
+// the way the car must move. `alongT` (0..1) is the arrow midpoint along the
+// entry→exit centreline. `mergeDir` is the side the SURVIVING lanes are on,
+// ±1 along n — for a kerb-anchored one-way that is always +1 (the kerb), since
+// such a road sheds its centre-most lane.
+//
+// `mergeDir` is a REQUIRED argument on purpose. It used to be inferred as
+// `Math.sign(laneOff) || 1` ("lean toward the centreline"), which silently broke
+// whenever the closing lane straddled the centreline: `Math.sign(0)` is 0, the
+// fallback picked the wrong side, and the arrows pointed away from the survivors.
+// That is exactly the 2→1 drop on a run whose widest section is 3 lanes.
 export function oneWayMergeArrowPath(
   entry: Port,
   exit: Port,
   size: number,
   laneOff: number,
   alongT: number,
+  mergeDir: 1 | -1,
 ): MergeArrowPath {
   const LANE_W = size * 0.14;
   const HALF = size * 0.075;
@@ -411,13 +420,12 @@ export function oneWayMergeArrowPath(
   const fx = dx / len, fy = dy / len;
   const n = perpUnit(a, b); // +n right-of-travel
   const along0 = alongT * len;
-  // The chevron leans toward the centreline (the merge direction): the head sits
-  // closer to centre (smaller |offset|), the tail further out. `toward` is the sign
-  // of the closing lane's side, so the lean is correct whichever side the lane
-  // closes on (a kerb-anchored one-way drops its centre lane on −n).
-  const toward = Math.sign(laneOff) || 1;
-  const tailOff = laneOff + toward * 0.3 * LANE_W; // further from centre
-  const headOff = laneOff - toward * 0.3 * LANE_W; // toward centre (merge direction)
+  // The chevron leans toward the SURVIVING lanes: the head sits on the survivor
+  // side of the lane centre, the tail on the closing side. Driven by the caller's
+  // `mergeDir`, never by the lane's own offset — a lane centred on the centreline
+  // has no sign to read.
+  const tailOff = laneOff - mergeDir * 0.3 * LANE_W; // away from the survivors
+  const headOff = laneOff + mergeDir * 0.3 * LANE_W; // toward the survivors
   const tail = { x: a.x + fx * (along0 - HALF) + n.x * tailOff, y: a.y + fy * (along0 - HALF) + n.y * tailOff };
   const head = { x: a.x + fx * (along0 + HALF) + n.x * headOff, y: a.y + fy * (along0 + HALF) + n.y * headOff };
   const ang = Math.atan2(head.y - tail.y, head.x - tail.x);

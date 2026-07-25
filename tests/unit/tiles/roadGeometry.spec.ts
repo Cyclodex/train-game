@@ -12,6 +12,7 @@ import {
   laneDropArrowPlan,
   laneDropGore,
   laneClosureGore,
+  oneWayMergeArrowPath,
   roadKerbEdge,
   roadCurveKerbEdge,
   junctionApproachSignalGeom,
@@ -359,6 +360,37 @@ describe("laneDropGore", () => {
     // survivors=1, selfN=3 → innerOff 28 (y128), outerOff 84 (y184).
     const gore = laneDropGore(Position.Left, Position.Right, 200, 1, 3);
     expect(gore.triangle).toBe("M 0 184 L 200 184 L 200 128 Z");
+  });
+});
+
+describe("oneWayMergeArrowPath — always leans toward the survivors", () => {
+  // Left→Right, size 200: forward = +x, +n (right-of-travel) = +y (DOWN on screen).
+  // A kerb-anchored one-way sheds its CENTRE lane, so survivors are kerb-side:
+  // mergeDir = +1, and every arrow head must sit BELOW its tail.
+  const lean = (laneOff: number) => {
+    const a = oneWayMergeArrowPath(Position.Left, Position.Right, 200, laneOff, 0.3, 1);
+    const n = a.shaft.match(/-?\d+\.?\d*/g)!.map(Number); // M tailX tailY L headX headY
+    return { dx: n[2] - n[0], dy: n[3] - n[1] };
+  };
+
+  it("leans toward the kerb for a closing lane on the centre side", () => {
+    // 3-lane run narrowing 3→2: the closing lane sits at −28 (centre side).
+    expect(Math.sign(lean(-28).dy)).toBe(1); // head below tail → merge toward kerb
+    expect(Math.sign(lean(-28).dx)).toBe(1); // and forward, never backwards
+  });
+
+  it("leans the SAME way when the closing lane straddles the centreline", () => {
+    // The regression: a 3-lane run narrowing 2→1 puts the closing lane at exactly
+    // 0. Inferring the side from `Math.sign(laneOff)` yielded 0 → fallback +1 →
+    // the arrows pointed AWAY from the survivors (visibly "upwards" on screen).
+    expect(Math.sign(lean(0).dy)).toBe(1);
+    expect(Math.sign(lean(0).dx)).toBe(1);
+  });
+
+  it("honours an explicit opposite merge direction", () => {
+    const a = oneWayMergeArrowPath(Position.Left, Position.Right, 200, 0, 0.3, -1);
+    const n = a.shaft.match(/-?\d+\.?\d*/g)!.map(Number);
+    expect(Math.sign(n[3] - n[1])).toBe(-1);
   });
 });
 

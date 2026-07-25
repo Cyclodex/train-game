@@ -137,6 +137,20 @@ async function main() {
         await slider.dispatchEvent("input");
       }
 
+      // Grow the viewport to fit the whole board BEFORE settling. A screenshot
+      // clip cannot reach outside the viewport, so a tall map (e.g. an 8-row
+      // scenario at 200px/tile) would otherwise be silently cropped — and the
+      // cropped-off part is often where cars spawn, so the shot looks empty too.
+      const needed = await page.evaluate(() => ({
+        w: Math.ceil(document.documentElement.scrollWidth),
+        h: Math.ceil(document.documentElement.scrollHeight),
+      }));
+      const MAX = 4000; // keep deviceScaleFactor×size within reason
+      await page.setViewportSize({
+        width: Math.min(MAX, Math.max(1500, needed.w)),
+        height: Math.min(MAX, Math.max(1200, needed.h)),
+      });
+
       await page.waitForTimeout(opt.wait);
 
       // Tight clip = union bbox of the non-empty tiles, padded.
