@@ -165,7 +165,11 @@ export default toNative(Train);
   position: absolute;
   color: black;
   width: 100%;
-  transform: translate(-50%, -50%);
+  // Cancel the unit's own rotation so the id stays upright and readable whichever
+  // way the train is running (`--unit-angle` is published by the game loop next to
+  // the transform it belongs to). Westbound trains sit at ~180deg, which used to
+  // render their ids mirrored and upside down.
+  transform: translate(-50%, -50%) rotate(calc(-1 * var(--unit-angle, 0deg)));
   top: 50%;
   left: 50%;
 }
