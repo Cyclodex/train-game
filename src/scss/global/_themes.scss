@@ -74,24 +74,32 @@
 // shape, tint and jittered placement — see `src/utils/meadowBackdrop.ts`),
 // supplied via the `--meadow-trees` custom property on #app and laid over a
 // soft grass gradient. A faint mottling breaks up the flat ground colour.
+// BEYOND the world: the far distance. Deliberately trees-free and low contrast —
+// it is fixed to the viewport, so anything with recognisable scale (a tree the
+// same size as a tree on the board) would sit still while the board pans and
+// zooms past it, which reads as the world sliding over its own scenery.
 .theme-meadow {
+  background-color: #5c9a5f;
+  background-image:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.05), transparent 60%),
+    linear-gradient(160deg, #79b47c, #5c9a5f);
+  background-size:
+    100% 100%,
+    100% 100%;
+}
+
+// THE WORLD's own ground. Painted on the board element itself, which the camera
+// transforms — so the trees pan and scale with the tiles they stand between,
+// instead of the board sliding over a fixed forest. Same seamless tile as before
+// (`--meadow-trees`), just attached to the thing it belongs to.
+.theme-meadow .world .level {
   background-color: #6aac6a;
   background-image:
     var(--meadow-trees),
-    radial-gradient(
-      circle at 30% 20%,
-      rgba(255, 255, 255, 0.06),
-      transparent 60%
-    ),
     linear-gradient(160deg, #8ecb8e, #6aac6a);
   background-size:
     680px 680px,
-    100% 100%,
     100% 100%;
-  background-position:
-    0 0,
-    0 0,
-    0 0;
 }
 .theme-meadow .world .level {
   border-radius: 10px;

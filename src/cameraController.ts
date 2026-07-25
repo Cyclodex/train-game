@@ -79,8 +79,11 @@ export function createCameraController(
         viewportSize(),
       );
     },
+    // Which button starts a pan is the CALLER's policy, not this controller's:
+    // the play boards pan on a plain left drag, but in the editor a left drag
+    // belongs to the connect tool (edge dot → edge dot) and stealing it would
+    // make the board unbuildable, so it pans on middle-drag or space-drag.
     onPointerDown(e: PointerEvent) {
-      if (e.button !== 0) return;
       pointerId = e.pointerId;
       moved = 0;
       (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);

@@ -35,6 +35,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Anything measuring tile positions on screen must read the pitch off a rendered
   tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
   path data inside a tile stays in its own viewBox units and is unaffected.
+- WHICH BUTTON pans is the CALLER's policy, not the controller's: play boards pan
+  on a plain left drag; the EDITOR pans on middle-drag / space-drag, because a
+  left drag there belongs to the connect tool (edge dot → edge dot) and stealing
+  it makes the board unbuildable.
+- BACKDROP vs GROUND: anything with recognisable scale must be painted on the
+  BOARD element (the camera transforms it, so it pans/zooms with the tiles).
+  `#app`'s themed background is the FAR distance only — fixed to the viewport, so
+  a tree there would sit still while the board slid past it. Splitting these is
+  what made the camera read correctly; the next step is terrain as tile data, see
+  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`.
 
 ## RENDER LAYOUT (the board is a CSS grid — mind what else is in it)
 - `.level` is `display:grid`; `<Train>`/car divs are its DIRECT CHILDREN, emitted

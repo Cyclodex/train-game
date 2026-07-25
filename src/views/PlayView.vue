@@ -647,6 +647,7 @@ class PlayView extends Vue {
     this.cam.onWheel(e, this.$refs.viewport as HTMLElement | undefined);
   }
   onViewportPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // left drag pans the board
     this.cam.onPointerDown(e);
   }
   onViewportPointerMove(e: PointerEvent): void {
