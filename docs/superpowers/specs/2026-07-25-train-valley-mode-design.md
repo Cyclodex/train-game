@@ -376,6 +376,92 @@ facility" button) rather than only track.
 
 ---
 
+## 6. Reception — what the market says, and what it does not
+
+Researched 2026-07-26.
+
+| Game | Year | Reviews | Positive | Label | Price now |
+|---|---|---|---|---|---|
+| Train Valley | 2015 | 3,446 | 89% | Very Positive | CHF 10 → 90% off |
+| Train Valley 2 | 2019 | 3,017 (2,710/307) | 90% | Very Positive | $1.79; given away free more than once |
+| Train Valley World | 2024 | **243** | **69%** | **Mixed** | CHF 22 → 75% off |
+
+Metacritic gave TV1 a 69 against ~90% from users — the press shrugs at this genre,
+its players don't. Flazm's pre-Steam casual titles (Railway Valley, 2008–12) were
+downloaded 15 million times, which is portal downloads, not sales.
+
+**Scale.** SteamSpy's owner estimates are broken post-2018 (it reports TV2 at
+"0–20,000" while the game has 3,017 reviews), so the only usable method is the
+review-multiplier rule of thumb, ~30–50 owners per review for that era: roughly
+**100–150k units each** for TV1 and TV2, at a lifetime average price far below
+list given permanent 80–90% discounting. A solid niche living, not a hit. Treat
+those as an order of magnitude.
+
+**The instructive data point: the newest, best-funded, publisher-backed entry did
+worst.** Train Valley World had tinyBuild behind it and launched at $19.99. Player
+complaints, in their own words:
+
+1. *"The routes the game automatically chooses for trains sometimes create logjams
+   unless you manually edit them."*
+2. *"The lack of a solid challenge makes it seem like a game for beginners that
+   don't want to suffer with a lack of money."*
+3. It changed identity **again** — TV1 dispatch → TV2 chains → TVW tycoon — and
+   players who came for TV2 said so.
+
+What we take from that: **the economy has to bite** (complaint 2 is a direct
+warning about phase 1 — fare decay and tax are the tension, not flavour), **pick
+one identity and stay in it** (complaint 3 is market evidence for keeping chains
+out of v1), and **don't design for critics**.
+
+Complaint 1 needs a qualification, below.
+
+---
+
+## 7. Automation is a question of scale — a deliberate divergence
+
+**Decision, 2026-07-26 (project owner's call; recorded because it cuts against the
+obvious reading of §6.)**
+
+The first take on TVW's complaint 1 was "watch `gameConfig.automaticRoutePlanning`
+and `automaticTrafficLights`, they are the same mistake." That is too broad. The
+complaint is valid **for a small, hand-routed puzzle map**, where automating the
+routing removes the only thing the player came to do. It does not generalise to a
+large world.
+
+The rule we will actually design to:
+
+> **Automation should scale with the world.** On a puzzle-sized board it is an
+> assist and must never be the default. On a large, living world it is the *point*
+> — nobody hand-routes two hundred trains, and the pleasure moves from "solve this
+> junction" to "watch the network I built keep working, and extend it."
+
+So the auto flags are not a smell. They are the seed of a different mode, and the
+same simulation serves both: the puzzle mode leaves them off, the network mode
+turns them on and adds more world.
+
+### The mode to keep in mind: the chill network builder
+
+Reference points: **Transport Fever**, OpenTTD. The fantasy is *build a large
+network, watch it work, grow it, fix the bottleneck that appears* — not "solve
+this board in 5:00". It wants, roughly in order:
+
+- automatic routing and signalling as defaults, not assists (already in
+  `gameConfig`);
+- a world that keeps going rather than ending — unbounded worlds and the camera
+  landed 2026-07-25, so the hard part is done;
+- demand that grows over time, so the network needs *extending* rather than
+  completing (the `Spawner` contract is the hook);
+- the road/city layer as the demand generator rather than as scenery — which is
+  the same bet as phase 6, pointed at a different mode;
+- production chains, which are unwelcome in the puzzle mode (§5) and are a
+  natural fit here.
+
+**Not now.** It is a later mode, not a redirection of the plan above — noted so
+that nothing in phases 0–6 forecloses it. Nothing currently does: the simulation
+is mode-agnostic, `src/modes/` is a registry, and the auto flags already exist.
+
+---
+
 ## Sources
 
 - [The Challenge of Train Valley — The Ancient Gaming Noob](https://tagn.wordpress.com/2017/01/23/the-challenge-of-train-valley/)
@@ -388,3 +474,9 @@ facility" button) rather than only track.
 - [What's the difference to TV2 — Steam discussion](https://steamcommunity.com/app/2244470/discussions/0/4146194656549996098/)
 - Player screenshots: TV1 level "See" (2026-07-25) and TV2 "Der Forstbetrieb"
   (2026-07-26).
+- [Train Valley on Steam](https://store.steampowered.com/app/353640/Train_Valley/)
+  and [Train Valley World on Steam](https://store.steampowered.com/app/2244470/Train_Valley_World/)
+  (review counts, 2026-07-26).
+- [Train Valley 2 reviews — Steambase](https://steambase.io/games/train-valley-2/reviews)
+- [Train Valley — Metacritic](https://www.metacritic.com/game/train-valley/)
+- [Train Valley World review — Geeky Hobbies](https://www.geekyhobbies.com/train-valley-world-indie-video-game-review/)
