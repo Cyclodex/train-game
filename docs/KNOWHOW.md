@@ -10,6 +10,21 @@ disproved anything here → edit this file in the same commit. Add a fact, fix a
 wrong one, delete a dead one. One-line bullets, cite `file.ts:symbol`. Keep it
 lean — prune as much as you add. This file only stays useful if every task tends it.
 
+## RENDER LAYOUT (the board is a CSS grid — mind what else is in it)
+- `.level` is `display:grid`; `<Train>`/car divs are its DIRECT CHILDREN, emitted
+  BEFORE the `.level-tile` divs. Anything in there that generates a box is a GRID
+  ITEM and eats a 200px cell, shifting every tile after it. `.train-composition`
+  did exactly that until 2026-07-25 — /play started at column 2 (2 trains) and
+  wrapped a 7th row onto a 6-row map; `/test/curve` drew an L as a diagonal
+  staircase. Fix is `display: contents` (NOT `position:absolute`: the units inside
+  are absolutely positioned against `.level`, and giving the wrapper a position
+  re-anchors every transform `game.ts` writes). Road cars were always fine — they
+  are absolutely positioned. `npm run probe` guards this now.
+- Debug labels sit INSIDE the rotated unit, so they rotate with it. Counter-rotate
+  them: cars do (`rotate(${-car.angle}deg)` in both views), trains do via the
+  `--unit-angle` custom property `game.ts` publishes next to the transform. Without
+  it a westbound train (~180°) renders its id mirrored and upside down.
+
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
   `road: Lane[]` = `{from,to[],index,kind?}` DIRECTED (undirected pairs can't do
@@ -159,6 +174,21 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `/test/turnfan` (junctions: L=west,M=straight,R=east+straight, arrows lane-aligned),
   `/test/roadonewaylanes` (drop coherent), `/test/crossturns3lane` (two-way, unchanged);
   1327 unit tests green incl. keep-right overtake.
+- JUNCTION SEAM = a lane-index DISCONTINUITY. `car.laneIndex` is ONE value per
+  vehicle, but crossing out of a junction reassigns it in a single step (the exit
+  arm numbers its lanes independently). The tail is still on the approach segment
+  in its old lane, so anything deriving a lane from the car alone teleports the
+  body a full lane sideways on that tick (measured: lanePos 1.00→0.00 while still
+  on the tile being left; `sample()` feeds the renderer, so it was VISIBLE as the
+  rear flicking across the road). `Car.lanePivot` + `CarSample.pathIndex` pin the
+  far-side lane for body points behind the seam; `lanePosAt` honours it.
+  NOT yet applied to the integer lane identity the following/conflict gates read —
+  doing so is more truthful and fixes more, but un-hides collisions those gates
+  never handled (overtakeloop clean → 0.09 overlap). See issue #56.
+- Lane-change gap acceptance is evaluated on the CURRENT tile at commit time only.
+  A long vehicle crossing a seam mid-change never re-checks against the traffic it
+  arrives beside — the open half of #56. Pausing mid-change is NOT the fix: a
+  vehicle astride the line overlaps BOTH lanes and measures worse.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
@@ -181,6 +211,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+- `npm run probe` = RENDER-level audit of all 68 scenarios in a real browser
+  (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
+  mismatch paint, no console errors, every merge arrow forward + leaning to the
+  survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
+  after ANY renderer/layout change — it catches what a screenshot won't, across
+  maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `tests/unit/sim/roadScenarioSweep.spec.ts` = BEHAVIOURAL sweep of every road
+  scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
+  never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed
+  circuit (`carcircle`, `overtakeloop`) gridlocked when its cars are lapping fine.
+  `KNOWN_OVERLAP` there pins known defects to their measured number: read it before
+  assuming a bus overlap is new.
 - LIVE-MODEL PROBE (fastest visual-bug loop, no screenshot needed): `preview_start`
   the `traingame` config in `.claude/launch.json` (dev server :5173), navigate to
   `#/test/<id>`, then run JS against `window.__game`. Works with the browser pane
