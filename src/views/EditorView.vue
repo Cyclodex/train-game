@@ -47,6 +47,18 @@
         <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
         <span>{{ toolMeta[t].label }}</span>
       </button>
+      <!-- Terrain brush picker: which ground the brush paints. Grass is the
+           eraser — it clears the field rather than storing a value. -->
+      <div v-if="tool === 'terrain'" class="lane-picker">
+        <button
+          v-for="t in terrainMeta"
+          :key="t.kind"
+          class="dock-btn lane-btn"
+          :class="{ on: terrainBrush === t.kind }"
+          :title="t.label"
+          @click="terrainBrush = t.kind"
+        >{{ t.icon }}</button>
+      </div>
       <!-- Lane-count picker: only visible when the road tool is active. -->
       <div v-if="tool === 'road'" class="lane-picker">
         <button
@@ -131,6 +143,8 @@
           height: config.tileSize + 'px',
         }"
         @click="onCellClick(cell.key)"
+        @mousedown="onTerrainDown($event, cell.key)"
+        @mouseenter="onTerrainEnter(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <Tile
@@ -309,6 +323,7 @@ import {
   isJunctionEntry,
   parseCoordId,
   isRoadOnlyLevel,
+  TerrainKind,
 } from "@/tiles/model";
 import { levelBounds, translateLevel } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
@@ -327,6 +342,8 @@ import {
   toggleLaneKind,
   setLaneKindRun,
   syncJunctionLanesAround,
+  setTerrain,
+  isBlankCell,
 } from "@/tiles/editOps";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -350,7 +367,15 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 import { takeEditorSeed } from "@/editorSeed";
 
-type Tool = "connect" | "depot" | "signal" | "erase" | "road" | "buslane" | "signalise";
+type Tool =
+  | "connect"
+  | "depot"
+  | "signal"
+  | "erase"
+  | "road"
+  | "buslane"
+  | "signalise"
+  | "terrain";
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
@@ -381,6 +406,8 @@ const HINTS: Record<Tool, string> = {
     "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
+  terrain:
+    "Pick a ground and drag across the board to paint it — woods, water, rock and towns are areas, and the trees and rocks on them follow automatically. 🟩 grass is the eraser. Terrain is scenery for now: nothing blocks a train yet.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -484,7 +511,16 @@ class EditorView extends Vue {
   levelSizeY = 6;
   // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
   // unaffected by order.
-  tools: Tool[] = ["connect", "road", "buslane", "signalise", "depot", "signal", "erase"];
+  tools: Tool[] = [
+    "connect",
+    "road",
+    "buslane",
+    "signalise",
+    "depot",
+    "signal",
+    "terrain",
+    "erase",
+  ];
   tool: Tool = "connect";
   // Big, kid-friendly icon + label for each build tool, shown in the dock.
   toolMeta: Record<Tool, { icon: string; label: string }> = {
@@ -494,8 +530,23 @@ class EditorView extends Vue {
     signalise: { icon: "🚥", label: "Signalise" },
     depot: { icon: "🏠", label: "Depot" },
     signal: { icon: "🚦", label: "Signal" },
+    terrain: { icon: "🌲", label: "Terrain" },
     erase: { icon: "🧽", label: "Erase" },
   };
+  // The kind the terrain brush paints. "grass" is the eraser: it clears the
+  // field rather than storing a value, since absent means grass everywhere else.
+  terrainBrush: TerrainKind = "forest";
+  // Terrain is the one tool where drag-to-paint is the natural verb (you paint
+  // an AREA of wood, not a tile of it), so it tracks its own press state instead
+  // of going through the edge-based gesture the connect tool uses.
+  terrainPainting = false;
+  terrainMeta: { kind: TerrainKind; icon: string; label: string }[] = [
+    { kind: "forest", icon: "🌲", label: "Forest" },
+    { kind: "water", icon: "💧", label: "Water" },
+    { kind: "rock", icon: "🪨", label: "Rock" },
+    { kind: "urban", icon: "🏘️", label: "Town" },
+    { kind: "grass", icon: "🟩", label: "Grass" },
+  ];
   // Provided so tile-level children (TileGround) can read their neighbours'
   // terrain without every view threading it through props.
   @Provide() level: Level = reactive(loadLevel());
@@ -890,7 +941,10 @@ class EditorView extends Vue {
     return this.level[id] ?? emptyCell();
   }
   commit(id: string, cell: Level[string]) {
-    if (cell.connections.length === 0 && !cell.signals?.length && !cell.road?.length) {
+    // `isBlankCell` rather than "no connections/signals/road": a cell carrying
+    // only TERRAIN is a real cell (a lake tile has no track and no road), and
+    // the older test deleted it the instant the brush painted it.
+    if (isBlankCell(cell)) {
       delete this.level[id];
     } else {
       this.level[id] = cell;
@@ -1086,6 +1140,41 @@ class EditorView extends Vue {
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }
 
+  // --- terrain brush (cell-level drag-to-paint) ---
+  // Painting an AREA is the natural gesture for ground, so the brush tracks its
+  // own press instead of the edge-to-edge gesture the connect tool uses. Space
+  // is the pan modifier everywhere in this editor, so it wins over the brush.
+  onTerrainDown(ev: MouseEvent, id: string) {
+    if (this.tool !== "terrain" || ev.button !== 0 || this.spaceHeld) return;
+    this.terrainPainting = true;
+    this.paintTerrain(id);
+  }
+  onTerrainEnter(id: string) {
+    if (this.tool !== "terrain" || !this.terrainPainting) return;
+    this.paintTerrain(id);
+  }
+  // An arrow-function FIELD, not a method: it is handed to window.addEventListener,
+  // where a prototype method would be invoked with `this` bound to the window.
+  // Same pattern as `onKeydown` below, and it keeps the reference stable so
+  // removeEventListener actually matches.
+  stopTerrainPainting = () => {
+    this.terrainPainting = false;
+  };
+  paintTerrain(id: string) {
+    const cur = this.level[id] ?? emptyCell();
+    if ((cur.terrain ?? "grass") === this.terrainBrush) return; // no-op repaint
+    const next = setTerrain(cur, this.terrainBrush);
+    // Painting grass over a cell that carried nothing else removes it entirely,
+    // rather than leaving a blank entry behind that still counts towards the
+    // level's bounds.
+    if (isBlankCell(next)) {
+      delete this.level[id];
+      this.persist();
+      return;
+    }
+    this.commit(id, next);
+  }
+
   // --- depot / erase (cell-level click) ---
   onCellClick(id: string) {
     if (this.tool === "depot") {
@@ -1132,6 +1221,9 @@ class EditorView extends Vue {
     window.addEventListener("keydown", this.onEditorKeyDown);
     window.addEventListener("keyup", this.onEditorKeyUp);
     window.addEventListener("resize", this.onWindowResize);
+    // On WINDOW, not the board: a paint drag that ends off the grid (or outside
+    // the app) must still release the brush, or the next hover keeps painting.
+    window.addEventListener("mouseup", this.stopTerrainPainting);
     // Frame the board before the first paint: a big level would otherwise open
     // on its top-left corner.
     this.$nextTick(() => this.fitWorld());
@@ -1145,6 +1237,7 @@ class EditorView extends Vue {
     window.removeEventListener("keydown", this.onEditorKeyDown);
     window.removeEventListener("keyup", this.onEditorKeyUp);
     window.removeEventListener("resize", this.onWindowResize);
+    window.removeEventListener("mouseup", this.stopTerrainPainting);
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];
