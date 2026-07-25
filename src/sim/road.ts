@@ -330,6 +330,16 @@ export interface Car {
   // was a moment ago, so its lateral position lags by `laneVel · (arc / speed)`,
   // angling the body into the change instead of sliding flat.
   laneVel: number;
+  // Lane HISTORY across a junction seam. `laneIndex` is a single value for the
+  // whole vehicle, but crossing out of a junction REASSIGNS it in one step (the
+  // exit arm numbers its lanes independently), while the vehicle's tail is still
+  // back on the segments before the seam in the lane it always had. Without this,
+  // the trailing body teleports a full lane sideways the tick the head crosses —
+  // it vanishes from the lane it is physically blocking and materialises inside
+  // whatever occupies the exit lane. `pathIndex` is the last segment on the OLD
+  // side; body points at or before it use `lane`. Null when the body is entirely
+  // past the seam.
+  lanePivot: { pathIndex: number; lane: number } | null;
   // Driver behaviour: an `overtaker` will pull into the lane to its left to pass a
   // slower leader when held below cruise; a disciplined driver (false) never does.
   overtaker: boolean;
@@ -382,6 +392,11 @@ export interface CarSample {
   // head during a lane change so the rendered body angles into it. Optional so
   // internal sampleAtArc callers that don't render can ignore it.
   lanePos?: number;
+  // Index into the car's `path` of the segment this point sits on. A vehicle
+  // straddling a seam has points on more than one segment, and the lane index is
+  // only meaningful PER SEGMENT (an exit arm numbers its lanes independently of
+  // the approach), so anything deriving a lane from a body point needs this.
+  pathIndex?: number;
 }
 // One rendered body box of a vehicle (a car/truck is one unit; a semi is two:
 // cab + trailer). `front`/`rear` are its two ends sampled along the car's path
@@ -1091,10 +1106,24 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // travelled that arc, so a mid-change body angles into the new lane.
   function lanePosAt(car: Car, arc: number, sample: CarSample): number {
     const count = laneCount(level[getCoordinatesId(sample.coord)]?.road, sample.entryPort);
+    if (count <= 1) return 0;
+    // Behind a junction seam the body is still in the lane it had on that side —
+    // the lag model can't express this, because the head's jump to the exit lane
+    // is a discontinuity, not a lateral velocity.
+    const pinned = pivotLaneFor(car, sample);
+    if (pinned !== null) return Math.max(0, Math.min(count - 1, pinned));
     const lag = car.laneVel * (arc / Math.max(car.velocity, 1e-3));
     const pos = car.laneIndex - lag;
-    if (count <= 1) return 0;
     return Math.max(0, Math.min(count - 1, pos));
+  }
+
+  // The lane a body point is pinned to by the car's junction-seam pivot, or null
+  // when the point is past the seam (or there is no pivot). A sample with no
+  // `pathIndex` is a caller that doesn't track segments — treat it as current.
+  function pivotLaneFor(car: Car, sample: CarSample): number | null {
+    const pivot = car.lanePivot;
+    if (!pivot || sample.pathIndex === undefined) return null;
+    return sample.pathIndex <= pivot.pathIndex ? pivot.lane : null;
   }
 
   // The nearest car ahead in the same lane and travel direction (the leader the
@@ -1357,8 +1386,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number; lanePos: number }[] = [];
     // Lane identity for following/conflict is the integer lane the car occupies
     // (its continuous position rounded) — a mid-change car counts as in the lane
-    // it is closest to. `lanePos` keeps the CONTINUOUS lateral position at that
-    // body point (lagged like the rendered body) for swept-body overlap checks.
+    // it is closest to. Deliberately still ONE value for the whole vehicle: making
+    // it per-point across a junction seam is more truthful, but it changes which
+    // bodies the following gates see and needs the gates reworked with it (see
+    // `Car.lanePivot`). `lanePos` — the CONTINUOUS lateral position used for the
+    // rendered body and swept-body checks — IS seam-aware, so the body no longer
+    // teleports sideways even though the gates still reason per vehicle.
     const lane = laneOf(car);
     const add = (a: number, s: CarSample) =>
       pts.push({
@@ -1873,6 +1906,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
               nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
               cls,
             );
+        // Pin the lane the body behind this seam is really in before overwriting
+        // it — `car.headIndex` still points at the junction segment here (the
+        // increment is below), so it is exactly the last index on the old side.
+        car.lanePivot = { pathIndex: car.headIndex, lane: laneOf(car) };
         car.laneIndex = start;
         car.targetLane = want;
         car.laneVel = 0;
@@ -1889,6 +1926,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
       car.headIndex += 1;
       car.headProgress -= 1;
+    }
+    // Retire the junction-seam pivot once the whole body has cleared the seam —
+    // the tail's segment is then past it and the single `laneIndex` describes the
+    // vehicle again. Left standing it would pin a lane the car has long left.
+    if (car.lanePivot && (sampleAtArc(car, car.length).pathIndex ?? 0) > car.lanePivot.pathIndex) {
+      car.lanePivot = null;
     }
     // Flag the car as a crossing-user the moment its head sits on a level-crossing
     // tile, so throughput (carsDelivered) counts only cars that actually traversed
@@ -1955,6 +1998,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: 0,
       targetLane: 0,
       laneVel: 0,
+      lanePivot: null,
       overtaker: false,
       heldSec: 0,
       overtakePhase: "none",
@@ -2034,6 +2078,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: chosenLane,
       targetLane: chosenLane,
       laneVel: 0,
+      lanePivot: null,
       overtaker,
       heldSec: 0,
       overtakePhase: "none",
@@ -2110,6 +2155,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         entryPort: seg.entryPort,
         exitPort: seg.exitPort,
         t: (withinHead - remaining) / len(seg),
+        pathIndex: idx,
       };
     }
     remaining -= withinHead;
@@ -2123,12 +2169,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           entryPort: seg.entryPort,
           exitPort: seg.exitPort,
           t: 1 - remaining / L,
+          pathIndex: idx,
         };
       remaining -= L;
       idx -= 1;
     }
     const seg = car.path[0];
-    return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t: 0 };
+    return { coord: seg.coord, entryPort: seg.entryPort, exitPort: seg.exitPort, t: 0, pathIndex: 0 };
   }
 
   // Arms with an APPROACHING bus per signalised junction, for transit signal
