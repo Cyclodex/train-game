@@ -44,9 +44,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
   path data inside a tile stays in its own viewBox units and is unaffected.
 - WHICH BUTTON pans is the CALLER's policy, not the controller's: play boards pan
-  on a plain left drag; the EDITOR pans on middle-drag / space-drag, because a
-  left drag there belongs to the connect tool (edge dot → edge dot) and stealing
-  it makes the board unbuildable.
+  on LEFT **or MIDDLE** drag (left is the map gesture everyone knows and the only
+  one a trackpad/touchscreen has); the EDITOR pans on middle-drag / space-drag
+  only, because a left drag there belongs to the connect tool (edge dot → edge
+  dot) and stealing it makes the board unbuildable.
+- The viewports set `user-select: none` OUTRIGHT, not on the `--panning` class.
+  Doing it on the class is too late twice: the class only lands once the drag
+  passes its slop threshold, and disabling selection does NOT clear a selection
+  already in progress — so a drag across the board highlighted its debug labels.
+  HUD/menus/activity log sit outside the viewport and stay selectable.
 - BACKDROP vs GROUND: anything with recognisable scale must be painted on the
   BOARD element (the camera transforms it, so it pans/zooms with the tiles).
   `#app`'s themed background is the FAR distance only — fixed to the viewport, so

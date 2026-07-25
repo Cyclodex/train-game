@@ -268,7 +268,11 @@ class TestStage extends Vue {
     this.cam.onWheel(e, this.$refs.viewport as HTMLElement | undefined);
   }
   onViewportPointerDown(e: PointerEvent): void {
-    if (e.button !== 0) return; // left drag pans the board
+    // Left drag pans — the gesture everyone already knows from a map, and the
+    // only one available on a trackpad or a touchscreen. Middle drag pans too,
+    // so the same muscle memory works here and in the editor (where left has to
+    // stay with the drawing tools).
+    if (e.button !== 0 && e.button !== 1) return;
     this.cam.onPointerDown(e);
   }
   onViewportPointerMove(e: PointerEvent): void {
@@ -416,14 +420,16 @@ export default toNative(TestStage);
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  // The board is dragged to pan; without this the browser's own touch scrolling
-  // and text selection race the pointer handlers.
+  // See `.world-viewport` in _themes.scss: selection is off outright, not just
+  // while panning, or a drag highlights the board's debug labels before the pan
+  // even starts.
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   cursor: grab;
 
   &--panning {
     cursor: grabbing;
-    user-select: none;
   }
 }
 

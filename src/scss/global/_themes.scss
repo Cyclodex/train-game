@@ -23,14 +23,21 @@
   position: relative;
   flex: 1 1 auto;
   overflow: hidden;
-  // The board is dragged to pan; without this the browser's own touch scrolling
-  // and text selection race the pointer handlers.
+  // The board is dragged to pan, so the browser's own gestures must stay out of
+  // the way: `touch-action` stops touch scrolling, and selection is disabled
+  // OUTRIGHT rather than only while panning. Doing it on the `--panning` class
+  // was too late twice over — the class only lands after the drag passes its
+  // slop threshold, and turning selection off does not clear a selection that
+  // has already started. The board is a map, not prose; nothing in here is worth
+  // selecting. (HUD, menus and the activity log sit outside the viewport and
+  // stay selectable.)
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   cursor: grab;
 
   &--panning {
     cursor: grabbing;
-    user-select: none;
   }
 }
 
