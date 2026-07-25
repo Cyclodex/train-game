@@ -140,6 +140,7 @@
           height: config.tileSize + 'px',
         }"
       >
+        <TileGround :coord-id="cell.key" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"

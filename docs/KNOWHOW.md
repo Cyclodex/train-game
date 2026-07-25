@@ -75,6 +75,30 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## TERRAIN (ground as tile data, 2026-07-26)
+- `TileCell.terrain?` = grass|forest|water|rock|urban; absent = grass. The third
+  axis of the tile model: `connections`/`road` say what CROSSES a cell, terrain
+  says what it IS. Cosmetic only so far — no sim/validator rule reads it yet.
+- GRASS DRAWS NOTHING (`tileGroundSvg` returns ""). That is what makes adding
+  terrain a no-op for every level authored before it: the themed board shows
+  through exactly as it did. Don't "fix" it by painting a grass rect — that would
+  cover the theme's backdrop on every tile in the game.
+- TERRAIN-ONLY CELLS ARE LEGAL: `{connections: [], terrain: "water"}`. `kindOf`
+  → "empty", `validateLevel` skips connection-less cells, and `levelBounds`
+  counts them — so a lake defines the world's extents like anything else.
+- Patches FUSE by looking at neighbours (`patchPath`): an edge whose neighbour is
+  the same kind runs full-bleed, a corner rounds only when BOTH its edges stop.
+  The rim/shore (`patchRimPath`) must stroke ONLY the stopping edges — stroking
+  the whole outline draws a bright line down every internal join and turns a 2x2
+  lake into four visibly tiled ponds. Regression-tested.
+- Scatter is DERIVED from `(kind, coord, seed)`, never authored: paint an area,
+  the trees follow. Same seed = same trees, or screenshots stop being comparable.
+  Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
+  and the distance are the same forest.
+- `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
+  ground exists on cells with nothing built on them. z-index 0 → under road (1)
+  and rails (2), so scenery never covers track.
+
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
   `road: Lane[]` = `{from,to[],index,kind?}` DIRECTED (undirected pairs can't do
@@ -273,6 +297,10 @@ lean — prune as much as you add. This file only stays useful if every task ten
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
   after ANY renderer/layout change — it catches what a screenshot won't, across
   maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `npm run shot` runs with DEBUG ON, and the debug reservation tint
+  (`.tile-status--free`, an OPAQUE green) covers everything under it — ground art,
+  terrain, depot art. A terrain change verified with a default shot looks like it
+  did nothing. Use `--no-debug` to judge anything painted below the rails.
 - `tests/unit/sim/roadScenarioSweep.spec.ts` = BEHAVIOURAL sweep of every road
   scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
   never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed

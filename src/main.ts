@@ -5,6 +5,7 @@ import { gameConfig, GAME_CONFIG_KEY } from "./gameConfig";
 
 import TileRail from "@/components/TileRail.vue";
 import Tile from "@/components/Tile.vue";
+import TileGround from "@/components/TileGround.vue";
 import Train from "@/components/Train.vue";
 import DebugShowRoutes from "@/components/DebugShowRoutes.vue";
 import CarRouteOverlay from "@/components/CarRouteOverlay.vue";
@@ -16,6 +17,7 @@ app.provide(GAME_CONFIG_KEY, gameConfig);
 
 app.component("TileRail", TileRail);
 app.component("Tile", Tile);
+app.component("TileGround", TileGround);
 app.component("Train", Train);
 app.component("DebugShowRoutes", DebugShowRoutes);
 app.component("CarRouteOverlay", CarRouteOverlay);

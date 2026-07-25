@@ -23,9 +23,19 @@ export type TileKind =
 
 // The canonical, authoritative description of one grid cell. `connections` is
 // the single source of truth; kind/geometry/routing are all derived from it.
+// What a cell IS, as opposed to what crosses it. `connections` and `road` say
+// what travels through a tile; terrain says what the tile is made of. Absent =
+// "grass", so every level authored before terrain existed still means the same
+// thing. Purely cosmetic today (see tiles/terrain.ts); rules — water blocking
+// plain track, bridges, rock blocking building — arrive one at a time.
+export type TerrainKind = "grass" | "forest" | "water" | "rock" | "urban";
+
 export interface TileCell {
   connections: PortPair[];
   role?: "depot";
+  // The ground under this cell. Absent = grass. See tiles/terrain.ts and
+  // docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md.
+  terrain?: TerrainKind;
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
   // Road layer: port pairs describing a road crossing this cell, in the SAME

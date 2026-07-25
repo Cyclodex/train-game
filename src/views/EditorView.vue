@@ -132,6 +132,7 @@
         }"
         @click="onCellClick(cell.key)"
       >
+        <TileGround :coord-id="cell.key" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
@@ -495,7 +496,9 @@ class EditorView extends Vue {
     signal: { icon: "🚦", label: "Signal" },
     erase: { icon: "🧽", label: "Erase" },
   };
-  level: Level = reactive(loadLevel());
+  // Provided so tile-level children (TileGround) can read their neighbours'
+  // terrain without every view threading it through props.
+  @Provide() level: Level = reactive(loadLevel());
   // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
   // picked in the two-click (click → click) connection flow.
   pressFrom: { id: string; port: Port } | null = null;
