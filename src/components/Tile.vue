@@ -252,7 +252,11 @@
 
     <!-- Depot -->
     <template v-if="isDepot">
-      <img class="depot-building" :src="depotBuildingImg" />
+      <svg
+        class="depot-building"
+        :viewBox="depotViewBox"
+        v-html="depotArt"
+      />
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
@@ -335,7 +339,7 @@ import {
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
-import depotBuildingImg from "@/assets/depot.png";
+import { depotSvg, depotViewBox } from "@/utils/trainArt";
 
 const ARMS = [
   ActiveIntersection.Left,
@@ -355,7 +359,10 @@ class Tile extends Vue {
   @Prop({ type: Object, required: true }) tile!: TileCell;
   @Prop({ type: String, required: true }) coordId!: string;
 
-  depotBuildingImg = depotBuildingImg;
+  // The engine shed is drawn, not loaded: see utils/trainArt.ts. Constant per
+  // tile, so it is a plain field rather than a getter.
+  depotViewBox = depotViewBox;
+  depotArt = depotSvg();
 
   get kind() {
     return kindOf(this.tile);
@@ -1723,8 +1730,14 @@ $signal-offset: 20px;
 .tile-depot {
   .depot-building {
     position: absolute;
+    // Matches DEPOT_W / DEPOT_H in utils/trainArt.ts (the art's viewBox). An
+    // inline <svg> has no intrinsic size to fall back on the way the old <img>
+    // did, so both axes are stated here — keep them in step with those two
+    // constants, and the per-rotation placement below keeps working unchanged.
+    width: 156px;
     height: 70px;
     z-index: 10;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
   }
   .depot-interaction {
     position: absolute;

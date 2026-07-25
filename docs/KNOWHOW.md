@@ -75,6 +75,29 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## ROLLING STOCK ART (procedural SVG, 2026-07-26)
+- Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
+  `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
+- Sprite size is a THREE-way sync: `UNIT_PX` (`sim/trainDimensions.ts`, what the sim
+  spaces couplings by) ↔ the CSS `width/height` in `Train.vue` ↔ `UNIT_H` + the
+  viewBox in `trainArt.ts`. `trainArt` imports `UNIT_PX` so the width leg can't drift;
+  the other two are by hand.
+- Livery is a real `fill` now. The PNGs were recoloured by
+  `grayscale/sepia/hue-rotate` filter stacks scoped to `.train-locomotive` ONLY — so
+  every wagon in the game rendered WHITE regardless of its train's colour, for years.
+  If a colour looks wrong, look for a filter, not a fill.
+- Freight body variant = hash of the WAGON ID (`freightVariantFor`), not `getRandom`.
+  The old renderer re-rolled it per render: a consist reshuffled itself on reload and
+  `npm run shot` output was never comparable. Same rule as terrain scatter — art is a
+  pure function of identity, never chance.
+- An inline `<svg>` swapped in for an `<img>` has NO intrinsic size, so `height` alone
+  no longer implies a width (`.depot-building` states both; they match `DEPOT_W/H`).
+- At 26–30px a unit must read its LIVERY first: a near-black hopper load or thin dark
+  logs turn the wagon into a featureless bar. Detail tones stay inside a generous
+  livery rim. Verify in `/test/rollingstock` (all four freight bodies × 4 liveries).
+- e2e asserts on the `.train-locomotive` and `.depot-building` CLASS names
+  (`tests/e2e/game.spec.ts`) — keep them on whatever element carries the art.
+
 ## TERRAIN (ground as tile data, 2026-07-26)
 - `TileCell.terrain?` = grass|forest|water|rock|urban; absent = grass. The third
   axis of the tile model: `connections`/`road` say what CROSSES a cell, terrain
