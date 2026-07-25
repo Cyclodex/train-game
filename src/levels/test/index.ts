@@ -70,6 +70,7 @@ import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { daily } from "@/levels/test/scenarios/daily";
+import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -169,6 +170,11 @@ export const DOMAINS: ScenarioDomain[] = [
     label: "Challenges",
     categories: [
       { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, daily] },
+      // Not an isolated mechanic like the rest of the gallery — a full-size board
+      // that exercises rail, roads and their crossings together. It lives here so
+      // it gets the same validation every scenario does, and so it is playable
+      // straight from the picker or via /play?board=demoworld.
+      { id: "worlds", label: "Worlds", scenarios: [demoworld] },
     ],
   },
 ];

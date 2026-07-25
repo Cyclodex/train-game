@@ -32,6 +32,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/vehicles": "🚌",
   "streets/routing": "📍",
   "challenges/modes": "🎯",
+  "challenges/worlds": "🌍",
 };
 
 // Per-scenario overrides, where a distinct glyph reads better than the category

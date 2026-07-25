@@ -5,16 +5,67 @@
 // Adding a theme: append an entry in `src/themes.ts` and one `.theme-<id>`
 // block here (plus its `.theme-<id> .level` framing).
 
-// The wrapper around the board grid. Fills the viewport behind the fixed menus
-// and centers the fixed-size grid, leaving room for the score-card (top) and
-// the tool dock (bottom).
+// The wrapper around the board grid. Fills the screen behind the fixed menus,
+// leaving room for the score-card (top) and the tool dock (bottom).
 .world {
-  min-height: 100vh;
+  height: 100vh;
   box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
   padding: 180px 24px 128px;
+}
+
+// The camera's window onto the board. Worlds are sized by their content now, so
+// one can be far larger than the screen: it is rendered at its natural tile size
+// and this clips it, with `.level` transformed by the camera. Centring is the
+// camera's job (it centres a world smaller than the window), not flexbox's —
+// otherwise the two fight over the same offset.
+.world-viewport {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  // The board is dragged to pan; without this the browser's own touch scrolling
+  // and text selection race the pointer handlers.
+  touch-action: none;
+  cursor: grab;
+
+  &--panning {
+    cursor: grabbing;
+    user-select: none;
+  }
+}
+
+// Zoom controls, pinned to the viewport's corner and outside the transformed
+// board so they keep their size at any zoom.
+.world-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.zoom-btn {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #17331a;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+
+  &:hover {
+    background: #fff;
+  }
+  &--fit {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 // ---- Meadow (default) -------------------------------------------------------

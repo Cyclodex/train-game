@@ -101,8 +101,29 @@
     </div>
     <div class="world">
     <div
+      ref="viewport"
+      class="world-viewport"
+      :class="{ 'world-viewport--panning': panning }"
+      @pointerdown="onViewportPointerDown"
+      @pointermove="onViewportPointerMove"
+      @pointerup="onViewportPointerUp"
+      @pointercancel="onViewportPointerUp"
+      @wheel.prevent="onViewportWheel"
+    >
+    <div class="world-zoom" v-if="worldOverflows">
+      <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
+      <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
+        {{ Math.round(camera.zoom * 100) }}%
+      </button>
+      <button class="zoom-btn" title="Zoom in" @click.stop="zoomBy(1.25)">+</button>
+    </div>
+    <div
       class="level"
-      :style="{ gridTemplateColumns: `repeat(${config.levelSizeX}, ${config.tileSize}px)`, width: config.tileSize * config.levelSizeX + 'px' }"
+      :style="{
+        gridTemplateColumns: `repeat(${bounds.cols}, ${config.tileSize}px)`,
+        width: config.tileSize * bounds.cols + 'px',
+        transform: levelTransform,
+      }"
       @click="onBackgroundClick"
     >
       <Train
@@ -157,6 +178,7 @@
         :coord-id="c.key"
         :cell="c.cell"
       />
+    </div>
     </div>
     </div>
     <div v-if="hud.startOverlay && phase === 'ready'" class="game-overlay">
@@ -290,6 +312,9 @@ import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
+import { levelBounds } from "@/tiles/bounds";
+import { type Camera, type Size } from "@/camera";
+import { createCameraController, type CameraController } from "@/cameraController";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -423,6 +448,11 @@ class PlayView extends Vue {
   );
 
   mounted() {
+    // Frame the board before the first paint the player sees: a world larger
+    // than the screen would otherwise open on its top-left corner, which looks
+    // like a broken level rather than a big one.
+    this.$nextTick(() => this.fitWorld());
+    window.addEventListener("resize", this.onWindowResize);
     // Remember the mode we ended up in, so a later plain /play reopens it.
     saveLastModeId(this.mode.id);
     this.best = loadBest(this.levelId);
@@ -526,17 +556,104 @@ class PlayView extends Vue {
 
   beforeUnmount() {
     this.game.stop();
+    window.removeEventListener("resize", this.onWindowResize);
+  }
+
+  // Re-clamp on resize: a window that grew could otherwise leave the board
+  // stranded against an edge with empty space beside it.
+  onWindowResize(): void {
+    this.cam.reclamp();
+  }
+
+  // The board's extents come from the LEVEL, not from a fixed board size, so a
+  // world is as big as its content. `gameConfig.levelSizeX`/`levelSizeY` are only
+  // the default canvas a brand-new board starts on.
+  get bounds(): { cols: number; rows: number } {
+    return levelBounds(this.level, {
+      cols: this.config.levelSizeX,
+      rows: this.levelSizeY,
+    });
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
     const out: { key: string; tile: Level[string] | null }[] = [];
-    for (let y = 0; y < this.levelSizeY; y++) {
-      for (let x = 0; x < this.config.levelSizeX; x++) {
+    const { cols, rows } = this.bounds;
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
         const key = `${x},${y}`;
         out.push({ key, tile: this.level[key] ?? null });
       }
     }
     return out;
+  }
+
+  // --- Camera ---------------------------------------------------------------
+  // A world bigger than the screen is panned and zoomed rather than shrunk: the
+  // board renders at its natural 200px tile (every piece of road geometry is in
+  // those px) and this moves a window over it. The wiring is shared with the test
+  // stage — see cameraController.ts.
+  // Built in `created()`, NOT as a field initialiser: a field initialiser runs
+  // while vue-facing-decorator is collecting data off a throwaway instance, so
+  // the closures below would capture THAT `this` — one whose injected `config` is
+  // still undefined. The first render calls `overflows` → `worldSize()` and dies
+  // on it. `created()` runs on the real instance, before the first render.
+  //
+  // markRaw: a plain controller in component state must not be deep-proxied
+  // (CLAUDE.md). Its own `state` is `reactive()`, so the camera still drives
+  // re-renders.
+  private cam!: CameraController;
+
+  created() {
+    this.cam = markRaw(
+      createCameraController(
+        () => this.worldSize,
+        () => this.viewportSize,
+      ),
+    );
+  }
+
+  get camera(): Camera {
+    return this.cam.state.camera;
+  }
+  get panning(): boolean {
+    return this.cam.state.panning;
+  }
+  get levelTransform(): string {
+    return this.cam.transform;
+  }
+  get worldOverflows(): boolean {
+    return this.cam.overflows;
+  }
+
+  get worldSize(): Size {
+    const { cols, rows } = this.bounds;
+    return { width: cols * this.config.tileSize, height: rows * this.config.tileSize };
+  }
+
+  get viewportSize(): Size {
+    const el = this.$refs.viewport as HTMLElement | undefined;
+    return el
+      ? { width: el.clientWidth, height: el.clientHeight }
+      : { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  fitWorld(): void {
+    this.cam.fit();
+  }
+  zoomBy(factor: number): void {
+    this.cam.zoomBy(factor);
+  }
+  onViewportWheel(e: WheelEvent): void {
+    this.cam.onWheel(e, this.$refs.viewport as HTMLElement | undefined);
+  }
+  onViewportPointerDown(e: PointerEvent): void {
+    this.cam.onPointerDown(e);
+  }
+  onViewportPointerMove(e: PointerEvent): void {
+    this.cam.onPointerMove(e);
+  }
+  onViewportPointerUp(e: PointerEvent): void {
+    this.cam.onPointerUp(e);
   }
 
   // Level-crossing cells (rail + road on the same tile) — overlaid with the
@@ -583,6 +700,9 @@ class PlayView extends Vue {
     if (this.config.debug) this.game.togglePinnedCar(this.baseCarId(id));
   }
   onBackgroundClick(): void {
+    // A drag that ends over the board still fires a click; ignore it, or panning
+    // would clear the inspected car every time.
+    if (this.panning) return;
     if (this.config.debug) this.game.clearRouteCar();
   }
 
@@ -691,8 +811,14 @@ export default toNative(PlayView);
 .level {
   display: grid;
   border: 1px solid green;
-  margin: 0 auto;
-  position: relative;
+  // Positioned by the camera inside `.world-viewport`, not by flow: the camera
+  // owns the offset (it centres a world smaller than the window itself), so a
+  // `margin: 0 auto` here would fight it. `transform-origin` must be the corner
+  // the camera's `scale() translate()` maths is expressed from.
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 .level-tile {
   position: relative;
