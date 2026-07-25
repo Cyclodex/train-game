@@ -69,5 +69,11 @@ export default toNative(TileGround);
   // on it. Clicks belong to the cell underneath (the editor listens there).
   z-index: 0;
   pointer-events: none;
+  // A patch's corners are nudged OFF the tile grid and its shores bow between
+  // them, so the outline legitimately crosses the tile boundary — that overlap
+  // is exactly how two neighbouring patches interlock instead of butting up in
+  // a straight line. Clipping it back to the box would reinstate the grid we
+  // just spent the jitter escaping.
+  overflow: visible;
 }
 </style>
