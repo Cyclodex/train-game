@@ -1,6 +1,6 @@
 <template>
   <div
-    class="tile clickable"
+    class="tile"
     :class="[kindClass, { 'tile-depot': isDepot }, isDepot ? depotFacingClass : '']"
     :style="reservationStyle"
     @pointerleave="closeSwitchFan"

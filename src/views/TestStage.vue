@@ -40,6 +40,19 @@
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
       </span>
+      <!-- The second clock, on the stage as well as in /play: `/test/taxyear`
+           is where the mechanic is demonstrated, so the date and the annual
+           upkeep have to be readable here. Absent on every board that named no
+           calendar. -->
+      <span
+        v-if="money.enabled && money.dateLabel"
+        class="stage-calendar"
+        :class="{ 'stage-calendar--broke': money.taxUnaffordable }"
+        title="The year, and this railway's annual upkeep"
+      >
+        📅 {{ money.dateLabel }} · 🏛 ${{ money.taxPerYear.toLocaleString("en-US") }}/yr
+        <template v-if="money.taxUnaffordable"> ⚠</template>
+      </span>
     </div>
 
     <div
@@ -116,21 +129,12 @@
       <!-- Fare pins (Tycoon). Absolutely positioned like the road cars, so they
            are not grid ITEMS and cannot displace a tile (KNOWHOW → RENDER
            LAYOUT). Clicking a waiting pin sends its train. -->
-      <button
+      <FarePin
         v-for="badge in fareBadges"
         :key="`fare-${badge.trainId}`"
-        class="fare-pin"
-        :class="{ 'fare-pin--waiting': badge.waiting }"
-        :style="{
-          borderColor: badge.color,
-          transform: `translate(-50%, -50%) translate(${badge.x}px, ${badge.y}px)`,
-        }"
-        :title="badge.waiting ? 'Waiting — click to send this train' : 'Fare, falling'"
-        @click.stop="onFareClick(badge)"
-      >
-        <span class="fare-pin__amount">{{ badge.amount }}</span>
-        <span v-if="badge.waiting" class="fare-pin__go">▶</span>
-      </button>
+        :badge="badge"
+        @send="onFareClick(badge)"
+      />
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -175,6 +179,7 @@ import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
+import FarePin from "@/components/FarePin.vue";
 import { type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
@@ -186,6 +191,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
     spawnAtSec: t.spawnAtSec,
   }));
 }
@@ -193,7 +199,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { Crossing } })
+@Component({ components: { Crossing, FarePin } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;
@@ -502,11 +508,23 @@ export default toNative(TestStage);
     background: #468060;
   }
 }
+// The readouts sit ON the world, not on a page background — soft greys at 13px
+// disappeared into the meadow (and would into any other theme). They get the
+// same dark chip the buttons carry, so the whole bar reads on any backdrop.
+.stage-cars,
+.stage-deliveries,
+.stage-money,
+.stage-calendar {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #2c3e50;
+}
 .stage-cars {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #cfd8e0;
+  color: #eaf1f7;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
@@ -518,60 +536,27 @@ export default toNative(TestStage);
 }
 .stage-cars-val {
   min-width: 1.8em;
-  color: #8fa3b3;
+  color: #c3d2de;
 }
 .stage-deliveries {
-  color: #8fa3b3;
+  color: #eaf1f7;
   font-size: 13px;
   font-weight: 600;
 }
 .stage-money {
-  color: #f4d47a;
+  color: #ffd873;
   font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
-// The fare pin — the money HUD's only board chrome; mirrors PlayView (both
-// stylesheets are `scoped`, so the rule cannot be shared as-is).
-.fare-pin {
-  position: absolute;
-  z-index: 8; // above cars (6) and their ids (7)
-  top: 0;
-  left: 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border: 2px solid #fff;
-  border-radius: 999px;
-  background: rgba(18, 22, 28, 0.9);
-  color: #f4d47a;
-  font: 800 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+.stage-calendar {
+  color: #e3ecf4;
+  font-size: 13px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  cursor: default;
 }
-.fare-pin--waiting {
-  cursor: pointer;
-  animation: fare-pin-pulse 1.4s ease-in-out infinite;
-
-  &:hover {
-    background: rgba(38, 50, 62, 0.95);
-  }
-}
-.fare-pin__go {
-  color: #5fd39a;
-  font-size: 10px;
-}
-@keyframes fare-pin-pulse {
-  0%,
-  100% {
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  }
-  50% {
-    box-shadow: 0 3px 16px rgba(95, 211, 154, 0.65);
-  }
+.stage-calendar--broke {
+  color: #e2574c; // next year's bill is more than there is in hand
 }
 .level {
   display: grid;

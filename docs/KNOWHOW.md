@@ -183,14 +183,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
   and the distance are the same forest.
-- Per-kind scatter has its OWN band (`SCATTER_BAND`): a peak is ~50 units tall so
-  it starts low in the tile and overflows UPWARD (deliberate — the row below is
-  later in the DOM, so a near peak occludes a far one; `.tile-ground` is
-  `overflow: visible` for exactly this). Keep every `translate()` inside 10..90 —
-  a unit test sweeps all kinds and fails otherwise.
-- `groundShadow(scale, spread, fill)` — the DEFAULT tint is green because the
-  default ground is meadow. On rock/mountain/town pass your own (`STONE_SHADOW`/
-  `TOWN_SHADOW`), or every boulder gets a patch of moss under it.
+- ALL scatter is TOP-DOWN (2026-07-27): canopies, roof plans, blob boulders,
+  ridges — one projection with the tracks/trains, one NW sun (lit up-left facet,
+  drop shadow offset down-right). Nothing grows upward out of its band any more,
+  so bands are symmetric and forest runs to [10,90]. Keep every `translate()`
+  inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
+  EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
+  into the point coords, never nest a `<g transform="translate">` inside a prop.
+- Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
+  default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
   across a rock patch read at board zoom as stray pen strokes lying on the tile;
   broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
@@ -201,9 +202,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   rock's L=56 (gravel) but ~30 over mountain's L=42: bright flecks on dark slate,
   reading as litter. It takes a `light` base now (rock 67, mountain 53).
   A near-white face against a near-black one turns every boulder into
-  a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
-  lands on the break→apex segment); a free-standing white wedge hangs off the
-  silhouette and reads as a paper dart.
+  a paper cutout. Snow lives ON the ridge polygon's own crest stations and
+  carries its own end-taper (`midProf` × sin) — cut off square it leaves a hard
+  white chevron across the ridge. On the tan urban ground a flat roof must
+  change TEMPERATURE (concrete grey), not just tone: warm at any lightness
+  either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.
@@ -266,6 +269,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
   mechanic (Train Valley M7). Ticked from `game.ts frame()` only while
   `objective.phase === "playing"`, so nothing burns behind the Ready screen.
   `settle()` is idempotent, so a duplicated `arrived` event cannot pay twice.
+- The fare falls as a STAIRCASE, not a slope: `DEFAULT_FARE_STEP_SEC` (=4s, the
+  middle of TV's 3–5s feel) quantises `fareAt`, so the pin holds a number and
+  then drops it in one chunk. `decayPerSec` is still the BALANCE dial and the
+  staircase tracks it to within one step (sizes round to $5) — changing the
+  step never moves a Payday target, changing the rate does. Per-fare override
+  `FareSpec.stepSec`; 0 = the old continuous curve. Measured on
+  `lakevalley-open`: −$20 every 4.0s, vs ~6 one-dollar flickers a second before.
+- FARES ARE PRICED FROM THE DEMAND, not the consist alone (2026-07-26):
+  `base = FARE_HANDLING + FARE_PER_WAGON[type] * wagons + FARE_PER_TILE * demandTiles`
+  and `decayPerSec` is DERIVED — the decayable part spread over `fareGrace` x
+  ideal travel time. So a long haul is a bigger prize AND burns slower per
+  second; those two together are what stop distance from being a pure penalty.
+- `demandTilesOf` is MANHATTAN between the depots the level paired, deliberately
+  NOT the rail path: on a build board the rail does not exist at setup (a path
+  query answers null exactly when it matters), and a straight-line price cannot
+  be inflated by routing the long way round.
+- The mode only sees `TrainDef`, which carried no destination. `destinations` is
+  plumbed from `TrainObject.routeDestinations` in all THREE builders (PlayView,
+  TestStage, modes/daily) — miss one and every fare there silently falls back
+  to `FALLBACK_DEMAND_TILES`.
+- The per-board dial is `TycoonTuning.fareGrace` (ideal trips a fare survives),
+  not money/sec: 4 generic, 8 on lakevalley-open. Being measured in TRIPS it
+  means the same thing on a 3-tile test lane and a 20-tile ring.
+- Payday is the ONLY goal that money-and-time eats — RE-MEASURE it in a real
+  browser after any pricing change. lakevalley-open 2026-07-26: prompt run
+  $2,040 of $2,440 max, sent-60s-late $1,140, all-floors $611 ⇒ target $1,700.
+- lakevalley-open's three demands form a 3-CYCLE (each train's destination is
+  another train's shed), so it CANNOT be played one train at a time — a
+  serialized measurement run deadlocks at the first arrival. Send all three.
 - `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
   specs build `Counters` fixtures BY HAND, and required fields break them.
   Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
@@ -277,9 +309,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the road cars (see RENDER LAYOUT — a box-generating direct child becomes a grid
   ITEM and eats a tile). Positions are captured in `renderTrains` from the loco it
   already placed; a second sampling pass would be the same maths twice a frame.
+  They live in `components/FarePin.vue` (markup AND scoped styles) because
+  PlayView and TestStage both draw them and used to carry byte-identical copies.
 - The depot art is z-10 and a loco is z-4, so a train sitting in its shed is
   INVISIBLE. A waiting train therefore reads as an empty station — the fare pin
   IS the affordance, which is also how Train Valley presents it.
+- …which is why the pin's own z-index is 30, not 8. Board art it can land on:
+  cars 6/7, trains 10, DEPOT ART 10, signals 14, crossing booms 15, switch boxes
+  20, depot colour dot 1000. At z-8 a pin over a depot whose building sits above
+  the loco (one opening Bottom, e.g. `heldby` 1,0) was drawn UNDER the roof and
+  `elementFromPoint` at its centre returned the depot SVG — so the mode's only
+  dispatch affordance was both invisible and DEAD there, silently: the click
+  landed on the depot and the train stayed `waiting`. Measured 2026-07-26.
+- A pin has three states, and the third is `held`: `sim.trainBlock(id)` mapped to
+  `{reason, by, color}` in `updateFareBadges`. It rings itself in the BLOCKER's
+  livery and prints that train's id, because our interlocking reserves the whole
+  route to the next signal — a train can refuse to leave a platform over track it
+  is nowhere near, which without an explanation reads as a broken button (Train
+  Valley never holds a train, so players arrive expecting it to just go). A
+  WAITING train is deliberately not "held": its pin is already the Send button.
+  Demo: `/test/heldby`; sim contract pinned by `tests/unit/sim/heldBy.spec.ts`.
+- Rebuild the hold record every frame and Vue re-patches the pin 60×/s for a
+  train that is standing still — compare before assigning (`sameHold`).
+- A HELD train's `velocity` keeps braking down for a second or two AFTER its
+  position is already clamped at the stop line (`advance` caps the move, the
+  ramp does not snap). Assert POSITION (`trainProgress === 1`), never
+  `velocity === 0`, when testing "it stopped".
 - RETRY is a first-class Tycoon flow ("bank more next run"), so `reset()` is hit
   routinely here — it must hand back WAITING trains, the starting capital and
   un-settled fares. Verified end to end (win → reset → win again); the stale
@@ -287,6 +342,86 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - NOT built, deliberately (`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`):
   reversing (§5.2), crashes (§2.2 G7), production chains (§5.1), removal/
   bulldozing (deferred with clearing costs, phase 3).
+
+## THE SECOND CLOCK — calendar + annual tax (2026-07-26)
+- `sim/calendar.ts` is pure: `calendarAt` (a date off `elapsedSec`), `leviesDue`
+  (whole years completed), `taxFor(spec, pieces)`. `game.ts collectTax()` is the
+  only wiring. Nothing here touches the sim's hot path.
+- THE TAX IS PER PIECE OF PLAYER-LAID TRACK, never a flat sum. A flat annual levy
+  is a steeper fare decay wearing a hat — it pushes the SAME way (hurry) and the
+  player decides nothing about it. Upkeep on the network you chose to build is
+  what makes §1.3's two clocks OPPOSED (fare decays ⇒ hurry; tax accrues ⇒ build
+  lean). Taxing the AUTHORED board would be a constant nobody can act on — and
+  as a bonus, per-piece means a dispatch-only board pays 0 with no special case.
+- THE TRAP, and it is easy to miss: `economy.spend()` increments `spent`, and
+  "Under budget ≤ $6,000" read `spent`. Book the tax as a spend and that star is
+  lost by DAWDLING instead of by over-building — it silently stops measuring the
+  build and starts measuring time, which is the axis Payday already scores. Fix
+  taken: `Counters.trackSpent` / `MoneyState.trackSpent` (money on track, net of
+  bulldoze refunds, kept beside `tilesBuilt` and netted by the same rule), and
+  the star reads THAT. The tax stays in `spent`, so the ledger still means "all
+  outgoings" and still sums to the balance. Rejected alternative: exempting tax
+  from `spent`, which redefines a documented field and breaks that identity.
+- Levies are billed in a `while`, not an `if`: one frame at 4x (or a headless
+  `advance()` with a big dt) can cross several year boundaries, and a skipped
+  levy is silent free money. Gated on `objective.phase === "playing"`, same as
+  the fares — nothing accrues behind the Ready card.
+- A levy larger than the balance TAKES WHAT IS THERE (`Math.min(owed, balance)`).
+  `spend` refuses an unaffordable amount, so booking it whole would make being
+  broke FREE. Balance floors at 0; there is still no bankruptcy state.
+- TUNE ON A MEASUREMENT, NOT ON TASTE. Both settings that shipped were the second
+  guess: 20s/year let the prompt lakevalley-open run finish inside its SECOND
+  year, so a winner paid the levy once (a fee, not a clock) → 15s. $200/piece
+  then ran the dawdling line to −$400 of capital before its fares landed, i.e. no
+  rescue build affordable, i.e. a silent soft-lock → $150. The "every line keeps
+  ≥$1,000 of capital" floor is pinned by `tycoon.spec.ts` so the next tweak
+  cannot quietly cross back. Measured, lakevalley-open (15s/yr, $150/piece):
+  prompt full rebuild won 35s / $2,100 tax / balance $7,660; dawdled 60s first,
+  won 95s / $6,300 tax / balance $2,566. Upkeep on a prompt run ($2,100) exceeds
+  what it earns ($1,760) — that is the sentence the mechanic exists to say.
+- `game.advance(dt)` is the frame body MINUS rendering, extracted so the loop is
+  drivable headlessly (`tax.spec.ts`). `game.sim.step()` moves trains only — it
+  runs no fares, no levy, no tracker. Use `advance` for anything loop-shaped.
+- HUD: the calendar REPLACES the stopwatch where a board has one (M13 is
+  literally "a calendar clock, not a stopwatch", and both render the same
+  elapsed seconds). Two rows total — balance, then date + upkeep. The row is
+  `:key`ed on `money.taxPaid` so its animation replays exactly once per levy; a
+  balance that drops silently is the one thing a money HUD must not do.
+- CALENDAR IS PER-BOARD (`TycoonTuning.calendar`), NOT mode-wide. The generic
+  tuning has none: the boards falling through to it are the one-mechanic test
+  scenarios on a $3,000 budget, where a levy both muddies the lesson and
+  dominates it. `/test/taxyear` teaches the mechanic (10s year, $300/piece,
+  $9,000 purse — dialled for watching, not for balance).
+
+## BANKRUPTCY (2026-07-27) — the tax's other half
+- BANKRUPT = OWING MORE THAN YOU HAVE, never "the balance reached zero". That
+  distinction is the whole design: measured lines finish flat broke with the
+  railway built and the trains running, and that is a tight WIN, not a failure.
+  The fail condition is a LEVY the balance cannot cover (`Counters.unpaidTax`,
+  `ObjectiveSpec.fail.onBankruptcy`). Only the tax can produce it — an
+  unaffordable BUILD is refused up front, and a refusal is a choice.
+- Declared for the whole Tycoon mode, not per board, because it is SELF-GATING:
+  no calendar ⇒ no levy ⇒ no shortfall ⇒ it can never fire. `buildgap` and
+  `/test/dispatch` carry the flag and are untouched by it.
+- The company PAYS WHAT IT HAS on the way down, then folds; billing STOPS at the
+  first shortfall. Piling every later levy onto the total would say nothing more
+  ("$18,000 short" vs "$600 short" — the run is over either way) and would make
+  the number meaningless as a diagnostic.
+- THE WARNING IS THE FEATURE, not the Failed screen. `money.taxUnaffordable`
+  (`taxPerYear > balance`) turns the calendar row red with "can't pay next year"
+  while there is still a year to act in — and the fix it names, BULLDOZE, works
+  twice over: it refunds what you paid AND lowers the next bill. Without it the
+  fail state is an ambush; same lesson as the gridlock nudge (name the failure
+  AND the fix). Deliberately literal — it does not try to predict fares.
+- `/test/bankrupt` is the scenario ($5,000, 8s year, $600/piece — the annual
+  bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
+  $2,321; relaxed won 22.7s banking $1,086; dawdling folded at 26.0s, $600
+  short. Playable at `/#/play?mode=tycoon&board=bankrupt`.
+- Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
+  still wins ties): "you ran out of money" beats any symptom another check might
+  notice on the same tick. A knock-on worth knowing: a board that DEADLOCKS in
+  Tycoon now eventually folds instead of stalling forever — the gridlock nudge
+  still fires first and names the real cause.
 - The DEFAULT board needs the player to throw switches: left alone, both trains
   lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
@@ -682,6 +817,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
   after ANY renderer/layout change — it catches what a screenshot won't, across
   maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `npm run shot` LEAKED ITS DEV SERVER on Windows until 2026-07-26: `shell:true`
+  means the child is cmd.exe, and `server.kill()` took only the wrapper, leaving
+  vite holding :5181. `waitForServer` then accepted that orphan's 200 on the next
+  run — so shots came out of WHATEVER CHECKOUT started it (found one a day old,
+  from a different worktree, silently photographing scenarios that did not exist
+  here: `window.__game` never appears and the run dies at the 30s waitForFunction
+  with no hint why). Now `taskkill /T` on exit plus a pre-flight refusal if
+  anything already answers on the port. If a shot ever times out on `__game`,
+  suspect a stale server on the port before suspecting your change.
+- `npm run shot -- <id> --send` clicks every fare pin after load. Tycoon boards
+  open with every train WAITING, so a plain shot of one is a still life; states
+  that only exist once trains roll (a pin held by another train's block) need it,
+  plus a `--wait` long enough to reach them (~3s on a 3×3 board) and short enough
+  that the runs have not finished.
 - `npm run shot` runs with DEBUG ON, and the debug reservation tint
   (`.tile-status--free`, an OPAQUE green) covers everything under it — ground art,
   terrain, depot art. A terrain change verified with a default shot looks like it
@@ -748,6 +897,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   reset/incremented → keep-right never fired even though it "looked" implemented.
 - Every feature ships `/test/<id>` scenario (CLAUDE.md rule); registry test fails CI
   on a broken map. Debug from the scenario, not the full level.
+- TRAP — `npm run test:e2e` CAN TEST SOMEBODY ELSE'S WORKTREE (2026-07-27, cost
+  half an hour). `playwright.config.ts` pins port **5180** with
+  `reuseExistingServer: !CI`, and every worktree shares that port. A dev server
+  left running by another worktree is silently REUSED, so your suite runs
+  against THAT tree's code. Symptom is uncanny: tests fail for features the
+  other tree simply does not have (`.score-calendar` "element(s) not found"
+  while the same page renders perfectly under `npm run dev`), AND unrelated
+  long-standing tests fail too (`.switch-box` on the default board) — the give-
+  away is that the SAME failure reproduces from a clean `master` worktree.
+  Check with `netstat -ano | grep :5180` before believing an e2e failure, and
+  kill stray servers (the WORKFLOW rule "kill bg dev servers when done" is
+  load-bearing, not tidiness).
+- `npm run probe`'s COVERAGE IS NONDETERMINISTIC — measured 76, 79 and 82 ids on
+  three consecutive runs of an unchanged tree, and it still prints "all scenarios
+  clean" either way. So a green probe is NOT proof your new scenario was probed;
+  check the listing for its id, or re-run. Cause is the picker walk: `linksOn`
+  navigates by HASH ONLY (no reload) and then waits for "any `#/test/` link",
+  which the PREVIOUS page's links already satisfy, so it can enumerate the page
+  it just left. The same race is why the explicit form `npm run probe -- <id>`
+  can fail with "no .level element" on `buildgap`/`taxyear`/`lakevalley-open` —
+  those are bare back-compat ids that REDIRECT to `domain/category/id`, and
+  `waitForFunction(() => !!window.__game)` is satisfied by the prior scenario's
+  stale handle. Reproduced on clean master, so pre-existing. Not fixed here (the
+  probe is the whole repo's render gate and this was a tycoon task). The
+  reliable every-scenario sweep is `tests/e2e/scenarios.spec.ts`, which
+  enumerates `window.__scenarioIds` — the flat registry — instead of the DOM.
 - Visual change ⇒ `npm run shot -- <id> --label before|after` (overlay on, flat bg).
 - rAF/hidden-tab: Chrome automation tab hidden ⇒ rAF paused ⇒ sim never steps (no
   cars, frozen) — env artifact. SVG geometry still inspects static. For behaviour use
@@ -774,9 +949,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   array to `game.buildRoute` ATOMICALLY (rail-only, priced). Steps travel a→b.
   Still in the views, deliberately: tool→layer mapping, `layPair` (lane
   count/bus/one-way), preview PAINT. `lakevalley-open` (2026-07-26) is the
-  played result — see LAKEVALLEY-OPEN above. NEXT UP (design doc §8): annual
-  tax + calendar clock (the economy's second sink/clock), goals listed on the
-  Ready card, destination badges.
+  played result — see LAKEVALLEY-OPEN above. The annual tax + calendar clock
+  (the economy's second sink/clock) landed the same day — see THE SECOND CLOCK.
 - `cfg.lay` runs through the caller's layer choice AT CALL TIME: finishing a
   pending frontier via a tool switch (`toolChanged`) lays the terminus per the
   NEW tool's layer (road route → switch tool → terminus laid as RAIL). That is
@@ -785,8 +959,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The "start `lakevalley` with a GAP in the ring" step is DONE (2026-07-26):
   `/test/lakevalley-open`, playable at `/#/play?mode=tycoon&board=lakevalley-open`
   — see LAKEVALLEY-OPEN above for the tuning and the sim facts it rests on.
-- The gallery is 75 scenarios. `npm run probe` + the road sweep both iterate the
-  registry, so a new scenario is covered the day it is added.
+- The gallery is 82 scenarios. The road sweep and `tests/e2e/scenarios.spec.ts`
+  iterate the registry, so a new scenario is covered the day it is added.
+  `npm run probe` walks the DOM instead and its coverage varies run to run
+  (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
+- The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
+  BANKRUPTCY followed it (2026-07-27) — see the two sections above. NEXT UP
+  (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
@@ -796,6 +975,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Commit your scoped change as soon as done+green, unasked. Heavy parallel editing
   of same files (`road.ts`, `editOps.ts`, scenario `index.ts`) — stage only your
   hunks. NO AI attribution in commit msgs.
+- LINE ENDINGS ARE MIXED IN THIS REPO (KNOWHOW.md is CRLF for ~716 lines then LF;
+  most src/ files are LF). An editor that normalises the whole file turns a 7-line
+  note into a 129-line phantom diff. After editing a doc, check `git diff --stat`
+  against `git diff --stat -w`: if they disagree, you rewrote endings, so
+  restore the file and re-apply the edit preserving them (strip CR with tr).
 - Worktrees: node_modules usually resolves up to repo root (try tooling first). If
   junctioned, remove junction (`cmd /c rmdir`) BEFORE `git worktree remove` or it
   deletes the real install. Kill bg dev servers when done.

@@ -74,12 +74,40 @@
         <div class="score-bar-fill" :style="{ width: deliveredPct + '%' }"></div>
         <span class="score-pct">{{ deliveredPct }}%</span>
       </div>
-      <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <!-- The stopwatch gives way to the calendar where there is one: M13 is
+           explicitly "a calendar clock, NOT a stopwatch", and the two are the
+           same elapsed seconds rendered twice — exactly the HUD density §5.5
+           warns against. Boards with no calendar (every other mode, and every
+           untuned Tycoon board) keep the timer unchanged. -->
+      <div v-if="hud.timer && !dateLabel" class="score-timer">
+        ⏱ {{ elapsedLabel }}
+      </div>
       <!-- The whole money HUD off the board is this one line. The fares live on
            the board as pins over their trains; anything more and we are building
            TV2's chrome (design doc §5.5). -->
       <div v-if="hud.money" class="score-money" title="Balance">
         💰 {{ balanceLabel }}
+      </div>
+      <!-- The second clock (§1.3), and the whole of it: a date instead of a
+           stopwatch, and what the railway costs to hold for a year. Keyed on
+           the tax paid so the row flashes exactly once per levy — money leaving
+           silently is the one thing a balance readout must not do. -->
+      <div
+        v-if="hud.money && dateLabel"
+        :key="taxPaid"
+        class="score-calendar"
+        :class="{ 'score-calendar--broke': taxUnaffordable }"
+        :title="calendarTitle"
+      >
+        📅 {{ dateLabel }}
+        <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
+        <!-- The warning that keeps bankruptcy a decision rather than an
+             ambush: while it shows, bulldozing surplus track both refunds now
+             and lowers the bill. Same job as the gridlock nudge — name the
+             failure before it lands, and name the fix. -->
+        <span v-if="taxUnaffordable" class="score-tax-warn">
+          ⚠ can't pay next year
+        </span>
       </div>
       <div
         v-if="showCrossingFlow"
@@ -298,22 +326,14 @@
       <!-- Fare pins. Absolutely positioned, like the road cars — a direct child
            of `.level` that generates a box becomes a GRID ITEM and eats a tile
            cell (see KNOWHOW → RENDER LAYOUT). A pin over a waiting train is its
-           dispatch button; over a running one it just counts down. -->
-      <button
+           dispatch button; over a held one it names what it is waiting for; over
+           a running one it just counts down. -->
+      <FarePin
         v-for="badge in fareBadges"
         :key="`fare-${badge.trainId}`"
-        class="fare-pin"
-        :class="{ 'fare-pin--waiting': badge.waiting }"
-        :style="{
-          borderColor: badge.color,
-          transform: `translate(-50%, -50%) translate(${badge.x}px, ${badge.y}px)`,
-        }"
-        :title="badge.waiting ? 'Waiting — click to send this train' : 'Fare, falling'"
-        @click.stop="onFareClick(badge)"
-      >
-        <span class="fare-pin__amount">{{ badge.amount }}</span>
-        <span v-if="badge.waiting" class="fare-pin__go">▶</span>
-      </button>
+        :badge="badge"
+        @send="onFareClick(badge)"
+      />
       <!-- Build cost tag: rides the hovered tile while the ghost route is up —
            Train Valley's live "-2000$" (M2). Absolutely positioned like the
            fare pins (a box-generating direct child of .level would become a
@@ -492,6 +512,7 @@ import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
+import FarePin from "@/components/FarePin.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
@@ -514,6 +535,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
     spawnAtSec: t.spawnAtSec,
   }));
 }
@@ -568,7 +590,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, MenuDrawer } })
+@Component({ components: { Crossing, FarePin, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -778,6 +800,25 @@ class PlayView extends Vue {
   // that declares no economy: `hud.money` is false and `fareBadges` stays empty.
   get balanceLabel(): string {
     return this.game.money.balance.toLocaleString("en-US");
+  }
+  // The calendar row. Empty `dateLabel` = this board named no calendar, and the
+  // row is not rendered at all — the pre-tax money HUD, unchanged.
+  get dateLabel(): string {
+    return this.game.money.dateLabel;
+  }
+  get taxPerYearLabel(): string {
+    return "$" + this.game.money.taxPerYear.toLocaleString("en-US");
+  }
+  get taxPaid(): number {
+    return this.game.money.taxPaid;
+  }
+  get taxUnaffordable(): boolean {
+    return this.game.money.taxUnaffordable;
+  }
+  get calendarTitle(): string {
+    return this.taxUnaffordable
+      ? "Next year's upkeep is more than you have — bulldoze track you don't need, or finish first"
+      : "The year, and this railway's annual upkeep";
   }
   get fareBadges(): FareBadge[] {
     return this.game.fareBadges;
@@ -1555,49 +1596,8 @@ export default toNative(PlayView);
     rgba(30, 44, 60, 0.55) 10px
   );
 }
-// The fare pin — the money HUD's ONLY board chrome. One per live train, floating
-// over its loco, coloured by the train's livery so it names its train without
-// text. A waiting one pulses and is clickable; a running one just counts down.
-.fare-pin {
-  position: absolute;
-  z-index: 8; // above cars (6) and their ids (7); crossing booms stay on top
-  top: 0;
-  left: 0;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border: 2px solid #fff;
-  border-radius: 999px;
-  background: rgba(18, 22, 28, 0.9);
-  color: #f4d47a;
-  font: 800 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  cursor: default;
-}
-.fare-pin--waiting {
-  cursor: pointer;
-  animation: fare-pin-pulse 1.4s ease-in-out infinite;
-
-  &:hover {
-    background: rgba(38, 50, 62, 0.95);
-  }
-}
-.fare-pin__go {
-  color: #5fd39a;
-  font-size: 10px;
-}
-@keyframes fare-pin-pulse {
-  0%,
-  100% {
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  }
-  50% {
-    box-shadow: 0 3px 16px rgba(95, 211, 154, 0.65);
-  }
-}
+// The fare pin lives in `components/FarePin.vue` — markup and styles both, so the
+// two views that draw it cannot drift apart.
 // ---- the build tool (Tycoon phase 2) ----
 // One floating toggle: the whole build HUD off the board. The cost lives on the
 // ghost preview's tag, not here.
@@ -1971,6 +1971,61 @@ export default toNative(PlayView);
   font-size: 17px;
   letter-spacing: 0.01em;
   color: #f4d47a;
+}
+.score-calendar {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 13px;
+  color: #b6c2cc;
+  // Replayed on every levy: the element is keyed on the tax paid, so a new
+  // total re-creates it and the animation runs once. A silent balance drop is
+  // the failure this guards against.
+  animation: tax-levy 1.1s ease-out;
+}
+.score-tax {
+  margin-left: 6px;
+  color: #d9a3a3;
+}
+// Insolvency warning: the bill outgrew the balance. Loud on purpose — this is
+// the last moment bulldozing can still save the run.
+.score-calendar--broke {
+  color: #e2574c;
+
+  .score-tax {
+    color: #e2574c;
+  }
+}
+.score-tax-warn {
+  display: block;
+  margin-top: 2px;
+  color: #e2574c;
+  font-size: 12px;
+  animation: tax-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tax-warn-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes tax-levy {
+  0% {
+    color: #e2574c;
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-2px);
+  }
+  30% {
+    transform: translateX(2px);
+  }
+  45% {
+    transform: translateX(0);
+  }
 }
 .score-crossing {
   margin-top: 4px;
