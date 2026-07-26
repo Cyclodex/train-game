@@ -29,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
-import { manoeuvreLength } from "@/tiles/parking";
+import { manoeuvreLength, rowSide } from "@/tiles/parking";
 import type { Car, RoadEntry, VehicleKind } from "./road";
 
 // A body point as `road.ts` samples it — only the fields the gates below read.
@@ -239,6 +239,20 @@ export function createParkingPhases(deps: ParkingDeps) {
     // `beginEntering` anchors the curve at the car's REAL position anyway, so
     // arriving early costs nothing.
     if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
+    // ONLY FROM THE LANE THE BAY IS SERVED FROM. A car peeling off out of the
+    // inner lane crosses the stream beside it to reach the kerb, which is both
+    // wrong and unmistakable on a 2+2 street. `desiredLane` gets a car heading for
+    // a space over to the kerb while it is still driving the car park; this is
+    // what makes that a rule rather than a preference. A car that never made it
+    // across simply drives past and the crossing code hands its bay back.
+    const road = level[car.stall.tileId]?.road;
+    const row = parking.info(car.stall)?.row;
+    const usable = usableLaneIndices(road, car.stall.from, clsOf(car));
+    if (usable.length > 0) {
+      const want =
+        row && rowSide(row) === "left" ? Math.max(...usable) : Math.min(...usable);
+      if (laneOf(car) !== want) return false;
+    }
     // ONE CAR AT A TIME per car park. A barrier serves one vehicle; a ramp is one
     // lane wide. Without this, every car bound for a garage would swing into the
     // same ramp mouth at once (all its slots share one entry point) and they would
@@ -464,8 +478,6 @@ export function createParkingPhases(deps: ParkingDeps) {
     if (!car.stall) return true;
     const head = car.path[car.headIndex];
     const tileId = getCoordinatesId(head.coord);
-    const slotFront = car.headProgress;
-    const slotRear = car.headProgress - car.length - PARKING.pullOutGap;
     for (const other of cars) {
       // Another car waiting to leave its own bay must not veto this one — two
       // neighbours would hold each other in place for ever, each waiting for a road
@@ -481,11 +493,23 @@ export function createParkingPhases(deps: ParkingDeps) {
       // deadlock: it waits for us to go, we wait for it to clear, and neither ever
       // moves. Measured before this line existed: two cars stuck in `leaving` for
       // fifty of an eighty-second run. Only traffic still ROLLING can close a gap.
-      if (other.velocity <= STOPPED_YIELDING) continue;
+      // ...but "behind us" has to mean BEHIND OUR BODY, not outside the wider
+      // margin we ask of MOVING traffic. `pullOutGap` (0.16) is nearly three times
+      // the following gap a stopped car keeps (CAR_GAP, 0.06), so measuring a
+      // stationary car against it counts a perfectly-parked follower as an
+      // obstacle for ever — that IS the deadlock. Measured against the body alone
+      // it is not, and a car that really has come to rest INSIDE the space we are
+      // about to reverse into still blocks. Which is the collision reported on the
+      // 90° bays: the wide margin let this gate wave a stopped car through, and
+      // the car backed straight into it.
+      const stopped = other.velocity <= STOPPED_YIELDING;
+      const margin = stopped ? 0 : PARKING.pullOutGap;
+      const slotRear = car.headProgress - car.length - margin;
+      const slotFront = car.headProgress + margin;
       for (const p of bodyPoints(other)) {
         if (p.tileId !== tileId) continue;
         if (p.entry !== head.entryPort) continue; // same travel direction only
-        if (p.t > slotRear && p.t < slotFront + PARKING.pullOutGap) return false;
+        if (p.t > slotRear && p.t < slotFront) return false;
       }
     }
     return true;

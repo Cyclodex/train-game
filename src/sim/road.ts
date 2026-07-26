@@ -1103,6 +1103,23 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (car.overtakePhase === "returning")
       return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
 
+    // (P) HEADING FOR A SPACE: get over to the kerb lane while still driving the
+    // car park, not at the bay. A car that dives into a space out of the inner
+    // lane cuts straight across the traffic beside it, which is as wrong as it
+    // looks — `atStallEntry` refuses it now, so this is the branch that actually
+    // delivers the car to the lane its bay is served from. Above the turn sorting
+    // below: the car is stopping here, the junction after it is not its problem.
+    //
+    // Kerb-most, which is the bay's side for every row that may exist on a
+    // multi-lane street (a `side: "left"` row is only legal on a one-way aisle,
+    // and this whole function has already returned for a single-lane approach).
+    if (
+      car.parkTarget !== null &&
+      parking.facilityOfTile(getCoordinatesId(head.coord)) === car.parkTarget
+    ) {
+      return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
+    }
+
     // (F) A junction is coming up — get into a lane that permits the turn the
     // route takes there, as early as a few tiles out so there's room to change.
     const ahead = junctionAhead(
@@ -2240,6 +2257,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // --- Parking, on arriving at a new tile --------------------------------
       if (car.parkTarget !== null) {
         const nextId = getCoordinatesId(nextCoord);
+        // MISSED IT. The car has crossed off the tile its bay is on without ever
+        // peeling in — it never got over to the kerb lane in time, which is what a
+        // driver who spots a space too late actually does. Give the bay back:
+        // held, it would read as taken for the rest of the run while the car drove
+        // on toward a space it can no longer reach.
+        if (car.stall !== null && car.stall.tileId !== nextId) releaseStall(car);
         const here = parking.facilityOfTile(nextId);
         if (here === car.parkTarget) {
           car.enteredTarget = true;

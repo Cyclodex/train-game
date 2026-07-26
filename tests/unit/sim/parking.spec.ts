@@ -747,6 +747,26 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(Math.min(...handovers)).toBeGreaterThan(0.3);
   });
 
+  it("only peels off into a bay from the lane the bay is on", () => {
+    // A car diving into a kerbside space out of the INNER lane of a 2+2 street
+    // cuts across the stream beside it. `/test/parkingkerb` is two lanes each way
+    // with bays down both kerbs, so it is the map where this shows.
+    const sim = simFor("parkingkerb", 4);
+    const driving = new Set<string>();
+    const lanes: number[] = [];
+    for (let i = 0; i < 3000; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        if (c.phase === "driving") driving.add(c.id);
+        else if (c.phase === "entering" && driving.delete(c.id)) lanes.push(Math.round(c.laneIndex));
+      }
+    }
+    expect(lanes.length).toBeGreaterThan(8); // cars really did park
+    // Every one of them from the kerb lane. Not "mostly": one car crossing a live
+    // lane to reach a space is the whole complaint.
+    expect([...new Set(lanes)]).toEqual([0]);
+  });
+
   it("cars drive to a car park, park, dwell, and leave again", () => {
     const sim = simFor("parkinglot");
     const phases = new Set<string>();

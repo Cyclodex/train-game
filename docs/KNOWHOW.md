@@ -325,9 +325,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
     apart but a car is 38px long, so two neighbours emerging together cannot fit.
     Committed (`entering`/`leaving`) neighbours win; same-tick ties go to the lower
     id, like the junction gates.
-  · `pullOutClear` (the roll decision) IGNORES STOPPED cars — one that stopped
-    behind you stopped BECAUSE of you, and treating it as an obstacle deadlocks
-    both (measured: 50s stuck in `leaving`). Only rolling traffic can close a gap.
+  · `pullOutClear` (the roll decision) measures a STOPPED car against the leaver's
+    BODY and a moving one against body + `pullOutGap`. One that stopped behind you
+    stopped BECAUSE of you, and treating it as an obstacle deadlocks both
+    (measured: 50s stuck in `leaving`, and the sweep drops parkinglot to one
+    completed cycle) — but "behind you" has to mean behind your BODY. `pullOutGap`
+    (0.16) is nearly three times a stopped car's following gap (CAR_GAP, 0.06), so
+    the old blanket skip was the only thing keeping a correctly-parked follower
+    from blocking for ever, and it also waved through a car that had come to rest
+    INSIDE the space being reversed into.
   · Do NOT grow the leaving footprint in as the car emerges: a follower brakes
     against what it can see, so starting at nothing means it arrives on top (0.077
     vs 0.028). Entering shrinks; leaving is full from tick one.
@@ -379,6 +385,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - GARAGES are driven THROUGH: two ramp mouths (`GARAGE_IN_T` / `GARAGE_OUT_T`) and
   `exitTo` to put the out-ramp on the other approach, so departures do not queue
   behind arrivals.
+- A BAY IS ENTERED FROM ITS OWN LANE ONLY. `atStallEntry` refuses any other, and
+  `desiredLane` branch (P) gets a car with a `parkTarget` over to the kerb-most
+  lane as soon as it is on a tile of that facility — early, so the merge has room.
+  Without it a car dives out of the inner lane of a 2+2 street straight across the
+  stream beside it. The companion is in the tile-crossing hook: a car that leaves
+  its stall's tile still driving RELEASES the bay ("missed it"), or the space
+  stays claimed for the rest of the run by a car that can no longer reach it.
 - STALL CHOICE is scattered by `hashOf(carId) % free.length`, filtered to bays
   still AHEAD of the nose (`atStallEntry` only fires forwards). Deterministic and
   free: a real RNG draw here would couple the parking stream to traffic state, and
