@@ -23,7 +23,7 @@
 //   npm run shot -- roadonewaylanes --label before
 //   npm run shot -- busmegacross mixedcross --out screenshots/issue-18
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { mkdirSync } from "node:fs";
 import { chromium } from "@playwright/test";
@@ -61,13 +61,37 @@ function parseArgs(argv) {
   return { ids, opt };
 }
 
-async function waitForServer(url, timeoutMs) {
+// `died` resolves if the spawned dev server exits. THE TRAP THIS CATCHES: with
+// `--strictPort`, a server already on the port makes OURS exit immediately — but
+// the port answers, so this would happily shoot whatever is running there. On a
+// machine with several worktrees checked out that is a DIFFERENT CHECKOUT of this
+// app, and the run then fails 30s later on `window.__game` with nothing to say
+// why (or, worse, silently produces screenshots of somebody else's branch).
+async function waitForServer(url, timeoutMs, died) {
   const deadline = Date.now() + timeoutMs;
+  let ours = true;
+  died?.then(() => {
+    ours = false;
+  });
+  // Give the spawn long enough to fall over on a taken port BEFORE trusting the
+  // first answer. Vite exits on `--strictPort` within a fraction of a second; a
+  // healthy cold start takes several, so this costs nothing when the port is free
+  // and is the whole difference between a clear message and a silent wrong shot.
+  if (died) await Promise.race([died, sleep(1500)]);
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url);
-      if (res.ok) return;
-    } catch {
+      if (res.ok) {
+        if (!ours) {
+          throw new Error(
+            `${url} is serving, but our dev server exited — the port is already ` +
+              `taken (another worktree's \`npm run dev\`?). Pass --port <n> to use a free one.`,
+          );
+        }
+        return;
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("--port")) throw e;
       /* not up yet */
     }
     await sleep(300);
@@ -92,7 +116,16 @@ async function main() {
   );
   const shutdown = () => {
     try {
-      server.kill("SIGTERM");
+      // Kill the process TREE, not the handle we hold. On Windows `shell: true`
+      // makes `server` the cmd.exe wrapper, and `.kill()` reaps only that — vite
+      // itself lives on, still holding the port. Every run then leaked a server,
+      // and the NEXT run collided with its own leftovers (and, before the guard
+      // above, silently shot whatever that stale server was serving).
+      if (onWin && server.pid) {
+        spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"], { stdio: "ignore" });
+      } else {
+        server.kill("SIGTERM");
+      }
     } catch {
       /* ignore */
     }
@@ -105,7 +138,7 @@ async function main() {
 
   let browser;
   try {
-    await waitForServer(base, 60000);
+    await waitForServer(base, 60000, new Promise(res => server.once("exit", res)));
     browser = await chromium.launch();
     const page = await browser.newPage({
       viewport: { width: 1500, height: 1200 },

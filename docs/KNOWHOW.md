@@ -28,6 +28,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   camera moves a window over it. Fits on mount. `.level` is `position:absolute` +
   `transform-origin: 0 0` inside an `overflow:hidden` viewport; the camera owns
   centring, so no `margin:auto` (they fight).
+- BREATHING ROOM AROUND THE BOARD IS THE CAMERA'S JOB, not the page's:
+  `WORLD_MARGIN` (48 SCREEN px — constant on screen, so it is `/zoom` in world
+  units). `fitCamera`/`fitZoom` leave it and `clampCamera` lets a pan take it at
+  either end. Page padding cannot do this: it made the page taller than the window
+  AND still pinned a big world's edge hard against the viewport, with nothing to
+  push the outer row of tiles off the frame's vignette.
+- `/test` IS EXACTLY ONE SCREEN AND NEVER SCROLLS. `.test-view` is a `100vh` flex
+  column; `.test-stage` fills its parent (`flex:1; min-height:0`) — it used to be
+  `100vh` ITSELF, below a breadcrumb and a description, so the page was ~160px
+  taller than the window and every stage control sat below the fold. Whatever needs
+  to scroll scrolls INSIDE itself (the card grid). Same rule applies to anything
+  added to that column: give it `flex: 0 0 auto` and a `max-height`.
 - TRAP: a class GETTER becomes a CACHED computed (vue-facing-decorator). Anything
   reading a NON-REACTIVE source — `$refs`, `clientWidth/Height`, `window.*` — must
   be a METHOD, or it caches its first value forever. `viewportSize` was a getter:
@@ -733,6 +745,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
   after ANY renderer/layout change — it catches what a screenshot won't, across
   maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `npm run shot` starts its OWN dev server on :5181 with `--strictPort`, so another
+  worktree's `npm run dev` on that port makes ours exit while the port still
+  answers — it would then shoot A DIFFERENT CHECKOUT of the app (or, as seen,
+  time out on `window.__game` 30s later with nothing to say why). Guarded now: the
+  script watches for its server dying and says to pass `--port`. It also kills the
+  process TREE (`taskkill /T`) — with `shell:true` on Windows `.kill()` reaps only
+  cmd.exe and every run used to leak a vite holding its port.
 - `npm run shot` runs with DEBUG ON, and the debug reservation tint
   (`.tile-status--free`, an OPAQUE green) covers everything under it — ground art,
   terrain, depot art. A terrain change verified with a default shot looks like it

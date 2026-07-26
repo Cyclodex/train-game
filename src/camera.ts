@@ -30,16 +30,38 @@ export function createCamera(): Camera {
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
+// Breathing room around the world, in SCREEN px — the same on a zoomed-out map
+// as a zoomed-in one, because it is about the edge of the SCREEN, not about the
+// board's scale.
+//
+// The board used to be given room by the page's own padding, which is the wrong
+// place for it: it made the page taller than the window (see TestView.vue) and
+// still pinned a big world's edge hard against the viewport, so the outermost
+// row of tiles sat under the frame's vignette with nothing to push it off. This
+// is the margin instead — the fit leaves it, and a pan may take it.
+export const WORLD_MARGIN = 48;
+
 // Keep the world in reach. A world smaller than the viewport is centred on that
 // axis; a larger one may be scrolled until its far edge meets the far edge of the
-// viewport, never past it — panning into an empty void loses the board and is the
-// quickest way to make a big map feel broken.
-export function clampCamera(cam: Camera, world: Size, viewport: Size): Camera {
+// viewport plus the margin, never past that — panning into an empty void loses
+// the board and is the quickest way to make a big map feel broken.
+export function clampCamera(
+  cam: Camera,
+  world: Size,
+  viewport: Size,
+  margin = WORLD_MARGIN,
+): Camera {
   const zoom = clampZoom(cam.zoom);
   const scaled = { width: world.width * zoom, height: world.height * zoom };
   const axis = (pos: number, worldLen: number, viewLen: number) => {
     if (worldLen <= viewLen) return (worldLen - viewLen) / 2 / zoom; // centred
-    return Math.min(Math.max(pos, 0), (worldLen - viewLen) / zoom);
+    // The slack is the margin at BOTH ends: `-margin` pushes the world's leading
+    // edge that far off the viewport's, and the far bound does the same at the
+    // other end.
+    return Math.min(
+      Math.max(pos, -margin / zoom),
+      (worldLen - viewLen + margin) / zoom,
+    );
   };
   return {
     zoom,
@@ -80,10 +102,11 @@ export function zoomAt(
   );
 }
 
-// The zoom that shows the whole world at once, with a little breathing room.
+// The zoom that shows the whole world at once, with a little breathing room —
+// `WORLD_MARGIN` at each side, the same gap a pan may open anywhere else.
 // Never zooms past 1: a small board is shown at its natural size rather than
 // blown up, which would just make the sprites soft.
-export function fitZoom(world: Size, viewport: Size, pad = 32): number {
+export function fitZoom(world: Size, viewport: Size, pad = WORLD_MARGIN * 2): number {
   if (world.width <= 0 || world.height <= 0) return 1;
   const z = Math.min(
     (viewport.width - pad) / world.width,
@@ -92,7 +115,7 @@ export function fitZoom(world: Size, viewport: Size, pad = 32): number {
   return clampZoom(Math.min(1, z));
 }
 
-export function fitCamera(world: Size, viewport: Size, pad = 32): Camera {
+export function fitCamera(world: Size, viewport: Size, pad = WORLD_MARGIN * 2): Camera {
   const zoom = fitZoom(world, viewport, pad);
   return clampCamera({ x: 0, y: 0, zoom }, world, viewport);
 }

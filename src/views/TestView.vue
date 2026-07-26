@@ -169,16 +169,33 @@ export default toNative(TestView);
 </script>
 
 <style lang="scss" scoped>
+// THE PAGE IS EXACTLY ONE SCREEN AND NEVER SCROLLS.
+//
+// It used to be a plain block with 16px of padding, and the stage inside it was
+// 100vh tall — so the page was always ~160px taller than the window (padding +
+// breadcrumb + description) and every one of the stage's own controls sat below
+// the fold. Hunting for the Pause button by scrolling is not a viewport.
+//
+// So: a flex column pinned to the viewport height. The chrome takes what it
+// needs, the stage takes the rest, and whatever wants to scroll (the card grid)
+// scrolls INSIDE itself. The board no longer needs page padding to breathe —
+// that is the camera's job now, as a margin you can push the world away from
+// (`WORLD_MARGIN` in camera.ts).
 .test-view {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 .test-header {
   @include glass;
   display: inline-flex;
+  align-self: flex-start;
+  flex: 0 0 auto;
   align-items: center;
   gap: 16px;
-  margin-bottom: 16px;
-  padding: 12px 16px;
+  margin: 10px 0 8px 12px;
+  padding: 10px 14px;
 }
 .nav-link {
   @include glass-button;
@@ -205,10 +222,17 @@ export default toNative(TestView);
 .crumb-sep {
   color: #5a6b78;
 }
+// The picker is the one part that can outgrow a screen, so IT scrolls — not the
+// page. Its own padding replaces the page padding that used to surround it.
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
+  padding: 4px 16px 16px;
   max-width: 1200px;
 }
 // A BeamNG-style image tile: full-bleed level preview, dark gradient, title over
@@ -313,9 +337,10 @@ export default toNative(TestView);
   display: flex;
   width: fit-content;
   align-items: baseline;
+  flex: 0 0 auto;
   gap: 10px;
-  margin: 0 auto 16px;
-  padding: 10px 16px;
+  margin: 0 auto 8px;
+  padding: 8px 16px;
   max-width: 720px;
   color: #cfd8e0;
   font-size: 13.5px;

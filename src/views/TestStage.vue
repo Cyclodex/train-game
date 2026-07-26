@@ -447,11 +447,18 @@ export default toNative(TestStage);
   // A column: controls on top, then the camera viewport taking the rest. The
   // board can be far bigger than the window (the demo world is 4000x2800px), so
   // the viewport clips and the camera moves the board inside it.
+  //
+  // FILLS ITS PARENT, never the viewport. `100vh` here meant the stage claimed a
+  // whole screen BELOW the breadcrumb and the description — so the page was
+  // taller than the window by exactly that chrome, and the stage's own controls
+  // were pushed off the bottom. TestView is the one that owns the screen height.
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
   box-sizing: border-box;
-  gap: 16px;
+  gap: 10px;
+  padding: 0 12px 12px;
 }
 .stage-viewport {
   position: relative;
@@ -666,7 +673,10 @@ export default toNative(TestStage);
 }
 .event-log {
   width: 320px;
-  max-height: 40vh;
+  // Never squeezed by the flex column, and never taller than a third of it: the
+  // log is a sidebar to the board, not a competitor for it.
+  flex: 0 0 auto;
+  max-height: 32vh;
   overflow-y: auto;
   background: rgba(20, 24, 28, 0.92);
   color: #d7dde3;
