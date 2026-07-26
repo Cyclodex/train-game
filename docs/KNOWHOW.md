@@ -183,14 +183,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
   and the distance are the same forest.
-- Per-kind scatter has its OWN band (`SCATTER_BAND`): a peak is ~50 units tall so
-  it starts low in the tile and overflows UPWARD (deliberate — the row below is
-  later in the DOM, so a near peak occludes a far one; `.tile-ground` is
-  `overflow: visible` for exactly this). Keep every `translate()` inside 10..90 —
-  a unit test sweeps all kinds and fails otherwise.
-- `groundShadow(scale, spread, fill)` — the DEFAULT tint is green because the
-  default ground is meadow. On rock/mountain/town pass your own (`STONE_SHADOW`/
-  `TOWN_SHADOW`), or every boulder gets a patch of moss under it.
+- ALL scatter is TOP-DOWN (2026-07-27): canopies, roof plans, blob boulders,
+  ridges — one projection with the tracks/trains, one NW sun (lit up-left facet,
+  drop shadow offset down-right). Nothing grows upward out of its band any more,
+  so bands are symmetric and forest runs to [10,90]. Keep every `translate()`
+  inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
+  EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
+  into the point coords, never nest a `<g transform="translate">` inside a prop.
+- Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
+  default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
   across a rock patch read at board zoom as stray pen strokes lying on the tile;
   broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
@@ -201,9 +202,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   rock's L=56 (gravel) but ~30 over mountain's L=42: bright flecks on dark slate,
   reading as litter. It takes a `light` base now (rock 67, mountain 53).
   A near-white face against a near-black one turns every boulder into
-  a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
-  lands on the break→apex segment); a free-standing white wedge hangs off the
-  silhouette and reads as a paper dart.
+  a paper cutout. Snow lives ON the ridge polygon's own crest stations and
+  carries its own end-taper (`midProf` × sin) — cut off square it leaves a hard
+  white chevron across the ridge. On the tan urban ground a flat roof must
+  change TEMPERATURE (concrete grey), not just tone: warm at any lightness
+  either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.

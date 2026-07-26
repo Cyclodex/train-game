@@ -411,14 +411,18 @@ describe("terrain", () => {
 
     it("does not look like rock", () => {
       // The two blocking grounds sit next to each other on real boards, so they
-      // have to be tellable apart at a glance: different ground colour, and a
-      // scatter that stands much taller.
+      // have to be tellable apart at a glance. Top-down nothing "stands taller"
+      // any more — what separates them is the ground tone (dark blue slate vs
+      // cool light grey) and the snow that only a ridge carries.
       const rock = tileGroundSvg("rock", "3,3", around("rock"), 5);
       const mountain = tileGroundSvg("mountain", "3,3", around("mountain"), 5);
       expect(mountain).not.toBe(rock);
-      const highest = (svg: string) =>
-        Math.min(...[...svg.matchAll(/[ML]([-\d.]+) (-[\d.]+)/g)].map(m => Number(m[2])));
-      expect(highest(mountain)).toBeLessThan(highest(rock) * 1.8);
+      expect(mountain).toContain("hsl(214 13% 42.0%)");
+      expect(rock).toContain("hsl(210 7% 56.0%)");
+      // Snow tones appear on ridges and nowhere on rock. (Deterministic: the
+      // seed is fixed, and each of this tile's peaks rolls snow at ~82%.)
+      expect(mountain).toContain("hsl(202 24% 94%)");
+      expect(rock).not.toContain("hsl(202 24% 94%)");
     });
 
     it("fuses with its neighbours like every other patch", () => {
