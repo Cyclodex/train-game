@@ -19,6 +19,7 @@ import {
   stallDepthPx,
   stallPitchPx,
   stallPose,
+  garageExitFrom,
 } from "./parking";
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
@@ -145,22 +146,34 @@ export interface GarageGeometry {
 // a car to swing into, narrow enough to read as a driveway and not a side street.
 const RAMP_WIDTH_FRAC = 0.26;
 
+// A garage has TWO mouths — one to go in, one to come out — so build each from
+// the same primitive. `mouth` picks which; the arrow points the way traffic runs
+// through it, which is what tells a player at a glance which driveway is which.
 export function garageGeometry(
   row: ParkingRow,
   size: number,
   kerbPx: number,
+  mouth: "in" | "out" = "in",
 ): GarageGeometry {
-  const f = rowFrame(row, size);
+  // The out-ramp is framed on the approach the car LEAVES by, so with a separate
+  // `exitTo` it sits on the far kerb facing the other way.
+  const framed = mouth === "out" ? { ...row, from: garageExitFrom(row) } : row;
+  const f = rowFrame(framed, size);
   const width = RAMP_WIDTH_FRAC * size;
   const depth = stallDepthPx("garage", size);
   const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
   const far = near + depth;
-  const mid = size / 2;
+  const pose = stallPose(framed, 0, size, kerbPx, mouth);
+  // `pose.t` already carries the mouth's position along the tile.
+  const mid = pose.t * size;
   const a0 = mid - width / 2;
   const a1 = mid + width / 2;
   // The mouth narrows slightly going in, which reads as a ramp descending.
   const inset = width * 0.16;
-  const pose = stallPose(row, 0, size, kerbPx);
+  // The chevron points INTO the building on the in-ramp and OUT of it on the
+  // out-ramp — the only thing on the tile that says which driveway is which.
+  const tipOut = mouth === "in" ? near + depth * 0.52 : near + depth * 0.18;
+  const baseOut = mouth === "in" ? near + depth * 0.18 : near + depth * 0.52;
   return {
     apron: poly([f.at(a0, near), f.at(a1, near), f.at(a1 - inset, far), f.at(a0 + inset, far)]),
     mouth: poly([
@@ -171,9 +184,9 @@ export function garageGeometry(
     ]),
     arrow: poly(
       [
-        f.at(mid - width * 0.16, near + depth * 0.18),
-        f.at(mid, near + depth * 0.52),
-        f.at(mid + width * 0.16, near + depth * 0.18),
+        f.at(mid - width * 0.16, baseOut),
+        f.at(mid, tipOut),
+        f.at(mid + width * 0.16, baseOut),
       ],
       false,
     ),

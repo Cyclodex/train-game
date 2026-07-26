@@ -397,6 +397,12 @@ export interface Car {
   // Position along `parkPath` as a fraction of its ARC LENGTH: 0 = out on the
   // lane, 1 = at rest in the bay.
   manoeuvre: number;
+  // True while the car is driving a garage's FORWARD exit curve, where `manoeuvre`
+  // runs 0 (at the ramp mouth) → 1 (back on the road). A rank of bays instead
+  // replays its entry curve BACKWARDS (1 → 0), which is the real motion: you
+  // reverse out of a parking bay. Nobody reverses out of a multi-storey, so a
+  // garage gets its own path and its own second mouth to come out of.
+  parkExiting: boolean;
   // Seconds of dwell left. Counts down only while `phase === "parked"`.
   dwellLeft: number;
   // Car parks entered and left without finding a space. Bounds "cruising for a
@@ -436,11 +442,28 @@ const PARKING = {
   // How many car parks a driver will try before giving up and driving on.
   maxTries: 2,
   // Clear road (tiles) a car needs BEHIND its slot before it pulls out of a bay.
-  pullOutGap: 0.5,
+  // Clear road (tiles) a car wants behind its slot before it actually rolls out of
+  // a bay — about a car's braking distance at cruise plus its following gap.
+  //
+  // This number stopped being load-bearing once a car about to leave started
+  // CLAIMING its lane slot while it waits (see the `parked` branch of
+  // advanceParking). Before that it was a no-win dial: big enough not to clip
+  // (0.5) meant almost any moving car anywhere on a single-lane aisle vetoed the
+  // manoeuvre, and /test/parkinglot filled with twelve cars of which two ever got
+  // out; small enough to drain (0.16) meant traffic that was legally clear when
+  // the car committed arrived mid-manoeuvre, and the sweep measured a real clip.
+  // Raising it again just pushed cars onto the patience valve, which barged them
+  // out into traffic and measured worse still (0.175). Claiming the slot first
+  // dissolves the trade-off: the queue forms behind the indicator, the gap appears
+  // because of it, and no valve is needed.
+  pullOutGap: 0.16,
 };
 
 // How close to its peel-off point a car counts as having arrived at its bay.
 const PARK_ARRIVE_EPS = 0.04;
+// Below this speed (tiles/sec) a car counts as STOPPED, and a stopped car behind
+// a vehicle waiting to leave its bay is yielding to it rather than blocking it.
+const STOPPED_YIELDING = 0.02;
 const OVERTAKE = {
   // Fraction of drivers that will overtake (the rest stay disciplined in lane).
   fraction: 0.4,
@@ -1577,9 +1600,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         laneIndex: lane,
         lanePos: lanePosAt(car, a, s),
       });
-    // How much ROAD this car still occupies. The car's own path/headProgress are
+    // How much ROAD this car still occupies — always the fraction of itself that
+    // is actually out on the carriageway. The car's own path/headProgress are
     // frozen at the peel-off point through the whole manoeuvre, so the body is
-    // simply measured back from there:
+    // simply measured back from there.
+    //
     //   parked   — nothing. It is in a bay off the carriageway, so it gates no
     //              traffic and the swept-body overlap check never compares it
     //              against a moving car (which would read as a clip).
@@ -1587,10 +1612,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     //              is released progressively instead of all at once. It DOES block
     //              while the swing starts, which is correct: you wait behind
     //              someone parking.
-    //   leaving  — the full slot from the first tick. It only sets off when the
-    //              lane is clear (pullOutClear), and claiming the space
-    //              immediately is what stops a car driving through it as it backs
-    //              out.
+    //   leaving  — the FULL slot from the first tick, deliberately. Growing it in
+    //              as the car emerges was tried and measured WORSE (0.077 vs 0.028
+    //              overlap on /test/parkingkerb): a follower brakes against the
+    //              obstacle it can see, so a body that starts at nothing gives it
+    //              nothing to brake against and it arrives on top of the car. The
+    //              clearance has to be bought BEFORE the manoeuvre starts —
+    //              PARKING.pullOutGap — not during it.
     const occupied =
       car.phase === "parked"
         ? 0
@@ -2046,7 +2074,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // Aim only at the approaches that currently have a free stall for this
       // vehicle — a row of disabled bays is not a destination for an ordinary car.
       const goals: RouteGoal[] = chosen.access.filter(a =>
-        parking.pickStallOn(getCoordinatesId(a.coord), a.entryPort, kind) !== null,
+        parking.pickStallOn(getCoordinatesId(a.coord), a.entryPort, kind, "probe") !== null,
       );
       if (goals.length === 0) continue;
       const plan = planRouteToGoals(level, coord, entry, goals, cls);
@@ -2064,7 +2092,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const cell = level[tileId];
     if (!cell?.parking?.rows?.length) return;
     if (facilityOfTile(tileId) !== car.parkTarget) return;
-    const ref = parking.pickStallOn(tileId, entry, car.kind);
+    // Only bays still ahead of the nose: the car has just crossed onto this tile,
+    // so that is normally all of them, but a car that SPAWNED mid-tile must not be
+    // handed a space it has already driven past.
+    const ref = parking.pickStallOn(tileId, entry, car.kind, car.id, car.headProgress);
     if (!ref) return;
     if (!parking.claim(ref, car.id)) return;
     car.stall = ref;
@@ -2134,6 +2165,93 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     car.overtakeOf = null;
   }
 
+  // Is the car's own lane slot EMPTY right now — i.e. can it show itself at all?
+  // A car about to leave claims its slot so traffic brakes for it, but it must not
+  // do that underneath a vehicle that is already there: a body appearing inside
+  // another body is a clip, however briefly. This is the narrow check (my own
+  // length, nothing more); `pullOutClear` is the wider one that decides when it is
+  // safe to actually roll.
+  function slotFree(car: Car, entryPort: Port, t: number): boolean {
+    const tileId = getCoordinatesId(car.path[car.headIndex].coord);
+    const front = t + CAR_GAP;
+    for (const other of cars) {
+      if (other === car) continue;
+      // Whether `other` is in the way of this slot RIGHT NOW.
+      //
+      // Not just moving traffic. Two cars in ADJACENT 90° bays share barely a
+      // third of a car length between their peel-off points — the bays are 28px
+      // apart because the cars stand across the aisle, but out on the lane they
+      // are 38px long — so two neighbours emerging at the same moment simply
+      // cannot both fit. In life one waits for the other; measured before this,
+      // they drew through each other by a third of a body on /test/parkinglot.
+      //
+      // A car already committed to leaving or arriving wins outright. Two that
+      // become ready on the SAME tick would otherwise each see the other still
+      // parked and both commit, so ties go to the lower id — the same
+      // deterministic tie-break the junction gates use.
+      const committed = other.phase === "leaving" || other.phase === "entering";
+      const readyToo =
+        other.phase === "parked" && other.dwellLeft <= 0 && other.id < car.id;
+      if (!committed && !readyToo && other.phase !== "driving") continue;
+      // How much road the car behind needs to stop. Claiming a slot is putting a
+      // stationary obstacle in a live lane, so it may only be done where the
+      // traffic can actually brake for it — a bumper gap is not enough at cruise
+      // (v^2/2b is ~0.10 tiles at 0.5 tiles/sec, nearly twice CAR_GAP), and
+      // claiming inside that distance is a clip the follower cannot avoid.
+      // Measured before this: 0.064 body overlap on the aisle of /test/parkinglot.
+      const stopping = (other.velocity * other.velocity) / (2 * Math.max(other.brake, 1e-6));
+      const rear = t - car.length - CAR_GAP - stopping;
+      // A still-parked neighbour reports NO body points by design, so measure the
+      // slot it is about to claim instead — its own frozen peel-off point.
+      const pts = readyToo
+        ? [
+            {
+              tileId: getCoordinatesId(other.path[other.headIndex].coord),
+              entry: other.path[other.headIndex].entryPort,
+              t: other.headProgress,
+            },
+            {
+              tileId: getCoordinatesId(other.path[other.headIndex].coord),
+              entry: other.path[other.headIndex].entryPort,
+              t: other.headProgress - other.length,
+            },
+          ]
+        : bodyPoints(other);
+      for (const p of pts) {
+        if (p.tileId !== tileId) continue;
+        if (p.entry !== entryPort) continue;
+        if (p.t > rear && p.t < front) return false;
+      }
+    }
+    return true;
+  }
+
+  // Re-seat a car onto the lane slot it will REJOIN the road at. For a bay that is
+  // where it peeled off (nothing changes); for a GARAGE it is the out ramp, which
+  // is further down the street and may be on the other side of it.
+  //
+  // Done when the car starts leaving, NOT when it finishes: the body has to be at
+  // the exit for the whole manoeuvre, or the car spends the manoeuvre claiming the
+  // ENTRANCE and then materialises at the exit — inside whatever had queued there
+  // in the meantime. Measured as a 0.064 body overlap on /test/parkinglot.
+  function seatAtExitSlot(car: Car): void {
+    const gExit = car.stall ? parking.exitFor(car.stall, 0) : null;
+    if (!gExit) return;
+    const head = car.path[car.headIndex];
+    const entryPort = gExit.from as Port;
+    const cls = clsOf(car);
+    const road = level[getCoordinatesId(head.coord)]?.road;
+    car.path = [
+      { coord: head.coord, entryPort, exitPort: roadExitPort(level, head.coord, entryPort, cls) },
+    ];
+    car.headIndex = 0;
+    car.headProgress = gExit.endT;
+    const lane = nearestUsableLaneIndex(road, entryPort, kerbMostLane(road, entryPort, cls), cls);
+    car.laneIndex = lane;
+    car.targetLane = lane;
+    car.lanePivot = null;
+  }
+
   // Is the lane behind the car's slot clear enough to reverse out into? Checked
   // against real bodies on the same tile travelling the same way, so a car waits
   // for a gap in the traffic instead of materialising into it.
@@ -2144,7 +2262,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const slotFront = car.headProgress;
     const slotRear = car.headProgress - car.length - PARKING.pullOutGap;
     for (const other of cars) {
-      if (other === car || other.phase === "parked") continue;
+      // Only vehicles actually driving can close the gap. Another car waiting to
+      // leave its own bay must not veto this one — two neighbours would then hold
+      // each other in place for ever, each waiting for a road the other is sitting
+      // on. Their bays are at least a pitch apart, so their claimed slots do not
+      // overlap, and ordinary following takes over once both are moving.
+      if (other === car || other.phase !== "driving") continue;
+      // A car that has STOPPED behind us has stopped BECAUSE of us — the slot was
+      // claimed the moment the dwell ended, so it braked for a body in its lane.
+      // That is the gap, and treating it as an obstacle instead is a guaranteed
+      // deadlock: it waits for us to go, we wait for it to clear, and neither ever
+      // moves. Measured before this line existed: two cars stuck in `leaving` for
+      // fifty of an eighty-second run. Only traffic still ROLLING can close a gap.
+      if (other.velocity <= STOPPED_YIELDING) continue;
       for (const p of bodyPoints(other)) {
         if (p.tileId !== tileId) continue;
         if (p.entry !== head.entryPort) continue; // same travel direction only
@@ -2161,13 +2291,21 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function resumeFromStall(car: Car): void {
     const head = car.path[car.headIndex];
     const cls = clsOf(car);
-    // `headProgress` was frozen at the peel-off point for the whole stay, so it
-    // still names exactly where the curve meets the lane — which is where the car
-    // rejoins traffic.
+    // Where the car rejoins the road, and facing which way.
+    //  • A BAY: `headProgress` was frozen at the peel-off point for the whole
+    //    stay, so it still names exactly where the curve meets the lane, on the
+    //    approach the car arrived by.
+    //  • A GARAGE: it came out of the OUT ramp, which is further down the road —
+    //    and, if the author gave the building a separate exit, on a different
+    //    approach entirely. Re-seed it there, or it would teleport back to the
+    //    entrance and drive the same stretch twice.
+    // `seatAtExitSlot` already moved a garage car onto its out ramp when it
+    // started leaving, so by here `head` IS the slot to resume from either way.
+    const entryPort = head.entryPort;
     const startT = car.headProgress;
-    const exit = roadExitPort(level, head.coord, head.entryPort, cls);
-    const replan = planRoute(level, head.coord, head.entryPort, allMapExits, routeRng, cls);
-    car.path = [{ coord: head.coord, entryPort: head.entryPort, exitPort: exit }];
+    const exit = roadExitPort(level, head.coord, entryPort, cls);
+    const replan = planRoute(level, head.coord, entryPort, allMapExits, routeRng, cls);
+    car.path = [{ coord: head.coord, entryPort, exitPort: exit }];
     car.headIndex = 0;
     car.headProgress = Math.max(0, Math.min(0.999, startT));
     car.routePlan = replan.turns;
@@ -2183,14 +2321,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     car.waitSeconds = 0;
     const lane = nearestUsableLaneIndex(
       level[getCoordinatesId(head.coord)]?.road,
-      head.entryPort,
-      kerbMostLane(level[getCoordinatesId(head.coord)]?.road, head.entryPort, cls),
+      entryPort,
+      kerbMostLane(level[getCoordinatesId(head.coord)]?.road, entryPort, cls),
       cls,
     );
     car.laneIndex = lane;
     car.targetLane = lane;
     car.overtakeHomeLane = lane;
     car.phase = "driving";
+    car.parkExiting = false;
     releaseStall(car);
   }
 
@@ -2231,16 +2370,51 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
     if (car.phase === "parked") {
       car.dwellLeft -= dt;
-      // Stay put until the dwell is up AND there is a gap to pull out into. A
-      // driver waits for the road rather than reversing into moving traffic.
-      if (car.dwellLeft <= 0 && pullOutClear(car)) {
+      // Dwell over: START LEAVING — indicator on. The car does not move yet (the
+      // "leaving" branch below only rolls when the road is clear), but it claims
+      // its lane slot from this moment, so traffic behind it brakes and the gap it
+      // needs forms BECAUSE it is waiting. Making the claim conditional on already
+      // having a gap is what made this a no-win dial: a car that is invisible
+      // until it moves is one that either never gets out, or appears in front of
+      // traffic that had no reason to slow down.
+      //
+      // `slotFree` is the one thing that must hold first — the slot cannot be
+      // claimed out from under a car that is passing through it this very tick.
+      // Where this car will actually rejoin the road — the out ramp for a garage,
+      // its own peel-off point for a bay. That is the slot to test and to claim.
+      const gExit = car.stall ? parking.exitFor(car.stall, 0) : null;
+      const seatPort = gExit ? (gExit.from as Port) : car.path[car.headIndex].entryPort;
+      const seatT = gExit ? gExit.endT : car.headProgress;
+      if (car.dwellLeft <= 0 && slotFree(car, seatPort, seatT)) {
         car.phase = "leaving";
-        car.manoeuvre = 1;
+        // A garage drives OUT of its second ramp, forwards. Everything else backs
+        // out of its bay along the curve it came in on.
+        const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car)) : null;
+        if (exit) {
+          car.parkPath = exit.path;
+          car.parkExiting = true;
+          car.manoeuvre = 0;
+          // Claim the OUT ramp's slot now, for the whole manoeuvre.
+          seatAtExitSlot(car);
+        } else {
+          car.parkExiting = false;
+          car.manoeuvre = 1;
+        }
       }
       return;
     }
 
-    // "leaving": replay the same curve backwards, out of the bay and onto the lane.
+    // "leaving". The slot is already claimed (see above); roll only when the road
+    // is actually clear. Holding here rather than at the "parked" gate is what
+    // lets the queue build up behind the waiting car.
+    if (!pullOutClear(car)) return;
+    // A garage drives its exit curve FORWARD; a bay replays its entry curve
+    // backwards, which is a car reversing out of its space.
+    if (car.parkExiting) {
+      car.manoeuvre = Math.min(1, car.manoeuvre + step);
+      if (car.manoeuvre >= 1) resumeFromStall(car);
+      return;
+    }
     car.manoeuvre = Math.max(0, car.manoeuvre - step);
     if (car.manoeuvre <= 0) resumeFromStall(car);
   }
@@ -2529,6 +2703,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       stall: null,
       parkPath: null,
       manoeuvre: 0,
+      parkExiting: false,
       dwellLeft: 0,
       parkTries: 0,
       enteredTarget: false,
@@ -2631,6 +2806,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       stall: null,
       parkPath: null,
       manoeuvre: 0,
+      parkExiting: false,
       dwellLeft: 0,
       parkTries: 0,
       enteredTarget: false,

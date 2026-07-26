@@ -26,6 +26,9 @@ import {
   stallPose,
   stallIsHidden,
   stallLengthPx,
+  garageExitPath,
+  garageExitEndT,
+  garageExitFrom,
 } from "@/tiles/parking";
 import { parseCoordId } from "@/tiles/model";
 import { specLength, vehicleSpec, type VehicleKind } from "./road";
@@ -67,6 +70,19 @@ export function stallFits(
   return bodyPx <= stallLengthPx(row, tileSize) * 0.98;
 }
 
+// A small, stable string hash. Used to scatter a car's choice of parking space
+// without spending a random draw — see `pickStallOn`. FNV-1a: cheap, and it
+// avalanches well enough that consecutive car ids ("car31", "car32") do not land
+// on neighbouring bays, which is the whole point.
+function hashOf(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0);
+}
+
 // --- The registry ------------------------------------------------------------
 
 export interface StallInfo {
@@ -92,16 +108,40 @@ export interface ParkingRegistry {
   // then keeps driving, which is exactly what a real driver does.
   claim(ref: StallRef, carId: string): boolean;
   release(ref: StallRef): void;
-  // The first free stall on `tileId` a vehicle of `kind` entering through `from`
-  // can take, scanned in DRIVING ORDER (nearest first) so a car takes the space
-  // it reaches first rather than driving past three empty bays.
-  pickStallOn(tileId: string, from: number, kind: VehicleKind): StallRef | null;
+  // A free stall on `tileId` for a vehicle of `kind` entering through `from`, or
+  // null if there is none it can use.
+  //
+  // NOT simply the nearest one. Drivers do not all take the first space they pass
+  // — they take one that suits them — and always picking the lowest index packs a
+  // car park solid from one end while the rest of it stands empty, which is the
+  // one thing a real car park never looks like. The choice is scattered by a hash
+  // of `carId`: deterministic (a seed replays exactly), spread out, and costing no
+  // RNG draw — which matters, because a draw made here would couple the parking
+  // random stream to traffic state, and every seeded run in the repo would then
+  // shift the next time anyone touched the following model.
+  //
+  // `minT` filters out bays the car has already driven past on this tile; it can
+  // never reach one behind it (`atStallEntry` only ever fires forwards).
+  pickStallOn(
+    tileId: string,
+    from: number,
+    kind: VehicleKind,
+    carId: string,
+    minT?: number,
+  ): StallRef | null;
   // The manoeuvre curve for a stall, in TILE units (size 1). `laneOff` is the
   // car's lateral lane offset in tile units; `tStart` anchors the curve at the
   // car's real position so the sprite does not jump when the swing begins.
   pathFor(ref: StallRef, laneOff: number, tStart?: number): ManoeuvrePath | null;
   // Where along its approach a car peels off toward `ref` (0..1 of the tile).
   startTOf(ref: StallRef): number;
+  // The FORWARD curve out of a garage, plus where on the road it ends and which
+  // approach that is. Null for a rank of bays — those reverse out along the curve
+  // they came in on, which is what a driver actually does.
+  exitFor(
+    ref: StallRef,
+    laneOff: number,
+  ): { path: ManoeuvrePath; endT: number; from: number } | null;
   // Everything the renderer needs to draw the parked fleet + a debug overlay:
   // stall id -> occupant car id.
   occupancy(): Record<string, string>;
@@ -258,10 +298,10 @@ export function createParkingRegistry(
     },
 
 
-    pickStallOn(tileId, from, kind) {
+    pickStallOn(tileId, from, kind, carId, minT = 0) {
       const cell = level[tileId];
       if (!cell?.parking?.rows?.length) return null;
-      let best: { ref: StallRef; t: number } | null = null;
+      const free: StallRef[] = [];
       for (const row of cell.parking.rows) {
         if (row.from !== from || row.count <= 0) continue;
         const side = rowSide(row);
@@ -271,17 +311,38 @@ export function createParkingRegistry(
           if (occupants.has(stallId(ref))) continue;
           const info = infoOf(ref);
           if (!info) continue;
-          // Nearest-first in DRIVING order: `t` grows along the direction of
-          // travel, so the smallest free `t` is the first bay the car meets.
-          if (!best || info.t < best.t) best = { ref, t: info.t };
+          // Only bays still AHEAD: `t` grows along the direction of travel, and a
+          // car cannot turn into a space it has already gone past.
+          if (info.t < minT) continue;
+          free.push(ref);
         }
       }
-      return best?.ref ?? null;
+      if (free.length === 0) return null;
+      // Deterministic scatter. `free` is built in a fixed order (rows as authored,
+      // then index), so the same car on the same tick always lands on the same bay.
+      return free[hashOf(carId) % free.length];
     },
 
     startTOf(ref) {
       const info = infoOf(ref);
       return info ? manoeuvreStartT(info.row, ref.index, 1) : 0;
+    },
+
+    exitFor(ref, laneOff) {
+      const info = infoOf(ref);
+      if (!info || info.row.kind !== "garage") return null;
+      const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}`;
+      let path = paths.get(key);
+      if (!path) {
+        const kerb = kerbOffsetAt(level, parseCoordId(ref.tileId), garageExitFrom(info.row), 1);
+        path = garageExitPath(info.row, 1, kerb, laneOff);
+        paths.set(key, path);
+      }
+      return {
+        path,
+        endT: garageExitEndT(info.row, 1),
+        from: garageExitFrom(info.row),
+      };
     },
 
     pathFor(ref, laneOff, tStart) {

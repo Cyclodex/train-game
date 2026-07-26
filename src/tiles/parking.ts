@@ -77,6 +77,15 @@ export interface ParkingRow {
   //  • "centre" centres the row on its tile. For a lone lay-by or a short bay
   //    group that should not look like the end of a longer run.
   align?: "pack" | "centre";
+  // GARAGE ONLY. The approach a car rejoins the road on when it drives back out,
+  // and therefore which bank its EXIT ramp sits on. Defaults to `from` — a single
+  // ramp mouth serving both directions.
+  //
+  // A real underground garage has an in ramp and an out ramp, and the difference
+  // is game-visible rather than cosmetic: with one mouth, departures and arrivals
+  // serialise through the same barrier, so a busy garage's leavers block its
+  // joiners. Two mouths let both flow at once.
+  exitTo?: Port;
   // Extra clearance between the kerb and the near edge of the bays, in lane
   // widths (a pavement, a verge, a service strip). Default 0.
   gap?: number;
@@ -362,11 +371,20 @@ export interface StallPose {
   pitchPx: number;
 }
 
+// Where along a garage tile its two ramp mouths sit, as a fraction of the tile.
+// Far enough apart to read as two driveways, close enough that both stay clear of
+// the tile's seams (and of a junction beyond one).
+export const GARAGE_IN_T = 0.34;
+export const GARAGE_OUT_T = 0.68;
+
 export function stallPose(
   row: ParkingRow,
   index: number,
   size: number,
   kerbPx: number,
+  // Which mouth of a GARAGE this is. Ignored for a rank of bays, which has one
+  // position per stall index and no notion of a direction.
+  mouth: "in" | "out" = "in",
 ): StallPose {
   const from = row.from;
   const exit = oppositePort(from);
@@ -392,7 +410,14 @@ export function stallPose(
   // centres the row for a lone lay-by. A garage's mouth is always mid-tile.
   const span = row.kind === "garage" ? 0 : pitch * row.count;
   const start = row.align === "centre" ? (size - span) / 2 : 0;
-  const along = row.kind === "garage" ? size / 2 : start + pitch * (index + 0.5);
+  // A GARAGE has no rank of bays: it has a RAMP MOUTH, and one for each direction
+  // of travel it serves. The in-ramp sits upstream and the out-ramp downstream, so
+  // a car drives in at the first driveway and comes out of the second FACING THE
+  // WAY IT IS GOING — never nose-first backwards out of the entrance.
+  const along =
+    row.kind === "garage"
+      ? size * (mouth === "out" ? GARAGE_OUT_T : GARAGE_IN_T)
+      : start + pitch * (index + 0.5);
   const t = along / size;
 
   // Lateral: out past the kerb, plus any authored verge, to the middle of the bay.
@@ -563,6 +588,65 @@ export function manoeuvrePath(
   };
   path.arc = buildArcTable(path);
   return path;
+}
+
+// The approach a car rejoins the road on when it leaves a GARAGE, and therefore
+// which bank its out-ramp sits on. Same as it went in unless the author says
+// otherwise.
+export function garageExitFrom(row: ParkingRow): Port {
+  return row.exitTo ?? row.from;
+}
+
+// The row as seen from the OUT ramp: same geometry, but framed on the approach the
+// car will be travelling when it re-emerges. With `exitTo === from` that is the
+// same bank a little further downstream; with the opposite port it is the far
+// kerb, facing the other way.
+function exitRowOf(row: ParkingRow): ParkingRow {
+  return row.exitTo && row.exitTo !== row.from ? { ...row, from: row.exitTo } : row;
+}
+
+// The curve a car drives OUT of a garage: from the ramp mouth, through the point
+// on the lane abeam it, to a point further along the road. Driven FORWARD (m 0→1),
+// so the car noses out of the building the way it is going.
+//
+// A rank of BAYS does not use this: reversing out of a bay and then pulling away
+// is what a driver actually does, and the entry curve replayed backwards is
+// exactly that motion. A garage is the case where it looks wrong — nobody backs
+// out of a multi-storey — so the garage gets its own forward path and its own
+// second mouth to come out of.
+export function garageExitPath(
+  row: ParkingRow,
+  size: number,
+  kerbPx: number,
+  laneOff: number,
+): ManoeuvrePath {
+  const exitRow = exitRowOf(row);
+  const from = exitRow.from;
+  const ahead = oppositePort(from);
+  const pose = stallPose(exitRow, 0, size, kerbPx, "out");
+  const tEnd = Math.min(0.999, pose.t + MANOEUVRE_APPROACH_FRAC);
+  const onLane = (t: number): Pt => {
+    const p = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, t);
+    return { x: p.x, y: p.y };
+  };
+  // Ends ALIGNED WITH THE ROAD, not with the ramp: the car is rejoining traffic,
+  // so its final heading is the lane's, whatever angle it left the building at.
+  const lane = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, tEnd);
+  const path: ManoeuvrePath = {
+    p0: { x: pose.x, y: pose.y },
+    p1: onLane(pose.t),
+    p2: onLane(tEnd),
+    restAngleDeg: lane.tangentDeg,
+    arc: [],
+  };
+  path.arc = buildArcTable(path);
+  return path;
+}
+
+// Where along its exit approach a car rejoins the road after a garage — the
+// progress its path is re-seeded at, so it carries on from where it really is.
+export function garageExitEndT(row: ParkingRow, size: number): number {
+  return Math.min(0.999, stallPose(exitRowOf(row), 0, size, 0, "out").t + MANOEUVRE_APPROACH_FRAC);
 }
 
 // How finely the manoeuvre curve is measured. 16 chords over a ~50px swing puts

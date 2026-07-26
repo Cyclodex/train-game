@@ -13,6 +13,9 @@ import {
   validateParking,
   kerbOffsetAt,
   bankOf,
+  garageExitPath,
+  garageExitEndT,
+  garageExitFrom,
   type ParkingRow,
 } from "@/tiles/parking";
 import { createParkingRegistry, stallFits, vehicleCanPark } from "@/sim/parking";
@@ -165,31 +168,111 @@ describe("the parking manoeuvre", () => {
   });
 });
 
+describe("a garage is driven THROUGH, not reversed out of", () => {
+  const garage: ParkingRow = { from: Position.Left, kind: "garage", count: 4 };
+
+  it("puts its two ramp mouths at different points along the tile", () => {
+    // One driveway in, one out. A single mouth serialises arrivals and departures
+    // through the same hole and forces the car to come out backwards.
+    const inM = stallPose(garage, 0, 200, 28, "in");
+    const outM = stallPose(garage, 0, 200, 28, "out");
+    expect(outM.x).toBeGreaterThan(inM.x); // the out ramp is downstream
+    expect(Math.abs(outM.x - inM.x)).toBeGreaterThan(50);
+    // Both on the same kerb, since no separate exit approach was authored.
+    expect(outM.y).toBeCloseTo(inM.y);
+  });
+
+  it("drives OUT forwards, ending aligned with the road", () => {
+    const path = garageExitPath(garage, 200, 28, 7);
+    const start = manoeuvreAt(path, 0);
+    const end = manoeuvreAt(path, 1);
+    const mouth = stallPose(garage, 0, 200, 28, "out");
+    // Starts at the out ramp…
+    expect(start.x).toBeCloseTo(mouth.x);
+    expect(start.y).toBeCloseTo(mouth.y);
+    // …ends back on the lane, FURTHER DOWN THE ROAD (not back where it came in),
+    // pointing the way it is going rather than nose-out of the building.
+    expect(end.x).toBeGreaterThan(start.x);
+    expect(end.y).toBeCloseTo(107);
+    expect(Math.abs(end.angleDeg)).toBeLessThan(5); // eastbound, along the street
+  });
+
+  it("sends the car out on the far kerb when the author gives it a separate exit", () => {
+    const twoRamp: ParkingRow = { ...garage, exitTo: Position.Right };
+    expect(garageExitFrom(twoRamp)).toBe(Position.Right);
+    const inM = stallPose(twoRamp, 0, 200, 28, "in");
+    const outM = stallPose({ ...twoRamp, from: Position.Right }, 0, 200, 28, "out");
+    // Opposite banks of the street: departures no longer queue behind arrivals.
+    expect((inM.y - 100) * (outM.y - 100)).toBeLessThan(0);
+  });
+
+  it("rejoins the road at the OUT ramp, not back at the entrance", () => {
+    // The car must carry on from where it really emerged. Re-seeding it at the
+    // in-ramp would teleport it backwards and make it drive the same stretch twice.
+    const endT = garageExitEndT(garage, 200);
+    const inT = stallPose(garage, 0, 200, 0, "in").t;
+    expect(endT).toBeGreaterThan(inT);
+    expect(endT).toBeLessThanOrEqual(0.999);
+  });
+});
+
 describe("the parking registry — occupancy and fit", () => {
   const rows: ParkingRow[] = [{ from: Position.Left, kind: "parallel", count: 2 }];
 
   it("hands out each bay exactly once", () => {
     const reg = createParkingRegistry(levelWith(rows), CAR_LEN);
-    const a = reg.pickStallOn("1,0", Position.Left, "car")!;
+    const a = reg.pickStallOn("1,0", Position.Left, "car", "car1")!;
     expect(a).toBeTruthy();
     expect(reg.claim(a, "car1")).toBe(true);
     // Claiming a taken bay fails; the car keeps driving, as a real driver does.
     expect(reg.claim(a, "car2")).toBe(false);
-    const b = reg.pickStallOn("1,0", Position.Left, "car")!;
+    const b = reg.pickStallOn("1,0", Position.Left, "car", "car2")!;
     expect(b.index).not.toBe(a.index);
     expect(reg.claim(b, "car2")).toBe(true);
-    expect(reg.pickStallOn("1,0", Position.Left, "car")).toBeNull();
+    expect(reg.pickStallOn("1,0", Position.Left, "car", "car3")).toBeNull();
     expect(reg.freeCount("P")).toBe(0);
     reg.release(a);
     expect(reg.freeCount("P")).toBe(1);
   });
 
-  it("takes bays in DRIVING order — the first space you reach", () => {
-    const reg = createParkingRegistry(levelWith([{ from: Position.Left, kind: "parallel", count: 3 }]), CAR_LEN);
-    const first = reg.pickStallOn("1,0", Position.Left, "car")!;
-    expect(first.index).toBe(0);
-    reg.claim(first, "a");
-    expect(reg.pickStallOn("1,0", Position.Left, "car")!.index).toBe(1);
+  it("scatters drivers across the free bays instead of packing from one end", () => {
+    // Always taking the nearest space fills a car park solid from the entrance
+    // while the far half stands empty — the one thing a real car park never looks
+    // like. Different cars must land on different bays.
+    const reg = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "perpendicular", count: 7 }]),
+      CAR_LEN,
+    );
+    const picked = new Set<number>();
+    for (let i = 0; i < 30; i++) {
+      picked.add(reg.pickStallOn("1,0", Position.Left, "car", `car${i}`)!.index);
+    }
+    expect(picked.size).toBeGreaterThan(3);
+  });
+
+  it("gives the same car the same bay every time (a seed replays exactly)", () => {
+    const reg = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "perpendicular", count: 7 }]),
+      CAR_LEN,
+    );
+    const once = reg.pickStallOn("1,0", Position.Left, "car", "car42")!;
+    for (let i = 0; i < 5; i++) {
+      expect(reg.pickStallOn("1,0", Position.Left, "car", "car42")!.index).toBe(once.index);
+    }
+  });
+
+  it("never offers a bay the car has already driven past", () => {
+    // `atStallEntry` only ever fires forwards, so a space behind the nose is one
+    // the car could never turn into — it would sit at its stop line for ever.
+    const reg = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "perpendicular", count: 7 }]),
+      CAR_LEN,
+    );
+    for (let i = 0; i < 40; i++) {
+      const ref = reg.pickStallOn("1,0", Position.Left, "car", `car${i}`, 0.6);
+      if (!ref) continue;
+      expect(reg.info(ref)!.t).toBeGreaterThanOrEqual(0.6);
+    }
   });
 
   it("refuses a vehicle that does not physically fit the bay", () => {
@@ -218,7 +301,7 @@ describe("the parking registry — occupancy and fit", () => {
     );
     expect(reg.capacity("P")).toBe(2);
     expect(reg.freeCount("P", "car")).toBe(2);
-    expect(reg.pickStallOn("1,0", Position.Right, "car")).toBeNull();
+    expect(reg.pickStallOn("1,0", Position.Right, "car", "car1")).toBeNull();
   });
 
   it("counts a car park that is spoken for as full (the aim token)", () => {
@@ -400,6 +483,37 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       }
     }
     expect(status.length).toBeGreaterThan(0);
+  });
+
+  it("drains as fast as it fills — a busy aisle must not trap its own cars", () => {
+    // REGRESSION. A car waits for a gap in the aisle before reversing out of its
+    // bay, and that gap used to be half a tile: on a single-lane car-park aisle
+    // almost any moving car anywhere on the tile vetoed the manoeuvre. Measured on
+    // this very map: twelve cars parked in forty seconds and TWO got back out, so
+    // the car park filled and stayed full while traffic streamed past it.
+    //
+    // Asserted as a RATIO rather than a count, because what matters is not how
+    // many cars park but that roughly as many leave as arrive.
+    const sim = simFor("parkinglot");
+    let parkings = 0;
+    let departures = 0;
+    const parked = new Set<string>();
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        if (c.parked) {
+          if (!parked.has(c.id)) parkings++;
+          parked.add(c.id);
+        } else if (parked.has(c.id) && c.phase === "driving") {
+          parked.delete(c.id);
+          departures++;
+        }
+      }
+    }
+    expect(parkings).toBeGreaterThan(8);
+    // Over 80 seconds the bays must turn over, not silt up. Half is generous —
+    // the broken version managed one in six.
+    expect(departures).toBeGreaterThan(parkings * 0.5);
   });
 
   it("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", () => {

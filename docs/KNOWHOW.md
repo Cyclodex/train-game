@@ -301,6 +301,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
   of all — fires constantly under `fillFast`, and a token for a car that never
   existed can never be released. Car parks then DRAIN to empty and stay there.
   Pinned by `parking.spec.ts` "no leaked aim tokens", measured via `parkingStatus()`.
+- LEAVING A BAY is a two-step claim, and every shortcut here was measured worse:
+  · The dwell ends → the car goes to `leaving` and CLAIMS its lane slot at full
+    length, but does not move. Traffic brakes for it, so the gap it needs forms
+    BECAUSE it is waiting. Claiming only once it starts rolling is a no-win dial
+    (0.5-tile gap ⇒ 12 parked / 2 ever out on `parkinglot`; 0.16 ⇒ real clips;
+    raising it again just fires the patience valve and barges into traffic, 0.175).
+  · It may only claim a slot the traffic behind can BRAKE for: `slotFree` adds
+    `v²/2b` per moving car, not just CAR_GAP.
+  · It may not claim one an ADJACENT bay is about to use. Two 90° bays are 28px
+    apart but a car is 38px long, so two neighbours emerging together cannot fit.
+    Committed (`entering`/`leaving`) neighbours win; same-tick ties go to the lower
+    id, like the junction gates.
+  · `pullOutClear` (the roll decision) IGNORES STOPPED cars — one that stopped
+    behind you stopped BECAUSE of you, and treating it as an obstacle deadlocks
+    both (measured: 50s stuck in `leaving`). Only rolling traffic can close a gap.
+  · Do NOT grow the leaving footprint in as the car emerges: a follower brakes
+    against what it can see, so starting at nothing means it arrives on top (0.077
+    vs 0.028). Entering shrinks; leaving is full from tick one.
+- GARAGES are driven THROUGH: two ramp mouths (`GARAGE_IN_T` / `GARAGE_OUT_T`),
+  a FORWARD exit curve (`garageExitPath`), and `exitTo` to put the out-ramp on the
+  other approach. A bay still reverses out — that IS the real motion — but nobody
+  backs out of a multi-storey. The car is re-seated on the OUT slot when it starts
+  leaving, not when it finishes, or it spends the manoeuvre claiming the entrance
+  and then materialises at the exit inside whatever queued there.
+- STALL CHOICE is scattered by `hashOf(carId) % free.length`, filtered to bays
+  still AHEAD of the nose (`atStallEntry` only fires forwards). Deterministic and
+  free: a real RNG draw here would couple the parking stream to traffic state, and
+  every seeded run in the repo would shift the next time the following model moved.
+  Always taking the nearest bay packs a car park solid from one end.
 - The MANOEUVRE is a quadratic Bézier (lane → point abeam the bay → bay) with an
   explicit ARC-LENGTH table. NOT `turnLaneFrame`'s fillet: that is 90°-only
   (tangent == rf because the lane lines are perpendicular) and of the four stall
@@ -461,6 +490,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (`seamPositioningBand`) in lockstep for stacked junctions.
 
 ## ROADS
+- NO MIN-2 PAINT FLOOR on a curve. `Tile.vue roadPaths` used `max(selfAt, 2)` in
+  the curve branch — a leftover from when a 1-lane one-way road was itself drawn 2
+  wide. Since the run-max kerb anchor a one-way STRAIGHT is drawn its true 1 lane,
+  so the floor made every one-way single-lane BEND twice the width of the road
+  either side of it (visible as a bulge at each corner of a car-park aisle).
+  `laneCountAt` counts BOTH directions, so anything two-way is already ≥2 and this
+  changed nothing for it — `roadcurveloops` is pixel-identical before/after.
+  Guarded by `tests/unit/tiles/roadPaintWidth.spec.ts`.
 - `LANE_WIDTH_FRAC=0.14` (`laneOffset.ts`). Same offset fns feed cars+paint+markings
   +overlay — keep lockstep.
 - Bidirectional: lanes anchor to YELLOW centreline; kerb lane drops; gore

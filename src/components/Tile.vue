@@ -26,6 +26,7 @@
       <template v-for="(p, pi) in parkingPaths" :key="'pk' + pi">
         <path v-if="p.apron" :d="p.apron" class="parking-apron" />
         <path v-if="p.garage" :d="p.garage.apron" class="parking-apron" />
+        <path v-if="p.garageOut" :d="p.garageOut.apron" class="parking-apron" />
       </template>
       <!-- Bus-lane tint: a gold strip over just the bus lane(s), not the whole
            ribbon, laterally aligned with the lane's cars/arrows. -->
@@ -127,6 +128,10 @@
         <template v-if="p.garage">
           <path :d="p.garage.mouth" class="parking-garage-mouth" />
           <path :d="p.garage.arrow" class="parking-garage-arrow" />
+        </template>
+        <template v-if="p.garageOut">
+          <path :d="p.garageOut.mouth" class="parking-garage-mouth" />
+          <path :d="p.garageOut.arrow" class="parking-garage-arrow" />
         </template>
       </template>
       <!-- Signalised-junction STOP LINES live in the road layer (on the street,
@@ -630,24 +635,32 @@ class Tile extends Vue {
           }
         }
         // Width PER END, each seam-matched to its own arm (seamPaintTotal against
-        // the neighbour crossing that seam, min 2 so a one-way still reads as a
-        // road) — the ribbon tapers across the bend so EACH end meets ITS arm
-        // flush. A junction's own laneCountAt deliberately over-counts an arm
-        // (every approach lane that can fan onto it counts), so the old constant
-        // max-of-both-ends width painted a narrow arm as wide as the widest one:
-        // a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of tarmac at the
-        // entrance seam, twice the road it meets.
+        // the neighbour crossing that seam) — the ribbon tapers across the bend so
+        // EACH end meets ITS arm flush. A junction's own laneCountAt deliberately
+        // over-counts an arm (every approach lane that can fan onto it counts), so
+        // the old constant max-of-both-ends width painted a narrow arm as wide as
+        // the widest one: a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of
+        // tarmac at the entrance seam, twice the road it meets.
         // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
         // so the arm mouth — straight or turning — meets the road flush, no taper
         // at the seam (#30). A simple curve (not a junction) keeps the per-end
         // seam taper between unequal straights, but a junction neighbour never
         // pinches it (roadSeamPaintTotal) — the junction adopts the curve.
+        //
+        // NO min-2 FLOOR. It dates from when a 1-lane one-way road was itself drawn
+        // 2 lanes wide; since the run-max kerb anchor (2026-07-25) a one-way
+        // STRAIGHT is drawn its true 1 lane, and leaving the floor on curves made a
+        // one-way single-lane BEND twice the width of the straights either side of
+        // it — a visible bulge at every corner of a car-park aisle. `laneCountAt`
+        // counts both directions, so anything two-way is already >= 2 and this
+        // changes nothing for it; the only tiles affected are genuine one-way
+        // single-lane bends. Guarded by `roadPaintWidth.spec.ts`.
         const widthEndA = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
-          : roadSeamPaintTotal(Math.max(selfAtA, 2), nTotalA, aJunction);
+          : roadSeamPaintTotal(selfAtA, nTotalA, aJunction);
         const widthEndB = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
-          : roadSeamPaintTotal(Math.max(selfAtB, 2), nTotalB, bJunction);
+          : roadSeamPaintTotal(selfAtB, nTotalB, bJunction);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -865,6 +878,7 @@ class Tile extends Vue {
     reserved?: string;
     stalls: { d: string; key: string; occupied: boolean }[];
     garage: ReturnType<typeof garageGeometry> | null;
+    garageOut: ReturnType<typeof garageGeometry> | null;
   }[] {
     if (!this.config.roads) return [];
     const rows = rowsOf(this.tile);
@@ -891,7 +905,10 @@ class Tile extends Vue {
         kerb: parkingKerbPath(row, size, kerb),
         reserved: row.reserved,
         stalls,
-        garage: row.kind === "garage" ? garageGeometry(row, size, kerb) : null,
+        garage: row.kind === "garage" ? garageGeometry(row, size, kerb, "in") : null,
+        // The second driveway. A garage a car can only reverse out of reads as a
+        // dead end; the out-ramp is what makes it a building traffic flows THROUGH.
+        garageOut: row.kind === "garage" ? garageGeometry(row, size, kerb, "out") : null,
       };
     });
   }
