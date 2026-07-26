@@ -956,6 +956,11 @@ class PlayView extends Vue {
 
   toggleBuild(): void {
     if (!this.buildArmed) {
+      // Both directions must disarm the other, or the exclusion is a half-rule:
+      // this branch used to arm Build without clearing Bulldoze, so going
+      // Bulldoze → Build left BOTH lit, with raze-hover highlights under live
+      // build zones and a tile click meaning two different things.
+      this.razeArmed = false;
       this.buildArmed = true;
       return;
     }
@@ -986,8 +991,10 @@ class PlayView extends Vue {
       this.razeArmed = false;
       return;
     }
-    // Arming Bulldoze disarms Build through its own exit path, so a half-drawn
-    // route is abandoned rather than left pending behind the other tool.
+    // Arming Bulldoze disarms Build through its own EXIT path (not by clearing
+    // the flag), so a half-drawn route is abandoned rather than left pending
+    // behind the other tool. toggleBuild clears `razeArmed` on the way in, so
+    // set it after.
     if (this.buildArmed) this.toggleBuild();
     this.razeArmed = true;
   }

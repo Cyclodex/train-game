@@ -340,6 +340,37 @@ test.describe("Train game", () => {
     await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(1);
   });
 
+  test("tycoon: Build and Bulldoze are never both armed", async ({ page }) => {
+    // They are opposite verbs claiming the same left click, so two lit at once
+    // means a tile click has two meanings. The first version only disarmed one
+    // way round — Build → Bulldoze was handled, Bulldoze → Build was not — so
+    // this asserts BOTH orders.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const build = page.getByTestId("build-toggle");
+    const raze = page.getByTestId("raze-toggle");
+    const on = /build-toggle--on/;
+
+    await build.click();
+    await expect(build).toHaveClass(on);
+    await expect(raze).not.toHaveClass(on);
+
+    // Build → Bulldoze
+    await raze.click();
+    await expect(raze).toHaveClass(on);
+    await expect(build).not.toHaveClass(on);
+
+    // Bulldoze → Build: the direction that was broken.
+    await build.click();
+    await expect(build).toHaveClass(on);
+    await expect(raze).not.toHaveClass(on);
+
+    // Each still turns itself off.
+    await build.click();
+    await expect(build).not.toHaveClass(on);
+    await expect(raze).not.toHaveClass(on);
+  });
+
   test("tycoon: bulldoze takes back a misdrag, and pays only for what was bought", async ({
     page,
   }) => {
