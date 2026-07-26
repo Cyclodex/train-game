@@ -266,6 +266,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   mechanic (Train Valley M7). Ticked from `game.ts frame()` only while
   `objective.phase === "playing"`, so nothing burns behind the Ready screen.
   `settle()` is idempotent, so a duplicated `arrived` event cannot pay twice.
+- The fare falls as a STAIRCASE, not a slope: `DEFAULT_FARE_STEP_SEC` (=4s, the
+  middle of TV's 3–5s feel) quantises `fareAt`, so the pin holds a number and
+  then drops it in one chunk. `decayPerSec` is still the BALANCE dial and the
+  staircase sits exactly on the old line at every step boundary — changing the
+  step never moves a Payday target, changing the rate does. Per-fare override
+  `FareSpec.stepSec`; 0 = the old continuous curve. Measured on
+  `lakevalley-open`: −$20 every 4.0s, vs ~6 one-dollar flickers a second before.
 - `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
   specs build `Counters` fixtures BY HAND, and required fields break them.
   Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
@@ -711,6 +718,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Commit your scoped change as soon as done+green, unasked. Heavy parallel editing
   of same files (`road.ts`, `editOps.ts`, scenario `index.ts`) — stage only your
   hunks. NO AI attribution in commit msgs.
+- LINE ENDINGS ARE MIXED IN THIS REPO (KNOWHOW.md is CRLF for ~716 lines then LF;
+  most src/ files are LF). An editor that normalises the whole file turns a 7-line
+  note into a 129-line phantom diff. After editing a doc, check `git diff --stat`
+  against `git diff --stat -w`: if they disagree, you rewrote endings, so
+  restore the file and re-apply the edit preserving them (strip CR with tr).
 - Worktrees: node_modules usually resolves up to repo root (try tooling first). If
   junctioned, remove junction (`cmd /c rmdir`) BEFORE `git worktree remove` or it
   deletes the real install. Kill bg dev servers when done.

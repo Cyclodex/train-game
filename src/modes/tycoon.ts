@@ -40,6 +40,11 @@ export const FARE_PER_WAGON = 200;
 // (design doc §4.2): steep → a twitchy dispatch game, shallow → a planning game.
 // 20/sec against a ~800 fare gives roughly 20 seconds of "prompt", which is about
 // one lap of a small board.
+//
+// The rate is the balance; the FEEL is `DEFAULT_FARE_STEP_SEC` in `sim/economy.ts`
+// — the pin holds a number for ~4s and then drops it in one chunk (Train Valley's
+// ~100$/3s), rather than trickling every frame. Changing the step does not move
+// any of the measured targets below; changing this rate does.
 export const FARE_DECAY_PER_SEC = 20;
 
 // Seed capital — the build budget (phase 2 spends it at TRACK_COST_PER_TILE).
@@ -140,7 +145,8 @@ export const LAKEVALLEY_OPEN_BALANCE = 15000;
 // train could possibly move. 5/sec (halved after playtesting — 10 still read as
 // rushed while learning the build tool) leaves the base fare alive for 120s on a
 // two-wagon train, so a first-timer can build deliberately and still be paid for
-// dispatching promptly.
+// dispatching promptly. On the 4s step that reads as −$20 every four seconds on
+// an $800 fare — a legible tick, roughly TV's proportion of the base per drop.
 export const LAKEVALLEY_OPEN_DECAY = 5;
 // "Under budget": win while spending at most this — the lean 6-piece build.
 export const LAKEVALLEY_OPEN_LEAN_SPEND = 6000;

@@ -497,7 +497,7 @@ this whole document was aiming at; everything below it is polish or scope.
 | | |
 |---|---|
 | **G1 economy** | `sim/economy.ts`: a pure ledger (signed entries, running totals, a capped log, `canAfford`/`spend` that refuses debt by default) plus a **fare book** — per-train decaying fares with an idempotent `settle`. Headless, deterministic, 23 unit tests. |
-| **M7 decay** | The fare falls from `base` at `decayPerSec` down to a floor (25% of base by default), and it decays **while the train waits**, which is the point. The curve is a per-mode dial, as §4.2 asked. |
+| **M7 decay** | The fare falls from `base` at `decayPerSec` down to a floor (25% of base by default), and it decays **while the train waits**, which is the point. The curve is a per-mode dial, as §4.2 asked. It falls as a **staircase, not a slope** (`DEFAULT_FARE_STEP_SEC` = 4s): the pin holds a number and then drops it in one chunk, like TV's ~100$/3s. The rate is unchanged — the staircase sits exactly on the old line at each step boundary — so no tuned target moved. Measured on `lakevalley-open`: −$20 every 4.0s (was ~6 flickering 1$ decrements per second). |
 | **G3 waiting** | `TrainState "waiting"` + `sim.dispatch(id)`, gated by `SimConfig.waitForDispatch`. **Default OFF** — every board and all pre-existing tests assume immediate departure, and the full suite is green unchanged. A waiting train occupies its depot tile but reserves nothing ahead. |
 | **Counters** | `balance` / `earned` / `spent` on `Counters`, fed the ledger's absolutes, so a star predicate can score money. |
 | **The mode** | `modes/tycoon.ts` — `controls.dispatch`, `hud.money`, an economy per setup, three orthogonal stars (Payday / Hands off / Perfect colours). Registered in `modes/index.ts`. |
