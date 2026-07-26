@@ -503,6 +503,18 @@ step" below.
 Green at the end of the day: `npm run build` clean, **1 568 unit tests in 58
 files passing**.
 
+#### Phase 2, as built (2026-07-26)
+
+| | |
+|---|---|
+| **The gesture** | `routeDrawController.ts` — the editor's route drawing extracted headless (edge press/drag one-shot, click chaining incl. the U-turn pending case, hover ghost), reused verbatim by PlayView. |
+| **M2 build + cost** | A single Build toggle (gated by `ModeControls.build`); while armed the tiles grow the editor's edge zones, the ghost previews the route, and a floating tag prices it live. `TRACK_COST_PER_TILE` = $1,000 (economy.ts). Only NEW pieces are charged — re-laid anchors/termini are free. |
+| **The commit** | `game.buildRoute`: canAfford → `applyEdits` → `spend`, in that order, so a refused edit (train moved in) spends nothing. Unaffordable routes preview red and abort on click. |
+| **M3 half** | `planRoute`'s `passable` = `canBuildOn` ∧ `canEdit`, so water/rock and occupied/reserved tiles are unroutable at preview time. Green plots + clearing stay phase 3. |
+| **Counter for M9** | `Counters.tilesBuilt` (pieces bought), for a "buy ≥ N track" star. |
+| **Retry honesty** | `reset()` restores the level from a pristine snapshot alongside the capital — no free-track Retry. |
+| **`/test/buildgap`** | The loop in isolation: a line two tiles short, a pond gating the route, the budget to close it. `allowIncomplete` is the authored validator opt-out §8 item 3 asked for. E2e drives the whole loop at `/#/play?mode=tycoon&board=buildgap`. |
+
 **Playtest note for whoever picks this up:** §4.5 says test phase 1 *alone*
 before building phase 2 on it. `/#/play?mode=tycoon&board=lakevalley` is the
 board to do it on.
@@ -512,7 +524,7 @@ board to do it on.
 | # | Mechanic | State | What is actually missing |
 |---|---|---|---|
 | M1 | Money is the master resource | **Partial** | The ledger, the balance and the HUD exist, but money has exactly **one source and no sink**. Track, clearing, calling trains and tax are all unbuilt, so the balance only ever rises. §1.3's "one resource, three sinks" — the thing that makes every decision comparable — is the part not yet there. |
-| M2 | Track costs money, per tile, previewed live | **Missing** | No build tool in play, no `costPerTile` anywhere in `src/`, no cost tag. `planRoute` + `game.applyEdits` are both ready; the gesture is not (see "The next step"). |
+| M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
 | M3 | Build from an open end into marked land | **Half** | `planRoute` already anchors on an open end and takes a `passable` predicate, and `canBuildOn` fills it. Absent: the *green plot* mask (buildable land as an authored, rendered thing distinct from terrain) and the dashed "close this gap" hint. |
 | M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing scenery for money** — forest and town are free to build over today, with no clearing action and no price. |
 | M5 | Trains wait until dispatched | **Done** | — |
@@ -528,9 +540,9 @@ board to do it on.
 
 ### What remains, ordered, with sizes
 
-1. **Extract `routeDrawController` from `EditorView`** — *S–M.* No behaviour change. The one blocker on phase 2; details below.
-2. **Phase 2 — build in play** — *M.* Gate on `ModeControls.build`, preview `tiles × costPerTile`, `economy.spend(…, "build")` before `game.applyEdits`, grey out what `canEdit` refuses, ship `/test/<id>` + a before/after shot.
-3. **Re-cut `lakevalley` to its opening state** — *S–M.* The board edit is small (drop the south side of the ring, set a budget). The cost is the **validator**: `validateLevel` raises `dangling-track` for any edge port with no connecting neighbour and `route-disconnected` for an unreachable destination, and `tests/unit/levels/testScenarios.spec.ts` runs it over every registered scenario. A deliberately-incomplete board therefore needs an authored opt-out (a scenario flag, or an `openEnd` notion the validator tolerates) before it can live in the registry. **This is the step that turns the tech demo into the level** — do it immediately after phase 2, not later.
+1. ~~**Extract `routeDrawController` from `EditorView`**~~ — **done 2026-07-26** (`routeDrawController.ts`).
+2. ~~**Phase 2 — build in play**~~ — **done 2026-07-26** (see "Phase 2, as built" above).
+3. **Re-cut `lakevalley` to its opening state** — *S.* Now genuinely small: the authored opt-out exists (`TestScenario.allowIncomplete`, proven by `buildgap`), so this is dropping the south side of the ring and setting the flag. **This is the step that turns the tech demo into the level.**
 4. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
 5. **Goals that can read the build** — *S.* A `tilesBuilt` / `spentOnTrack` counter plus the star labels listed on the Ready card, so a level can ask for "buy ≥46 pieces" and the player can read the targets before starting (M9).
 6. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, and clearing forest/town for money (M3/M4).

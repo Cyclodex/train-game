@@ -45,6 +45,13 @@ export interface EconomySpec {
 
 const DEFAULT_MAX_ENTRIES = 200;
 
+// What one tile of track costs to lay DURING PLAY (phase 2, Train Valley's rate:
+// M2's screenshots price a two-tile spur at −2000$). Owned here, beside the
+// ledger the spend books into, so the mode, `game.buildRoute` and the preview
+// cost tag can never disagree about the price. Only NEW pieces are charged —
+// re-laying a connection a tile already has is free (see `buildRoute`).
+export const TRACK_COST_PER_TILE = 1000;
+
 export interface Economy {
   readonly balance: number;
   readonly earned: number; // lifetime income this run

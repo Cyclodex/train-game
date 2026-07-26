@@ -40,6 +40,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   decorator collects data off a THROWAWAY instance, so a field initialiser's
   closures capture a `this` whose injected `config` is undefined → first render
   dies inside `worldSize()` with a null `subTree`. And `markRaw` it (CLAUDE.md).
+- TRAP (same family, 2026-07-26): a WINDOW-event handler written as an
+  arrow-function FIELD can capture a DEAD `this` — PlayView's Esc handler ran
+  but read a forever-false `buildArmed` and an undefined `routeCtrl`, a SILENT
+  no-op (no error, the guard just returned). Create the closure in `mounted()`
+  (`this.bound = e => this.handle(e)` onto `!:` fields, so removeEventListener
+  still matches). EditorView's older arrow-field handlers happen to work —
+  don't read them as proof the pattern is safe. The buildgap e2e pins Esc's
+  EFFECT (finish wedge count → 0), because balance alone can't tell.
 - Anything measuring tile positions on screen must read the pitch off a rendered
   tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
   path data inside a tile stays in its own viewBox units and is unaffected.
@@ -257,12 +265,49 @@ lean — prune as much as you add. This file only stays useful if every task ten
   un-settled fares. Verified end to end (win → reset → win again); the stale
   `game.sim` handle it exposed is in VERIFY.
 - NOT built, deliberately (`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`):
-  in-play build (phase 2, blocked on extracting `routeDrawController` from
-  `EditorView`), reversing (§5.2), crashes (§2.2 G7), production chains (§5.1).
+  reversing (§5.2), crashes (§2.2 G7), production chains (§5.1), removal/
+  bulldozing (deferred with clearing costs, phase 3).
 - The DEFAULT board needs the player to throw switches: left alone, both trains
   lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
+
+## BUILD IN PLAY (Tycoon phase 2, 2026-07-26)
+- `game.buildRoute(steps)` = canAfford gate → `applyEdits` → `spend`, IN THAT
+  ORDER: a refused edit (a train moved onto a route tile after the preview)
+  spends NOTHING, and nothing runs between gate and spend (one sync call), so
+  the spend can't fail after the lay landed. Pinned by `buildRoute.spec.ts`.
+- Only NEW pieces are priced (`samePair` filter, `newBuildSteps`): the gesture
+  re-lays the anchor straight of the open end it grows from, and closing a gap
+  into existing track plans straight through the far tile — both duplicates,
+  and charging them prices a 2-tile gap at 5. The SAME filter feeds the preview
+  tag (`buildCostOf`) and the `tilesBuilt` counter (Counters/Observation, for a
+  "buy ≥ N pieces" star), so shown = charged = counted.
+  `TRACK_COST_PER_TILE` (=1000, Train Valley's rate) lives in `sim/economy.ts`.
+- PlayView's UI is ONE toggle (gated by `controls.build`; Sandbox has it too
+  and builds FREE — no economy ⇒ cost 0, no tag). The zone overlay is z-5:
+  above rails, BELOW cars (6) and fare pins (8), so a waiting train stays
+  dispatchable mid-build. While armed, LEFT drag belongs to drawing (the
+  editor's policy — see WHICH BUTTON above); pan = middle-drag / space+left,
+  and left-pan returns on disarm. Zones carry `data-coord`/`data-port` for e2e.
+- The controller advances its head AFTER `lay()` returns, so a refusal can't be
+  cleaned up inside `lay` — PlayView sets a flag and aborts once the controller
+  call returns (`settleBuildGesture`). ABANDON = `dropAnchors(); finishRoute();`
+  IN THAT ORDER: with the head cleared, finish cannot lay the pending frontier,
+  only forget it. Reversed, it lays (and charges for) a terminus straight no
+  cost tag ever showed. Esc = FINISH (lays the terminus; free when it's a dup,
+  which the gap-closing flow always is); disarm/refusal = ABANDON.
+- `game.reset()` restores the LEVEL from a pristine deep-copy snapshot: Retry
+  hands back the starting capital, and keeping the bought track would let every
+  Retry re-spend the same money. Built-junction switch entries are pruned with
+  the same merge `applyEdits` uses; player arms on surviving junctions persist
+  (pre-existing reset behaviour, unchanged).
+- A DELIBERATELY-INCOMPLETE board is now authorable: `TestScenario.
+  allowIncomplete` makes `testScenarios.spec.ts` skip exactly `dangling-track`
+  + `route-disconnected` for that scenario (everything else still applies).
+  `/test/buildgap` is the worked example — playable at
+  `/#/play?mode=tycoon&board=buildgap` (the /test stage shows the board; the
+  build UI lives in PlayView).
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
@@ -554,33 +599,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
   `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
   MEASURED WORSE — read the issue before attempting a third.
-- NEXT UP: Train Valley phase 2 (build in play); full state of play + sizes in
-  the design doc **§8** (renumbered — there used to be two §6s). Its blocker is
-  DONE (2026-07-26): the route-draw gesture (edge press/drag one-shot, click
-  chaining incl. the U-turn pending case, hover ghost) lives headless in
-  `routeDrawController.ts` beside `cameraController.ts` —
-  `createRouteDrawController({drawing, planOpts, lay})`, pinned by
-  `routeDrawController.spec.ts` + the 4 editor e2e tests (unmodified). Each
-  gesture emits ONE `lay(RouteStep[])` call with anchor/terminus straights
-  included in commit order: the editor's `lay` commits cell by cell
-  (`commit`+`layPair`, rail OR road), play's will hand the same array to
-  `game.applyEdits` ATOMICALLY (rail-only, guarded). Steps travel a→b (one-way
-  roads care). Still in the view, deliberately: tool→layer mapping (`drawing`),
-  `layPair` (lane count/bus/one-way), preview PAINT (`previewByCell` maps steps
-  → rail pair vs road ribbon). Then: gate on `ModeControls.build`, preview
-  `tiles × cost`, spend, call `applyEdits`, grey out what `canEdit` refuses.
+- Train Valley phase 2 (build in play) is BUILT (2026-07-26) — see BUILD IN
+  PLAY above. The route-draw gesture lives headless in `routeDrawController.ts`
+  (`createRouteDrawController({drawing, planOpts, lay})`, pinned by
+  `routeDrawController.spec.ts` + the editor e2e); each gesture emits ONE
+  `lay(RouteStep[])` with anchor/terminus straights in commit order. The editor
+  lays cell by cell (`commit`+`layPair`, rail OR road); PlayView hands the same
+  array to `game.buildRoute` ATOMICALLY (rail-only, priced). Steps travel a→b.
+  Still in the views, deliberately: tool→layer mapping, `layPair` (lane
+  count/bus/one-way), preview PAINT. NEXT UP (design doc §8): re-cut
+  `lakevalley` to its opening state (unblocked — `allowIncomplete` exists),
+  annual tax + calendar clock (the economy's second sink/clock), destination
+  badges.
 - `cfg.lay` runs through the caller's layer choice AT CALL TIME: finishing a
   pending frontier via a tool switch (`toolChanged`) lays the terminus per the
   NEW tool's layer (road route → switch tool → terminus laid as RAIL). That is
   pre-existing editor behaviour, preserved verbatim in the extraction — a fix
   would be a behaviour change, decide it separately.
-- TRAP for the "start `lakevalley` with a GAP in the ring" step (what makes it
-  the real level): `validateLevel` raises `dangling-track` on any edge port with
-  no connecting neighbour AND `route-disconnected` for the unreachable depot,
-  and `tests/unit/levels/testScenarios.spec.ts` runs it over EVERY registered
-  scenario. A deliberately-incomplete board needs an authored opt-out first —
-  it is not just deleting three tiles.
-- The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
+- The "start `lakevalley` with a GAP in the ring" step is now UNBLOCKED: the
+  authored opt-out exists (`TestScenario.allowIncomplete`, see BUILD IN PLAY),
+  so re-cutting the board is again mostly deleting tiles + setting the flag.
+- The gallery is 74 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW

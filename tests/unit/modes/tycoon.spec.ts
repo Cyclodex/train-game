@@ -107,7 +107,8 @@ describe("tycoon mode", () => {
     expect(MODES.filter(m => m.hud.money)).toEqual([tycoonMode]);
   });
 
-  it("does not enable the build tool — that is phase 2", () => {
-    expect(tycoonMode.controls.build).toBe(false);
+  it("enables the build tool (phase 2) alongside dispatch", () => {
+    expect(tycoonMode.controls.build).toBe(true);
+    expect(tycoonMode.controls.dispatch).toBe(true);
   });
 });
