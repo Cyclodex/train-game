@@ -46,6 +46,22 @@ const CORNER_JITTER = 7;
 const EDGE_BOW = 11;
 const EDGE_BOW_MIN = 0.34;
 
+// A cubic reaches 3/4 of its control offset at the midpoint, so a shore that
+// should bulge EDGE_BOW has to lean its controls out by EDGE_BOW / 0.75.
+const MID_OF_LEAN = 0.75;
+
+// A lattice point in the MIDDLE of a shore — one where the boundary runs
+// straight on into the next tile — is pushed off the grid too, outward, and the
+// shore leans through it. Without this the outline returned to the bare lattice
+// point at every tile boundary and left a sharp inward V there: the bulges were
+// convex, but the CUSPS BETWEEN THEM drew the tile grid back onto the shore, so
+// you could count the tiles down the side of a lake. The push gives the shore
+// somewhere else to be; the slope is what makes the two tiles' curves meet
+// smoothly rather than at a kink (see shoreEdge).
+const CORNER_PUSH_MIN = 4;
+const CORNER_PUSH_MAX = 13;
+const CORNER_SLOPE = 5;
+
 // A continuing (internal) edge is pushed a hair OUTWARD instead of being drawn
 // as an exact shared line. Two patches that abut precisely still show a hairline
 // seam, because each antialiases its edge against the background and two
@@ -91,12 +107,20 @@ export function canBuildOn(cell: TileCell | null | undefined): boolean {
   return !terrainBlocksBuilding(terrainOf(cell));
 }
 
-// The four edge neighbours' kinds, in the order a clockwise path walks them.
+// The four edge neighbours' kinds, in the order a clockwise path walks them —
+// plus the four DIAGONAL ones, which decide whether a corner is the middle of a
+// straight shore or a place where the boundary turns. Diagonals are optional
+// (absent = grass), so a caller that only knows its four sides still works: it
+// just treats every corner as mid-shore, which is the common case.
 export interface TerrainNeighbours {
   top: TerrainKind;
   right: TerrainKind;
   bottom: TerrainKind;
   left: TerrainKind;
+  topLeft?: TerrainKind;
+  topRight?: TerrainKind;
+  bottomRight?: TerrainKind;
+  bottomLeft?: TerrainKind;
 }
 
 const ALL_GRASS: TerrainNeighbours = {
@@ -104,6 +128,10 @@ const ALL_GRASS: TerrainNeighbours = {
   right: "grass",
   bottom: "grass",
   left: "grass",
+  topLeft: "grass",
+  topRight: "grass",
+  bottomRight: "grass",
+  bottomLeft: "grass",
 };
 
 type Hsl = [h: number, s: number, l: number];
@@ -203,21 +231,87 @@ export function edgeBow(
   return -EDGE_BOW * lerp(EDGE_BOW_MIN, 1, r());
 }
 
+/**
+ * How far a MID-SHORE lattice point is pushed off the grid, along the shore's
+ * outward normal, and how steeply the shore leans as it passes through. Both are
+ * seeded by the lattice point alone, so the two tiles that share it place it and
+ * angle it identically — that agreement is the whole reason the seam stays shut.
+ */
+export function cornerPush(gx: number, gy: number, seed: number): number {
+  const r = makeRng(hashInts(seed, gx, gy, 0x3b));
+  return lerp(CORNER_PUSH_MIN, CORNER_PUSH_MAX, r());
+}
+
+export function cornerSlope(gx: number, gy: number, seed: number): number {
+  const r = makeRng(hashInts(seed, gx, gy, 0x5f));
+  return (r() * 2 - 1) * CORNER_SLOPE;
+}
+
 type Pt = { x: number; y: number };
 
+// Each edge in the order the clockwise outline walks it: the direction it runs,
+// and the OUTWARD normal (away from the tile). Taken from the edge INDEX rather
+// than measured off the jittered chord, so the two tiles either side of a shore
+// derive the identical frame and their tangents can line up exactly.
+const EDGE_FRAME: { dir: Pt; out: Pt }[] = [
+  { dir: { x: 1, y: 0 }, out: { x: 0, y: -1 } }, // top:    TL -> TR
+  { dir: { x: 0, y: 1 }, out: { x: 1, y: 0 } }, // right:  TR -> BR
+  { dir: { x: -1, y: 0 }, out: { x: 0, y: 1 } }, // bottom: BR -> BL
+  { dir: { x: 0, y: -1 }, out: { x: -1, y: 0 } }, // left:   BL -> TL
+];
+
+// What a corner IS, which is decided by its two edges and its diagonal:
+//  - "corner": both edges stop, so the patch genuinely turns here. Round it.
+//  - "run": exactly one edge stops and the boundary carries straight on into the
+//    next tile. Push it out and give it a shared tangent — no kink.
+//  - "turn": interior, or the reflex corner of an L (the diagonal is the same
+//    kind, so the boundary turns AROUND this point). Leave it on the lattice:
+//    the two tiles meeting there run perpendicular and must not agree.
+type CornerRole =
+  | { kind: "corner" }
+  | { kind: "run"; edge: number }
+  | { kind: "turn" };
+
+function cornerRoles(stops: boolean[], diag: boolean[]): CornerRole[] {
+  const roles: CornerRole[] = [];
+  for (let i = 0; i < 4; i++) {
+    const before = stops[(i + 3) % 4];
+    const after = stops[i];
+    if (before && after) roles.push({ kind: "corner" });
+    else if (before !== after && !diag[i]) {
+      roles.push({ kind: "run", edge: before ? (i + 3) % 4 : i });
+    } else roles.push({ kind: "turn" });
+  }
+  return roles;
+}
+
 // The tile's four corners in local space, each displaced by its lattice point's
-// shared offset. Clockwise from the top-left.
-function corners(x: number, y: number, seed: number, size: number): Pt[] {
-  const at = (gx: number, gy: number, lx: number, ly: number): Pt => {
-    const { dx, dy } = latticeOffset(gx, gy, seed);
-    return { x: lx + dx, y: ly + dy };
-  };
-  return [
-    at(x, y, 0, 0),
-    at(x + 1, y, size, 0),
-    at(x + 1, y + 1, size, size),
-    at(x, y + 1, 0, size),
+// shared offset and, mid-shore, pushed outward. Clockwise from the top-left.
+function corners(
+  x: number,
+  y: number,
+  seed: number,
+  size: number,
+  roles: CornerRole[],
+): Pt[] {
+  const local: Pt[] = [
+    { x: 0, y: 0 },
+    { x: size, y: 0 },
+    { x: size, y: size },
+    { x: 0, y: size },
   ];
+  return cornerLattice(x, y).map(([gx, gy], i) => {
+    const { dx, dy } = latticeOffset(gx, gy, seed);
+    const p = { x: local[i].x + dx, y: local[i].y + dy };
+    const role = roles[i];
+    if (role.kind === "run") {
+      const push = cornerPush(gx, gy, seed);
+      const out = EDGE_FRAME[role.edge].out;
+      p.x += out.x * push;
+      p.y += out.y * push;
+    }
+    return p;
+  });
 }
 
 // The lattice points of each corner, in the same clockwise order — needed to
@@ -233,26 +327,104 @@ function cornerLattice(x: number, y: number): [number, number][] {
 
 const n1 = (v: number) => v.toFixed(1);
 
-// One boundary, as a quadratic bowing off the straight line between corners.
-// The control point is offset by twice the bow because a quadratic only reaches
-// half its control offset at the midpoint.
-function bowedEdge(a: Pt, b: Pt, bow: number): string {
-  const ex = b.x - a.x;
-  const ey = b.y - a.y;
-  const len = Math.hypot(ex, ey) || 1;
-  const cx = (a.x + b.x) / 2 - (ey / len) * bow * 2;
-  const cy = (a.y + b.y) / 2 + (ex / len) * bow * 2;
-  return `Q${n1(cx)} ${n1(cy)} ${n1(b.x)} ${n1(b.y)}`;
+/**
+ * One boundary, as a cubic whose END TANGENTS are chosen, not implied.
+ *
+ * This is the whole trick. A quadratic bowing off the chord leaves each corner
+ * at an angle, so where two tiles' shores met the outline kinked ~47° — a sharp
+ * inward V at every tile boundary, which is the tile grid drawn back onto the
+ * lake. Here each end contributes `dir * reach` along the shore plus `out *
+ * lean` across it, and at a mid-shore corner BOTH tiles read the same `lean`
+ * (the lattice point's shared slope) from the same frame — so the two curves
+ * leave and arrive along one line and the join disappears.
+ *
+ * `leadOut` is the slope leaving `a`, `leadIn` the slope arriving at `b`, both
+ * positive = outward. A real corner passes +lean / −lean, which bulges the edge
+ * out and brings it back: that is what rounds a lone patch into a blob.
+ */
+function shoreEdge(
+  a: Pt,
+  b: Pt,
+  frame: { dir: Pt; out: Pt },
+  reach: number,
+  leadOut: number,
+  leadIn: number,
+): string {
+  const { dir, out } = frame;
+  const p1 = {
+    x: a.x + dir.x * reach + out.x * leadOut,
+    y: a.y + dir.y * reach + out.y * leadOut,
+  };
+  const p2 = {
+    x: b.x - dir.x * reach - out.x * leadIn,
+    y: b.y - dir.y * reach - out.y * leadIn,
+  };
+  return `C${n1(p1.x)} ${n1(p1.y)} ${n1(p2.x)} ${n1(p2.y)} ${n1(b.x)} ${n1(b.y)}`;
 }
 
-// Edge order matches `corners`: top, right, bottom, left.
-function edgeStops(same: {
+// The slope to hand `shoreEdge` at one end of an edge. `sign` is +1 leaving a
+// corner, −1 arriving at one: a real corner leans out on the way in and back on
+// the way out, a mid-shore point uses the lattice's shared slope either way, and
+// a reflex corner stays flat so the two perpendicular shores meet cleanly.
+function edgeLead(
+  role: CornerRole,
+  lattice: [number, number],
+  seed: number,
+  lean: number,
+  sign: number,
+): number {
+  if (role.kind === "corner") return sign * lean;
+  if (role.kind === "run") return cornerSlope(lattice[0], lattice[1], seed);
+  return 0;
+}
+
+/**
+ * Which of a tile's neighbours carry the SAME terrain. The four sides decide
+ * where the patch stops; the four diagonals (absent = different) decide whether
+ * a corner is mid-shore or a turn.
+ */
+export interface PatchSame {
   top: boolean;
   right: boolean;
   bottom: boolean;
   left: boolean;
-}): boolean[] {
+  topLeft?: boolean;
+  topRight?: boolean;
+  bottomRight?: boolean;
+  bottomLeft?: boolean;
+}
+
+// Edge order matches `corners`: top, right, bottom, left.
+function edgeStops(same: PatchSame): boolean[] {
   return [!same.top, !same.right, !same.bottom, !same.left];
+}
+
+// Diagonal order matches the CORNERS: top-left, top-right, bottom-right,
+// bottom-left — corner i's diagonal is the tile across it.
+function cornerDiagonals(same: PatchSame): boolean[] {
+  return [!!same.topLeft, !!same.topRight, !!same.bottomRight, !!same.bottomLeft];
+}
+
+// Everything the two path builders need to agree on, worked out once.
+function patchFrame(same: PatchSame, x: number, y: number, seed: number, size: number) {
+  const stops = edgeStops(same);
+  const roles = cornerRoles(stops, cornerDiagonals(same));
+  return {
+    stops,
+    roles,
+    c: corners(x, y, seed, size, roles),
+    g: cornerLattice(x, y),
+    reach: size / 3,
+  };
+}
+
+// The outward lean that rounds a real corner, derived from this edge's own bow
+// so each shore still bulges by a different amount (see EDGE_BOW). `edgeBow` is
+// negative for outward; `shoreEdge` takes outward as positive.
+function edgeLean(g: [number, number][], i: number, seed: number): number {
+  const [ax, ay] = g[i];
+  const [bx, by] = g[(i + 1) % 4];
+  return -edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN;
 }
 
 /**
@@ -262,26 +434,36 @@ function edgeStops(same: {
  * bows into a shoreline. A lake is authored as an area, never as corner sprites.
  */
 export function patchPath(
-  same: { top: boolean; right: boolean; bottom: boolean; left: boolean },
+  same: PatchSame,
   x = 0,
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const c = corners(x, y, seed, size);
-  const g = cornerLattice(x, y);
-  const stops = edgeStops(same);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
   const out = [`M${n1(c[0].x)} ${n1(c[0].y)}`];
   for (let i = 0; i < 4; i++) {
     const a = c[i];
     const b = c[(i + 1) % 4];
+    const j = (i + 1) % 4;
     if (!stops[i]) {
-      out.push(bowedEdge(a, b, -SEAM_OVERLAP));
+      // An internal join: a hair outward on both ends so two abutting bodies
+      // overlap by ~1 unit of the same colour instead of leaving a hairline.
+      const seam = SEAM_OVERLAP / MID_OF_LEAN;
+      out.push(shoreEdge(a, b, EDGE_FRAME[i], reach, seam, -seam));
       continue;
     }
-    const [ax, ay] = g[i];
-    const [bx, by] = g[(i + 1) % 4];
-    out.push(bowedEdge(a, b, edgeBow(ax, ay, bx, by, seed)));
+    const lean = edgeLean(g, i, seed);
+    out.push(
+      shoreEdge(
+        a,
+        b,
+        EDGE_FRAME[i],
+        reach,
+        edgeLead(roles[i], g[i], seed, lean, 1),
+        edgeLead(roles[j], g[j], seed, lean, -1),
+      ),
+    );
   }
   out.push("Z");
   return out.join(" ");
@@ -294,24 +476,29 @@ export function patchPath(
  * tiled ponds: the one thing patchPath exists to prevent.
  */
 export function patchRimPath(
-  same: { top: boolean; right: boolean; bottom: boolean; left: boolean },
+  same: PatchSame,
   x = 0,
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const c = corners(x, y, seed, size);
-  const g = cornerLattice(x, y);
-  const stops = edgeStops(same);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
   const out: string[] = [];
   for (let i = 0; i < 4; i++) {
     if (!stops[i]) continue;
     const a = c[i];
     const b = c[(i + 1) % 4];
-    const [ax, ay] = g[i];
-    const [bx, by] = g[(i + 1) % 4];
+    const j = (i + 1) % 4;
+    const lean = edgeLean(g, i, seed);
     out.push(
-      `M${n1(a.x)} ${n1(a.y)} ${bowedEdge(a, b, edgeBow(ax, ay, bx, by, seed))}`,
+      `M${n1(a.x)} ${n1(a.y)} ${shoreEdge(
+        a,
+        b,
+        EDGE_FRAME[i],
+        reach,
+        edgeLead(roles[i], g[i], seed, lean, 1),
+        edgeLead(roles[j], g[j], seed, lean, -1),
+      )}`,
     );
   }
   return out.join(" ");
@@ -459,18 +646,26 @@ function boulder(rng: Rng, scale: number): string {
   );
 }
 
-/** A loose stone: the scree that makes rock read as GROUND, not as props. */
-function pebble(rng: Rng, scale: number): string {
+/**
+ * A loose stone: the scree that makes rock read as GROUND, not as props.
+ *
+ * `light` is the lit face's tone and MUST be pitched against the ground it lies
+ * on, not fixed. On rock (ground L=56) the default sits ~14 steps above it and
+ * reads as stone; dropped unchanged on mountain (L=42) the same chips were ~30
+ * steps up — bright flecks scattered over dark slate, which read as litter or
+ * ice rather than as gravel.
+ */
+function pebble(rng: Rng, scale: number, light = 67): string {
   const r = lerp(3.4, 6.2, rng()) * scale;
   const h = r * lerp(0.35, 0.6, rng());
   const sil = rockOutline(rng, r, h, 3);
   const ai = apexIndex(sil);
   return (
     groundShadow(scale * 0.16, 18, STONE_SHADOW) +
-    poly(sil, stone(rng, lerp(67, 74, rng()))) +
+    poly(sil, stone(rng, lerp(light, light + 7, rng()))) +
     poly(
       [sil[ai], ...sil.slice(ai + 1), { x: sil[ai].x * 0.3, y: 0 }],
-      stone(rng, lerp(44, 51, rng())),
+      stone(rng, lerp(light - 23, light - 16, rng())),
     )
   );
 }
@@ -766,7 +961,7 @@ function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
     // because that part of the picture is where the peaks are.
     return (
       spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85), [70, 88])
+      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85, 53), [70, 88])
     );
   }
   if (kind === "urban") {
@@ -808,13 +1003,22 @@ export function tileGroundSvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
 ): string {
-  const same = {
+  const same: PatchSame = {
     top: neighbours.top === kind,
     right: neighbours.right === kind,
     bottom: neighbours.bottom === kind,
     left: neighbours.left === kind,
+    topLeft: neighbours.topLeft === kind,
+    topRight: neighbours.topRight === kind,
+    bottomRight: neighbours.bottomRight === kind,
+    bottomLeft: neighbours.bottomLeft === kind,
   };
-  const key = `${kind}|${+same.top}${+same.right}${+same.bottom}${+same.left}|${coordId}|${seed}`;
+  // The diagonals belong in the key too: two tiles with identical sides but a
+  // different corner neighbour draw different outlines (mid-shore vs turn).
+  const key =
+    `${kind}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
+    `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
+    `|${coordId}|${seed}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
 
@@ -826,7 +1030,7 @@ export function tileGroundSvg(
 function buildGround(
   kind: TerrainKind,
   coordId: string,
-  same: { top: boolean; right: boolean; bottom: boolean; left: boolean },
+  same: PatchSame,
   seed: number,
 ): string {
   const base = GROUND[kind];
@@ -841,13 +1045,22 @@ function buildGround(
   // The rim is a thick inside stroke along the STOPPING edges only (see
   // patchRimPath), clipped to the patch so it reads as a band just inside the
   // shore rather than a line drawn on it.
+  //
+  // ROUND CAPS, not the default butt. Each tile strokes only its own share of a
+  // shore, so on a shore that runs across several tiles the segments ABUT — and
+  // two butt caps meeting on the same line antialias to a half-covered pixel
+  // column, i.e. a dark tick across the shallows at every tile boundary. It is
+  // the same defect SEAM_OVERLAP fixes for the fill, and it only became visible
+  // once the shore itself stopped kinking there. The cap's overhang is harmless:
+  // the clip path is the patch, so it can only spill into the SEAM_OVERLAP the
+  // neighbour also covers, and at a real corner it is cut off entirely.
   const rim = RIM[kind];
   const rimD = rim ? patchRimPath(same, x, y, seed) : "";
   if (rim && rimD) {
     const clip = `terrain-clip-${coordId.replace(",", "-")}-${kind}`;
     parts.unshift(`<clipPath id="${clip}"><path d="${d}"/></clipPath>`);
     parts.push(
-      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" clip-path="url(#${clip})" opacity="0.75"/>`,
+      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${clip})" opacity="0.75"/>`,
     );
   }
 

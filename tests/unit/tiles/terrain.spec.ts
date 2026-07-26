@@ -18,7 +18,38 @@ const around = (kind: TerrainNeighbours["top"]): TerrainNeighbours => ({
   right: kind,
   bottom: kind,
   left: kind,
+  topLeft: kind,
+  topRight: kind,
+  bottomRight: kind,
+  bottomLeft: kind,
 });
+
+interface Pt {
+  x: number;
+  y: number;
+}
+interface Seg {
+  start: Pt;
+  c1: Pt;
+  c2: Pt;
+  end: Pt;
+}
+
+/** The cubic segments of a patch outline, in clockwise order from the top. */
+function parsePath(d: string): Seg[] {
+  const m = d.match(/M([-\d.]+) ([-\d.]+)/)!;
+  let cursor: Pt = { x: Number(m[1]), y: Number(m[2]) };
+  const segs: Seg[] = [];
+  for (const c of d.matchAll(
+    /C([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)/g,
+  )) {
+    const n = c.slice(1).map(Number);
+    const end = { x: n[4], y: n[5] };
+    segs.push({ start: cursor, c1: { x: n[0], y: n[1] }, c2: { x: n[2], y: n[3] }, end });
+    cursor = end;
+  }
+  return segs;
+}
 
 describe("terrain", () => {
   beforeEach(() => _clearTerrainCache());
@@ -39,9 +70,10 @@ describe("terrain", () => {
     const all = (v: boolean) => ({ top: v, right: v, bottom: v, left: v });
 
     it("bows every boundary of an isolated patch", () => {
-      // Four quadratics = four shores. No straight edges, so nothing reads as a
-      // square.
-      expect(patchPath(all(false), 2, 3, 9).match(/Q/g)?.length).toBe(4);
+      // Four cubics = four shores. No straight edges, so nothing reads as a
+      // square. Cubics rather than quadratics because only a cubic lets both
+      // ends of a shore choose their tangent — see the seam tests below.
+      expect(patchPath(all(false), 2, 3, 9).match(/C/g)?.length).toBe(4);
     });
 
     it("keeps an internal join almost flat, and bulges it outward not inward", () => {
@@ -51,7 +83,7 @@ describe("terrain", () => {
       // leaves an antialiasing hairline. Measured on the top edge: its control
       // point must sit above the corners (smaller y), i.e. outside the tile.
       const c = patchPath(all(true), 2, 3, 9);
-      const first = c.match(/Q([-\d.]+) ([-\d.]+)/);
+      const first = c.match(/C([-\d.]+) ([-\d.]+)/);
       const start = c.match(/M([-\d.]+) ([-\d.]+)/);
       expect(first).not.toBeNull();
       expect(Number(first![2])).toBeLessThan(Number(start![2]));
@@ -92,23 +124,19 @@ describe("terrain", () => {
     });
 
     it("bulges every boundary of an isolated patch beyond its corners", () => {
-      // The geometric statement of the rule, measured on the real path: each
-      // quadratic's control point must sit OUTSIDE the chord between the two
-      // corners it spans — above the top edge, right of the right edge, and so
-      // on. Reading it off the path is what catches a sign flip in bowedEdge.
-      const d = patchPath(all(false), 2, 3, 9);
-      const nums = [...d.matchAll(/[MQ]([-\d.]+) ([-\d.]+)(?: ([-\d.]+) ([-\d.]+))?/g)];
-      const start = { x: Number(nums[0][1]), y: Number(nums[0][2]) };
-      const seg = nums.slice(1).map(m => ({
-        c: { x: Number(m[1]), y: Number(m[2]) },
-        end: { x: Number(m[3]), y: Number(m[4]) },
-      }));
-      const corner = [start, ...seg.map(s => s.end)];
-      // top: control above both corners; right: right of them; etc.
-      expect(seg[0].c.y).toBeLessThan(Math.min(corner[0].y, corner[1].y));
-      expect(seg[1].c.x).toBeGreaterThan(Math.max(corner[1].x, corner[2].x));
-      expect(seg[2].c.y).toBeGreaterThan(Math.max(corner[2].y, corner[3].y));
-      expect(seg[3].c.x).toBeLessThan(Math.min(corner[3].x, corner[0].x));
+      // The geometric statement of the rule, measured on the real path: every
+      // control point must sit OUTSIDE the chord between the two corners it
+      // spans. The outline is wound clockwise, so "outside" is a NEGATIVE cross
+      // product of (chord x offset) — which is what catches a sign flip.
+      const segs = parsePath(patchPath(all(false), 2, 3, 9));
+      expect(segs).toHaveLength(4);
+      for (const s of segs) {
+        for (const c of [s.c1, s.c2]) {
+          const chord = { x: s.end.x - s.start.x, y: s.end.y - s.start.y };
+          const off = { x: c.x - s.start.x, y: c.y - s.start.y };
+          expect(chord.x * off.y - chord.y * off.x).toBeLessThan(0);
+        }
+      }
     });
 
     it("does not land on the tile grid — corners are nudged off it", () => {
@@ -138,6 +166,81 @@ describe("terrain", () => {
 
     it("still varies from edge to edge", () => {
       expect(edgeBow(4, 2, 5, 2, 11)).not.toBe(edgeBow(6, 2, 7, 2, 11));
+    });
+
+    // A shore that runs on into the next tile has to leave one tile and enter
+    // the next along ONE line. It did not: each edge bowed off its own chord, so
+    // the outline arrived at the shared corner ~24 degrees off and left it ~24
+    // degrees the other way — a sharp inward V at every tile boundary. On a 3x2
+    // lake you could count the tiles down the shoreline, which is the tile grid
+    // drawn back onto the water: exactly what the jittered outline exists to
+    // hide. Pinned here by measuring the tangents on both sides.
+    const world = (tx: number, ty: number, p: { x: number; y: number }) => ({
+      x: tx * 100 + p.x,
+      y: ty * 100 + p.y,
+    });
+    // The path is written to one decimal, so two points derived from it can
+    // legitimately differ by 0.1 — a tenth of a unit on a 100-unit tile, three
+    // orders of magnitude below the ~24-degree kink this is here to catch.
+    const near = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+      expect(Math.abs(a.x - b.x)).toBeLessThanOrEqual(0.11);
+      expect(Math.abs(a.y - b.y)).toBeLessThanOrEqual(0.11);
+    };
+
+    it("joins a shore that runs on into the next tile without a kink", () => {
+      // Two water tiles side by side, grass all around: one shore running west
+      // to east across the top of both.
+      const west = parsePath(
+        patchPath({ top: false, right: true, bottom: false, left: false }, 2, 3, 9),
+      );
+      const east = parsePath(
+        patchPath({ top: false, right: false, bottom: false, left: true }, 3, 3, 9),
+      );
+      // Same corner: the end of the west tile's top shore IS the start of the
+      // east tile's.
+      near(world(2, 3, west[0].end), world(3, 3, east[0].start));
+      // Same tangent through it: arriving direction == leaving direction.
+      const arrive = { x: west[0].end.x - west[0].c2.x, y: west[0].end.y - west[0].c2.y };
+      const leave = { x: east[0].c1.x - east[0].start.x, y: east[0].c1.y - east[0].start.y };
+      near(arrive, leave);
+    });
+
+    it("smooths a running shore by lifting the corner off the lattice", () => {
+      // The other half of the fix: the shared point is pushed OUTWARD too, so
+      // the shore never comes back to touch the straight grid line. Compare the
+      // mid-shore corner with the bare jittered lattice point it would sit on.
+      const run = parsePath(
+        patchPath({ top: false, right: true, bottom: false, left: false }, 2, 3, 9),
+      );
+      const { dy } = latticeOffset(3, 3, 9);
+      expect(run[0].end.y).toBeLessThan(dy - 3); // above the lattice = outward
+    });
+
+    it("leaves the inside corner of an L on the lattice, so both arms agree", () => {
+      // The reflex corner of an L-shaped wood: forest at 0,0 / 1,0 / 0,1. The
+      // boundary TURNS around 1,1 — the two tiles meeting there run at right
+      // angles, so smoothing it would push one arm north and the other east and
+      // tear the patch open. Both must leave it exactly on the lattice point.
+      const top = parsePath(
+        patchPath(
+          { top: false, right: false, bottom: false, left: true, bottomLeft: true },
+          1,
+          0,
+          9,
+        ),
+      );
+      const side = parsePath(
+        patchPath(
+          { top: true, right: false, bottom: false, left: false, topRight: true },
+          0,
+          1,
+          9,
+        ),
+      );
+      // Corner 3 (end of the bottom shore) vs corner 1 (end of the top shore).
+      near(world(1, 0, top[2].end), world(0, 1, side[0].end));
+      const { dx, dy } = latticeOffset(1, 1, 9);
+      near(world(1, 0, top[2].end), { x: 100 + dx, y: 100 + dy });
     });
   });
 

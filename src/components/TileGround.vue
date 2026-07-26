@@ -40,6 +40,10 @@ class TileGround extends Vue {
     return terrainOf(this.level[getCoordinatesId({ x, y })]);
   }
 
+  // The DIAGONALS matter as much as the sides: they are what tells a corner
+  // apart from the middle of a shore that runs on into the next tile, and only
+  // the middle of a run may be smoothed. Give a reflex corner (an L's inside
+  // corner) the smoothing and the two tiles disagree about where it sits.
   get neighbours(): TerrainNeighbours {
     const { x, y } = parseCoordId(this.coordId);
     return {
@@ -47,6 +51,10 @@ class TileGround extends Vue {
       right: this.kindAt(x + 1, y),
       bottom: this.kindAt(x, y + 1),
       left: this.kindAt(x - 1, y),
+      topLeft: this.kindAt(x - 1, y - 1),
+      topRight: this.kindAt(x + 1, y - 1),
+      bottomRight: this.kindAt(x + 1, y + 1),
+      bottomLeft: this.kindAt(x - 1, y + 1),
     };
   }
 

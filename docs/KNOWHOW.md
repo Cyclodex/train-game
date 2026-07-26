@@ -121,6 +121,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   silhouette is convex while the outline stays irregular. SIGN: the outline is
   wound clockwise, so **negative = outward** (same convention as `SEAM_OVERLAP`).
   Pinned by "bows every shore OUTWARD" + a control-point-outside-the-chord test.
+- OUTWARD-ONLY WAS ONLY HALF THE FIX. Bulging every edge left a CUSP at every
+  shared corner: each edge bowed off its own chord, so the outline arrived ~24°
+  off and left ~24° the other way — a sharp inward V at each tile boundary. You
+  could count the tiles down the side of a 3x2 lake, which is the tile grid drawn
+  back onto the water. Fixed 2026-07-26 by making each shore a CUBIC whose end
+  TANGENTS are chosen rather than implied (`shoreEdge`): `dir*(size/3)` along the
+  shore + `out*lean` across it, with `dir`/`out` taken from the EDGE INDEX
+  (`EDGE_FRAME`), never measured off the jittered chord — that is what lets two
+  tiles derive the identical tangent.
+- A corner is one of THREE things (`cornerRoles`), and the difference needs the
+  DIAGONAL neighbours, not just the four sides (`TerrainNeighbours` carries all
+  eight; the diagonals are in the memo key too):
+  · both edges stop → real CORNER: lean `+lean`/`-lean` (bulge out, come back) —
+    this is what rounds a lone patch into a blob.
+  · exactly one stops AND the diagonal differs → mid-shore RUN: push the point
+    outward (`cornerPush`) and lean by the lattice's shared slope (`cornerSlope`).
+    Both are seeded by the LATTICE POINT, so the two tiles agree on both.
+  · else (interior, or an L's reflex corner where the diagonal IS the same kind)
+    → leave it on the lattice, flat. Smoothing a reflex corner pushes one arm
+    north and the other east and TEARS THE PATCH OPEN — that case is why the
+    diagonals are needed at all. All three are unit-tested for agreement.
+- Pushing a shared corner outward does NOT by itself remove a cusp — it is a
+  translation, and a cusp is a TANGENT discontinuity. Don't reach for a bigger
+  bow/jitter to fix a kink; fix the tangents.
+- The rim stroke needs `stroke-linecap="round"`. Each tile strokes only its own
+  share of a shore, so the segments ABUT, and two butt caps meeting on one line
+  antialias to a dark tick across the shallows at every tile boundary — the same
+  defect `SEAM_OVERLAP` fixes for the fill, invisible until the shore stopped
+  kinking there. The cap can only spill into the overlap the neighbour covers
+  (the clip path is the patch).
 - Scatter is DERIVED from `(kind, coord, seed)`, never authored: paint an area,
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
@@ -138,7 +168,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
   lesson as the abandoned per-tile tone variation, one scale down.
 - Rock/mountain scatter tones sit CLOSE together (light 68-75 vs dark 44-51 on a
-  56 ground). A near-white face against a near-black one turns every boulder into
+  56 ground) — and that means RELATIVE to the ground, so a tone shared between
+  two kinds has to be a parameter. `pebble`'s fixed 67-74 was ~14 steps over
+  rock's L=56 (gravel) but ~30 over mountain's L=42: bright flecks on dark slate,
+  reading as litter. It takes a `light` base now (rock 67, mountain 53).
+  A near-white face against a near-black one turns every boulder into
   a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
   lands on the break→apex segment); a free-standing white wedge hangs off the
   silhouette and reads as a paper dart.
