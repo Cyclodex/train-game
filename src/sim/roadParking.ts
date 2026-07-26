@@ -238,7 +238,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     // toward its own bay for ever. A fifth of a car length is invisible, and
     // `beginEntering` anchors the curve at the car's REAL position anyway, so
     // arriving early costs nothing.
-    if (car.headProgress < parking.startTOf(car.stall) - PARK_ARRIVE_EPS) return false;
+    if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
     // ONE CAR AT A TIME per car park. A barrier serves one vehicle; a ramp is one
     // lane wide. Without this, every car bound for a garage would swing into the
     // same ramp mouth at once (all its slots share one entry point) and they would
@@ -284,6 +284,25 @@ export function createParkingPhases(deps: ParkingDeps) {
   // would put back a fifth of the very jump this exists to remove.
   const halfBody = (car: Car): number => car.length / 2;
   const centreT = (car: Car): number => car.headProgress - halfBody(car);
+
+  // Where along the tile this car's NOSE must reach for the car to be AT its
+  // stall — the stop line the follower model brakes to, and the trigger for the
+  // manoeuvre.
+  //
+  // For a HALT the stall's `t` is the middle of the marked stretch of kerb, and a
+  // bus stands ON it: nose half a body past it. Stopping the NOSE on the middle
+  // instead parks the whole coach BEHIND the stop — it was hanging off the back of
+  // its own markings with the front half of the bay empty, which is exactly what
+  // a bus stopping short looks like.
+  //
+  // For a BAY it is the peel-off point and stays nose-based, matched to what
+  // `clearAhead` brakes to. `beginEntering` then anchors the curve at the car's
+  // real centre, so arriving a little early only lengthens the swing.
+  function stopTOf(car: Car): number {
+    if (!car.stall) return 0;
+    const t = parking.startTOf(car.stall);
+    return parking.info(car.stall)?.onLane ? t + halfBody(car) : t;
+  }
 
   function beginEntering(car: Car): void {
     // A HALT needs no manoeuvre at all: the bus is already where it is stopping.
@@ -646,6 +665,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     claimStallHere,
     releaseStall,
     atStallEntry,
+    stopTOf,
     beginEntering,
     resumeFromStall,
     advanceParking,

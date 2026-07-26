@@ -346,6 +346,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   · `seatAtExitSlot` seats the nose at `endT + half`, and `exitFor` takes a
     `headRoom` so the curve stops half a body short of the tile's end — otherwise
     the nose has nowhere legal to sit and the clamp reintroduces the jump.
+  · `stopTOf` is the STOP LINE, and a HALT needs the same half: its stall `t` is
+    the middle of the marked kerb and the bus stands ON it, so the nose goes half
+    a body past. Braking the nose to the middle parked the coach BEHIND its own
+    markings — hanging off the back with the front half of the stop empty, which
+    is exactly what a bus stopping short looks like (0.122 of a tile out).
+    `clearAhead` and `atStallEntry` must agree on it or the car creeps for ever.
 - SLOT CHECKS MUST FOLLOW THE BODY ACROSS A TILE SEAM. `slotFree` compared the
   other car's points TILE BY TILE, so a car standing across a seam read as its
   nose alone — its tail was on the tile behind and simply not looked at. A car

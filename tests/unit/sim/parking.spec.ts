@@ -14,6 +14,7 @@ import {
   manoeuvreRunPx,
   stallBoxPoints,
   stallPose,
+  stallPitchPx,
   validateParking,
   kerbOffsetAt,
   bankOf,
@@ -30,7 +31,7 @@ import {
   bayClassOf,
   bayAdmits,
 } from "@/sim/parking";
-import { createRoadSim } from "@/sim/road";
+import { createRoadSim, specLength, vehicleSpec } from "@/sim/road";
 import { SCENARIOS } from "@/levels/test";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -958,6 +959,42 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // default 5s budget, and the run has to be long enough that every one of six
     // facilities is genuinely used or the assertions above prove nothing.
   }, 30000);
+
+  it("stands a halted bus ON its markings, not short of them", () => {
+    // A halt is a length of painted kerb, and the bus is supposed to be BESIDE it.
+    // Braking the NOSE to the middle of the stretch parks the whole coach behind
+    // it — hanging off the back of its own markings with the front half empty,
+    // which reads exactly as a bus stopping too early. The stop line is half a
+    // body PAST the middle.
+    const s = SCENARIOS.find(x => x.id === "busstops")!;
+    const halt = s.level["1,1"]?.parking?.rows?.[0];
+    if (!halt) throw new Error("busstops no longer has a halt row on 1,1");
+    // The painted stretch, in tile units: one pitch centred on the stall's own t.
+    const pitch = stallPitchPx(halt.kind, 1, needsBigBay(halt.reserved));
+    const mid = stallPose(halt, 0, 1, 0).t;
+    const markLo = mid - pitch / 2;
+    const markHi = mid + pitch / 2;
+
+    // `cars()` reports no body length, so take it from the same spec the sim sizes
+    // its vehicles with — `simFor` passes carLength 0.2.
+    const busLen = specLength(vehicleSpec("bus", 0.2));
+    const sim = simFor("busstops", 5);
+    let seen = 0;
+    let worstOut = 0;
+    for (let i = 0; i < 2000; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        if (c.phase !== "parked" || c.tileId !== "1,1") continue;
+        seen++;
+        // How far the coach sticks out of the painted stretch, either end.
+        worstOut = Math.max(worstOut, markLo - (c.headProgress - busLen), c.headProgress - markHi);
+      }
+    }
+    expect(seen).toBeGreaterThan(50); // buses really did use the halt
+    // A hair of tolerance for the arrival epsilon, nothing like the half-body
+    // (0.1375 of a tile on a coach) this exists to catch.
+    expect(worstOut).toBeLessThan(0.02);
+  });
 
   it("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", () => {
     // The entire difference between the two kinds of stop, measured. Both hold a

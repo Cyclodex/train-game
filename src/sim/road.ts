@@ -1747,7 +1747,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         getCoordinatesId(head.coord) === car.stall.tileId &&
         head.entryPort === car.stall.from
       ) {
-        bind(Math.max(0, parking.startTOf(car.stall) - car.headProgress), 0);
+        // The stop LINE, not the stall's middle: a bus halting in lane stands ON
+        // its markings, so its nose goes half a body past them (`stopTOf`).
+        bind(Math.max(0, stopTOf(car) - car.headProgress), 0);
       }
     }
     // Junction arbiter: for each upcoming junction on the route, ask whether
@@ -2066,6 +2068,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     beginEntering,
     advanceParking,
   } = phases;
+  // NOT destructured: `clearAhead` is defined ABOVE this block, and a hoisted
+  // function reading a `const` from here would hit the TDZ if anything called it
+  // during construction (KNOWHOW: `facilityOfTile` did exactly that).
+  const stopTOf = (car: Car) => phases.stopTOf(car);
 
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
