@@ -50,6 +50,11 @@ export interface TrainDef {
   y: number; // the depot the train starts in
   type: "people" | "fraight";
   wagonIds: string[];
+  // The depots this train is asked to reach, as `"x,y"` coord ids, in order
+  // (`TrainObject.routeDestinations`). The SIM does not read this — it still
+  // parks on any colour match — but the DEMAND is what a fare is priced against
+  // (`modes/tycoon.ts`), so the mode needs the pairing the level authored.
+  destinations?: string[];
   // When set (>0), the train is NOT present at init: it is injected by the
   // mode's spawner at this sim-time, departing its depot then (Time Attack's
   // predefined schedule). Omitted / 0 → present from the start, as before.

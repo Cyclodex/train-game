@@ -7,8 +7,10 @@ import {
   objectiveFromSpec,
 } from "@/modes/types";
 import { Counters, StarSpec } from "@/sim/objectives";
-import { FareSpec } from "@/sim/economy";
+import { FareSpec, fareFloor } from "@/sim/economy";
 import { CalendarSetup } from "@/sim/calendar";
+import { DEFAULT_SPEED } from "@/sim/simulation";
+import { parseCoordId } from "@/tiles/model";
 
 // Tycoon — the build-and-dispatch loop, phase 1.
 //
@@ -31,17 +33,47 @@ import { CalendarSetup } from "@/sim/calendar";
 // crashes (§2.2 G7 — our interlocking makes them impossible and that is a
 // feature), production chains (§5.1).
 
-// What a delivery is worth before any decay. A loco is the fixed part; each
-// wagon is cargo, so a longer consist is a bigger prize AND a slower one — the
-// mass model already makes heavy trains accelerate and brake more gently.
-export const BASE_FARE = 400;
-export const FARE_PER_WAGON = 200;
+// --- what a delivery is worth ------------------------------------------------
+//
+// A fare answers two questions at once, and they need different terms:
+//
+//   "was this job worth doing?"   → the BASE, priced from the demand: cargo and
+//                                   how far it has to travel.
+//   "did you do it well?"         → the DECAY, normalised to that same distance,
+//                                   so a long haul is a bigger prize and NOT a
+//                                   harder one to score.
+//
+// Before 2026-07-26 the base was cargo-only and the decay a flat per-board rate,
+// which meant distance was priced ONLY as decay eaten in transit: a far delivery
+// was strictly worse than a near one, and on a demoworld-sized board the map's
+// most interesting geometry paid worst. Both halves below exist to fix that.
 
-// How fast the fare falls, in money per second. This is the mode's genre dial
-// (design doc §4.2): steep → a twitchy dispatch game, shallow → a planning game.
-// 20/sec against a ~800 fare gives roughly 20 seconds of "prompt", which is about
-// one lap of a small board.
-export const FARE_DECAY_PER_SEC = 20;
+// The fixed part of a fare: what any delivery is worth for happening at all.
+export const FARE_HANDLING = 250;
+// Per wagon of cargo. Freight wagons pay more because they weigh more —
+// `physics.ts` gives a freight wagon 1.6x a passenger wagon's weight, so a
+// freight consist genuinely pulls away and stops more slowly. The premium is
+// the compensation for hauling it, not flavour.
+export const FARE_PER_WAGON = { people: 150, fraight: 200 } as const;
+// Per tile of DEMAND distance (see `demandTilesOf` — straight-line, not the
+// route actually driven, so a scenic detour cannot pay for itself).
+export const FARE_PER_TILE = 35;
+
+// What a train is priced for when a level names no destination for it (a demo
+// board, a scenery train). A middling haul rather than 0, so an unpaired train
+// is worth something sane instead of collapsing to the handling fee with an
+// undefined ideal travel time.
+export const FALLBACK_DEMAND_TILES = 6;
+
+// How many times the IDEAL travel time a fare survives before it bottoms out at
+// its floor. This — not a money-per-second rate — is the mode's genre dial now
+// (design doc §4.2): a small grace makes a twitchy dispatch game, a large one a
+// planning game, and because it is measured in trips rather than seconds it
+// means the same thing on a 3-tile test lane and on a 20-tile ring.
+//
+// 4 reproduces the old flat 20/sec on a small board, which is roughly "one lap
+// to think about it, then you are losing money".
+export const GENERIC_FARE_GRACE = 4;
 
 // Seed capital — the build budget (phase 2 spends it at TRACK_COST_PER_TILE).
 // Three tiles of track: enough to close a small gap the direct way, not enough
@@ -54,14 +86,52 @@ export const STARTING_BALANCE = 3000;
 // not one at a time.
 const PAYDAY_FRACTION = 0.6;
 
+// Manhattan tiles from the train's depot through the depots it is asked to
+// reach, in order. STRAIGHT-LINE on purpose, not the shortest rail path:
+//   - on a build board (lakevalley-open, buildgap) the rail does not exist yet
+//     at setup, so a path query would answer null exactly when it matters;
+//   - it prices the DEMAND, so it cannot be inflated by routing the long way
+//     round, and it does not change under the player's own track edits.
+// Manhattan rather than Euclidean because our trains only ever travel along
+// grid edges, so it is the honest lower bound on the trip.
+export function demandTilesOf(def: TrainDef): number {
+  const legs = def.destinations ?? [];
+  if (legs.length === 0) return FALLBACK_DEMAND_TILES;
+  let tiles = 0;
+  let [x, y] = [def.x, def.y];
+  for (const to of legs) {
+    const { x: tx, y: ty } = parseCoordId(to);
+    tiles += Math.abs(tx - x) + Math.abs(ty - y);
+    [x, y] = [tx, ty];
+  }
+  // A same-tile "demand" would divide by zero in the decay below; one tile is
+  // the smallest trip the board can actually contain.
+  return Math.max(1, tiles);
+}
+
+// Seconds this delivery would take if the line were clear and straight: the
+// yardstick the decay is normalised against. Uses the sim's own cruise speed, so
+// retuning train speed retunes the fares with it.
+export function idealTravelSec(tiles: number): number {
+  return tiles / DEFAULT_SPEED;
+}
+
 export function fareFor(
   def: TrainDef,
-  decayPerSec: number = FARE_DECAY_PER_SEC
+  grace: number = GENERIC_FARE_GRACE
 ): FareSpec {
-  return {
-    base: BASE_FARE + FARE_PER_WAGON * def.wagonIds.length,
-    decayPerSec,
-  };
+  const tiles = demandTilesOf(def);
+  const base =
+    FARE_HANDLING +
+    FARE_PER_WAGON[def.type] * def.wagonIds.length +
+    FARE_PER_TILE * tiles;
+  // Spend the whole decayable part (base down to the floor) over `grace` ideal
+  // trips, so every train on the board has the same shape: full fare if sent at
+  // once and routed well, floor only if you take many times longer than the job
+  // needs. Distance therefore raises the prize without raising the difficulty.
+  const spec: FareSpec = { base, decayPerSec: 0 };
+  const decayable = base - fareFloor(spec);
+  return { base, decayPerSec: decayable / (grace * idealTravelSec(tiles)) };
 }
 
 export function economyFor(
@@ -69,7 +139,7 @@ export function economyFor(
   tuning: TycoonTuning = GENERIC_TUNING
 ): EconomySetup {
   const fares: Record<string, FareSpec> = {};
-  for (const def of trains) fares[def.id] = fareFor(def, tuning.fareDecayPerSec);
+  for (const def of trains) fares[def.id] = fareFor(def, tuning.fareGrace);
   return {
     startingBalance: tuning.startingBalance,
     fares,
@@ -115,7 +185,8 @@ function tycoonStars(maxPayout: number): StarSpec[] {
 // the same game.
 export interface TycoonTuning {
   startingBalance: number;
-  fareDecayPerSec: number;
+  // Ideal trips a fare survives before bottoming out (see GENERIC_FARE_GRACE).
+  fareGrace: number;
   stars: (maxPayout: number) => StarSpec[];
   // The second clock (M1/M13): an in-game year and the annual upkeep levied on
   // the track the player laid. OPT-IN PER BOARD, like every other dial here.
@@ -131,7 +202,7 @@ export interface TycoonTuning {
 
 const GENERIC_TUNING: TycoonTuning = {
   startingBalance: STARTING_BALANCE,
-  fareDecayPerSec: FARE_DECAY_PER_SEC,
+  fareGrace: GENERIC_FARE_GRACE,
   stars: tycoonStars,
 };
 
@@ -150,26 +221,33 @@ const GENERIC_TUNING: TycoonTuning = {
 // is still rewarded, by the Under budget star, which measures SPEND and is
 // therefore unaffected by how much you were given.
 export const LAKEVALLEY_OPEN_BALANCE = 15000;
-// Slower burn than the generic dial: the fares tick while the player is still
-// buying track, and at 20/sec everything would sit at its floor before the first
-// train could possibly move. 5/sec (halved after playtesting — 10 still read as
-// rushed while learning the build tool) leaves the base fare alive for 120s on a
-// two-wagon train, so a first-timer can build deliberately and still be paid for
-// dispatching promptly.
-export const LAKEVALLEY_OPEN_DECAY = 5;
+// Twice the generic grace: on this board the fares tick while the player is
+// still learning the build tool and buying track, and at the generic 4 trips
+// everything would be at its floor before the first train could possibly move.
+// 8 ideal trips reproduces the hand-tuned 5/sec this board carried before fares
+// were normalised (blue: $830 over 128s ⇒ 4.9/sec), so the playtested feel is
+// preserved — it is now expressed as "you get eight trips' worth of thinking
+// time" instead of a number that only meant anything on this one map.
+export const LAKEVALLEY_OPEN_GRACE = 8;
 // "Under budget": win while spending at most this — the lean 6-piece build.
 export const LAKEVALLEY_OPEN_LEAN_SPEND = 6000;
 // "Rail baron": buy at least the full 7-piece restoration.
 export const LAKEVALLEY_OPEN_RING_PIECES = 7;
 // "Payday": gross income target, and the one star that has to be RE-MEASURED
-// whenever the decay dial moves — it is the only goal denominated in money that
-// time eats. Measured on the e2e's scripted prompt run (build, then dispatch all
-// three at once): $1,763 of the $2,200 maximum at 5/sec, where the same run
-// banked $1,188 at 10/sec. Letting every fare rot to its floor banks $550.
-// $1,500 is ~85% of the prompt run: a player who builds deliberately and sends
-// trains as they free up clears it, one who dawdles does not, and the e2e keeps
-// real headroom instead of balancing on the exact optimum.
-export const LAKEVALLEY_OPEN_PAYDAY = 1500;
+// whenever the pricing moves — it is the only goal denominated in money that
+// time eats. Re-measured 2026-07-26 after fares were priced by distance and the
+// decay normalised, all in a real browser on this board:
+//   prompt run (build, then dispatch all three at once)   $2,040 of $2,440 max
+//   same run but sent 60s late                            $1,140
+//   every fare left to rot to its 25% floor                 $611
+// $1,700 is ~85% of the prompt run: a player who builds deliberately and sends
+// the trains as they free up clears it, one who dawdles does not, and the e2e
+// keeps real headroom instead of balancing on the exact optimum.
+//
+// Note this board CANNOT be played one train at a time: the three demands form
+// a 3-cycle (blue→red's shed→yellow's shed→blue's), so nobody can park until
+// everybody has left. Sending all three is the board's lesson, not an optimum.
+export const LAKEVALLEY_OPEN_PAYDAY = 1700;
 
 // The second clock (design doc §1.3). A Lake Valley year lasts 15 sim-seconds
 // and each piece of track the player laid costs $150 a year to keep — 15% of
@@ -249,7 +327,7 @@ function lakevalleyOpenStars(): StarSpec[] {
 
 const LAKEVALLEY_OPEN_TUNING: TycoonTuning = {
   startingBalance: LAKEVALLEY_OPEN_BALANCE,
-  fareDecayPerSec: LAKEVALLEY_OPEN_DECAY,
+  fareGrace: LAKEVALLEY_OPEN_GRACE,
   stars: lakevalleyOpenStars,
   calendar: {
     startYear: LAKEVALLEY_OPEN_START_YEAR,
@@ -272,9 +350,10 @@ export const TAXYEAR_TAX_PER_PIECE = 300;
 
 const TAXYEAR_TUNING: TycoonTuning = {
   startingBalance: TAXYEAR_BALANCE,
-  // The generic 20/s would floor both fares before a single year turned, and
-  // this board is about the tax, not the fare.
-  fareDecayPerSec: LAKEVALLEY_OPEN_DECAY,
+  // The generic grace would floor both fares before a single year turned, and
+  // this board is about the tax, not the fare — so it borrows the opening
+  // level's slower burn.
+  fareGrace: LAKEVALLEY_OPEN_GRACE,
   stars: tycoonStars,
   calendar: {
     startYear: 1830,
@@ -303,7 +382,9 @@ export const BANKRUPT_TAX_PER_PIECE = 600;
 
 const BANKRUPT_TUNING: TycoonTuning = {
   startingBalance: BANKRUPT_BALANCE,
-  fareDecayPerSec: LAKEVALLEY_OPEN_DECAY,
+  // The fares are not the point here either  borrow the opening level's
+  // slower burn so the TAX is what runs the clock down.
+  fareGrace: LAKEVALLEY_OPEN_GRACE,
   stars: tycoonStars,
   calendar: {
     startYear: 1830,

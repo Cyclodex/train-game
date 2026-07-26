@@ -240,7 +240,10 @@ export interface Simulation {
   isProceedForced(tileId: string, exitPort: Port): boolean;
 }
 
-const DEFAULT_SPEED = 0.5;
+// Cruise speed in tiles/sec. Exported because the fare model prices a delivery
+// against its IDEAL travel time (`modes/tycoon.ts`), and a second copy of this
+// number would silently mis-price every fare the day it is retuned here.
+export const DEFAULT_SPEED = 0.5;
 
 export function createSimulation(config: SimConfig): Simulation {
   const { level } = config;

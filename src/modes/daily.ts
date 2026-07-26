@@ -77,6 +77,7 @@ function toTrainDefs(trains: ReturnType<typeof trainsFromRoutes>): TrainDef[] {
     y: t.y,
     type: t.type as "people" | "fraight",
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
   }));
 }
 

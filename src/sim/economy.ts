@@ -154,6 +154,10 @@ export function createEconomy(spec: EconomySpec = {}): Economy {
 export interface FareSpec {
   base: number; // the payout for an instant delivery
   decayPerSec: number; // money lost per second of the train's life
+  // How long the fare HOLDS each value before dropping to the next one. The
+  // decay is a staircase, not a slope (see below). 0 means the old continuous
+  // slope, for a caller that wants the raw curve.
+  stepSec?: number;
   // The payout never falls below this. Defaults to a fraction of `base` so a
   // long haul is still worth running; an explicit 0 means it can decay away.
   floor?: number;
@@ -163,15 +167,54 @@ export interface FareSpec {
 // still funds something rather than turning the level into an instant loss.
 export const DEFAULT_FARE_FLOOR_FRAC = 0.25;
 
+// How long a fare holds its number before the next drop. Train Valley's pin sits
+// still for a beat and then falls in one visible chunk (~100$ every ~3s); a fare
+// that counts down every frame reads as HUD noise, and it is the flicker rather
+// than the arithmetic that makes the player feel hurried. 4s is the middle of
+// the 3–5s band that still feels like a live clock rather than a stuck one.
+//
+// This is a DELIVERY dial, not a balance dial: `decayPerSec` still sets the rate
+// and the staircase tracks it within one rounded step, so the tuned numbers
+// (Payday targets, the measured runs in `modes/tycoon.ts`) keep their meaning.
+export const DEFAULT_FARE_STEP_SEC = 4;
+
+// Step sizes are rounded to a multiple of this once they are big enough for it
+// to matter, so a pin falls 830 → 810 → 790 rather than 830 → 810 → 791. Fares
+// are now DERIVED (tycoon prices decay from the trip length, so the raw rate is
+// a fraction like 4.86/sec); without this the pin would show the arithmetic.
+const STEP_ROUNDING = 5;
+
 export function fareFloor(spec: FareSpec): number {
   return spec.floor ?? Math.round(spec.base * DEFAULT_FARE_FLOOR_FRAC);
+}
+
+// Seconds per step. Negative/NaN is treated as "no stepping" rather than trusted.
+export function fareStepSec(spec: FareSpec): number {
+  const step = spec.stepSec ?? DEFAULT_FARE_STEP_SEC;
+  return step > 0 ? step : 0;
+}
+
+// What one step costs. Rounded ONCE here rather than per step, so the pin falls
+// by the same round number every time instead of drifting 19/20/21 as a rounding
+// remainder accumulates.
+export function fareStepAmount(spec: FareSpec): number {
+  const raw = spec.decayPerSec * fareStepSec(spec);
+  if (!(raw > 0)) return 0;
+  return raw >= STEP_ROUNDING
+    ? Math.round(raw / STEP_ROUNDING) * STEP_ROUNDING
+    : Math.max(1, Math.round(raw));
 }
 
 // The payout for a train that has been alive `ageSec` seconds. Whole money only
 // — a fractional fare would render as noise and make ledger totals irreproducible.
 export function fareAt(spec: FareSpec, ageSec: number): number {
-  const decayed = spec.base - spec.decayPerSec * Math.max(0, ageSec);
-  return Math.max(fareFloor(spec), Math.round(decayed));
+  const age = Math.max(0, ageSec);
+  const stepSec = fareStepSec(spec);
+  const lost =
+    stepSec > 0
+      ? fareStepAmount(spec) * Math.floor(age / stepSec)
+      : spec.decayPerSec * age;
+  return Math.max(fareFloor(spec), Math.round(spec.base - lost));
 }
 
 // Per-train fare state for one run. Ages every unsettled fare on `tick`, and

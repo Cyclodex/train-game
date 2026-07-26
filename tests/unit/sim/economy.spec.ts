@@ -4,7 +4,10 @@ import {
   createFareBook,
   fareAt,
   fareFloor,
+  fareStepAmount,
+  fareStepSec,
   DEFAULT_FARE_FLOOR_FRAC,
+  DEFAULT_FARE_STEP_SEC,
 } from "@/sim/economy";
 
 describe("economy ledger", () => {
@@ -98,15 +101,40 @@ describe("economy ledger", () => {
 
 describe("fare decay", () => {
   const spec = { base: 1000, decayPerSec: 20 };
+  const step = DEFAULT_FARE_STEP_SEC;
 
   it("pays the full base for an instant delivery", () => {
     expect(fareAt(spec, 0)).toBe(1000);
   });
 
-  it("falls linearly with time — the reason prompt dispatch matters", () => {
-    expect(fareAt(spec, 5)).toBe(900);
-    expect(fareAt(spec, 10)).toBe(800);
-    expect(fareAt(spec, 25)).toBe(500);
+  it("falls with time — the reason prompt dispatch matters", () => {
+    expect(fareAt(spec, step)).toBe(920);
+    expect(fareAt(spec, 5 * step)).toBe(600);
+  });
+
+  it("falls in STEPS, not per frame: the number holds, then drops in one chunk", () => {
+    expect(fareStepSec(spec)).toBe(step);
+    expect(fareStepAmount(spec)).toBe(spec.decayPerSec * step);
+    // Anywhere inside a step the fare is the same number — this is what stops
+    // the pin from flickering every frame.
+    expect(fareAt(spec, 0)).toBe(1000);
+    expect(fareAt(spec, step - 0.01)).toBe(1000);
+    expect(fareAt(spec, step)).toBe(1000 - fareStepAmount(spec));
+    expect(fareAt(spec, 2 * step - 0.01)).toBe(1000 - fareStepAmount(spec));
+    expect(fareAt(spec, 2 * step)).toBe(1000 - 2 * fareStepAmount(spec));
+  });
+
+  it("sits ON the old continuous curve at every step boundary — the rate is unchanged", () => {
+    for (const n of [1, 2, 3, 7]) {
+      const age = n * step;
+      expect(fareAt(spec, age)).toBe(spec.base - spec.decayPerSec * age);
+    }
+  });
+
+  it("honours a per-fare step, including stepSec 0 for the raw slope", () => {
+    expect(fareAt({ ...spec, stepSec: 10 }, 9.9)).toBe(1000);
+    expect(fareAt({ ...spec, stepSec: 10 }, 10)).toBe(800);
+    expect(fareAt({ ...spec, stepSec: 0 }, 5)).toBe(900);
   });
 
   it("never falls below the floor (a quarter of base by default)", () => {
@@ -121,6 +149,7 @@ describe("fare decay", () => {
 
   it("always pays whole money", () => {
     expect(Number.isInteger(fareAt({ base: 333, decayPerSec: 7 }, 3.7))).toBe(true);
+    expect(Number.isInteger(fareAt({ base: 333, decayPerSec: 7.3 }, 30))).toBe(true);
   });
 });
 
@@ -132,16 +161,16 @@ describe("fare book", () => {
 
   it("ages every unsettled fare on tick", () => {
     const book = createFareBook(specs);
-    book.tick(5);
+    book.tick(5); // one 4s step gone
     expect(book.ageOf("a")).toBe(5);
-    expect(book.valueOf("a")).toBe(900);
-    expect(book.valueOf("b")).toBe(550);
+    expect(book.valueOf("a")).toBe(920);
+    expect(book.valueOf("b")).toBe(560);
   });
 
   it("settles at the value the fare has decayed to, and only once", () => {
     const book = createFareBook(specs);
-    book.tick(10);
-    expect(book.settle("a")).toBe(800);
+    book.tick(12); // three steps
+    expect(book.settle("a")).toBe(760);
     expect(book.isSettled("a")).toBe(true);
     // Idempotent: a duplicated arrival event cannot pay twice.
     expect(book.settle("a")).toBe(0);
@@ -174,7 +203,7 @@ describe("fare book", () => {
     book.add("c", { base: 500, decayPerSec: 10 });
     expect(book.valueOf("c")).toBe(500);
     book.tick(5);
-    expect(book.valueOf("c")).toBe(450);
+    expect(book.valueOf("c")).toBe(460);
   });
 
   it("reset un-settles everything at full value", () => {
