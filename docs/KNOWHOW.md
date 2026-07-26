@@ -405,6 +405,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
   swept-overlap test only compares bodies within 0.7 lanes and a bay is further out
   than that by construction. Only SINGLE-BOX vehicles park (`vehicleCanPark`, no
   semis).
+- TWO KINDS OF BUS STOP, and the difference is one property: `stallOnLane`
+  (`StallKind "busstop"`). A LAY-BY is a bay off the carriageway — the bus leaves
+  the lane and traffic flows past. A HALT is a length of kerb it stops AGAINST, in
+  lane, so everything behind it QUEUES. That inverts the rule the rest of parking
+  rests on, so a halted bus KEEPS its road body and every gate that tested
+  `phase === "parked"` had to become `blocksLane()` — `clearAhead`'s follower loop,
+  `laneClearForChange`, `bodyTileIds`, `pullOutClear`, and the traffic cap. Missing
+  one lets the queue drive straight through the bus (measured: 0.04 overlap).
+  A halt also skips the manoeuvre entirely (a zero-length curve divides by its own
+  length), skips the gap checks, and takes `startTOf` = the stop's own `t`.
+- A HALT PAINTS NOTHING BOX-SHAPED. `stallBoxPoints` on a zero-depth row is
+  DEGENERATE — nought long and a full pitch wide — and renders as a bare line
+  straight across the road. `stallOutlinePath`/`parkingKerbPath`/`parkingApronPath`
+  all return "" for it; its yellow kerb marking, tarmac legend and shelter
+  (`busStopGeometry`) are what mark it. Only visible when zoomed: `npm run shot
+  --scale 6` found it.
+- The sign reads **H** for a bus facility and **P** otherwise. A car-park P over a
+  bus stop reads as somewhere to leave your car, which is the one thing it is not.
+- AUTHORING: put a halt UPSTREAM of a lay-by when both are on one street. A queue
+  backs up BEHIND its cause, so the halt's runs away from the bay; the other way
+  round it reaches back past the lay-by and anything measuring "is traffic stopped
+  near the bay?" reads the halt's jam and blames the bay (it did — 35 vehicles).
 - SIZE follows the class through ONE predicate, `needsBigBay` (long|delivery|bus →
   110px, one per tile). The inline `reserved === "long"` it replaced sat at NINE
   call sites; every one would have gone on sizing a bus stop like a car space.
@@ -421,6 +443,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   carries all six facility kinds at once, and `parking.spec.ts` runs it for 200
   simulated seconds asserting each is used by exactly its own class — the test that
   would have caught the original report AND the two bugs it was hiding.
+  `/test/busstops` is the halt-vs-lay-by pair, asserted both ways: the mechanism (a
+  halted bus reports a road body, a bayed one does not) and the consequence
+  (traffic queues behind the halt and never behind the bay).
 - Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
   (no permit system) — that is what makes a car park look real, not a bug.
 - TESTS: the sweep measures flow against MOVING vehicles (`movingCarCount`) and

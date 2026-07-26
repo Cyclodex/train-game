@@ -542,6 +542,7 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "park-angled", icon: "↗️", label: "Angled", tool: "parking", stall: "angled" },
       { key: "park-perp", icon: "🅿️", label: "90°", tool: "parking", stall: "perpendicular" },
       { key: "park-garage", icon: "🏢", label: "Garage", tool: "parking", stall: "garage" },
+      { key: "park-busstop", icon: "🚏", label: "Halt", tool: "parking", stall: "busstop" },
       { key: "park-facility", icon: "#️⃣", label: "Car park", tool: "facility" },
     ],
   },
@@ -605,7 +606,7 @@ const HINTS: Record<Tool, string> = {
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
-    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage instead of bays. A bay serves ONE class of vehicle and nothing else that merely fits: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody (no permits yet, so they stay empty — which is what makes a car park look real). Everything unmarked takes cars, and a garage has a height barrier so no lorries go down the ramp.",
+    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage and 🚏 a bus stop IN the running lane — the bus never leaves it, so the traffic behind has to wait (for a lay-by that traffic flows past, use 🚗 with 🚌). A bay serves ONE class of vehicle and nothing else that merely fits: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody (no permits yet, so they stay empty — which is what makes a car park look real). Everything unmarked takes cars, and a garage has a height barrier so no lorries go down the ramp.",
   facility:
     "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
   terrain:

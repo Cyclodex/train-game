@@ -766,6 +766,88 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // facilities is genuinely used or the assertions above prove nothing.
   }, 30000);
 
+  it("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", () => {
+    // The entire difference between the two kinds of stop, measured. Both hold a
+    // bus for the same dwell on the same street; only the halt is in the running
+    // lane, so only the halt should ever have anything stopped behind it.
+    const s = SCENARIOS.find(x => x.id === "busstops")!;
+    const sim = createRoadSim({
+      level: s.level,
+      width: s.size!.cols,
+      height: s.size!.rows,
+      seed: 5,
+      spawnInterval: s.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: s.traffic!.maxCars,
+      mix: s.traffic!.mix,
+    });
+    // The halt is UPSTREAM of the bay on purpose (see the scenario): a queue backs
+    // up behind whatever causes it, so the halt's runs west, away from the bay, and
+    // the approach to the bay stays clear. The other way round, the halt's jam
+    // reaches back past the lay-by and gets blamed on it.
+    const HALT_TILE = "1,1";
+    const BAY_TILE = "4,1";
+    let haltedInLane = 0;
+    let parkedInBay = 0;
+    let queuedBehindHalt = 0;
+    let queuedBehindBay = 0;
+
+    for (let i = 0; i < 2000; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      const stopped = cars.filter(c => c.phase === "parked");
+      for (const b of stopped) {
+        if (b.tileId === HALT_TILE) haltedInLane++;
+        if (b.tileId === BAY_TILE) parkedInBay++;
+      }
+      // Anything else stationary on the same tile as a stopped bus, or on the tile
+      // behind it, is a vehicle the stop is holding up.
+      const haltBusy = stopped.some(c => c.tileId === HALT_TILE);
+      const bayBusy = stopped.some(c => c.tileId === BAY_TILE);
+      for (const c of cars) {
+        if (c.phase !== "driving" || c.velocity > 0.01) continue;
+        if (haltBusy && (c.tileId === HALT_TILE || c.tileId === "0,1")) queuedBehindHalt++;
+        if (bayBusy && (c.tileId === BAY_TILE || c.tileId === "3,1")) queuedBehindBay++;
+      }
+    }
+
+    // The MECHANISM, stated directly: a halted bus is still an obstacle on the
+    // road and a bus in a bay is not. Everything above is the consequence.
+    const mech = createRoadSim({
+      level: s.level, width: s.size!.cols, height: s.size!.rows, seed: 5,
+      spawnInterval: s.traffic!.spawnInterval, carSpeed: 0.5, carLength: 0.2,
+      maxCars: s.traffic!.maxCars, mix: s.traffic!.mix,
+    });
+    let sawHaltBody = false;
+    let sawBayBody = false;
+    for (let i = 0; i < 2000; i++) {
+      mech.step(0.05, () => false);
+      const bodies = new Map(mech.bodies().map(b => [b.id, b.points.length]));
+      for (const c of mech.cars()) {
+        if (c.phase !== "parked") continue;
+        if (c.tileId === HALT_TILE) sawHaltBody ||= (bodies.get(c.id) ?? 0) > 0;
+        if (c.tileId === BAY_TILE) sawBayBody ||= (bodies.get(c.id) ?? 0) > 0;
+      }
+    }
+    expect(sawHaltBody, "a halted bus reported no road body — nothing would queue")
+      .toBe(true);
+    expect(sawBayBody, "a bus in the bay still held the lane it had left").toBe(false);
+
+    // Both stops were genuinely used, or the comparison below proves nothing.
+    expect(haltedInLane, "no bus ever used the halt").toBeGreaterThan(0);
+    expect(parkedInBay, "no bus ever used the lay-by").toBeGreaterThan(0);
+    // The halt holds traffic up…
+    expect(queuedBehindHalt, "nothing ever queued behind the in-lane halt")
+      .toBeGreaterThan(0);
+    // …and the lay-by lets it past. That is the whole reason a town builds one,
+    // and it is why the two cannot be the same thing with a flag.
+    expect(
+      queuedBehindBay,
+      "traffic queued behind the LAY-BY — the bus did not leave the running lane",
+    ).toBe(0);
+  }, 20000);
+
   it("leaves every existing road scenario's parking layer empty", () => {
     // The parking subsystem must cost a level that has none exactly nothing —
     // including its RNG draws, which is what keeps every pre-existing seeded run

@@ -46,7 +46,24 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 //  • "garage"        — no visible bay at all: a ramp mouth at the kerb leading into
 //                      a building. `count` is the building's capacity and a parked
 //                      car is not drawn (see `stallIsHidden`).
-export type StallKind = "parallel" | "perpendicular" | "angled" | "garage";
+//  • "busstop"       — a halt ON the carriageway. The bus does not leave the lane
+//                      at all, so the traffic behind it QUEUES, which is the whole
+//                      difference between a stop and a lay-by. Bus-only by its own
+//                      kind; no `reserved` needed (see sim/parking.ts bayClassOf).
+export type StallKind =
+  | "parallel"
+  | "perpendicular"
+  | "angled"
+  | "garage"
+  | "busstop";
+
+// Does a vehicle using this stall stay ON the carriageway? The one property that
+// separates a bus STOP from a bus BAY, and it decides three things at once: no
+// pull-in manoeuvre, no gap to wait for, and — the point — the halted bus keeps
+// its road body, so everything behind it has to wait.
+export function stallOnLane(kind: StallKind): boolean {
+  return kind === "busstop";
+}
 
 // Who may use a row. Absent = anything that physically fits.
 //  • "disabled" / "delivery" — reserved bays. v1 paints them and keeps ordinary
@@ -147,6 +164,8 @@ export function stallId(ref: StallRef): string {
 
 // Depth of a bay measured out from the kerb (how far it eats into the verge).
 const DEPTH_FRAC: Record<StallKind, number> = {
+  // A stop on the carriageway has no depth: the bus never leaves its lane.
+  busstop: 0,
   parallel: 0.13, // 26px — a car is 20px wide
   perpendicular: 0.24, // 48px — a car is 38px long
   // 42px = (carLength + carWidth)·sin45 = (38 + 20)·0.707. A 45° car needs less
@@ -160,6 +179,8 @@ const DEPTH_FRAC: Record<StallKind, number> = {
 // is centred on the tile, so an over-long row simply spills past the tile edge —
 // `validateParking` flags it rather than silently drawing nonsense.
 const PITCH_FRAC: Record<StallKind, number> = {
+  // One coach's worth of kerb (a bus is 55px), plus room for the markings.
+  busstop: 0.4,
   parallel: 0.3, // 60px — a 38px car plus room to get in and out
   perpendicular: 0.14, // 28px — a car is 20px wide
   // 29px. NOT the 45° diagonal of the car: in a real echelon rank the along-kerb
@@ -203,6 +224,8 @@ export function stallPitchPx(kind: StallKind, tileSize: number, big = false): nu
 export function stallLengthPx(row: ParkingRow, tileSize: number): number {
   const big = needsBigBay(row.reserved);
   if (row.kind === "garage") return Number.POSITIVE_INFINITY;
+  // A stop is a length of kerb, never a box the vehicle noses into.
+  if (row.kind === "busstop") return stallPitchPx(row.kind, tileSize, big);
   return row.kind === "parallel"
     ? stallPitchPx(row.kind, tileSize, big)
     : stallDepthPx(row.kind, tileSize, big);
@@ -211,6 +234,8 @@ export function stallLengthPx(row: ParkingRow, tileSize: number): number {
 // The resting angle of a parked car RELATIVE to the direction of travel, in
 // degrees. 0 = nose along the road (parallel), 90 = nose into the bay.
 const REST_ANGLE: Record<StallKind, number> = {
+  // Still pointing down the road — it is halted in the lane, not parked.
+  busstop: 0,
   parallel: 0,
   perpendicular: 90,
   angled: 45,
@@ -911,7 +936,17 @@ export function validateParking(
       // running lane to count as a physical clip (CLIP_LANES in sim/road.ts), and
       // it would sit there for its whole dwell. That is not a bay, it is a lane
       // blocker.
-      if (row.kind !== "garage" && stallDepthPx(row.kind, tileSize, big) < 0.5 * LANE_WIDTH_FRAC * tileSize) {
+      //
+      // A HALT is exempt, and not as a loophole: standing in the running lane is
+      // what it is FOR, and the sim knows it (`stallOnLane` keeps the halted bus's
+      // road body so the queue behind it is real). The rule this check enforces is
+      // "a vehicle that has left the carriageway must actually have left it" — a
+      // halt never claims to.
+      if (
+        row.kind !== "garage" &&
+        !stallOnLane(row.kind) &&
+        stallDepthPx(row.kind, tileSize, big) < 0.5 * LANE_WIDTH_FRAC * tileSize
+      ) {
         add(tileId, `${row.kind} bays are too shallow to keep a parked car clear of the lane`);
       }
     }

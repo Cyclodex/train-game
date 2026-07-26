@@ -101,6 +101,15 @@ on this list: **the world has no terrain.** See item 1 below.
 11. **Per-`(tile, lane)` route planner.** Routes are tile sequences with lane
     sorting on approach; a true lane-cost planner would handle dense turn-lane
     networks more robustly. Optimisation, not a blocker.
+12. **Paid / time-limited parking.** Parked out until the Tycoon ledger existed —
+    "there is no money in this game and nothing to spend it on" — which stopped
+    being true when `sim/economy.ts` landed. Now a real option: a per-facility
+    tariff, a fee charged on `resumeFromStall` (the one place a stay ends), and a
+    time limit that makes a driver leave early or overstay. The parking side needs
+    almost nothing: `ParkingCell` already carries a per-facility `dwellSec`, and a
+    `tariff` sits beside it. The work is deciding what the player DOES with the
+    money — a fee nobody chooses to set is a number on a sign, not a mechanic.
+    Files: `src/tiles/parking.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
 
 ## Architecture / code health
 

@@ -125,6 +125,21 @@
           ]"
         />
         <path v-if="p.kerb" :d="p.kerb" class="parking-kerb" />
+        <template v-if="p.bus">
+          <path :d="p.bus.kerbLine" class="bus-stop-kerb" />
+          <path
+            v-for="(l, li) in p.bus.legend"
+            :key="'bl' + pi + '_' + li"
+            :d="l"
+            class="bus-stop-legend"
+          />
+          <path :d="p.bus.shelter" class="bus-stop-shelter" />
+          <path :d="p.bus.shelterRoof" class="bus-stop-roof" />
+          <template v-if="p.busHalt">
+            <path :d="p.bus.sign" class="bus-stop-pole" />
+            <path :d="p.bus.signFlag" class="bus-stop-flag" />
+          </template>
+        </template>
         <template v-if="p.garage">
           <path :d="p.garage.mouth" class="parking-garage-mouth" />
           <path :d="p.garage.arrow" class="parking-garage-arrow" />
@@ -391,6 +406,7 @@ import {
   parkingSignAnchor,
   stallOutlinePath,
   garageGeometry,
+  busStopGeometry,
 } from "@/tiles/parkingGeometry";
 import { rowsOf, rowSide, stallId, facilityOf } from "@/tiles/parking";
 import { signalModeLabel } from "@/sim/junctionSignal";
@@ -879,6 +895,9 @@ class Tile extends Vue {
     stalls: { d: string; key: string; occupied: boolean }[];
     garage: ReturnType<typeof garageGeometry> | null;
     garageOut: ReturnType<typeof garageGeometry> | null;
+    bus: ReturnType<typeof busStopGeometry> | null;
+    // A HALT stands in the lane and so needs a sign; a LAY-BY has a bay to mark.
+    busHalt: boolean;
   }[] {
     if (!this.config.roads) return [];
     const rows = rowsOf(this.tile);
@@ -905,6 +924,14 @@ class Tile extends Vue {
         kerb: parkingKerbPath(row, size, kerb),
         reserved: row.reserved,
         stalls,
+        // A bus stop of either shape gets its yellow kerb marking, its legend and
+        // its shelter. Without them a lay-by is indistinguishable from the lorry
+        // bay beside it (same size, same outline) and a halt is invisible entirely.
+        bus:
+          row.kind === "busstop" || row.reserved === "bus"
+            ? busStopGeometry(row, size, kerb)
+            : null,
+        busHalt: row.kind === "busstop",
         garage: row.kind === "garage" ? garageGeometry(row, size, kerb, "in") : null,
         // The second driveway. A garage a car can only reverse out of reads as a
         // dead end; the out-ramp is what makes it a building traffic flows THROUGH.
@@ -932,11 +959,16 @@ class Tile extends Vue {
     const coord = parseCoordId(this.coordId);
     const row = rows[0];
     const anchor = parkingSignAnchor(row, size, this.parkingKerbFor(coord, row.from));
+    // A bus stop is an H, not a P. Both signs count the same way, but a car-park
+    // P over a bus stop reads as somewhere to leave your car, which is the one
+    // thing it is not.
+    const isStop = rows.every(r => r.kind === "busstop" || r.reserved === "bus");
+    const mark = isStop ? "H" : "P";
     return {
       x: anchor.x,
       y: anchor.y,
       label: status.label,
-      text: status.free > 0 ? `P ${status.free}/${status.capacity}` : "P VOLL",
+      text: status.free > 0 ? `${mark} ${status.free}/${status.capacity}` : `${mark} VOLL`,
       full: status.free <= 0,
     };
   }
@@ -2015,6 +2047,48 @@ $signal-offset: 20px;
 /* A bus stop. Distinct from the lorry lay-by beside it, because they are the same
    SIZE and completely different traffic — telling them apart by shape alone is
    impossible, so the colour has to do it. */
+/* Bus stops. A lay-by is the same SIZE and OUTLINE as the lorry bay beside it and
+   a halt has no outline at all, so neither can be told apart by shape — the
+   yellow kerb marking is what says "bus", exactly as it does on a real street. */
+.bus-stop-kerb {
+  fill: none;
+  stroke: #ffd24a;
+  stroke-width: 3;
+  stroke-dasharray: 9 6;
+  stroke-linecap: round;
+}
+/* Three bars standing in for the word BUS. Real lettering is unreadable at this
+   size, and a glyph nobody can read is noise rather than information. */
+.bus-stop-legend {
+  fill: none;
+  stroke: #ffd24a;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+.bus-stop-shelter {
+  fill: rgba(40, 48, 58, 0.9);
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1;
+}
+.bus-stop-roof {
+  fill: none;
+  stroke: #dfe6ee;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+}
+.bus-stop-pole {
+  fill: none;
+  stroke: #cfd6de;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.bus-stop-flag {
+  fill: #ffd24a;
+  stroke: #6b5300;
+  stroke-width: 1;
+}
+
 .parking-bay--bus {
   fill: rgba(70, 190, 150, 0.22);
   stroke: #bff3e2;

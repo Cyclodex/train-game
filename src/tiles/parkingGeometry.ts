@@ -19,6 +19,7 @@ import {
   stallDepthPx,
   stallPitchPx,
   stallPose,
+  stallOnLane,
   garageExitFrom,
   needsBigBay,
 } from "./parking";
@@ -75,6 +76,7 @@ export function parkingApronPath(
   kerbPx: number,
 ): string {
   if (row.kind === "garage") return "";
+  if (stallOnLane(row.kind)) return ""; // no bay, so no apron to pave
   const f = rowFrame(row, size);
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
@@ -104,6 +106,11 @@ export function stallOutlinePath(
   kerbPx: number,
 ): string {
   if (row.kind === "garage") return "";
+  // A HALT has no bay to outline — it is a length of kerb, and its depth is zero
+  // by definition. Drawing one anyway produces a DEGENERATE box: zero long and a
+  // full pitch wide, which renders as a bare line straight across the road. Its
+  // yellow kerb marking and legend are what mark it (`busStopGeometry`).
+  if (stallOnLane(row.kind)) return "";
   return poly(stallBoxPoints(row, index, size, kerbPx));
 }
 
@@ -116,6 +123,9 @@ export function parkingKerbPath(
   kerbPx: number,
 ): string {
   if (row.kind === "garage") return "";
+  // Same for a HALT: its kerb IS the road's own, and `busStopGeometry` paints the
+  // yellow marking on it. A second white line here would just double it.
+  if (stallOnLane(row.kind)) return "";
   const f = rowFrame(row, size);
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
@@ -212,4 +222,90 @@ export function parkingSignAnchor(
   const depth = row.kind === "garage" ? stallDepthPx("garage", size) : stallDepthPx(row.kind, size, big);
   const out = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth + size * 0.055;
   return f.at(size * 0.5, out);
+}
+
+// --- Bus stops ---------------------------------------------------------------
+// Two shapes, one idea. A LAY-BY is a bay off the carriageway; a HALT is a length
+// of kerb the bus stops against, in lane. Both need to say "bus" at a glance, and
+// neither can do it by outline alone — a lay-by is the same size and shape as a
+// lorry bay, and a halt has no shape at all. So they say it the way real ones do:
+// a yellow kerb marking and a shelter.
+
+export interface BusStopGeometry {
+  // The yellow kerb line the bus pulls up against, dashed the way a stopping
+  // restriction is painted.
+  kerbLine: string;
+  // The BUS legend on the tarmac — three bars, because real lettering is
+  // unreadable at this size and a glyph that cannot be read is just noise.
+  legend: string[];
+  // A shelter: back wall and roof, set behind the kerb on the verge.
+  shelter: string;
+  shelterRoof: string;
+  // The pole + flag of a stop sign, for a HALT that has no bay to mark.
+  sign: string;
+  signFlag: string;
+}
+
+export function busStopGeometry(
+  row: ParkingRow,
+  size: number,
+  kerbPx: number,
+): BusStopGeometry {
+  const f = rowFrame(row, size);
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
+  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  // A lay-by's markings sit at the FAR edge of its bay; a halt has no bay, so they
+  // sit on the kerb itself.
+  const mark = near + depth;
+  const first = stallPose(row, 0, size, kerbPx);
+  const a0 = first.t * size - pitch / 2;
+  const a1 = a0 + pitch * row.count;
+
+  // Three bars standing in for the word BUS, centred on the stop.
+  const mid = (a0 + a1) / 2;
+  const barLen = pitch * 0.16;
+  const legend: string[] = [];
+  for (const k of [-1, 0, 1]) {
+    const c = mid + k * barLen * 1.9;
+    const out = depth > 0 ? near + depth * 0.5 : near - LANE_WIDTH_FRAC * size * 0.45;
+    legend.push(
+      poly([f.at(c - barLen / 2, out), f.at(c + barLen / 2, out)], false),
+    );
+  }
+
+  // The shelter, on the verge just beyond the markings.
+  const shOut = mark + size * 0.02;
+  const shDepth = size * 0.055;
+  const shHalf = pitch * 0.3;
+  const roofOver = size * 0.012;
+
+  // The sign: a short pole at the downstream end with a flag on top.
+  const poleAt = a1 - pitch * 0.14;
+  const poleOut = mark + size * 0.015;
+  const poleLen = size * 0.05;
+  const flagHalf = size * 0.022;
+
+  return {
+    kerbLine: poly([f.at(a0, mark), f.at(a1, mark)], false),
+    legend,
+    shelter: poly([
+      f.at(mid - shHalf, shOut),
+      f.at(mid + shHalf, shOut),
+      f.at(mid + shHalf, shOut + shDepth),
+      f.at(mid - shHalf, shOut + shDepth),
+    ]),
+    shelterRoof: poly(
+      [f.at(mid - shHalf - roofOver, shOut), f.at(mid + shHalf + roofOver, shOut)],
+      false,
+    ),
+    sign: poly([f.at(poleAt, poleOut), f.at(poleAt, poleOut + poleLen)], false),
+    signFlag: poly([
+      f.at(poleAt - flagHalf, poleOut + poleLen),
+      f.at(poleAt + flagHalf, poleOut + poleLen),
+      f.at(poleAt + flagHalf, poleOut + poleLen + flagHalf * 1.4),
+      f.at(poleAt - flagHalf, poleOut + poleLen + flagHalf * 1.4),
+    ]),
+  };
 }

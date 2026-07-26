@@ -25,6 +25,7 @@ import {
   stallId,
   stallPose,
   stallIsHidden,
+  stallOnLane,
   stallLengthPx,
   garageExitPath,
   garageExitEndT,
@@ -54,6 +55,9 @@ export function bayClassOf(row: ParkingRow): BayClass {
   // barrier, and a lorry or a coach does not go down the ramp. Its slots are not
   // on the map, so nothing about its geometry would ever have said so.
   if (row.kind === "garage") return "car";
+  // A halt on the carriageway is a bus stop by its own shape — it needs no
+  // `reserved` flag to say so, and authoring one would just be a second spelling.
+  if (row.kind === "busstop") return "bus";
   switch (row.reserved) {
     case "long":
       return "lorry";
@@ -152,6 +156,9 @@ export interface StallInfo {
   row: ParkingRow;
   facilityId: string;
   hidden: boolean; // a garage slot: the car is inside a building, not drawn
+  // A halt ON the carriageway rather than a bay off it. The vehicle never leaves
+  // its lane, so it keeps its road body and the traffic behind it queues.
+  onLane: boolean;
   // Where on the approach a car draws level with this stall (0..1 along the tile).
   t: number;
 }
@@ -259,6 +266,7 @@ export function createParkingRegistry(
         row,
         facilityId: f.id,
         hidden: stallIsHidden(row.kind),
+        onLane: stallOnLane(row.kind),
         t: pose.t,
       });
     }
@@ -391,7 +399,11 @@ export function createParkingRegistry(
 
     startTOf(ref) {
       const info = infoOf(ref);
-      return info ? manoeuvreStartT(info.row, ref.index, 1) : 0;
+      if (!info) return 0;
+      // A halt has no pull-in to start early for: the bus stops exactly AT the
+      // stop, on the lane it is already in.
+      if (info.onLane) return info.t;
+      return manoeuvreStartT(info.row, ref.index, 1);
     },
 
     exitFor(ref, laneOff) {

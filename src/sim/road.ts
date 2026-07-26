@@ -397,6 +397,12 @@ export interface Car {
   // Position along `parkPath` as a fraction of its ARC LENGTH: 0 = out on the
   // lane, 1 = at rest in the bay.
   manoeuvre: number;
+  // True when the claimed stall is a HALT ON THE CARRIAGEWAY (a bus stop) rather
+  // than a bay off it. Cached from the stall because `bodyPoints` reads it every
+  // tick for every vehicle. It inverts the rule the rest of parking rests on: a
+  // halted bus KEEPS its road body, which is precisely why the traffic behind it
+  // queues instead of flowing past.
+  parkOnLane: boolean;
   // True while the car is driving a garage's FORWARD exit curve, where `manoeuvre`
   // runs 0 (at the ramp mouth) → 1 (back on the road). A rank of bays instead
   // replays its entry curve BACKWARDS (1 → 0), which is the real motion: you
@@ -981,7 +987,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // The total fleet stays bounded: cap + the level's stall count.
   function activeCarCount(): number {
     let n = 0;
-    for (const c of cars) if (c.phase !== "parked") n++;
+    // A bus at a STOP is still standing in the road, so it still counts against
+    // the density the cap describes. Only a vehicle that has left the carriageway
+    // for a bay frees the slot it was using.
+    for (const c of cars) if (c.phase !== "parked" || c.parkOnLane) n++;
     return n;
   }
 
@@ -1008,6 +1017,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (idx < 0) return null;
     car.routeStep = idx + 1;
     return car.routePlan[idx].exitArm;
+  }
+
+  // Is this vehicle a physical obstacle on the carriageway? Everything is, EXCEPT
+  // a vehicle that has left the road for a bay — and a bus at a HALT has not left
+  // it. Every gate that used to test `phase === "parked"` has to ask this instead:
+  // "parked" stopped meaning "off the road" the moment stops existed, and a gate
+  // that skips a halted bus lets the traffic behind it drive through it.
+  function blocksLane(car: Car): boolean {
+    return car.phase !== "parked" || car.parkOnLane;
   }
 
   // The integer lane the car logically occupies (its continuous position rounded).
@@ -1214,11 +1232,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const myRear = car.headProgress - car.length;
     for (const o of cars) {
       if (o === car) continue;
-      // A parked car is off the carriageway, but this gate reads `headProgress`
-      // and `laneOf` straight off the vehicle rather than its body points — and
-      // both are FROZEN at the peel-off point for the whole stay. Left in, one
-      // parked car would veto every lane change on its tile until it drove away.
-      if (o.phase === "parked") continue;
+      // A vehicle in a bay is off the carriageway, but this gate reads
+      // `headProgress` and `laneOf` straight off it rather than its body points —
+      // and both are FROZEN at the peel-off point for the whole stay. Left in, one
+      // parked car would veto every lane change on its tile until it drove away. A
+      // halted bus is a real obstacle in the lane and stays in.
+      if (!blocksLane(o)) continue;
       const oh = o.path[o.headIndex];
       if (getCoordinatesId(oh.coord) !== headId) continue;
       if (oh.entryPort !== head.entryPort) continue; // same travel direction only
@@ -1524,8 +1543,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function bodyTileIds(car: Car): Set<string> {
     // A parked car is off the carriageway: it holds no tile, occupies no junction
     // and gates nobody. This is the road-side counterpart of the rule that makes
-    // the whole feature safe — see `bodyPoints`.
-    if (car.phase === "parked") return new Set();
+    // the whole feature safe — see `bodyPoints`. A bus at a STOP is the exception:
+    // it never left the lane, so it holds its tile like any stationary vehicle.
+    if (car.phase === "parked" && !car.parkOnLane) return new Set();
     const headDistance = car.headIndex + car.headProgress;
     const tailDistance = headDistance - car.length;
     const tailIndex = Math.max(0, Math.floor(tailDistance + 1e-9));
@@ -1625,7 +1645,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     //              PARKING.pullOutGap — not during it.
     const occupied =
       car.phase === "parked"
-        ? 0
+        ? // A bus at a STOP has not left the road: it is standing in its lane with
+          // its doors open, and the queue behind it is the entire point. Only a
+          // vehicle in a BAY is off the carriageway.
+          car.parkOnLane
+          ? car.length
+          : 0
         : car.phase === "entering"
           ? car.length * (1 - car.manoeuvre)
           : car.length;
@@ -1797,11 +1822,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
       if (other === car) continue;
-      // Parked cars report no body at all (see `bodyPoints`), so skipping them
-      // here changes no outcome — it just keeps them out of the hottest loop in
-      // the tick, which a busy car park would otherwise fill with vehicles that
-      // are never going to be an obstacle.
-      if (other.phase === "parked") continue;
+      // A vehicle in a BAY reports no body at all (see `bodyPoints`), so skipping
+      // it changes no outcome — it just keeps it out of the hottest loop in the
+      // tick, which a busy car park would otherwise fill with vehicles that can
+      // never be an obstacle. A bus at a HALT is still standing in the lane and
+      // must NOT be skipped, or the queue behind it drives straight through it.
+      if (!blocksLane(other)) continue;
       const otherPts = bodyPoints(other);
       // Swept-body following, overlap-RECOVERING: keep our head a gap behind the
       // REAR-most point of any same-direction body whose lateral extent is within a
@@ -2103,6 +2129,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (!ref) return;
     if (!parking.claim(ref, car.id)) return;
     car.stall = ref;
+    car.parkOnLane = parking.info(ref)?.onLane ?? false;
   }
 
   function facilityOfTile(tileId: string): string | null {
@@ -2118,6 +2145,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     car.stall = null;
     car.parkPath = null;
     car.manoeuvre = 0;
+    car.parkOnLane = false;
   }
 
   // Has the car reached the point on its approach where it should swing into its
@@ -2150,7 +2178,31 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return true;
   }
 
+  // How long this vehicle stays. Authored PER FACILITY where the level says so: a
+  // kerbside space that turns over every twenty seconds beside a garage whose cars
+  // sit for two minutes is what makes a street read as a street — and a bus stop,
+  // whose dwell is seconds, is what makes a halt read as a halt rather than as a
+  // breakdown.
+  function drawDwell(car: Car): number {
+    const authored = car.stall
+      ? parking.dwellOf(parking.info(car.stall)?.facilityId ?? "")
+      : undefined;
+    const lo = authored ? authored[0] : dwellRange.min;
+    const hi = authored ? authored[1] : dwellRange.max;
+    return lo + parkRng() * Math.max(0, hi - lo);
+  }
+
   function beginEntering(car: Car): void {
+    // A HALT needs no manoeuvre at all: the bus is already where it is stopping.
+    // Skipping straight to `parked` is not a shortcut — building a degenerate
+    // zero-length curve for it would divide by its own length.
+    if (car.parkOnLane) {
+      car.phase = "parked";
+      car.velocity = 0;
+      car.manoeuvre = 1;
+      car.dwellLeft = drawDwell(car);
+      return;
+    }
     // Anchor the curve at where the car ACTUALLY is, so the sprite never jumps
     // sideways as the swing starts.
     const path = parking.pathFor(car.stall!, laneOffsetOf(car), car.headProgress);
@@ -2266,12 +2318,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const slotFront = car.headProgress;
     const slotRear = car.headProgress - car.length - PARKING.pullOutGap;
     for (const other of cars) {
-      // Only vehicles actually driving can close the gap. Another car waiting to
-      // leave its own bay must not veto this one — two neighbours would then hold
-      // each other in place for ever, each waiting for a road the other is sitting
-      // on. Their bays are at least a pitch apart, so their claimed slots do not
-      // overlap, and ordinary following takes over once both are moving.
-      if (other === car || other.phase !== "driving") continue;
+      // Another car waiting to leave its own bay must not veto this one — two
+      // neighbours would hold each other in place for ever, each waiting for a road
+      // the other is sitting on. Their bays are at least a pitch apart, so their
+      // claimed slots do not overlap, and ordinary following takes over once both
+      // are moving. A bus HALTED in the lane is a different matter: it is genuinely
+      // parked across the road this car wants, so it counts.
+      if (other === car) continue;
+      if (other.phase !== "driving" && !other.parkOnLane) continue;
       // A car that has STOPPED behind us has stopped BECAUSE of us — the slot was
       // claimed the moment the dwell ended, so it braked for a body in its lane.
       // That is the gap, and treating it as an obstacle instead is a guaranteed
@@ -2359,21 +2413,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.manoeuvre = Math.min(1, car.manoeuvre + step);
       if (car.manoeuvre >= 1) {
         car.phase = "parked";
-        // Dwell is authored PER FACILITY where the level says so: a kerbside bay
-        // that turns over every twenty seconds beside a garage whose cars sit for
-        // two minutes is what makes a street read as a street.
-        const authored = car.stall
-          ? parking.dwellOf(parking.info(car.stall)?.facilityId ?? "")
-          : undefined;
-        const lo = authored ? authored[0] : dwellRange.min;
-        const hi = authored ? authored[1] : dwellRange.max;
-        car.dwellLeft = lo + parkRng() * Math.max(0, hi - lo);
+        car.dwellLeft = drawDwell(car);
       }
       return;
     }
 
     if (car.phase === "parked") {
       car.dwellLeft -= dt;
+      // A HALT just drives on when the time is up. There is no gap to wait for and
+      // no slot to claim — the bus never gave up the lane it is standing in.
+      if (car.parkOnLane) {
+        if (car.dwellLeft <= 0) resumeFromStall(car);
+        return;
+      }
       // Dwell over: START LEAVING — indicator on. The car does not move yet (the
       // "leaving" branch below only rolls when the road is clear), but it claims
       // its lane slot from this moment, so traffic behind it brakes and the gap it
@@ -2707,6 +2759,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       stall: null,
       parkPath: null,
       manoeuvre: 0,
+      parkOnLane: false,
       parkExiting: false,
       dwellLeft: 0,
       parkTries: 0,
@@ -2810,6 +2863,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       stall: null,
       parkPath: null,
       manoeuvre: 0,
+      parkOnLane: false,
       parkExiting: false,
       dwellLeft: 0,
       parkTries: 0,
