@@ -912,7 +912,15 @@ export function createGame(
     const dt = last ? (now - last) / 1000 : 0;
     last = now;
     if (!paused.value) {
-      const scaled = dt * speed.value;
+      // Hold the whole world still while a Ready screen is up. The spawner was
+      // already gated on the objective being live ("nothing spawns on the Ready
+      // screen"), but the TRAINS were not: they drove off behind the overlay, and
+      // any delivery made before the player pressed Start landed before
+      // `tracker.start()` — so it was never counted and the level could not be
+      // won. Freezing dt keeps sampling and rendering intact, and stops the
+      // scored clock running on a screen the player has not answered yet.
+      const waitingToStart = mode.hud.startOverlay && objective.phase === "ready";
+      const scaled = waitingToStart ? 0 : dt * speed.value;
       clock += scaled;
       // Advance the predefined spawn schedule only while the objective is live,
       // so the schedule clock aligns with the scored elapsed time (and nothing

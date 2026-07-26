@@ -196,7 +196,7 @@
       </div>
     </div>
     <div
-      v-if="hud.endOverlay && (phase === 'won' || phase === 'lost')"
+      v-if="hud.endOverlay && (phase === 'won' || phase === 'lost') && !endDismissed"
       class="game-overlay"
     >
       <div class="overlay-card">
@@ -218,6 +218,13 @@
         </p>
         <p v-else class="overlay-desc">{{ lostReason }}</p>
         <button class="overlay-btn" @click="retry">Retry</button>
+        <!-- Train Valley's ∞: the result screen must not be a trap. Without it
+             the overlay covers the whole board for good, and a level that
+             completes on its own (or one you simply want to keep playing with)
+             leaves every switch and signal unclickable. -->
+        <button class="overlay-btn overlay-btn--ghost" @click="keepPlaying">
+          Keep playing
+        </button>
         <button class="overlay-btn overlay-btn--ghost" @click="openPicker">
           Change game mode
         </button>
@@ -464,11 +471,21 @@ class PlayView extends Vue {
     (window as unknown as { __game?: Game }).__game = this.game;
   }
 
+  // Set when the player dismisses the result screen to stay on the board. Reset
+  // on any fresh run, so the next result is shown again.
+  endDismissed = false;
+
+  keepPlaying() {
+    this.endDismissed = true;
+  }
+
   startPlaying() {
+    this.endDismissed = false;
     this.game.startObjective();
   }
 
   retry() {
+    this.endDismissed = false;
     this.game.reset();
     this.game.startObjective();
   }

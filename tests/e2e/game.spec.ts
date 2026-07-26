@@ -41,6 +41,14 @@ test.describe("Train game", () => {
     await page.goto("/");
     await expect(page.locator(".train-locomotive")).toHaveCount(2);
 
+    // Plain `/` opens the DEFAULT mode (puzzle), which shows a Ready screen —
+    // and the world is held still until it is answered. This assertion is about
+    // the simulation moving trains, not about them moving before the player has
+    // started, so press Start first. It used to pass without this only because
+    // trains drove off behind the overlay, which also meant any delivery made
+    // before Start went uncounted and the level could never be won.
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
     // Read each train's tile coordinate straight from the live simulation.
     const readPositions = () =>
       page.evaluate(() => {
