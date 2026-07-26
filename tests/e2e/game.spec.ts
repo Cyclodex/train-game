@@ -515,6 +515,147 @@ test.describe("Train game", () => {
     expect(await balance()).toBe(start);
   });
 
+  test("tycoon: the calendar turns and the railway is taxed for what you laid", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    // The second clock through the real UI (design doc §1.3). Everything about
+    // the levy is pure and unit-tested in `tax.spec.ts`; what only a browser
+    // can prove is that it is WIRED — that the frame loop runs it, that the
+    // Ready card holds it, and that the HUD says so. A hidden pane runs no
+    // requestAnimationFrame, so this cannot be checked by poking the preview.
+    await page.goto("/#/play?mode=tycoon&board=taxyear");
+    const money = () =>
+      page.evaluate(() => {
+        const m = (window as any).__game.money;
+        return {
+          balance: m.balance as number,
+          taxPaid: m.taxPaid as number,
+          taxPerYear: m.taxPerYear as number,
+          dateLabel: m.dateLabel as string,
+        };
+      });
+
+    // Behind the Ready card nothing accrues — the scored clock is frozen there
+    // and the levy is denominated in it.
+    await expect(page.locator(".score-calendar")).toContainText("Jan 1830");
+    await page.waitForTimeout(1500);
+    expect((await money()).dateLabel).toBe("Jan 1830");
+
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const budget = (await money()).balance;
+
+    // Nothing laid yet, so nothing owed: only PLAYER-built track is taxed, and
+    // the board's own line is the company's existing one.
+    expect((await money()).taxPerYear).toBe(0);
+
+    // Close the gap: two tiles at $1,000, and the upkeep line jumps to $600/yr.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("1,1", 1).click(); // East=Right=1
+    await zone("4,1", 3).click(); // West=Left=3
+    await expect.poll(async () => (await money()).taxPerYear).toBe(600);
+    await expect(page.locator(".score-calendar")).toContainText("$600/yr");
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+
+    // A year here lasts 10 sim-seconds; run at 4x and watch one turn. The
+    // balance steps down by exactly the annual figure, and the date follows.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+    await expect
+      .poll(async () => (await money()).taxPaid, {
+        timeout: 30000,
+        intervals: [250],
+      })
+      .toBeGreaterThan(0);
+    const after = await money();
+    // Whole levies only, of $600 each — never a fractional trickle.
+    expect(after.taxPaid % 600).toBe(0);
+    expect(after.balance).toBe(budget - 2000 - after.taxPaid);
+    expect(after.dateLabel).not.toBe("Jan 1830");
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
+  test("tycoon: an unpayable levy folds the railway, and Retry gives it back", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    // Bankruptcy through the real UI. The rule itself is pure and covered in
+    // `bankruptcy.spec.ts`; what only a browser proves is that the frame loop
+    // runs it, that the HUD warns BEFORE the bill lands, and that the Failed
+    // overlay is a real exit rather than a dead board.
+    await page.goto("/#/play?mode=tycoon&board=bankrupt");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const money = () =>
+      page.evaluate(() => {
+        const m = (window as any).__game.money;
+        return { balance: m.balance as number, unpaid: m.unpaidTax as number };
+      });
+    const budget = (await money()).balance;
+    expect(budget).toBe(5000);
+
+    // Close the gap: $2,000 of track, and $1,200 a year to hold it.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("1,1", 1).click();
+    await zone("4,1", 3).click();
+    await expect.poll(async () => (await money()).balance).toBe(budget - 2000);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+    await expect(page.locator(".score-calendar")).toContainText("$1,200/yr");
+    // Not in trouble yet — $3,000 covers the next bill comfortably.
+    await expect(page.locator(".score-calendar")).not.toHaveClass(/--broke/);
+
+    // Leave the train on the platform and let the years turn.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+
+    // The warning comes FIRST, while bulldozing could still save the run. That
+    // ordering is the feature: a Failed screen with no warning is an ambush.
+    await expect(page.locator(".score-calendar")).toHaveClass(/--broke/, {
+      timeout: 30000,
+    });
+    await expect(page.locator(".score-tax-warn")).toBeVisible();
+    expect((await money()).unpaid).toBe(0); // warned, not yet folded
+
+    // Then the bill it cannot pay.
+    await expect(page.getByText("Failed")).toBeVisible({ timeout: 30000 });
+    await expect(page.locator(".overlay-desc")).toContainText("Bankrupt");
+    await expect(page.locator(".overlay-desc")).toContainText("bulldoze");
+    const broke = await money();
+    expect(broke.balance).toBe(0);
+    expect(broke.unpaid).toBeGreaterThan(0);
+
+    // Retry is a true do-over: the purse, the calendar and the gap all return.
+    // (It resets and starts in one go — no second Ready card.)
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByText("Failed")).toHaveCount(0);
+    expect(await money()).toEqual({ balance: budget, unpaid: 0 });
+    await expect(page.locator(".score-calendar")).toContainText("1830");
+    await expect(page.locator(".score-calendar")).not.toHaveClass(/--broke/);
+    await expect(page.locator('.level-tile[data-coord="2,1"] .tile')).toHaveCount(0);
+    // Nothing was bought this run, so the levy is $0 and the clock is harmless.
+    await expect(page.locator(".score-calendar")).toContainText("$0/yr");
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
   test("tycoon: lakevalley-open — build the ring, dispatch all three, win with the money accounted", async ({
     page,
   }) => {
@@ -536,9 +677,22 @@ test.describe("Train game", () => {
 
     const balance = () =>
       page.evaluate(() => (window as any).__game.money.balance as number);
+    // What went on TRACK, which is what the build gestures below are about.
+    // The raw balance is no longer a stable measure of a purchase on this
+    // board: the annual levy comes out of the same pool on its own schedule,
+    // so a `balance === budget − 5000` assertion would pass or fail on whether
+    // an in-game year happened to turn during the click.
+    const trackSpent = () =>
+      page.evaluate(() => (window as any).__game.money.trackSpent as number);
     const budget = await balance();
     expect(budget).toBe(15000);
     await expect(page.locator(".fare-pin")).toHaveCount(3);
+
+    // The second clock is on this board: a date, not a stopwatch, and no
+    // upkeep yet because nothing has been laid (only player-built track is
+    // taxed).
+    await expect(page.locator(".score-calendar")).toContainText("1830");
+    await expect(page.locator(".score-calendar")).toContainText("$0/yr");
 
     // The choreography below assumes the seeded 3-cycle. Assert it first so a
     // colour-assignment change fails loudly here instead of as a stuck train.
@@ -560,17 +714,19 @@ test.describe("Train game", () => {
       page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
     await zone("2,4", 2).click(); // South=Bottom=2, West=Left=3
     await zone("6,4", 2).click(); // ring: 5 new pieces
-    await expect.poll(balance).toBe(budget - 5000); // the 5-piece ring run
+    await expect.poll(trackSpent).toBe(5000); // the 5-piece ring run
     await page.keyboard.press("Escape");
     await zone("3,5", 3).click();
     await zone("2,5", 2).click(); // station entry from the ring ([E,S])
-    await expect.poll(balance).toBe(budget - 6000);
+    await expect.poll(trackSpent).toBe(6000);
     await page.keyboard.press("Escape");
     await zone("2,4", 2).click();
     await zone("2,5", 2).click(); // station entry from the west side ([N,S])
-    await expect.poll(balance).toBe(budget - 7000);
+    await expect.poll(trackSpent).toBe(7000);
     await page.keyboard.press("Escape");
-    expect(await balance()).toBe(budget - 7000); // Esc lays nothing chargeable
+    expect(await trackSpent()).toBe(7000); // Esc lays nothing chargeable
+    // The railway now costs something to hold: 7 pieces at $150 a year.
+    await expect(page.locator(".score-calendar")).toContainText("$1,050/yr");
     await page.getByTestId("build-toggle").click();
 
     // The bought junction renders and carries merged switch arms (a junction
@@ -622,6 +778,10 @@ test.describe("Train game", () => {
       const g = (window as any).__game;
       return {
         counters: g.objective.counters,
+        // Read in the SAME evaluate as the counters: the ledger stops moving
+        // once the phase leaves "playing", but reading the two across separate
+        // round trips is a race waiting to be introduced.
+        taxPaid: g.money.taxPaid as number,
         stars: Object.fromEntries(
           g.objective.stars.map((s: { id: string; earned: boolean }) => [
             s.id,
@@ -630,11 +790,25 @@ test.describe("Train game", () => {
         ),
       };
     });
+    const tax = end.taxPaid;
     expect(end.counters.delivered).toBe(3);
-    expect(end.counters.spent).toBe(7000);
+    // Track and upkeep are both outgoings, and `spent` is all of them — but
+    // only `trackSpent` is the build, which is what the Under budget goal
+    // scores. Splitting them is what stops a goal about BUILDING quietly
+    // becoming a goal about TIME.
+    expect(end.counters.trackSpent).toBe(7000);
+    expect(end.counters.spent).toBe(7000 + tax);
+    // The run spans 2-3 in-game years, so the levy actually landed: a tax you
+    // never pay is not a clock.
+    expect(tax).toBeGreaterThan(0);
     expect(end.counters.earned).toBeGreaterThan(0);
-    expect(end.counters.balance).toBe(budget - 7000 + end.counters.earned);
+    expect(end.counters.balance).toBe(
+      budget - 7000 - tax + end.counters.earned
+    );
     expect(await balance()).toBe(end.counters.balance);
+    // The full rebuild is still comfortably affordable with the tax on top —
+    // the budget steers with goals, not scarcity.
+    expect(end.counters.balance).toBeGreaterThan(0);
     expect(end.stars["payday"]).toBe(true);
     expect(end.stars["rail-baron"]).toBe(true);
     expect(end.stars["under-budget"]).toBe(false);

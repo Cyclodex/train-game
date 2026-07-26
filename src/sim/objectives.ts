@@ -44,6 +44,20 @@ export interface Counters {
   // "buy ≥ N track pieces" star reads. Optional like the other economy fields,
   // and for the same fixture-compatibility reason.
   tilesBuilt?: number;
+  // Money committed to TRACK this run, net of bulldoze refunds — i.e. `spent`
+  // minus everything that was not a build. It exists because `spent` now also
+  // carries the annual TAX, and a "win while spending at most $X" star must
+  // keep measuring build discipline: charged to `spent`, the tax would turn
+  // that star into a second time star (dawdle and lose it), which is exactly
+  // the axis Payday already scores. Same netting rule as `tilesBuilt`, so the
+  // two always agree about what the player kept.
+  trackSpent?: number;
+  // Upkeep the company could not pay — the shortfall on the first annual levy
+  // that outran the balance. Non-zero means BANKRUPT. A number rather than a
+  // flag, to match every other counter here and because how badly you missed is
+  // worth knowing. Only the TAX can produce it: an unaffordable build is
+  // refused up front, and a refusal is a choice, not insolvency.
+  unpaidTax?: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -75,6 +89,13 @@ export interface ObjectiveSpec {
     // play, undelivered) at once — the backlog the player let pile up. Off by
     // default so other modes never trip it.
     maxActiveTrains?: number;
+    // BANKRUPTCY (Tycoon): lose when an annual levy outruns the balance. Off by
+    // default, and inert on any board with no calendar — no tax, no shortfall.
+    // Note what it deliberately is NOT: "the balance reached zero". Being broke
+    // with the railway already built and the trains running is not a failure,
+    // it is a tight win, and several measured lines finish exactly like that.
+    // The failure is owing money you cannot pay.
+    onBankruptcy?: boolean;
   };
   stars?: StarSpec[];
 }
@@ -102,6 +123,14 @@ export interface Observation {
   balance?: number;
   earned?: number;
   spent?: number;
+  // Money committed to track so far, net of refunds. An ABSOLUTE for the same
+  // reason the three above are: `game.ts` already keeps this running total
+  // beside `boughtPieces`, so re-deriving it from deltas here would be a second
+  // source of truth that can drift.
+  trackSpent?: number;
+  // Upkeep the company could not pay, cumulative. An ABSOLUTE, like the ledger
+  // figures above; `game.ts` owns the running total.
+  unpaidTax?: number;
   // Track pieces bought this tick (Tycoon build). A DELTA, unlike the ledger
   // absolutes above: a purchase is an event, not a running total the game
   // already owns elsewhere.
@@ -153,6 +182,8 @@ function zeroCounters(): Counters {
     balance: 0,
     earned: 0,
     spent: 0,
+    trackSpent: 0,
+    unpaidTax: 0,
     tilesBuilt: 0,
   };
 }
@@ -203,12 +234,24 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (obs.balance !== undefined) counters.balance = obs.balance;
       if (obs.earned !== undefined) counters.earned = obs.earned;
       if (obs.spent !== undefined) counters.spent = obs.spent;
+      if (obs.trackSpent !== undefined) counters.trackSpent = obs.trackSpent;
+      if (obs.unpaidTax !== undefined) counters.unpaidTax = obs.unpaidTax;
       counters.tilesBuilt =
         (counters.tilesBuilt ?? 0) + (obs.tilesBuiltDelta ?? 0);
 
       // Win takes priority over any same-tick fail.
       if (counters.delivered >= spec.deliveriesRequired) {
         phase = "won";
+        return;
+      }
+      // Bankruptcy first among the fail checks: it is the most specific reason
+      // the run ended, and telling the player "you ran out of money" beats any
+      // symptom of it that another check might notice on the same tick.
+      if (spec.fail?.onBankruptcy && (counters.unpaidTax ?? 0) > 0) {
+        phase = "lost";
+        lostReason =
+          "Bankrupt — the upkeep outgrew the railway. Build leaner, " +
+          "or bulldoze track you no longer need.";
         return;
       }
       if (

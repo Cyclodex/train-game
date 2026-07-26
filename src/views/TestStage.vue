@@ -40,6 +40,19 @@
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
       </span>
+      <!-- The second clock, on the stage as well as in /play: `/test/taxyear`
+           is where the mechanic is demonstrated, so the date and the annual
+           upkeep have to be readable here. Absent on every board that named no
+           calendar. -->
+      <span
+        v-if="money.enabled && money.dateLabel"
+        class="stage-calendar"
+        :class="{ 'stage-calendar--broke': money.taxUnaffordable }"
+        title="The year, and this railway's annual upkeep"
+      >
+        📅 {{ money.dateLabel }} · 🏛 ${{ money.taxPerYear.toLocaleString("en-US") }}/yr
+        <template v-if="money.taxUnaffordable"> ⚠</template>
+      </span>
     </div>
 
     <div
@@ -176,6 +189,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
     spawnAtSec: t.spawnAtSec,
   }));
 }
@@ -515,6 +529,15 @@ export default toNative(TestStage);
   font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+}
+.stage-calendar {
+  color: #b6c2cc;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.stage-calendar--broke {
+  color: #e2574c; // next year's bill is more than there is in hand
 }
 .level {
   display: grid;
