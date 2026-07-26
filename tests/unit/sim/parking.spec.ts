@@ -18,7 +18,13 @@ import {
   garageExitFrom,
   type ParkingRow,
 } from "@/tiles/parking";
-import { createParkingRegistry, stallFits, vehicleCanPark } from "@/sim/parking";
+import {
+  createParkingRegistry,
+  stallFits,
+  vehicleCanPark,
+  vehicleBaySize,
+  baySizeOf,
+} from "@/sim/parking";
 import { createRoadSim } from "@/sim/road";
 import { SCENARIOS } from "@/levels/test";
 
@@ -273,6 +279,56 @@ describe("the parking registry — occupancy and fit", () => {
       if (!ref) continue;
       expect(reg.info(ref)!.t).toBeGreaterThanOrEqual(0.6);
     }
+  });
+
+  it("keeps each class to its own bays — a bay is not just a space you fit in", () => {
+    // What the player reported: cars sitting in the lorry bays. Measured, it was
+    // worse than that — a coach also took ordinary kerb spaces (a bus is 55px, a
+    // parallel bay 60px) and a lorry drove down the ramp of an underground
+    // garage. All three fit; none of them belongs.
+    const std: ParkingRow = { from: Position.Left, kind: "parallel", count: 1 };
+    const long: ParkingRow = { ...std, reserved: "long" };
+    const deep: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 1 };
+    const garage: ParkingRow = { from: Position.Left, kind: "garage", count: 8 };
+
+    // Ordinary bays: cars, and nothing bigger.
+    expect(stallFits("car", std, CAR_LEN)).toBe(true);
+    expect(stallFits("bus", std, CAR_LEN)).toBe(false);
+    expect(stallFits("truck", std, CAR_LEN)).toBe(false);
+    expect(stallFits("car", deep, CAR_LEN)).toBe(true);
+
+    // Lorry bays: lorries and coaches, and NOT cars however much room is left.
+    expect(stallFits("truck", long, CAR_LEN)).toBe(true);
+    expect(stallFits("bus", long, CAR_LEN)).toBe(true);
+    expect(stallFits("car", long, CAR_LEN)).toBe(false);
+
+    // A garage has a height barrier: cars go down the ramp, lorries do not. Its
+    // slots are not on the map, so no amount of geometry would have said so.
+    expect(stallFits("car", garage, CAR_LEN)).toBe(true);
+    expect(stallFits("truck", garage, CAR_LEN)).toBe(false);
+    expect(stallFits("bus", garage, CAR_LEN)).toBe(false);
+
+    // And the classes themselves.
+    expect(vehicleBaySize("car")).toBe("standard");
+    expect(vehicleBaySize("truck")).toBe("long");
+    expect(vehicleBaySize("bus")).toBe("long");
+    expect(baySizeOf(garage)).toBe("standard");
+  });
+
+  it("counts a lorry-only facility as real capacity, not as a full car park", () => {
+    // The sign asks "could ANY vehicle use this?", so a lay-by of two lorry bays
+    // reads 2/2 rather than reporting nought capacity and showing VOLL beside two
+    // empty spaces. The ROUTER always names the kind, so a car is still never sent
+    // there.
+    const reg = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "parallel", count: 1, reserved: "long" }]),
+      CAR_LEN,
+    );
+    expect(reg.capacity("P")).toBe(1);
+    expect(reg.availableFor("P", "truck")).toBe(1);
+    expect(reg.availableFor("P", "car")).toBe(0);
+    expect(reg.openFacilities("car")).toEqual([]);
+    expect(reg.openFacilities("truck").map(f => f.id)).toEqual(["P"]);
   });
 
   it("refuses a vehicle that does not physically fit the bay", () => {
@@ -555,6 +611,57 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     const finalUsed = sim.parkingStatus().reduce((n, f) => n + (f.capacity - f.free), 0);
     expect(peakOccupied).toBeGreaterThan(3);
     expect(finalUsed).toBeGreaterThan(0);
+  });
+
+  it("never lets a car end up in a lorry bay, over a whole run", () => {
+    // The end-to-end version of the rule, on the map built to show it: a street
+    // with car spaces at one end and a lay-by at the other, and enough lorries and
+    // coaches in the mix to want it.
+    const s = SCENARIOS.find(x => x.id === "parkinglorry")!;
+    const sim = createRoadSim({
+      level: s.level,
+      width: s.size!.cols,
+      height: s.size!.rows,
+      seed: 5,
+      spawnInterval: s.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.2,
+      maxCars: s.traffic!.maxCars,
+      mix: s.traffic!.mix,
+    });
+    // Which stalls are lorry bays, straight from the level.
+    const lorryStalls = new Set<string>();
+    for (const [tileId, cell] of Object.entries(s.level)) {
+      for (const row of cell.parking?.rows ?? []) {
+        if (row.reserved !== "long") continue;
+        for (let i = 0; i < row.count; i++) {
+          lorryStalls.add(`${tileId}|${row.from}|${row.side ?? "right"}|${i}`);
+        }
+      }
+    }
+    expect(lorryStalls.size).toBeGreaterThan(0);
+
+    let sawLorryParked = 0;
+    let sawCarParked = 0;
+    for (let i = 0; i < 2400; i++) {
+      sim.step(0.05, () => false);
+      const kindById = new Map(sim.cars().map(c => [c.id, c.kind]));
+      for (const [stall, carId] of Object.entries(sim.parkingOccupancy())) {
+        const kind = kindById.get(carId);
+        if (!kind) continue;
+        if (lorryStalls.has(stall)) {
+          expect(kind, `a ${kind} took the lorry bay ${stall}`).not.toBe("car");
+          sawLorryParked++;
+        } else {
+          expect(kind, `a ${kind} took the car bay ${stall}`).toBe("car");
+          sawCarParked++;
+        }
+      }
+    }
+    // And both kinds of bay were genuinely exercised, or the assertions above
+    // would be proving nothing.
+    expect(sawLorryParked).toBeGreaterThan(0);
+    expect(sawCarParked).toBeGreaterThan(0);
   });
 
   it("leaves every existing road scenario's parking layer empty", () => {

@@ -386,10 +386,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   garage: 4-6) and let the big surface lot be the one that always has room.
   Conversely: a rank of 2 bays on a 200px tile reads as an UNFINISHED car park, not
   a small one — fill the tile (3 parallel / 7 perpendicular).
-- Only SINGLE-BOX vehicles park (`vehicleCanPark`, no semis) and the fit gate is
-  real body length vs real bay length (`stallFits`), never a category flag. Nothing
-  downstream catches an oversized parked car: the swept-overlap check only compares
-  bodies within 0.7 lanes, and a bay is further out than that by construction.
+- A BAY SERVES ONE CLASS. `stallFits` gates on `vehicleBaySize(kind) ===
+  baySizeOf(row)` FIRST, then on real body length as a backstop. Geometry alone is
+  not enough and shipped wrong once: a car took a `long` bay (fits, with room to
+  spare), a coach took an ordinary kerb space (bus 55px vs a 60px parallel bay) and
+  a lorry drove down a GARAGE ramp (`stallLengthPx` is Infinity there). All three
+  measured true; all three wrong; and invisible to every other check, because the
+  swept-overlap test only compares bodies within 0.7 lanes and a bay is further out
+  than that by construction. Garage = "standard" (a height barrier — its slots are
+  not on the map, so no geometry would ever have said so). Only SINGLE-BOX vehicles
+  park at all (`vehicleCanPark`, no semis).
+- `freeCount`/`capacity` with NO kind means "could ANY vehicle use this" (car OR
+  lorry), so a lay-by of two lorry bays reads `P 2/2` instead of reporting nought
+  capacity and showing VOLL beside two empty spaces. The ROUTER always names the
+  kind (`availableFor`), so a car is still never sent to lorry-only space.
+- `/test/parkinglorry` is the demo and the regression: car spaces at one end, a
+  lay-by at the other, and a mix heavy enough in lorries and coaches to fill it.
 - Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
   (no permit system) — that is what makes a car park look real, not a bug.
 - TESTS: the sweep measures flow against MOVING vehicles (`movingCarCount`) and

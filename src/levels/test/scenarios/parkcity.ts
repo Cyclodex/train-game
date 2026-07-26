@@ -132,6 +132,22 @@ function build(): Level {
   for (let x = 0; x < COLS; x++) {
     road(x, BACK_Y, SIDE_X.includes(x) ? fourWayCross() : twoWay(Left, Right));
   }
+  // A lorry lay-by behind the shops. A long bay is 110px, so exactly ONE fits per
+  // tile — which is what a lay-by looks like. Cars cannot use these however empty
+  // they stand, and lorries and coaches cannot use anything else on the map: a bay
+  // serves one class of vehicle, never anything that merely fits inside it.
+  for (const x of [6, 7]) {
+    const cell = level[`${x},${BACK_Y}`];
+    level[`${x},${BACK_Y}`] = {
+      ...cell,
+      parking: {
+        facility: "lorry",
+        label: "Lieferhof",
+        dwellSec: [25, 50],
+        rows: [{ from: Left, kind: "parallel", count: 1, reserved: "long" }],
+      },
+    };
+  }
   // The two side streets, top to bottom.
   for (const x of SIDE_X) {
     for (let y = 0; y < ROWS; y++) road(x, y, twoWay(Top, Bottom));
@@ -234,5 +250,11 @@ export const parkcity: TestScenario = {
     cityB: mkTrain("cityB", COLS - 1, RAIL_Y, "fraight", 2, `0,${RAIL_Y}`),
   },
   size: { cols: COLS, rows: ROWS },
-  traffic: { spawnInterval: 0.8, maxCars: 34 },
+  // A city carries more than cars. The lorries and coaches are what make the
+  // lay-by mean anything; the semis never park at all and simply drive through.
+  traffic: {
+    mix: { car: 1, truck: 0.45, bus: 0.3, semi: 0.15 },
+    spawnInterval: 0.8,
+    maxCars: 34,
+  },
 };

@@ -43,15 +43,39 @@ export function vehicleCanPark(kind: VehicleKind): boolean {
   return kind !== "semi";
 }
 
+// How big a space a vehicle needs, and how big a space a bay IS. A bay serves one
+// class and only that class — a lorry bay is not a car park with extra room, it
+// is a lorry bay, and a car sitting in one is the same nuisance on screen as it
+// is in life.
+export type BaySize = "standard" | "long";
+
+export function vehicleBaySize(kind: VehicleKind): BaySize {
+  return kind === "truck" || kind === "bus" ? "long" : "standard";
+}
+
+export function baySizeOf(row: ParkingRow): BaySize {
+  // A GARAGE is standard-size whatever its capacity: an underground car park has
+  // a height barrier, and a lorry or a coach does not go down the ramp. Its stalls
+  // are not on the map, so nothing about its geometry would ever have said so.
+  if (row.kind === "garage") return "standard";
+  return row.reserved === "long" ? "long" : "standard";
+}
+
 // Can a vehicle of `kind` use a stall in `row`?
 //
-// The gate is the vehicle's REAL BODY LENGTH against the bay's real length —
-// never a category. An admission flag that let a vehicle in without changing the
-// bay's size is exactly how a 92px semi ends up centred in a 60px bay, lying
-// across the two spaces either side of it, which the registry then hands to two
-// more cars. Nothing downstream would catch it either: the swept-overlap check
-// only compares bodies within 0.7 lanes of each other, and a bay is by
-// construction further out than that. The only guard is this function.
+// TWO gates, and both are needed.
+//
+// CLASS first: a bay serves exactly one size of vehicle. Geometry alone let a car
+// take a lorry bay (it fits, with room to spare), a coach take an ordinary kerb
+// space (a bus is 55px, a parallel bay 60px) and a lorry drive down a garage ramp
+// — all measured, all wrong, and all invisible to every other check in the sim.
+//
+// SIZE second, as the backstop that keeps the two honest: an admission flag that
+// let a vehicle in without the bay actually being big enough is how a 92px semi
+// ends up centred in a 60px bay, lying across the two spaces either side of it,
+// which the registry then hands to two more cars. Nothing downstream would catch
+// that either — the swept-overlap check only compares bodies within 0.7 lanes of
+// each other, and a bay is by construction further out than that.
 //
 // A reserved DISABLED or DELIVERY bay stays empty: nothing issues a permit yet,
 // so ordinary traffic keeps out and the bay reads as the real thing — a car park
@@ -64,6 +88,7 @@ export function stallFits(
 ): boolean {
   if (!vehicleCanPark(kind)) return false;
   if (row.reserved === "disabled" || row.reserved === "delivery") return false;
+  if (vehicleBaySize(kind) !== baySizeOf(row)) return false;
   const bodyPx = specLength(vehicleSpec(kind, carLength)) * tileSize;
   // 2% margin so a body that exactly fills its bay still reads as parked rather
   // than as bursting out of it.
@@ -230,10 +255,17 @@ export function createParkingRegistry(
     const info = infoOf(ref);
     if (!info) return false;
     // With no kind named the question is "could ANY vehicle use this?" — which a
-    // reserved bay answers no. Counting reserved bays as capacity would make a
-    // facility advertise space it can never hand out, so cars would keep routing
-    // to a car park that is full for them.
-    if (kind === undefined) return stallFits("car", info.row, carLength, tileSize);
+    // permit-only bay answers no, and a LORRY bay answers yes. Asking only about a
+    // car would report a lay-by of two lorry bays as a nought-capacity car park,
+    // and its sign would read VOLL while both spaces stood empty. The router never
+    // takes this branch: it always names the kind it is routing (`availableFor`),
+    // so a car is still never sent to a car park that only has lorry space.
+    if (kind === undefined) {
+      return (
+        stallFits("car", info.row, carLength, tileSize) ||
+        stallFits("truck", info.row, carLength, tileSize)
+      );
+    }
     return stallFits(kind, info.row, carLength, tileSize);
   }
 

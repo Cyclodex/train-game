@@ -52,7 +52,9 @@ export type StallKind = "parallel" | "perpendicular" | "angled" | "garage";
 //  • "disabled" / "delivery" — reserved bays. v1 paints them and keeps ordinary
 //    traffic out; nothing yet issues a permit, so they simply stay empty and read
 //    as the real thing (a car park is never 100% usable).
-//  • "long" — sized for a truck/semi/bus; short vehicles may use it too.
+//  • "long" — the lorry/coach bay. RESERVED for them: a car may not take one,
+//    however much room is left over (see sim/parking.ts `baySizeOf`). A bay
+//    serves one class of vehicle, never anything that merely fits.
 export type StallReservation = "disabled" | "delivery" | "long";
 
 // A run of stalls served by one approach of one tile, on one side of it.

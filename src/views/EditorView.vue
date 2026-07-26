@@ -107,7 +107,7 @@
             class="dock-btn lane-btn"
             :class="{ on: parkReserved === 'long' }"
             @click="parkReserved = parkReserved === 'long' ? undefined : 'long'"
-            title="Long bay — fits a lorry or a coach"
+            title="Lorry bay — reserved for lorries and coaches; cars may not use it"
           >🚛</button>
         </div>
         <!-- Which car park the facility brush sweeps tiles into. -->
@@ -598,7 +598,7 @@ const HINTS: Record<Tool, string> = {
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
-    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage instead of bays.",
+    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage instead of bays. A bay serves ONE class of vehicle: 🚛 marks a lorry bay that cars may not use, and everything else takes cars only — a garage has a height barrier, so no lorries down the ramp.",
   facility:
     "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
   terrain:

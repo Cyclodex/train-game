@@ -600,6 +600,10 @@ export interface RoadSim {
   frame(): RoadFrame;
   cars(): {
     id: string;
+    // What KIND of vehicle it is. Exposed so a test (and a debug overlay) can ask
+    // the question the parking rules turn on — "is this a car or a lorry?" —
+    // without re-deriving it from a body length.
+    kind: VehicleKind;
     tileId: string;
     headIndex: number;
     headProgress: number;
@@ -3010,6 +3014,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     cars() {
       return cars.map(c => ({
         id: c.id,
+        kind: c.kind,
         tileId: tileIdOf(c),
         headIndex: c.headIndex,
         headProgress: c.headProgress,
