@@ -529,7 +529,7 @@ board to do it on.
 |---|---|
 | **`lakevalley-open`** | The complete `lakevalley` minus exactly the ring's south run (`structuredClone` of the reference board with `2,5…6,5` deleted, so the two can never drift; the complete board stays the /test reference). The yellow station is severed outright; only the blue↔red trunk works on open. `allowIncomplete` extended to tolerate a severed depot. |
 | **Why the ring matters** | Proved, not assumed: the seeded assignment is a 3-cycle, and a 3-cycle over a tree of single track deadlocks in every dispatch order (the B<Y<R<B contradiction at the 1,2–2,2 needle). The ring is the passing loop; closing it *is* the level. |
-| **The economics** | Budget $15,000 against a designed 7-piece/$7,000 rebuild (5 ring + the station junction's two entries — the gesture prices a T-junction pair by pair). Deliberately ~2x the rebuild: an opening level teaches the verbs and steers with goals, not scarcity (TV1 gives 100,000$ against a ~10,000$ ring), and we have no bulldoze-refund or bankruptcy state to soften a misdrag. Fare decay 5/s for this board (per-board `TycoonTuning`, keyed off the levelId tail so /play and /test agree). |
+| **The economics** | Budget $15,000 against a designed 7-piece/$7,000 rebuild (5 ring + the station junction's two entries — the gesture prices a T-junction pair by pair). Deliberately ~2x the rebuild: an opening level teaches the verbs and steers with goals, not scarcity (TV1 gives 100,000$ against a ~10,000$ ring), a misdrag is recoverable (Bulldoze refunds what you bought) but there is still no bankruptcy state. Fare decay 5/s for this board (per-board `TycoonTuning`, keyed off the levelId tail so /play and /test agree). |
 | **M9 goals** | Three that pull apart, each verified reachable in a real browser: **Payday ($1,500)** — re-measured after the decay dial moved to 5/s: the same prompt full rebuild banks $1,763 of the $2,200 maximum (it banked $1,188 at 10/s), a serialized lean run $692, all-floor $550; **Under budget ($6,000)** — the ring + east-entry-only build, won via ordered dispatch + one switch flip, using the 4,2 signal as the waiting bay; **Rail baron (7 pieces)** — the full rebuild. Under budget and Rail baron are mutually exclusive by arithmetic, so the board is worth two runs (§1.3). |
 | **The sim facts the goals rest on** | Trains route by the ARMS at reservation time (no destination pathfinding), an unsignalled departure reserves the whole route to its end, and a train stopped at a signal keeps ~a consist-length of stale rear reservations. The lean line works *because* yellow's short consist releases 6,2; the north-entry variant deadlocks on exactly that tile. Measured in scripted playtests, then pinned by the e2e. |
 | **The e2e** | `tests/e2e/game.spec.ts` "tycoon: lakevalley-open" drives the whole loop through the UI: Start, three build gestures, the arm table, three pin dispatches, phase `won`, `balance = budget − spent + earned`, Payday + Rail baron earned / Under budget not. |
@@ -556,13 +556,14 @@ board to do it on.
 ### What remains, ordered, with sizes
 
 Done and struck from this list on 2026-07-26: the `routeDrawController`
-extraction, phase 2 (build in play) and the `lakevalley-open` re-cut — see the
-"as built" tables above. The goal sentence itself is met; everything below is
+extraction, phase 2 (build in play), the `lakevalley-open` re-cut, and — added
+late the same day — BULLDOZE (refund-what-you-bought) and the GRIDLOCK nudge.
+See the "as built" tables above and `KNOWHOW` → BULLDOZE + GRIDLOCK. The goal sentence itself is met; everything below is
 what separates *the loop works* from *a finished mode*.
 
 1. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
 2. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
-3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4).
+3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). Bulldoze exists already; what phase 3 adds here is a demolition/clearing PRICE.
 4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
 5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
 6. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
@@ -576,14 +577,29 @@ Carried forward from the last session and still open:
 - **Dynamic trains (G6).** `PlayView` renders `<Train v-for="t in trains">` from a
   fixed list, so player-called trains need either a pre-declared pool (cheap,
   enough for a campaign level) or real dynamic sprites.
-- **Removal / bulldozing.** Deliberately deferred with phase 3, where clearing
-  gets a price and "a reserved block ran through the deleted tile" is worth
-  answering properly.
+- ~~Removal / bulldozing~~ **DONE** (`game.bulldoze`): refunds only pieces the
+  player bought (`boughtPieces`), refuses depots and any tile a train occupies
+  or has reserved — which is also the answer to "what if a reserved block runs
+  through the deleted tile". A demolition FEE still belongs with phase 3.
 - **`generateLevel` does not paint terrain yet**, so generated and daily boards
   are still bare grass. Contained work, and it is what makes procgen levels look
   like places.
 - **`demoworld` has no terrain painted**, so `/play` still shows the old flat
   ground.
+
+### Known warts in the build tool (documented, not fixed)
+
+- **A train stranded at a dead end sits on its own anchor.** You cannot build or
+  raze under a train, so the rescue must be drawn from the FAR side, ending one
+  tile short of it (edge adjacency joins them). Recoverable but not
+  discoverable; the honest fix is the nudge pointing at the tile to build FROM.
+  Pinned by the "nowhere to go" e2e.
+- **Esc-finishing a route into the side of an existing line** lays a charged
+  $1,000 straight the cost tag never showed.
+- **Branching off the side of a line** buys an unreachable crossing rather than a
+  turnout. Open-end growth is the honest gesture; real turnouts are a phase-3
+  question, and the reason the build targets were NOT narrowed to open ends only
+  (lakevalley-open needs an interior-edge start to buy its station junction).
 
 ### The next step, concretely: tax + calendar, then goals on the Ready card
 
