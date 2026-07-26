@@ -303,6 +303,43 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
+  test("tycoon: aiming past the end of a line still grabs that line", async ({
+    page,
+  }) => {
+    test.setTimeout(60000);
+    // The reported miss: a line's end is ONE place but sits on the boundary
+    // between two tiles, and the wedge you had to hit tapered to a point at the
+    // tile centre — a few pixels at a fitted zoom. Overshooting by a pixel armed
+    // a different anchor on the empty tile. Both halves now delegate to the same
+    // open end, so either side works.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    await page.getByTestId("build-toggle").click();
+
+    // The target on the empty side is a half-tile BAND, not a tapering wedge:
+    // full tile height, where the wedge collapses to a point at the centre.
+    const target = page.locator('.level-tile[data-coord="3,1"] .zone[data-port="3"]');
+    await expect(target).toHaveClass(/zone--open/);
+    const band = await target.boundingBox();
+    const tile = await page.locator('.level-tile[data-coord="3,1"]').boundingBox();
+    expect(band!.height).toBeGreaterThanOrEqual(tile!.height - 1);
+
+    // Click the EMPTY tile beyond the rails, not the rails themselves.
+    await target.click();
+
+    // It armed the line's own end at 2,1-east. (The bands give way to the
+    // ordinary wedges once a gesture owns the board, so only the tile that owns
+    // the rail shows the armed marker from here on.)
+    await expect(
+      page.locator('.level-tile[data-coord="2,1"] .zone[data-port="1"]')
+    ).toHaveClass(/zone--armed/);
+
+    // Finish the route from there to prove the delegated anchor really builds.
+    await page.locator('.level-tile[data-coord="5,1"] .zone[data-port="3"]').click();
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(1);
+    await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(1);
+  });
+
   test("tycoon: bulldoze takes back a misdrag, and pays only for what was bought", async ({
     page,
   }) => {

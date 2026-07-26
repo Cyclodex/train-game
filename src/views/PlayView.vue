@@ -215,8 +215,12 @@
             class="preview-rail"
             :class="{ 'preview-rail--refused': previewRefused }"
           />
+          <!-- The four edge wedges, unchanged: every edge stays reachable,
+               because growing a branch off an existing line (which is how Lake
+               Valley's station junction gets bought back) starts on an interior
+               edge, not an open end. -->
           <path
-            v-for="p in EDGES"
+            v-for="p in wedgePorts(cell.key)"
             :key="'z' + p"
             :data-port="p"
             :d="zonePath(p)"
@@ -230,6 +234,37 @@
             @click.stop="onZoneClick(cell.key, p)"
             @mouseenter="onZoneEnter(cell.key, p)"
             @mouseleave="onZoneLeave(cell.key, p)"
+          />
+          <!-- The fix for aiming at the end of a line: a big disc ON TOP of the
+               wedges, centred exactly on the open end. Drawn last, so it takes
+               the click from the tapering triangle underneath.
+               Both tiles either side draw one at the SAME world point — each
+               clipped to its own half — so together they form one disc spanning
+               the boundary, and both halves arm the same open end. That is what
+               makes overshooting onto the empty neighbour harmless. Only while
+               idle: once a gesture owns the board the wedges pick direction. -->
+          <path
+            v-for="t in openEndTargets(cell.key)"
+            :key="'oe' + t.port"
+            class="zone zone--open"
+            :data-port="t.port"
+            :d="edgeBandPath(t.port)"
+            :class="{ 'zone--armed': isBuildArmed(t.end.id, t.end.edge) }"
+            @mousedown.stop="onZoneDown(t.end.id, t.end.edge)"
+            @mouseup.stop="onZoneUp(t.end.id, t.end.edge)"
+            @click.stop="onZoneClick(t.end.id, t.end.edge)"
+            @mouseenter="onZoneEnter(t.end.id, t.end.edge)"
+            @mouseleave="onZoneLeave(t.end.id, t.end.edge)"
+          />
+          <!-- The knob that says "a line ends here". Owner-drawn only, or the
+               facing pair would stack two. Never takes a click itself. -->
+          <circle
+            v-for="p in ownOpenEnds(cell.key)"
+            :key="'oek' + p"
+            class="open-end"
+            :cx="edgeMid(p).x"
+            :cy="edgeMid(p).y"
+            :r="config.tileSize * 0.1"
           />
         </svg>
       </div>
@@ -440,7 +475,8 @@ import { canBuildOn } from "@/tiles/terrain";
 import { railPathsFor } from "@/tiles/geometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { TRACK_COST_PER_TILE } from "@/sim/economy";
-import type { RouteOpts, RouteStep } from "@/tiles/routePlanner";
+import type { RouteOpts, RouteStep, OpenEnd } from "@/tiles/routePlanner";
+import { buildTargetsAt, openEndPortsAt } from "@/tiles/openEnds";
 import {
   createRouteDrawController,
   type RouteDrawController,
@@ -991,9 +1027,13 @@ class PlayView extends Vue {
         ? "A train has run out of track. Build the missing link — or bulldoze a wrong turn and try again."
         : "A train has run out of track: the line does not reach its station.";
     }
-    return this.canBuild
-      ? "Trains are waiting on each other. Flip a switch to let one through, or build a passing loop."
-      : "Trains are waiting on each other. Flip a switch to let one through.";
+    // Deliberately does NOT offer "build a passing loop": building grows a line
+    // from its OPEN END, and a deadlock happens on a network that is already
+    // joined up — so there is usually nothing to build from. Promising a fix
+    // the tool cannot perform is worse than naming the one that works.
+    // Branching a siding off the side of a line needs real turnouts first
+    // (today it would buy an unreachable crossing — see KNOWHOW).
+    return "Trains are waiting on each other. Flip a switch to let one through.";
   }
 
   // Live plan options for the route controller: the current world bounds and
@@ -1064,6 +1104,84 @@ class PlayView extends Vue {
 
   // The triangular hit-zone for one edge: edge corners to the tile centre, so
   // every point of the tile maps to exactly one edge (the editor's shape).
+  // Which edges of this tile are build targets right now, and how big a shape
+  // each gets. Idle: only open ends (this tile's own, or the facing neighbour's,
+  // which is what makes clicking either side of a line's end work). Routing: all
+  // four, unchanged — the click then chooses a direction, not an anchor.
+  // True only before a gesture has begun. The narrowing applies to the click
+  // that STARTS a route, not to the ones that steer it: `routeStarted` alone is
+  // the wrong test, because it only flips once the first segment is actually
+  // laid — so the second click of every gesture would still see the narrowed
+  // set and land on a delegating open-end target instead of the tile it aimed
+  // at. `armed` (and a live drag) is what says "a gesture owns the board now".
+  get buildIdle(): boolean {
+    const s = this.routeCtrl.state;
+    // Deliberately NOT gated on `pressFrom`. Doing so swapped the band for a
+    // wedge on MOUSEDOWN, so mouseup landed on a different element — and a
+    // browser fires `click` on the nearest common ancestor of the two, which
+    // carries no handler. The click silently never reached the controller and
+    // nothing armed. Whatever decides this must not change mid-press.
+    return !s.armed && !s.routeStarted;
+  }
+
+  // The open ends a click on THIS tile should be able to grab: its own, plus a
+  // facing neighbour's (so the empty side of a line's end works too).
+  openEndTargets(id: string): { port: Port; end: OpenEnd }[] {
+    if (!this.buildIdle) return [];
+    void this.game.levelVersion.value; // ends move when track is laid or razed
+    return buildTargetsAt(this.level, id);
+  }
+
+  // Ports still served by the tapering wedge. An open-end port is served by the
+  // disc INSTEAD — one element per port, so the two never overlap and neither
+  // can intercept the other's click. Interior edges keep their wedge, because
+  // branching a line (Lake Valley's station junction) starts on one.
+  wedgePorts(id: string): Port[] {
+    const taken = new Set(this.openEndTargets(id).map(t => t.port));
+    return taken.size === 0 ? EDGES : EDGES.filter(p => !taken.has(p));
+  }
+
+  // The open ends this tile OWNS (rail on this side), for drawing the knob.
+  ownOpenEnds(id: string): Port[] {
+    if (!this.buildIdle) return [];
+    void this.game.levelVersion.value;
+    return openEndPortsAt(this.level, id);
+  }
+
+  edgeMid(port: Port): { x: number; y: number } {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    if (port === Position.Top) return { x: c, y: 0 };
+    if (port === Position.Right) return { x: s, y: c };
+    if (port === Position.Bottom) return { x: c, y: s };
+    return { x: 0, y: c };
+  }
+
+  // The pinwheel wedge, one per edge, dividing the tile between the four ports.
+  // Fine while a gesture is steering (the click picks a direction), and hopeless
+  // as a way to grab the END of a line — it tapers to a point at the tile centre
+  // and at a fitted zoom (30px tiles) is a few pixels wide. That case is served
+  // by the open-end disc drawn on top of these.
+  // The open-end target: the half-tile band along that edge, used INSTEAD of the
+  // wedge for that port. Both tiles either side of a line's end draw their own
+  // band, so together they form one tile-wide strip centred on the boundary and
+  // both halves arm the same end — overshooting onto the empty neighbour is
+  // harmless. A whole half-tile where there was a triangle tapering to a point.
+  edgeBandPath(port: Port): string {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    switch (port) {
+      case Position.Top:
+        return `M0 0 L${s} 0 L${s} ${c} L0 ${c} Z`;
+      case Position.Right:
+        return `M${c} 0 L${s} 0 L${s} ${s} L${c} ${s} Z`;
+      case Position.Bottom:
+        return `M0 ${c} L${s} ${c} L${s} ${s} L0 ${s} Z`;
+      default:
+        return `M0 0 L${c} 0 L${c} ${s} L0 ${s} Z`;
+    }
+  }
+
   zonePath(port: Port): string {
     const s = this.config.tileSize;
     const c = s / 2;
@@ -1585,6 +1703,33 @@ export default toNative(PlayView);
 .level-tile:hover .zone {
   stroke: rgba(44, 62, 80, 0.25);
   stroke-width: 1;
+}
+// An open-end target is the only zone on its tile, so it can afford to be
+// obvious — and it needs to be, because before this the player was aiming at an
+// invisible triangle tapering to a point.
+.zone--open {
+  fill: rgba(66, 184, 131, 0.14);
+
+  &:hover {
+    fill: rgba(66, 184, 131, 0.34);
+  }
+}
+// The knob that says "a line ends here, build from it". Not interactive itself
+// — the zone under it takes the click, across the whole half-tile.
+.open-end {
+  fill: #ffd76a;
+  stroke: rgba(60, 44, 8, 0.75);
+  stroke-width: 2;
+  pointer-events: none;
+  animation: open-end-pulse 1.6s ease-in-out infinite alternate;
+}
+@keyframes open-end-pulse {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .zone--armed,
 .zone--armed:hover {

@@ -748,3 +748,30 @@ lean — prune as much as you add. This file only stays useful if every task ten
   "the board is frozen" observation made through the preview pane is worthless.
   Verify frame-loop behaviour in e2e (Playwright composites) or make the logic
   pure and unit-test it. Cost an hour of chasing a phantom deadlock.
+
+## BUILDING: AIMING AT THE END OF A LINE (2026-07-26)
+- The board's build targets are the four PINWHEEL WEDGES per tile — they tile the
+  square from the centre, so there is no neutral area and every click arms some
+  edge. On the gap board that is 168 targets, of which 2 are legal starts, and at
+  a fitted zoom (30px tiles) a wedge is ~15px tapering to a POINT at the centre.
+- Worse, a line's end is ONE physical place on a boundary but TWO half-targets
+  that mean different things: 2,1-East grows the line, 3,1-West arms an empty
+  tile. Overshooting by a pixel silently armed the wrong anchor.
+- Fix (`tiles/openEnds.ts` + PlayView): at an open end, the wedge is REPLACED by
+  a half-tile band carrying the same `data-port`, and the empty tile facing it
+  draws its own band DELEGATING to the same `OpenEnd`. One element per port (so
+  neither can intercept the other's click), a target of half a tile instead of a
+  point, and either side of the boundary arms the same end. A knob marks it.
+- Do NOT narrow the targets to open ends only: branching off an INTERIOR edge is
+  how lakevalley-open buys its station junction back. Everything stays clickable;
+  only the open end gets the bigger, obvious target.
+- TRAP — never swap the element under a press. Gating the bands on `pressFrom`
+  replaced band with wedge on MOUSEDOWN; mouseup then hit a different element and
+  the browser fired `click` on their nearest common ancestor, which has no
+  handler. The click vanished with no error and nothing armed. Whatever decides
+  which element is under the cursor must not change mid-gesture (`buildIdle` is
+  therefore `!armed && !routeStarted`, deliberately not `pressFrom`).
+- TRAP — Vite HMR on a big SFC can leave a stale render ("Something went wrong
+  during Vue component hot-reload. Full reload required."): the page reported
+  `edgeBandPath is not a function` for a method that was plainly in the file.
+  Check the console and hard-reload before believing a live probe.
