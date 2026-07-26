@@ -1,6 +1,6 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
-import { Level, partnersOf, armExit, defaultArmFor, parseCoordId } from "@/tiles/model";
+import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair } from "@/tiles/model";
 import { addConnection } from "@/tiles/editOps";
 import type { RouteStep } from "@/tiles/routePlanner";
 import {
@@ -32,7 +32,7 @@ import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
-import { createEconomy, createFareBook } from "@/sim/economy";
+import { createEconomy, createFareBook, TRACK_COST_PER_TILE } from "@/sim/economy";
 import { RoadFrame } from "@/sim/road";
 
 export interface TrainDef {
@@ -219,6 +219,14 @@ export interface Game {
   applyEdits(steps: RouteStep[]): EditResult;
   // Whether those tiles could be edited right now, for greying out a preview.
   canEdit(tileIds: string[]): boolean;
+  // The in-play BUILD verb (Tycoon phase 2): what a route would cost, and the
+  // buy itself — affordability gate, then applyEdits, then the spend, in that
+  // order so a refused edit (a train moved in) spends NOTHING. Only NEW pieces
+  // are priced; a step whose connection the tile already carries is free, so
+  // extending from an open end (whose anchor straight is re-laid) costs only
+  // the tiles that actually gain rail. Modes without an economy build free.
+  buildCostOf(steps: RouteStep[]): number;
+  buildRoute(steps: RouteStep[]): EditResult;
   // Signal aspects for rendering, keyed `${tileId}:${exitPort}`.
   signalAspects: Record<string, "stop" | "proceed">;
   // Manual override state per signal, keyed `${tileId}:${exitPort}`.
@@ -372,6 +380,13 @@ export function createGame(
   let signalTiles = Object.entries(level)
     .filter(([, tile]) => tile.signals && tile.signals.length > 0)
     .map(([id]) => id);
+
+  // The board's opening state, for Retry. `applyEdits`/`buildRoute` mutate the
+  // live level in place; reset() restores this snapshot so a Tycoon Retry that
+  // hands back the starting capital does not also keep the track that capital
+  // already bought (a free-track exploit otherwise). Plain data, so a JSON
+  // round-trip is a faithful deep copy.
+  const pristineLevel: Level = JSON.parse(JSON.stringify(level));
 
   // Bumped whenever the level itself changes, so views can re-derive from it.
   // Vue can NOT see these mutations on its own: `level` here is the raw object,
@@ -985,6 +1000,11 @@ export function createGame(
   let lastHoldTotal = 0;
   let lastGreenTotal = 0;
 
+  // Track pieces bought in play (buildRoute), diffed into the observation the
+  // same way the manual-signal totals are.
+  let tilesBuiltTotal = 0;
+  let lastTilesBuiltTotal = 0;
+
   function refreshObjective() {
     Object.assign(objective, tracker.state());
   }
@@ -1013,12 +1033,15 @@ export function createGame(
     const manualGreenDelta = manualGreenTotal - lastGreenTotal;
     lastHoldTotal = manualHoldTotal;
     lastGreenTotal = manualGreenTotal;
+    const tilesBuiltDelta = tilesBuiltTotal - lastTilesBuiltTotal;
+    lastTilesBuiltTotal = tilesBuiltTotal;
     deliveries.value += deliveredDelta;
     return {
       deliveredDelta,
       mismatchedDelta,
       manualHoldDelta,
       manualGreenDelta,
+      tilesBuiltDelta,
       // Absolutes off the ledger, so the counters can never drift from it. Left
       // out entirely when there is no economy, which keeps the money counters at
       // their zero defaults for every other mode.
@@ -1142,6 +1165,57 @@ export function createGame(
     return { ok: true, blocked: [] };
   }
 
+  // --- buying track (the in-play build verb, Tycoon phase 2) -----------------
+  //
+  // Only NEW pieces cost money. The route gesture re-lays the anchor straight
+  // of the open end it grows from, and closing a gap into existing track plans
+  // straight through the far tile — both are duplicates of connections the
+  // level already has, and `addConnection` makes them no-ops. Charging for them
+  // would price a two-tile gap at five tiles, so the cost (and the `tilesBuilt`
+  // counter a "buy ≥ N pieces" star reads) counts only steps that actually add
+  // a connection. Same filter feeds the preview tag, so what's shown = what's
+  // charged.
+  function newBuildSteps(steps: RouteStep[]): RouteStep[] {
+    const seen = new Set<string>();
+    const out: RouteStep[] = [];
+    for (const s of steps) {
+      const key = `${s.id}:${Math.min(s.a, s.b)}-${Math.max(s.a, s.b)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const pair: PortPair = [s.a, s.b];
+      if (level[s.id]?.connections.some(c => samePair(c, pair))) continue;
+      out.push(s);
+    }
+    return out;
+  }
+
+  function buildCostOf(steps: RouteStep[]): number {
+    if (!economy) return 0; // no ledger, no price (Sandbox builds free)
+    return TRACK_COST_PER_TILE * newBuildSteps(steps).length;
+  }
+
+  // ORDER IS THE POINT: affordability gate → applyEdits → spend. applyEdits can
+  // refuse (a train moved onto a route tile between preview and click), and a
+  // refused buy must cost nothing — so the money moves only after the edit has
+  // actually landed. Nothing runs between the canAfford check and the spend
+  // (one synchronous call), so the spend cannot fail after the lay succeeded.
+  function buildRoute(steps: RouteStep[]): EditResult {
+    if (steps.length === 0) return { ok: true, blocked: [] }; // reachable: a 1-step U-turn plans an empty batch
+    const pieces = newBuildSteps(steps).length;
+    const cost = buildCostOf(steps);
+    if (economy && cost > 0 && !economy.canAfford(cost)) {
+      return { ok: false, blocked: [] };
+    }
+    const res = applyEdits(steps);
+    if (!res.ok) return res; // refused — nothing spent, nothing counted
+    if (economy && cost > 0) {
+      economy.spend(cost, "build", `${pieces} tile${pieces === 1 ? "" : "s"}`);
+      refreshMoney(); // headless callers (unit tests) see the balance without a frame
+    }
+    tilesBuiltTotal += pieces;
+    return res;
+  }
+
   return {
     // A GETTER, not a snapshot. `reset()` calls `buildSims()`, which REPLACES
     // the simulation object; `sim,` captured the one that existed when
@@ -1163,6 +1237,8 @@ export function createGame(
     levelVersion,
     canEdit,
     applyEdits,
+    buildCostOf,
+    buildRoute,
     signalAspects,
     signalOverrides,
     reservations,
@@ -1199,6 +1275,27 @@ export function createGame(
       refreshObjective();
     },
     reset() {
+      // Un-buy the track first, so buildSims() below reads the board's opening
+      // state: Retry restores the starting capital, and keeping the laid track
+      // alongside it would let every Retry re-spend the same money. Writes go
+      // through the RAW level (the same object the sim indexes); the
+      // levelVersion bump at the end is what tells the views.
+      for (const id of Object.keys(level)) delete level[id];
+      Object.assign(level, JSON.parse(JSON.stringify(pristineLevel)));
+      // Junctions the build created are gone again: drop their switch entries
+      // (and pick up the pristine board's own), keeping the player's existing
+      // arm choices for junctions that survive — the same merge applyEdits does.
+      const fresh = initialSwitches(level);
+      for (const id of Object.keys(switches)) {
+        if (!fresh[id]) delete switches[id];
+      }
+      for (const id of Object.keys(fresh)) {
+        switches[id] = { ...fresh[id], ...(switches[id] ?? {}) };
+      }
+      signalTiles = Object.entries(level)
+        .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+        .map(([id]) => id);
+      levelVersion.value++;
       buildSims();
       // Re-arm the predefined schedule from the start; injected trains were
       // dropped by buildSims() (it seeds only the init trains).
@@ -1208,6 +1305,8 @@ export function createGame(
       manualGreenTotal = 0;
       lastHoldTotal = 0;
       lastGreenTotal = 0;
+      tilesBuiltTotal = 0;
+      lastTilesBuiltTotal = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];

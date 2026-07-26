@@ -229,6 +229,246 @@ test.describe("Train game", () => {
       .toBeGreaterThan(first.balance);
   });
 
+  test("tycoon: buy the missing link in play, then deliver across it", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    // The buildgap board: a line stopping two tiles short of its station, a
+    // waiting train, and the budget to close the gap. This is the whole Train
+    // Valley loop — build, dispatch, switch-free run, payout — end to end.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    const balance = () =>
+      page.evaluate(() => (window as any).__game.money.balance as number);
+    const start = await balance();
+
+    // Arm the build tool. The edge zones appear on every tile.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+
+    // Click the west line's open end (east edge of 2,1), then the east line's
+    // facing open end (west edge of 5,1): the controller routes across the gap
+    // and lays it as ONE commit. East=Right=1, West=Left=3.
+    await zone("2,1", 1).click();
+    await expect(zone("2,1", 1)).toHaveClass(/zone--armed/);
+    await zone("5,1", 3).click();
+
+    // Two new tiles of track at $1,000 each came out of the balance —
+    // the anchor and terminus tiles already had their rails and were free.
+    await expect.poll(balance).toBe(start - 2000);
+    // The gap tiles exist now and render rail art.
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(1);
+    await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(1);
+    // The objective layer counted the purchase (a "buy ≥ N pieces" star reads this).
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__game.objective.counters.tilesBuilt as number
+        )
+      )
+      .toBe(2);
+
+    // Esc finishes the open route (the terminus tile already has its rail, so
+    // nothing further is charged) and clears the finish wedge. The wedge
+    // assertion is load-bearing: an Escape handler reading stale state no-ops
+    // SILENTLY (it bit once — the arrow-field `this` trap), and the balance
+    // alone cannot tell.
+    await expect(page.locator(".zone--finish")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".zone--finish")).toHaveCount(0);
+    expect(await balance()).toBe(start - 2000);
+    await page.getByTestId("build-toggle").click();
+
+    // Dispatch the waiting train; it crosses the bought track and delivers.
+    await page.locator(".fare-pin").click();
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__game.objective.phase), {
+        timeout: 45000,
+        intervals: [500],
+      })
+      .toBe("won");
+    // The fare landed on top of the post-build balance.
+    expect(await balance()).toBeGreaterThan(start - 2000);
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
+  test("tycoon: bought track never leaks into the scenario registry", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    // Regression: PlayView used to hand the game the scenario registry's
+    // module-level singleton, and applyEdits wrote bought track INTO it. A
+    // same-document remount (browser Back, re-entering the URL — the keyed
+    // router-view remounts without a reload) then landed on the mutated board
+    // with a fresh balance: free track. The board must come back as authored.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const balance = () =>
+      page.evaluate(() => (window as any).__game.money.balance as number);
+    const start = await balance();
+
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("2,1", 1).click();
+    await zone("5,1", 3).click();
+    await expect.poll(balance).toBe(start - 2000);
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(1);
+
+    // Same-document navigation away and back — deliberately NOT page.goto,
+    // which could full-load and mask the leak by resetting module state.
+    await page.evaluate(() => {
+      location.hash = "#/test";
+    });
+    await expect(page.locator(".level-tile")).toHaveCount(0);
+    await page.evaluate(() => {
+      location.hash = "#/play?mode=tycoon&board=buildgap";
+    });
+
+    // Fresh mount: the gap is a gap again, and the balance is the full budget.
+    await expect(
+      page.getByRole("button", { name: "Start", exact: true })
+    ).toBeVisible();
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
+    await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(0);
+    expect(await balance()).toBe(start);
+  });
+
+  test("tycoon: lakevalley-open — build the ring, dispatch all three, win with the money accounted", async ({
+    page,
+  }) => {
+    test.setTimeout(120000);
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    // The opening state of Lake Valley: the ring's south run is missing, the
+    // yellow station is severed, and the $8,000 budget buys it back. This test
+    // is the whole Train Valley level-1 loop on the real board — Ready screen,
+    // fares burning from Start, buying the ring and the station junction,
+    // switching, dispatching all three trains, the win screen, and the ledger
+    // adding up.
+    await page.goto("/#/play?mode=tycoon&board=lakevalley-open");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    const balance = () =>
+      page.evaluate(() => (window as any).__game.money.balance as number);
+    expect(await balance()).toBe(8000);
+    await expect(page.locator(".fare-pin")).toHaveCount(3);
+
+    // The choreography below assumes the seeded 3-cycle. Assert it first so a
+    // colour-assignment change fails loudly here instead of as a stuck train.
+    expect(
+      await page.evaluate(() => {
+        const g = (window as any).__game;
+        return (
+          g.trainColors.blue === g.depotColors["8,2"] &&
+          g.trainColors.red === g.depotColors["2,6"] &&
+          g.trainColors.yellow === g.depotColors["0,2"]
+        );
+      })
+    ).toBe(true);
+
+    // Buy the full rebuild, gesture by gesture (7 pieces, $7,000):
+    // the ring along row 5, then the station junction's two entries at 2,5.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("2,4", 2).click(); // South=Bottom=2, West=Left=3
+    await zone("6,4", 2).click(); // ring: 5 new pieces
+    await expect.poll(balance).toBe(3000);
+    await page.keyboard.press("Escape");
+    await zone("3,5", 3).click();
+    await zone("2,5", 2).click(); // station entry from the ring ([E,S])
+    await expect.poll(balance).toBe(2000);
+    await page.keyboard.press("Escape");
+    await zone("2,4", 2).click();
+    await zone("2,5", 2).click(); // station entry from the west side ([N,S])
+    await expect.poll(balance).toBe(1000);
+    await page.keyboard.press("Escape");
+    expect(await balance()).toBe(1000); // Esc lays nothing chargeable
+    await page.getByTestId("build-toggle").click();
+
+    // The bought junction renders and carries merged switch arms (a junction
+    // without arms would stop a train dead on it).
+    await expect(page.locator('.level-tile[data-coord="2,5"] .tile')).toHaveCount(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window as any).__game.objective.counters.tilesBuilt as number
+        )
+      )
+      .toBe(7);
+
+    // Route the three trains on disjoint paths (the rebuilt ring is the
+    // passing loop): blue east along the trunk, red down the east side and
+    // west along the bought ring into the yellow station, yellow up the west
+    // side. Arms are per entry port, so the table is static — this is the
+    // switching verb, set through the same map the switch UI writes.
+    await page.evaluate(() => {
+      const g = (window as any).__game;
+      const set = (id: string, entry: number, arm: number) => {
+        if (!g.switches[id]) g.switches[id] = {};
+        g.switches[id][entry] = arm;
+      };
+      set("2,2", 3, 1); // blue:   W -> E
+      set("2,2", 2, 0); // yellow: S -> W
+      set("6,2", 3, 1); // blue:   W -> E
+      set("6,2", 1, 0); // red:    E -> S
+      set("2,5", 1, 0); // red:    E -> S into the station
+      set("2,5", 2, 1); // yellow: S -> N up the west side
+    });
+
+    // Dispatch all three by clicking their fare pins, then run fast.
+    for (const pin of await page.locator(".fare-pin").all()) await pin.click();
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__game.objective.phase), {
+        timeout: 90000,
+        intervals: [500],
+      })
+      .toBe("won");
+    await expect(page.getByText("You win!")).toBeVisible();
+
+    // Money accounted: balance = budget − track + fares, and the goals read
+    // the run correctly (full rebuild ⇒ Rail baron, not Under budget).
+    const end = await page.evaluate(() => {
+      const g = (window as any).__game;
+      return {
+        counters: g.objective.counters,
+        stars: Object.fromEntries(
+          g.objective.stars.map((s: { id: string; earned: boolean }) => [
+            s.id,
+            s.earned,
+          ])
+        ),
+      };
+    });
+    expect(end.counters.delivered).toBe(3);
+    expect(end.counters.spent).toBe(7000);
+    expect(end.counters.earned).toBeGreaterThan(0);
+    expect(end.counters.balance).toBe(8000 - 7000 + end.counters.earned);
+    expect(await balance()).toBe(end.counters.balance);
+    expect(end.stars["rail-baron"]).toBe(true);
+    expect(end.stars["under-budget"]).toBe(false);
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
   test("signals are drawn and a manual hold turns a signal to Stop", async ({
     page,
   }) => {

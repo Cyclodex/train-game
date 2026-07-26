@@ -39,6 +39,11 @@ export interface Counters {
   balance?: number; // money in hand right now
   earned?: number; // lifetime income this run
   spent?: number; // lifetime outgoings this run (positive)
+  // Track pieces bought in play (Tycoon build, phase 2): the count of NEW rail
+  // connections `game.buildRoute` laid this run. What a Train Valley style
+  // "buy ≥ N track pieces" star reads. Optional like the other economy fields,
+  // and for the same fixture-compatibility reason.
+  tilesBuilt?: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -97,6 +102,10 @@ export interface Observation {
   balance?: number;
   earned?: number;
   spent?: number;
+  // Track pieces bought this tick (Tycoon build). A DELTA, unlike the ledger
+  // absolutes above: a purchase is an event, not a running total the game
+  // already owns elsewhere.
+  tilesBuiltDelta?: number;
 }
 
 export const emptyObservation: Observation = {
@@ -144,6 +153,7 @@ function zeroCounters(): Counters {
     balance: 0,
     earned: 0,
     spent: 0,
+    tilesBuilt: 0,
   };
 }
 
@@ -193,6 +203,8 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (obs.balance !== undefined) counters.balance = obs.balance;
       if (obs.earned !== undefined) counters.earned = obs.earned;
       if (obs.spent !== undefined) counters.spent = obs.spent;
+      counters.tilesBuilt =
+        (counters.tilesBuilt ?? 0) + (obs.tilesBuiltDelta ?? 0);
 
       // Win takes priority over any same-tick fail.
       if (counters.delivered >= spec.deliveriesRequired) {

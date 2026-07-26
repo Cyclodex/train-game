@@ -25,6 +25,15 @@ export interface TestScenario {
   // Sandbox. Needed for mechanics that only exist in a mode — e.g. Time Attack's
   // scheduled spawner. Omitted → Sandbox (the free-play default for demos).
   modeId?: string;
+  // This board is DELIBERATELY incomplete: it opens with a gap the player buys
+  // track across in play (Train Valley M3 — `buildgap`, `lakevalley-open`).
+  // The registry test (tests/unit/levels/testScenarios.spec.ts) normally fails
+  // any map with dangling track, an unreachable route or a severed depot —
+  // which is exactly what an authored gap looks like — so this flag makes it
+  // skip THOSE THREE issue types for this scenario only. Every other rule
+  // (blocked terrain, trains-in-depots, grid fit) still applies here, and
+  // every other scenario keeps the full validation.
+  allowIncomplete?: boolean;
 }
 
 // Build a train that starts in the depot at (x,y), leaves outward, and routes to
