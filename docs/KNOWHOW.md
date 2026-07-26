@@ -554,12 +554,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
   `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
   MEASURED WORSE — read the issue before attempting a third.
-- NEXT UP: Train Valley phase 2 (build in play). Its ONE blocker is an
-  extraction, not a feature — pull the route-draw gesture out of `EditorView`
-  into a headless `routeDrawController.ts` beside `cameraController.ts`, or
-  `PlayView` and `EditorView` end up with two copies of the trickiest
-  interaction in the app. Then: gate on `ModeControls.build`, preview
-  `tiles × cost`, spend, call `game.applyEdits`, grey out what `canEdit` refuses.
+- NEXT UP: Train Valley phase 2 (build in play); full state of play + sizes in
+  the design doc **§8** (renumbered — there used to be two §6s). Its ONE blocker
+  is an extraction, not a feature — pull the route-draw gesture out of
+  `EditorView` (`pressFrom`/`armed`/`routeStarted`/`pendingId`/`hoverPort` +
+  `previewByCell`/`commitSegment`/`extendRoute`/`onZone*`, ~230 lines) into a
+  headless `routeDrawController.ts` beside `cameraController.ts`, or `PlayView`
+  and `EditorView` end up with two copies of the trickiest interaction in the
+  app. It must stay layer-agnostic and emit `RouteStep[]` over injected ports:
+  the editor commits CELL BY CELL (`level[id]=` + `syncBusGates` + `persist`,
+  rail OR road), play commits the whole route ATOMICALLY via
+  `game.applyEdits` (rail-only, guarded). Then: gate on `ModeControls.build`,
+  preview `tiles × cost`, spend, call `applyEdits`, grey out what `canEdit` refuses.
+- TRAP for the "start `lakevalley` with a GAP in the ring" step (what makes it
+  the real level): `validateLevel` raises `dangling-track` on any edge port with
+  no connecting neighbour AND `route-disconnected` for the unreachable depot,
+  and `tests/unit/levels/testScenarios.spec.ts` runs it over EVERY registered
+  scenario. A deliberately-incomplete board needs an authored opt-out first —
+  it is not just deleting three tiles.
 - The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
