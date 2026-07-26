@@ -111,11 +111,44 @@ export function canSpawn(scenario: ScenarioLike): boolean {
 // between ticks counts tile CROSSINGS, which is the flow measure that works for
 // both open maps (cars exit) and closed circuits (cars lap forever) — a car that
 // keeps changing tiles is making progress no matter where it ends up.
+// PARKED vehicles are deliberately absent. A car in a bay is where it wants to
+// be, so counting it as a vehicle that failed to cross a tile would read a car
+// park working exactly as designed as a jam. A car inside a GARAGE reports no
+// body units at all (it is inside a building), so the guard is also what stops
+// this reading `units[0]` of an empty array.
 export function frontTiles(sim: ReturnType<typeof createRoadSim>): Map<string, string> {
   const out = new Map<string, string>();
+  const parked = new Set(sim.cars().filter(c => c.parked).map(c => c.id));
   for (const c of sim.sample()) {
+    if (parked.has(c.id) || c.units.length === 0) continue;
     const f = c.units[0].front;
     out.set(c.id, `${f.coord.x},${f.coord.y}`);
   }
   return out;
+}
+
+// Vehicles that are supposed to be MOVING — everything except the ones sitting in
+// a parking bay. The sweep's liveness assertions compare crossings against this
+// rather than against the whole fleet: with parked cars in the denominator, a car
+// park filling up would look like traffic failing to advance.
+export function movingCarCount(sim: ReturnType<typeof createRoadSim>): number {
+  return sim.cars().filter(c => !c.parked).length;
+}
+
+// Cars that have completed the parking CYCLE this run: parked, dwelt, and driven
+// away again. This is the property a parking scenario actually has to prove — that
+// parking is a cycle and not a sink — and it is what the sweep asserts in place of
+// "traffic was still crossing tiles at the end" on a map whose whole point is that
+// some of its vehicles are standing still on purpose.
+export function countUnparkings(sim: ReturnType<typeof createRoadSim>, seen: Set<string>): number {
+  let done = 0;
+  for (const c of sim.cars()) {
+    if (c.parked) {
+      seen.add(c.id);
+    } else if (seen.has(c.id) && c.phase === "driving") {
+      seen.delete(c.id);
+      done++;
+    }
+  }
+  return done;
 }

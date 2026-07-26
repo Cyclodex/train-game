@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { SCENARIOS } from "@/levels/test";
-import { simFor, worstSweptOverlap, hasRoad, canSpawn, frontTiles } from "../support/roadSim";
+import {
+  simFor,
+  worstSweptOverlap,
+  hasRoad,
+  canSpawn,
+  frontTiles,
+  movingCarCount,
+  countUnparkings,
+} from "../support/roadSim";
 
 // Registry-wide behavioural sweep of the road scenarios.
 //
@@ -43,6 +51,18 @@ const KNOWN_OVERLAP: Record<string, number> = {
 };
 const CLEAN_OVERLAP = 0.02;
 
+// Scenarios whose vehicles are SUPPOSED to stand still for long stretches: a car
+// park works by holding cars, so "traffic was still crossing tiles in the last ten
+// seconds" is the wrong question to ask of one. Listed here in the same style as
+// KNOWN_OVERLAP — named, with the reason, and swapping in a STRICTER assertion
+// rather than skipping. What a parking map has to prove is that parking is a
+// CYCLE and not a sink: cars must be seen driving away from bays they parked in.
+const PARKING_SCENARIOS = new Set(["parkingkerb", "parkinglot"]);
+// Completed park-and-leave cycles a parking scenario must show in the run. More
+// than a token 1: a single cycle could be one lucky car, whereas several means the
+// bays are genuinely turning over.
+const MIN_PARK_CYCLES = 3;
+
 // Steps at 0.05s = 40s of simulated time. Long enough for a car to cross even the
 // biggest gallery map several times, short enough to keep the sweep quick.
 const STEPS = 800;
@@ -66,6 +86,12 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
       let lateCrossings = 0; // crossings in the final quarter — a jam that forms
       //                        and never clears shows up here and nowhere else
       let prev = frontTiles(sim);
+      // Parking bookkeeping: the peak of vehicles that are supposed to be MOVING
+      // (parked ones must not be counted against the flow measure), and how many
+      // completed a full park-and-leave cycle.
+      let peakMoving = 0;
+      let parkCycles = 0;
+      const wasParked = new Set<string>();
       // Stuck detection: a tick where EVERY vehicle is stationary. A few are
       // normal (a red signal, a train on a crossing); hundreds in a row are not.
       let allStopped = 0;
@@ -76,6 +102,9 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
         const cars = sim.cars();
         peakCars = Math.max(peakCars, cars.length);
         worstOverlap = Math.max(worstOverlap, worstSweptOverlap(sim));
+
+        peakMoving = Math.max(peakMoving, movingCarCount(sim));
+        parkCycles += countUnparkings(sim, wasParked);
 
         const now = frontTiles(sim);
         for (const [id, tile] of now) {
@@ -119,13 +148,28 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
       //    entries or lane directions are broken — it renders but is a dead map.
       expect(peakCars, `${scenario.id} never spawned a vehicle`).toBeGreaterThan(0);
 
-      // 2. Traffic moved, and was STILL moving at the end of the run.
+      // 2. Traffic moved, and was STILL moving at the end of the run. Measured
+      //    against the vehicles that are supposed to be moving: a parked car
+      //    contributes no crossings by design, so leaving it in the denominator
+      //    would read a car park filling up as traffic failing to advance.
       expect(crossings, `${scenario.id} never advanced a vehicle to another tile`)
-        .toBeGreaterThan(peakCars);
+        .toBeGreaterThan(peakMoving);
       expect(
         lateCrossings,
         `${scenario.id} stopped advancing before the run ended (jam that never clears?)`,
       ).toBeGreaterThan(0);
+
+      // 2b. On a PARKING map, the property that actually matters: cars must be
+      //     seen driving away from the bays they parked in. A map where every car
+      //     parks and none ever leaves passes every check above — the streets stay
+      //     busy with through-traffic — while being exactly the failure the
+      //     feature must not have.
+      if (PARKING_SCENARIOS.has(scenario.id)) {
+        expect(
+          parkCycles,
+          `${scenario.id} is a parking scenario but no car completed a park-and-leave cycle`,
+        ).toBeGreaterThanOrEqual(MIN_PARK_CYCLES);
+      }
 
       // 3. No permanent standstill. 200 ticks = 10 simulated seconds with every
       //    vehicle stationary, which no signal phase or level crossing justifies.

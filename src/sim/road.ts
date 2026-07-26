@@ -14,7 +14,18 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneSegmentLength } from "./pathGeometry";
 import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { planRoute, RouteTurn } from "./roadRouter";
+import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
+import {
+  createParkingRegistry,
+  vehicleCanPark,
+  type ParkingRegistry,
+} from "./parking";
+import {
+  manoeuvreAt,
+  manoeuvreLength,
+  type ManoeuvrePath,
+  type StallRef,
+} from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -366,9 +377,70 @@ export interface Car {
   // exit — never on the immediate exit arm (which would re-create the post-junction
   // "dip"). Reset to 0 each time the car crosses out of a junction.
   tilesSinceJunction: number;
+
+  // --- Parking ---------------------------------------------------------------
+  // What the car is doing about parking. On a level with no car parks every car
+  // stays "driving" for its whole life and nothing below is ever read, so the
+  // parking layer costs the existing maps exactly nothing.
+  phase: CarPhase;
+  // The car park this trip is aimed at (facility id), or null for a through trip
+  // that just drives across the map, as every car did before parking existed.
+  parkTarget: string | null;
+  // The stall the car has claimed. Claiming IS the reservation — set the moment
+  // the car reaches a tile with a free bay, cleared once it is fully back on the
+  // road — so two cars can never aim for the same space.
+  stall: StallRef | null;
+  // The pull-in curve, built when the car peels off and replayed BACKWARDS when
+  // it leaves. Held on the car (not in the registry) because it is anchored at
+  // the car's real position at the moment it turned in, so the sprite never jumps.
+  parkPath: ManoeuvrePath | null;
+  // Position along `parkPath` as a fraction of its ARC LENGTH: 0 = out on the
+  // lane, 1 = at rest in the bay.
+  manoeuvre: number;
+  // Seconds of dwell left. Counts down only while `phase === "parked"`.
+  dwellLeft: number;
+  // Car parks entered and left without finding a space. Bounds "cruising for a
+  // space" so a driver gives up and drives on instead of circling for ever.
+  parkTries: number;
+  // True once the car has stood on a tile of `parkTarget`. Leaving those tiles
+  // with no stall claimed is exactly the event "I drove the whole car park and it
+  // was full", which is what sends the driver looking for an alternative.
+  enteredTarget: boolean;
 }
 
-// Driver behaviour tuning (same-direction overtaking).
+// A car is either in traffic or dealing with a parking space.
+//   driving  — ordinary traffic; the only state on a map with no car parks.
+//   entering — swinging off the lane into its claimed bay. Still occupies the
+//              road (shrinking as it tucks in), so following cars queue behind it
+//              exactly as they would behind someone parking in real life.
+//   parked   — at rest, dwelling. Contributes NO road body at all, so the lane it
+//              came from is free and the swept-body checks never see it.
+//   leaving  — replaying the curve backwards out of the bay. Claims the full lane
+//              slot from the first tick (it only sets off when the lane is clear),
+//              so nobody drives through a car that is reversing out.
+export type CarPhase = "driving" | "entering" | "parked" | "leaving";
+
+// Parking behaviour tuning.
+const PARKING = {
+  // Fraction of drivers whose trip ENDS at a car park rather than at a map edge.
+  // Half is high for a real city but right for a demo: the point of the feature
+  // is to be seen working.
+  fraction: 0.5,
+  // Seconds a parked car stays. Long enough that bays visibly fill and a full car
+  // park is reachable, short enough that a 40s test run sees a whole cycle.
+  dwellMin: 12,
+  dwellMax: 34,
+  // Crawl speed of a parking manoeuvre, in tiles/sec. Well under cruise — you
+  // ease into a bay, you do not swing into it at 30.
+  speed: 0.16,
+  // How many car parks a driver will try before giving up and driving on.
+  maxTries: 2,
+  // Clear road (tiles) a car needs BEHIND its slot before it pulls out of a bay.
+  pullOutGap: 0.5,
+};
+
+// How close to its peel-off point a car counts as having arrived at its bay.
+const PARK_ARRIVE_EPS = 0.04;
 const OVERTAKE = {
   // Fraction of drivers that will overtake (the rest stay disciplined in lane).
   fraction: 0.4,
@@ -397,6 +469,18 @@ export interface CarSample {
   // only meaningful PER SEGMENT (an exit arm numbers its lanes independently of
   // the approach), so anything deriving a lane from a body point needs this.
   pathIndex?: number;
+  // An ABSOLUTE tile-local pose, in TILE units (0..1 within `coord`), that
+  // bypasses the lane path entirely. When set, `entryPort`/`exitPort`/`t`/
+  // `lanePos` carry no meaning for the renderer.
+  //
+  // The lane model can express exactly one thing: a point on a port→port path
+  // pushed sideways by an offset. That is every position a DRIVING car can hold,
+  // and nothing else — a car sitting square in a 90° bay is simply not in its
+  // vocabulary. Rather than bend the lane maths into something it isn't, a parked
+  // or manoeuvring car reports where it actually is. Tile units, not px: the sim
+  // builds its lane geometry at size 1 and the renderer at size `tileSize`, so a
+  // px pose would be right in one and 200x wrong in the other.
+  pose?: { tx: number; ty: number; headingDeg: number };
 }
 // One rendered body box of a vehicle (a car/truck is one unit; a semi is two:
 // cab + trailer). `front`/`rear` are its two ends sampled along the car's path
@@ -479,6 +563,12 @@ export interface RoadSimConfig {
   // slider reaches its target quickly; the unit-test sims leave it off and keep
   // the deterministic per-interval trickle. Default false.
   fillFast?: boolean;
+  // Fraction of drivers whose trip ends at a car park instead of a map edge.
+  // Only consulted on levels that actually have parking, so leaving it unset can
+  // never change an existing map's seeded run. Default PARKING.fraction.
+  parkFraction?: number;
+  // Seconds a parked car stays, drawn uniformly from [min, max].
+  dwell?: { min: number; max: number };
 }
 
 export interface RoadSim {
@@ -495,6 +585,13 @@ export interface RoadSim {
     laneIndex: number; // continuous lateral lane position (float during a change)
     targetLane: number; // the integer lane it is easing toward
     overtakePhase: Car["overtakePhase"]; // "none" | "passing" | "returning"
+    // Parking state. `parked` is the one a test must know about: a car standing
+    // in a bay is behaving correctly, not gridlocked, and the liveness checks
+    // have to be able to tell those apart (roadScenarioSweep.spec.ts).
+    phase: CarPhase;
+    parked: boolean;
+    // The car park this trip is aimed at, for the HUD / debug overlay.
+    parkTarget: string | null;
   }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
@@ -535,6 +632,24 @@ export interface RoadSim {
   // two-phase+bus → round-robin → round-robin+bus → off). Returns the new signal,
   // or null if the tile is not a road junction.
   cycleSignal(tileId: string): JunctionSignal | null;
+  // --- Parking ---------------------------------------------------------------
+  // Live occupancy: stall id → the car id sitting in it. The renderer paints an
+  // occupied bay differently and the debug overlay lists them.
+  parkingOccupancy(): Record<string, string>;
+  // Per-facility state for the HUD: how full each car park is, right now.
+  parkingStatus(): {
+    id: string;
+    label: string;
+    capacity: number;
+    free: number;
+    // Cars currently driving toward this car park (its "inbound" count). A full
+    // car park with cars still inbound is the interesting moment to watch.
+    inbound: number;
+  }[];
+  // How many live cars are parked, and how many drove a whole car park without
+  // finding a space (the "cruising for a space" tally) — the numbers that show
+  // the feature is a CYCLE and not a sink.
+  parkingFrame(): { parked: number; searching: number; givenUp: number };
 }
 
 const DEFAULT_SPAWN_INTERVAL = 2.5;
@@ -681,11 +796,43 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     typeof maxCarsCfg === "function" ? maxCarsCfg() : maxCarsCfg ?? DEFAULT_MAX_CARS;
   const mix = config.mix ?? { car: 1 };
 
-  const entries = config.spawnEntries ?? roadEntries(level, width, height);
+  // A fourth for parking decisions (is this a parking trip? which car park? how
+  // long a stay?). Separate for the same reason as the others — and, crucially,
+  // it is only ever DRAWN FROM on a level that has parking, so every existing
+  // seeded scenario replays byte-for-byte.
+  const parkRng = makeRng((config.seed ?? 1) ^ 0x2545f491);
+  const parking: ParkingRegistry = createParkingRegistry(level, carLength);
+  const parkFraction = Math.max(0, Math.min(1, config.parkFraction ?? PARKING.fraction));
+  const dwellRange = config.dwell ?? { min: PARKING.dwellMin, max: PARKING.dwellMax };
+  // Facility id -> the tiles it covers, so a car can tell it has driven out of
+  // the car park it was aiming for.
+  const facilityTiles = new Map<string, Set<string>>();
+  for (const f of parking.facilities()) facilityTiles.set(f.id, f.tileIds);
+  // Cars that drove a whole car park and found no space (the cruising tally).
+  let parkingGiveUps = 0;
+
+  // An opening that is INSIDE a car park rather than on the map border. A lot
+  // aisle that stops (a row-end, a turning head) looks exactly like an open road
+  // end to `roadEntries`/`roadExits`: no neighbour road continues it. Left in, two
+  // things go visibly wrong — cars MATERIALISE between the rows of stalls, and
+  // ordinary through-traffic is routed into the lot "to leave the map there" and
+  // EVAPORATES at the end of an aisle. A border street with kerbside bays is not
+  // affected: its opening is off-grid, which is a real way off the map.
+  function openingInsideLot(e: RoadEntry): boolean {
+    const n = neighborCoord(e.coord, e.entryPort);
+    if (!n) return false;
+    const offGrid = n.x < 0 || n.y < 0 || n.x >= width || n.y >= height;
+    if (offGrid) return false;
+    return facilityOfTile(getCoordinatesId(e.coord)) !== null;
+  }
+
+  const entries = (config.spawnEntries ?? roadEntries(level, width, height)).filter(
+    e => !openingInsideLot(e),
+  );
   // BFS routing targets: the off-map openings a car can drive OUT of. On one-way
   // roads these differ from the spawn entries, so a car can be routed to an
   // outbound arm that is not itself a spawn point.
-  const allMapExits = roadExits(level, width, height);
+  const allMapExits = roadExits(level, width, height).filter(e => !openingInsideLot(e));
 
   // Pre-compute the conflict matrix for every road-junction tile once, so
   // clearAhead doesn't rebuild it every frame.
@@ -798,6 +945,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
   const tileIdOf = (c: Car): string => getCoordinatesId(c.path[c.headIndex].coord);
+
+  // Vehicles that count against the traffic cap. `maxCars` is a density setting —
+  // "how busy are the streets" — so a car sitting in a bay must not consume a slot
+  // on the carriageway. Left inclusive, a car park would slowly swallow the whole
+  // budget and the roads would empty out as it filled. On a level with no parking
+  // every car is driving and this is exactly `cars.length`, so nothing changes.
+  // The total fleet stays bounded: cap + the level's stall count.
+  function activeCarCount(): number {
+    let n = 0;
+    for (const c of cars) if (c.phase !== "parked") n++;
+    return n;
+  }
 
   // Parse a "x,y" tile id back to a Coordinates object.
   function parseJunctionCoord(id: string): Coordinates {
@@ -1028,6 +1187,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const myRear = car.headProgress - car.length;
     for (const o of cars) {
       if (o === car) continue;
+      // A parked car is off the carriageway, but this gate reads `headProgress`
+      // and `laneOf` straight off the vehicle rather than its body points — and
+      // both are FROZEN at the peel-off point for the whole stay. Left in, one
+      // parked car would veto every lane change on its tile until it drove away.
+      if (o.phase === "parked") continue;
       const oh = o.path[o.headIndex];
       if (getCoordinatesId(oh.coord) !== headId) continue;
       if (oh.entryPort !== head.entryPort) continue; // same travel direction only
@@ -1299,6 +1463,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function waitingCarsAt(junctionId: string, me: Car): WaitingCar[] {
     const waiting: WaitingCar[] = [];
     for (const other of cars) {
+      // A car dealing with a parking space is not queueing for the junction. It
+      // passes the "stopped" test below (velocity 0) and its `waitSeconds` climbs
+      // for the whole dwell, so left in it would become a PHANTOM CLAIMANT: the
+      // arbiter's starvation guard hands priority to the longest waiter, and a car
+      // that has been "waiting" 40 seconds in a bay would make every conflicting
+      // approach yield to a vehicle that is never going to move.
+      if (other.phase !== "driving") continue;
       if (other === me || other.velocity > 0.001) continue;
       const head = other.path[other.headIndex];
       const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort);
@@ -1324,6 +1495,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // The body is short (< 1 tile by default), so this is the head tile plus the
   // previous one while the head is still near the boundary it just crossed.
   function bodyTileIds(car: Car): Set<string> {
+    // A parked car is off the carriageway: it holds no tile, occupies no junction
+    // and gates nobody. This is the road-side counterpart of the rule that makes
+    // the whole feature safe — see `bodyPoints`.
+    if (car.phase === "parked") return new Set();
     const headDistance = car.headIndex + car.headProgress;
     const tailDistance = headDistance - car.length;
     const tailIndex = Math.max(0, Math.floor(tailDistance + 1e-9));
@@ -1402,8 +1577,29 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         laneIndex: lane,
         lanePos: lanePosAt(car, a, s),
       });
-    for (let a = 0; a < car.length; a += BODY_SAMPLE_STEP) add(a, sampleAtArc(car, a));
-    add(car.length, sampleAtArc(car, car.length)); // always include the exact tail
+    // How much ROAD this car still occupies. The car's own path/headProgress are
+    // frozen at the peel-off point through the whole manoeuvre, so the body is
+    // simply measured back from there:
+    //   parked   — nothing. It is in a bay off the carriageway, so it gates no
+    //              traffic and the swept-body overlap check never compares it
+    //              against a moving car (which would read as a clip).
+    //   entering — shrinks to nothing as the car tucks in, so the queue behind it
+    //              is released progressively instead of all at once. It DOES block
+    //              while the swing starts, which is correct: you wait behind
+    //              someone parking.
+    //   leaving  — the full slot from the first tick. It only sets off when the
+    //              lane is clear (pullOutClear), and claiming the space
+    //              immediately is what stops a car driving through it as it backs
+    //              out.
+    const occupied =
+      car.phase === "parked"
+        ? 0
+        : car.phase === "entering"
+          ? car.length * (1 - car.manoeuvre)
+          : car.length;
+    if (occupied <= 1e-6) return pts;
+    for (let a = 0; a < occupied; a += BODY_SAMPLE_STEP) add(a, sampleAtArc(car, a));
+    add(occupied, sampleAtArc(car, occupied)); // always include the exact tail
     return pts;
   }
 
@@ -1494,6 +1690,19 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (lead >= 0 && closed(tileId)) crossingClear = Math.min(crossingClear, lead);
     }
     bind(crossingClear, 0);
+    // A claimed parking bay is a stop line: never roll past the point where the
+    // car must peel off, or it would sail by its own space and have to go round.
+    // Binding here (rather than letting `advance` catch it after the fact) is also
+    // what makes the car BRAKE into the manoeuvre instead of arriving at cruise.
+    if (car.stall && car.phase === "driving") {
+      const head = car.path[car.headIndex];
+      if (
+        getCoordinatesId(head.coord) === car.stall.tileId &&
+        head.entryPort === car.stall.from
+      ) {
+        bind(Math.max(0, parking.startTOf(car.stall) - car.headProgress), 0);
+      }
+    }
     // Junction arbiter: for each upcoming junction on the route, ask whether
     // this car may enter given the current conflict geometry and waiting cars.
     for (const [junctionId, { lead, entry: myEntry }] of route) {
@@ -1556,6 +1765,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
       if (other === car) continue;
+      // Parked cars report no body at all (see `bodyPoints`), so skipping them
+      // here changes no outcome — it just keeps them out of the hottest loop in
+      // the tick, which a busy car park would otherwise fill with vehicles that
+      // are never going to be an obstacle.
+      if (other.phase === "parked") continue;
       const otherPts = bodyPoints(other);
       // Swept-body following, overlap-RECOVERING: keep our head a gap behind the
       // REAR-most point of any same-direction body whose lateral extent is within a
@@ -1773,7 +1987,275 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return { clear: finalClear, boundByCrossing };
   }
 
+  // --- Parking ---------------------------------------------------------------
+
+  // The car's lateral lane offset in TILE units — where it really sits across the
+  // road. The manoeuvre curve starts there rather than on the centreline, so a car
+  // in the kerb lane of a four-lane street peels off from the kerb lane and not
+  // from the middle of the carriageway.
+  function laneOffsetOf(car: Car): number {
+    const head = car.path[car.headIndex];
+    return laneGeo.couplerOffsets(
+      {
+        coord: head.coord,
+        entryPort: head.entryPort,
+        exitPort: head.exitPort,
+        lanePos: car.laneIndex,
+      },
+      laneOf(car),
+      clsOf(car),
+    ).offEntry;
+  }
+
+  // Plan a trip that ENDS at a car park. Picks among the car parks that still
+  // have a space this vehicle could use, weighted by how many — a big empty car
+  // park pulls more traffic than a single kerbside bay, which is what makes a
+  // city read right — then finds the way there. Null when nothing is open or
+  // nothing is reachable, and the caller falls back to an ordinary through trip.
+  function planParkingTrip(
+    coord: Coordinates,
+    entry: Port,
+    kind: VehicleKind,
+    cls: VehicleClass,
+    avoid?: string | null,
+  ): { turns: RouteTurn[]; facilityId: string } | null {
+    const open = parking
+      .openFacilities(kind)
+      .filter(f => f.id !== avoid);
+    if (open.length === 0) return null;
+    // Weighted draw without replacement: try the picked car park, and if it turns
+    // out to be unreachable from here try the next, up to a small bound. A level
+    // where a car park exists but no road reaches it is an authoring error, not
+    // something to spend a whole BFS budget on every spawn.
+    const pool = open.map(f => ({
+      f,
+      w: Math.max(1, parking.availableFor(f.id, kind)),
+    }));
+    for (let attempt = 0; attempt < 3 && pool.length > 0; attempt++) {
+      const total = pool.reduce((s, p) => s + p.w, 0);
+      let r = parkRng() * total;
+      let idx = pool.length - 1;
+      for (let i = 0; i < pool.length; i++) {
+        r -= pool[i].w;
+        if (r < 0) {
+          idx = i;
+          break;
+        }
+      }
+      const chosen = pool.splice(idx, 1)[0].f;
+      // Aim only at the approaches that currently have a free stall for this
+      // vehicle — a row of disabled bays is not a destination for an ordinary car.
+      const goals: RouteGoal[] = chosen.access.filter(a =>
+        parking.pickStallOn(getCoordinatesId(a.coord), a.entryPort, kind) !== null,
+      );
+      if (goals.length === 0) continue;
+      const plan = planRouteToGoals(level, coord, entry, goals, cls);
+      if (plan.goal) return { turns: plan.turns, facilityId: chosen.id };
+    }
+    return null;
+  }
+
+  // Try to take a free bay on the tile the car has just reached. Claiming is the
+  // reservation, so from here on the space is the car's and nobody else can aim
+  // for it. Real-driver semantics: you take the first space you SEE, which is the
+  // first one on the tile you are on — not one three tiles away.
+  function claimStallHere(car: Car, tileId: string, entry: Port): void {
+    if (car.stall || car.parkTarget === null) return;
+    const cell = level[tileId];
+    if (!cell?.parking?.rows?.length) return;
+    if (facilityOfTile(tileId) !== car.parkTarget) return;
+    const ref = parking.pickStallOn(tileId, entry, car.kind);
+    if (!ref) return;
+    if (!parking.claim(ref, car.id)) return;
+    car.stall = ref;
+  }
+
+  function facilityOfTile(tileId: string): string | null {
+    for (const [id, tiles] of facilityTiles) if (tiles.has(tileId)) return id;
+    return null;
+  }
+
+  // Give the stall back and forget it. Used when the car leaves, and when it is
+  // removed mid-park — a leaked claim would strand a bay for the rest of the run.
+  function releaseStall(car: Car): void {
+    if (car.stall) parking.release(car.stall);
+    parking.unaim(car.id);
+    car.stall = null;
+    car.parkPath = null;
+    car.manoeuvre = 0;
+  }
+
+  // Has the car reached the point on its approach where it should swing into its
+  // claimed bay? Only true on the right tile, in the right direction.
+  function atStallEntry(car: Car): boolean {
+    if (!car.stall || car.phase !== "driving") return false;
+    const head = car.path[car.headIndex];
+    if (getCoordinatesId(head.coord) !== car.stall.tileId) return false;
+    if (head.entryPort !== car.stall.from) return false;
+    // Tolerance, not pedantry: `clearAhead` binds the car's clear distance to
+    // exactly this point, and the brake ramp (vSafe = sqrt(2·brake·clear))
+    // approaches it asymptotically — a strict `>=` would leave the car creeping
+    // toward its own bay for ever. A fifth of a car length is invisible, and
+    // `beginEntering` anchors the curve at the car's REAL position anyway, so
+    // arriving early costs nothing.
+    if (car.headProgress < parking.startTOf(car.stall) - PARK_ARRIVE_EPS) return false;
+    // ONE CAR AT A TIME per car park. A barrier serves one vehicle; a ramp is one
+    // lane wide. Without this, every car bound for a garage would swing into the
+    // same ramp mouth at once (all its slots share one entry point) and they would
+    // draw through each other. With it, the followers hold on the street and their
+    // frozen bodies queue the ones behind THEM — which is the single most
+    // recognisable parking image there is: a line of cars waiting to get in.
+    const mine = parking.info(car.stall)?.facilityId;
+    if (mine !== undefined) {
+      for (const other of cars) {
+        if (other === car || other.phase !== "entering" || !other.stall) continue;
+        if (parking.info(other.stall)?.facilityId === mine) return false;
+      }
+    }
+    return true;
+  }
+
+  function beginEntering(car: Car): void {
+    // Anchor the curve at where the car ACTUALLY is, so the sprite never jumps
+    // sideways as the swing starts.
+    const path = parking.pathFor(car.stall!, laneOffsetOf(car), car.headProgress);
+    if (!path) {
+      // The level changed under the claim — give the bay back and drive on.
+      releaseStall(car);
+      return;
+    }
+    car.parkPath = path;
+    car.phase = "entering";
+    car.manoeuvre = 0;
+    car.velocity = 0;
+    car.laneVel = 0;
+    car.heldSec = 0;
+    car.overtakePhase = "none";
+    car.overtakeOf = null;
+  }
+
+  // Is the lane behind the car's slot clear enough to reverse out into? Checked
+  // against real bodies on the same tile travelling the same way, so a car waits
+  // for a gap in the traffic instead of materialising into it.
+  function pullOutClear(car: Car): boolean {
+    if (!car.stall) return true;
+    const head = car.path[car.headIndex];
+    const tileId = getCoordinatesId(head.coord);
+    const slotFront = car.headProgress;
+    const slotRear = car.headProgress - car.length - PARKING.pullOutGap;
+    for (const other of cars) {
+      if (other === car || other.phase === "parked") continue;
+      for (const p of bodyPoints(other)) {
+        if (p.tileId !== tileId) continue;
+        if (p.entry !== head.entryPort) continue; // same travel direction only
+        if (p.t > slotRear && p.t < slotFront + PARKING.pullOutGap) return false;
+      }
+    }
+    return true;
+  }
+
+  // Send the car back into traffic from its bay: re-seat it on the lane at the
+  // point the curve started from, and plan a fresh route to a map edge. The path
+  // is REPLACED (not appended to) — the drive that brought it here is over, and a
+  // stale history would keep `sampleAtArc` walking back into it.
+  function resumeFromStall(car: Car): void {
+    const head = car.path[car.headIndex];
+    const cls = clsOf(car);
+    // `headProgress` was frozen at the peel-off point for the whole stay, so it
+    // still names exactly where the curve meets the lane — which is where the car
+    // rejoins traffic.
+    const startT = car.headProgress;
+    const exit = roadExitPort(level, head.coord, head.entryPort, cls);
+    const replan = planRoute(level, head.coord, head.entryPort, allMapExits, routeRng, cls);
+    car.path = [{ coord: head.coord, entryPort: head.entryPort, exitPort: exit }];
+    car.headIndex = 0;
+    car.headProgress = Math.max(0, Math.min(0.999, startT));
+    car.routePlan = replan.turns;
+    car.routeStep = 0;
+    car.destination = replan.destination;
+    car.parkTarget = null;
+    car.enteredTarget = false;
+    car.lanePivot = null;
+    car.pendingExitLane = null;
+    car.tilesSinceJunction = 0;
+    car.laneVel = 0;
+    car.launchTimer = 0;
+    car.waitSeconds = 0;
+    const lane = nearestUsableLaneIndex(
+      level[getCoordinatesId(head.coord)]?.road,
+      head.entryPort,
+      kerbMostLane(level[getCoordinatesId(head.coord)]?.road, head.entryPort, cls),
+      cls,
+    );
+    car.laneIndex = lane;
+    car.targetLane = lane;
+    car.overtakeHomeLane = lane;
+    car.phase = "driving";
+    releaseStall(car);
+  }
+
+  // The parking phase machine. Runs INSTEAD of the driving physics — a car in a
+  // bay is not doing car-following, junction arbitration or lane changes, and
+  // trying to make it do so is what would break every gate at once.
+  function advanceParking(car: Car, dt: number): void {
+    car.velocity = 0;
+    // A parked car is not WAITING for anything — it is where it wants to be.
+    // `waitSeconds` feeds the junction arbiter's starvation guard and `waitedSec`
+    // feeds the crossing-patience objective (`frame()` → objectives.ts →
+    // crossing-keeper's 30s fail threshold). Left to accrue, a long dwell in a bay
+    // beside a crossing would LOSE the level while behaving perfectly.
+    car.waitSeconds = 0;
+    car.waitedSec = 0;
+    car.launchTimer = 0;
+    const len = car.parkPath ? manoeuvreLength(car.parkPath) : 0;
+    // Fraction of the curve covered this tick, at the crawl speed. A deep 90° bay
+    // therefore takes longer to enter than a shallow kerbside one, for free.
+    const step = len > 1e-6 ? (PARKING.speed * dt) / len : 1;
+
+    if (car.phase === "entering") {
+      car.manoeuvre = Math.min(1, car.manoeuvre + step);
+      if (car.manoeuvre >= 1) {
+        car.phase = "parked";
+        // Dwell is authored PER FACILITY where the level says so: a kerbside bay
+        // that turns over every twenty seconds beside a garage whose cars sit for
+        // two minutes is what makes a street read as a street.
+        const authored = car.stall
+          ? parking.dwellOf(parking.info(car.stall)?.facilityId ?? "")
+          : undefined;
+        const lo = authored ? authored[0] : dwellRange.min;
+        const hi = authored ? authored[1] : dwellRange.max;
+        car.dwellLeft = lo + parkRng() * Math.max(0, hi - lo);
+      }
+      return;
+    }
+
+    if (car.phase === "parked") {
+      car.dwellLeft -= dt;
+      // Stay put until the dwell is up AND there is a gap to pull out into. A
+      // driver waits for the road rather than reversing into moving traffic.
+      if (car.dwellLeft <= 0 && pullOutClear(car)) {
+        car.phase = "leaving";
+        car.manoeuvre = 1;
+      }
+      return;
+    }
+
+    // "leaving": replay the same curve backwards, out of the bay and onto the lane.
+    car.manoeuvre = Math.max(0, car.manoeuvre - step);
+    if (car.manoeuvre <= 0) resumeFromStall(car);
+  }
+
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
+    // A car dealing with a parking space is off the traffic model entirely.
+    if (car.phase !== "driving") {
+      advanceParking(car, dt);
+      return true;
+    }
+    // Reached its bay — swing in and stop being traffic.
+    if (atStallEntry(car)) {
+      beginEntering(car);
+      if (car.phase !== "driving") return true;
+    }
     const { clear, boundByCrossing } = clearAhead(car, closed);
     // Patience bookkeeping: a car stopped specifically by a closed crossing ahead
     // accrues wait time; any other state (moving, or stopped behind a car/junction)
@@ -1926,6 +2408,41 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
       car.headIndex += 1;
       car.headProgress -= 1;
+      // --- Parking, on arriving at a new tile --------------------------------
+      if (car.parkTarget !== null) {
+        const nextId = getCoordinatesId(nextCoord);
+        const here = facilityOfTile(nextId);
+        if (here === car.parkTarget) {
+          car.enteredTarget = true;
+          // Take the first free bay on this tile. Not one further along the row
+          // and not one on a tile ahead: a driver takes the space they can see.
+          claimStallHere(car, nextId, nextEntry);
+        } else if (car.enteredTarget && car.stall === null) {
+          // Drove the whole car park and every bay was taken. This is the
+          // "cruising for a space" moment — try somewhere else, and after a
+          // couple of failures give up and drive on, as a real driver does.
+          car.enteredTarget = false;
+          car.parkTries += 1;
+          parkingGiveUps += 1;
+          const retry =
+            car.parkTries < PARKING.maxTries
+              ? planParkingTrip(nextCoord, nextEntry, car.kind, cls, car.parkTarget)
+              : null;
+          if (retry) {
+            car.routePlan = retry.turns;
+            car.routeStep = 0;
+            car.parkTarget = retry.facilityId;
+            parking.aim(retry.facilityId, car.id); // move the token to the new target
+          } else {
+            const away = planRoute(level, nextCoord, nextEntry, allMapExits, routeRng, cls);
+            car.routePlan = away.turns;
+            car.routeStep = 0;
+            car.destination = away.destination;
+            car.parkTarget = null;
+            parking.unaim(car.id); // gave up on parking — stop holding a space
+          }
+        }
+      }
     }
     // Retire the junction-seam pivot once the whole body has cleared the seam —
     // the tail's segment is then past it and the single `laneIndex` describes the
@@ -1950,7 +2467,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // Attempt one spawn at a randomly-chosen entry. Returns true iff a car was
   // placed, so the fill-fast loop knows whether the road still has room.
   function trySpawn(closed: CrossingClosed): boolean {
-    if (entries.length === 0 || cars.length >= maxCarsOf()) return false;
+    if (entries.length === 0 || activeCarCount() >= maxCarsOf()) return false;
     // Decide the vehicle kind FIRST (it fixes the lane-access class), then pick
     // a class-compatible entry: a car never draws a bus-only street's open end,
     // and buses can spawn there at all (previously such edges had no entry).
@@ -2007,10 +2524,35 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       destination: null,
       pendingExitLane: null,
       tilesSinceJunction: 0,
+      phase: "driving",
+      parkTarget: null,
+      stall: null,
+      parkPath: null,
+      manoeuvre: 0,
+      dwellLeft: 0,
+      parkTries: 0,
+      enteredTarget: false,
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
-    const { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
+    let { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
+    // Is this a PARKING trip? Only asked on a level that has car parks, so the
+    // parking RNG stream is never drawn from elsewhere and every existing seeded
+    // scenario replays exactly as before.
+    let parkTarget: string | null = null;
+    if (parking.any() && vehicleCanPark(kind) && parkRng() < parkFraction) {
+      const trip = planParkingTrip(entry.coord, entry.entryPort, kind, cls);
+      if (trip) {
+        routePlan = trip.turns;
+        parkTarget = trip.facilityId;
+      }
+    }
+    const carId = `car${nextId++}`;
+    // Take the facility token the moment the trip is planned, so the NEXT car to
+    // spawn already sees this space as spoken for. Without it a car park with two
+    // free bays attracts every car on the map, and all but two of them drive its
+    // whole length and turn round — a jam dressed up as a feature.
+    if (parkTarget !== null) parking.aim(parkTarget, carId);
     // Lane order to try at the entry, by class:
     //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
     //    then the remaining lanes from a rotating start.
@@ -2052,8 +2594,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan, cls);
-    cars.push({
-      id: `car${nextId++}`,
+    const spawned: Car = {
+      id: carId,
       kind,
       speed,
       // Enter the map already at cruise speed — a car drives in from off-screen, so
@@ -2087,7 +2629,26 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       destination,
       pendingExitLane: null,
       tilesSinceJunction: 0,
-    });
+      phase: "driving",
+      parkTarget,
+      stall: null,
+      parkPath: null,
+      manoeuvre: 0,
+      dwellLeft: 0,
+      parkTries: 0,
+      enteredTarget: false,
+    };
+    cars.push(spawned);
+    // A car can spawn ON the very tile it means to park on (a kerbside bay on the
+    // entry street). The tile-crossing hook would never fire for it, so claim here
+    // too — otherwise it drives straight past its own destination.
+    if (parkTarget !== null) {
+      const spawnId = getCoordinatesId(entry.coord);
+      if (facilityOfTile(spawnId) === parkTarget) {
+        spawned.enteredTarget = true;
+        claimStallHere(spawned, spawnId, entry.entryPort);
+      }
+    }
     return true;
   }
 
@@ -2226,7 +2787,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // packs even a wide cap to its target within a fraction of a second.
         let misses = 0;
         const maxAttempts = Math.max(1, entries.length) * 4;
-        for (let a = 0; a < maxAttempts && cars.length < maxCarsOf(); a++) {
+        for (let a = 0; a < maxAttempts && activeCarCount() < maxCarsOf(); a++) {
           if (trySpawn(closed)) misses = 0;
           else if (++misses >= Math.max(1, entries.length)) break;
         }
@@ -2244,6 +2805,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const alive = advance(cars[i], dt, closed);
         if (!alive) {
           if (cars[i].crossedCrossing) carsDelivered += 1;
+          // Hand the bay back on the way out. A claim that outlives its car would
+          // strand that space for the rest of the run — the road-layer version of
+          // "a parked train occupies its depot tile forever".
+          releaseStall(cars[i]);
           cars.splice(i, 1);
         }
       }
@@ -2252,6 +2817,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       let maxCarWaitSec = 0;
       let carWaitTotalSec = 0;
       for (const c of cars) {
+        if (c.phase !== "driving") continue; // a parked car is not being held up
         if (c.waitedSec > maxCarWaitSec) maxCarWaitSec = c.waitedSec;
         carWaitTotalSec += c.waitedSec;
       }
@@ -2268,12 +2834,48 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         laneIndex: c.laneIndex,
         targetLane: c.targetLane,
         overtakePhase: c.overtakePhase,
+        phase: c.phase,
+        parked: c.phase === "parked",
+        parkTarget: c.parkTarget,
       }));
     },
     sample() {
       return cars.map(c => {
         const spec = vehicleSpec(c.kind, carLength);
         const units: CarUnit[] = [];
+        // A car in a bay or swinging into one is not on any lane, so it reports an
+        // absolute pose instead (see CarSample.pose). One rigid box: only
+        // single-segment vehicles park (`vehicleCanPark`), so there is no
+        // articulation to model here.
+        if (c.phase !== "driving" && c.parkPath) {
+          const info = c.stall ? parking.info(c.stall) : undefined;
+          // A garage slot is INSIDE the building — the car is simply not drawn
+          // once it is in there. It reappears the tick it starts back out.
+          if (info?.hidden && c.phase === "parked") {
+            return { id: c.id, units: [], laneIndex: c.laneIndex, laneCount: 1, destination: c.destination };
+          }
+          const at = manoeuvreAt(c.parkPath, c.manoeuvre);
+          const rad = (at.angleDeg * Math.PI) / 180;
+          const half = spec.segments[0].length / 2;
+          const mk = (sign: number): CarSample => ({
+            coord: c.path[c.headIndex].coord,
+            entryPort: c.path[c.headIndex].entryPort,
+            exitPort: null,
+            t: 0,
+            pose: {
+              tx: at.x + Math.cos(rad) * half * sign,
+              ty: at.y + Math.sin(rad) * half * sign,
+              headingDeg: at.angleDeg,
+            },
+          });
+          units.push({
+            front: mk(1),
+            rear: mk(-1),
+            lengthTiles: spec.segments[0].length,
+            part: spec.segments[0].part,
+          });
+          return { id: c.id, units, laneIndex: c.laneIndex, laneCount: 1, destination: c.destination };
+        }
         let lead = 0; // arc distance from the head to this segment's leading edge
         for (const seg of spec.segments) {
           // Rendered spacing uses the lane-offset driven length so the cab and
@@ -2327,6 +2929,31 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const next = cycleJunctionSignal(ctrl.signal());
       ctrl.setSignal(next);
       return next;
+    },
+    parkingOccupancy() {
+      return parking.occupancy();
+    },
+    parkingStatus() {
+      const inbound = new Map<string, number>();
+      for (const c of cars) {
+        if (c.parkTarget) inbound.set(c.parkTarget, (inbound.get(c.parkTarget) ?? 0) + 1);
+      }
+      return parking.facilities().map(f => ({
+        id: f.id,
+        label: f.label,
+        capacity: parking.capacity(f.id),
+        free: parking.freeCount(f.id),
+        inbound: inbound.get(f.id) ?? 0,
+      }));
+    },
+    parkingFrame() {
+      let parked = 0;
+      let searching = 0;
+      for (const c of cars) {
+        if (c.phase === "parked") parked++;
+        else if (c.parkTarget !== null) searching++;
+      }
+      return { parked, searching, givenUp: parkingGiveUps };
     },
     routePath(carId: string): RoadSegment[] {
       const car = cars.find(c => c.id === carId);

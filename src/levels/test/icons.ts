@@ -31,6 +31,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/priority": "⚠️",
   "streets/vehicles": "🚌",
   "streets/routing": "📍",
+  "streets/parking": "🅿️",
   "challenges/modes": "🎯",
   "challenges/worlds": "🌍",
 };

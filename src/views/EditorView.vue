@@ -514,6 +514,13 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
     signalOverrides: empty,
     roadSignalAspects: empty,
     roadSignals: empty,
+    // Parking is level DATA, so the editor draws the bays; only the live
+    // occupancy and the "P n/total" sign belong to a running game. Empty here
+    // means every bay renders free and no sign is drawn — which is exactly right
+    // for a level that is not being played. (Omitting them would make Tile.vue's
+    // parkingPaths read `undefined[key]` the moment a bay was drawn.)
+    parkingOccupancy: empty,
+    parkingStatus: empty,
     cycleSignal: () => {},
     cycleRoadSignal: () => {},
     // roadLaneCount / roadLaneCountAt are both called by Tile.vue's roadPaths

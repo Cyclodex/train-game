@@ -60,7 +60,12 @@ export function isBlankCell(cell: TileCell): boolean {
     (cell.road?.length ?? 0) === 0 &&
     cell.role === undefined &&
     cell.terrain === undefined &&
-    (cell.signals?.length ?? 0) === 0
+    (cell.signals?.length ?? 0) === 0 &&
+    // Parking counts as real content, exactly as terrain does. A cell can carry
+    // ONLY `parking` — `{ facility: "P1" }` with no bays is how an aisle tile
+    // joins a car park — and treating that as blank would delete it the instant
+    // it was touched. Same bug terrain hit before it was added here.
+    cell.parking === undefined
   );
 }
 

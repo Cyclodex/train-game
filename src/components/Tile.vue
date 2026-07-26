@@ -19,6 +19,14 @@
           :class="{ 'road-surface--mismatch': r.mismatch }"
         />
       </g>
+      <!-- Parking APRON: the strip of tarmac the bays stand on, painted right
+           after the carriageway and before its kerb line and markings, so the
+           two read as one continuous surface instead of bays floating on grass
+           (the same trick `.road-gore-fill` uses for a hatched closure). -->
+      <template v-for="(p, pi) in parkingPaths" :key="'pk' + pi">
+        <path v-if="p.apron" :d="p.apron" class="parking-apron" />
+        <path v-if="p.garage" :d="p.garage.apron" class="parking-apron" />
+      </template>
       <!-- Bus-lane tint: a gold strip over just the bus lane(s), not the whole
            ribbon, laterally aligned with the lane's cars/arrows. -->
       <path
@@ -99,6 +107,27 @@
           class="road-lane-arrow"
           :class="{ 'road-lane-arrow--bus': arr.bus }"
         />
+      </template>
+      <!-- Parking BAY LINES, over the road's own markings: the outline of each
+           space plus the outer kerb where the apron meets the verge. An occupied
+           bay is tinted so a full car park reads at a glance even when the cars
+           in it are small. -->
+      <template v-for="(p, pi) in parkingPaths" :key="'pl' + pi">
+        <path
+          v-for="s in p.stalls"
+          :key="s.key"
+          :d="s.d"
+          class="parking-bay"
+          :class="[
+            { 'parking-bay--taken': s.occupied },
+            p.reserved ? 'parking-bay--' + p.reserved : '',
+          ]"
+        />
+        <path v-if="p.kerb" :d="p.kerb" class="parking-kerb" />
+        <template v-if="p.garage">
+          <path :d="p.garage.mouth" class="parking-garage-mouth" />
+          <path :d="p.garage.arrow" class="parking-garage-arrow" />
+        </template>
       </template>
       <!-- Signalised-junction STOP LINES live in the road layer (on the street,
            UNDER the cars and debug arrows). The signal heads + gantry are a
@@ -260,6 +289,20 @@
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
+    <!-- Car-park sign: "P 3/12", or "P VOLL" when there is no space left. Drawn
+         once per car park, above the cars, from the SAME live counts the router
+         reads when it decides where to send a driver — so "cars avoid a full car
+         park" is something a player can actually watch happen. -->
+    <div
+      v-if="parkingSign"
+      class="parking-sign"
+      :class="{ 'parking-sign--full': parkingSign.full }"
+      :style="{ left: parkingSign.x + 'px', top: parkingSign.y + 'px' }"
+    >
+      <span class="parking-sign-count">{{ parkingSign.text }}</span>
+      <span class="parking-sign-label">{{ parkingSign.label }}</span>
+    </div>
+
     <!-- Car destination marker (debug): a car is currently heading to this tile. -->
     <div v-if="config.debug && carDestinationId" class="car-destination-marker">
       <span class="car-destination-label">→{{ carDestinationId }}</span>
@@ -282,7 +325,7 @@
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
-import { Position, ActiveIntersection, Route } from "@/types";
+import { Position, ActiveIntersection, Route, type Coordinates } from "@/types";
 import {
   TileCell,
   kindOf,
@@ -335,7 +378,24 @@ import {
   lanesFrom,
   laneAllExits,
   approachPortsOf,
+  isOneWayStraight,
 } from "@/tiles/lanes";
+import {
+  parkingApronPath,
+  parkingKerbPath,
+  parkingSignAnchor,
+  stallOutlinePath,
+  garageGeometry,
+  rowBankPort,
+} from "@/tiles/parkingGeometry";
+import {
+  rowsOf,
+  rowSide,
+  kerbOffsetAt,
+  stallId,
+  facilityOf,
+  type ParkingRow,
+} from "@/tiles/parking";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
@@ -767,6 +827,109 @@ class Tile extends Vue {
         mismatchTip: "",
       };
     });
+  }
+
+  // Where the kerb sits for a parking row's approach, in px. This mirrors
+  // `tiles/parking.ts kerbOffsetAt` exactly, but resolves its neighbours through
+  // the injected Game road API instead of the level: `Tile` deliberately sees only
+  // its own cell (unlike `TileGround`), and the editor supplies a no-op Game that
+  // this then keeps working against. Keep the two in lockstep — if the painted bay
+  // and the sim's manoeuvre curve disagree about where the kerb is, cars park on
+  // the road markings.
+  //
+  // A METHOD, not a getter: it takes arguments, and vue-facing-decorator turns a
+  // getter into a cached computed (KNOWHOW → CAMERA).
+  parkingKerbFor(coord: Coordinates, from: Position): number {
+    const size = this.config.tileSize;
+    const road = this.tile.road;
+    // A one-way aisle is kerb-anchored to its run's widest lane count and never
+    // seam-tapers — measuring it by the two-way max(laneCountAt, 2) rule would put
+    // the kerb 14px too far out and leave a car's width of grass under the bays.
+    if (isOneWayStraight(road, from)) {
+      return (this.game.roadOneWayRunMax(coord, from) / 2) * LANE_WIDTH_PX_FRAC * size;
+    }
+    const selfTotal = Math.max(laneCountAt(road, from), 2);
+    let widest = 0;
+    for (const port of [from, oppositePort(from)]) {
+      const nb = neighborCoord(coord, port);
+      const crossing = nb ? this.game.roadLaneCountAt(nb, oppositePort(port)) : 0;
+      const total = roadSeamPaintTotal(
+        selfTotal,
+        crossing,
+        nb ? this.game.roadIsJunctionAt(nb) : false,
+      );
+      widest = Math.max(widest, (total / 2) * LANE_WIDTH_PX_FRAC * size);
+    }
+    return widest;
+  }
+
+  // The parking layer's paint: the apron each row of bays stands on, its outer
+  // kerb, and one outline per bay. Lives inside the road-layer SVG, ordered so the
+  // apron goes UNDER the road's own kerb and markings (one continuous surface) and
+  // the bay lines go over them.
+  get parkingPaths(): {
+    apron: string;
+    kerb: string;
+    reserved?: string;
+    stalls: { d: string; key: string; occupied: boolean }[];
+    garage: ReturnType<typeof garageGeometry> | null;
+  }[] {
+    if (!this.config.roads) return [];
+    const rows = rowsOf(this.tile);
+    if (rows.length === 0) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const occupancy = this.game.parkingOccupancy;
+    return rows.map(row => {
+      const kerb = this.parkingKerbFor(coord, row.from);
+      const side = rowSide(row);
+      const stalls: { d: string; key: string; occupied: boolean }[] = [];
+      if (row.kind !== "garage") {
+        for (let i = 0; i < row.count; i++) {
+          const key = stallId({ tileId: this.coordId, from: row.from, side, index: i });
+          stalls.push({
+            d: stallOutlinePath(row, i, size, kerb),
+            key,
+            occupied: !!occupancy?.[key],
+          });
+        }
+      }
+      return {
+        apron: parkingApronPath(row, size, kerb),
+        kerb: parkingKerbPath(row, size, kerb),
+        reserved: row.reserved,
+        stalls,
+        garage: row.kind === "garage" ? garageGeometry(row, size, kerb) : null,
+      };
+    });
+  }
+
+  // The "P 3/12" chip for a car park, drawn once per facility on its lowest tile.
+  // Without it, "cars avoid a car park that is already full" is a behaviour no
+  // player can ever see — the whole routing half of the feature would be
+  // invisible work.
+  get parkingSign(): { x: number; y: number; label: string; text: string; full: boolean } | null {
+    if (!this.config.roads) return null;
+    const rows = rowsOf(this.tile);
+    if (rows.length === 0) return null;
+    const fid = facilityOf(this.tile, this.coordId);
+    if (!fid) return null;
+    const status = this.game.parkingStatus?.[fid];
+    if (!status) return null;
+    // Only the facility's own sign tile draws it, or a ten-tile car park would
+    // carry ten identical signs.
+    if (status.signTileId !== this.coordId) return null;
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const row = rows[0];
+    const anchor = parkingSignAnchor(row, size, this.parkingKerbFor(coord, row.from));
+    return {
+      x: anchor.x,
+      y: anchor.y,
+      label: status.label,
+      text: status.free > 0 ? `P ${status.free}/${status.capacity}` : "P VOLL",
+      full: status.free <= 0,
+    };
   }
 
   // Tinted strips for bus lanes: one filled band per bus lane, laterally aligned
@@ -1794,6 +1957,97 @@ $signal-offset: 20px;
 
 /* Car destination marker (debug overlay): a small teal tag on a tile that a car
    is currently heading toward. Non-intrusive — sits in the top-right corner. */
+/* --- Parking ------------------------------------------------------------- */
+/* The apron reads as the SAME tarmac as the carriageway (matching
+   `.road-surface`), so a kerbside bay looks like a widening of the street rather
+   than a separate slab parked next to it. */
+.parking-apron {
+  fill: #4a4a4a;
+}
+/* The outer kerb, where the parking strip meets the verge. The road's own kerb
+   line is buried under the apron on this flank, so without this the tarmac would
+   bleed straight into the grass. */
+.parking-kerb {
+  fill: none;
+  stroke: #d9d9d9;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* One outline per space. Bay lines are what a player actually reads as
+   "parking" — the shape alone says it before any car arrives. */
+.parking-bay {
+  fill: rgba(255, 255, 255, 0.02);
+  stroke: #e8e8e8;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+/* A taken bay. Tinted rather than hidden: at this zoom a small car does not by
+   itself make a car park look full, and "is there space?" is the question the
+   whole feature is about. */
+.parking-bay--taken {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: rgba(232, 232, 232, 0.45);
+}
+/* Reserved bays, painted in their real-world colours so they read without a
+   legend. Nothing may park in them yet — that is deliberate: a car park is never
+   100% usable, and the empty blue bays are what make it look like one. */
+.parking-bay--disabled {
+  fill: rgba(60, 130, 220, 0.32);
+  stroke: #cfe4ff;
+}
+.parking-bay--delivery {
+  fill: rgba(230, 170, 40, 0.26);
+  stroke: #ffe4a8;
+}
+.parking-bay--long {
+  fill: rgba(255, 255, 255, 0.03);
+  stroke-dasharray: 7 4;
+}
+/* The garage ramp: a dark mouth under the building, with a chevron pointing in.
+   A car that drives to a bare kerb and vanishes reads as a despawn BUG — the
+   ramp is what makes it read as a garage. */
+.parking-garage-mouth {
+  fill: #15181c;
+}
+.parking-garage-arrow {
+  fill: none;
+  stroke: #f0f0f0;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+.parking-sign {
+  position: absolute;
+  z-index: 11; // above the cars (6) and the garage building (10)
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(18, 46, 96, 0.92);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.parking-sign--full {
+  background: rgba(120, 26, 26, 0.94);
+}
+.parking-sign-count {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+.parking-sign-label {
+  font-size: 7px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .car-destination-marker {
   position: absolute;
   top: 2px;

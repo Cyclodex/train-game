@@ -160,3 +160,82 @@ export function planRoute(
   // No path to the chosen target found.
   return { turns: [], destination: null };
 }
+
+// --- Routing to a place ON the map (parking) ---------------------------------
+//
+// `planRoute` above answers "how do I drive off the map again". Parking asks a
+// different question: "how do I get to a tile I want to STOP on". The graph and
+// the turn extraction are identical; only the goal test changes — from "this exit
+// leads off the grid" to "I am standing on one of these (tile, approach) states".
+//
+// One BFS over a SET of goals, not one per facility: the search is breadth-first,
+// so the first goal it reaches is the NEAREST one, which is both the realistic
+// choice and cheaper than N separate searches. The caller decides WHICH car park
+// to aim at (and skips the full ones); this only finds the way there.
+
+// A place a car can drive to: a tile, entered through a given port.
+export interface RouteGoal {
+  coord: Coordinates;
+  entryPort: Port;
+}
+
+export interface GoalRoutePlan {
+  turns: RouteTurn[];
+  // The goal actually reached, or null when none is reachable.
+  goal: RouteGoal | null;
+}
+
+export function planRouteToGoals(
+  level: Level,
+  spawnCoord: Coordinates,
+  spawnEntry: Port,
+  goals: RouteGoal[],
+  cls: VehicleClass = "car",
+): GoalRoutePlan {
+  if (goals.length === 0) return { turns: [], goal: null };
+  const goalKeys = new Map<string, RouteGoal>();
+  for (const g of goals) goalKeys.set(`${getCoordinatesId(g.coord)}:${g.entryPort}`, g);
+
+  const startKey = `${getCoordinatesId(spawnCoord)}:${spawnEntry}`;
+  // Standing on the goal already — no turns needed. The caller must handle this
+  // (a car that spawns on the very tile it wants to park on), or it would drive
+  // a lap of the map to reach where it started.
+  const here = goalKeys.get(startKey);
+  if (here) return { turns: [], goal: here };
+
+  interface QueueItem {
+    coord: Coordinates;
+    entryPort: Port;
+    path: PathStep[];
+  }
+  const visited = new Set<string>([startKey]);
+  const queue: QueueItem[] = [{ coord: spawnCoord, entryPort: spawnEntry, path: [] }];
+
+  while (queue.length > 0) {
+    const { coord, entryPort, path } = queue.shift()!;
+    const tile = level[getCoordinatesId(coord)];
+    if (!tile?.road || tile.road.length === 0) continue;
+
+    for (const exitPort of usableExits(tile.road, entryPort, cls)) {
+      const nextCoord = neighborCoord(coord, exitPort);
+      if (!nextCoord) continue; // Center has no neighbour
+      const nextId = getCoordinatesId(nextCoord);
+      const nextTile = level[nextId];
+      const nextEntry = oppositePort(exitPort);
+      if (
+        !nextTile?.road?.length ||
+        usableExits(nextTile.road, nextEntry, cls).length === 0
+      )
+        continue; // off-grid / dead end — never a parking goal
+
+      const stateId = `${nextId}:${nextEntry}`;
+      const nextPath = [...path, { coord, entry: entryPort, exit: exitPort }];
+      const goal = goalKeys.get(stateId);
+      if (goal) return { turns: extractTurns(level, nextPath), goal };
+      if (visited.has(stateId)) continue;
+      visited.add(stateId);
+      queue.push({ coord: nextCoord, entryPort: nextEntry, path: nextPath });
+    }
+  }
+  return { turns: [], goal: null };
+}

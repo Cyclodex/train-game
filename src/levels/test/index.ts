@@ -16,6 +16,8 @@ import { roadcurveloops } from "@/levels/test/scenarios/roadcurveloops";
 import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
 import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
+import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
+import { parkinglot } from "@/levels/test/scenarios/parkinglot";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
 import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
@@ -166,6 +168,11 @@ export const DOMAINS: ScenarioDomain[] = [
         id: "routing",
         label: "Destinations & routing",
         scenarios: [cardestination, carroute],
+      },
+      {
+        id: "parking",
+        label: "Parking",
+        scenarios: [parkingkerb, parkinglot],
       },
     ],
   },
