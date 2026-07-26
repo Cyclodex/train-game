@@ -23,6 +23,8 @@ import {
   garageExitFrom,
   needsBigBay,
   layByTaperPx,
+  bayNearPx,
+  apronNearPx,
 } from "./parking";
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
@@ -82,8 +84,13 @@ export function parkingApronPath(
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
-  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const near = bayNearPx(row, size, kerbPx);
   const far = near + depth;
+  // The apron starts at the KERB for a rank that is held off the driving line for
+  // turning room (`bayNearPx`): that clearance is the aisle a car swings through,
+  // so it has to be tarmac. Left starting at the bays it would be a band of GRASS
+  // between the road and the car park, which is not what a car park looks like.
+  const paveFrom = apronNearPx(row, size, kerbPx);
   // An echelon rank's apron has to cover the rake as well as the bays.
   const skew = row.kind === "angled" ? depth : 0;
   const first = stallPose(row, 0, size, kerbPx);
@@ -96,8 +103,8 @@ export function parkingApronPath(
   // rectangle it was.
   const taper = layByTaperPx(row, size);
   return poly([
-    f.at(a0 - skew / 2 - taper, near),
-    f.at(a1 - skew / 2 + taper, near),
+    f.at(a0 - skew / 2 - taper, paveFrom),
+    f.at(a1 - skew / 2 + taper, paveFrom),
     f.at(a1 + skew / 2, far),
     f.at(a0 + skew / 2, far),
   ]);
@@ -137,7 +144,7 @@ export function parkingKerbPath(
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
-  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const near = bayNearPx(row, size, kerbPx);
   const far = near + depth;
   const skew = row.kind === "angled" ? depth : 0;
   const first = stallPose(row, 0, size, kerbPx);
@@ -194,7 +201,7 @@ export function garageGeometry(
   const f = rowFrame(framed, size);
   const width = RAMP_WIDTH_FRAC * size;
   const depth = stallDepthPx("garage", size);
-  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const near = bayNearPx(row, size, kerbPx);
   const far = near + depth;
   const pose = stallPose(framed, 0, size, kerbPx, mouth);
   // `pose.t` already carries the mouth's position along the tile.
@@ -242,7 +249,7 @@ export function parkingSignAnchor(
   const f = rowFrame(row, size);
   const big = needsBigBay(row.reserved);
   const depth = row.kind === "garage" ? stallDepthPx("garage", size) : stallDepthPx(row.kind, size, big);
-  const out = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth + size * 0.055;
+  const out = bayNearPx(row, size, kerbPx) + depth + size * 0.055;
   return f.at(size * 0.5, out);
 }
 
@@ -277,7 +284,7 @@ export function busStopGeometry(
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
-  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const near = bayNearPx(row, size, kerbPx);
   // The furniture — shelter, sign — stands on the VERGE, beyond the bay.
   const mark = near + depth;
   const first = stallPose(row, 0, size, kerbPx);

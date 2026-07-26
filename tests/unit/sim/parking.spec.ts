@@ -15,6 +15,8 @@ import {
   stallBoxPoints,
   stallPose,
   stallPitchPx,
+  bayNearPx,
+  apronNearPx,
   validateParking,
   kerbOffsetAt,
   bankOf,
@@ -226,6 +228,75 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
     const inT = stallPose(garage, 0, 200, 0, "in").t;
     expect(endT).toBeGreaterThan(inT);
     expect(endT).toBeLessThanOrEqual(0.999);
+  });
+});
+
+describe("a 90 deg bay needs an aisle to turn in", () => {
+  // Separation (>0) or penetration (<0) of two convex boxes, by SAT.
+  const sat = (A: { x: number; y: number }[], B: { x: number; y: number }[]): number => {
+    let worst = -Infinity;
+    for (const poly of [A, B]) {
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i]!;
+        const q = poly[(i + 1) % poly.length]!;
+        const l = Math.hypot(q.y - p.y, q.x - p.x) || 1;
+        const nx = -(q.y - p.y) / l;
+        const ny = (q.x - p.x) / l;
+        const pr = (pts: typeof A) => pts.map(t => t.x * nx + t.y * ny);
+        const a = pr(A);
+        const b = pr(B);
+        const gap = Math.max(Math.min(...a) - Math.max(...b), Math.min(...b) - Math.max(...a));
+        if (gap > 0) return gap;
+        worst = Math.max(worst, gap);
+      }
+    }
+    return worst;
+  };
+  const box = (x: number, y: number, deg: number, len: number, wid: number) => {
+    const r = (deg * Math.PI) / 180;
+    const c = Math.cos(r);
+    const sn = Math.sin(r);
+    return [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([u, v]) => ({
+      x: x + c * (len / 2) * u! - sn * (wid / 2) * v!,
+      y: y + sn * (len / 2) * u! + c * (wid / 2) * v!,
+    }));
+  };
+
+  it("never drives through the car in the bay next door", () => {
+    // THE REPORTED PICTURE: a car swinging into a 90° bay across the ones either
+    // side of it. Turning a car through a right angle takes its own length of
+    // room, and these aisles were 14px wide for a 38px car — the pull-in went
+    // 5.6px THROUGH the parked neighbour. `bayNearPx` holds a turning rank a car's
+    // length off the driving line, which is what a real car park's aisle is.
+    const row: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 7 };
+    const target = 3;
+    const CAR_L = 38;
+    const CAR_W = 20;
+    const kerb = 14; // a one-lane aisle: the tightest case there is
+    const neighbours = [target - 1, target + 1].map(i => {
+      const q = stallPose(row, i, 200, kerb);
+      return box(q.x, q.y, q.angleDeg, CAR_L, CAR_W);
+    });
+    const path = manoeuvrePath(row, target, 200, kerb, 7);
+    let worst = Infinity;
+    for (let i = 0; i <= 40; i++) {
+      const at = manoeuvreAt(path, i / 40);
+      const me = box(at.x, at.y, at.angleDeg, CAR_L, CAR_W);
+      for (const n of neighbours) worst = Math.min(worst, sat(me, n));
+    }
+    expect(worst).toBeGreaterThanOrEqual(0);
+  });
+
+  it("paves the clearance, and leaves an authored verge green", () => {
+    // The room a turning rank is held out by IS the aisle, so it is tarmac up to
+    // the kerb — a band of grass between the road and the car park is not a car
+    // park. An authored `gap` on a kerbside row is the opposite: a pavement.
+    const lot: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 7 };
+    const kerbside: ParkingRow = { from: Position.Left, kind: "parallel", count: 3, gap: 1 };
+    expect(bayNearPx(lot, 200, 14)).toBeCloseTo(38);
+    expect(apronNearPx(lot, 200, 14)).toBeCloseTo(14); // paved from the kerb out
+    expect(bayNearPx(kerbside, 200, 28)).toBeCloseTo(56);
+    expect(apronNearPx(kerbside, 200, 28)).toBeCloseTo(56); // the verge stays green
   });
 });
 

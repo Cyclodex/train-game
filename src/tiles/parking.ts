@@ -119,6 +119,47 @@ export function layByTaperPx(row: ParkingRow, size: number): number {
   return stallDepthPx(row.kind, size, true) * 1.5;
 }
 
+// A CAR'S LENGTH, as a fraction of a tile — the aisle a 90° bay needs.
+//
+// Turning a car through a right angle takes room, and the room it takes is its own
+// length. Measured on a rank of 90° bays with a parked neighbour either side: from
+// the 14px aisle these maps had, the pull-in drove 5.6px THROUGH the car next
+// door. At a car's length of clearance it grazes it (0.6px clear) and stays there
+// however much more you give it — so this is a threshold, not a dial.
+//
+// And it is CLEARANCE that fixes it, not a longer approach: lengthening the swing
+// makes it worse, fast (−5.6 → −23.7px at 0.6 of a tile), because the car spends
+// the extra distance travelling diagonally across the bays it is passing. Turn
+// LATE, in a WIDE aisle — which is exactly how a real car park is laid out.
+const TURN_IN_CLEARANCE_FRAC = 0.19;
+
+// Does this kind turn ACROSS the kerb to get in, rather than sliding along it?
+function turnsInAcrossKerb(kind: StallKind): boolean {
+  return kind === "perpendicular" || kind === "angled";
+}
+
+// Where a row's bays START, measured out from the lane's centreline. The one place
+// that answers it: the expression was repeated at nine call sites, and the
+// clearance rule below would have been missed by every one of them.
+//
+// A row that turns in across the kerb is held at least a car's length off the
+// driving line whatever the author asked for. That is not a preference — under it
+// the manoeuvre cannot be driven without going through the neighbours.
+export function bayNearPx(row: ParkingRow, size: number, kerbPx: number): number {
+  const authored = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  if (!turnsInAcrossKerb(row.kind)) return authored;
+  return Math.max(authored, TURN_IN_CLEARANCE_FRAC * size);
+}
+
+// Where the row's TARMAC starts, which is not always where its bays do. An
+// AUTHORED `gap` is a verge — a pavement, a service strip — and stays green. The
+// clearance a turning rank is held out by is the opposite: it is the aisle the car
+// swings through, so it is paved right up to the kerb.
+export function apronNearPx(row: ParkingRow, size: number, kerbPx: number): number {
+  const authored = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  return turnsInAcrossKerb(row.kind) ? Math.min(authored, kerbPx) : authored;
+}
+
 // How much room along the road a manoeuvre into or out of this row takes, in px.
 // ONE number for both directions, because the pull-in and the pull-out are mirror
 // images of each other; two would make a bay you enter along a gentle curve and
@@ -139,20 +180,25 @@ export function manoeuvreRunPx(row: ParkingRow, size: number, kerbPx: number): n
   if (taper > 0) return taper + stallPitchPx(row.kind, size, true) / 2;
   if (row.kind === "parallel") {
     const lateral =
-      kerbPx +
-      (row.gap ?? 0) * LANE_WIDTH_FRAC * size +
-      stallDepthPx(row.kind, size, needsBigBay(row.reserved)) / 2;
+      bayNearPx(row, size, kerbPx) + stallDepthPx(row.kind, size, needsBigBay(row.reserved)) / 2;
     return Math.max(MANOEUVRE_APPROACH_FRAC * size, 2 * lateral);
   }
   return MANOEUVRE_APPROACH_FRAC * size;
 }
 
-// How much faster than the base crawl a row's manoeuvre is driven — see
-// `ManoeuvrePath.pace`. Straight from the room the move takes: a curve with twice
-// the run is half as sharp, so it is driven about twice as fast and takes about
-// the same TIME. The tightest kind (the fixed short approach) is the 1.
-export function manoeuvrePace(row: ParkingRow, size: number, kerbPx: number): number {
-  return manoeuvreRunPx(row, size, kerbPx) / (MANOEUVRE_APPROACH_FRAC * size);
+// How much faster than the base crawl a curve is driven — see `ManoeuvrePath.pace`.
+// Straight from the DISTANCE it covers: a manoeuvre with twice the swing is half
+// as sharp, so it is driven about twice as fast and takes about the same TIME.
+//
+// Measured on the curve rather than on its longitudinal run, because the two come
+// apart: widening a car-park aisle to a car's length (`bayNearPx`) leaves the run
+// untouched and half again as much curve, and on the run alone that read as "no
+// change" while every 90° pull-in silently took 60% longer — `parkinglot` fell
+// from three completed park-and-leave cycles in a run to two.
+//
+// Never below 1: a degenerate stub of a curve is not a reason to crawl.
+function paceOf(path: ManoeuvrePath, size: number): number {
+  return Math.max(1, manoeuvreLength(path) / (MANOEUVRE_APPROACH_FRAC * size));
 }
 
 // A run of stalls served by one approach of one tile, on one side of it.
@@ -541,7 +587,7 @@ export function stallPose(
   const t = along / size;
 
   // Lateral: out past the kerb, plus any authored verge, to the middle of the bay.
-  const lateral = sideSign * (kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth / 2);
+  const lateral = sideSign * (bayNearPx(row, size, kerbPx) + depth / 2);
 
   const travelDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
   // Nose INTO the bay: the rest angle turns from the travel heading toward the
@@ -614,7 +660,7 @@ function shearedBoxPoints(
   const sideSign = rowSide(row) === "right" ? 1 : -1;
   const rx = -dy * sideSign;
   const ry = dx * sideSign;
-  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const near = bayNearPx(row, size, kerbPx);
   const far = near + pose.depthPx;
   // The bay leans FORWARD, along the direction of travel: you reach a 45° bay by
   // turning TOWARD its side, so the car ends up nose-deep and further down the
@@ -741,9 +787,10 @@ export function manoeuvrePath(
     p2: { x: pose.x, y: pose.y },
     restAngleDeg: pose.angleDeg,
     arc: [],
-    pace: manoeuvrePace(row, size, kerbPx),
+    pace: 1,
   };
   path.arc = buildArcTable(path);
+  path.pace = paceOf(path, size);
   return path;
 }
 
@@ -845,9 +892,10 @@ export function forwardExitPath(
     p2: far,
     restAngleDeg: lane.tangentDeg,
     arc: [],
-    pace: manoeuvrePace(row, size, kerbPx),
+    pace: 1,
   };
   path.arc = buildArcTable(path);
+  path.pace = paceOf(path, size);
   return path;
 }
 
@@ -1095,7 +1143,7 @@ export function validateParking(
       const kerb = kerbOffsetAt(level, coord, row.from, tileSize);
       const big = needsBigBay(row.reserved);
       const outer =
-        kerb + (row.gap ?? 0) * LANE_WIDTH_FRAC * tileSize + stallDepthPx(row.kind, tileSize, big);
+        bayNearPx(row, tileSize, kerb) + stallDepthPx(row.kind, tileSize, big);
       if (outer > tileSize / 2 + 0.5) {
         add(
           tileId,

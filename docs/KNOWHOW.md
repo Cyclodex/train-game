@@ -385,6 +385,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - GARAGES are driven THROUGH: two ramp mouths (`GARAGE_IN_T` / `GARAGE_OUT_T`) and
   `exitTo` to put the out-ramp on the other approach, so departures do not queue
   behind arrivals.
+- A 90° BAY NEEDS A CAR'S LENGTH OF AISLE, and `bayNearPx` enforces it whatever
+  the author wrote (`TURN_IN_CLEARANCE_FRAC` 0.19). Turning a car through a right
+  angle takes its own length of room: from the 14px aisle these maps had, the
+  pull-in drove 5.6px THROUGH the parked car next door; at a car's length it
+  grazes it (+0.6px) and stays there however much more you give it. A THRESHOLD,
+  not a dial — and the one repeated expression (`kerb + gap·W`) is now one
+  function, because the rule would have been missed by all nine call sites.
+  · A LONGER APPROACH MAKES IT WORSE, fast: −5.6 → −23.7px at 0.6 of a tile, since
+    the car spends the extra distance travelling diagonally across the bays it is
+    passing. Turn LATE, in a WIDE aisle. (Which is why `manoeuvreRunPx` gives the
+    turning kinds the short fixed run and only kerbside ones a long one.)
+  · `apronNearPx` ≠ `bayNearPx`: the clearance is the aisle the car swings
+    through, so it is PAVED to the kerb. An authored `gap` is the opposite — a
+    pavement or verge — and stays green.
+  · `pace` had to move from the run to the CURVE LENGTH. Widening the aisle leaves
+    the run untouched and adds half again as much curve, so on the run alone it
+    read as "no change" while every 90° pull-in silently took 60% longer and
+    `parkinglot` fell from three completed cycles a run to two.
 - A BAY IS ENTERED FROM ITS OWN LANE ONLY. `atStallEntry` refuses any other, and
   `desiredLane` branch (P) gets a car with a `parkTarget` over to the kerb-most
   lane as soon as it is on a tile of that facility — early, so the merge has room.
