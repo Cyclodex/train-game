@@ -65,6 +65,7 @@
         gridTemplateColumns: `repeat(${cols}, ${config.tileSize}px)`,
         width: cols * config.tileSize + 'px',
         transform: levelTransform,
+        '--switch-scale': switchScale,
       }"
       @click="onBackgroundClick"
     >
@@ -175,6 +176,7 @@ import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
 import { type Camera, type Size } from "@/camera";
+import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
@@ -254,6 +256,11 @@ class TestStage extends Vue {
   }
   get levelTransform(): string {
     return this.cam.transform;
+  }
+  // Counter-scale for the junction switch fans on a zoomed-out board. See
+  // switchFan.ts.
+  get switchScale(): number {
+    return switchFanScale(this.camera.zoom);
   }
   // Also a method: it reads `viewportSize()`, which is not a reactive dependency.
   worldOverflows(): boolean {

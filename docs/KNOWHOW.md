@@ -426,6 +426,91 @@ lean — prune as much as you add. This file only stays useful if every task ten
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
   old "strange bend" on mixed-width junctions). =concentric arc when offsets equal.
 
+## RAIL SWITCH UI — arrows on the rails (2026-07-27)
+- The player-facing switch is a FAN: one per SWITCHABLE ENTRY (`isJunctionEntry`
+  = >1 partner), geometry in `src/tiles/switchFan.ts`, drawn by `Tile.vue` as a
+  single `.switch-layer` svg in TILE coordinates. It replaced `.switch-box` (a
+  24x18 box of three 3px bulbs) — don't reintroduce that class; `game.spec.ts`
+  asserts `.switch-fan`.
+- TRAIN VALLEY'S MODEL: the control is a MARKING ON THE TRACK, not a widget
+  beside it. Each arm is an arrow laid along the rail curve a train would take.
+  `railArrow` samples the SAME quadratic `segmentPathD` draws (control point =
+  tile centre; for opposite ports that degenerates to the straight line), so an
+  arrow physically cannot disagree with the rail it marks. One code path for
+  straight and curved — don't split them.
+- ARROWS ARE ANCHORED AT THEIR ENTRY: start on the edge the train comes from,
+  walk toward the exit, stop as a short stub (`ARROW_T_END_REST`). Version one
+  anchored them at the exit (tail mid-air, head on the exit edge) and the player
+  read it backwards — "something arrives here" — and couldn't tell which entry
+  owned which arrow on a cross. Entry-anchored + mid-stop keeps each entry in
+  its own quadrant, which is how OUR all-pairs crosses stay readable (TV never
+  has that case).
+- WHY IT IS NOT ALL DRAWN AT ONCE. An all-pairs 4-way cross has FOUR independent
+  settings and TWELVE possible movements. Drawing them together makes an asterisk
+  nobody can read — this was built and thrown away, twice (12 arrows, then 4 long
+  + 8 stubs). What works: **at rest each entry draws ONE arrow, its set route,
+  a SHORT stub from its entry edge (`ARROW_T_END_REST`, TV proportions)**; a fan
+  OPENS (all arms, run further out, `ARROW_T_END_OPEN`) only when a train is
+  arriving by that entry or the pointer is on it. Never more than one fan open at a time. Before making arrows more
+  visible, re-shoot `switch-fan` — that scenario exists because it is the dense
+  case.
+- OPENING is per-ENTRY and sticky: `openEntry` is set by `@pointerover` on any of
+  that fan's arms, and cleared by `@pointerleave` on the TILE root.
+  Per-arm hover would collapse the fan as the pointer travelled from the set
+  arrow to an alternative — i.e. it would be unclickable.
+- SIZE: the arrows are track markings, so their GEOMETRY scales with the board;
+  their WEIGHT must not (that is what made the old widget unusable). Every stroke
+  width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
+  on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
+  capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
+  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
+  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
+  the "strange black dot" the player asked about; with entry-anchored arrows it
+  marked nothing. `switchHubAt` survives for the EDITOR, which centres its
+  authored-arm cycle zone on that point.
+- TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
+  the build tool's `.zone` edge targets and eat the click that would lay track
+  (the old edge-hugging box was too small to notice). PlayView passes
+  `:switch-interactive="!buildArmed && !razeArmed"`; the lakevalley-open e2e
+  catches it, because building the station junction reveals a fan mid-drag.
+- NOTHING IN A FAN MAY LOOK LIKE AN ARROW EXCEPT AN ARM. An early version put a
+  chevron on the entry marker to say "trains arrive here"; it read as an extra
+  arm, being colinear with the Straight arm and pointing the same way.
+- Arrows sit DEAD-CENTRE on the rail. An early 8px right-of-travel offset (to
+  separate the two directions of one arc) read as a misdrawn arrow — the player
+  said so. Centring is safe because opposing directions only co-exist AT REST,
+  where the short crop keeps each on its own end of the curve.
+- ARROW STYLE (chosen from a 4-variant mockup round, "A1/A3 hybrid"): a stroked
+  near-black body in a WHITE casing bending along the curve, finished with a
+  filled flat-backed triangle head (`HEAD_LEN`/`HEAD_HALF`; capped at 45% of a
+  short arrow's run). The SHAFT stops at the head's back — `railArrow` walks the
+  sampled arc length backwards, so don't reintroduce an even-t mapping (the unit
+  test checks point-on-curve, not parameters). SET arm = black body/white
+  casing; ALTERNATIVES = the inverse ghost (white body, dark casing) — current
+  vs available is a colour inversion, not an opacity guess. Head polygons scale
+  with the board (geometry); only stroke WIDTHS counter-scale.
+- RESTING FANS ARE TRANSLUCENT (`.switch-fan` opacity 0.55): quiet at rest, full
+  strength exactly when they matter — `--open` (train due OR pointer on it),
+  and always in the EDITOR (`.switch-layer--static`, an editing surface).
+  `--muted` (a train is due on a DIFFERENT entry) drops further, to 0.28.
+- WHICH FAN MATTERS: `Tile.approachEntry` promotes the fan whose NEIGHBOUR tile
+  holds a train pointing at us (`--armed`, glow) and mutes the rest. It keys off
+  the reactive `occupied` map — `updateReservations` refills that every frame
+  regardless of `switchLockMode` — and only then reads the markRaw'd
+  `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
+  proxied, so nothing would re-render.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
+  widget could only cycle, which is why reaching a specific exit on a 4-way took
+  up to three clicks and a guess.
+- EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
+  `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
+  `defaultArms` and persists, a different verb from the live throw. Its
+  `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
+  re-deriving it.
+- Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
+
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
   (`demoworld.ts fourWayCross`). `twoWay(L,R) + twoWay(T,B)` looks identical on

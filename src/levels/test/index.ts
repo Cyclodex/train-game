@@ -6,6 +6,7 @@ import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
 import { switchDefault } from "@/levels/test/scenarios/switch-default";
+import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
@@ -115,7 +116,7 @@ export const DOMAINS: ScenarioDomain[] = [
     label: "Trains",
     categories: [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
-      { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault] },
+      { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross] },
       {
         id: "crossings",

@@ -166,6 +166,7 @@
         gridTemplateColumns: `repeat(${bounds.cols}, ${config.tileSize}px)`,
         width: config.tileSize * bounds.cols + 'px',
         transform: levelTransform,
+        '--switch-scale': switchScale,
       }"
       @click="onBackgroundClick"
       @mouseup="onLevelPointerGone"
@@ -197,6 +198,7 @@
           :tile="cell.tile"
           :coord-id="cell.key"
           class="tile-component"
+          :switch-interactive="!buildArmed && !razeArmed"
         />
         <!-- In-play building: the editor's triangular edge hit-zones + ghost
              preview, driven by the same extracted routeDrawController. Mounted
@@ -493,6 +495,7 @@ import Crossing from "@/components/Crossing.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
+import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
 
 // The four tile edges, for the build tool's triangular hit-zones (same order as
@@ -874,6 +877,11 @@ class PlayView extends Vue {
   }
   get levelTransform(): string {
     return this.cam.transform;
+  }
+  // Counter-scale for the junction switch fans, so a zoomed-out world does not
+  // shrink them back to the unusable size the old widget had. See switchFan.ts.
+  get switchScale(): number {
+    return switchFanScale(this.camera.zoom);
   }
   // Also a method: it reads `viewportSize()`, which is not a reactive dependency.
   worldOverflows(): boolean {
