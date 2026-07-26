@@ -37,41 +37,30 @@
     </MenuDrawer>
 
     <ToolDock :hint="hint">
-      <!-- Two-level dock (Transport Fever style): pick WHAT you are building
-           first, then which tool within it. Eight flat buttons of unrelated
-           things (rail, bus lanes, ground, erase) forced the child to scan the
-           whole row every time; grouping keeps only the handful that belong
-           together on screen. -->
-      <div class="dock-groups">
-        <button
-          v-for="g in dockGroups"
-          :key="g.id"
-          class="dock-btn"
-          :class="{ on: group === g.id }"
-          :title="g.label"
-          @click="selectGroup(g.id)"
-        >
-          <span class="dock-btn__icon">{{ g.icon }}</span>
-          <span>{{ g.label }}</span>
-        </button>
-      </div>
-      <!-- The chosen group's tools. Hidden for a group with a single tool
-           (Erase), where a second row would just repeat the button above it. -->
-      <div v-if="activeGroup.items.length > 1" class="dock-items">
-        <button
-          v-for="it in activeGroup.items"
-          :key="it.key"
-          class="dock-btn dock-btn--item"
-          :class="{ on: isActiveItem(it) }"
-          :title="it.label"
-          @click="selectItem(it)"
-        >
-          <span class="dock-btn__icon">{{ it.icon }}</span>
-          <span>{{ it.label }}</span>
-        </button>
-      </div>
-      <!-- Lane-count picker: only visible when the road tool is active. -->
-      <div v-if="tool === 'road'" class="lane-picker">
+      <!-- Two-level dock, laid out like Transport Fever: the categories are a
+           fixed row along the BOTTOM and the open category's actions sit in a
+           panel ABOVE them. Keeping the categories in one place means the button
+           you just pressed never moves, and only the panel changes — a side-by-
+           side split instead left a large dead area and made the eye hunt. -->
+      <div class="dock-panel">
+        <!-- The chosen category's tools. A single-tool category (Erase) shows
+             nothing here rather than repeating the button below it. -->
+        <div v-if="activeGroup.items.length > 1" class="dock-items">
+          <button
+            v-for="it in activeGroup.items"
+            :key="it.key"
+            class="dock-btn dock-btn--item"
+            :class="{ on: isActiveItem(it) }"
+            :title="it.label"
+            @click="selectItem(it)"
+          >
+            <span class="dock-btn__icon">{{ it.icon }}</span>
+            <span>{{ it.label }}</span>
+          </button>
+        </div>
+        <span v-else class="dock-panel__empty">{{ activeGroup.label }}</span>
+        <!-- Lane-count picker: only visible when the road tool is active. -->
+        <div v-if="tool === 'road'" class="lane-picker">
         <button
           v-for="n in [1, 2, 3]"
           :key="n"
@@ -91,24 +80,40 @@
           @click="roadOneWay = !roadOneWay"
           title="One-way road (lanes only in the drawn direction)"
         >➡️</button>
+        </div>
+        <!-- The world grows right and down simply by drawing into the empty
+             margin. These add room on the other two sides, by shifting what is
+             already there — the engine anchors the world at 0,0. Right-aligned:
+             they belong to the board, not to the open category. -->
+        <div class="grow-picker">
+          <button
+            class="dock-btn lane-btn"
+            title="Add a column before the left edge (shifts the world right)"
+            @click="growLeft"
+          >⬅︎+</button>
+          <button
+            class="dock-btn lane-btn"
+            title="Add a row above the top edge (shifts the world down)"
+            @click="growUp"
+          >⬆︎+</button>
+          <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
+            {{ gridCols - 2 }}×{{ gridRows - 2 }}
+          </span>
+        </div>
       </div>
-      <!-- The world grows right and down simply by drawing into the empty margin.
-           These add room on the other two sides, by shifting what is already
-           there — the engine anchors the world at 0,0. -->
-      <div class="grow-picker">
+      <!-- The categories themselves: one fixed row, always in the same place. -->
+      <div class="dock-groups">
         <button
-          class="dock-btn lane-btn"
-          title="Add a column before the left edge (shifts the world right)"
-          @click="growLeft"
-        >⬅︎+</button>
-        <button
-          class="dock-btn lane-btn"
-          title="Add a row above the top edge (shifts the world down)"
-          @click="growUp"
-        >⬆︎+</button>
-        <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
-          {{ gridCols - 2 }}×{{ gridRows - 2 }}
-        </span>
+          v-for="g in dockGroups"
+          :key="g.id"
+          class="dock-group"
+          :class="{ on: group === g.id }"
+          :title="g.label"
+          @click="selectGroup(g.id)"
+        >
+          <span class="dock-group__icon">{{ g.icon }}</span>
+          <span class="dock-group__label">{{ g.label }}</span>
+        </button>
       </div>
     </ToolDock>
 
@@ -1626,6 +1631,77 @@ export default toNative(EditorView);
   stroke-linecap: round;
   pointer-events: none;
 }
+// --- Dock layout -------------------------------------------------------------
+// The dock stacks: contextual panel on top, category row underneath. `:deep` is
+// needed because `.tool-dock` lives inside the ToolDock component, and a scoped
+// style stops at a child component's root.
+:deep(.tool-dock) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px;
+}
+// What the open category can do. Reserves its height so the dock does not jump
+// as categories with different numbers of tools are opened.
+.dock-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 76px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+.dock-panel__empty {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6a7a6a;
+  padding: 0 6px;
+}
+.dock-items {
+  display: flex;
+  gap: 6px;
+}
+// The category row: one fixed place, so the button just pressed never moves.
+.dock-groups {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+.dock-group {
+  @include glass-button;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 66px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+
+  &.on {
+    background: #5fd39a;
+    color: #0e1a14;
+    box-shadow: 0 0 14px rgba(95, 211, 154, 0.5);
+
+    &:hover {
+      background: #6ee0a8;
+      color: #0e1a14;
+    }
+  }
+}
+.dock-group__icon {
+  font-size: 24px;
+  line-height: 1;
+}
+// The tools inside a category read as secondary to the categories themselves.
+.dock-btn--item {
+  min-width: 68px;
+  padding: 9px 11px;
+  font-size: 12px;
+
+  .dock-btn__icon {
+    font-size: 24px;
+  }
+}
 // Lane-count picker: a compact inline group next to the road tool buttons.
 .lane-picker {
   display: flex;
@@ -1641,7 +1717,7 @@ export default toNative(EditorView);
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: 8px;
+  margin-left: auto; // board controls sit apart from the category's own tools
   padding-left: 10px;
   border-left: 1px solid rgba(0, 0, 0, 0.15);
 }
