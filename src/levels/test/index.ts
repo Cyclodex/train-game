@@ -2,6 +2,7 @@ import { TestScenario } from "@/levels/test/scenario";
 import { straight } from "@/levels/test/scenarios/straight";
 import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
+import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
 import { switchDefault } from "@/levels/test/scenarios/switch-default";
@@ -69,9 +70,11 @@ import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
+import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
+import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -109,7 +112,7 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "trains",
     label: "Trains",
     categories: [
-      { id: "basics", label: "Basics", scenarios: [straight, curve, depot] },
+      { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross] },
       {
@@ -170,12 +173,12 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, daily] },
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, daily] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, demoworld] },
     ],
   },
 ];

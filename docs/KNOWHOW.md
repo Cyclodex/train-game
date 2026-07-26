@@ -75,10 +75,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## ROLLING STOCK ART (procedural SVG, 2026-07-26)
+- Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
+  `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
+- Sprite size is a THREE-way sync: `UNIT_PX` (`sim/trainDimensions.ts`, what the sim
+  spaces couplings by) ↔ the CSS `width/height` in `Train.vue` ↔ `UNIT_H` + the
+  viewBox in `trainArt.ts`. `trainArt` imports `UNIT_PX` so the width leg can't drift;
+  the other two are by hand.
+- Livery is a real `fill` now. The PNGs were recoloured by
+  `grayscale/sepia/hue-rotate` filter stacks scoped to `.train-locomotive` ONLY — so
+  every wagon in the game rendered WHITE regardless of its train's colour, for years.
+  If a colour looks wrong, look for a filter, not a fill.
+- Freight body variant = hash of the WAGON ID (`freightVariantFor`), not `getRandom`.
+  The old renderer re-rolled it per render: a consist reshuffled itself on reload and
+  `npm run shot` output was never comparable. Same rule as terrain scatter — art is a
+  pure function of identity, never chance.
+- An inline `<svg>` swapped in for an `<img>` has NO intrinsic size, so `height` alone
+  no longer implies a width (`.depot-building` states both; they match `DEPOT_W/H`).
+- At 26–30px a unit must read its LIVERY first: a near-black hopper load or thin dark
+  logs turn the wagon into a featureless bar. Detail tones stay inside a generous
+  livery rim. Verify in `/test/rollingstock` (all four freight bodies × 4 liveries).
+- e2e asserts on the `.train-locomotive` and `.depot-building` CLASS names
+  (`tests/e2e/game.spec.ts`) — keep them on whatever element carries the art.
+
 ## TERRAIN (ground as tile data, 2026-07-26)
-- `TileCell.terrain?` = grass|forest|water|rock|urban; absent = grass. The third
-  axis of the tile model: `connections`/`road` say what CROSSES a cell, terrain
-  says what it IS. Cosmetic only so far — no sim/validator rule reads it yet.
+- `TileCell.terrain?` = grass|forest|water|rock|mountain|urban; absent = grass.
+  The third axis of the tile model: `connections`/`road` say what CROSSES a cell,
+  terrain says what it IS. Only `canBuildOn` reads it so far (see TERRAIN RULES).
 - GRASS DRAWS NOTHING (`tileGroundSvg` returns ""). That is what makes adding
   terrain a no-op for every level authored before it: the themed board shows
   through exactly as it did. Don't "fix" it by painting a grass rect — that would
@@ -91,13 +114,165 @@ lean — prune as much as you add. This file only stays useful if every task ten
   The rim/shore (`patchRimPath`) must stroke ONLY the stopping edges — stroking
   the whole outline draws a bright line down every internal join and turns a 2x2
   lake into four visibly tiled ponds. Regression-tested.
+- SHORES BULGE OUTWARD ONLY (`edgeBow`, 2026-07-26). The bow was symmetric
+  (`(r()*2-1)*EDGE_BOW`), so half of every patch's boundaries curved INWARD and a
+  lake came out PINCHED — a star, not a body of water. Now the direction is fixed
+  and only the amount varies (`-EDGE_BOW * lerp(EDGE_BOW_MIN,1,r)`), so the
+  silhouette is convex while the outline stays irregular. SIGN: the outline is
+  wound clockwise, so **negative = outward** (same convention as `SEAM_OVERLAP`).
+  Pinned by "bows every shore OUTWARD" + a control-point-outside-the-chord test.
+- OUTWARD-ONLY WAS ONLY HALF THE FIX. Bulging every edge left a CUSP at every
+  shared corner: each edge bowed off its own chord, so the outline arrived ~24°
+  off and left ~24° the other way — a sharp inward V at each tile boundary. You
+  could count the tiles down the side of a 3x2 lake, which is the tile grid drawn
+  back onto the water. Fixed 2026-07-26 by making each shore a CUBIC whose end
+  TANGENTS are chosen rather than implied (`shoreEdge`): `dir*(size/3)` along the
+  shore + `out*lean` across it, with `dir`/`out` taken from the EDGE INDEX
+  (`EDGE_FRAME`), never measured off the jittered chord — that is what lets two
+  tiles derive the identical tangent.
+- A corner is one of THREE things (`cornerRoles`), and the difference needs the
+  DIAGONAL neighbours, not just the four sides (`TerrainNeighbours` carries all
+  eight; the diagonals are in the memo key too):
+  · both edges stop → real CORNER: lean `+lean`/`-lean` (bulge out, come back) —
+    this is what rounds a lone patch into a blob.
+  · exactly one stops AND the diagonal differs → mid-shore RUN: push the point
+    outward (`cornerPush`) and lean by the lattice's shared slope (`cornerSlope`).
+    Both are seeded by the LATTICE POINT, so the two tiles agree on both.
+  · else (interior, or an L's reflex corner where the diagonal IS the same kind)
+    → leave it on the lattice, flat. Smoothing a reflex corner pushes one arm
+    north and the other east and TEARS THE PATCH OPEN — that case is why the
+    diagonals are needed at all. All three are unit-tested for agreement.
+- Pushing a shared corner outward does NOT by itself remove a cusp — it is a
+  translation, and a cusp is a TANGENT discontinuity. Don't reach for a bigger
+  bow/jitter to fix a kink; fix the tangents.
+- The rim stroke needs `stroke-linecap="round"`. Each tile strokes only its own
+  share of a shore, so the segments ABUT, and two butt caps meeting on one line
+  antialias to a dark tick across the shallows at every tile boundary — the same
+  defect `SEAM_OVERLAP` fixes for the fill, invisible until the shore stopped
+  kinking there. The cap can only spill into the overlap the neighbour covers
+  (the clip path is the patch).
 - Scatter is DERIVED from `(kind, coord, seed)`, never authored: paint an area,
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
   and the distance are the same forest.
+- Per-kind scatter has its OWN band (`SCATTER_BAND`): a peak is ~50 units tall so
+  it starts low in the tile and overflows UPWARD (deliberate — the row below is
+  later in the DOM, so a near peak occludes a far one; `.tile-ground` is
+  `overflow: visible` for exactly this). Keep every `translate()` inside 10..90 —
+  a unit test sweeps all kinds and fails otherwise.
+- `groundShadow(scale, spread, fill)` — the DEFAULT tint is green because the
+  default ground is meadow. On rock/mountain/town pass your own (`STONE_SHADOW`/
+  `TOWN_SHADOW`), or every boulder gets a patch of moss under it.
+- Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
+  across a rock patch read at board zoom as stray pen strokes lying on the tile;
+  broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
+  lesson as the abandoned per-tile tone variation, one scale down.
+- Rock/mountain scatter tones sit CLOSE together (light 68-75 vs dark 44-51 on a
+  56 ground) — and that means RELATIVE to the ground, so a tone shared between
+  two kinds has to be a parameter. `pebble`'s fixed 67-74 was ~14 steps over
+  rock's L=56 (gravel) but ~30 over mountain's L=42: bright flecks on dark slate,
+  reading as litter. It takes a `light` base now (rock 67, mountain 53).
+  A near-white face against a near-black one turns every boulder into
+  a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
+  lands on the break→apex segment); a free-standing white wedge hangs off the
+  silhouette and reads as a paper dart.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.
+
+## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
+- THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`
+  and `isBoundary` index `level[…]` on EVERY call, against the object handed to
+  `createSimulation` — never copied. Track laid mid-run routes on the next tick
+  with no rebuild. Don't "optimise" this into a snapshot; `liveEdit.spec.ts` guards it.
+- Signals are derived per call from `level[id].signals`, NOT snapshotted.
+  `config.signalTiles` is an ADDITIVE override (unioned), for tests that mark
+  boundaries on cells carrying no `signals` of their own.
+- TRAP: a tile that just became a junction has no switch arm, and
+  `connectionsToExitPort` returns **null** for a multi-partner entry with no arm →
+  the train STOPS DEAD on the tile you just built. `game.applyEdits` merges fresh
+  `initialSwitches` arms in (existing player choices win).
+- Edits touching an OCCUPIED or RESERVED tile are rejected (`game.canEdit`). A
+  train's `path[headIndex]` caches that tile's exit port and reservations cache
+  ids; editing under it makes both stale. Same line of code as the game rule
+  "you can't rip up track under a moving train".
+- `levelVersion` (a ref bumped per edit) is how the VIEW learns. `game` holds the
+  RAW level (the sim indexes it thousands of times a tick — no Proxy in that path)
+  while the view holds a reactive proxy of the same target, so raw writes notify
+  nobody. `PlayView.bounds`/`gridCells` read the counter.
+- Additive edits only so far. Removal is deferred with clearing costs.
+- TEST TRAP: a train arriving at a depot whose colour does NOT match BOUNCES BACK
+  OUT. In a test that reads like "the new track was ignored". Pass `depotColors`.
+
+## COLOUR ASSIGNMENT = SOLVABILITY (2026-07-26)
+- A PARKED TRAIN OCCUPIES ITS DEPOT TILE FOREVER. So "two trains, one matching
+  depot" is not a slow level, it is an UNSOLVABLE one — the second train waits
+  at the door for good. Every rule below follows from that one fact.
+- Depot colours must be DISTINCT while the palette lasts (`Colors` has 5). Random
+  per depot let two depots share a colour, and the sim parks a train in the first
+  depot of its colour it reaches — so both trains chase the same tile.
+- Train homes are a MAXIMUM BIPARTITE MATCHING (`matchHomeDepots`, Kuhn's), not
+  greedy first-fit. Greedy cannot find a DERANGEMENT, and the most natural level
+  there is — n trains each starting in their own depot — needs one. Greedy swaps
+  the first two and strands the last on its own start, which then shares a depot.
+  Symptom: the last train runs, then stops dead somewhere and never delivers.
+- `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
+
+## ECONOMY + DISPATCH (Tycoon phase 1, 2026-07-26)
+- `sim/economy.ts` = pure ledger (`createEconomy`) + fare book (`createFareBook`)
+  beside `objectives.ts`: no Vue, no DOM, deterministic. Ledger amounts are
+  SIGNED (+earn/−spend) so the entry log sums to the balance and needs no second
+  field. `spend` returns null when refused — treat null as "it did not happen".
+- `TrainState` gained `"waiting"`, released by `sim.dispatch(id)`. It is gated by
+  `SimConfig.waitForDispatch` and DEFAULTS OFF — every level, scenario and unit
+  test predates it and assumes a train departs on tick 1. The ONLY thing that
+  turns it on is `ModeControls.dispatch` (Tycoon). Do not flip the default.
+- A waiting train OCCUPIES its depot tile but RESERVES NOTHING ahead. That falls
+  out for free: `releaseStaleReservations` only adds the route-to-next-signal for
+  `state === "running"`. Pinned by `dispatch.spec.ts`.
+- TRAP (bit once): `renderTrains` computed `docked = trainState !== "running"`.
+  Adding a 4th state silently made a WAITING train "docked" and eligible for the
+  shed-hiding test. Enumerate the states you mean (`parking || parked`), never
+  negate against a union you are about to extend.
+- Fares decay while the train WAITS, not only in transit — that is the whole
+  mechanic (Train Valley M7). Ticked from `game.ts frame()` only while
+  `objective.phase === "playing"`, so nothing burns behind the Ready screen.
+  `settle()` is idempotent, so a duplicated `arrived` event cannot pay twice.
+- `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
+  specs build `Counters` fixtures BY HAND, and required fields break them.
+  Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
+- Adding a field to `ModeControls`/`HudDescriptor` breaks the exhaustive
+  `expect(mode.controls).toEqual({…})` in all five mode specs. Expected; update
+  them all rather than loosening the assertion — it is what keeps a new mode from
+  quietly inheriting a control it should not have.
+- Fare pins are ABSOLUTELY POSITIONED direct children of `.level`, same rule as
+  the road cars (see RENDER LAYOUT — a box-generating direct child becomes a grid
+  ITEM and eats a tile). Positions are captured in `renderTrains` from the loco it
+  already placed; a second sampling pass would be the same maths twice a frame.
+- The depot art is z-10 and a loco is z-4, so a train sitting in its shed is
+  INVISIBLE. A waiting train therefore reads as an empty station — the fare pin
+  IS the affordance, which is also how Train Valley presents it.
+- RETRY is a first-class Tycoon flow ("bank more next run"), so `reset()` is hit
+  routinely here — it must hand back WAITING trains, the starting capital and
+  un-settled fares. Verified end to end (win → reset → win again); the stale
+  `game.sim` handle it exposed is in VERIFY.
+- NOT built, deliberately (`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`):
+  in-play build (phase 2, blocked on extracting `routeDrawController` from
+  `EditorView`), reversing (§5.2), crashes (§2.2 G7), production chains (§5.1).
+- The DEFAULT board needs the player to throw switches: left alone, both trains
+  lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
+  identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
+  don't read it as a Tycoon routing bug when a headless run never completes.
+
+## TERRAIN RULES
+- `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
+  `validateLevel` (issue `blocked-terrain`), the editor's `routeOpts.passable`,
+  and anything later. Water + rock + mountain block; forest + town don't (you
+  fell trees). A bridge (water) and a tunnel (mountain) will be EXCEPTIONS here,
+  not second rules.
+- Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
+  terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
+  Painting grass back over a bare cell removes it, so repainting can't grow bounds.
 
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
@@ -291,7 +466,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
-- `npm run probe` = RENDER-level audit of all 68 scenarios in a real browser
+- `npm run probe` = RENDER-level audit of all 73 scenarios in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
@@ -318,6 +493,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   0/null. This gives EXACT numbers (lane offsets, landings, arm widths) where a
   screenshot only gives an impression; edit → HMR → re-query is seconds. Use it to
   FIND/diagnose; use `npm run shot` before/after to PROVE the paint changed.
+- ANYTHING `createGame` HANDS OUT THAT `reset()` REBUILDS MUST BE A GETTER.
+  `reset()` → `buildSims()` REPLACES `sim`/`roadSim`, so the `return { sim, … }`
+  shorthand froze the object that existed at construction: after a Retry the
+  handle answered from the DEAD sim while the game ran a new one. It fails
+  silently — nothing in `src/` reads `game.sim`, only the e2e specs and the
+  `window.__game` probe, so you get WRONG NUMBERS, never an error (measured:
+  handle said `parking` while the live sim had the train `waiting`). Fixed
+  2026-07-26 (`get sim()`, matching `get signalTiles()`); pinned by
+  `tests/unit/gameReset.spec.ts`. Never re-add a bare `sim,`; when a probe
+  straddles a reset, cross-check the handle against a value the closure owns
+  (`fareBadges`) — disagreement means you are holding a stale handle again.
+- The tab must be VISIBLE or rAF is paused and `renderTrains` never runs — so
+  `fareBadges`/`roadCars` stay EMPTY and the board looks broken when it is not.
+  A hidden pane still answers static queries (see the rAF/hidden-tab note below).
+  For behaviour across a reset, drive Playwright directly (`node_modules/
+  playwright/index.mjs`) rather than the hidden preview pane.
 - BROWSERS: run `npm run browsers` (NOT `npx playwright install`). `.npmrc` sets
   `ignore-scripts` so nothing is auto-downloaded, and on this machine
   `playwright install` HANGS: it fetches the 149MB zip in ~4s, logs "extracting
@@ -354,18 +545,34 @@ lean — prune as much as you add. This file only stays useful if every task ten
   entries into reactive arrays.
 - `config.plainBackdrop` (🌳 BG in /test) = flat green for reading kerbs/markings/gores.
 
-## STATE (2026-07-25) — read before picking up work
+## STATE (2026-07-26) — read before picking up work
 - Nothing is PUSHED. `master` holds the merged road-rendering work; branch
-  `claude/bigger-worlds` is ahead of it with worlds+camera+demoworld. Check
+  `claude/terrain-world` is ahead of it with worlds+camera+demoworld, terrain,
+  live editing (phase 0) and the Tycoon economy (phase 1). Check
   `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
 - OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
   (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
   `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
   MEASURED WORSE — read the issue before attempting a third.
-- NEXT UP (agreed): terrain as tile data, spec written and not started —
-  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`. Cosmetic
-  first; bridges are the prize. See IMPROVEMENTS.md item 1.
-- The gallery is 69 scenarios. `npm run probe` + the road sweep both iterate the
+- NEXT UP: Train Valley phase 2 (build in play); full state of play + sizes in
+  the design doc **§8** (renumbered — there used to be two §6s). Its ONE blocker
+  is an extraction, not a feature — pull the route-draw gesture out of
+  `EditorView` (`pressFrom`/`armed`/`routeStarted`/`pendingId`/`hoverPort` +
+  `previewByCell`/`commitSegment`/`extendRoute`/`onZone*`, ~230 lines) into a
+  headless `routeDrawController.ts` beside `cameraController.ts`, or `PlayView`
+  and `EditorView` end up with two copies of the trickiest interaction in the
+  app. It must stay layer-agnostic and emit `RouteStep[]` over injected ports:
+  the editor commits CELL BY CELL (`level[id]=` + `syncBusGates` + `persist`,
+  rail OR road), play commits the whole route ATOMICALLY via
+  `game.applyEdits` (rail-only, guarded). Then: gate on `ModeControls.build`,
+  preview `tiles × cost`, spend, call `applyEdits`, grey out what `canEdit` refuses.
+- TRAP for the "start `lakevalley` with a GAP in the ring" step (what makes it
+  the real level): `validateLevel` raises `dangling-track` on any edge port with
+  no connecting neighbour AND `route-disconnected` for the unreachable depot,
+  and `tests/unit/levels/testScenarios.spec.ts` runs it over EVERY registered
+  scenario. A deliberately-incomplete board needs an authored opt-out first —
+  it is not just deleting three tiles.
+- The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW

@@ -65,6 +65,43 @@ describe("assignColors", () => {
     expect(homes[0]).not.toBe(homes[1]);
   });
 
+  it("solves n trains sitting in n depots — the case greedy assignment could not", () => {
+    // The natural shape of a level: every train starts in its own station. The
+    // only valid answer is a DERANGEMENT, and first-fit greedy cannot find one —
+    // it gives depot B to the train from A and depot A to the train from B, then
+    // the third train has nothing left but its own start, falls back to sharing,
+    // and two trains end up the same colour. Whichever arrives second is stuck
+    // forever, because a parked train occupies its depot tile.
+    const level = levelWithDepots(3);
+    const trains: TrainStart[] = [
+      { id: "t1", x: 1, y: 0 },
+      { id: "t2", x: 2, y: 0 },
+      { id: "t3", x: 3, y: 0 },
+    ];
+    const { depotColors, trainColors } = assignColors(level, trains, makeRng(5));
+
+    // Every train has a matching depot, and no two trains want the same one.
+    const homes = trains.map(t => {
+      const startId = `${t.x},${t.y}`;
+      return Object.keys(depotColors).find(
+        id => id !== startId && depotColors[id] === trainColors[t.id]
+      );
+    });
+    for (const [i, home] of homes.entries()) {
+      expect(home, `train ${trains[i].id} has a non-start home`).toBeDefined();
+    }
+    expect(new Set(homes).size).toBe(trains.length);
+  });
+
+  it("gives depots distinct colours while the palette lasts", () => {
+    // Two depots sharing a colour starves a train however well the homes are
+    // matched, because the simulation parks a train in the first depot of its
+    // colour it reaches.
+    const level = levelWithDepots(4);
+    const colors = Object.values(assignColors(level, [], makeRng(11)).depotColors);
+    expect(new Set(colors).size).toBe(4);
+  });
+
   it("is deterministic for a given seed and varies across seeds", () => {
     const level = levelWithDepots(4);
     const trains: TrainStart[] = [{ id: "t1", x: 1, y: 0 }];

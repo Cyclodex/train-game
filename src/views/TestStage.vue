@@ -37,6 +37,9 @@
       <span class="stage-deliveries">
         Delivered {{ delivered }} / {{ totalTrains }}
       </span>
+      <span v-if="money.enabled" class="stage-money" title="Balance">
+        💰 {{ money.balance.toLocaleString("en-US") }}
+      </span>
     </div>
 
     <div
@@ -109,6 +112,24 @@
         :segments="carRoute.segments"
         :color="carColor(carRoute.carId)"
       />
+      <!-- Fare pins (Tycoon). Absolutely positioned like the road cars, so they
+           are not grid ITEMS and cannot displace a tile (KNOWHOW → RENDER
+           LAYOUT). Clicking a waiting pin sends its train. -->
+      <button
+        v-for="badge in fareBadges"
+        :key="`fare-${badge.trainId}`"
+        class="fare-pin"
+        :class="{ 'fare-pin--waiting': badge.waiting }"
+        :style="{
+          borderColor: badge.color,
+          transform: `translate(-50%, -50%) translate(${badge.x}px, ${badge.y}px)`,
+        }"
+        :title="badge.waiting ? 'Waiting — click to send this train' : 'Fare, falling'"
+        @click.stop="onFareClick(badge)"
+      >
+        <span class="fare-pin__amount">{{ badge.amount }}</span>
+        <span v-if="badge.waiting" class="fare-pin__go">▶</span>
+      </button>
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -147,7 +168,7 @@ import { Component, Inject, Prop, Provide, Vue, toNative } from "vue-facing-deco
 import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
-import { createGame, Game, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, MoneyState, TrainDef } from "@/game";
 import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
@@ -367,6 +388,22 @@ class TestStage extends Vue {
     if (this.config.debug) this.game.clearRouteCar();
   }
 
+  // --- money (Tycoon) --------------------------------------------------------
+  // Inert for every scenario that doesn't name a mode with an economy: `enabled`
+  // is false and `fareBadges` stays empty.
+  get money(): MoneyState {
+    return this.game.money;
+  }
+  get fareBadges(): FareBadge[] {
+    return this.game.fareBadges;
+  }
+  onFareClick(badge: FareBadge): void {
+    // A drag that ends over a pin still fires a click; ignore it, or panning the
+    // board would dispatch whatever train the cursor happened to land on.
+    if (this.panning) return;
+    if (badge.waiting) this.game.dispatch(badge.trainId);
+  }
+
   get paused(): boolean {
     return this.game.paused.value;
   }
@@ -480,6 +517,54 @@ export default toNative(TestStage);
   color: #8fa3b3;
   font-size: 13px;
   font-weight: 600;
+}
+.stage-money {
+  color: #f4d47a;
+  font-size: 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+// The fare pin — the money HUD's only board chrome; mirrors PlayView (both
+// stylesheets are `scoped`, so the rule cannot be shared as-is).
+.fare-pin {
+  position: absolute;
+  z-index: 8; // above cars (6) and their ids (7)
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: rgba(18, 22, 28, 0.9);
+  color: #f4d47a;
+  font: 800 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+.fare-pin--waiting {
+  cursor: pointer;
+  animation: fare-pin-pulse 1.4s ease-in-out infinite;
+
+  &:hover {
+    background: rgba(38, 50, 62, 0.95);
+  }
+}
+.fare-pin__go {
+  color: #5fd39a;
+  font-size: 10px;
+}
+@keyframes fare-pin-pulse {
+  0%,
+  100% {
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 3px 16px rgba(95, 211, 154, 0.65);
+  }
 }
 .level {
   display: grid;

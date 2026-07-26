@@ -51,6 +51,7 @@ export const puzzleMode: GameMode = {
     signalHolds: true,
     crossingGate: false,
     build: false,
+    dispatch: false,
   },
   createObjective: objectiveFromSpec,
   hud: {
@@ -59,5 +60,6 @@ export const puzzleMode: GameMode = {
     stars: true,
     startOverlay: true,
     endOverlay: true,
+    money: false,
   },
 };

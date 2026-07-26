@@ -7,6 +7,7 @@ import {
   Observation,
   createObjectiveTracker,
 } from "@/sim/objectives";
+import { EconomySpec, FareSpec } from "@/sim/economy";
 
 // Which existing player controls a mode enables. The sim already implements all
 // of these; a mode only gates whether the view exposes them.
@@ -15,6 +16,10 @@ export interface ModeControls {
   signalHolds: boolean; // hold/release + force-green signals
   crossingGate: boolean; // manual level-crossing gate (Crossing Keeper, later)
   build: boolean; // edit the board (Sandbox)
+  // Trains wait in their depot until the player sends them (Tycoon). This is the
+  // ONLY switch that turns the sim's `waitForDispatch` on — leave it false and
+  // trains depart immediately, exactly as every mode before this one did.
+  dispatch: boolean;
 }
 
 // Which readouts/overlays the HUD shows for this mode. A pure view hint.
@@ -24,6 +29,18 @@ export interface HudDescriptor {
   stars: boolean; // star pips
   startOverlay: boolean; // Ready screen with a Start button
   endOverlay: boolean; // Won/Lost screen with Retry
+  // Balance readout + the per-train fare badges. Deliberately the whole money
+  // HUD in one flag: the design doc's §5.5 warning is against TV2's chrome
+  // density, so this is one card and one badge per train, nothing else.
+  money: boolean;
+}
+
+// A mode's economy, handed to game.ts by setup(). Omitted → no ledger at all:
+// no fares, no balance, the money counters stay 0 and the HUD shows nothing.
+export interface EconomySetup extends EconomySpec {
+  // The fare each train carries, by train id. A train with no entry is simply
+  // worth nothing — useful for scenery//test trains that only exist to move.
+  fares?: Record<string, FareSpec>;
 }
 
 // What a mode hands back from setup(): the board, trains, optional pinned colours,
@@ -34,6 +51,7 @@ export interface ModeSetup {
   trains: TrainDef[];
   colors?: ColorAssignment;
   objective: ObjectiveSpec;
+  economy?: EconomySetup;
 }
 
 // Inputs available to setup(): the board the view currently has (default board,

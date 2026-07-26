@@ -1,12 +1,14 @@
 import { Position } from "@/types";
 import { Level, Port, portsOf, parseCoordId } from "@/tiles/model";
 import { roadPortsOf } from "@/tiles/lanes";
+import { canBuildOn } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
 export type IssueType =
   | "dangling-track" // a rail points at a neighbour that doesn't connect back
   | "isolated-depot" // a depot connects to nothing
+  | "blocked-terrain" // track or road laid on ground that can't carry it
   | "route-disconnected"; // a train can't reach its destination depot
 
 export interface Issue {
@@ -79,6 +81,18 @@ export function validateLevel(
   const issues: Issue[] = [];
 
   for (const [id, tile] of Object.entries(level)) {
+    // Terrain rule: a line can't be laid on water or rock. Checked before the
+    // connection walk so a road-only tile is covered too (the walk skips those).
+    if (
+      !canBuildOn(tile) &&
+      (tile.connections.length > 0 || (tile.road?.length ?? 0) > 0)
+    ) {
+      issues.push({
+        type: "blocked-terrain",
+        tileId: id,
+        detail: `${id} carries a line over ${tile.terrain} — build round it, or bridge it`,
+      });
+    }
     if (tile.connections.length === 0) continue;
     const edges = portsOf(tile.connections).filter(p => p !== Position.Center);
 

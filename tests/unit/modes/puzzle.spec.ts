@@ -20,6 +20,8 @@ describe("puzzle mode", () => {
       signalHolds: true,
       crossingGate: false,
       build: false,
+      // Trains depart immediately here; only Tycoon makes them wait.
+      dispatch: false,
     });
   });
 
@@ -61,6 +63,7 @@ describe("puzzle mode", () => {
       stars: true,
       startOverlay: true,
       endOverlay: true,
+      money: false,
     });
   });
 });

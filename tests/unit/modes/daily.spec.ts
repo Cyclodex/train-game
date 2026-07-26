@@ -153,6 +153,8 @@ describe("dailyMode controls + hud", () => {
       signalHolds: true,
       crossingGate: false,
       build: false,
+      // Trains depart immediately here; only Tycoon makes them wait.
+      dispatch: false,
     });
   });
 
@@ -163,6 +165,7 @@ describe("dailyMode controls + hud", () => {
       stars: true,
       startOverlay: true,
       endOverlay: true,
+      money: false,
     });
   });
 

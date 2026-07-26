@@ -3,8 +3,20 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
 // https://vitejs.dev/config/
+// Honour PORT when the environment assigns one (Claude Code's preview launcher,
+// CI, containers) and fall back to Vite's own default otherwise. Without this,
+// Vite ignores PORT entirely and quietly drifts to the next free port when 5173
+// is taken — which looks like a working server on a port nothing is watching.
+// `strictPort` only when a port was assigned: bind exactly what we were told to,
+// or fail loudly instead of drifting.
+const assignedPort = Number(process.env.PORT) || undefined;
+
 export default defineConfig({
   plugins: [vue()],
+  server: {
+    port: assignedPort,
+    strictPort: assignedPort !== undefined,
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

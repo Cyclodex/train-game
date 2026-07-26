@@ -37,18 +37,30 @@
     </MenuDrawer>
 
     <ToolDock :hint="hint">
-      <button
-        v-for="t in tools"
-        :key="t"
-        class="dock-btn"
-        :class="{ on: tool === t }"
-        @click="setTool(t)"
-      >
-        <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
-        <span>{{ toolMeta[t].label }}</span>
-      </button>
-      <!-- Lane-count picker: only visible when the road tool is active. -->
-      <div v-if="tool === 'road'" class="lane-picker">
+      <!-- Two-level dock, laid out like Transport Fever: the categories are a
+           fixed row along the BOTTOM and the open category's actions sit in a
+           panel ABOVE them. Keeping the categories in one place means the button
+           you just pressed never moves, and only the panel changes — a side-by-
+           side split instead left a large dead area and made the eye hunt. -->
+      <div class="dock-panel">
+        <!-- The chosen category's tools. A single-tool category (Erase) shows
+             nothing here rather than repeating the button below it. -->
+        <div v-if="activeGroup.items.length > 1" class="dock-items">
+          <button
+            v-for="it in activeGroup.items"
+            :key="it.key"
+            class="dock-btn dock-btn--item"
+            :class="{ on: isActiveItem(it) }"
+            :title="it.label"
+            @click="selectItem(it)"
+          >
+            <span class="dock-btn__icon">{{ it.icon }}</span>
+            <span>{{ it.label }}</span>
+          </button>
+        </div>
+        <span v-else class="dock-panel__empty">{{ activeGroup.label }}</span>
+        <!-- Lane-count picker: only visible when the road tool is active. -->
+        <div v-if="tool === 'road'" class="lane-picker">
         <button
           v-for="n in [1, 2, 3]"
           :key="n"
@@ -68,24 +80,40 @@
           @click="roadOneWay = !roadOneWay"
           title="One-way road (lanes only in the drawn direction)"
         >➡️</button>
+        </div>
+        <!-- The world grows right and down simply by drawing into the empty
+             margin. These add room on the other two sides, by shifting what is
+             already there — the engine anchors the world at 0,0. Right-aligned:
+             they belong to the board, not to the open category. -->
+        <div class="grow-picker">
+          <button
+            class="dock-btn lane-btn"
+            title="Add a column before the left edge (shifts the world right)"
+            @click="growLeft"
+          >⬅︎+</button>
+          <button
+            class="dock-btn lane-btn"
+            title="Add a row above the top edge (shifts the world down)"
+            @click="growUp"
+          >⬆︎+</button>
+          <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
+            {{ gridCols - 2 }}×{{ gridRows - 2 }}
+          </span>
+        </div>
       </div>
-      <!-- The world grows right and down simply by drawing into the empty margin.
-           These add room on the other two sides, by shifting what is already
-           there — the engine anchors the world at 0,0. -->
-      <div class="grow-picker">
+      <!-- The categories themselves: one fixed row, always in the same place. -->
+      <div class="dock-groups">
         <button
-          class="dock-btn lane-btn"
-          title="Add a column before the left edge (shifts the world right)"
-          @click="growLeft"
-        >⬅︎+</button>
-        <button
-          class="dock-btn lane-btn"
-          title="Add a row above the top edge (shifts the world down)"
-          @click="growUp"
-        >⬆︎+</button>
-        <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
-          {{ gridCols - 2 }}×{{ gridRows - 2 }}
-        </span>
+          v-for="g in dockGroups"
+          :key="g.id"
+          class="dock-group"
+          :class="{ on: group === g.id }"
+          :title="g.label"
+          @click="selectGroup(g.id)"
+        >
+          <span class="dock-group__icon">{{ g.icon }}</span>
+          <span class="dock-group__label">{{ g.label }}</span>
+        </button>
       </div>
     </ToolDock>
 
@@ -131,6 +159,8 @@
           height: config.tileSize + 'px',
         }"
         @click="onCellClick(cell.key)"
+        @mousedown="onTerrainDown($event, cell.key)"
+        @mouseenter="onTerrainEnter($event, cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <Tile
@@ -309,6 +339,7 @@ import {
   isJunctionEntry,
   parseCoordId,
   isRoadOnlyLevel,
+  TerrainKind,
 } from "@/tiles/model";
 import { levelBounds, translateLevel } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
@@ -327,7 +358,10 @@ import {
   toggleLaneKind,
   setLaneKindRun,
   syncJunctionLanesAround,
+  setTerrain,
+  isBlankCell,
 } from "@/tiles/editOps";
+import { canBuildOn } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
@@ -350,7 +384,85 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { setCustomLevel, trainsFromRoutes, migrateLevel } from "@/levelStore";
 import { takeEditorSeed } from "@/editorSeed";
 
-type Tool = "connect" | "depot" | "signal" | "erase" | "road" | "buslane" | "signalise";
+type Tool =
+  | "connect"
+  | "depot"
+  | "signal"
+  | "erase"
+  | "road"
+  | "buslane"
+  | "signalise"
+  | "terrain";
+
+// The dock is two levels: pick the LAYER you are working on, then the tool
+// within it. Terrain's "tools" are brush kinds rather than separate Tools, so an
+// item carries an optional `terrain` — selecting it arms the terrain tool AND
+// sets the brush, which is what makes the ground buttons live inside the Terrain
+// group instead of in a second picker beside it.
+type ToolGroupId = "rail" | "road" | "terrain" | "erase";
+
+interface DockItem {
+  key: string;
+  icon: string;
+  label: string;
+  tool: Tool;
+  terrain?: TerrainKind;
+}
+
+interface DockGroup {
+  id: ToolGroupId;
+  icon: string;
+  label: string;
+  items: DockItem[];
+}
+
+const DOCK_GROUPS: DockGroup[] = [
+  {
+    id: "rail",
+    icon: "🚂",
+    label: "Rail",
+    items: [
+      { key: "connect", icon: "🛤️", label: "Track", tool: "connect" },
+      { key: "depot", icon: "🏠", label: "Depot", tool: "depot" },
+      { key: "signal", icon: "🚦", label: "Signal", tool: "signal" },
+    ],
+  },
+  {
+    id: "road",
+    icon: "🚗",
+    label: "Road",
+    items: [
+      { key: "road", icon: "🛣️", label: "Road", tool: "road" },
+      { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
+      { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
+    ],
+  },
+  {
+    id: "terrain",
+    icon: "🏞️",
+    label: "Terrain",
+    items: [
+      { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest" },
+      { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water" },
+      { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },
+      { key: "mountain", icon: "⛰️", label: "Mountain", tool: "terrain", terrain: "mountain" },
+      { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
+      { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
+    ],
+  },
+  {
+    id: "erase",
+    icon: "🧽",
+    label: "Erase",
+    items: [{ key: "erase", icon: "🧽", label: "Erase", tool: "erase" }],
+  },
+];
+
+// Which group a tool belongs to, so arming a tool any other way (a shortcut, a
+// hand-off from another view) still opens the right drawer.
+const GROUP_OF_TOOL = new Map<Tool, ToolGroupId>(
+  DOCK_GROUPS.flatMap(g => g.items.map(i => [i.tool, g.id] as [Tool, ToolGroupId])),
+);
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
@@ -381,6 +493,8 @@ const HINTS: Record<Tool, string> = {
     "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
+  terrain:
+    "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them).",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -484,18 +598,46 @@ class EditorView extends Vue {
   levelSizeY = 6;
   // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
   // unaffected by order.
-  tools: Tool[] = ["connect", "road", "buslane", "signalise", "depot", "signal", "erase"];
   tool: Tool = "connect";
-  // Big, kid-friendly icon + label for each build tool, shown in the dock.
-  toolMeta: Record<Tool, { icon: string; label: string }> = {
-    connect: { icon: "🚂", label: "Rail" },
-    road: { icon: "🚗", label: "Road" },
-    buslane: { icon: "🚌", label: "Bus lane" },
-    signalise: { icon: "🚥", label: "Signalise" },
-    depot: { icon: "🏠", label: "Depot" },
-    signal: { icon: "🚦", label: "Signal" },
-    erase: { icon: "🧽", label: "Erase" },
-  };
+  // Which dock group is open. The tool and the group are separate state: the
+  // group decides what the second row OFFERS, the tool is what is armed.
+  group: ToolGroupId = "rail";
+  // The kind the terrain brush paints. "grass" is the eraser: it clears the
+  // field rather than storing a value, since absent means grass everywhere else.
+  terrainBrush: TerrainKind = "forest";
+  // Terrain is the one tool where drag-to-paint is the natural verb (you paint
+  // an AREA of wood, not a tile of it), so it tracks its own press state instead
+  // of going through the edge-based gesture the connect tool uses.
+  terrainPainting = false;
+
+  dockGroups: DockGroup[] = DOCK_GROUPS;
+
+  get activeGroup(): DockGroup {
+    return DOCK_GROUPS.find(g => g.id === this.group) ?? DOCK_GROUPS[0];
+  }
+
+  // A terrain item is "active" by its BRUSH, not just by its tool — otherwise
+  // every ground button would light up together whenever the brush is armed.
+  isActiveItem(item: DockItem): boolean {
+    if (item.terrain !== undefined) {
+      return this.tool === "terrain" && this.terrainBrush === item.terrain;
+    }
+    return this.tool === item.tool;
+  }
+
+  selectGroup(id: ToolGroupId) {
+    this.group = id;
+    // Opening a group arms its first tool, so one click is enough for the common
+    // case and the board is never left in a state where the highlighted group
+    // does not match the armed tool.
+    const first = this.activeGroup.items[0];
+    if (first) this.selectItem(first);
+  }
+
+  selectItem(item: DockItem) {
+    if (item.terrain !== undefined) this.terrainBrush = item.terrain;
+    this.setTool(item.tool);
+  }
   // Provided so tile-level children (TileGround) can read their neighbours'
   // terrain without every view threading it through props.
   @Provide() level: Level = reactive(loadLevel());
@@ -748,9 +890,15 @@ class EditorView extends Vue {
     return this.routeStarted && this.armed?.id === id && this.armed?.port === port;
   }
   get routeOpts() {
-    // `passable` is left default (everything passable); the future "blocked
-    // tiles" feature plugs in here without touching the router.
-    return { width: this.gridCols, height: this.gridRows };
+    // Water and rock are not buildable, so the planner routes AROUND them —
+    // which is the whole point of terrain having rules. One predicate
+    // (`canBuildOn`) is shared with the validator so a preview can never offer
+    // a route the level would then be flagged for.
+    return {
+      width: this.gridCols,
+      height: this.gridRows,
+      passable: (c: Coordinates) => canBuildOn(this.level[getCoordinatesId(c)]),
+    };
   }
 
   // The layer the route-builder is currently drawing on. `connect` lays rail
@@ -890,7 +1038,10 @@ class EditorView extends Vue {
     return this.level[id] ?? emptyCell();
   }
   commit(id: string, cell: Level[string]) {
-    if (cell.connections.length === 0 && !cell.signals?.length && !cell.road?.length) {
+    // `isBlankCell` rather than "no connections/signals/road": a cell carrying
+    // only TERRAIN is a real cell (a lake tile has no track and no road), and
+    // the older test deleted it the instant the brush painted it.
+    if (isBlankCell(cell)) {
       delete this.level[id];
     } else {
       this.level[id] = cell;
@@ -1086,6 +1237,56 @@ class EditorView extends Vue {
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }
 
+  // --- terrain brush (cell-level drag-to-paint) ---
+  // Painting an AREA is the natural gesture for ground, so the brush tracks its
+  // own press instead of the edge-to-edge gesture the connect tool uses. Space
+  // is the pan modifier everywhere in this editor, so it wins over the brush.
+  onTerrainDown(ev: MouseEvent, id: string) {
+    if (this.tool !== "terrain" || ev.button !== 0 || this.spaceHeld) return;
+    this.terrainPainting = true;
+    this.paintTerrain(id);
+  }
+  onTerrainEnter(ev: MouseEvent, id: string) {
+    if (this.tool !== "terrain" || !this.terrainPainting) return;
+    // `buttons` is the LIVE state of the physical mouse buttons, so this paints
+    // only while one is actually held. The flag alone was not enough: a mouseup
+    // swallowed by another handler (the edge zones use `@mouseup.stop`, and the
+    // camera takes pointer capture) leaves it stuck true, and from then on every
+    // tile the cursor merely passes over gets painted.
+    if ((ev.buttons & 1) === 0) {
+      this.terrainPainting = false;
+      return;
+    }
+    this.paintTerrain(id);
+  }
+  // An arrow-function FIELD, not a method: it is handed to window.addEventListener,
+  // where a prototype method would be invoked with `this` bound to the window.
+  // Same pattern as `onKeydown` below, and it keeps the reference stable so
+  // removeEventListener actually matches.
+  stopTerrainPainting = () => {
+    this.terrainPainting = false;
+  };
+  paintTerrain(id: string) {
+    const cur = this.level[id] ?? emptyCell();
+    if ((cur.terrain ?? "grass") === this.terrainBrush) return; // no-op repaint
+    const next = setTerrain(cur, this.terrainBrush);
+    // Refuse to flood a tile that already carries a line. Allowing it would let
+    // a single drag quietly invalidate half a level, and the validator would
+    // then report a problem the player never chose to create. Clear the track
+    // first if you really want water there.
+    const carriesLine = cur.connections.length > 0 || (cur.road?.length ?? 0) > 0;
+    if (carriesLine && !canBuildOn(next)) return;
+    // Painting grass over a cell that carried nothing else removes it entirely,
+    // rather than leaving a blank entry behind that still counts towards the
+    // level's bounds.
+    if (isBlankCell(next)) {
+      delete this.level[id];
+      this.persist();
+      return;
+    }
+    this.commit(id, next);
+  }
+
   // --- depot / erase (cell-level click) ---
   onCellClick(id: string) {
     if (this.tool === "depot") {
@@ -1120,6 +1321,10 @@ class EditorView extends Vue {
   }
   setTool(t: Tool) {
     this.tool = t;
+    // Keep the open group honest even when a tool is armed without going
+    // through the dock.
+    const g = GROUP_OF_TOOL.get(t);
+    if (g) this.group = g;
     this.pressFrom = null;
     this.hoverPort = null;
     this.finishRoute();
@@ -1132,6 +1337,9 @@ class EditorView extends Vue {
     window.addEventListener("keydown", this.onEditorKeyDown);
     window.addEventListener("keyup", this.onEditorKeyUp);
     window.addEventListener("resize", this.onWindowResize);
+    // On WINDOW, not the board: a paint drag that ends off the grid (or outside
+    // the app) must still release the brush, or the next hover keeps painting.
+    window.addEventListener("mouseup", this.stopTerrainPainting);
     // Frame the board before the first paint: a big level would otherwise open
     // on its top-left corner.
     this.$nextTick(() => this.fitWorld());
@@ -1145,6 +1353,7 @@ class EditorView extends Vue {
     window.removeEventListener("keydown", this.onEditorKeyDown);
     window.removeEventListener("keyup", this.onEditorKeyUp);
     window.removeEventListener("resize", this.onWindowResize);
+    window.removeEventListener("mouseup", this.stopTerrainPainting);
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];
@@ -1423,6 +1632,77 @@ export default toNative(EditorView);
   stroke-linecap: round;
   pointer-events: none;
 }
+// --- Dock layout -------------------------------------------------------------
+// The dock stacks: contextual panel on top, category row underneath. `:deep` is
+// needed because `.tool-dock` lives inside the ToolDock component, and a scoped
+// style stops at a child component's root.
+:deep(.tool-dock) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px;
+}
+// What the open category can do. Reserves its height so the dock does not jump
+// as categories with different numbers of tools are opened.
+.dock-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 76px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+.dock-panel__empty {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6a7a6a;
+  padding: 0 6px;
+}
+.dock-items {
+  display: flex;
+  gap: 6px;
+}
+// The category row: one fixed place, so the button just pressed never moves.
+.dock-groups {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+.dock-group {
+  @include glass-button;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 66px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+
+  &.on {
+    background: #5fd39a;
+    color: #0e1a14;
+    box-shadow: 0 0 14px rgba(95, 211, 154, 0.5);
+
+    &:hover {
+      background: #6ee0a8;
+      color: #0e1a14;
+    }
+  }
+}
+.dock-group__icon {
+  font-size: 24px;
+  line-height: 1;
+}
+// The tools inside a category read as secondary to the categories themselves.
+.dock-btn--item {
+  min-width: 68px;
+  padding: 9px 11px;
+  font-size: 12px;
+
+  .dock-btn__icon {
+    font-size: 24px;
+  }
+}
 // Lane-count picker: a compact inline group next to the road tool buttons.
 .lane-picker {
   display: flex;
@@ -1438,7 +1718,7 @@ export default toNative(EditorView);
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-left: 8px;
+  margin-left: auto; // board controls sit apart from the category's own tools
   padding-left: 10px;
   border-left: 1px solid rgba(0, 0, 0, 0.15);
 }

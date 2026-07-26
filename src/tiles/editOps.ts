@@ -3,6 +3,7 @@ import {
   Port,
   PortPair,
   TileCell,
+  TerrainKind,
   Level,
   samePair,
   armExit,
@@ -38,6 +39,29 @@ function directedLanes(
 
 export function emptyCell(): TileCell {
   return { connections: [] };
+}
+
+// Paint (or clear, with `undefined`) the ground under a cell. Terrain is the one
+// tile property that is meaningful on a cell carrying nothing else — a lake tile
+// has no track and no road — so the editor creates cells for it and this op has
+// to be safe on an empty one.
+export function setTerrain(cell: TileCell, kind: TerrainKind | undefined): TileCell {
+  const { terrain: _drop, ...rest } = cell;
+  return kind === undefined || kind === "grass" ? rest : { ...rest, terrain: kind };
+}
+
+// True when a cell carries nothing at all and can be dropped from the level
+// rather than left behind as an empty entry. Erasing the terrain from a plain
+// grass cell should remove it, or a session of painting and repainting silently
+// grows the level (and its bounds) with cells that draw nothing.
+export function isBlankCell(cell: TileCell): boolean {
+  return (
+    cell.connections.length === 0 &&
+    (cell.road?.length ?? 0) === 0 &&
+    cell.role === undefined &&
+    cell.terrain === undefined &&
+    (cell.signals?.length ?? 0) === 0
+  );
 }
 
 // Add the connection if absent, remove it if already present (order-independent).

@@ -127,6 +127,7 @@ export const dailyMode: GameMode = {
     signalHolds: true,
     crossingGate: false,
     build: false,
+    dispatch: false,
   },
 
   createObjective: objectiveFromSpec,
@@ -137,6 +138,7 @@ export const dailyMode: GameMode = {
     stars: true,
     startOverlay: true,
     endOverlay: true,
+    money: false,
   },
 };
 
