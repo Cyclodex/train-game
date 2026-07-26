@@ -723,6 +723,30 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(`${worstId}:${biggest.toFixed(3)}`).toBe(`${worstId}:${Math.min(biggest, LIMIT).toFixed(3)}`);
   });
 
+  it("pulls away with the speed it left the bay at, instead of stalling on the lane", () => {
+    // `advanceParking` pins `velocity` at 0 for the whole manoeuvre — the curve
+    // moves the car, the follower model does not — so handing it back at 0 makes a
+    // coach that was gliding out at nearly cruise speed stop dead the instant it
+    // rejoins the road and start again. Not braking: no momentum. It reads as the
+    // bus almost stopping just after it pulls out.
+    const sim = simFor("buslayby", 6);
+    const leaving = new Set<string>();
+    const handovers: number[] = [];
+    for (let i = 0; i < 4000; i++) {
+      sim.step(0.05, () => false);
+      for (const c of sim.cars()) {
+        if (c.phase === "leaving") leaving.add(c.id);
+        else if (c.phase === "driving" && leaving.delete(c.id)) handovers.push(c.velocity);
+      }
+    }
+    expect(handovers.length).toBeGreaterThan(3);
+    // Every one of them, not just the best: a single stall is the thing you see.
+    // The manoeuvre runs at PARKING.speed x pace, ~0.47 tiles/sec on this bay,
+    // and a departure held up by traffic is capped by the follower gate, not by
+    // this handover — so a floor well under the crawl speed is the honest bar.
+    expect(Math.min(...handovers)).toBeGreaterThan(0.3);
+  });
+
   it("cars drive to a car park, park, dwell, and leave again", () => {
     const sim = simFor("parkinglot");
     const phases = new Set<string>();

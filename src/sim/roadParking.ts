@@ -536,6 +536,17 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.targetLane = lane;
     car.overtakeHomeLane = lane;
     car.phase = "driving";
+    // HAND THE MANOEUVRE'S SPEED OVER. `advanceParking` pins `velocity` at 0 for
+    // the whole swing — the curve moves the car, not the follower model — so
+    // rejoining the road at 0 makes a vehicle that was gliding out at nearly
+    // cruise speed stop dead on the lane and start again. That is the hesitation
+    // at every bay: it is not braking, it is being handed back with no momentum.
+    //
+    // A REVERSED-OUT bay keeps the standing start, and should: the driver really
+    // has stopped to change direction. Only a nose-first exit is already rolling.
+    if (car.parkExiting) {
+      car.velocity = Math.min(car.speed, PARKING.speed * (car.parkPath?.pace ?? 1));
+    }
     car.parkExiting = false;
     releaseStall(car);
   }

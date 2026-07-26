@@ -346,6 +346,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   · `seatAtExitSlot` seats the nose at `endT + half`, and `exitFor` takes a
     `headRoom` so the curve stops half a body short of the tile's end — otherwise
     the nose has nowhere legal to sit and the clamp reintroduces the jump.
+  · `resumeFromStall` HANDS THE MANOEUVRE'S SPEED OVER on a nose-first exit
+    (`PARKING.speed x pace`, capped at the car's own cruise). `advanceParking`
+    pins `velocity` at 0 for the whole swing — the curve moves the car, the
+    follower model does not — so rejoining at 0 makes a coach that was gliding out
+    at 0.47 tiles/sec stop dead on the lane and start again. Not braking: no
+    momentum. A REVERSED-OUT bay keeps the standing start and should, the driver
+    really has stopped to change direction.
   · `stopTOf` is the STOP LINE, and a HALT needs the same half: its stall `t` is
     the middle of the marked kerb and the bus stands ON it, so the nose goes half
     a body past. Braking the nose to the middle parked the coach BEHIND its own
