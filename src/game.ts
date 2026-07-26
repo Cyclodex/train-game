@@ -32,6 +32,7 @@ import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
+import { createEconomy, createFareBook } from "@/sim/economy";
 import { RoadFrame } from "@/sim/road";
 
 export interface TrainDef {
@@ -174,6 +175,34 @@ export interface EditResult {
   blocked: string[];
 }
 
+// The HUD's reactive mirror of the ledger in `sim/economy.ts`. `enabled` is
+// false for every mode that declares no economy, and that single flag is what
+// the money HUD gates on — so a mode without money renders no money chrome at
+// all rather than a zeroed card.
+export interface MoneyState {
+  enabled: boolean;
+  balance: number;
+  earned: number;
+  spent: number;
+}
+
+// One fare pin, drawn over a train's loco. EXACTLY one per train and nothing
+// else: the design doc's §5.5 lesson from Train Valley 2 is that counters,
+// cargo pins, demand badges and price tags all at once do not survive a board
+// that pans and zooms. A pin over a WAITING train is also its dispatch button.
+export interface FareBadge {
+  trainId: string;
+  x: number; // world px — the loco's current position
+  y: number;
+  amount: number; // what the fare is worth at this instant
+  waiting: boolean; // sitting in its station, click to send
+  color: string; // the train's livery, so a pin names its train without text
+}
+
+// How far above the loco a fare pin floats, as a fraction of the tile. Enough to
+// clear the sprite and the depot roof without leaving the tile.
+const FARE_BADGE_LIFT = 0.34;
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -222,6 +251,14 @@ export interface Game {
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
+  // Reactive mirror of the mode's ledger (all zeros + enabled:false when the
+  // mode declares no economy).
+  money: MoneyState;
+  // One fare pin per live, unpaid train, refreshed each frame beside the sprites.
+  fareBadges: FareBadge[];
+  // Send a waiting train (Tycoon). Returns false when the train isn't waiting —
+  // no mode without `controls.dispatch` ever has one, so this is a no-op there.
+  dispatch(trainId: string): boolean;
   mode: GameMode;
   // Reactive snapshot of the objective tracker, refreshed each frame.
   objective: ObjectiveState;
@@ -437,6 +474,9 @@ export function createGame(
       trains: trainDefs.filter(def => !isScheduled(def)).map(trainInit),
       getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
       signalTiles,
+      // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
+      // the sim builds trains in state "running" exactly as it always has.
+      waitForDispatch: mode.controls.dispatch,
     });
     roadSim = createRoadSim({
       level,
@@ -649,7 +689,47 @@ export function createGame(
     return { x: (f.x + r.x) / 2, y: (f.y + r.y) / 2, angle };
   }
 
+  // Fare pins, reconciled from the loco positions the sprite pass just computed
+  // (re-sampling here would be the same maths twice a frame). A pin exists only
+  // while the train is live and unpaid: it disappears the moment the train
+  // starts gliding into its shed, rather than hanging over the depot roof.
+  function updateFareBadges(locoPos: Record<string, { x: number; y: number }>) {
+    if (!fares) return;
+    const seen = new Set<string>();
+    for (const def of trainDefs) {
+      const train = sim.trains[def.id];
+      const pos = locoPos[def.id];
+      if (!train || !pos) continue;
+      if (!fares.has(def.id) || fares.isSettled(def.id)) continue;
+      if (train.state === "parking" || train.state === "parked") continue;
+      seen.add(def.id);
+      const amount = fares.valueOf(def.id);
+      const waiting = train.state === "waiting";
+      const y = pos.y - tileSize * FARE_BADGE_LIFT;
+      const existing = fareBadges.find(b => b.trainId === def.id);
+      if (existing) {
+        existing.x = pos.x;
+        existing.y = y;
+        existing.amount = amount;
+        existing.waiting = waiting;
+      } else {
+        fareBadges.push({
+          trainId: def.id,
+          x: pos.x,
+          y,
+          amount,
+          waiting,
+          color: trainColors[def.id] ?? "#ffffff",
+        });
+      }
+    }
+    for (let i = fareBadges.length - 1; i >= 0; i--) {
+      if (!seen.has(fareBadges[i].trainId)) fareBadges.splice(i, 1);
+    }
+  }
+
   function renderTrains() {
+    const locoPos: Record<string, { x: number; y: number }> = {};
     for (const def of trainDefs) {
       // A scheduled train has DOM (so colours/sprites exist up front) but is not
       // in the sim until its spawn time — keep its units hidden until then.
@@ -661,7 +741,11 @@ export function createGame(
         continue;
       }
       const units = sim.sampleTrain(def.id);
-      const docked = sim.trainState(def.id) !== "running";
+      const state = sim.trainState(def.id);
+      // A waiting train has not moved yet, so its units still sit stacked at the
+      // depot centre exactly as they do on the first frame of any level — it is
+      // "docked" for the shed-hiding test below only once it is actually parking.
+      const docked = state === "parking" || state === "parked";
       const ids = unitIds[def.id];
       for (let i = 0; i < units.length; i++) {
         const el = document.getElementById(ids[i]);
@@ -677,6 +761,7 @@ export function createGame(
           unit.rear.t >= 0.999;
         el.style.visibility = inShed ? "hidden" : "visible";
         const { x, y, angle } = positionUnit(unit);
+        if (i === 0) locoPos[def.id] = { x, y };
         el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${angle}deg)`;
         // Publish the angle so the debug label inside can cancel it out. A train
         // running right-to-left is rotated ~180deg, which rendered its id upside
@@ -684,6 +769,7 @@ export function createGame(
         el.style.setProperty("--unit-angle", `${angle}deg`);
       }
     }
+    updateFareBadges(locoPos);
   }
 
   // The exit ports a signal tile carries a signal for (per-direction).
@@ -850,6 +936,28 @@ export function createGame(
   const tracker = mode.createObjective(setup);
   const spawner = mode.createSpawner?.(setup);
 
+  // --- the economy -----------------------------------------------------------
+  // A mode that declares no `economy` gets NEITHER object, so every money code
+  // path below is a null check away from doing nothing — which is what keeps
+  // Puzzle/Daily/Sandbox byte-for-byte as they were.
+  const economySetup = setup.economy;
+  const economy = economySetup ? createEconomy(economySetup) : null;
+  const fares = economySetup ? createFareBook(economySetup.fares ?? {}) : null;
+  const money = reactive({
+    enabled: !!economy,
+    balance: economy?.balance ?? 0,
+    earned: 0,
+    spent: 0,
+  }) as MoneyState;
+  const fareBadges = reactive([]) as FareBadge[];
+
+  function refreshMoney() {
+    if (!economy) return;
+    money.balance = economy.balance;
+    money.earned = economy.earned;
+    money.spent = economy.spent;
+  }
+
   // Inject a scheduled train into the live sim. The colour/sprite resolution is
   // identical to the init path (trainInit), so a spawned train departs its depot
   // exactly like one present at t=0. Guards against a double-spawn (the spawner
@@ -888,8 +996,15 @@ export function createGame(
     let mismatchedDelta = 0;
     for (const e of events) {
       if (e.type === "arrived") {
-        if (e.matched) deliveredDelta += 1;
-        else mismatchedDelta += 1;
+        if (e.matched) {
+          deliveredDelta += 1;
+          // The fare is settled at the value it has decayed to right now, and
+          // `settle` is idempotent — a repeated arrival event can never pay
+          // twice. A mismatched (bounced) arrival pays nothing and keeps
+          // decaying, which is exactly the cost of routing a train wrongly.
+          const fare = fares?.settle(e.trainId) ?? 0;
+          economy?.earn(fare, "fare", e.trainId);
+        } else mismatchedDelta += 1;
       }
       eventLog.push(toLogEntry(e, logSeq++, clock));
     }
@@ -899,7 +1014,20 @@ export function createGame(
     lastHoldTotal = manualHoldTotal;
     lastGreenTotal = manualGreenTotal;
     deliveries.value += deliveredDelta;
-    return { deliveredDelta, mismatchedDelta, manualHoldDelta, manualGreenDelta };
+    return {
+      deliveredDelta,
+      mismatchedDelta,
+      manualHoldDelta,
+      manualGreenDelta,
+      // Absolutes off the ledger, so the counters can never drift from it. Left
+      // out entirely when there is no economy, which keeps the money counters at
+      // their zero defaults for every other mode.
+      ...(economy && {
+        balance: economy.balance,
+        earned: economy.earned,
+        spent: economy.spent,
+      }),
+    };
   }
 
   const paused = ref(false);
@@ -931,6 +1059,13 @@ export function createGame(
           injectTrain(def);
           spawnedDelta += 1;
         }
+        // Fares decay in sim time, and — the point of the whole mode — they
+        // decay while a train is still WAITING in its station, not only in
+        // transit. Gated on the objective being live so nothing ticks away
+        // behind the Ready screen (dt is already 0 there, this is belt and braces
+        // for a mode with no start overlay).
+        economy?.tick(scaled);
+        fares?.tick(scaled);
       }
       const obs = handleEvents(sim.step(scaled));
       obs.spawnedDelta = spawnedDelta;
@@ -948,6 +1083,7 @@ export function createGame(
       roadFrame.carsDelivered = rf.carsDelivered;
       tracker.observe(obs, scaled);
       refreshObjective();
+      refreshMoney();
     }
     renderTrains();
     updateRoadCars();
@@ -1032,6 +1168,11 @@ export function createGame(
     paused,
     speed,
     deliveries,
+    money,
+    fareBadges,
+    dispatch(trainId: string) {
+      return sim.dispatch(trainId);
+    },
     mode,
     objective,
     roadFrame,
@@ -1066,6 +1207,12 @@ export function createGame(
       roadFrame.maxCarWaitSec = 0;
       roadFrame.carWaitTotalSec = 0;
       roadFrame.carsDelivered = 0;
+      // A true do-over needs the money back too: the balance to its starting
+      // capital and every fare un-settled at full value.
+      economy?.reset();
+      fares?.reset();
+      fareBadges.splice(0, fareBadges.length);
+      refreshMoney();
       tracker.reset();
       refreshObjective();
     },

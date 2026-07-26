@@ -121,6 +121,7 @@ export const timeAttackMode: GameMode = {
     signalHolds: true,
     crossingGate: false,
     build: false,
+    dispatch: false,
   },
   createObjective: objectiveFromSpec,
   createSpawner(setup: ModeSetup): Spawner {
@@ -132,5 +133,6 @@ export const timeAttackMode: GameMode = {
     stars: true,
     startOverlay: true,
     endOverlay: true,
+    money: false,
   },
 };

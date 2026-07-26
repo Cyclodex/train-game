@@ -75,6 +75,12 @@
         <span class="score-pct">{{ deliveredPct }}%</span>
       </div>
       <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <!-- The whole money HUD off the board is this one line. The fares live on
+           the board as pins over their trains; anything more and we are building
+           TV2's chrome (design doc §5.5). -->
+      <div v-if="hud.money" class="score-money" title="Balance">
+        💰 {{ balanceLabel }}
+      </div>
       <div
         v-if="showCrossingFlow"
         class="score-crossing"
@@ -173,6 +179,25 @@
         :segments="carRoute.segments"
         :color="carColor(carRoute.carId)"
       />
+      <!-- Fare pins. Absolutely positioned, like the road cars — a direct child
+           of `.level` that generates a box becomes a GRID ITEM and eats a tile
+           cell (see KNOWHOW → RENDER LAYOUT). A pin over a waiting train is its
+           dispatch button; over a running one it just counts down. -->
+      <button
+        v-for="badge in fareBadges"
+        :key="`fare-${badge.trainId}`"
+        class="fare-pin"
+        :class="{ 'fare-pin--waiting': badge.waiting }"
+        :style="{
+          borderColor: badge.color,
+          transform: `translate(-50%, -50%) translate(${badge.x}px, ${badge.y}px)`,
+        }"
+        :title="badge.waiting ? 'Waiting — click to send this train' : 'Fare, falling'"
+        @click.stop="onFareClick(badge)"
+      >
+        <span class="fare-pin__amount">{{ badge.amount }}</span>
+        <span v-if="badge.waiting" class="fare-pin__go">▶</span>
+      </button>
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -310,7 +335,7 @@ import {
 import { nextTheme, themeMeta } from "@/themes";
 import { TrainsDefinition, TrainStatus } from "@/types";
 import { Level, TileCell, isLevelCrossing, isRoadOnlyLevel } from "@/tiles/model";
-import { createGame, Game, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
@@ -503,6 +528,7 @@ class PlayView extends Vue {
 
   private modeIcons: Record<string, string> = {
     puzzle: "🧩",
+    tycoon: "💰",
     "crossing-keeper": "🚧",
     "time-attack": "⏱️",
     daily: "📅",
@@ -570,6 +596,22 @@ class PlayView extends Vue {
   }
   get lostReason(): string {
     return this.game.objective.lostReason ?? "";
+  }
+
+  // --- money (Tycoon) --------------------------------------------------------
+  // The balance, and one fare pin per live train. Both are inert for every mode
+  // that declares no economy: `hud.money` is false and `fareBadges` stays empty.
+  get balanceLabel(): string {
+    return this.game.money.balance.toLocaleString("en-US");
+  }
+  get fareBadges(): FareBadge[] {
+    return this.game.fareBadges;
+  }
+  onFareClick(badge: FareBadge): void {
+    // A drag that ends over a pin still fires a click; ignore it, or panning the
+    // board would dispatch whatever train the cursor happened to land on.
+    if (this.panning) return;
+    if (badge.waiting) this.game.dispatch(badge.trainId);
   }
 
   beforeUnmount() {
@@ -945,6 +987,49 @@ export default toNative(PlayView);
     rgba(30, 44, 60, 0.55) 10px
   );
 }
+// The fare pin — the money HUD's ONLY board chrome. One per live train, floating
+// over its loco, coloured by the train's livery so it names its train without
+// text. A waiting one pulses and is clickable; a running one just counts down.
+.fare-pin {
+  position: absolute;
+  z-index: 8; // above cars (6) and their ids (7); crossing booms stay on top
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: rgba(18, 22, 28, 0.9);
+  color: #f4d47a;
+  font: 800 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+.fare-pin--waiting {
+  cursor: pointer;
+  animation: fare-pin-pulse 1.4s ease-in-out infinite;
+
+  &:hover {
+    background: rgba(38, 50, 62, 0.95);
+  }
+}
+.fare-pin__go {
+  color: #5fd39a;
+  font-size: 10px;
+}
+@keyframes fare-pin-pulse {
+  0%,
+  100% {
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 3px 16px rgba(95, 211, 154, 0.65);
+  }
+}
 .score-card {
   position: fixed;
   z-index: 2000;
@@ -1097,6 +1182,14 @@ export default toNative(PlayView);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   color: #cdd7df;
+}
+.score-money {
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: 0.01em;
+  color: #f4d47a;
 }
 .score-crossing {
   margin-top: 4px;

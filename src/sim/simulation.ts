@@ -38,10 +38,14 @@ export interface TrainInit {
   coupling?: number;
 }
 
+// "waiting" is a train sitting in its depot with the brake on, waiting for the
+// player to send it (Train Valley's "Zug wartet. Per Klick losschicken."). It is
+// OPT-IN — `SimConfig.waitForDispatch` — so every board authored before dispatch
+// existed still departs the moment the level starts.
 // "parking" is the transient glide where a train that has matched a depot keeps
 // moving forward so its whole body slides into the depot (clearing the approach
 // tiles) before it freezes as "parked".
-export type TrainState = "running" | "parking" | "parked";
+export type TrainState = "waiting" | "running" | "parking" | "parked";
 
 export interface SimTrain {
   id: string;
@@ -162,6 +166,14 @@ export interface SimConfig {
   // Tile ids that carry a signal — block boundaries. Depots are boundaries too.
   signalTiles?: string[];
   depotColors?: Record<string, string>;
+  // Opt-in dispatch: trains are created in state "waiting" and stay put — no
+  // movement, no reservations — until `dispatch(id)` sends them.
+  //
+  // DEFAULT OFF, and it must stay that way. Every level, /test scenario and unit
+  // test written before this assumes a train leaves its depot on the first tick;
+  // flipping the default would silently freeze all of them. Only a mode that
+  // asks for it (`ModeControls.dispatch`) turns it on.
+  waitForDispatch?: boolean;
 }
 
 export interface SampledUnit {
@@ -199,6 +211,12 @@ export interface Simulation {
   // reservations/occupancy (the new train claims its block on its first
   // crossing, like any other). Throws if a train with that id already exists.
   addTrain(init: TrainInit): void;
+  // Send a waiting train (only meaningful under `waitForDispatch`). Returns true
+  // if this call actually released it — false for an unknown train or one that
+  // is already running/parking/parked, so a double click cannot restart anything.
+  dispatch(id: string): boolean;
+  // The trains currently waiting for the player, in a stable (sorted) order.
+  waitingTrains(): string[];
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -285,7 +303,7 @@ export function createSimulation(config: SimConfig): Simulation {
       coupling,
       unitOffsets,
       bodyLength,
-      state: "running",
+      state: config.waitForDispatch ? "waiting" : "running",
       path: [{ coord: init.coord, entryPort: init.entryPort, exitPort }],
       headIndex: 0,
       headProgress: 0,
@@ -563,6 +581,10 @@ export function createSimulation(config: SimConfig): Simulation {
 
   function advance(train: SimTrain, dt: number, events: SimEvent[]): void {
     if (train.state === "parked") return;
+    // Waiting for the player. It sits on its depot tile (so it still blocks that
+    // tile, exactly like a train that has not pulled out yet) but claims no
+    // block ahead — a waiting train must not hold a route it isn't using.
+    if (train.state === "waiting") return;
     if (train.state === "parking") {
       // The loco is already at the depot centre. Keep driving the whole consist
       // forward — sampling clamps every unit to the centre as it catches up, and
@@ -788,6 +810,20 @@ export function createSimulation(config: SimConfig): Simulation {
         throw new Error(`addTrain: train "${init.id}" already exists`);
       }
       trains[init.id] = buildTrain(init);
+    },
+    dispatch(id: string) {
+      const train = trains[id];
+      if (!train || train.state !== "waiting") return false;
+      train.state = "running";
+      // Departs from rest like any train leaving a depot — the momentum model
+      // ramps it up from 0, so dispatch is a release, not a shove.
+      train.velocity = 0;
+      return true;
+    },
+    waitingTrains() {
+      return Object.keys(trains)
+        .filter(id => trains[id].state === "waiting")
+        .sort();
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);

@@ -218,6 +218,44 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## ECONOMY + DISPATCH (Tycoon phase 1, 2026-07-26)
+- `sim/economy.ts` = pure ledger (`createEconomy`) + fare book (`createFareBook`)
+  beside `objectives.ts`: no Vue, no DOM, deterministic. Ledger amounts are
+  SIGNED (+earn/−spend) so the entry log sums to the balance and needs no second
+  field. `spend` returns null when refused — treat null as "it did not happen".
+- `TrainState` gained `"waiting"`, released by `sim.dispatch(id)`. It is gated by
+  `SimConfig.waitForDispatch` and DEFAULTS OFF — every level, scenario and unit
+  test predates it and assumes a train departs on tick 1. The ONLY thing that
+  turns it on is `ModeControls.dispatch` (Tycoon). Do not flip the default.
+- A waiting train OCCUPIES its depot tile but RESERVES NOTHING ahead. That falls
+  out for free: `releaseStaleReservations` only adds the route-to-next-signal for
+  `state === "running"`. Pinned by `dispatch.spec.ts`.
+- TRAP (bit once): `renderTrains` computed `docked = trainState !== "running"`.
+  Adding a 4th state silently made a WAITING train "docked" and eligible for the
+  shed-hiding test. Enumerate the states you mean (`parking || parked`), never
+  negate against a union you are about to extend.
+- Fares decay while the train WAITS, not only in transit — that is the whole
+  mechanic (Train Valley M7). Ticked from `game.ts frame()` only while
+  `objective.phase === "playing"`, so nothing burns behind the Ready screen.
+  `settle()` is idempotent, so a duplicated `arrived` event cannot pay twice.
+- `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
+  specs build `Counters` fixtures BY HAND, and required fields break them.
+  Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
+- Adding a field to `ModeControls`/`HudDescriptor` breaks the exhaustive
+  `expect(mode.controls).toEqual({…})` in all five mode specs. Expected; update
+  them all rather than loosening the assertion — it is what keeps a new mode from
+  quietly inheriting a control it should not have.
+- Fare pins are ABSOLUTELY POSITIONED direct children of `.level`, same rule as
+  the road cars (see RENDER LAYOUT — a box-generating direct child becomes a grid
+  ITEM and eats a tile). Positions are captured in `renderTrains` from the loco it
+  already placed; a second sampling pass would be the same maths twice a frame.
+- The depot art is z-10 and a loco is z-4, so a train sitting in its shed is
+  INVISIBLE. A waiting train therefore reads as an empty station — the fare pin
+  IS the affordance, which is also how Train Valley presents it.
+- NOT built, deliberately (`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`):
+  in-play build (phase 2, blocked on extracting `routeDrawController` from
+  `EditorView`), reversing (§5.2), crashes (§2.2 G7), production chains (§5.1).
+
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
   `validateLevel` (issue `blocked-terrain`), the editor's `routeOpts.passable`,
@@ -483,18 +521,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   entries into reactive arrays.
 - `config.plainBackdrop` (🌳 BG in /test) = flat green for reading kerbs/markings/gores.
 
-## STATE (2026-07-25) — read before picking up work
+## STATE (2026-07-26) — read before picking up work
 - Nothing is PUSHED. `master` holds the merged road-rendering work; branch
-  `claude/bigger-worlds` is ahead of it with worlds+camera+demoworld. Check
+  `claude/terrain-world` is ahead of it with worlds+camera+demoworld, terrain,
+  live editing (phase 0) and the Tycoon economy (phase 1). Check
   `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
 - OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
   (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
   `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
   MEASURED WORSE — read the issue before attempting a third.
-- NEXT UP (agreed): terrain as tile data, spec written and not started —
-  `docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md`. Cosmetic
-  first; bridges are the prize. See IMPROVEMENTS.md item 1.
-- The gallery is 69 scenarios. `npm run probe` + the road sweep both iterate the
+- NEXT UP: Train Valley phase 2 (build in play). Its ONE blocker is an
+  extraction, not a feature — pull the route-draw gesture out of `EditorView`
+  into a headless `routeDrawController.ts` beside `cameraController.ts`, or
+  `PlayView` and `EditorView` end up with two copies of the trickiest
+  interaction in the app. Then: gate on `ModeControls.build`, preview
+  `tiles × cost`, spend, call `game.applyEdits`, grey out what `canEdit` refuses.
+- The gallery is 70 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW

@@ -20,6 +20,8 @@ describe("crossing-keeper mode", () => {
       signalHolds: false,
       crossingGate: true,
       build: false,
+      // Trains depart immediately here; only Tycoon makes them wait.
+      dispatch: false,
     });
   });
 
@@ -67,6 +69,7 @@ describe("crossing-keeper mode", () => {
       stars: true,
       startOverlay: true,
       endOverlay: true,
+      money: false,
     });
   });
 });

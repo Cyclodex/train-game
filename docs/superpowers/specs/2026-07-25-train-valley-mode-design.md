@@ -475,6 +475,30 @@ Written at the end of the first build session, on `claude/terrain-world`.
 | **The first rule** | `canBuildOn`: water and rock are unbuildable, enforced in `validateLevel` and in the editor's route planner from one predicate. |
 | **`lakevalley`** | Our reconstruction of Train Valley level 1: three coloured stations, a ring around an unbuildable lake, a junction per spur. `/test/lakevalley`, also `/play?board=lakevalley`. |
 | **Phase 0** | The world is editable mid-run: `game.applyEdits` / `canEdit`, live signal derivation, switch-arm merging, `levelVersion`. |
+| **Phase 1** | The economy and the dispatch loop — see below. |
+
+#### Phase 1, as built (2026-07-26)
+
+| | |
+|---|---|
+| **G1 economy** | `sim/economy.ts`: a pure ledger (signed entries, running totals, a capped log, `canAfford`/`spend` that refuses debt by default) plus a **fare book** — per-train decaying fares with an idempotent `settle`. Headless, deterministic, 23 unit tests. |
+| **M7 decay** | The fare falls from `base` at `decayPerSec` down to a floor (25% of base by default), and it decays **while the train waits**, which is the point. The curve is a per-mode dial, as §4.2 asked. |
+| **G3 waiting** | `TrainState "waiting"` + `sim.dispatch(id)`, gated by `SimConfig.waitForDispatch`. **Default OFF** — every board and all 1 505 pre-existing tests assume immediate departure, and the full suite is green unchanged. A waiting train occupies its depot tile but reserves nothing ahead. |
+| **Counters** | `balance` / `earned` / `spent` on `Counters`, fed the ledger's absolutes, so a star predicate can score money. |
+| **The mode** | `modes/tycoon.ts` — `controls.dispatch`, `hud.money`, an economy per setup, three orthogonal stars (Payday / Hands off / Perfect colours). Registered in `modes/index.ts`. |
+| **HUD** | One balance line on the existing score card, and **one fare pin per train** floating over its loco — a waiting pin is the dispatch button. Nothing else, per §5.5. |
+| **`/test/dispatch`** | Two identical lanes, two waiting trains: send one now and one late, and the pins show what waiting costs. Also covered end-to-end by an e2e test. |
+
+Deliberately **not** built here, each with its reason above: the in-play build
+tool (phase 2 — still blocked on the `routeDrawController` extraction), typed
+cargo and hold/resume (folded in later; colour matching still carries the
+destination), `TrainDef.destination` (G4 — the colour assignment already
+guarantees a solvable, reachable match), reversing (§5.2), crashes (§2.2 G7),
+production chains (§5.1).
+
+**Playtest note for whoever picks this up:** §4.5 says test phase 1 *alone*
+before building phase 2 on it. `/#/play?mode=tycoon&board=lakevalley` is the
+board to do it on.
 
 ### The next unlock, and the one thing in its way
 
@@ -496,12 +520,12 @@ call `applyEdits`, grey out what `canEdit` refuses.
 
 ### Recommended order from here
 
-1. **Extract `routeDrawController`** from `EditorView`, no behaviour change,
+1. ~~**Phase 1 — economy + dispatch.**~~ **Done 2026-07-26** (see "Phase 1, as
+   built" above). Playtest it ALONE on `lakevalley` before building phase 2 on
+   top of it: if dispatching trains and watching fares decay is not fun, the
+   build tool will not save it.
+2. **Extract `routeDrawController`** from `EditorView`, no behaviour change,
    guarded by the existing editor e2e/probe runs.
-2. **Phase 1 — economy + dispatch.** `sim/economy.ts`, `TrainState "waiting"` +
-   `sim.dispatch(id)`, fare decay, typed cargo, money in the HUD. Playtest this
-   ALONE on `lakevalley` before building phase 2 on top of it: if dispatching
-   trains and watching fares decay is not fun, the build tool will not save it.
 3. **Phase 2 — build in play**, on the extracted controller.
 4. **Re-cut `lakevalley` to its opening state**: the south side of the ring
    removed and a budget set, so the level plays as the original does — build the

@@ -30,6 +30,15 @@ export interface Counters {
   // The highest `active` seen this run (a high-water mark), for a "kept it calm"
   // style star.
   peakActive?: number;
+  // Economy (Tycoon). Mirrors of the ledger in `sim/economy.ts` so a star
+  // predicate can score money without the tracker knowing what a fare is. The
+  // tracker always sets these (zeroCounters); they're optional for the same
+  // reason `spawned`/`active` are — hand-built Counters fixtures in the mode
+  // specs stay valid without being rewritten. A mode with no economy never
+  // reports them, so they stay 0 and every existing predicate is unaffected.
+  balance?: number; // money in hand right now
+  earned?: number; // lifetime income this run
+  spent?: number; // lifetime outgoings this run (positive)
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -82,6 +91,12 @@ export interface Observation {
   carsDelivered?: number; // current cumulative road throughput
   crossingIncidentDelta?: number; // new managed-crossing incidents this tick
   spawnedDelta?: number; // trains injected by the spawner this tick (Time Attack)
+  // Economy (Tycoon): the ledger's ABSOLUTE current totals, not deltas — the
+  // ledger is already the running total, so re-deriving it from per-tick deltas
+  // would be a second source of truth that can drift. Omitted → unchanged.
+  balance?: number;
+  earned?: number;
+  spent?: number;
 }
 
 export const emptyObservation: Observation = {
@@ -126,6 +141,9 @@ function zeroCounters(): Counters {
     spawned: 0,
     active: 0,
     peakActive: 0,
+    balance: 0,
+    earned: 0,
+    spent: 0,
   };
 }
 
@@ -171,6 +189,10 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (obs.carsDelivered !== undefined)
         counters.carsDelivered = obs.carsDelivered;
       counters.crossingIncidents += obs.crossingIncidentDelta ?? 0;
+      // Economy: absolutes straight off the ledger (see the Observation note).
+      if (obs.balance !== undefined) counters.balance = obs.balance;
+      if (obs.earned !== undefined) counters.earned = obs.earned;
+      if (obs.spent !== undefined) counters.spent = obs.spent;
 
       // Win takes priority over any same-tick fail.
       if (counters.delivered >= spec.deliveriesRequired) {

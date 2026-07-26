@@ -27,6 +27,8 @@ describe("time attack mode", () => {
       signalHolds: true,
       crossingGate: false,
       build: false,
+      // Trains depart immediately here; only Tycoon makes them wait.
+      dispatch: false,
     });
   });
 
@@ -57,6 +59,7 @@ describe("time attack mode", () => {
       stars: true,
       startOverlay: true,
       endOverlay: true,
+      money: false,
     });
   });
 });

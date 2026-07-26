@@ -67,6 +67,7 @@ export const crossingKeeperMode: GameMode = {
     signalHolds: false, // the crossing is the manual tool here, not signals
     crossingGate: true, // the level-crossing gate is this mode's control
     build: false,
+    dispatch: false,
   },
   createObjective: objectiveFromSpec,
   hud: {
@@ -75,5 +76,6 @@ export const crossingKeeperMode: GameMode = {
     stars: true,
     startOverlay: true,
     endOverlay: true,
+    money: false,
   },
 };

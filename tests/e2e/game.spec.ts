@@ -179,6 +179,56 @@ test.describe("Train game", () => {
       .toBe(3);
   });
 
+  test("tycoon: a train waits, its fare decays, dispatching it pays out", async ({
+    page,
+  }) => {
+    test.setTimeout(60000);
+    // The /test/dispatch scenario runs in Tycoon mode: two trains, both waiting
+    // in their stations with a fare pin over them. This is the one check that
+    // covers the WHOLE wiring — sim state, decaying fare, click, settlement,
+    // ledger — which the unit tests only cover a piece at a time.
+    await page.goto("/#/test/dispatch");
+
+    const snapshot = () =>
+      page.evaluate(() => {
+        const game = (window as any).__game;
+        return {
+          states: Object.keys(game.sim.trains).map((id: string) =>
+            game.sim.trainState(id)
+          ) as string[],
+          balance: game.money.balance as number,
+          fares: game.fareBadges.map((b: { amount: number }) => b.amount),
+        };
+      });
+
+    // Both trains sit in their depots with a pin each.
+    await expect.poll(() => page.locator(".fare-pin").count()).toBe(2);
+    const first = await snapshot();
+    expect(first.states).toEqual(["waiting", "waiting"]);
+
+    // The fare falls while the train WAITS — the whole point of the mode.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+    await expect
+      .poll(async () => (await snapshot()).fares[0], { timeout: 20000 })
+      .toBeLessThan(first.fares[0]);
+
+    // Clicking a pin sends that train, and only that train.
+    await page.locator(".fare-pin").first().click();
+    await expect
+      .poll(async () => (await snapshot()).states.filter(s => s === "waiting").length)
+      .toBe(1);
+
+    // Delivering it banks the decayed fare.
+    await expect
+      .poll(async () => (await snapshot()).balance, {
+        timeout: 45000,
+        intervals: [500],
+      })
+      .toBeGreaterThan(first.balance);
+  });
+
   test("signals are drawn and a manual hold turns a signal to Stop", async ({
     page,
   }) => {

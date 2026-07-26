@@ -21,6 +21,7 @@ export const sandboxMode: GameMode = {
     signalHolds: true,
     crossingGate: false,
     build: true,
+    dispatch: false,
   },
   createObjective(setup): ObjectiveTracker {
     return createObjectiveTracker(setup.objective);
@@ -31,5 +32,6 @@ export const sandboxMode: GameMode = {
     stars: false,
     startOverlay: false,
     endOverlay: false,
+    money: false,
   },
 };
