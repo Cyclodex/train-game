@@ -190,6 +190,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
   EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
   into the point coords, never nest a `<g transform="translate">` inside a prop.
+- KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
+  footprint off every rail/road through the cell AND its four side-neighbours
+  (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from
+  `segmentPoints` in sim/pathGeometry — same quad the trains drive, ONE
+  derivation). An object re-rolls up to 8 spots then is DROPPED (the wood thins
+  along the line — that's the cleared right-of-way, not a bug); ground marks
+  drop without retry. Corridors are part of the terrain cache key: building
+  through a tile reflows its scatter. FOREST exception: a trunk ≥ TRUNK_CLEAR
+  off the ballast whose crown overlaps the line renders on the CANOPY layer
+  (`tileCanopySvg`, second `<TileGround layer="canopy">` per cell, z-index 5 —
+  above wagons z3/loco z4, below road cars z6) so trains pass UNDER the
+  foliage. /test scenario: `clearing`.
 - Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
   default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"

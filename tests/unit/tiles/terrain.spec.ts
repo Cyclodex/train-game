@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   _clearTerrainCache,
   canBuildOn,
+  cellCorridors,
+  corridorsFor,
   edgeBow,
   latticeOffset,
   patchOutlinePolygon,
@@ -10,10 +12,13 @@ import {
   pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
+  tileCanopySvg,
   tileGroundSvg,
   TERRAIN_KINDS,
 } from "@/tiles/terrain";
 import { TerrainNeighbours } from "@/tiles/terrain";
+import { TileCell } from "@/tiles/model";
+import { Position } from "@/types";
 
 const around = (kind: TerrainNeighbours["top"]): TerrainNeighbours => ({
   top: kind,
@@ -393,6 +398,98 @@ describe("terrain", () => {
           }
         }
       }
+    });
+  });
+
+  describe("keep-out corridors", () => {
+    const straight: TileCell = {
+      connections: [[Position.Left, Position.Right]],
+    };
+    const translates = (svg: string) =>
+      [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)].map(m => ({
+        x: Number(m[1]),
+        y: Number(m[2]),
+      }));
+
+    it("derives a rail corridor from a connection", () => {
+      const cs = cellCorridors(straight);
+      expect(cs).toHaveLength(1);
+      expect(cs[0].pts).toEqual([
+        { x: 0, y: 50 },
+        { x: 100, y: 50 },
+      ]);
+    });
+
+    it("keeps every ground object and mark clear of the line", () => {
+      // A W-E straight runs along y=50. Nothing on the GROUND layer — trees,
+      // buildings, boulders, paving, gardens, scree — may put its footprint on
+      // the corridor (half-width 8, plus each object's own clear radius).
+      const cs = cellCorridors(straight);
+      for (const kind of TERRAIN_KINDS) {
+        if (kind === "grass") continue;
+        for (const coord of ["6,6", "2,9", "11,4"]) {
+          const svg = tileGroundSvg(kind, coord, around(kind), 3, cs);
+          for (const p of translates(svg)) {
+            expect(Math.abs(p.y - 50)).toBeGreaterThan(11);
+          }
+        }
+      }
+    });
+
+    it("sends overhanging forest trees to the canopy layer, trunks off the ballast", () => {
+      // The pass-under effect: trees whose trunks stand just OFF the line but
+      // whose crowns reach over it. Trunk at >= half+TRUNK_CLEAR (12) from the
+      // centreline, and close enough that the canopy actually overhangs.
+      const cs = cellCorridors(straight);
+      let seen = 0;
+      for (const coord of ["6,6", "2,9", "11,4", "5,5", "7,2"]) {
+        const canopy = tileCanopySvg("forest", coord, around("forest"), 3, cs);
+        for (const p of translates(canopy)) {
+          seen++;
+          const d = Math.abs(p.y - 50);
+          expect(d).toBeGreaterThanOrEqual(11.9);
+          expect(d).toBeLessThan(23.1);
+        }
+      }
+      expect(seen).toBeGreaterThan(0);
+    });
+
+    it("draws no canopy without a line, and none for other kinds", () => {
+      expect(tileCanopySvg("forest", "6,6", around("forest"), 3)).toBe("");
+      expect(
+        tileCanopySvg("urban", "6,6", around("urban"), 3, cellCorridors(straight)),
+      ).toBe("");
+      expect(
+        tileCanopySvg("rock", "6,6", around("rock"), 3, cellCorridors(straight)),
+      ).toBe("");
+    });
+
+    it("carries a neighbour's line into this tile's space", () => {
+      const cs = corridorsFor(undefined, { top: straight });
+      expect(cs).toHaveLength(1);
+      expect(cs[0].pts[0]).toEqual({ x: 0, y: -50 });
+    });
+
+    it("widens a road corridor with its lane count", () => {
+      const oneLane: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      };
+      const twoLane: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Left, to: [Position.Right], index: 1 },
+        ],
+      };
+      const narrow = cellCorridors(oneLane)[0].half;
+      const wide = cellCorridors(twoLane)[0].half;
+      expect(wide).toBeGreaterThan(narrow);
+      // A road is wider than a rail line.
+      expect(narrow).toBeGreaterThan(cellCorridors(straight)[0].half);
     });
   });
 

@@ -79,6 +79,7 @@ import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
+import { clearing } from "@/levels/test/scenarios/clearing";
 import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
@@ -184,7 +185,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, lakevalleyOpen, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, clearing, lakevalley, lakevalleyOpen, demoworld] },
     ],
   },
 ];

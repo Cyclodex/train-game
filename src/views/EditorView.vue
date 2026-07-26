@@ -169,6 +169,9 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+        <!-- Canopies overhanging a line (see TileGround.vue). The editor's own
+             overlay sits at z30, so every handle stays clickable and visible. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
 
         <svg
           class="overlay"
