@@ -142,8 +142,8 @@
         width: config.tileSize * gridCols + 'px',
         transform: levelTransform,
       }"
-      @mouseup="pressFrom = null"
-      @mouseleave="pressFrom = null"
+      @mouseup="clearPress()"
+      @mouseleave="clearPress()"
     >
       <div
         v-for="cell in gridCells"
@@ -366,7 +366,10 @@ import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
 import { roadSurfacePath } from "@/tiles/roadGeometry";
-import { planRoute, OpenEnd } from "@/tiles/routePlanner";
+import {
+  createRouteDrawController,
+  type RouteDrawController,
+} from "@/routeDrawController";
 import {
   roadEdges as laneEdges,
   laneCount,
@@ -641,15 +644,6 @@ class EditorView extends Vue {
   // Provided so tile-level children (TileGround) can read their neighbours'
   // terrain without every view threading it through props.
   @Provide() level: Level = reactive(loadLevel());
-  // `pressFrom` tracks an in-progress drag gesture; `armed` is the first edge
-  // picked in the two-click (click → click) connection flow.
-  pressFrom: { id: string; port: Port } | null = null;
-  // `armed` is the route head: the open end the track grows from. In route mode
-  // each click extends the route and advances the head; clicking the head edge
-  // again (or Esc) finishes. `routeStarted` becomes true once the route's first
-  // segment is laid, so the start tile is only laid once.
-  armed: { id: string; port: Port } | null = null;
-  routeStarted = false;
   // Number of lanes per direction when the road tool is active (1/2/3).
   // Persisted in localStorage so it survives tool switches and page reloads.
   roadLaneCount = loadRoadLaneCount();
@@ -658,12 +652,6 @@ class EditorView extends Vue {
   // Whether the road tool draws one-way roads (lanes only in the drawn
   // direction) rather than the default two-way road.
   roadOneWay = loadRoadOneWay();
-  // Set only in the U-turn case: the frontier tile is left undecided (blank)
-  // because you're pointing at the edge the track entered through. The head
-  // then trails one tile back, pointing at this pending tile.
-  pendingId: string | null = null;
-  // The edge currently hovered, used to ghost-preview the route.
-  hoverPort: { id: string; port: Port } | null = null;
   showIo = false;
   ioText = "";
 
@@ -707,12 +695,33 @@ class EditorView extends Vue {
   // (edge dot -> edge dot), and stealing it would make the board unbuildable.
   private cam!: CameraController;
 
+  // The route-drawing gesture (edge press/drag one-shot, click chaining with
+  // the U-turn pending case, hover ghost preview) lives in a shared headless
+  // controller so PlayView's in-play building reuses the exact same gesture.
+  // Built in `created()` and markRaw'd for the same reasons as the camera.
+  private routeCtrl!: RouteDrawController;
+
   created() {
     this.cam = markRaw(
       createCameraController(
         () => this.worldSize,
         () => this.viewportSize(),
       ),
+    );
+    this.routeCtrl = markRaw(
+      createRouteDrawController({
+        drawing: () => this.drawing,
+        planOpts: () => this.routeOpts,
+        // The editor commits CELL BY CELL — each step goes through `commit` so
+        // bus gates re-derive and the level persists per tile, exactly as the
+        // pre-extraction gesture did. (Play instead lays a whole route
+        // atomically via `game.applyEdits`.)
+        lay: steps => {
+          for (const s of steps) {
+            this.commit(s.id, this.layPair(this.cellOf(s.id), s.a, s.b));
+          }
+        },
+      }),
     );
   }
 
@@ -813,8 +822,8 @@ class EditorView extends Vue {
     const moved = translateLevel(this.level, dx, dy);
     for (const key of Object.keys(this.level)) delete this.level[key];
     Object.assign(this.level, moved);
-    this.armed = null;
-    this.pressFrom = null;
+    // The re-base moved every tile out from under the gesture's ids.
+    this.routeCtrl.dropAnchors();
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
@@ -880,14 +889,16 @@ class EditorView extends Vue {
     return `M${x - r} ${y - r} L${x + r} ${y + r} M${x + r} ${y - r} L${x - r} ${y + r}`;
   }
   isArmed(id: string, port: Port): boolean {
-    // Only the start edge shows the armed wedge; once routing the glow follows
-    // the pending frontier tile instead.
-    return !this.routeStarted && this.armed?.id === id && this.armed?.port === port;
+    return this.routeCtrl.isArmed(id, port);
   }
   // The open-end wedge that finishes the route when clicked again — highlighted
   // distinctly while routing so it's obvious where to stop.
   isFinish(id: string, port: Port): boolean {
-    return this.routeStarted && this.armed?.id === id && this.armed?.port === port;
+    return this.routeCtrl.isFinish(id, port);
+  }
+  // In-progress press released off the zones (grid mouseup / mouseleave).
+  clearPress(): void {
+    this.routeCtrl.clearPress();
   }
   get routeOpts() {
     // Water and rock are not buildable, so the planner routes AROUND them —
@@ -926,41 +937,21 @@ class EditorView extends Vue {
   get previewClass(): string {
     return this.drawing === "road" ? "preview-road" : "preview-rail";
   }
-  // Ghost rails for the whole previewed route, keyed by cell id. Anchors on the
-  // in-progress drag start if there is one, otherwise the route head — so the
-  // preview spans every tile for both gestures.
+  // Ghost rails for the whole previewed route, keyed by cell id. The
+  // controller decides WHICH connections the pointer is describing (anchor
+  // inclusion, U-turn trimming); mapping them to paint — rail pair vs road
+  // ribbon — is this view's layer choice, like `layPair`.
   get previewByCell(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
-    const from = this.pressFrom ?? this.armed;
-    const to = this.hoverPort;
-    if (!this.drawing || !from || !to) return out;
-    const steps = planRoute(
-      { id: from.id, edge: from.port },
-      { id: to.id, edge: to.port },
-      this.routeOpts
-    );
-    if (!steps) return out;
     const size = this.config.tileSize;
     const off = this.config.railDistanceFromPath;
-    const add = (id: string, a: Port, b: Port) => {
+    for (const s of this.routeCtrl.previewSteps()) {
       const paths =
         this.drawing === "road"
-          ? [roadSurfacePath(a, b, size)]
-          : railPathsFor(a, b, size, off);
-      (out[id] ??= []).push(...paths);
-    };
-    // The start tile is laid as a straight only for the first segment of a
-    // fresh route (drag is always a one-shot first segment).
-    if ((this.pressFrom || !this.routeStarted) && from.id !== to.id) {
-      add(from.id, oppositePort(from.port), from.port);
+          ? [roadSurfacePath(s.a, s.b, size)]
+          : railPathsFor(s.a, s.b, size, off);
+      (out[s.id] ??= []).push(...paths);
     }
-    // The pointed-at tile draws `incoming -> hovered edge` for its three exit
-    // edges; it's left blank only when you point at the edge the track enters
-    // through (a U-turn). A one-shot drag always draws its whole route.
-    const last = steps[steps.length - 1];
-    const uTurn = !this.pressFrom && to.port === last.a;
-    const count = uTurn ? steps.length - 1 : steps.length;
-    for (let i = 0; i < count; i++) add(steps[i].id, steps[i].a, steps[i].b);
     return out;
   }
   previewRails(id: string): string[] {
@@ -1060,122 +1051,37 @@ class EditorView extends Vue {
     for (const [gid, gcell] of Object.entries(synced)) this.level[gid] = gcell;
   }
 
-  // Lay every connection of the route from `from` to `to`. For the first
-  // segment of a route (and every one-shot drag) the anchor tile is also laid
-  // as a straight in its clicked direction. Returns the route's new open end
-  // (the last tile + the edge its rail actually exits) so the head can advance
-  // there — which may differ from the clicked edge (e.g. a back-pointing click
-  // becomes a straight-through). Null if no route fits.
-  commitSegment(from: OpenEnd, to: OpenEnd, layAnchor: boolean): OpenEnd | null {
-    const steps = planRoute(from, to, this.routeOpts);
-    if (!steps || steps.length === 0) return null;
-    if (layAnchor && from.id !== to.id) {
-      this.commit(
-        from.id,
-        this.layPair(this.cellOf(from.id), oppositePort(from.edge), from.edge)
-      );
-    }
-    for (const s of steps) {
-      this.commit(s.id, this.layPair(this.cellOf(s.id), s.a, s.b));
-    }
-    const last = steps[steps.length - 1];
-    return { id: last.id, edge: last.b };
-  }
   // The tile to glow: the pending frontier tile (U-turn case) while routing,
   // otherwise the head/last tile, else the start.
   get glowId(): string | null {
-    return this.pendingId ?? this.armed?.id ?? null;
+    return this.routeCtrl.glowId;
   }
   finishRoute() {
-    if (this.pendingId && this.armed) {
-      // Lock the still-undecided frontier tile as a plain straight terminus.
-      this.commit(
-        this.pendingId,
-        this.layPair(this.cellOf(this.pendingId), oppositePort(this.armed.port), this.armed.port)
-      );
-    }
-    this.armed = null;
-    this.routeStarted = false;
-    this.pendingId = null;
+    this.routeCtrl.finishRoute();
   }
 
-  // --- connect tool: drag gesture (one-shot single route) ---
-  // A drag starts here; if it ends on a different zone (onZoneUp) it lays one
-  // route. The browser only fires `click` when down and up share an element, so
-  // a drag never also triggers the click→click chaining below.
+  // --- connect/road tool: the route-drawing gesture ---
+  // Drag one-shot, click chaining (with the U-turn pending case) and the hover
+  // ghost all live in routeDrawController; the view only forwards the edge-zone
+  // events. The signal tool shares the zones, so its click is peeled off here.
   onZoneDown(id: string, port: Port) {
-    if (!this.drawing) return;
-    this.pressFrom = { id, port };
+    this.routeCtrl.onZoneDown(id, port);
   }
   onZoneUp(id: string, port: Port) {
-    if (!this.drawing) return;
-    const from = this.pressFrom;
-    this.pressFrom = null;
-    if (from && (from.id !== id || from.port !== port)) {
-      this.commitSegment({ id: from.id, edge: from.port }, { id, edge: port }, true);
-    }
+    this.routeCtrl.onZoneUp(id, port);
   }
-  // --- connect/signal tool: click (route mode chaining) ---
   onZoneClick(id: string, port: Port) {
     if (this.tool === "signal") {
       this.commit(id, toggleSignalPort(this.cellOf(id), port));
       return;
     }
-    if (!this.drawing) return;
-    const head = this.armed;
-    if (!head) {
-      this.armed = { id, port }; // start a route at this open end
-      this.routeStarted = false;
-      return;
-    }
-    // Finish: click the start edge again, or click the pending frontier tile.
-    if ((head.id === id && head.port === port) || this.pendingId === id) {
-      this.finishRoute();
-      return;
-    }
-    this.extendRoute(id, port);
-  }
-  // Plan the route to the clicked tile. The last tile is drawn `incoming ->
-  // clicked edge` for any of its three exit edges; only if you click the edge
-  // the track enters through (a U-turn) is it left blank and the head trails
-  // one tile back so your next click decides its shape.
-  extendRoute(targetId: string, targetPort: Port) {
-    const head = this.armed!;
-    const steps = planRoute(
-      { id: head.id, edge: head.port },
-      { id: targetId, edge: targetPort },
-      this.routeOpts
-    );
-    if (!steps || steps.length === 0) return;
-    if (!this.routeStarted && head.id !== targetId) {
-      this.commit(
-        head.id,
-        this.layPair(this.cellOf(head.id), oppositePort(head.port), head.port)
-      );
-    }
-    this.routeStarted = true;
-    const last = steps[steps.length - 1];
-    const uTurn = targetPort === last.a; // pointing at the incoming edge
-    const count = uTurn ? steps.length - 1 : steps.length;
-    for (let i = 0; i < count; i++) {
-      this.commit(steps[i].id, this.layPair(this.cellOf(steps[i].id), steps[i].a, steps[i].b));
-    }
-    if (uTurn) {
-      const penultId = steps.length >= 2 ? steps[steps.length - 2].id : head.id;
-      this.armed = { id: penultId, port: oppositePort(last.a) };
-      this.pendingId = last.id; // frontier tile stays undecided
-    } else {
-      this.armed = { id: last.id, port: last.b }; // exit = the clicked edge
-      this.pendingId = null;
-    }
+    this.routeCtrl.onZoneClick(id, port);
   }
   onZoneEnter(id: string, port: Port) {
-    if (this.drawing) this.hoverPort = { id, port };
+    this.routeCtrl.onZoneEnter(id, port);
   }
   onZoneLeave(id: string, port: Port) {
-    if (this.hoverPort?.id === id && this.hoverPort?.port === port) {
-      this.hoverPort = null;
-    }
+    this.routeCtrl.onZoneLeave(id, port);
   }
   deleteConn(id: string, conn: PortPair) {
     this.commit(id, removeConnection(this.cellOf(id), conn[0], conn[1]));
@@ -1325,9 +1231,7 @@ class EditorView extends Vue {
     // through the dock.
     const g = GROUP_OF_TOOL.get(t);
     if (g) this.group = g;
-    this.pressFrom = null;
-    this.hoverPort = null;
-    this.finishRoute();
+    this.routeCtrl.toolChanged();
   }
   onKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape") this.finishRoute();

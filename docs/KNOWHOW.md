@@ -555,17 +555,25 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
   MEASURED WORSE — read the issue before attempting a third.
 - NEXT UP: Train Valley phase 2 (build in play); full state of play + sizes in
-  the design doc **§8** (renumbered — there used to be two §6s). Its ONE blocker
-  is an extraction, not a feature — pull the route-draw gesture out of
-  `EditorView` (`pressFrom`/`armed`/`routeStarted`/`pendingId`/`hoverPort` +
-  `previewByCell`/`commitSegment`/`extendRoute`/`onZone*`, ~230 lines) into a
-  headless `routeDrawController.ts` beside `cameraController.ts`, or `PlayView`
-  and `EditorView` end up with two copies of the trickiest interaction in the
-  app. It must stay layer-agnostic and emit `RouteStep[]` over injected ports:
-  the editor commits CELL BY CELL (`level[id]=` + `syncBusGates` + `persist`,
-  rail OR road), play commits the whole route ATOMICALLY via
-  `game.applyEdits` (rail-only, guarded). Then: gate on `ModeControls.build`,
-  preview `tiles × cost`, spend, call `applyEdits`, grey out what `canEdit` refuses.
+  the design doc **§8** (renumbered — there used to be two §6s). Its blocker is
+  DONE (2026-07-26): the route-draw gesture (edge press/drag one-shot, click
+  chaining incl. the U-turn pending case, hover ghost) lives headless in
+  `routeDrawController.ts` beside `cameraController.ts` —
+  `createRouteDrawController({drawing, planOpts, lay})`, pinned by
+  `routeDrawController.spec.ts` + the 4 editor e2e tests (unmodified). Each
+  gesture emits ONE `lay(RouteStep[])` call with anchor/terminus straights
+  included in commit order: the editor's `lay` commits cell by cell
+  (`commit`+`layPair`, rail OR road), play's will hand the same array to
+  `game.applyEdits` ATOMICALLY (rail-only, guarded). Steps travel a→b (one-way
+  roads care). Still in the view, deliberately: tool→layer mapping (`drawing`),
+  `layPair` (lane count/bus/one-way), preview PAINT (`previewByCell` maps steps
+  → rail pair vs road ribbon). Then: gate on `ModeControls.build`, preview
+  `tiles × cost`, spend, call `applyEdits`, grey out what `canEdit` refuses.
+- `cfg.lay` runs through the caller's layer choice AT CALL TIME: finishing a
+  pending frontier via a tool switch (`toolChanged`) lays the terminus per the
+  NEW tool's layer (road route → switch tool → terminus laid as RAIL). That is
+  pre-existing editor behaviour, preserved verbatim in the extraction — a fix
+  would be a behaviour change, decide it separately.
 - TRAP for the "start `lakevalley` with a GAP in the ring" step (what makes it
   the real level): `validateLevel` raises `dangling-track` on any edge port with
   no connecting neighbour AND `route-disconnected` for the unreachable depot,
