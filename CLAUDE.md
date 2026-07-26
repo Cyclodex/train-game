@@ -343,6 +343,20 @@ It loads `/test/<scenarioId>` in a real browser with the **Debug overlay on**
 state; a visual **fix PR** carries a **before/after** pair (the implementer
 provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.
 
+**Finish by handing back the links.** The last thing every task says is WHERE to
+look, so the reader never has to hunt for the right page. List every page the
+change touches — the `/test/<id>` scenario for the mechanic in isolation, and the
+`/#/play?…` board when a mode or level is involved — as clickable URLs against the
+running dev server, not as instructions to go and find them:
+
+```
+http://localhost:5173/#/test/faredistance                       # the mechanic alone
+http://localhost:5173/#/play?mode=tycoon&board=lakevalley-open  # it in a real run
+```
+
+A screenshot proves what you saw; a link lets the reader see it for themselves.
+Both, every time — a change nobody can reach in one click is not handed over.
+
 ## Ticket ownership (don't double-build)
 
 `status: ready-for-dev` is the **automated implement pipeline's** queue: an issue
