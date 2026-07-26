@@ -501,11 +501,23 @@ export default toNative(TestStage);
     background: #468060;
   }
 }
+// The readouts sit ON the world, not on a page background — soft greys at 13px
+// disappeared into the meadow (and would into any other theme). They get the
+// same dark chip the buttons carry, so the whole bar reads on any backdrop.
+.stage-cars,
+.stage-deliveries,
+.stage-money,
+.stage-calendar {
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #2c3e50;
+}
 .stage-cars {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #cfd8e0;
+  color: #eaf1f7;
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
@@ -517,21 +529,21 @@ export default toNative(TestStage);
 }
 .stage-cars-val {
   min-width: 1.8em;
-  color: #8fa3b3;
+  color: #c3d2de;
 }
 .stage-deliveries {
-  color: #8fa3b3;
+  color: #eaf1f7;
   font-size: 13px;
   font-weight: 600;
 }
 .stage-money {
-  color: #f4d47a;
+  color: #ffd873;
   font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 .stage-calendar {
-  color: #b6c2cc;
+  color: #e3ecf4;
   font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
