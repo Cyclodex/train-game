@@ -44,6 +44,8 @@ export function createCameraController(
   };
   let pointerId: number | null = null;
   let moved = 0;
+  // Whether this gesture has taken pointer capture yet — only a real drag does.
+  let captured = false;
 
   return {
     state,
@@ -86,18 +88,32 @@ export function createCameraController(
     onPointerDown(e: PointerEvent) {
       pointerId = e.pointerId;
       moved = 0;
-      (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+      captured = false;
+      // Deliberately NOT capturing here. Pointer capture retargets every later
+      // pointer event — and the `click` derived from them — to the capturing
+      // element, so capturing on press meant a click that started on a switch,
+      // signal or depot was delivered to the viewport instead and the widget's
+      // handler never ran. Hit-testing is unaffected by capture, so the controls
+      // still looked perfectly clickable while doing nothing. Capture is taken
+      // below, once the gesture is actually a drag.
     },
     onPointerMove(e: PointerEvent) {
       if (pointerId !== e.pointerId) return;
       moved += Math.abs(e.movementX) + Math.abs(e.movementY);
       if (moved < PAN_SLOP) return;
+      // Now it is a pan: capture so it keeps tracking if the cursor leaves the
+      // viewport mid-drag.
+      if (!captured) {
+        (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+        captured = true;
+      }
       state.panning = true;
       state.camera = panBy(state.camera, e.movementX, e.movementY, worldSize(), viewportSize());
     },
     onPointerUp(e: PointerEvent) {
       if (pointerId !== e.pointerId) return;
       pointerId = null;
+      captured = false;
       // Cleared a tick later so the click that follows a drag sees `panning` and
       // is ignored, instead of landing on whatever tile the drag ended over.
       setTimeout(() => {
