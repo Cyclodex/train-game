@@ -634,6 +634,10 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       carSpeed: 0.5,
       carLength: 0.2,
       maxCars: s.traffic?.maxCars ?? 12,
+      // The scenario's OWN vehicle mix. Dropping it silently spawns cars only —
+      // and a map whose bay is bus-reserved then never parks anything at all, so
+      // a test of the parking seams runs green over an empty street.
+      mix: s.traffic?.mix,
     });
   }
 
@@ -669,6 +673,53 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }
     expect(steps).toBeGreaterThan(20); // cars really did leave their bays
     expect(worst).toBeGreaterThanOrEqual(-1e-9);
+  });
+
+  it("never teleports a body between the road and a bay", () => {
+    // THE SEAM BUG, as a property. `headProgress` names the car's NOSE; every
+    // manoeuvre curve names its CENTRE. Cross between them without converting and
+    // the sprite steps half its own length — forward as it peels off, backwards as
+    // it rejoins. On a coach that is a fifth of a tile, and it was reported as
+    // "the bus appears a few cm further back before it drives away".
+    //
+    // `/test/buslayby` is a single east-west street, so a body's position along
+    // the road is just `coord.x + progress`, whichever branch of `sample()` it
+    // came from — which is what makes the two sides of the seam comparable at all.
+    const sim = simFor("buslayby", 6);
+    const DT = 0.05;
+    // Generous: 0.5 tiles/sec of cruise is 0.025 a tick, so this is double the
+    // fastest legitimate step and still a fifth of the half-coach jump it catches.
+    const LIMIT = 0.05;
+    const prev = new Map<string, number>();
+    let biggest = 0;
+    let worstId = "";
+    let ticks = 0;
+    for (let i = 0; i < 4000; i++) {
+      sim.step(DT, () => false);
+      const seen = new Set<string>();
+      for (const chord of sim.sample()) {
+        const u = chord.units[0];
+        if (!u) continue; // a garaged car is not drawn at all
+        const f = u.front;
+        const x = f.pose
+          ? f.coord.x + f.pose.tx
+          : f.coord.x + (f.entryPort === Position.Left ? f.t : 1 - f.t);
+        seen.add(chord.id);
+        const before = prev.get(chord.id);
+        prev.set(chord.id, x);
+        if (before === undefined) continue;
+        const jump = Math.abs(x - before);
+        if (jump > biggest) {
+          biggest = jump;
+          worstId = chord.id;
+        }
+        ticks++;
+      }
+      // Drop the cars that despawned, so a recycled id cannot read as a jump.
+      for (const id of [...prev.keys()]) if (!seen.has(id)) prev.delete(id);
+    }
+    expect(ticks).toBeGreaterThan(500);
+    expect(`${worstId}:${biggest.toFixed(3)}`).toBe(`${worstId}:${Math.min(biggest, LIMIT).toFixed(3)}`);
   });
 
   it("cars drive to a car park, park, dwell, and leave again", () => {

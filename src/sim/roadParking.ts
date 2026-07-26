@@ -24,7 +24,7 @@
 import { Coordinates } from "@/types";
 import { Level } from "@/tiles/model";
 import { nearestUsableLaneIndex, usableLaneIndices, type VehicleClass } from "@/tiles/lanes";
-import { Port } from "./topology";
+import { Port, neighborCoord } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
@@ -269,6 +269,22 @@ export function createParkingPhases(deps: ParkingDeps) {
     return lo + parkRng() * Math.max(0, hi - lo);
   }
 
+  // NOSE ↔ CENTRE, the one conversion the parking layer needs and the one it is
+  // easy to forget. `headProgress` names where the car's FRONT is along the tile;
+  // every manoeuvre curve names where its MIDDLE is. Half a body length apart —
+  // a fifth of a tile for a coach, which is a visible jump.
+  //
+  // Measured in tile PROGRESS rather than driven arc, which is exact here: a
+  // parking row is only legal on a straight approach (`validateParking`), and a
+  // straight lane segment is one tile long.
+  // NEGATIVE IS ALLOWED and deliberate: a car peeling off toward the first bay of
+  // a packed rank has its nose barely onto the tile and its middle still on the
+  // one behind. `centrelineAt` is a plain lerp for a straight, so t < 0 is simply
+  // the lane extended backwards — the honest answer. Clamping it to 0 instead
+  // would put back a fifth of the very jump this exists to remove.
+  const halfBody = (car: Car): number => car.length / 2;
+  const centreT = (car: Car): number => car.headProgress - halfBody(car);
+
   function beginEntering(car: Car): void {
     // A HALT needs no manoeuvre at all: the bus is already where it is stopping.
     // Skipping straight to `parked` is not a shortcut — building a degenerate
@@ -281,8 +297,13 @@ export function createParkingPhases(deps: ParkingDeps) {
       return;
     }
     // Anchor the curve at where the car ACTUALLY is, so the sprite never jumps
-    // sideways as the swing starts.
-    const path = parking.pathFor(car.stall!, laneOffsetOf(car), car.headProgress);
+    // as the swing starts — and mind WHICH POINT OF THE CAR that is. The sim
+    // tracks the NOSE (`headProgress`, arc 0 of `sampleAtArc`); a manoeuvre curve
+    // carries the CENTRE (`sample()` lays the body ±half a length about it, and a
+    // stall pose is where a car RESTS, which is its middle). Anchoring nose-on-
+    // centre teleports the body half its own length — forward here, and backwards
+    // again when it rejoins the road, which is what a bus leaving a lay-by showed.
+    const path = parking.pathFor(car.stall!, laneOffsetOf(car), centreT(car));
     if (!path) {
       // The level changed under the claim — give the bay back and drive on.
       releaseStall(car);
@@ -305,8 +326,18 @@ export function createParkingPhases(deps: ParkingDeps) {
   // length, nothing more); `pullOutClear` is the wider one that decides when it is
   // safe to actually roll.
   function slotFree(car: Car, entryPort: Port, t: number): boolean {
-    const tileId = getCoordinatesId(car.path[car.headIndex].coord);
+    const head = car.path[car.headIndex];
+    const tileId = getCoordinatesId(head.coord);
     const front = t + CAR_GAP;
+    // The tile BEHIND me on this approach. A body long enough to straddle the
+    // seam has its tail there, and a per-tile comparison cannot see it: the check
+    // below skipped every point whose tileId was not mine, so a car standing
+    // across the seam read as nothing but its nose. Measured on /test/parkinglot:
+    // a car resumed from its bay four thousandths of a tile in, INSIDE a leaving
+    // neighbour whose tail lay on the tile behind (`1,2|t0.948`), and the two sat
+    // a tenth of a body through each other.
+    const behind = neighborCoord(head.coord, entryPort);
+    const behindId = behind ? getCoordinatesId(behind) : null;
     for (const other of cars) {
       if (other === car) continue;
       // Whether `other` is in the way of this slot RIGHT NOW.
@@ -350,11 +381,29 @@ export function createParkingPhases(deps: ParkingDeps) {
             },
           ]
         : bodyPoints(other);
+      // The other body's EXTENT along my approach, as one interval rather than a
+      // handful of points — a straddling body is only whole when its far side is
+      // carried across the seam. A point on the tile behind maps to `t - 1`, which
+      // is exact here: a straight lane segment is one tile long, and a parking row
+      // is only legal on a straight approach.
+      //
+      // Anchored on "does it have a point in MY lane on MY tile": that is what
+      // says the body is in my stream at all. Without it an upstream point alone
+      // would block on anything passing back there, oncoming traffic included.
+      let lo = Number.POSITIVE_INFINITY;
+      let hi = Number.NEGATIVE_INFINITY;
+      let mine = false;
       for (const p of pts) {
-        if (p.tileId !== tileId) continue;
-        if (p.entry !== entryPort) continue;
-        if (p.t > rear && p.t < front) return false;
+        if (p.tileId !== tileId || p.entry !== entryPort) continue;
+        mine = true;
+        lo = Math.min(lo, p.t);
+        hi = Math.max(hi, p.t);
       }
+      if (!mine) continue;
+      if (behindId !== null) {
+        for (const p of pts) if (p.tileId === behindId) lo = Math.min(lo, p.t - 1);
+      }
+      if (hi > rear && lo < front) return false;
     }
     return true;
   }
@@ -369,7 +418,7 @@ export function createParkingPhases(deps: ParkingDeps) {
   // ENTRANCE and then materialises at the exit — inside whatever had queued there
   // in the meantime. Measured as a 0.064 body overlap on /test/parkinglot.
   function seatAtExitSlot(car: Car): void {
-    const gExit = car.stall ? parking.exitFor(car.stall, 0) : null;
+    const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car)) : null;
     if (!gExit) return;
     const head = car.path[car.headIndex];
     const entryPort = gExit.from as Port;
@@ -379,7 +428,10 @@ export function createParkingPhases(deps: ParkingDeps) {
       { coord: head.coord, entryPort, exitPort: roadExitPort(level, head.coord, entryPort, cls) },
     ];
     car.headIndex = 0;
-    car.headProgress = gExit.endT;
+    // `endT` is where the curve leaves the car's CENTRE; the nose is half a body
+    // further on. `exitFor` was asked to keep that much room, so this stays on the
+    // tile — the clamp is a backstop for a bay authored right up against the seam.
+    car.headProgress = Math.min(0.999, gExit.endT + halfBody(car));
     const lane = nearestUsableLaneIndex(road, entryPort, kerbMostLane(road, entryPort, cls), cls);
     car.laneIndex = lane;
     car.targetLane = lane;
@@ -519,14 +571,14 @@ export function createParkingPhases(deps: ParkingDeps) {
       // Where this car will actually rejoin the road — the far end of its exit
       // curve if it drives out forwards, its own peel-off point if it reverses.
       // That is the slot to test and to claim.
-      const gExit = car.stall ? parking.exitFor(car.stall, 0) : null;
+      const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car)) : null;
       const seatPort = gExit ? (gExit.from as Port) : car.path[car.headIndex].entryPort;
-      const seatT = gExit ? gExit.endT : car.headProgress;
+      const seatT = gExit ? gExit.endT + halfBody(car) : car.headProgress;
       if (car.dwellLeft <= 0 && slotFree(car, seatPort, seatT)) {
         car.phase = "leaving";
         // A kerbside bay and a garage are driven out of nose-first; an echelon or
         // 90° bay is backed out of along the curve it came in on.
-        const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car)) : null;
+        const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car), halfBody(car)) : null;
         if (exit) {
           car.parkPath = exit.path;
           car.parkExiting = true;

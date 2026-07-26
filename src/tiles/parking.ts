@@ -781,8 +781,9 @@ function forwardExitEnd(
   pose: StallPose,
   size: number,
   kerbPx: number,
+  maxT: number,
 ): number {
-  return Math.min(0.999, pose.t + manoeuvreRunPx(row, size, kerbPx) / size);
+  return Math.min(maxT, pose.t + manoeuvreRunPx(row, size, kerbPx) / size);
 }
 
 // The curve a vehicle drives OUT of a stall nose-first: from the space, through a
@@ -796,11 +797,16 @@ export function forwardExitPath(
   size: number,
   kerbPx: number,
   laneOff: number,
+  // The furthest along the tile the curve may END, as `forwardExitEndT` takes it.
+  // The caller owns this because it depends on the VEHICLE: the curve carries the
+  // body's centre, so its nose needs half a length of tile left in front of it to
+  // be re-seated on the lane (see `seatAtExitSlot`).
+  maxT = 0.999,
 ): ManoeuvrePath {
   const { row: exitRow, pose } = exitStall(row, index, size, kerbPx);
   const from = exitRow.from;
   const ahead = oppositePort(from);
-  const tEnd = forwardExitEnd(row, pose, size, kerbPx);
+  const tEnd = forwardExitEnd(row, pose, size, kerbPx, maxT);
   const onLane = (t: number): Pt => {
     const p = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
@@ -854,9 +860,10 @@ export function forwardExitEndT(
   index: number,
   size: number,
   kerbPx: number,
+  maxT = 0.999,
 ): number {
   const { pose } = exitStall(row, index, size, kerbPx);
-  return forwardExitEnd(row, pose, size, kerbPx);
+  return forwardExitEnd(row, pose, size, kerbPx, maxT);
 }
 
 // How finely the manoeuvre curve is measured. 16 chords over a ~50px swing puts

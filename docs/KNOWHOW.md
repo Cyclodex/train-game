@@ -331,6 +331,30 @@ lean — prune as much as you add. This file only stays useful if every task ten
   · Do NOT grow the leaving footprint in as the car emerges: a follower brakes
     against what it can see, so starting at nothing means it arrives on top (0.077
     vs 0.028). Entering shrinks; leaving is full from tick one.
+- NOSE vs CENTRE — the conversion every seam between the road and a bay needs.
+  `headProgress` names where a car's FRONT is (arc 0 of `sampleAtArc`); every
+  manoeuvre curve names where its MIDDLE is (`sample()` lays the body ±half a
+  length about the curve point, and a stall pose is where a car RESTS). Cross
+  without converting and the sprite steps half its own length — forward as it
+  peels off, backwards as it rejoins, which is a fifth of a tile on a coach and
+  was reported as "the bus appears a few cm further back before it drives away".
+  · `beginEntering` anchors the curve at `headProgress − half`. NEGATIVE IS FINE:
+    a car peeling off toward the first bay of a packed rank has its middle still
+    on the tile behind, and `centrelineAt` is a plain lerp on a straight, so t < 0
+    is the lane extended backwards. Clamping it to 0 puts a fifth of the jump back
+    (measured: the lay-by test fails at 0.145 either way).
+  · `seatAtExitSlot` seats the nose at `endT + half`, and `exitFor` takes a
+    `headRoom` so the curve stops half a body short of the tile's end — otherwise
+    the nose has nowhere legal to sit and the clamp reintroduces the jump.
+- SLOT CHECKS MUST FOLLOW THE BODY ACROSS A TILE SEAM. `slotFree` compared the
+  other car's points TILE BY TILE, so a car standing across a seam read as its
+  nose alone — its tail was on the tile behind and simply not looked at. A car
+  then claimed a slot four thousandths of a tile in, inside a leaving neighbour
+  whose tail lay at `1,2|t0.948`, and they sat a tenth of a body through each
+  other. It now takes the other body's EXTENT along the approach, mapping a point
+  on the tile behind to `t − 1` (exact: a straight lane segment is one tile long
+  and a row is only legal on a straight). Anchored on "has a point in my lane on
+  MY tile", or an upstream point alone would block on oncoming traffic.
 - WHICH STALLS ARE DRIVEN OUT OF FORWARDS: `exitsForward(kind)` = garage | parallel.
   An echelon or 90° bay is REVERSED out of — that is the real motion, and replaying
   the entry curve backwards is exactly it, free. A KERBSIDE space is not: nobody
@@ -507,6 +531,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `/test/busstops` is the halt-vs-lay-by pair, asserted both ways: the mechanism (a
   halted bus reports a road body, a bayed one does not) and the consequence
   (traffic queues behind the halt and never behind the bay).
+  `/test/buslayby` is ONE straight and ONE bay, for watching a single coach do the
+  whole move. Worth its own entry precisely because `busstops` has two stops and a
+  city map has fifty vehicles: a seam bug that moves one bus half a body length is
+  invisible in company. It is what the nose/centre fix was found and pinned on.
+- A TEST'S SIM MUST TAKE THE SCENARIO'S OWN `traffic.mix`. `parking.spec.ts`'s
+  helper dropped it, so every map spawned cars only — and a map whose bay is
+  bus-reserved parked NOTHING. A seam test then ran green over an empty street
+  and reported the ticks it had counted, all of them cars driving past.
 - Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
   (no permit system) — that is what makes a car park look real, not a bug.
 - FOUR FILES, and the split is by QUESTION not by size:
@@ -739,7 +771,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
-- `npm run probe` = RENDER-level audit of all 73 scenarios in a real browser
+- `npm run probe` = RENDER-level audit of all 79 scenarios in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
@@ -852,7 +884,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and `tests/unit/levels/testScenarios.spec.ts` runs it over EVERY registered
   scenario. A deliberately-incomplete board needs an authored opt-out first —
   it is not just deleting three tiles.
-- The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
+- The gallery is 79 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 - PARKING landed 2026-07-26 (see the PARKING section), with `/test/parkingkerb`,
   `/test/parkinglot` and the `/test/parkcity` world. Deferred with reasons: a

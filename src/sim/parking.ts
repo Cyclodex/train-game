@@ -217,9 +217,15 @@ export interface ParkingRegistry {
   // The FORWARD curve out of a stall, plus where on the road it ends and which
   // approach that is. Null for the kinds that are REVERSED out of (see
   // `exitsForward`), which drive the curve they came in on backwards instead.
+  // `headRoom` is HALF the vehicle's body length in tiles. Every manoeuvre curve
+  // carries the body's CENTRE, but the sim tracks its NOSE (`headProgress`), so
+  // the curve has to stop half a length short of the tile's end or the car cannot
+  // be re-seated where it actually finished — and the sprite snaps backwards by
+  // exactly that much as it rejoins the road.
   exitFor(
     ref: StallRef,
     laneOff: number,
+    headRoom?: number,
   ): { path: ManoeuvrePath; endT: number; from: number } | null;
   // Everything the renderer needs to draw the parked fleet + a debug overlay:
   // stall id -> occupant car id.
@@ -422,7 +428,7 @@ export function createParkingRegistry(
       return manoeuvreStartT(info.row, ref.index, 1, info.kerb);
     },
 
-    exitFor(ref, laneOff) {
+    exitFor(ref, laneOff, headRoom = 0) {
       const info = infoOf(ref);
       if (!info || !exitsForward(info.row.kind)) return null;
       // A garage rejoins the road at its OUT ramp, which may be on the far bank;
@@ -434,13 +440,14 @@ export function createParkingRegistry(
         from === info.row.from
           ? info.kerb
           : kerbOffsetAt(level, parseCoordId(ref.tileId), from, 1);
-      const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}`;
+      const maxT = Math.max(0, 0.999 - headRoom);
+      const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}|${Math.round(headRoom * 1000)}`;
       let path = paths.get(key);
       if (!path) {
-        path = forwardExitPath(info.row, ref.index, 1, kerb, laneOff);
+        path = forwardExitPath(info.row, ref.index, 1, kerb, laneOff, maxT);
         paths.set(key, path);
       }
-      return { path, endT: forwardExitEndT(info.row, ref.index, 1, kerb), from };
+      return { path, endT: forwardExitEndT(info.row, ref.index, 1, kerb, maxT), from };
     },
 
     pathFor(ref, laneOff, tStart) {
