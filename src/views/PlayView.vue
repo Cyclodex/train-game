@@ -531,16 +531,25 @@ class PlayView extends Vue {
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
   // and promotes the generated board so the renderer and sim agree.
   private _resolved = (() => {
-    const fallbackLevel = this.board
-      ? this.board.level
-      : this.custom
-        ? this.custom.level
-        : DEFAULT_LEVEL;
-    const fallbackTrains = this.board
-      ? this.board.trains
-      : this.custom
-        ? this.custom.trains
-        : defaultTrains();
+    // CLONE the board before the game gets it. `this.board` is the scenario
+    // registry's module-level singleton (and `this.custom` can be the editor's
+    // live reactive level), while build-in-play writes through `applyEdits`
+    // into whatever level object the game holds. Handing the singleton over
+    // raw meant bought track was written INTO THE REGISTRY: browser Back /
+    // re-entering the URL remounted onto the mutated board with a fresh
+    // balance (free track), Retry's "pristine" snapshot was taken after the
+    // mutation, and /test rendered the same corrupted object. A clone makes
+    // the game's world private; the registry stays what the author wrote.
+    const fallbackLevel = structuredClone(
+      this.board ? this.board.level : this.custom ? this.custom.level : DEFAULT_LEVEL,
+    );
+    const fallbackTrains = structuredClone(
+      this.board
+        ? this.board.trains
+        : this.custom
+          ? this.custom.trains
+          : defaultTrains(),
+    );
     const fallbackLevelId = this.board
       ? `board:${this.board.id}`
       : this.custom

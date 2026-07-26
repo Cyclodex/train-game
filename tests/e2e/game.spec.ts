@@ -303,6 +303,48 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
+  test("tycoon: bought track never leaks into the scenario registry", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    // Regression: PlayView used to hand the game the scenario registry's
+    // module-level singleton, and applyEdits wrote bought track INTO it. A
+    // same-document remount (browser Back, re-entering the URL — the keyed
+    // router-view remounts without a reload) then landed on the mutated board
+    // with a fresh balance: free track. The board must come back as authored.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const balance = () =>
+      page.evaluate(() => (window as any).__game.money.balance as number);
+    const start = await balance();
+
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("2,1", 1).click();
+    await zone("5,1", 3).click();
+    await expect.poll(balance).toBe(start - 2000);
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(1);
+
+    // Same-document navigation away and back — deliberately NOT page.goto,
+    // which could full-load and mask the leak by resetting module state.
+    await page.evaluate(() => {
+      location.hash = "#/test";
+    });
+    await expect(page.locator(".level-tile")).toHaveCount(0);
+    await page.evaluate(() => {
+      location.hash = "#/play?mode=tycoon&board=buildgap";
+    });
+
+    // Fresh mount: the gap is a gap again, and the balance is the full budget.
+    await expect(
+      page.getByRole("button", { name: "Start", exact: true })
+    ).toBeVisible();
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
+    await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(0);
+    expect(await balance()).toBe(start);
+  });
+
   test("tycoon: lakevalley-open — build the ring, dispatch all three, win with the money accounted", async ({
     page,
   }) => {
