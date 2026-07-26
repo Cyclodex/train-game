@@ -270,10 +270,21 @@ export function assessGridlock(samples: GridlockSample[]): {
   };
 }
 
+// Why a train is standing still, if it is — the fare pin's third state. `by` is
+// the train that owns the block ahead (with its livery, so the pin can point at
+// the culprit in the board's own colour language); it is absent when the thing
+// holding this train is the player's own signal hold.
+export interface FareHold {
+  reason: BlockReason;
+  by?: string;
+  color?: string;
+}
+
 // One fare pin, drawn over a train's loco. EXACTLY one per train and nothing
 // else: the design doc's §5.5 lesson from Train Valley 2 is that counters,
 // cargo pins, demand badges and price tags all at once do not survive a board
-// that pans and zooms. A pin over a WAITING train is also its dispatch button.
+// that pans and zooms. A pin over a WAITING train is also its dispatch button;
+// a pin over a HELD one names what it is waiting for.
 export interface FareBadge {
   trainId: string;
   x: number; // world px — the loco's current position
@@ -281,6 +292,15 @@ export interface FareBadge {
   amount: number; // what the fare is worth at this instant
   waiting: boolean; // sitting in its station, click to send
   color: string; // the train's livery, so a pin names its train without text
+  held?: FareHold; // stopped by traffic — undefined while it is rolling
+}
+
+// Whether two hold records say the same thing. The pin's state is rebuilt every
+// frame; without this, a fresh object each tick would re-patch the DOM 60 times
+// a second for a train that is simply standing still.
+function sameHold(a: FareHold | undefined, b: FareHold | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.reason === b.reason && a.by === b.by && a.color === b.color;
 }
 
 // How far above the loco a fare pin floats, as a fraction of the tile. Enough to
@@ -819,12 +839,25 @@ export function createGame(
       const amount = fares.valueOf(def.id);
       const waiting = train.state === "waiting";
       const y = pos.y - tileSize * FARE_BADGE_LIFT;
+      // A WAITING train is not "held": it is the player's turn, and its pin is
+      // already the Send button. A train stopped at a DEAD END carries no block
+      // record either — the sim reports proceeding there (see assessGridlock),
+      // so the pin stays silent and the gridlock nudge covers that case.
+      const block = waiting ? undefined : sim.trainBlock(def.id);
+      const held: FareHold | undefined = block
+        ? {
+            reason: block.reason,
+            by: block.blockedBy,
+            color: block.blockedBy ? trainColors[block.blockedBy] : undefined,
+          }
+        : undefined;
       const existing = fareBadges.find(b => b.trainId === def.id);
       if (existing) {
         existing.x = pos.x;
         existing.y = y;
         existing.amount = amount;
         existing.waiting = waiting;
+        if (!sameHold(existing.held, held)) existing.held = held;
       } else {
         fareBadges.push({
           trainId: def.id,
@@ -833,6 +866,7 @@ export function createGame(
           amount,
           waiting,
           color: trainColors[def.id] ?? "#ffffff",
+          held,
         });
       }
     }

@@ -277,9 +277,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the road cars (see RENDER LAYOUT — a box-generating direct child becomes a grid
   ITEM and eats a tile). Positions are captured in `renderTrains` from the loco it
   already placed; a second sampling pass would be the same maths twice a frame.
+  They live in `components/FarePin.vue` (markup AND scoped styles) because
+  PlayView and TestStage both draw them and used to carry byte-identical copies.
 - The depot art is z-10 and a loco is z-4, so a train sitting in its shed is
   INVISIBLE. A waiting train therefore reads as an empty station — the fare pin
   IS the affordance, which is also how Train Valley presents it.
+- …which is why the pin's own z-index is 30, not 8. Board art it can land on:
+  cars 6/7, trains 10, DEPOT ART 10, signals 14, crossing booms 15, switch boxes
+  20, depot colour dot 1000. At z-8 a pin over a depot whose building sits above
+  the loco (one opening Bottom, e.g. `heldby` 1,0) was drawn UNDER the roof and
+  `elementFromPoint` at its centre returned the depot SVG — so the mode's only
+  dispatch affordance was both invisible and DEAD there, silently: the click
+  landed on the depot and the train stayed `waiting`. Measured 2026-07-26.
+- A pin has three states, and the third is `held`: `sim.trainBlock(id)` mapped to
+  `{reason, by, color}` in `updateFareBadges`. It rings itself in the BLOCKER's
+  livery and prints that train's id, because our interlocking reserves the whole
+  route to the next signal — a train can refuse to leave a platform over track it
+  is nowhere near, which without an explanation reads as a broken button (Train
+  Valley never holds a train, so players arrive expecting it to just go). A
+  WAITING train is deliberately not "held": its pin is already the Send button.
+  Demo: `/test/heldby`; sim contract pinned by `tests/unit/sim/heldBy.spec.ts`.
+- Rebuild the hold record every frame and Vue re-patches the pin 60×/s for a
+  train that is standing still — compare before assigning (`sameHold`).
+- A HELD train's `velocity` keeps braking down for a second or two AFTER its
+  position is already clamped at the stop line (`advance` caps the move, the
+  ramp does not snap). Assert POSITION (`trainProgress === 1`), never
+  `velocity === 0`, when testing "it stopped".
 - RETRY is a first-class Tycoon flow ("bank more next run"), so `reset()` is hit
   routinely here — it must hand back WAITING trains, the starting capital and
   un-settled fares. Verified end to end (win → reset → win again); the stale
@@ -647,6 +670,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
   after ANY renderer/layout change — it catches what a screenshot won't, across
   maps nobody opens. Ids come from walking the picker, so new scenarios are covered free.
+- `npm run shot` LEAKED ITS DEV SERVER on Windows until 2026-07-26: `shell:true`
+  means the child is cmd.exe, and `server.kill()` took only the wrapper, leaving
+  vite holding :5181. `waitForServer` then accepted that orphan's 200 on the next
+  run — so shots came out of WHATEVER CHECKOUT started it (found one a day old,
+  from a different worktree, silently photographing scenarios that did not exist
+  here: `window.__game` never appears and the run dies at the 30s waitForFunction
+  with no hint why). Now `taskkill /T` on exit plus a pre-flight refusal if
+  anything already answers on the port. If a shot ever times out on `__game`,
+  suspect a stale server on the port before suspecting your change.
+- `npm run shot -- <id> --send` clicks every fare pin after load. Tycoon boards
+  open with every train WAITING, so a plain shot of one is a still life; states
+  that only exist once trains roll (a pin held by another train's block) need it,
+  plus a `--wait` long enough to reach them (~3s on a 3×3 board) and short enough
+  that the runs have not finished.
 - `npm run shot` runs with DEBUG ON, and the debug reservation tint
   (`.tile-status--free`, an OPAQUE green) covers everything under it — ground art,
   terrain, depot art. A terrain change verified with a default shot looks like it
@@ -713,6 +750,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   reset/incremented → keep-right never fired even though it "looked" implemented.
 - Every feature ships `/test/<id>` scenario (CLAUDE.md rule); registry test fails CI
   on a broken map. Debug from the scenario, not the full level.
+- TRAP — `npm run test:e2e` CAN TEST SOMEBODY ELSE'S WORKTREE (2026-07-27, cost
+  half an hour). `playwright.config.ts` pins port **5180** with
+  `reuseExistingServer: !CI`, and every worktree shares that port. A dev server
+  left running by another worktree is silently REUSED, so your suite runs
+  against THAT tree's code. Symptom is uncanny: tests fail for features the
+  other tree simply does not have (`.score-calendar` "element(s) not found"
+  while the same page renders perfectly under `npm run dev`), AND unrelated
+  long-standing tests fail too (`.switch-box` on the default board) — the give-
+  away is that the SAME failure reproduces from a clean `master` worktree.
+  Check with `netstat -ano | grep :5180` before believing an e2e failure, and
+  kill stray servers (the WORKFLOW rule "kill bg dev servers when done" is
+  load-bearing, not tidiness).
 - `npm run probe`'s COVERAGE IS NONDETERMINISTIC — measured 76, 79 and 82 ids on
   three consecutive runs of an unchanged tree, and it still prints "all scenarios
   clean" either way. So a green probe is NOT proof your new scenario was probed;
