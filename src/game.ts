@@ -1143,7 +1143,16 @@ export function createGame(
   }
 
   return {
-    sim,
+    // A GETTER, not a snapshot. `reset()` calls `buildSims()`, which REPLACES
+    // the simulation object; `sim,` captured the one that existed when
+    // createGame returned, so after a Retry the handle answered from the dead
+    // sim while the game ran a new one. Nothing in `src/` reads it, which is
+    // why it went unnoticed — but the e2e tests and the live `window.__game`
+    // probe do, and they were reading a corpse (wrong answers, never an error).
+    // Same reason `signalTiles` below is a getter.
+    get sim() {
+      return sim;
+    },
     tileSize,
     depotColors,
     trainColors,

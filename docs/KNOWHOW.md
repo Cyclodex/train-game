@@ -252,9 +252,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The depot art is z-10 and a loco is z-4, so a train sitting in its shed is
   INVISIBLE. A waiting train therefore reads as an empty station — the fare pin
   IS the affordance, which is also how Train Valley presents it.
+- RETRY is a first-class Tycoon flow ("bank more next run"), so `reset()` is hit
+  routinely here — it must hand back WAITING trains, the starting capital and
+  un-settled fares. Verified end to end (win → reset → win again); the stale
+  `game.sim` handle it exposed is in VERIFY.
 - NOT built, deliberately (`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`):
   in-play build (phase 2, blocked on extracting `routeDrawController` from
   `EditorView`), reversing (§5.2), crashes (§2.2 G7), production chains (§5.1).
+- The DEFAULT board needs the player to throw switches: left alone, both trains
+  lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
+  identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
+  don't read it as a Tycoon routing bug when a headless run never completes.
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
@@ -458,7 +466,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
-- `npm run probe` = RENDER-level audit of all 68 scenarios in a real browser
+- `npm run probe` = RENDER-level audit of all 73 scenarios in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
@@ -485,6 +493,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   0/null. This gives EXACT numbers (lane offsets, landings, arm widths) where a
   screenshot only gives an impression; edit → HMR → re-query is seconds. Use it to
   FIND/diagnose; use `npm run shot` before/after to PROVE the paint changed.
+- ANYTHING `createGame` HANDS OUT THAT `reset()` REBUILDS MUST BE A GETTER.
+  `reset()` → `buildSims()` REPLACES `sim`/`roadSim`, so the `return { sim, … }`
+  shorthand froze the object that existed at construction: after a Retry the
+  handle answered from the DEAD sim while the game ran a new one. It fails
+  silently — nothing in `src/` reads `game.sim`, only the e2e specs and the
+  `window.__game` probe, so you get WRONG NUMBERS, never an error (measured:
+  handle said `parking` while the live sim had the train `waiting`). Fixed
+  2026-07-26 (`get sim()`, matching `get signalTiles()`); pinned by
+  `tests/unit/gameReset.spec.ts`. Never re-add a bare `sim,`; when a probe
+  straddles a reset, cross-check the handle against a value the closure owns
+  (`fareBadges`) — disagreement means you are holding a stale handle again.
+- The tab must be VISIBLE or rAF is paused and `renderTrains` never runs — so
+  `fareBadges`/`roadCars` stay EMPTY and the board looks broken when it is not.
+  A hidden pane still answers static queries (see the rAF/hidden-tab note below).
+  For behaviour across a reset, drive Playwright directly (`node_modules/
+  playwright/index.mjs`) rather than the hidden preview pane.
 - BROWSERS: run `npm run browsers` (NOT `npx playwright install`). `.npmrc` sets
   `ignore-scripts` so nothing is auto-downloaded, and on this machine
   `playwright install` HANGS: it fetches the 149MB zip in ~4s, logs "extracting
@@ -536,7 +560,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `PlayView` and `EditorView` end up with two copies of the trickiest
   interaction in the app. Then: gate on `ModeControls.build`, preview
   `tiles × cost`, spend, call `game.applyEdits`, grey out what `canEdit` refuses.
-- The gallery is 70 scenarios. `npm run probe` + the road sweep both iterate the
+- The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW
