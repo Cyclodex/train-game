@@ -72,7 +72,9 @@ import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { faredistance } from "@/levels/test/scenarios/faredistance";
+import { heldby } from "@/levels/test/scenarios/heldby";
 import { buildgap } from "@/levels/test/scenarios/buildgap";
+import { taxyear } from "@/levels/test/scenarios/taxyear";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
@@ -176,7 +178,7 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, buildgap, daily] },
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, taxyear, daily] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable

@@ -18,7 +18,13 @@ import {
   LAKEVALLEY_OPEN_LEAN_SPEND,
   LAKEVALLEY_OPEN_RING_PIECES,
   LAKEVALLEY_OPEN_PAYDAY,
+  LAKEVALLEY_OPEN_START_YEAR,
+  LAKEVALLEY_OPEN_SEC_PER_YEAR,
+  LAKEVALLEY_OPEN_TAX_PER_PIECE,
+  TAXYEAR_SEC_PER_YEAR,
+  TAXYEAR_TAX_PER_PIECE,
 } from "@/modes/tycoon";
+import { taxFor } from "@/sim/calendar";
 import { MODES, modeById } from "@/modes/index";
 import type { TrainDef } from "@/modes/types";
 import type { Counters } from "@/sim/objectives";
@@ -56,6 +62,7 @@ function counters(over: Partial<Counters> = {}): Counters {
     balance: 0,
     earned: 0,
     spent: 0,
+    trackSpent: 0,
     ...over,
   };
 }
@@ -217,6 +224,11 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
       "hands-off",
       "perfect-colours",
     ]);
+    // And NO calendar: the boards that fall through to the generic tuning are
+    // the one-mechanic test scenarios on a $3,000 budget, where an annual levy
+    // would both muddy the lesson and, on that purse, dominate it. The tax is
+    // opt-in per board exactly like every other dial here.
+    expect(setup.economy?.calendar).toBeUndefined();
   });
 
   it("funds the ring rebuild with room to fumble, and burns slower", () => {
@@ -263,12 +275,82 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     const stars = tycoonMode.setup(openCtx).objective.stars ?? [];
     const under = stars.find(s => s.id === "under-budget")!;
     const baron = stars.find(s => s.id === "rail-baron")!;
-    const lean = counters({ spent: 6000, tilesBuilt: 6 });
-    const full = counters({ spent: 7000, tilesBuilt: 7 });
+    const lean = counters({ trackSpent: 6000, tilesBuilt: 6 });
+    const full = counters({ trackSpent: 7000, tilesBuilt: 7 });
     expect(under.predicate(lean)).toBe(true);
     expect(baron.predicate(lean)).toBe(false);
     expect(under.predicate(full)).toBe(false);
     expect(baron.predicate(full)).toBe(true);
+  });
+
+  it("Under budget measures BUILD discipline, not time — the tax cannot cost it", () => {
+    // The trap this feature had to be steered around. The annual levy books
+    // through the same ledger, so it lands in `spent`; a star reading `spent`
+    // would be lost by DAWDLING rather than by over-building — i.e. it would
+    // stop measuring the build and start measuring time, which is the axis
+    // Payday already scores. It reads `trackSpent` for exactly that reason.
+    const stars = tycoonMode.setup(openCtx).objective.stars ?? [];
+    const under = stars.find(s => s.id === "under-budget")!;
+    // A lean build that took forever: $6,000 of track, $9,000 of upkeep on top.
+    const leanButSlow = counters({
+      trackSpent: 6000,
+      spent: 15000,
+      tilesBuilt: 6,
+    });
+    expect(under.predicate(leanButSlow)).toBe(true);
+    // And an over-build still loses it, tax or no tax.
+    expect(under.predicate(counters({ trackSpent: 7000, spent: 7000 }))).toBe(
+      false
+    );
+  });
+
+  it("runs a calendar, and levies upkeep only on player-laid track", () => {
+    const cal = tycoonMode.setup(openCtx).economy?.calendar;
+    expect(cal).toEqual({
+      startYear: LAKEVALLEY_OPEN_START_YEAR,
+      secPerYear: LAKEVALLEY_OPEN_SEC_PER_YEAR,
+      taxPerTrackPiecePerYear: LAKEVALLEY_OPEN_TAX_PER_PIECE,
+    });
+    // Measured win times through the real UI, and the levies each line pays at
+    // this dial. A levy has to land at least TWICE in a WINNING run: at 20s/year
+    // the prompt line finished inside its second year and paid once, which reads
+    // as a one-off fee rather than a clock. That measurement is what these
+    // numbers are, so they are pinned here rather than left to taste.
+    const levies = (winSec: number) =>
+      Math.floor(winSec / LAKEVALLEY_OPEN_SEC_PER_YEAR);
+    const full = taxFor(cal!, LAKEVALLEY_OPEN_RING_PIECES);
+    const lean = taxFor(cal!, LAKEVALLEY_OPEN_RING_PIECES - 1);
+    expect(levies(35)).toBeGreaterThanOrEqual(2);
+
+    const promptTax = levies(35) * full;
+    const leanTax = levies(75) * lean;
+    const dawdleTax = levies(95) * full;
+
+    // "Hurry": dawdling costs several times what a prompt run does.
+    expect(dawdleTax).toBeGreaterThan(2 * promptTax);
+    // "Build lean" is a real trade, not a free win: the lean line saves $1,000
+    // of capital up front and gives more than that back in upkeep, because it
+    // runs slower.
+    expect(leanTax - promptTax).toBeGreaterThan(1000);
+    // NO LINE MAY RUN THE CAPITAL DRY — and the margin has to be a whole spare
+    // piece of track, not merely positive. There is no bankruptcy state yet
+    // (deliberately, §8), so a line that cannot afford a rescue build soft-locks
+    // silently, which is the worst thing this dial can buy. Measured on CAPITAL
+    // ALONE: counting the fares would let a line be rescued by income that only
+    // arrives at the end, long after the player needed the money. $200/piece
+    // failed exactly here (the dawdling line reached −$400).
+    const left = (track: number, tax: number) =>
+      LAKEVALLEY_OPEN_BALANCE - track - tax;
+    for (const margin of [
+      left(7000, promptTax),
+      left(6000, leanTax),
+      left(7000, dawdleTax),
+    ]) {
+      expect(margin).toBeGreaterThanOrEqual(1000);
+    }
+    // And the upkeep on a prompt full rebuild outweighs what that run earns —
+    // the sentence the mechanic exists to say.
+    expect(promptTax).toBeGreaterThan(LAKEVALLEY_OPEN_PAYDAY);
   });
 
   it("Payday reads gross income and sits above the all-floors payout", () => {
@@ -282,7 +364,30 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     ).toBe(false);
     // Measured in a real browser on this board (see the constant's comment):
     // every fare left to rot to its floor pays $611, and a run sent 60s late
-    // banks $1,140. The star must not be earnable by dawdling.
+    // banks $1,140. The star must not be earnable by dawdling — and it is
+    // unaffected by the tax, which eats the BALANCE and never `earned`.
     expect(LAKEVALLEY_OPEN_PAYDAY).toBeGreaterThan(1140);
+  });
+});
+
+// The feature-test board for the second clock (project rule: every mechanic
+// ships a scenario that shows it in isolation).
+describe("tycoon per-board tuning (taxyear)", () => {
+  it("dials the calendar for WATCHING: a short year and a visible levy", () => {
+    const setup = tycoonMode.setup({ ...ctx, levelId: "test:taxyear" });
+    const cal = setup.economy?.calendar;
+    expect(cal?.secPerYear).toBe(TAXYEAR_SEC_PER_YEAR);
+    expect(cal?.taxPerTrackPiecePerYear).toBe(TAXYEAR_TAX_PER_PIECE);
+    // Faster than the board it teaches for, so a levy lands while you are still
+    // looking at the balance...
+    expect(TAXYEAR_SEC_PER_YEAR).toBeLessThan(LAKEVALLEY_OPEN_SEC_PER_YEAR);
+    // ...and the purse survives several years of it, so the demonstration does
+    // not soft-lock before the point lands.
+    const twoPieces = taxFor(cal!, 2);
+    expect(setup.economy!.startingBalance! - 2000).toBeGreaterThan(5 * twoPieces);
+  });
+
+  it("reaches the same tuning from /play and from /test", () => {
+    expect(tuningFor("board:taxyear")).toBe(tuningFor("test:taxyear"));
   });
 });

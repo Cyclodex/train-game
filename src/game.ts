@@ -35,6 +35,13 @@ import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
 import { createEconomy, createFareBook, TRACK_COST_PER_TILE } from "@/sim/economy";
+import {
+  CalendarSetup,
+  calendarAt,
+  leviesDue,
+  levyYear,
+  taxFor,
+} from "@/sim/calendar";
 import { RoadFrame } from "@/sim/road";
 
 export interface TrainDef {
@@ -191,6 +198,20 @@ export interface MoneyState {
   balance: number;
   earned: number;
   spent: number;
+  // Of `spent`, the part that went on TRACK (net of bulldoze refunds). Split out
+  // because `spent` also carries the annual tax now, and "how disciplined was
+  // the build" must not become "how fast were you" — see Counters.trackSpent.
+  trackSpent: number;
+  // The second clock (design doc §1.3), all inert when the mode's economy names
+  // no calendar: `dateLabel` is "" and the HUD renders no calendar row at all.
+  dateLabel: string; // "Feb 1832"
+  // What one year's upkeep costs at the CURRENT network size — the figure Train
+  // Valley shows beside the capital. Falls when you bulldoze.
+  taxPerYear: number;
+  // Lifetime tax paid this run. Also the HUD's flash key: a levy changes it, so
+  // keying the calendar row on it replays the animation exactly once per levy
+  // (and a zero levy, on a board where nothing was built, correctly does not).
+  taxPaid: number;
 }
 
 // Whether the board has jammed. `sec` is how long every runnable train has been
@@ -254,10 +275,21 @@ export function assessGridlock(samples: GridlockSample[]): {
   };
 }
 
+// Why a train is standing still, if it is — the fare pin's third state. `by` is
+// the train that owns the block ahead (with its livery, so the pin can point at
+// the culprit in the board's own colour language); it is absent when the thing
+// holding this train is the player's own signal hold.
+export interface FareHold {
+  reason: BlockReason;
+  by?: string;
+  color?: string;
+}
+
 // One fare pin, drawn over a train's loco. EXACTLY one per train and nothing
 // else: the design doc's §5.5 lesson from Train Valley 2 is that counters,
 // cargo pins, demand badges and price tags all at once do not survive a board
-// that pans and zooms. A pin over a WAITING train is also its dispatch button.
+// that pans and zooms. A pin over a WAITING train is also its dispatch button;
+// a pin over a HELD one names what it is waiting for.
 export interface FareBadge {
   trainId: string;
   x: number; // world px — the loco's current position
@@ -265,6 +297,15 @@ export interface FareBadge {
   amount: number; // what the fare is worth at this instant
   waiting: boolean; // sitting in its station, click to send
   color: string; // the train's livery, so a pin names its train without text
+  held?: FareHold; // stopped by traffic — undefined while it is rolling
+}
+
+// Whether two hold records say the same thing. The pin's state is rebuilt every
+// frame; without this, a fresh object each tick would re-patch the DOM 60 times
+// a second for a train that is simply standing still.
+function sameHold(a: FareHold | undefined, b: FareHold | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.reason === b.reason && a.by === b.by && a.color === b.color;
 }
 
 // How far above the loco a fare pin floats, as a fraction of the tile. Enough to
@@ -351,6 +392,12 @@ export interface Game {
   roadFrame: RoadFrame;
   start(): void;
   stop(): void;
+  // Step the world by `dt` SIM seconds without rendering — what the rAF frame
+  // calls, exposed so behaviour can be driven headlessly. `game.sim.step()`
+  // moves the trains alone; this also runs the fares, the annual levy, the
+  // objective tracker and the road, so anything that only happens in the loop
+  // (the second clock, most of all) is testable without a browser.
+  advance(dt: number): void;
   // Move Ready -> Playing (the Start button).
   startObjective(): void;
   // Win/Lose -> Ready with the same seed, for Retry (a true do-over).
@@ -797,12 +844,25 @@ export function createGame(
       const amount = fares.valueOf(def.id);
       const waiting = train.state === "waiting";
       const y = pos.y - tileSize * FARE_BADGE_LIFT;
+      // A WAITING train is not "held": it is the player's turn, and its pin is
+      // already the Send button. A train stopped at a DEAD END carries no block
+      // record either — the sim reports proceeding there (see assessGridlock),
+      // so the pin stays silent and the gridlock nudge covers that case.
+      const block = waiting ? undefined : sim.trainBlock(def.id);
+      const held: FareHold | undefined = block
+        ? {
+            reason: block.reason,
+            by: block.blockedBy,
+            color: block.blockedBy ? trainColors[block.blockedBy] : undefined,
+          }
+        : undefined;
       const existing = fareBadges.find(b => b.trainId === def.id);
       if (existing) {
         existing.x = pos.x;
         existing.y = y;
         existing.amount = amount;
         existing.waiting = waiting;
+        if (!sameHold(existing.held, held)) existing.held = held;
       } else {
         fareBadges.push({
           trainId: def.id,
@@ -811,6 +871,7 @@ export function createGame(
           amount,
           waiting,
           color: trainColors[def.id] ?? "#ffffff",
+          held,
         });
       }
     }
@@ -1034,11 +1095,19 @@ export function createGame(
   const economySetup = setup.economy;
   const economy = economySetup ? createEconomy(economySetup) : null;
   const fares = economySetup ? createFareBook(economySetup.fares ?? {}) : null;
+  // The second clock. Present only when the mode's tuning named one, so every
+  // untuned board (and every mode without an economy) keeps exactly the HUD and
+  // the ledger it had before the calendar existed.
+  const calendar: CalendarSetup | null = economySetup?.calendar ?? null;
   const money = reactive({
     enabled: !!economy,
     balance: economy?.balance ?? 0,
     earned: 0,
     spent: 0,
+    trackSpent: 0,
+    dateLabel: calendar ? calendarAt(calendar, 0).label : "",
+    taxPerYear: 0,
+    taxPaid: 0,
   }) as MoneyState;
   const fareBadges = reactive([]) as FareBadge[];
   // How long the board has been jammed, and whether that has passed the point
@@ -1054,6 +1123,39 @@ export function createGame(
     money.balance = economy.balance;
     money.earned = economy.earned;
     money.spent = economy.spent;
+    money.trackSpent = trackSpentTotal;
+    money.taxPaid = taxPaidTotal;
+    if (calendar) {
+      money.dateLabel = calendarAt(calendar, economy.clock).label;
+      money.taxPerYear = taxFor(calendar, tilesBuiltTotal);
+    }
+  }
+
+  // --- the annual levy (the second clock) ------------------------------------
+  //
+  // Charged in whole years off the LEDGER's clock, which only advances while the
+  // objective is live — so nothing accrues behind the Ready card, where dt is 0
+  // anyway. A `while` rather than an `if` because one frame at 4x speed (or a
+  // headless `advance()` with a big dt) can cross more than one year boundary,
+  // and a skipped levy would be silent free money.
+  //
+  // The amount is read at the moment the levy falls due, so track bought during
+  // the year is taxed for that year and track bulldozed before year end is not.
+  // A levy larger than the balance takes what is there rather than being refused
+  // outright: `spend` declines an unaffordable amount, which would make being
+  // broke FREE. Hitting zero is not a fail state — bankruptcy is its own
+  // decision and deliberately not in this step (design doc §8 item 1).
+  function collectTax() {
+    if (!economy || !calendar) return;
+    const due = leviesDue(calendar, economy.clock);
+    while (leviesBilled < due) {
+      leviesBilled += 1;
+      const owed = Math.min(taxFor(calendar, tilesBuiltTotal), economy.balance);
+      if (owed > 0) {
+        economy.spend(owed, "tax", `${levyYear(calendar, leviesBilled)} upkeep`);
+        taxPaidTotal += owed;
+      }
+    }
   }
 
   // Inject a scheduled train into the live sim. The colour/sprite resolution is
@@ -1087,6 +1189,13 @@ export function createGame(
   // same way the manual-signal totals are.
   let tilesBuiltTotal = 0;
   let lastTilesBuiltTotal = 0;
+  // Money committed to track, net of bulldoze refunds — kept beside the piece
+  // count it moves with, and reported as an ABSOLUTE (see Observation).
+  let trackSpentTotal = 0;
+  // The second clock's bookkeeping: how many annual levies have been billed, and
+  // what they came to. Both zeroed by reset(), like the ledger itself.
+  let leviesBilled = 0;
+  let taxPaidTotal = 0;
 
   function refreshObjective() {
     Object.assign(objective, tracker.state());
@@ -1132,6 +1241,7 @@ export function createGame(
         balance: economy.balance,
         earned: economy.earned,
         spent: economy.spent,
+        trackSpent: trackSpentTotal,
       }),
     };
   }
@@ -1141,6 +1251,54 @@ export function createGame(
   const deliveries = ref(0);
   let raf = 0;
   let last = 0;
+
+  // One step of the WORLD, in already-scaled sim seconds — everything the rAF
+  // frame does except drawing. Extracted so behaviour can be driven headlessly
+  // (unit tests, probes): a hidden browser pane runs no requestAnimationFrame,
+  // so anything that only happens inside `frame()` cannot be observed there at
+  // all (KNOWHOW → the rAF/hidden-tab trap). Purely a split of the old frame
+  // body; the order of operations is unchanged.
+  function advance(scaled: number) {
+    clock += scaled;
+    // Advance the predefined spawn schedule only while the objective is live,
+    // so the schedule clock aligns with the scored elapsed time (and nothing
+    // spawns on the Ready screen). Each due train is injected into the sim.
+    let spawnedDelta = 0;
+    if (objective.phase === "playing") {
+      for (const def of spawner?.step(scaled) ?? []) {
+        injectTrain(def);
+        spawnedDelta += 1;
+      }
+      // Fares decay in sim time, and — the point of the whole mode — they
+      // decay while a train is still WAITING in its station, not only in
+      // transit. Gated on the objective being live so nothing ticks away
+      // behind the Ready screen (dt is already 0 there, this is belt and braces
+      // for a mode with no start overlay).
+      economy?.tick(scaled);
+      fares?.tick(scaled);
+      // The other clock, on the same gate and for the same reason: no upkeep
+      // accrues on a level the player has not started.
+      collectTax();
+    }
+    const obs = handleEvents(sim.step(scaled));
+    obs.spawnedDelta = spawnedDelta;
+    // A crossing is closed while a train reserves or sits on that tile.
+    roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
+    // Fold the road's crossing-flow snapshot into the observation so the
+    // objective layer can score patience + throughput (Crossing Keeper). The
+    // automatic crossing can't produce an incident, so the delta stays 0.
+    const rf = roadSim.frame();
+    obs.maxCarWaitSec = rf.maxCarWaitSec;
+    obs.carsDelivered = rf.carsDelivered;
+    obs.crossingIncidentDelta = 0;
+    roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
+    roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
+    roadFrame.carsDelivered = rf.carsDelivered;
+    tracker.observe(obs, scaled);
+    refreshObjective();
+    refreshMoney();
+    updateGridlock(scaled);
+  }
 
   function frame(now: number) {
     const dt = last ? (now - last) / 1000 : 0;
@@ -1154,43 +1312,7 @@ export function createGame(
       // won. Freezing dt keeps sampling and rendering intact, and stops the
       // scored clock running on a screen the player has not answered yet.
       const waitingToStart = mode.hud.startOverlay && objective.phase === "ready";
-      const scaled = waitingToStart ? 0 : dt * speed.value;
-      clock += scaled;
-      // Advance the predefined spawn schedule only while the objective is live,
-      // so the schedule clock aligns with the scored elapsed time (and nothing
-      // spawns on the Ready screen). Each due train is injected into the sim.
-      let spawnedDelta = 0;
-      if (objective.phase === "playing") {
-        for (const def of spawner?.step(scaled) ?? []) {
-          injectTrain(def);
-          spawnedDelta += 1;
-        }
-        // Fares decay in sim time, and — the point of the whole mode — they
-        // decay while a train is still WAITING in its station, not only in
-        // transit. Gated on the objective being live so nothing ticks away
-        // behind the Ready screen (dt is already 0 there, this is belt and braces
-        // for a mode with no start overlay).
-        economy?.tick(scaled);
-        fares?.tick(scaled);
-      }
-      const obs = handleEvents(sim.step(scaled));
-      obs.spawnedDelta = spawnedDelta;
-      // A crossing is closed while a train reserves or sits on that tile.
-      roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
-      // Fold the road's crossing-flow snapshot into the observation so the
-      // objective layer can score patience + throughput (Crossing Keeper). The
-      // automatic crossing can't produce an incident, so the delta stays 0.
-      const rf = roadSim.frame();
-      obs.maxCarWaitSec = rf.maxCarWaitSec;
-      obs.carsDelivered = rf.carsDelivered;
-      obs.crossingIncidentDelta = 0;
-      roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
-      roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
-      roadFrame.carsDelivered = rf.carsDelivered;
-      tracker.observe(obs, scaled);
-      refreshObjective();
-      refreshMoney();
-      updateGridlock(scaled);
+      advance(waitingToStart ? 0 : dt * speed.value);
     }
     renderTrains();
     updateRoadCars();
@@ -1350,10 +1472,16 @@ export function createGame(
 
     if (economy && refund > 0) {
       economy.earn(refund, "refund", `${refunded} tile${refunded === 1 ? "" : "s"}`);
-      refreshMoney();
     }
     // Net, so "buy >= N pieces" counts the railway you kept, not the churn.
+    // `trackSpent` nets by the same rule, so the two can never disagree about
+    // what the player kept — and so a levy is charged on the railway that is
+    // still standing.
     tilesBuiltTotal = Math.max(0, tilesBuiltTotal - refunded);
+    trackSpentTotal = Math.max(0, trackSpentTotal - refund);
+    // After the totals, not before: the mirror carries `trackSpent` and the
+    // upkeep rate now, and both are derived from what was just written.
+    refreshMoney();
     levelVersion.value++;
     return { ok: true, blocked: [] };
   }
@@ -1415,9 +1543,14 @@ export function createGame(
     if (!res.ok) return res; // refused — nothing spent, nothing counted
     if (economy && cost > 0) {
       economy.spend(cost, "build", `${pieces} tile${pieces === 1 ? "" : "s"}`);
-      refreshMoney(); // headless callers (unit tests) see the balance without a frame
+      trackSpentTotal += cost;
     }
     tilesBuiltTotal += pieces;
+    // AFTER the totals: the mirror derives `trackSpent` and the annual upkeep
+    // from them, so refreshing first would publish a rate for the railway that
+    // existed a line ago. (Headless callers — unit tests, probes — see the
+    // balance move without waiting for a frame.)
+    refreshMoney();
     // Record what was PAID for, so bulldoze can refund it and only it.
     for (const s of newSteps) boughtPieces.add(pieceKey(s.id, s.a, s.b));
     return res;
@@ -1480,6 +1613,7 @@ export function createGame(
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
     },
+    advance,
     startObjective() {
       tracker.start();
       refreshObjective();
@@ -1517,6 +1651,11 @@ export function createGame(
       lastGreenTotal = 0;
       tilesBuiltTotal = 0;
       lastTilesBuiltTotal = 0;
+      trackSpentTotal = 0;
+      // Retry re-opens the level on 1 January of its starting year: the levies
+      // already billed are forgotten with the capital they were paid out of.
+      leviesBilled = 0;
+      taxPaidTotal = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];
