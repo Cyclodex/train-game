@@ -353,10 +353,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
   refs between scenarios — both get handed to createGame and edited in play.
 - Tycoon tuning is PER BOARD: `tuningFor(levelId)` (`modes/tycoon.ts`) keys on
   the levelId TAIL — PlayView passes `board:<id>`, TestStage `test:<id>`, so
-  both routes into a board get the same game. lakevalley-open: $8,000 budget,
-  decay 10/s, stars Payday $1,100 / Under budget $6,000 / Rail baron 7 pieces
+  both routes into a board get the same game. lakevalley-open: $15,000 budget,
+  decay 5/s, stars Payday $1,500 / Under budget $6,000 / Rail baron 7 pieces
   (lean+baron mutually exclusive by arithmetic — TV1's own goal design). Every
   other board keeps the generic $3,000/20/s/payday-hands-off-colours.
+- AN OPENING LEVEL WANTS A LOOSE BUDGET, and steers with GOALS instead. TV1
+  hands you 100,000$ against a ~10,000$ ring. Ours was $8,000 vs a $7,000
+  rebuild (one spare piece) and that was too tight, because we have neither of
+  TV's safety nets: no bulldoze to refund a misdrag, and no bankruptcy state to
+  explain the dead end — a fumbled drag just soft-locks into Retry silently.
+  Discipline still gets rewarded because "Under budget" measures SPEND, which is
+  independent of what you were given.
+- PAYDAY MUST BE RE-MEASURED WHENEVER THE DECAY DIAL MOVES — it is the only goal
+  denominated in money that time eats. Same scripted prompt run banked $1,188 at
+  10/s and $1,763 at 5/s (max $2,200, all-floor $550), so a target tuned for one
+  dial is nearly free at the other. Measure with the lakevalley-open e2e (log
+  `end.counters.earned`), then set ~85% of it. The e2e now asserts Payday earned,
+  so a mis-tune fails loudly instead of quietly gifting a star.
 - THE RING IS THE PASSING LOOP, proved not vibed: the seeded assignment is a
   3-cycle, and a 3-cycle of depots over a TREE of single track deadlocks in
   every dispatch order (B<Y<R<B contradiction at the 1,2–2,2 needle). Don't

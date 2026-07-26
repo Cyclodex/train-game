@@ -145,13 +145,21 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     ]);
   });
 
-  it("funds the 7-piece ring rebuild with one spare piece, and burns slower", () => {
+  it("funds the ring rebuild with room to fumble, and burns slower", () => {
     const setup = tycoonMode.setup(openCtx);
     expect(setup.economy?.startingBalance).toBe(LAKEVALLEY_OPEN_BALANCE);
-    // Comfortable but not lavish: the designed rebuild plus exactly one spare.
-    expect(LAKEVALLEY_OPEN_BALANCE).toBe(
-      (LAKEVALLEY_OPEN_RING_PIECES + 1) * 1000
-    );
+    // This used to pin budget === rebuild + exactly one spare piece. That was
+    // the wrong shape for an OPENING level and the intent changed deliberately
+    // (playtested): TV1 gives 100,000$ against a ~10,000$ ring, because the
+    // first level teaches the verbs and steers with goals, not scarcity — and
+    // we have neither a bulldoze-refund nor a bankruptcy state, so one fumbled
+    // drag on a hairline budget soft-locks the board into Retry with no
+    // feedback. The floor asserted here is "several misdrags are survivable".
+    const rebuild = LAKEVALLEY_OPEN_RING_PIECES * 1000;
+    expect(LAKEVALLEY_OPEN_BALANCE).toBeGreaterThanOrEqual(rebuild * 2);
+    // Discipline is still scored — but on SPEND, which is independent of the
+    // budget, so a generous purse cannot buy the lean star.
+    expect(LAKEVALLEY_OPEN_LEAN_SPEND).toBeLessThan(rebuild);
     expect(setup.economy?.fares?.a.decayPerSec).toBe(LAKEVALLEY_OPEN_DECAY);
   });
 

@@ -366,7 +366,8 @@ test.describe("Train game", () => {
 
     const balance = () =>
       page.evaluate(() => (window as any).__game.money.balance as number);
-    expect(await balance()).toBe(8000);
+    const budget = await balance();
+    expect(budget).toBe(15000);
     await expect(page.locator(".fare-pin")).toHaveCount(3);
 
     // The choreography below assumes the seeded 3-cycle. Assert it first so a
@@ -389,17 +390,17 @@ test.describe("Train game", () => {
       page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
     await zone("2,4", 2).click(); // South=Bottom=2, West=Left=3
     await zone("6,4", 2).click(); // ring: 5 new pieces
-    await expect.poll(balance).toBe(3000);
+    await expect.poll(balance).toBe(budget - 5000); // the 5-piece ring run
     await page.keyboard.press("Escape");
     await zone("3,5", 3).click();
     await zone("2,5", 2).click(); // station entry from the ring ([E,S])
-    await expect.poll(balance).toBe(2000);
+    await expect.poll(balance).toBe(budget - 6000);
     await page.keyboard.press("Escape");
     await zone("2,4", 2).click();
     await zone("2,5", 2).click(); // station entry from the west side ([N,S])
-    await expect.poll(balance).toBe(1000);
+    await expect.poll(balance).toBe(budget - 7000);
     await page.keyboard.press("Escape");
-    expect(await balance()).toBe(1000); // Esc lays nothing chargeable
+    expect(await balance()).toBe(budget - 7000); // Esc lays nothing chargeable
     await page.getByTestId("build-toggle").click();
 
     // The bought junction renders and carries merged switch arms (a junction
@@ -462,8 +463,9 @@ test.describe("Train game", () => {
     expect(end.counters.delivered).toBe(3);
     expect(end.counters.spent).toBe(7000);
     expect(end.counters.earned).toBeGreaterThan(0);
-    expect(end.counters.balance).toBe(8000 - 7000 + end.counters.earned);
+    expect(end.counters.balance).toBe(budget - 7000 + end.counters.earned);
     expect(await balance()).toBe(end.counters.balance);
+    expect(end.stars["payday"]).toBe(true);
     expect(end.stars["rail-baron"]).toBe(true);
     expect(end.stars["under-budget"]).toBe(false);
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);

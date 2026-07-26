@@ -125,20 +125,36 @@ const GENERIC_TUNING: TycoonTuning = {
 // yellow station's T-junction entry at 2,5 (see the scenario file for the
 // geometry). The budget covers that with exactly one spare piece: comfortable,
 // not lavish. A lean 6-piece build also wins but needs a mid-run switch flip.
-export const LAKEVALLEY_OPEN_BALANCE = 8000;
+// The budget is deliberately GENEROUS — about twice the rebuild. Train Valley's
+// own level 1 hands you 100,000$ against a ~10,000$ ring, a tenfold cushion: the
+// opening level teaches the verbs and does its steering through GOALS, not
+// through scarcity. Ours was $8,000 (one spare piece) and that was too tight for
+// a first level, because we lack both of TV's safety nets — there is no bulldoze
+// to refund a misdrag, and no bankruptcy state to explain the dead end, so a
+// fumbled drag just soft-locks the board into Retry with no feedback. Discipline
+// is still rewarded, by the Under budget star, which measures SPEND and is
+// therefore unaffected by how much you were given.
+export const LAKEVALLEY_OPEN_BALANCE = 15000;
 // Slower burn than the generic dial: the fares tick while the player is still
-// buying track, and at 20/sec everything would sit at its floor before the
-// first train could possibly move. 10/sec keeps roughly half a fare alive
-// through a practised ~40s build-and-dispatch, so promptness stays worth money.
-export const LAKEVALLEY_OPEN_DECAY = 10;
+// buying track, and at 20/sec everything would sit at its floor before the first
+// train could possibly move. 5/sec (halved after playtesting — 10 still read as
+// rushed while learning the build tool) leaves the base fare alive for 120s on a
+// two-wagon train, so a first-timer can build deliberately and still be paid for
+// dispatching promptly.
+export const LAKEVALLEY_OPEN_DECAY = 5;
 // "Under budget": win while spending at most this — the lean 6-piece build.
 export const LAKEVALLEY_OPEN_LEAN_SPEND = 6000;
 // "Rail baron": buy at least the full 7-piece restoration.
 export const LAKEVALLEY_OPEN_RING_PIECES = 7;
-// "Payday": gross income target. Tuned against a played run (see the design
-// doc): a prompt build-then-dispatch banks ~$1,4xx of the $2,200 maximum; a run
-// that lets every fare hit its floor banks $550.
-export const LAKEVALLEY_OPEN_PAYDAY = 1100;
+// "Payday": gross income target, and the one star that has to be RE-MEASURED
+// whenever the decay dial moves — it is the only goal denominated in money that
+// time eats. Measured on the e2e's scripted prompt run (build, then dispatch all
+// three at once): $1,763 of the $2,200 maximum at 5/sec, where the same run
+// banked $1,188 at 10/sec. Letting every fare rot to its floor banks $550.
+// $1,500 is ~85% of the prompt run: a player who builds deliberately and sends
+// trains as they free up clears it, one who dawdles does not, and the e2e keeps
+// real headroom instead of balancing on the exact optimum.
+export const LAKEVALLEY_OPEN_PAYDAY = 1500;
 
 // Three goals that pull in different directions, Train Valley style (§1.2 M9 —
 // level 1 asks for an extra train, 46 track pieces AND $5,000, and you cannot
