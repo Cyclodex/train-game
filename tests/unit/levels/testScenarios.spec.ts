@@ -30,7 +30,9 @@ describe("feature test world", () => {
       // that traps a car with no way back to the road. None of them break a
       // render, so without this they ship green.
       it("has a valid parking layer", () => {
-        expect(validateParking(scenario.level)).toEqual([]);
+        // The grid matters: it is what tells a dead-end aisle (a car trap) from a
+        // street that simply runs off the edge of the world.
+        expect(validateParking(scenario.level, 200, scenarioGrid(scenario))).toEqual([]);
       });
 
       it("every train starts in a depot tile", () => {

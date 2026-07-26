@@ -398,7 +398,12 @@ describe("validateParking — the mistakes that would otherwise ship green", () 
         parking: { facility: "trap", rows: [{ from: Position.Left, kind: "perpendicular", count: 1 }] },
       },
     };
-    expect(validateParking(lvl).map(i => i.message).join()).toMatch(/no way back/);
+    // The grid says the aisle stops in the MIDDLE of the map, not at its edge —
+    // which is the whole difference between a car trap and a street that simply
+    // runs off the world.
+    expect(
+      validateParking(lvl, 200, { cols: 4, rows: 2 }).map(i => i.message).join(),
+    ).toMatch(/no way back/);
   });
 
   it("rejects more stalls than physically fit on a tile", () => {

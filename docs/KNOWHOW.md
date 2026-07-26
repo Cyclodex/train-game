@@ -345,6 +345,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
   FORWARD); rotating a rect overlaps its neighbour by 18px and lands on the tarmac.
 - `align` defaults to "pack" (row starts at the leading edge). "centre" on every
   tile of a long row leaves a car-sized hole of kerb at EVERY tile seam.
+- EDITOR TOOL (2026-07-26): the target is a KERB, not a tile edge and not a lane.
+  An edge wedge names a DIRECTION and covers the carriageway; on a two-way street
+  the two kerbs are reached from different approaches. So the hit strip is keyed
+  `(approach, side)` and DEDUPED BY `bankFor` — else a two-way tile offers four
+  hits for its two kerbs and you can author two ranks into one strip of tarmac.
+  The strip IS the pixels the bays will cover. Plain click paints the whole street
+  run (`setParkingRowRun`, clicked tile decides the state so a half-painted street
+  goes uniform); Ctrl+click does one tile via `toggleParkingRow` — a bare `set`
+  there means two clicks to change one tile's kind.
+  · The tool PREVENTS everything one cell + its neighbours can see (greyed kerb:
+    bend, junction, taper, overhang, far bank on a two-way) and REPORTS only
+    "car park has no way out", which is a property of a flood fill a road edit
+    three tiles away can invent. Verified in the editor: on a 2+2 arterial
+    parallel and angled are live, 90° is greyed — kerb parking genuinely caps
+    there at the 200px tile.
+  · `maxStallsPerTile("garage")` is a CEILING (400), never a default: a garage's
+    slots are not on the map, so "how many fit" is the wrong question.
+    `DEFAULT_GARAGE_CAPACITY` (16) is what the tool lays, and a reservation is
+    dropped on a garage — a whole building is not a disabled bay.
+  · Road edits run `pruneParkingRows`: redrawing a two-way street as one-way, or a
+    straight as a bend, otherwise orphans a row and the validator fires on a tile
+    the author never touched with the parking tool.
+  · `validateParking(level, tileSize, grid?)` — the way-out check needs the GRID.
+    Without it a kerb bay on the last tile of a border street reads as a car trap,
+    because "runs off the level" and "dead-ends mid-map" look identical from the
+    level alone. The registry spec passes `scenarioGrid`.
+  · TRAP: `isActiveItem`/`selectItem` need a `stall` branch beside the `terrain`
+    one. Several dock items share `tool: "parking"`, so without it every kind
+    lights up at once and picking one silently does nothing.
 - AUTHORING: a car park must LOOP back to the street. There is no U-turn in the
   lane model, so a dead-ended aisle is a car trap — `validateParking` rejects it,
   and `createRoadSim` filters in-grid openings on facility tiles out of BOTH

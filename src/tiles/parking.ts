@@ -214,6 +214,13 @@ export function stallIsHidden(kind: StallKind): boolean {
 // at module import and take the tab with it.
 export const MAX_GARAGE_CAPACITY = 400;
 
+// What a garage holds when nobody says. A car park's capacity is the number the
+// whole feature turns on — a facility that cannot fill never shows a driver being
+// turned away — so the default is a building you could plausibly fill, not the
+// ceiling. `maxStallsPerTile` answers "how many COULD fit", which is the wrong
+// question to answer with for a garage, whose slots are not on the map at all.
+export const DEFAULT_GARAGE_CAPACITY = 16;
+
 export function maxStallsPerTile(kind: StallKind, tileSize = 200, long = false): number {
   if (kind === "garage") return MAX_GARAGE_CAPACITY;
   return Math.floor(tileSize / stallPitchPx(kind, tileSize, long) + 1e-9);
@@ -254,16 +261,17 @@ export function rowFor(cell: TileCell | undefined, ref: StallRef): ParkingRow | 
 // NORTH kerb. Authoring both paints two sets of bays into the same pixels and
 // counts every space twice, so `validateParking` rejects it — and this is the
 // function that makes the clash visible.
-export function bankOf(row: ParkingRow): Port {
-  const side = rowSide(row);
+export function bankFor(from: Port, side: "right" | "left"): Port {
   // Right-of-travel in screen space (y down) is the port one quarter-turn
-  // CLOCKWISE from the direction of travel, i.e. from `from` itself: travelling
-  // east (from = Left) the right hand points south (Bottom = Left + 1 turn... in
-  // port order Top,Right,Bottom,Left the quarter-turn from Left is Top). Derive
-  // it from the travel heading rather than by table, so it cannot drift.
-  const travel = oppositePort(row.from);
-  return rotatePort(travel, side === "right" ? 1 : -1);
+  // CLOCKWISE from the direction of travel. Derived from the heading rather than
+  // by table, so it cannot drift.
+  return rotatePort(oppositePort(from), side === "right" ? 1 : -1);
 }
+
+export function bankOf(row: ParkingRow): Port {
+  return bankFor(row.from, rowSide(row));
+}
+
 
 // --- Geometry ----------------------------------------------------------------
 // Tile-local pixel space, the same the road layer paints in (`0 0 size size`).
@@ -789,7 +797,16 @@ export interface ParkingIssue {
 //
 // `tileSize` matters: every dimension here is a fraction of a tile, so "does this
 // bay fit" is only answerable against the size the board actually renders at.
-export function validateParking(level: Level, tileSize = 200): ParkingIssue[] {
+export function validateParking(
+  level: Level,
+  tileSize = 200,
+  // The map's extents. Needed only by the "a car park must have a way out" check,
+  // which cannot otherwise tell a dead-end aisle from a street that simply runs
+  // off the edge of the world — and a kerbside bay on the last tile of a border
+  // street is perfectly fine. Omitted, that one check is skipped rather than
+  // guessed at.
+  grid?: { cols: number; rows: number },
+): ParkingIssue[] {
   const issues: ParkingIssue[] = [];
   const add = (tileId: string, message: string) => issues.push({ tileId, message });
 
@@ -892,9 +909,11 @@ export function validateParking(level: Level, tileSize = 200): ParkingIssue[] {
   // end and despawns between the rows of stalls, or circles a pocket it cannot
   // leave. The sim already refuses to spawn or route to openings inside a car
   // park; this is the other half — proving the way out exists.
-  for (const f of facilitiesOf(level)) {
-    if (!facilityHasWayOut(level, f)) {
-      add([...f.tileIds].sort()[0], `car park "${f.label}" has no way back to the road network`);
+  if (grid) {
+    for (const f of facilitiesOf(level)) {
+      if (!facilityHasWayOut(level, f, grid)) {
+        add([...f.tileIds].sort()[0], `car park "${f.label}" has no way back to the road network`);
+      }
     }
   }
   return issues;
@@ -902,7 +921,11 @@ export function validateParking(level: Level, tileSize = 200): ParkingIssue[] {
 
 // Can a car driving anywhere in `f` reach a tile outside the facility, or the map
 // edge? A flood fill over the road port-graph from every access state.
-function facilityHasWayOut(level: Level, f: ParkingFacility): boolean {
+function facilityHasWayOut(
+  level: Level,
+  f: ParkingFacility,
+  grid: { cols: number; rows: number },
+): boolean {
   const seen = new Set<string>();
   const queue: { coord: Coordinates; entry: Port }[] = f.access.map(a => ({
     coord: a.coord,
@@ -921,10 +944,13 @@ function facilityHasWayOut(level: Level, f: ParkingFacility): boolean {
       if (!n) continue;
       const nId = getCoordinatesId(n);
       const nCell = level[nId];
-      // Running off into nothing is NOT a way out — it is the dead end itself.
-      // The sim refuses to route a car to an opening inside a car park precisely
-      // so that nobody drives into one and evaporates between the rows of stalls;
-      // the validator has to agree, or it would bless the map that does it.
+      // Driving off the EDGE OF THE MAP is a real way out — that is how every
+      // car leaves. Running into a hole in the middle of the map is not: it is
+      // the dead end itself, and the sim refuses to route a car to an opening
+      // inside a car park precisely so nobody drives into one and evaporates
+      // between the rows of stalls. Only the grid can tell the two apart.
+      const offGrid = n.x < 0 || n.y < 0 || n.x >= grid.cols || n.y >= grid.rows;
+      if (offGrid) return true;
       if (!nCell?.road?.length) continue;
       if (!f.tileIds.has(nId)) return true; // reached ordinary street
       queue.push({ coord: n, entry: oppositePort(exit) });
