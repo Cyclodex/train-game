@@ -448,6 +448,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (traffic queues behind the halt and never behind the bay).
 - Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
   (no permit system) — that is what makes a car park look real, not a bug.
+- FOUR FILES, and the split is by QUESTION not by size:
+  · `tiles/parking.ts` — where bays ARE (data + geometry, no state)
+  · `sim/parking.ts` — which are TAKEN (the registry; also owns `facilityOfTile`,
+    because "which car park is this tile part of?" is derived purely from the level
+    and BOTH the phase machine and the road graph need it)
+  · `sim/roadParking.ts` — what a car DOES about them (the phases)
+  · `sim/road.ts` — the traffic model, which now only wires the four together.
+  The value of the last split is the explicit `ParkingDeps` list: as closure state
+  there was no way to see how coupled parking and traffic were. Only two entries
+  are genuinely road.ts's — `bodyPoints` (walks a path by real driven arc length)
+  and `roadExitPort`. TRAP when moving code out of `createRoadSim`: a hoisted
+  `function` becomes a `const` from a destructure, so anything using it EARLIER in
+  the closure hits the TDZ. `facilityOfTile` did (`openingInsideLot` runs while the
+  spawn entries are built) and every road scenario threw.
 - TESTS: the sweep measures flow against MOVING vehicles (`movingCarCount`) and
   swaps `lateCrossings>0` for `parkCycles >= 3` on `PARKING_SCENARIOS` — parking is
   a CYCLE, not a sink, and that is the property to assert. `frontTiles` must skip

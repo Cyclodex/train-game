@@ -166,6 +166,11 @@ export interface StallInfo {
 export interface ParkingRegistry {
   facilities(): ParkingFacility[];
   facility(id: string): ParkingFacility | undefined;
+  // Which car park a tile belongs to, or null. Registry business rather than the
+  // sim's: it is derived purely from the level, and both the phase machine (has
+  // this car driven out of the car park it wanted?) and the road graph (is this
+  // opening INSIDE a car park, and therefore not a way off the map?) need it.
+  facilityOfTile(tileId: string): string | null;
   // Every facility that still has a stall this vehicle kind could take. The
   // router picks from these, so a full car park is avoided BEFORE a car sets off
   // rather than discovered on arrival.
@@ -251,6 +256,10 @@ export function createParkingRegistry(
 ): ParkingRegistry {
   const facilities = facilitiesOf(level);
   const byId = new Map(facilities.map(f => [f.id, f]));
+  // tile id -> the car park it belongs to. Built once; the level is static for a
+  // run, and a linear scan per lookup showed up in the tile-crossing hot path.
+  const facilityByTile = new Map<string, string>();
+  for (const f of facilities) for (const t of f.tileIds) facilityByTile.set(t, f.id);
 
   // Stall metadata, resolved once. The level is static for a run (live edits go
   // through game.applyEdits, which rebuilds the sims), so this never goes stale.
@@ -326,6 +335,7 @@ export function createParkingRegistry(
   return {
     facilities: () => facilities,
     facility: id => byId.get(id),
+    facilityOfTile: tileId => facilityByTile.get(tileId) ?? null,
     any: () => facilities.length > 0,
 
     openFacilities(kind) {
