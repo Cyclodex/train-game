@@ -96,10 +96,18 @@
         v-if="hud.money && dateLabel"
         :key="taxPaid"
         class="score-calendar"
-        title="The year, and this railway's annual upkeep"
+        :class="{ 'score-calendar--broke': taxUnaffordable }"
+        :title="calendarTitle"
       >
         📅 {{ dateLabel }}
         <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
+        <!-- The warning that keeps bankruptcy a decision rather than an
+             ambush: while it shows, bulldozing surplus track both refunds now
+             and lowers the bill. Same job as the gridlock nudge — name the
+             failure before it lands, and name the fix. -->
+        <span v-if="taxUnaffordable" class="score-tax-warn">
+          ⚠ can't pay next year
+        </span>
       </div>
       <div
         v-if="showCrossingFlow"
@@ -800,6 +808,14 @@ class PlayView extends Vue {
   }
   get taxPaid(): number {
     return this.game.money.taxPaid;
+  }
+  get taxUnaffordable(): boolean {
+    return this.game.money.taxUnaffordable;
+  }
+  get calendarTitle(): string {
+    return this.taxUnaffordable
+      ? "Next year's upkeep is more than you have — bulldoze track you don't need, or finish first"
+      : "The year, and this railway's annual upkeep";
   }
   get fareBadges(): FareBadge[] {
     return this.game.fareBadges;
@@ -1962,6 +1978,31 @@ export default toNative(PlayView);
 .score-tax {
   margin-left: 6px;
   color: #d9a3a3;
+}
+// Insolvency warning: the bill outgrew the balance. Loud on purpose — this is
+// the last moment bulldozing can still save the run.
+.score-calendar--broke {
+  color: #e2574c;
+
+  .score-tax {
+    color: #e2574c;
+  }
+}
+.score-tax-warn {
+  display: block;
+  margin-top: 2px;
+  color: #e2574c;
+  font-size: 12px;
+  animation: tax-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tax-warn-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 @keyframes tax-levy {
   0% {

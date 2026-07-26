@@ -368,9 +368,35 @@ export function boardIdOf(levelId: string): string {
   return i < 0 ? levelId : levelId.slice(i + 1);
 }
 
+// `bankrupt` — the feature-test board for the FAIL half of the second clock.
+// Where `taxyear` has a deep purse and exists to be watched, this one is tuned
+// so the upkeep is a countdown: a tight $5,000, an eight-second year, and $600
+// a piece. Close the two-tile gap ($2,000) and you can afford exactly two
+// levies; the third arrives around 24s and the railway folds. A prompt run
+// delivers well inside that, a dawdled one does not, and an over-built one
+// folds sooner still — with bulldoze as the way back, which is the whole reason
+// the HUD warns before the bill lands rather than after.
+export const BANKRUPT_BALANCE = 5000;
+export const BANKRUPT_SEC_PER_YEAR = 8;
+export const BANKRUPT_TAX_PER_PIECE = 600;
+
+const BANKRUPT_TUNING: TycoonTuning = {
+  startingBalance: BANKRUPT_BALANCE,
+  // The fares are not the point here either  borrow the opening level's
+  // slower burn so the TAX is what runs the clock down.
+  fareGrace: LAKEVALLEY_OPEN_GRACE,
+  stars: tycoonStars,
+  calendar: {
+    startYear: 1830,
+    secPerYear: BANKRUPT_SEC_PER_YEAR,
+    taxPerTrackPiecePerYear: BANKRUPT_TAX_PER_PIECE,
+  },
+};
+
 const TUNING_BY_BOARD: Record<string, TycoonTuning> = {
   "lakevalley-open": LAKEVALLEY_OPEN_TUNING,
   taxyear: TAXYEAR_TUNING,
+  bankrupt: BANKRUPT_TUNING,
 };
 
 export function tuningFor(levelId: string): TycoonTuning {
@@ -395,6 +421,13 @@ export const tycoonMode: GameMode = {
         // fare is already burning. Without this the tracker's live `active`
         // backlog counts down through zero into negatives.
         initialActiveTrains: ctx.trains.length,
+        // The tax's other half. Until it existed the only way to empty the
+        // purse was to over-spend on track, i.e. to make a mistake you could
+        // see; now TIME drains it too, and a board that silently stops
+        // responding to the build tool is the worst kind of dead end. Declared
+        // unconditionally because it is self-gating: no calendar ⇒ no levy ⇒ no
+        // shortfall ⇒ this can never fire.
+        fail: { onBankruptcy: true },
         stars: tuning.stars(maxPayoutOf(ctx.trains)),
       },
       economy: economyFor(ctx.trains, tuning),

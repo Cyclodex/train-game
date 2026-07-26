@@ -27,8 +27,10 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 //
 // The dials are tuned for WATCHING, not for balance (`TAXYEAR_TUNING` in
 // `modes/tycoon.ts`): a 10-second year and $300 a piece make each levy a step
-// you can see, and $9,000 means several years pass before anything soft-locks.
-// `lakevalley-open` is where the tax is tuned to actually bite.
+// you can see, and $9,000 is a deep enough purse that the point lands before
+// the money runs out. `lakevalley-open` is where the tax is tuned to bite, and
+// `/test/bankrupt` is where it is tuned to WIN — over-build here for long
+// enough and this board will fold too, but that is the other scenario's lesson.
 //
 // DELIBERATELY INCOMPLETE, like `buildgap`: the dangling ends either side of
 // the gap are the point, so `allowIncomplete` opts the registry validation out

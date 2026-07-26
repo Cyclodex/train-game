@@ -197,6 +197,16 @@ describe("tycoon mode", () => {
     expect(tycoonMode.controls.build).toBe(true);
     expect(tycoonMode.controls.dispatch).toBe(true);
   });
+
+  it("is the ONLY mode that can go bankrupt, and declares it unconditionally", () => {
+    // Declared for the whole mode rather than per board, because it is
+    // self-gating: no calendar ⇒ no levy ⇒ no shortfall ⇒ it cannot fire. The
+    // untuned board below has no calendar and still carries the flag.
+    expect(tycoonMode.setup(ctx).objective.fail?.onBankruptcy).toBe(true);
+    expect(tycoonMode.setup(ctx).economy?.calendar).toBeUndefined();
+    const canFold = MODES.filter(m => m.setup(ctx).objective.fail?.onBankruptcy);
+    expect(canFold).toEqual([tycoonMode]);
+  });
 });
 
 // Per-board tuning: the generic numbers hold everywhere except the boards that

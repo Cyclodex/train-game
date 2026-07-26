@@ -47,9 +47,11 @@
       <span
         v-if="money.enabled && money.dateLabel"
         class="stage-calendar"
+        :class="{ 'stage-calendar--broke': money.taxUnaffordable }"
         title="The year, and this railway's annual upkeep"
       >
         📅 {{ money.dateLabel }} · 🏛 ${{ money.taxPerYear.toLocaleString("en-US") }}/yr
+        <template v-if="money.taxUnaffordable"> ⚠</template>
       </span>
     </div>
 
@@ -533,6 +535,9 @@ export default toNative(TestStage);
   font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+.stage-calendar--broke {
+  color: #e2574c; // next year's bill is more than there is in hand
 }
 .level {
   display: grid;
