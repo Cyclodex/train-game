@@ -119,6 +119,29 @@
       <span class="build-toggle__icon">🛤️</span>
       <span>{{ buildArmed ? "Building — Esc finishes" : "Build" }}</span>
     </button>
+    <!-- Bulldoze rides alongside Build rather than inside it: they are opposite
+         verbs on the same board, and burying the undo in a sub-mode of the
+         thing that caused the mistake is exactly where a player will not look
+         for it. Only one can be armed at a time. -->
+    <button
+      v-if="canBuild"
+      class="build-toggle build-toggle--raze"
+      :class="{ 'build-toggle--on': razeArmed }"
+      data-testid="raze-toggle"
+      :title="razeToggleTitle"
+      @click="toggleRaze"
+    >
+      <span class="build-toggle__icon">🧨</span>
+      <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
+    </button>
+    <!-- The jam nudge. Collisions are impossible here by construction, so
+         DEADLOCK is the failure this game actually has, and without a word it
+         reads as the game having frozen. Not an overlay: the board stays live
+         so the fix (flip a switch) is one click away. -->
+    <div v-if="gridlocked" class="gridlock-nudge" data-testid="gridlock-nudge">
+      <span class="gridlock-nudge__icon">{{ gridlockIcon }}</span>
+      <span>{{ gridlockMessage }}</span>
+    </div>
     <div class="world">
     <div
       ref="viewport"
@@ -158,11 +181,15 @@
         :key="cell.key"
         class="level-tile"
         :data-coord="cell.key"
-        :class="{ 'level-tile--build-glow': buildArmed && buildGlowId === cell.key }"
+        :class="{
+          'level-tile--build-glow': buildArmed && buildGlowId === cell.key,
+          'level-tile--razeable': razeArmed && canRaze(cell.key),
+        }"
         :style="{
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
         }"
+        @click="onTileRaze(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <Tile
@@ -906,6 +933,69 @@ class PlayView extends Vue {
     this.buildArmed = false;
   }
 
+  // --- bulldoze --------------------------------------------------------------
+  // Armed separately from Build, and mutually exclusive with it: the two verbs
+  // both claim the left click on a tile, so only one can own it at a time.
+  razeArmed = false;
+
+  get razeToggleTitle(): string {
+    const how = "Click a piece of track to remove it.";
+    return this.game.money.enabled
+      ? `Bulldoze track — refunds what you paid for it. ${how}`
+      : `Bulldoze track. ${how}`;
+  }
+
+  toggleRaze(): void {
+    if (this.razeArmed) {
+      this.razeArmed = false;
+      return;
+    }
+    // Arming Bulldoze disarms Build through its own exit path, so a half-drawn
+    // route is abandoned rather than left pending behind the other tool.
+    if (this.buildArmed) this.toggleBuild();
+    this.razeArmed = true;
+  }
+
+  // Clicking a tile while Bulldoze is armed. Refusals (a depot, or track a
+  // train occupies or has reserved) are deliberately quiet on the board — the
+  // tile simply does not go — because the honest signal is the one the player
+  // can see: the train sitting on it.
+  onTileRaze(tileId: string): void {
+    if (!this.razeArmed || this.panning) return;
+    this.game.bulldoze(tileId);
+  }
+
+  // Whether a click here would actually remove something — drives the hover
+  // affordance, so the player can see which tiles are theirs to take back
+  // before clicking. Cheap: it reads the level, not the sim's reservations,
+  // because those change every frame and the truth is enforced by `bulldoze`.
+  canRaze(tileId: string): boolean {
+    const cell = this.level[tileId];
+    return !!cell && cell.role !== "depot" && cell.connections.length > 0;
+  }
+
+  get gridlocked(): boolean {
+    return this.game.gridlock.stuck;
+  }
+
+  get gridlockIcon(): string {
+    return this.game.gridlock.reason === "dead-end" ? "🛤️" : "🚦";
+  }
+
+  // Name the actual fix, which differs by cause: a deadlock frees on a switch,
+  // a dead end needs rails. Telling a player to flip switches at a severed line
+  // would send them hunting for a junction that cannot help.
+  get gridlockMessage(): string {
+    if (this.game.gridlock.reason === "dead-end") {
+      return this.canBuild
+        ? "A train has run out of track. Build the missing link — or bulldoze a wrong turn and try again."
+        : "A train has run out of track: the line does not reach its station.";
+    }
+    return this.canBuild
+      ? "Trains are waiting on each other. Flip a switch to let one through, or build a passing loop."
+      : "Trains are waiting on each other. Flip a switch to let one through.";
+  }
+
   // Live plan options for the route controller: the current world bounds and
   // the passable gate. Terrain (water/rock/mountain) AND tiles a train occupies
   // or has reserved are unplannable, so the preview can never offer a route
@@ -1410,6 +1500,63 @@ export default toNative(PlayView);
   background: linear-gradient(90deg, #f5d97a, #d6a93c);
   border-color: rgba(245, 217, 122, 0.8);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(245, 217, 122, 0.45);
+}
+// Bulldoze sits beside Build rather than under it. Offset so the pair reads as
+// two halves of one control strip.
+.build-toggle--raze {
+  transform: translateX(calc(-50% + 168px));
+}
+.build-toggle--raze.build-toggle--on {
+  color: #1a0e0e;
+  background: linear-gradient(90deg, #f2a488, #d9663f);
+  border-color: rgba(242, 164, 136, 0.8);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(217, 102, 63, 0.45);
+}
+// Only tiles that would actually go light up, so the affordance never promises
+// a removal the guard will refuse.
+.level-tile--razeable {
+  cursor: pointer;
+
+  &:hover::after {
+    content: "";
+    position: absolute;
+    inset: 6px;
+    border: 2px dashed rgba(217, 102, 63, 0.9);
+    border-radius: 10px;
+    background: rgba(217, 102, 63, 0.16);
+    pointer-events: none;
+    z-index: 5;
+  }
+}
+// The jam nudge: a strip under the score card, deliberately NOT an overlay —
+// the fix is a click on the board behind it.
+.gridlock-nudge {
+  position: fixed;
+  z-index: 2000;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 18px;
+  font: 600 14px/1.35 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #2a1a06;
+  background: linear-gradient(90deg, #ffd88a, #f5b942);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  animation: gridlock-in 0.25s ease-out;
+}
+.gridlock-nudge__icon {
+  font-size: 18px;
+}
+@keyframes gridlock-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
 }
 .build-toggle__icon {
   font-size: 18px;

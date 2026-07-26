@@ -17,6 +17,7 @@
 export type LedgerReason =
   | "fare" // a delivery paid out
   | "build" // track laid (phase 2)
+  | "refund" // track bulldozed — money back for pieces the player bought
   | "clearing" // scenery cleared (phase 3)
   | "tax" // periodic upkeep (phase 4)
   | "dispatch" // calling an extra train (phase 5)

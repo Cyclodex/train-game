@@ -714,3 +714,37 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Worktrees: node_modules usually resolves up to repo root (try tooling first). If
   junctioned, remove junction (`cmd /c rmdir`) BEFORE `git worktree remove` or it
   deletes the real install. Kill bg dev servers when done.
+
+## BULLDOZE + GRIDLOCK (2026-07-26)
+- REFUNDS MUST TRACK PURCHASES, not track. `boughtPieces` (`game.ts`) records the
+  connection keys `buildRoute` actually charged for; `bulldoze` refunds only
+  those. Without it every board's AUTHORED rail is a cash machine — you would
+  bulldoze the pre-laid ring for income. You may raze anything (bar a depot);
+  only what you bought pays back. Full refund by design: bulldoze exists so a
+  misdrag is not fatal. A demolition FEE belongs with phase 3 clearing costs.
+- Removal is the mirror of the new-junction trap: an arm can be left pointing at
+  an exit that no longer exists, and `connectionsToExitPort` answers NULL for
+  that (train stops dead). `bulldoze` re-derives `initialSwitches` for the tile
+  AND its neighbours rather than merging. Adding merges, removing replaces.
+- `bulldoze` keeps the CELL when it takes the rails, if terrain/road remain —
+  clearing track must not erase the ground under it (`isBlankCell` decides).
+- YOU CANNOT BUILD OR RAZE UNDER A TRAIN (same `editBlockers` guard as building)
+  — which is also the answer to the question additive-only edits were deferred
+  over. Consequence worth knowing: a train stranded at a dead end sits ON the
+  near anchor, so the rescue route must be drawn from the FAR side, terminating
+  one tile short of it; the join is edge adjacency, so that frees it. Pinned by
+  the "nowhere to go" e2e.
+- GRIDLOCK: collisions are impossible here, so DEADLOCK is the failure this game
+  actually has, and it is silent. `assessGridlock` (pure, `game.ts`) is the test;
+  the frame loop only supplies samples + clock. Rules: waiting/parked trains are
+  not in the question; a signal the PLAYER holds counts as neither stuck nor
+  active; and — the one that is easy to miss — a train at a DEAD END carries NO
+  block record at all (the sim notes a block only when `mayCross` refuses;
+  running out of rails takes the map-edge branch and reports proceeding), so
+  absent block info IS the severed-track case and must count as stuck. The nudge
+  names the fix per cause: switches free a deadlock, only rails fix a dead end.
+- TRAP: a HIDDEN browser pane runs NO requestAnimationFrame, so the game loop
+  does not tick — `elapsedSec` stays 0 and every train reads velocity 0. Any
+  "the board is frozen" observation made through the preview pane is worthless.
+  Verify frame-loop behaviour in e2e (Playwright composites) or make the logic
+  pure and unit-test it. Cost an hour of chasing a phantom deadlock.

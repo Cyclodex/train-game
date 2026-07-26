@@ -303,6 +303,108 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
+  test("tycoon: bulldoze takes back a misdrag, and pays only for what was bought", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    // Why this exists: with no refund and no bankruptcy state, one fumbled
+    // gesture on a tight budget silently soft-locked the board into Retry.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    const balance = () =>
+      page.evaluate(() => (window as any).__game.money.balance as number);
+    const tilesBuilt = () =>
+      page.evaluate(
+        () => (window as any).__game.objective.counters.tilesBuilt as number
+      );
+    const budget = await balance();
+
+    // Buy the two gap tiles.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("2,1", 1).click();
+    await zone("5,1", 3).click();
+    await expect.poll(balance).toBe(budget - 2000);
+    await expect.poll(tilesBuilt).toBe(2);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+
+    // Bulldoze one of them back: money returns and the rails go.
+    await page.getByTestId("raze-toggle").click();
+    await page.locator('.level-tile[data-coord="3,1"]').click();
+    await expect.poll(balance).toBe(budget - 1000);
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
+    // Net, so a "buy >= N pieces" star cannot be farmed by build/bulldoze
+    // cycling. (Asserted here rather than in a unit test: the counter reaches
+    // the objective through the per-frame observation, which needs real frames.)
+    await expect.poll(tilesBuilt).toBe(1);
+
+    // Bulldozing AUTHORED track removes it but pays nothing — otherwise every
+    // board's pre-laid rail would be a cash machine.
+    const beforeAuthored = await balance();
+    await page.locator('.level-tile[data-coord="1,1"]').click();
+    await expect(page.locator('.level-tile[data-coord="1,1"] .tile')).toHaveCount(0);
+    expect(await balance()).toBe(beforeAuthored);
+
+    // And a depot is the level's furniture, not the player's track.
+    await page.locator('.level-tile[data-coord="0,1"]').click();
+    await expect(page.locator('.level-tile[data-coord="0,1"] .tile')).toHaveCount(1);
+  });
+
+  test("tycoon: a train with nowhere to go says so", async ({ page }) => {
+    test.setTimeout(90000);
+    // The nudge for the failure this game actually has. Collisions are
+    // impossible by construction, so a jam is silent: the board just stops, and
+    // without a word it reads as the game having frozen.
+    //
+    // This has to be an e2e. The detector runs in the rAF loop, and a hidden
+    // browser pane runs no frames at all — an earlier attempt to verify it in
+    // the preview "showed" three motionless trains that were merely a frozen
+    // loop, proving nothing.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    // Send the train at the gap WITHOUT building it: it runs to the end of the
+    // rails and stops there for good.
+    await page.locator(".fare-pin").click();
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+
+    const nudge = page.getByTestId("gridlock-nudge");
+    await expect(nudge).toBeVisible({ timeout: 45000 });
+    // It must name the right fix: rails, not switches — flipping a switch at a
+    // severed line sends the player hunting for a junction that cannot help.
+    await expect(nudge).toContainText("run out of track");
+    expect(
+      await page.evaluate(() => (window as any).__game.gridlock.reason)
+    ).toBe("dead-end");
+
+    // And it clears once the way is open. Note WHERE the route is drawn from:
+    // the stranded train is parked on 2,1, the near side of the gap, and you
+    // cannot build from under a train — that tile is occupied, so the planner
+    // will not start (or finish) a route there. The rescue is drawn from the
+    // FAR side instead, terminating one tile short of the train: laying 4,1 and
+    // 3,1 gives 3,1 a west port facing 2,1's east port, which joins the two and
+    // frees the train. So the nudge's advice is followable, just not from the
+    // tile the player is staring at.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("5,1", 3).click(); // west edge of the east stub: the open end
+    await zone("3,1", 3).click(); // west edge of 3,1: one tile short of the train
+    await expect(nudge).toBeHidden({ timeout: 20000 });
+    // Freed, not merely un-nudged: it goes on to deliver.
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__game.objective.phase), {
+        timeout: 45000,
+        intervals: [500],
+      })
+      .toBe("won");
+  });
+
   test("tycoon: bought track never leaks into the scenario registry", async ({
     page,
   }) => {

@@ -1,7 +1,7 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
-import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair } from "@/tiles/model";
-import { addConnection } from "@/tiles/editOps";
+import { Level, TileCell, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
+import { addConnection, isBlankCell } from "@/tiles/editOps";
 import type { RouteStep } from "@/tiles/routePlanner";
 import {
   createSimulation,
@@ -9,6 +9,8 @@ import {
   SampledUnit,
   UnitChord,
   SimEvent,
+  TrainState,
+  BlockReason,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { JunctionSignal } from "@/sim/junctionSignal";
@@ -186,6 +188,67 @@ export interface MoneyState {
   spent: number;
 }
 
+// Whether the board has jammed. `sec` is how long every runnable train has been
+// held by the network (not by the player) — `stuck` is that having passed the
+// threshold worth interrupting for. Reactive, refreshed each frame.
+export interface GridlockState {
+  sec: number;
+  stuck: boolean;
+  // What KIND of stuck, because the fix differs: "deadlock" means the trains are
+  // waiting on each other and a switch will free one; "dead-end" means the rails
+  // simply stop and no amount of switching helps.
+  reason: "deadlock" | "dead-end";
+}
+
+// How long the board must be motionless before we call it gridlock. Long enough
+// that ordinary signal queuing at a junction never trips it, short enough that a
+// player does not sit wondering whether the game is broken.
+export const GRIDLOCK_AFTER_SEC = 6;
+
+// One train, as the jam test sees it.
+export interface GridlockSample {
+  state: TrainState;
+  velocity: number;
+  block?: { reason: BlockReason } | undefined;
+}
+
+/**
+ * Is the board jammed, and in what way? Pure so it can be tested without a
+ * running frame loop — the loop only supplies the samples and the clock.
+ *
+ * Rules, each earned the hard way:
+ *  - A train WAITING for dispatch, or PARKED, is not part of the question.
+ *  - A train held by a signal the PLAYER is holding is them playing, and is not
+ *    counted as active either — otherwise holding one train on a two-train board
+ *    would read as half the railway being permanently stuck.
+ *  - A train stopped at a DEAD END carries no block record at all: the sim only
+ *    notes a block when `mayCross` refuses, while running out of rails takes the
+ *    "map edge / dead end" branch and reports proceeding. Absent block info is
+ *    therefore the severed-track case — exactly what a half-built route leaves —
+ *    so it must count, or the situation the nudge exists for is the one it stays
+ *    silent about.
+ */
+export function assessGridlock(samples: GridlockSample[]): {
+  jammed: boolean;
+  reason: "deadlock" | "dead-end";
+} {
+  let active = 0;
+  let stuck = 0;
+  let waitingOnEachOther = 0;
+  for (const s of samples) {
+    if (s.state === "parked" || s.state === "waiting") continue;
+    if (s.block?.reason === "signal-hold") continue;
+    active += 1;
+    if (s.velocity > 1e-3) continue;
+    stuck += 1;
+    if (s.block) waitingOnEachOther += 1;
+  }
+  return {
+    jammed: active > 0 && stuck === active,
+    reason: waitingOnEachOther > 0 ? "deadlock" : "dead-end",
+  };
+}
+
 // One fare pin, drawn over a train's loco. EXACTLY one per train and nothing
 // else: the design doc's §5.5 lesson from Train Valley 2 is that counters,
 // cargo pins, demand badges and price tags all at once do not survive a board
@@ -262,6 +325,14 @@ export interface Game {
   // Reactive mirror of the mode's ledger (all zeros + enabled:false when the
   // mode declares no economy).
   money: MoneyState;
+  // Live jam state, for the "your trains are stuck" nudge. See GridlockState.
+  gridlock: GridlockState;
+  // Clear a tile's rails, refunding only pieces the player actually bought.
+  // Refuses on a depot, or a tile a train occupies or has reserved.
+  bulldoze(tileId: string): EditResult;
+  // What bulldozing that tile would pay back — for the preview, so what is
+  // shown is what is paid.
+  refundOf(tileId: string): number;
   // One fare pin per live, unpaid train, refreshed each frame beside the sprites.
   fareBadges: FareBadge[];
   // Send a waiting train (Tycoon). Returns false when the train isn't waiting —
@@ -965,6 +1036,13 @@ export function createGame(
     spent: 0,
   }) as MoneyState;
   const fareBadges = reactive([]) as FareBadge[];
+  // How long the board has been jammed, and whether that has passed the point
+  // where it is worth telling the player. See `updateGridlock`.
+  const gridlock = reactive({
+    sec: 0,
+    stuck: false,
+    reason: "deadlock",
+  }) as GridlockState;
 
   function refreshMoney() {
     if (!economy) return;
@@ -1107,6 +1185,7 @@ export function createGame(
       tracker.observe(obs, scaled);
       refreshObjective();
       refreshMoney();
+      updateGridlock(scaled);
     }
     renderTrains();
     updateRoadCars();
@@ -1194,6 +1273,122 @@ export function createGame(
     return TRACK_COST_PER_TILE * newBuildSteps(steps).length;
   }
 
+  // --- bulldozing (the undo half of the build verb) --------------------------
+  //
+  // Every connection the player has actually PAID for, keyed the same way
+  // `newBuildSteps` de-duplicates. This set is why a refund cannot print money:
+  // a board arrives with authored track nobody bought, and refunding that would
+  // turn `lakevalley-open`'s pre-existing ring into a cash machine. You may
+  // bulldoze anything (it is your railway), but only pieces in here pay back.
+  const boughtPieces = new Set<string>();
+  const pieceKey = (id: string, a: Port, b: Port) =>
+    `${id}:${Math.min(a, b)}-${Math.max(a, b)}`;
+
+  function refundOf(tileId: string): number {
+    if (!economy) return 0;
+    const cell = level[tileId];
+    if (!cell) return 0;
+    const paid = cell.connections.filter(c =>
+      boughtPieces.has(pieceKey(tileId, c[0], c[1]))
+    ).length;
+    return TRACK_COST_PER_TILE * paid;
+  }
+
+  // Clear a tile's rails. Refunds only what was bought, at the price paid — a
+  // full refund, deliberately: bulldoze exists so a misdrag is not fatal, and a
+  // partial refund would invent an economy rule we have not playtested. A
+  // DEMOLITION FEE belongs with phase 3's clearing costs (paying to remove
+  // scenery), where charging to change the world is the point.
+  //
+  // Guarded by the same `editBlockers` as building — you cannot rip up track a
+  // train stands on or has reserved. That is also the answer to the question
+  // additive-only edits were deferred over ("what if a reserved block runs
+  // through the deleted tile"): it cannot, because the tile refuses.
+  function bulldoze(tileId: string): EditResult {
+    const cell = level[tileId];
+    if (!cell || cell.connections.length === 0) return { ok: true, blocked: [] };
+    // A depot is the level's furniture, not the player's track: removing one
+    // would strand its train's route with no way to put it back.
+    if (cell.role === "depot") return { ok: false, blocked: [tileId] };
+    const blocked = editBlockers([tileId]);
+    if (blocked.length > 0) return { ok: false, blocked };
+
+    let refund = 0;
+    let refunded = 0;
+    for (const c of cell.connections) {
+      const key = pieceKey(tileId, c[0], c[1]);
+      if (boughtPieces.delete(key)) {
+        refund += TRACK_COST_PER_TILE;
+        refunded += 1;
+      }
+    }
+
+    // Drop the rails but keep the cell if it still carries road or terrain —
+    // bulldozing track must not erase the ground under it.
+    const next: TileCell = { ...cell, connections: [] };
+    if (isBlankCell(next)) delete level[tileId];
+    else level[tileId] = next;
+
+    // Removal is the case additive edits never had: an arm can now point at an
+    // exit that no longer exists, and `connectionsToExitPort` answers NULL for
+    // that — a train would stop dead on the tile. Re-derive from scratch here
+    // rather than merging, so no stale arm survives.
+    const fresh = initialSwitches(level);
+    for (const id of [tileId, ...neighbourIds(tileId)]) {
+      if (fresh[id]) switches[id] = fresh[id];
+      else delete switches[id];
+    }
+
+    signalTiles = Object.entries(level)
+      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+      .map(([id]) => id);
+
+    if (economy && refund > 0) {
+      economy.earn(refund, "refund", `${refunded} tile${refunded === 1 ? "" : "s"}`);
+      refreshMoney();
+    }
+    // Net, so "buy >= N pieces" counts the railway you kept, not the churn.
+    tilesBuiltTotal = Math.max(0, tilesBuiltTotal - refunded);
+    levelVersion.value++;
+    return { ok: true, blocked: [] };
+  }
+
+  // --- gridlock detection ----------------------------------------------------
+  //
+  // Collisions are impossible here by construction (path reservation), so the
+  // failure mode this game actually has is DEADLOCK: two trains reserve into
+  // each other and both wait forever. From outside that is indistinguishable
+  // from a quiet moment — nothing errors, no train crashes, the board just stops
+  // — and with no fail state the player is left staring at it. Hence a nudge.
+  //
+  // The rule: every train that could be moving is blocked, and none of them is
+  // blocked by something the PLAYER chose. A held signal is not a deadlock, it
+  // is someone playing; so is a train still waiting in its station for dispatch.
+  // Only once the board has been motionless for GRIDLOCK_AFTER_SEC of game time
+  // do we say so — a train braking for a signal it is about to get is normal.
+  function updateGridlock(dt: number): void {
+    const { jammed, reason } = assessGridlock(
+      Object.keys(sim.trains).map(id => ({
+        state: sim.trainState(id),
+        velocity: sim.trainVelocity(id),
+        block: sim.trainBlock(id),
+      }))
+    );
+    gridlock.sec = jammed ? gridlock.sec + dt : 0;
+    gridlock.stuck = jammed && gridlock.sec >= GRIDLOCK_AFTER_SEC;
+    if (jammed) gridlock.reason = reason;
+  }
+
+  function neighbourIds(tileId: string): string[] {
+    const coord = parseCoordId(tileId);
+    const out: string[] = [];
+    for (const p of [Position.Top, Position.Right, Position.Bottom, Position.Left]) {
+      const n = neighborCoord(coord, p);
+      if (n) out.push(getCoordinatesId(n));
+    }
+    return out;
+  }
+
   // ORDER IS THE POINT: affordability gate → applyEdits → spend. applyEdits can
   // refuse (a train moved onto a route tile between preview and click), and a
   // refused buy must cost nothing — so the money moves only after the edit has
@@ -1201,7 +1396,12 @@ export function createGame(
   // (one synchronous call), so the spend cannot fail after the lay succeeded.
   function buildRoute(steps: RouteStep[]): EditResult {
     if (steps.length === 0) return { ok: true, blocked: [] }; // reachable: a 1-step U-turn plans an empty batch
-    const pieces = newBuildSteps(steps).length;
+    // Capture the chargeable steps BEFORE the edit lands: `newBuildSteps` asks
+    // the level which connections are missing, and after `applyEdits` the
+    // answer is "none" — reading it afterwards would record nothing as bought
+    // and silently make every piece unrefundable.
+    const newSteps = newBuildSteps(steps);
+    const pieces = newSteps.length;
     const cost = buildCostOf(steps);
     if (economy && cost > 0 && !economy.canAfford(cost)) {
       return { ok: false, blocked: [] };
@@ -1213,6 +1413,8 @@ export function createGame(
       refreshMoney(); // headless callers (unit tests) see the balance without a frame
     }
     tilesBuiltTotal += pieces;
+    // Record what was PAID for, so bulldoze can refund it and only it.
+    for (const s of newSteps) boughtPieces.add(pieceKey(s.id, s.a, s.b));
     return res;
   }
 
@@ -1239,6 +1441,8 @@ export function createGame(
     applyEdits,
     buildCostOf,
     buildRoute,
+    bulldoze,
+    refundOf,
     signalAspects,
     signalOverrides,
     reservations,
@@ -1254,6 +1458,7 @@ export function createGame(
     speed,
     deliveries,
     money,
+    gridlock,
     fareBadges,
     dispatch(trainId: string) {
       return sim.dispatch(trainId);
