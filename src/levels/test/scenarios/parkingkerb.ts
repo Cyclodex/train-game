@@ -17,11 +17,12 @@ import type { ParkingRow } from "@/tiles/parking";
 // `validateParking` rejects the alternative rather than painting bays into the
 // neighbour's garden.
 //
-// Deliberately only TWO bays per tile, six in all. A car park that cannot fill is
-// a car park whose interesting behaviour — a driver finding it full and going
-// somewhere else — never happens, and the geometric maximum here would be four
-// per tile with no chance of ever taking them all.
-const bays = (from: Position, count = 2): ParkingRow => ({
+// THREE bays per tile — the most a 60px parallel pitch fits on a 200px tile, so
+// the rank runs the length of the kerb instead of leaving a third of it blank.
+// Twelve spaces in all, which is few enough that the street can genuinely fill
+// them: a car park that cannot fill never shows the behaviour the whole feature
+// is about — a driver arriving to find it full and going somewhere else.
+const bays = (from: Position, count = 3): ParkingRow => ({
   from,
   kind: "parallel",
   count,

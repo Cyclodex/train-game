@@ -2547,12 +2547,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         parkTarget = trip.facilityId;
       }
     }
-    const carId = `car${nextId++}`;
-    // Take the facility token the moment the trip is planned, so the NEXT car to
-    // spawn already sees this space as spoken for. Without it a car park with two
-    // free bays attracts every car on the map, and all but two of them drive its
-    // whole length and turn round — a jam dressed up as a feature.
-    if (parkTarget !== null) parking.aim(parkTarget, carId);
     // Lane order to try at the entry, by class:
     //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
     //    then the remaining lanes from a rotating start.
@@ -2594,6 +2588,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
     const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan, cls);
+    const carId = `car${nextId++}`;
     const spawned: Car = {
       id: carId,
       kind,
@@ -2639,6 +2634,17 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       enteredTarget: false,
     };
     cars.push(spawned);
+    // Take the facility token only now the car REALLY EXISTS, so the next driver
+    // to plan already sees this space as spoken for.
+    //
+    // Not one line earlier. Every bail-out above this point — a blocked entry
+    // lane most of all — happens constantly under `fillFast`, which retries a
+    // spawn many times a tick. A token taken before those returns is a token for
+    // a car that was never created and can never release it, and they accumulate
+    // until every car park reports zero availability for the rest of the run. The
+    // symptom is a car park that slowly DRAINS and then stays empty for ever
+    // while traffic streams past it.
+    if (parkTarget !== null) parking.aim(parkTarget, spawned.id);
     // A car can spawn ON the very tile it means to park on (a kerbside bay on the
     // entry street). The tile-crossing hook would never fire for it, so claim here
     // too — otherwise it drives straight past its own destination.

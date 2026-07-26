@@ -18,16 +18,22 @@ import { oneWay, turns, twoWay } from "@/tiles/lanes";
 // the end and has nowhere to go. `validateParking` rejects a car park with no way
 // back to the road network for exactly this reason.
 //
-// Capacity is deliberately TINY: eight bays outside and four in the garage. A car
-// park that cannot fill never shows the behaviour the whole feature is about — a
-// driver arriving, finding it full, and going somewhere else instead.
+// The garage is deliberately TINY — four slots. A facility that cannot fill never
+// shows the behaviour the whole feature is about: a driver arriving to find it
+// full and going somewhere else instead. The surface car park is full-size, so
+// between them the map shows both a car park working and a car park turning
+// people away.
 
 const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
 
-// A rank of 90° bays on one bank of the aisle. Two per tile, not the seven that
-// would geometrically fit: see the note on capacity above.
+// A rank of 90° bays along one bank of the aisle. SEVEN is what fits on a tile at
+// a 28px pitch, and painting fewer does not read as a small car park — it reads as
+// a car park someone forgot to finish, with two lonely bays and 140px of blank
+// tarmac beside them. So the surface car park is full-size and looks it; the
+// GARAGE across the street is the small facility (four slots), and it is the one
+// that fills up and sends drivers elsewhere.
 const rank = (side: "right" | "left") =>
-  ({ from: Position.Left, side, kind: "perpendicular" as const, count: 2 });
+  ({ from: Position.Left, side, kind: "perpendicular" as const, count: 7 });
 
 // An aisle tile: a single eastbound lane with a rank of bays on each bank.
 const aisle = () => ({

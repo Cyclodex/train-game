@@ -402,6 +402,42 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(status.length).toBeGreaterThan(0);
   });
 
+  it("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", () => {
+    // REGRESSION. The facility "aim" token used to be taken while a spawn was
+    // still being decided, before the blocked-entry-lane bail-out. `fillFast` —
+    // which the rendered game uses — retries a spawn many times a tick, and most
+    // of those attempts bounce off that bail-out, so each one leaked a token for a
+    // car that never existed and could never release it. Within a minute every car
+    // park reported zero availability, no new driver was ever sent to one, and the
+    // car parks slowly DRAINED to empty while traffic streamed past them.
+    //
+    // Measured through `parkingStatus()`, which is exactly what the roadside sign
+    // shows, so this fails the moment the board would start lying to the player.
+    const s = SCENARIOS.find(x => x.id === "parkinglot")!;
+    const sim = createRoadSim({
+      level: s.level,
+      width: s.size!.cols,
+      height: s.size!.rows,
+      seed: 3,
+      carSpeed: 0.5,
+      carLength: 0.19,
+      maxCars: 16,
+      fillFast: true, // the rendered game's setting — the one that exposed it
+    });
+    let peakOccupied = 0;
+    for (let i = 0; i < 3000; i++) {
+      sim.step(0.05, () => false);
+      if (i % 20 === 0) {
+        const used = sim.parkingStatus().reduce((n, f) => n + (f.capacity - f.free), 0);
+        peakOccupied = Math.max(peakOccupied, used);
+      }
+    }
+    // Late in the run the car parks must still be in use, not drained to nothing.
+    const finalUsed = sim.parkingStatus().reduce((n, f) => n + (f.capacity - f.free), 0);
+    expect(peakOccupied).toBeGreaterThan(3);
+    expect(finalUsed).toBeGreaterThan(0);
+  });
+
   it("leaves every existing road scenario's parking layer empty", () => {
     // The parking subsystem must cost a level that has none exactly nothing —
     // including its RNG draws, which is what keeps every pre-existing seeded run
