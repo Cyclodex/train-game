@@ -414,6 +414,43 @@ lean — prune as much as you add. This file only stays useful if every task ten
     the run untouched and adds half again as much curve, so on the run alone it
     read as "no change" while every 90° pull-in silently took 60% longer and
     `parkinglot` fell from three completed cycles a run to two.
+- A REFUSAL THAT CANNOT BE SATISFIED IS A DEADLOCK, not a rule. The lane gate
+  below shipped as a plain `return false` from `atStallEntry`, and its
+  intersection with three individually-correct rules wedged the car for ever:
+  `clearAhead` brakes it to the stop line, a STOPPED car may not change lanes
+  (road.ts updateLateral), and a car that never reaches the tile end never runs
+  the crossing hook that hands the bay back. Measured on /test/parkingkerb: EVERY
+  live vehicle at v=0 at the end of EVERY seed, against 99-108 completed cycles
+  once it is impossible. `missedStall` makes it a checked STATE and releases the
+  bay on the spot; `clearAhead` does not brake to a stop line the car cannot use;
+  and `desiredLane` (P) aims kerb-ward as soon as the car HAS a target, since the
+  approach tile is not part of the facility and keep-right needs three
+  junction-free tiles a short map does not have.
+  - THE SWEEP COULD NOT SEE IT. Its standstill predicate read `c.speed` — the
+    car's preferred CRUISE, never zero — so it was dead code for its whole life;
+    and it runs 40 simulated seconds while the collapse takes 50-120. Both fixed,
+    plus a long-run liveness test in `parking.spec.ts` that runs 200s.
+- NOTHING SPAWNS IN THE MIDDLE OF THE MAP. `roadEntries` called a seam an opening
+  when no upstream lane fed it — but a ONE-WAY neighbour pointing away feeds
+  nothing, so an interior tile beside a one-way read as the edge of the world.
+  /test/parkcity materialised 4-9 vehicles a run at its car-park ramp mouth. A
+  road you cannot enter from this side is a one-way street; only genuinely
+  off-grid, or a stub with no road beyond it, is an entry.
+- A PARALLEL BAY'S RUN IS MEASURED FROM THE CAR'S OWN LANE, not the centreline.
+  The bay is `bayNearPx + depth/2` out from the middle of the road, but the car is
+  already riding the KERB LANE — the shift it actually makes is 27px on a 1+1 and
+  on a 2+2 alike, against the 69px the centreline suggests on the wide one. Taken
+  from the wrong datum the run came out at 138px, five times the real shift, which
+  (a) clamped two of every three stop lines to the tile's leading edge, leaving
+  nothing to change lanes in, and (b) drifted the body sideways while it was still
+  abeam the neighbours — the "cuts across the next bay" that was reported.
+- A PARALLEL BAY CANNOT BE ENTERED NOSE-FIRST when both neighbours are taken, and
+  that is geometry, not tuning: 60px of pitch for a 40px car is 20px of slack, and
+  the car has to shift 27px sideways. Measured swept penetration into a parked
+  neighbour, after every fix above: 90° bays CLEAR (+0.0001 tiles), parallel ones
+  -7.6px (parkingkerb), -7.5 (parkcity), -7.1 (parkinglorry). Real drivers reverse
+  into one for exactly this reason; the numbers are pinned so the reverse-in work
+  has a target.
 - A BAY IS ENTERED FROM ITS OWN LANE ONLY. `atStallEntry` refuses any other, and
   `desiredLane` branch (P) gets a car with a `parkTarget` over to the kerb-most
   lane as soon as it is on a tile of that facility — early, so the merge has room.
@@ -609,6 +646,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `/test/busstops` is the halt-vs-lay-by pair, asserted both ways: the mechanism (a
   halted bus reports a road body, a bayed one does not) and the consequence
   (traffic queues behind the halt and never behind the bay).
+  `/test/parkvariants` is the GALLERY - every kind on one board, and the home for
+  the two combinations that existed nowhere: ECHELON bays (authored in no level at
+  all) and 90 deg bays BESIDE A STREET (they only ever sat on a car-park aisle). It
+  is three INDEPENDENT straight streets, not a loop: a turn tile is narrower than
+  the road it meets, so the kerb tapers across the tile beside it and
+  `validateParking` rejects a row there. Widths are not interchangeable - a 90 deg
+  rank beside a 2+2 lands at 104px, over the tile own half-width, and is rejected;
+  it needs the 1+1.
   `/test/buslayby` is ONE straight and ONE bay, for watching a single coach do the
   whole move. Worth its own entry precisely because `busstops` has two stops and a
   city map has fifty vehicles: a seam bug that moves one bus half a body length is

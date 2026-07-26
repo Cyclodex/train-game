@@ -116,7 +116,15 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
         }
         prev = now;
 
-        if (cars.length > 0 && cars.every(c => c.speed <= 0.001)) {
+        // `velocity`, NOT `speed`. `speed` is the car's PREFERRED CRUISE — a
+        // constant drawn at spawn and never zero — so this predicate could not
+        // fire on any map, gridlocked or not, and it was dead code for as long as
+        // it has existed. It let a total standstill of /test/parkingkerb (every
+        // live vehicle at v=0, every seed) ship green.
+        //
+        // Parked cars are excluded: a car sitting in a bay is behaving correctly.
+        const rolling = cars.filter(c => !c.parked);
+        if (rolling.length > 0 && rolling.every(c => c.velocity <= 0.001)) {
           allStopped++;
           longestAllStopped = Math.max(longestAllStopped, allStopped);
         } else {

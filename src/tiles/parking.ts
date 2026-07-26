@@ -179,9 +179,26 @@ export function manoeuvreRunPx(row: ParkingRow, size: number, kerbPx: number): n
   const taper = layByTaperPx(row, size);
   if (taper > 0) return taper + stallPitchPx(row.kind, size, true) / 2;
   if (row.kind === "parallel") {
-    const lateral =
-      bayNearPx(row, size, kerbPx) + stallDepthPx(row.kind, size, needsBigBay(row.reserved)) / 2;
-    return Math.max(MANOEUVRE_APPROACH_FRAC * size, 2 * lateral);
+    // MEASURED FROM THE CAR'S OWN LANE, not from the tile's centreline. The bay
+    // sits `bayNearPx + depth/2` out from the centreline, but the car is already
+    // most of the way there — it is riding the KERB LANE, half a lane inside the
+    // kerb. The shift it actually has to make is the difference, and it is small:
+    // 27px on both a 1+1 street and a 2+2 arterial, against the 69px the
+    // centreline suggests on the wide one.
+    //
+    // Getting this wrong scaled the run to 138px — over five times the real shift
+    // — and that is what wrecked the kerbside manoeuvre. Longitudinally a parallel
+    // bay has almost nothing to spare (60px of pitch for a 40px car leaves 20px),
+    // so a run that long drifts the body sideways while it is still abeam the
+    // neighbours, which is exactly the "cuts across the next bay" that was
+    // reported. It also clamped two of every three stop lines to the tile's
+    // leading edge, which is what left cars nothing to change lanes in.
+    const lane = kerbPx - (LANE_WIDTH_FRAC * size) / 2;
+    const shift =
+      bayNearPx(row, size, kerbPx) +
+      stallDepthPx(row.kind, size, needsBigBay(row.reserved)) / 2 -
+      lane;
+    return Math.max(MANOEUVRE_APPROACH_FRAC * size, 2 * shift);
   }
   return MANOEUVRE_APPROACH_FRAC * size;
 }

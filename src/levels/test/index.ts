@@ -21,6 +21,7 @@ import { parkinglot } from "@/levels/test/scenarios/parkinglot";
 import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
 import { busstops } from "@/levels/test/scenarios/busstops";
 import { buslayby } from "@/levels/test/scenarios/buslayby";
+import { parkvariants } from "@/levels/test/scenarios/parkvariants";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
@@ -176,7 +177,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkingkerb, parkinglot, parkinglorry, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkinglorry, busstops, buslayby],
       },
     ],
   },

@@ -223,6 +223,15 @@ export function roadEntries(level: Level, width: number, height: number): RoadEn
       const feedsAny =
         !offGrid && !!neigh?.road && neigh.road.some(l => l.to.includes(back));
       if (!offGrid && feedsAny) continue;
+      // ...and a seam with a ROAD on the other side is never an opening, however
+      // that road runs. A one-way neighbour pointing AWAY feeds nothing, which
+      // read as "the world ends here" and spawned cars in the MIDDLE OF THE MAP:
+      // on /test/parkcity, 4-9 vehicles a run materialised at the mouth of the
+      // car-park ramp (6,3, whose Bottom neighbour is `oneWay(Top,Bottom)`) and
+      // then had nowhere sensible to go. A road you cannot enter from this side is
+      // a one-way street, not an edge of the world. Only genuinely off-grid, or a
+      // stub with no road beyond it at all, is an entry.
+      if (!offGrid && neigh?.road?.length) continue;
       out.push(carCan ? { coord, entryPort: port } : { coord, entryPort: port, busOnly: true });
     }
   }
@@ -1113,10 +1122,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Kerb-most, which is the bay's side for every row that may exist on a
     // multi-lane street (a `side: "left"` row is only legal on a one-way aisle,
     // and this whole function has already returned for a single-lane approach).
-    if (
-      car.parkTarget !== null &&
-      parking.facilityOfTile(getCoordinatesId(head.coord)) === car.parkTarget
-    ) {
+    // As soon as it HAS a target, not once it is standing on the car park: the
+    // approach tile is not part of the facility, and the generic keep-right drift
+    // needs three junction-free tiles it does not have on a short map, so gating
+    // this on `facilityOfTile` left the car arriving in the inner lane every time
+    // with nought to 0.06 tiles in which to cross — against the 0.45 a lane change
+    // needs. A driver looking for a space rides the kerb lane; that is the rule.
+    if (car.parkTarget !== null) {
       return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
     }
 
@@ -1766,7 +1778,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       ) {
         // The stop LINE, not the stall's middle: a bus halting in lane stands ON
         // its markings, so its nose goes half a body past them (`stopTOf`).
-        bind(Math.max(0, stopTOf(car) - car.headProgress), 0);
+        //
+        // ONLY IF THE CAR CAN ACTUALLY TAKE THE SPACE. Braking to a stop line in
+        // the wrong lane is a trap with no way out: the car arrives at v=0, and a
+        // stationary car may not change lanes, so it can never reach the lane the
+        // bay is served from. It drives on instead and `missedStall` hands the bay
+        // back.
+        if (inServedLane(car)) bind(Math.max(0, stopTOf(car) - car.headProgress), 0);
       }
     }
     // Junction arbiter: for each upcoming junction on the route, ask whether
@@ -2082,6 +2100,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     claimStallHere,
     releaseStall,
     atStallEntry,
+    missedStall,
     beginEntering,
     advanceParking,
   } = phases;
@@ -2089,6 +2108,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // function reading a `const` from here would hit the TDZ if anything called it
   // during construction (KNOWHOW: `facilityOfTile` did exactly that).
   const stopTOf = (car: Car) => phases.stopTOf(car);
+  const inServedLane = (car: Car) => phases.inServedLane(car);
 
 
   function advance(car: Car, dt: number, closed: CrossingClosed): boolean {
@@ -2101,6 +2121,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     if (atStallEntry(car)) {
       beginEntering(car);
       if (car.phase !== "driving") return true;
+    } else if (missedStall(car)) {
+      // Arrived at the space in the wrong lane: it cannot have it. Hand it back
+      // NOW rather than letting the refusal stand — a car held at a stop line it
+      // can never satisfy is stopped for ever (it may not change lanes at a
+      // standstill and it never reaches the tile end that would release the bay),
+      // and being stopped in a live lane it takes the street with it.
+      releaseStall(car);
     }
     const { clear, boundByCrossing } = clearAhead(car, closed);
     // Patience bookkeeping: a car stopped specifically by a closed crossing ahead

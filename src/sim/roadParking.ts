@@ -227,6 +227,42 @@ export function createParkingPhases(deps: ParkingDeps) {
 
   // Has the car reached the point on its approach where it should swing into its
   // claimed bay? Only true on the right tile, in the right direction.
+  // The lane a stall is reached from: the kerb-most usable one, or the innermost
+  // for a row on the far bank (legal only on a one-way aisle).
+  function servedLane(car: Car): number | null {
+    if (!car.stall) return null;
+    const usable = usableLaneIndices(level[car.stall.tileId]?.road, car.stall.from, clsOf(car));
+    if (usable.length === 0) return null;
+    const row = parking.info(car.stall)?.row;
+    return row && rowSide(row) === "left" ? Math.max(...usable) : Math.min(...usable);
+  }
+
+  function inServedLane(car: Car): boolean {
+    const want = servedLane(car);
+    return want === null || laneOf(car) === want;
+  }
+
+  // HAS THE CAR BLOWN IT? It is at (or past) the point where the swing had to
+  // start and it is not in the lane the bay is served from, so it can no longer
+  // take that space.
+  //
+  // This has to be a real, checked state rather than "atStallEntry just keeps
+  // saying no", because saying no is TERMINAL: `clearAhead` brakes the car to the
+  // stop line, a car at a standstill may not change lanes (road.ts), and a car
+  // that never reaches the end of the tile never runs the crossing hook that hands
+  // the bay back. All three rules are individually right and their intersection is
+  // a car wedged in a live lane for ever. Measured on /test/parkingkerb: EVERY
+  // vehicle at zero velocity by the end of every seed, against 52 completed
+  // park-and-leave cycles once the wedge is impossible.
+  function missedStall(car: Car): boolean {
+    if (!car.stall || car.phase !== "driving") return false;
+    const head = car.path[car.headIndex];
+    if (getCoordinatesId(head.coord) !== car.stall.tileId) return false;
+    if (head.entryPort !== car.stall.from) return false;
+    if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
+    return !inServedLane(car);
+  }
+
   function atStallEntry(car: Car): boolean {
     if (!car.stall || car.phase !== "driving") return false;
     const head = car.path[car.headIndex];
@@ -241,18 +277,8 @@ export function createParkingPhases(deps: ParkingDeps) {
     if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
     // ONLY FROM THE LANE THE BAY IS SERVED FROM. A car peeling off out of the
     // inner lane crosses the stream beside it to reach the kerb, which is both
-    // wrong and unmistakable on a 2+2 street. `desiredLane` gets a car heading for
-    // a space over to the kerb while it is still driving the car park; this is
-    // what makes that a rule rather than a preference. A car that never made it
-    // across simply drives past and the crossing code hands its bay back.
-    const road = level[car.stall.tileId]?.road;
-    const row = parking.info(car.stall)?.row;
-    const usable = usableLaneIndices(road, car.stall.from, clsOf(car));
-    if (usable.length > 0) {
-      const want =
-        row && rowSide(row) === "left" ? Math.max(...usable) : Math.min(...usable);
-      if (laneOf(car) !== want) return false;
-    }
+    // wrong and unmistakable on a 2+2 street.
+    if (!inServedLane(car)) return false;
     // ONE CAR AT A TIME per car park. A barrier serves one vehicle; a ramp is one
     // lane wide. Without this, every car bound for a garage would swing into the
     // same ramp mouth at once (all its slots share one entry point) and they would
@@ -719,6 +745,8 @@ export function createParkingPhases(deps: ParkingDeps) {
     claimStallHere,
     releaseStall,
     atStallEntry,
+    missedStall,
+    inServedLane,
     stopTOf,
     beginEntering,
     resumeFromStall,

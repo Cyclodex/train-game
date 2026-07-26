@@ -33,7 +33,8 @@ import {
   bayClassOf,
   bayAdmits,
 } from "@/sim/parking";
-import { createRoadSim, specLength, vehicleSpec, type CarSample } from "@/sim/road";
+import { createRoadSim, roadEntries, specLength, vehicleSpec, type CarSample } from "@/sim/road";
+import { neighborCoord } from "@/sim/topology";
 import { SCENARIOS } from "@/levels/test";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -886,6 +887,12 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       ];
     };
 
+    // 90° bays only. A PARALLEL bay cannot be entered nose-first at all when both
+    // neighbours are taken, and that is geometry, not tuning: the pitch is 60px
+    // for a 40px car, so there is 20px of slack, and the car has to shift 27px
+    // sideways to get in. Real drivers reverse into one for exactly this reason.
+    // Measured, so the reverse-in work has a number to beat and cannot silently
+    // get worse: parkingkerb −7.6px, parkcity −7.5px, parkinglorry −7.1px.
     const sim = simFor("parkinglot", 5);
     let worst = Infinity;
     let compared = 0;
@@ -913,6 +920,69 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // of approach, and clear the moment the approach became square.
     expect(worst).toBeGreaterThanOrEqual(0);
   });
+
+  it("spawns nothing in the middle of the map", () => {
+    // A seam whose neighbour is a ONE-WAY pointing away feeds nothing, and that
+    // read as "the world ends here": /test/parkcity spawned 4-9 vehicles a run at
+    // the mouth of its car-park ramp (6,3, whose Bottom neighbour is a one-way
+    // running down), where they appeared out of nowhere and then got stuck. A road
+    // you cannot enter from this side is a one-way street, not an edge of the map.
+    const s = SCENARIOS.find(x => x.id === "parkcity")!;
+    const w = s.size!.cols;
+    const h = s.size!.rows;
+    for (const e of roadEntries(s.level, w, h)) {
+      const onBorder = e.coord.x === 0 || e.coord.y === 0 || e.coord.x === w - 1 || e.coord.y === h - 1;
+      const n = neighborCoord(e.coord, e.entryPort)!;
+      const stub = !s.level[getCoordinatesId(n)]?.road?.length;
+      expect(
+        onBorder || stub,
+        `${getCoordinatesId(e.coord)} port ${e.entryPort} is an interior spawn point`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps the street alive over a LONG run, on every parking map", () => {
+    // THE TEST THAT WAS MISSING. A lane rule I added held a car at a stop line it
+    // could not satisfy: it may not change lanes at a standstill, so it could
+    // never reach the lane its bay is served from, and it never reached the tile
+    // end that hands the bay back. Wedged in a live lane for ever — and because it
+    // is the LEAD car, the street behind it dies too. Measured before the fix:
+    // every live vehicle on /test/parkingkerb at zero velocity, at every seed.
+    //
+    // The registry sweep could not see it. It runs 40 simulated seconds and the
+    // collapse takes 50–120, and its standstill predicate read `speed` (the car's
+    // preferred cruise, never zero) instead of `velocity`. Both are fixed; this
+    // covers the duration the sweep cannot afford.
+    for (const id of ["parkingkerb", "parkcity", "parkinglot"]) {
+      for (const seed of [1, 3, 5]) {
+        const sim = simFor(id, seed);
+        let cycles = 0;
+        let worstStreak = 0;
+        let streak = 0;
+        const parkedOnce = new Set<string>();
+        for (let i = 0; i < 4000; i++) {
+          sim.step(0.05, () => false);
+          const cars = sim.cars();
+          for (const c of cars) {
+            if (c.parked) parkedOnce.add(c.id);
+            else if (parkedOnce.has(c.id) && c.phase === "driving") {
+              parkedOnce.delete(c.id);
+              cycles++;
+            }
+          }
+          const rolling = cars.filter(c => !c.parked);
+          streak = rolling.length > 0 && rolling.every(c => c.velocity <= 0.001) ? streak + 1 : 0;
+          worstStreak = Math.max(worstStreak, streak);
+        }
+        const where = `${id} seed ${seed}`;
+        // Nothing standing completely still for more than a couple of seconds: a
+        // queue at a junction is normal, a dead map is not.
+        expect(worstStreak * 0.05, `${where} stood completely still`).toBeLessThan(3);
+        // And the bays are turning over, not merely not-crashed.
+        expect(cycles, `${where} completed park-and-leave cycles`).toBeGreaterThan(20);
+      }
+    }
+  }, 60_000);
 
   it("cars drive to a car park, park, dwell, and leave again", () => {
     const sim = simFor("parkinglot");
