@@ -4,6 +4,7 @@ import {
   bankOf,
   DEFAULT_GARAGE_CAPACITY,
   maxStallsPerTile,
+  needsBigBay,
   type ParkingCell,
   type ParkingRow,
 } from "@/tiles/parking";
@@ -884,7 +885,7 @@ export function setParkingRow(
     rows.splice(at, 1);
     return writeParking(cell, { ...cell.parking, rows });
   }
-  const max = maxStallsPerTile(spec.kind, tileSize, spec.reserved === "long");
+  const max = maxStallsPerTile(spec.kind, tileSize, needsBigBay(spec.reserved));
   // A rank of bays fills its kerb; a GARAGE gets a building-sized capacity rather
   // than the 400-slot ceiling `maxStallsPerTile` reports for it (its slots are not
   // on the map, so "how many fit" is the wrong question).

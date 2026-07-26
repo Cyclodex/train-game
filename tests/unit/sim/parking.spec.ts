@@ -8,6 +8,8 @@ import {
   manoeuvreLength,
   manoeuvrePath,
   maxStallsPerTile,
+  needsBigBay,
+  stallLengthPx,
   stallBoxPoints,
   stallPose,
   validateParking,
@@ -22,8 +24,8 @@ import {
   createParkingRegistry,
   stallFits,
   vehicleCanPark,
-  vehicleBaySize,
-  baySizeOf,
+  bayClassOf,
+  bayAdmits,
 } from "@/sim/parking";
 import { createRoadSim } from "@/sim/road";
 import { SCENARIOS } from "@/levels/test";
@@ -308,11 +310,59 @@ describe("the parking registry — occupancy and fit", () => {
     expect(stallFits("truck", garage, CAR_LEN)).toBe(false);
     expect(stallFits("bus", garage, CAR_LEN)).toBe(false);
 
-    // And the classes themselves.
-    expect(vehicleBaySize("car")).toBe("standard");
-    expect(vehicleBaySize("truck")).toBe("long");
-    expect(vehicleBaySize("bus")).toBe("long");
-    expect(baySizeOf(garage)).toBe("standard");
+    // And the classification itself.
+    expect(bayClassOf(std)).toBe("car");
+    expect(bayClassOf(long)).toBe("lorry");
+    expect(bayClassOf(garage)).toBe("car");
+    expect(bayAdmits("bus", "lorry")).toBe(true);
+    expect(bayAdmits("car", "lorry")).toBe(false);
+  });
+
+  it("keeps a bus stop, a loading bay and a lay-by apart — same size, different traffic", () => {
+    // All three need a BIG bay, so size alone cannot tell them apart. That is
+    // exactly why admission is a class and not a measurement.
+    const stop: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, reserved: "bus" };
+    const load: ParkingRow = { ...stop, reserved: "delivery" };
+    const layby: ParkingRow = { ...stop, reserved: "long" };
+    const permit: ParkingRow = { ...stop, reserved: "disabled" };
+    expect(stallLengthPx(stop, 200)).toBe(stallLengthPx(load, 200));
+    expect(stallLengthPx(load, 200)).toBe(stallLengthPx(layby, 200));
+
+    // A bus stop is for the coach and nobody else.
+    expect(stallFits("bus", stop, CAR_LEN)).toBe(true);
+    expect(stallFits("truck", stop, CAR_LEN)).toBe(false);
+    expect(stallFits("car", stop, CAR_LEN)).toBe(false);
+
+    // A loading bay is for the delivery lorry — a coach would fit and is still
+    // not making a delivery.
+    expect(stallFits("truck", load, CAR_LEN)).toBe(true);
+    expect(stallFits("bus", load, CAR_LEN)).toBe(false);
+    expect(stallFits("car", load, CAR_LEN)).toBe(false);
+
+    // A lay-by genuinely serves both. That is what a lay-by is.
+    expect(stallFits("truck", layby, CAR_LEN)).toBe(true);
+    expect(stallFits("bus", layby, CAR_LEN)).toBe(true);
+
+    // And a disabled bay stays empty, because nothing issues a permit yet.
+    for (const k of ["car", "truck", "bus"] as const) {
+      expect(stallFits(k, permit, CAR_LEN)).toBe(false);
+    }
+  });
+
+  it("sizes every reserved bay to the vehicle it is for", () => {
+    // One predicate decides this. The inline `reserved === "long"` it replaced sat
+    // at nine call sites, and every one of them would have gone on sizing a bus
+    // stop like a car space — a 55px coach in a 60px bay, which fits by 5px and
+    // looks it.
+    expect(needsBigBay("long")).toBe(true);
+    expect(needsBigBay("delivery")).toBe(true);
+    expect(needsBigBay("bus")).toBe(true);
+    expect(needsBigBay("disabled")).toBe(false); // a permit bay is a car space
+    expect(needsBigBay(undefined)).toBe(false);
+    // A big bay takes most of a tile, so exactly one fits — which is what a
+    // lay-by, a loading bay and a bus stop all actually look like.
+    expect(maxStallsPerTile("parallel", 200, true)).toBe(1);
+    expect(maxStallsPerTile("parallel", 200, false)).toBe(3);
   });
 
   it("counts a lorry-only facility as real capacity, not as a full car park", () => {
@@ -663,6 +713,58 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(sawLorryParked).toBeGreaterThan(0);
     expect(sawCarParked).toBeGreaterThan(0);
   });
+
+  it("sends every class of vehicle to its own kind of facility, across a whole city", () => {
+    // The end-to-end statement of the rule, on the map that has all of them at
+    // once. Six facilities, six different kinds of bay, and one run long enough
+    // that each is actually used — this is the test that would have caught the
+    // original report (cars in the lorry bays) and the two it turned out to be
+    // hiding (a coach in a car space, a lorry down the garage ramp).
+    const s = SCENARIOS.find(x => x.id === "parkcity")!;
+    const sim = createRoadSim({
+      level: s.level,
+      width: s.size!.cols,
+      height: s.size!.rows,
+      seed: 5,
+      spawnInterval: s.traffic!.spawnInterval,
+      carSpeed: 0.5,
+      carLength: 0.19,
+      maxCars: s.traffic!.maxCars,
+      mix: s.traffic!.mix,
+    });
+    const seen = new Map<string, Set<string>>();
+    for (let i = 0; i < 4000; i++) {
+      sim.step(0.05, () => false);
+      const kindById = new Map(sim.cars().map(c => [c.id, c.kind]));
+      for (const [stall, carId] of Object.entries(sim.parkingOccupancy())) {
+        const tileId = stall.split("|")[0];
+        const fac = s.level[tileId]?.parking?.facility ?? tileId;
+        const kind = kindById.get(carId);
+        if (!kind) continue;
+        if (!seen.has(fac)) seen.set(fac, new Set());
+        seen.get(fac)!.add(kind);
+      }
+    }
+    // Who belongs where. Every one of these was wrong at some point.
+    const expected: Record<string, string> = {
+      "kerb-west": "car", // ordinary kerb spaces
+      lot: "car", // the surface car park
+      garage: "car", // a height barrier keeps the big vehicles out
+      lorry: "truck", // the Lieferhof lay-by
+      busstop: "bus", // the Haltestelle
+    };
+    for (const [fac, kind] of Object.entries(expected)) {
+      const got = seen.get(fac);
+      expect(got, `nothing ever parked at ${fac} — the assertion below proves nothing`)
+        .toBeTruthy();
+      expect([...got!].sort(), `wrong traffic at ${fac}`).toEqual([kind]);
+    }
+    // And a semi never parks anywhere at all.
+    for (const kinds of seen.values()) expect(kinds.has("semi")).toBe(false);
+    // 200 simulated seconds on a 16x12 city with 34 vehicles: slower than the
+    // default 5s budget, and the run has to be long enough that every one of six
+    // facilities is genuinely used or the assertions above prove nothing.
+  }, 30000);
 
   it("leaves every existing road scenario's parking layer empty", () => {
     // The parking subsystem must cost a level that has none exactly nothing —

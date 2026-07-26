@@ -386,22 +386,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
   garage: 4-6) and let the big surface lot be the one that always has room.
   Conversely: a rank of 2 bays on a 200px tile reads as an UNFINISHED car park, not
   a small one — fill the tile (3 parallel / 7 perpendicular).
-- A BAY SERVES ONE CLASS. `stallFits` gates on `vehicleBaySize(kind) ===
-  baySizeOf(row)` FIRST, then on real body length as a backstop. Geometry alone is
-  not enough and shipped wrong once: a car took a `long` bay (fits, with room to
+- A BAY SERVES ONE CLASS, and the class is ADMISSION not SIZE. `stallFits` gates on
+  `bayAdmits(kind, bayClassOf(row))` FIRST, then on real body length as a backstop.
+  `BayClass` = car | lorry | bus | delivery | permit, and the `bayAdmits` switch is
+  exhaustive on purpose — a new class that nobody may use looks exactly like a bay
+  nobody happens to have taken yet.
+  · car      → cars. Includes a GARAGE whatever its capacity: a height barrier, and
+    its slots are not on the map so no geometry would ever have said so.
+  · lorry    → truck + bus. A lay-by genuinely serves both; that is what it is.
+  · bus      → bus only (a stop, authored with a SHORT `dwellSec`).
+  · delivery → truck only. A coach fits and is not making a delivery.
+  · permit   → nobody (no disabled-permit system; they stay empty, which is what
+    makes a car park look real rather than 100% usable).
+  Geometry alone shipped wrong once: a car took a `long` bay (fits, with room to
   spare), a coach took an ordinary kerb space (bus 55px vs a 60px parallel bay) and
   a lorry drove down a GARAGE ramp (`stallLengthPx` is Infinity there). All three
   measured true; all three wrong; and invisible to every other check, because the
   swept-overlap test only compares bodies within 0.7 lanes and a bay is further out
-  than that by construction. Garage = "standard" (a height barrier — its slots are
-  not on the map, so no geometry would ever have said so). Only SINGLE-BOX vehicles
-  park at all (`vehicleCanPark`, no semis).
+  than that by construction. Only SINGLE-BOX vehicles park (`vehicleCanPark`, no
+  semis).
+- SIZE follows the class through ONE predicate, `needsBigBay` (long|delivery|bus →
+  110px, one per tile). The inline `reserved === "long"` it replaced sat at NINE
+  call sites; every one would have gone on sizing a bus stop like a car space.
+- `CAPACITY_PROBES` — capacity/freeCount with no kind asks "could ANYONE use this",
+  over one vehicle per class. Hard-coding a car made a lay-by of two lorry bays
+  report nought capacity and show VOLL beside two empty spaces. The router always
+  names its kind (`availableFor`), so nobody is misrouted by it.
 - `freeCount`/`capacity` with NO kind means "could ANY vehicle use this" (car OR
   lorry), so a lay-by of two lorry bays reads `P 2/2` instead of reporting nought
   capacity and showing VOLL beside two empty spaces. The ROUTER always names the
   kind (`availableFor`), so a car is still never sent to lorry-only space.
-- `/test/parkinglorry` is the demo and the regression: car spaces at one end, a
-  lay-by at the other, and a mix heavy enough in lorries and coaches to fill it.
+- `/test/parkinglorry` is the focused demo: car spaces at one end, a lay-by at the
+  other, and a mix heavy enough in lorries and coaches to fill it. `/test/parkcity`
+  carries all six facility kinds at once, and `parking.spec.ts` runs it for 200
+  simulated seconds asserting each is used by exactly its own class — the test that
+  would have caught the original report AND the two bugs it was hiding.
 - Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
   (no permit system) — that is what makes a car park look real, not a bug.
 - TESTS: the sweep measures flow against MOVING vehicles (`movingCarCount`) and

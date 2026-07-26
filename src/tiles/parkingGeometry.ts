@@ -20,6 +20,7 @@ import {
   stallPitchPx,
   stallPose,
   garageExitFrom,
+  needsBigBay,
 } from "./parking";
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
@@ -75,9 +76,9 @@ export function parkingApronPath(
 ): string {
   if (row.kind === "garage") return "";
   const f = rowFrame(row, size);
-  const long = row.reserved === "long";
-  const pitch = stallPitchPx(row.kind, size, long);
-  const depth = stallDepthPx(row.kind, size, long);
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
   const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
   const far = near + depth;
   // An echelon rank's apron has to cover the rake as well as the bays.
@@ -116,9 +117,9 @@ export function parkingKerbPath(
 ): string {
   if (row.kind === "garage") return "";
   const f = rowFrame(row, size);
-  const long = row.reserved === "long";
-  const pitch = stallPitchPx(row.kind, size, long);
-  const depth = stallDepthPx(row.kind, size, long);
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
   const far = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth;
   const skew = row.kind === "angled" ? depth : 0;
   const first = stallPose(row, 0, size, kerbPx);
@@ -207,8 +208,8 @@ export function parkingSignAnchor(
   kerbPx: number,
 ): Pt {
   const f = rowFrame(row, size);
-  const long = row.reserved === "long";
-  const depth = row.kind === "garage" ? stallDepthPx("garage", size) : stallDepthPx(row.kind, size, long);
+  const big = needsBigBay(row.reserved);
+  const depth = row.kind === "garage" ? stallDepthPx("garage", size) : stallDepthPx(row.kind, size, big);
   const out = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth + size * 0.055;
   return f.at(size * 0.5, out);
 }

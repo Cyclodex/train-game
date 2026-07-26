@@ -2012,6 +2012,14 @@ $signal-offset: 20px;
   fill: rgba(255, 255, 255, 0.03);
   stroke-dasharray: 7 4;
 }
+/* A bus stop. Distinct from the lorry lay-by beside it, because they are the same
+   SIZE and completely different traffic — telling them apart by shape alone is
+   impossible, so the colour has to do it. */
+.parking-bay--bus {
+  fill: rgba(70, 190, 150, 0.22);
+  stroke: #bff3e2;
+  stroke-dasharray: 7 4;
+}
 /* The garage ramp: a dark mouth under the building, with a chevron pointing in.
    A car that drives to a bare kerb and vanishes reads as a despawn BUG — the
    ramp is what makes it read as a garage. */

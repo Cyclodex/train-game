@@ -107,8 +107,14 @@
             class="dock-btn lane-btn"
             :class="{ on: parkReserved === 'long' }"
             @click="parkReserved = parkReserved === 'long' ? undefined : 'long'"
-            title="Lorry bay — reserved for lorries and coaches; cars may not use it"
+            title="Lorry lay-by — lorries and coaches; cars may not use it"
           >🚛</button>
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: parkReserved === 'bus' }"
+            @click="parkReserved = parkReserved === 'bus' ? undefined : 'bus'"
+            title="Bus stop — coaches only. Give it a short dwell: a halt is not parking."
+          >🚌</button>
         </div>
         <!-- Which car park the facility brush sweeps tiles into. -->
         <div v-if="tool === 'facility'" class="lane-picker">
@@ -440,6 +446,7 @@ import {
   kerbOffsetAt,
   kerbOffsetEnds,
   maxStallsPerTile,
+  needsBigBay,
   stallDepthPx,
   type StallKind,
   type StallReservation,
@@ -598,7 +605,7 @@ const HINTS: Record<Tool, string> = {
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
-    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage instead of bays. A bay serves ONE class of vehicle: 🚛 marks a lorry bay that cars may not use, and everything else takes cars only — a garage has a height barrier, so no lorries down the ramp.",
+    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage instead of bays. A bay serves ONE class of vehicle and nothing else that merely fits: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody (no permits yet, so they stay empty — which is what makes a car park look real). Everything unmarked takes cars, and a garage has a height barrier so no lorries go down the ramp.",
   facility:
     "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
   terrain:
@@ -1420,7 +1427,7 @@ class EditorView extends Vue {
         const ok = canParkOn(tile, from, side) && this.kerbFits(id, from);
         const has = !!parkingRowAt(tile, from, side);
         const kerb = kerbOffsetAt(this.level, coord, from, size);
-        const depth = stallDepthPx(this.stallKind, size, this.parkReserved === "long");
+        const depth = stallDepthPx(this.stallKind, size, needsBigBay(this.parkReserved));
         const f = rowFrame({ from, side, kind: this.stallKind, count: 1 }, size);
         const d =
           "M " +
@@ -1459,7 +1466,7 @@ class EditorView extends Vue {
     // This is what greys both kerbs of a wide street when 90° bays are armed —
     // the honest teaching moment: kerb parking caps at a 2+2 arterial.
     const kerb = kerbOffsetAt(this.level, coord, from, size);
-    return kerb + stallDepthPx(this.stallKind, size, this.parkReserved === "long")
+    return kerb + stallDepthPx(this.stallKind, size, needsBigBay(this.parkReserved))
       <= size / 2 + 0.5;
   }
 
@@ -1496,7 +1503,7 @@ class EditorView extends Vue {
       from: hit.from,
       side: hit.side,
       kind: this.stallKind,
-      count: maxStallsPerTile(this.stallKind, size, this.parkReserved === "long"),
+      count: maxStallsPerTile(this.stallKind, size, needsBigBay(this.parkReserved)),
       ...(this.parkReserved ? { reserved: this.parkReserved } : {}),
     } as const;
     if (this.stallKind === "garage") {

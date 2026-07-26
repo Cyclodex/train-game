@@ -52,10 +52,22 @@ export type StallKind = "parallel" | "perpendicular" | "angled" | "garage";
 //  • "disabled" / "delivery" — reserved bays. v1 paints them and keeps ordinary
 //    traffic out; nothing yet issues a permit, so they simply stay empty and read
 //    as the real thing (a car park is never 100% usable).
-//  • "long" — the lorry/coach bay. RESERVED for them: a car may not take one,
-//    however much room is left over (see sim/parking.ts `baySizeOf`). A bay
-//    serves one class of vehicle, never anything that merely fits.
-export type StallReservation = "disabled" | "delivery" | "long";
+//  • "long" — the lorry/coach lay-by. RESERVED for them: a car may not take one,
+//    however much room is left over.
+//  • "bus" — a BUS STOP. Coaches only, and authored with a short `dwellSec`: a
+//    halt is a pause with passengers boarding, not parking.
+// A bay serves ONE class of vehicle, never anything that merely fits inside it.
+// Who may use what lives in `sim/parking.ts` (`bayClassOf` / `bayAdmits`).
+export type StallReservation = "disabled" | "delivery" | "long" | "bus";
+
+// Does this reservation need a BIG bay? A car is 38px, a coach 55 and a lorry 65,
+// and a delivery lorry has to get its tail in too — one extra size tier covers all
+// three. This is the SINGLE place that decides, because the inline
+// `reserved === "long"` it replaces was repeated at nine call sites and every one
+// of them would have quietly ignored the two new kinds.
+export function needsBigBay(reserved?: StallReservation): boolean {
+  return reserved === "long" || reserved === "delivery" || reserved === "bus";
+}
 
 // A run of stalls served by one approach of one tile, on one side of it.
 export interface ParkingRow {
@@ -173,27 +185,27 @@ const LONG_FRAC = 0.55;
 // dimension a vehicle's body has to fit inside, whichever that is — the single
 // number `stallFits` compares against, so the "does a truck fit" question is
 // never asked of the wrong axis.
-export function stallDepthPx(kind: StallKind, tileSize: number, long = false): number {
-  if (long && kind !== "parallel") return LONG_FRAC * tileSize;
+export function stallDepthPx(kind: StallKind, tileSize: number, big = false): number {
+  if (big && kind !== "parallel") return LONG_FRAC * tileSize;
   return DEPTH_FRAC[kind] * tileSize;
 }
 
-export function stallPitchPx(kind: StallKind, tileSize: number, long = false): number {
-  if (long && kind === "parallel") return LONG_FRAC * tileSize;
-  // A long 90° bay is DEEPER, not wider — it needs a touch more width too, but
+export function stallPitchPx(kind: StallKind, tileSize: number, big = false): number {
+  if (big && kind === "parallel") return LONG_FRAC * tileSize;
+  // A big 90° bay is DEEPER, not wider — it needs a touch more width too, but
   // nothing like its extra depth.
-  if (long && kind !== "garage") return PITCH_FRAC[kind] * 1.35 * tileSize;
+  if (big && kind !== "garage") return PITCH_FRAC[kind] * 1.35 * tileSize;
   return PITCH_FRAC[kind] * tileSize;
 }
 
 // The length of body a stall can hold, in px. A garage slot is inside a building
 // — no geometry constrains it, so it takes anything that is allowed to park.
 export function stallLengthPx(row: ParkingRow, tileSize: number): number {
-  const long = row.reserved === "long";
+  const big = needsBigBay(row.reserved);
   if (row.kind === "garage") return Number.POSITIVE_INFINITY;
   return row.kind === "parallel"
-    ? stallPitchPx(row.kind, tileSize, long)
-    : stallDepthPx(row.kind, tileSize, long);
+    ? stallPitchPx(row.kind, tileSize, big)
+    : stallDepthPx(row.kind, tileSize, big);
 }
 
 // The resting angle of a parked car RELATIVE to the direction of travel, in
@@ -223,9 +235,9 @@ export const MAX_GARAGE_CAPACITY = 400;
 // question to answer with for a garage, whose slots are not on the map at all.
 export const DEFAULT_GARAGE_CAPACITY = 16;
 
-export function maxStallsPerTile(kind: StallKind, tileSize = 200, long = false): number {
+export function maxStallsPerTile(kind: StallKind, tileSize = 200, big = false): number {
   if (kind === "garage") return MAX_GARAGE_CAPACITY;
-  return Math.floor(tileSize / stallPitchPx(kind, tileSize, long) + 1e-9);
+  return Math.floor(tileSize / stallPitchPx(kind, tileSize, big) + 1e-9);
 }
 
 // --- Derivations over a cell -------------------------------------------------
@@ -412,9 +424,9 @@ export function stallPose(
   const ry = dx;
   const sideSign = rowSide(row) === "right" ? 1 : -1;
 
-  const long = row.reserved === "long";
-  const pitch = stallPitchPx(row.kind, size, long);
-  const depth = stallDepthPx(row.kind, size, long);
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
   // Where the row starts along the tile. "pack" (the default) begins at the
   // leading edge so consecutive tiles form one continuous run of bays; "centre"
   // centres the row for a lone lay-by. A garage's mouth is always mid-tile.
@@ -875,7 +887,7 @@ export function validateParking(
           "left-side parking row on a two-way road (a driver cannot cross oncoming traffic to reach it)",
         );
       }
-      const max = maxStallsPerTile(row.kind, tileSize);
+      const max = maxStallsPerTile(row.kind, tileSize, needsBigBay(row.reserved));
       if (row.count > max) {
         add(tileId, `${row.count} ${row.kind} stalls do not fit on one tile (max ${max})`);
       }
@@ -886,9 +898,9 @@ export function validateParking(
       // wide. That is the correct answer — an American arterial with kerb parking
       // IS 2+2 — but it has to be said out loud rather than discovered.
       const kerb = kerbOffsetAt(level, coord, row.from, tileSize);
-      const long = row.reserved === "long";
+      const big = needsBigBay(row.reserved);
       const outer =
-        kerb + (row.gap ?? 0) * LANE_WIDTH_FRAC * tileSize + stallDepthPx(row.kind, tileSize, long);
+        kerb + (row.gap ?? 0) * LANE_WIDTH_FRAC * tileSize + stallDepthPx(row.kind, tileSize, big);
       if (outer > tileSize / 2 + 0.5) {
         add(
           tileId,
@@ -899,7 +911,7 @@ export function validateParking(
       // running lane to count as a physical clip (CLIP_LANES in sim/road.ts), and
       // it would sit there for its whole dwell. That is not a bay, it is a lane
       // blocker.
-      if (row.kind !== "garage" && stallDepthPx(row.kind, tileSize, long) < 0.5 * LANE_WIDTH_FRAC * tileSize) {
+      if (row.kind !== "garage" && stallDepthPx(row.kind, tileSize, big) < 0.5 * LANE_WIDTH_FRAC * tileSize) {
         add(tileId, `${row.kind} bays are too shallow to keep a parked car clear of the lane`);
       }
     }

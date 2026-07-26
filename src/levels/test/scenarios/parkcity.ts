@@ -26,8 +26,10 @@ const { Top, Right, Bottom, Left } = Position;
 //     kerb. Small on purpose, because a facility that cannot fill never shows the
 //     behaviour that matters — a driver arriving to find it full and going
 //     somewhere else. Watch the sign flip to VOLL and the traffic re-route.
-//   • DELIVERY and DISABLED bays outside the store, which nothing may use. A car
-//     park is never 100% usable, and the empty bays are what make it look like one.
+//   • A LORRY LAY-BY, a DELIVERY bay and a BUS STOP — three big bays serving three
+//     different kinds of traffic, and none of them interchangeable. Plus DISABLED
+//     bays nothing may use: a car park is never 100% usable, and the permanently
+//     empty spaces are what make it look like a real one.
 //   • A rail line across the bottom with two depots, crossing both side streets —
 //     so the parking traffic has to share the city with the trains.
 //
@@ -75,10 +77,17 @@ function teeSouth(): Lane[] {
   ];
 }
 
-const kerbBays = (from: Position, reserved?: ParkingRow["reserved"]): ParkingRow => ({
+// Three ordinary spaces fit a tile. A reserved bay that needs a BIG one — a
+// delivery lorry, a coach — takes most of the tile on its own, so it authors its
+// own count rather than inheriting the car figure.
+const kerbBays = (
+  from: Position,
+  reserved?: ParkingRow["reserved"],
+  count = 3,
+): ParkingRow => ({
   from,
   kind: "parallel",
-  count: 3,
+  count,
   ...(reserved ? { reserved } : {}),
 });
 
@@ -148,6 +157,22 @@ function build(): Level {
       },
     };
   }
+  // A BUS STOP on the far kerb of the back street, facing the lorry lay-by across
+  // the road — two big bays side by side serving completely different traffic,
+  // which is the point. Coaches only, and a halt is not parking: its dwell is
+  // seconds, the passengers get on and the bus goes.
+  for (const x of [9, 10]) {
+    const cell = level[`${x},${BACK_Y}`];
+    level[`${x},${BACK_Y}`] = {
+      ...cell,
+      parking: {
+        facility: "busstop",
+        label: "Haltestelle",
+        dwellSec: [6, 12],
+        rows: [{ from: Right, kind: "parallel", count: 1, reserved: "bus" }],
+      },
+    };
+  }
   // The two side streets, top to bottom.
   for (const x of SIDE_X) {
     for (let y = 0; y < ROWS; y++) road(x, y, twoWay(Top, Bottom));
@@ -194,7 +219,9 @@ function build(): Level {
       facility: "kerb-east",
       label: "Kaufhausstrasse",
       dwellSec: [14, 30],
-      rows: [kerbBays(Left, "delivery"), kerbBays(Right)],
+      // The store's loading bay: one lorry's worth of kerb, and lorries ONLY — a
+      // coach that would also fit is not making a delivery.
+      rows: [kerbBays(Left, "delivery", 1), kerbBays(Right)],
     },
   };
 

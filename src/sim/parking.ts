@@ -43,29 +43,61 @@ export function vehicleCanPark(kind: VehicleKind): boolean {
   return kind !== "semi";
 }
 
-// How big a space a vehicle needs, and how big a space a bay IS. A bay serves one
-// class and only that class — a lorry bay is not a car park with extra room, it
-// is a lorry bay, and a car sitting in one is the same nuisance on screen as it
-// is in life.
-export type BaySize = "standard" | "long";
+// WHO a bay is for. Deliberately not "how big is it": a lorry lay-by and a
+// delivery bay are the same size and serve different traffic, and a bus stop is
+// for coaches only however much room a lorry would have had. Size is a
+// CONSEQUENCE of the class (see `needsBigBay`); admission is the rule.
+export type BayClass = "car" | "lorry" | "bus" | "delivery" | "permit";
 
-export function vehicleBaySize(kind: VehicleKind): BaySize {
-  return kind === "truck" || kind === "bus" ? "long" : "standard";
+export function bayClassOf(row: ParkingRow): BayClass {
+  // A GARAGE is a car park whatever its capacity: an underground one has a height
+  // barrier, and a lorry or a coach does not go down the ramp. Its slots are not
+  // on the map, so nothing about its geometry would ever have said so.
+  if (row.kind === "garage") return "car";
+  switch (row.reserved) {
+    case "long":
+      return "lorry";
+    case "bus":
+      return "bus";
+    case "delivery":
+      return "delivery";
+    case "disabled":
+      return "permit";
+    default:
+      return "car";
+  }
 }
 
-export function baySizeOf(row: ParkingRow): BaySize {
-  // A GARAGE is standard-size whatever its capacity: an underground car park has
-  // a height barrier, and a lorry or a coach does not go down the ramp. Its stalls
-  // are not on the map, so nothing about its geometry would ever have said so.
-  if (row.kind === "garage") return "standard";
-  return row.reserved === "long" ? "long" : "standard";
+// May a vehicle of `kind` use a bay of class `cls`?
+//
+// One table, exhaustive on purpose: adding a bay class without deciding who may
+// use it should not compile, because the failure mode is silent — a bay nobody
+// can use looks exactly like a bay nobody happens to have taken yet.
+export function bayAdmits(kind: VehicleKind, cls: BayClass): boolean {
+  switch (cls) {
+    case "car":
+      return kind === "car";
+    // A lay-by serves both the lorries and the coaches; that is what a lay-by IS.
+    case "lorry":
+      return kind === "truck" || kind === "bus";
+    case "bus":
+      return kind === "bus";
+    // A loading bay is for the delivery lorry, not for the coach that would also
+    // fit in it.
+    case "delivery":
+      return kind === "truck";
+    // Nothing issues a disabled permit yet, so these stay empty — which is what
+    // makes a car park look like a real one rather than 100% usable.
+    case "permit":
+      return false;
+  }
 }
 
 // Can a vehicle of `kind` use a stall in `row`?
 //
 // TWO gates, and both are needed.
 //
-// CLASS first: a bay serves exactly one size of vehicle. Geometry alone let a car
+// CLASS first: a bay serves exactly one class of vehicle. Geometry alone let a car
 // take a lorry bay (it fits, with room to spare), a coach take an ordinary kerb
 // space (a bus is 55px, a parallel bay 60px) and a lorry drive down a garage ramp
 // — all measured, all wrong, and all invisible to every other check in the sim.
@@ -77,9 +109,9 @@ export function baySizeOf(row: ParkingRow): BaySize {
 // that either — the swept-overlap check only compares bodies within 0.7 lanes of
 // each other, and a bay is by construction further out than that.
 //
-// A reserved DISABLED or DELIVERY bay stays empty: nothing issues a permit yet,
-// so ordinary traffic keeps out and the bay reads as the real thing — a car park
-// is never 100% usable. Deliberate, not an oversight.
+// A DISABLED bay stays empty: nothing issues a permit yet, so ordinary traffic
+// keeps out and the bay reads as the real thing — a car park is never 100%
+// usable. Deliberate, not an oversight.
 export function stallFits(
   kind: VehicleKind,
   row: ParkingRow,
@@ -87,8 +119,7 @@ export function stallFits(
   tileSize = 200,
 ): boolean {
   if (!vehicleCanPark(kind)) return false;
-  if (row.reserved === "disabled" || row.reserved === "delivery") return false;
-  if (vehicleBaySize(kind) !== baySizeOf(row)) return false;
+  if (!bayAdmits(kind, bayClassOf(row))) return false;
   const bodyPx = specLength(vehicleSpec(kind, carLength)) * tileSize;
   // 2% margin so a body that exactly fills its bay still reads as parked rather
   // than as bursting out of it.
@@ -107,6 +138,12 @@ function hashOf(s: string): number {
   }
   return (h >>> 0);
 }
+
+// One vehicle of every class that can park, for the "could ANYONE use this?"
+// question `capacity`/`freeCount` ask when no kind is named. Listing them beats
+// hard-coding a car: a lay-by of two lorry bays would otherwise report nought
+// capacity and its sign would read VOLL beside two empty spaces.
+const CAPACITY_PROBES: VehicleKind[] = ["car", "truck", "bus"];
 
 // --- The registry ------------------------------------------------------------
 
@@ -261,10 +298,7 @@ export function createParkingRegistry(
     // takes this branch: it always names the kind it is routing (`availableFor`),
     // so a car is still never sent to a car park that only has lorry space.
     if (kind === undefined) {
-      return (
-        stallFits("car", info.row, carLength, tileSize) ||
-        stallFits("truck", info.row, carLength, tileSize)
-      );
+      return CAPACITY_PROBES.some(k => stallFits(k, info.row, carLength, tileSize));
     }
     return stallFits(kind, info.row, carLength, tileSize);
   }
