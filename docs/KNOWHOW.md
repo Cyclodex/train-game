@@ -51,6 +51,10 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Anything measuring tile positions on screen must read the pitch off a rendered
   tile, not assume 200 (`scripts/probe.mjs`) — the camera scales the board. SVG
   path data inside a tile stays in its own viewBox units and is unaffected.
+- A FITTED world gives the camera NO slack: pan is clamped to zero movement, so
+  a drag "does nothing" and a pan test passes/fails vacuously. Zoom in first
+  (wheel) before asserting that a drag pans — bit during the build-in-play
+  verification.
 - WHICH BUTTON pans is the CALLER's policy, not the controller's: play boards pan
   on LEFT **or MIDDLE** drag (left is the map gesture everyone knows and the only
   one a trackpad/touchscreen has); the EDITOR pans on middle-drag / space-drag
@@ -295,8 +299,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   call returns (`settleBuildGesture`). ABANDON = `dropAnchors(); finishRoute();`
   IN THAT ORDER: with the head cleared, finish cannot lay the pending frontier,
   only forget it. Reversed, it lays (and charges for) a terminus straight no
-  cost tag ever showed. Esc = FINISH (lays the terminus; free when it's a dup,
-  which the gap-closing flow always is); disarm/refusal = ABANDON.
+  cost tag ever showed. Esc = FINISH (lays the terminus); disarm/refusal =
+  ABANDON. The Esc terminus is free ONLY when it duplicates the far tile's rail,
+  i.e. the route closes into COLLINEAR track (buildgap's flow). Closing into the
+  SIDE of an existing line lays a NEW perpendicular straight there — a charged
+  $1,000 the cost tag never showed (measured live on lakevalley: 1000 → 0 on
+  Esc). Known gap, deliberately documented rather than redesigned.
+- Anchor AND terminus are always STRAIGHTS through the pressed edge
+  (`straightOut`), so branching off the SIDE of a line buys a CROSSING, not a
+  turnout — {N,S} laid across {W,E} has no shared connection, and no train can
+  ever enter the branch (verified live: lakevalley corner-cut is unreachable
+  rail). Turnouts only form where a planned route passes THROUGH an existing
+  tile while turning. Growing from OPEN ENDS is the gesture's honest use.
 - `game.reset()` restores the LEVEL from a pristine deep-copy snapshot: Retry
   hands back the starting capital, and keeping the bought track would let every
   Retry re-spend the same money. Built-junction switch entries are pruned with
