@@ -1,6 +1,8 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId } from "@/tiles/model";
+import { addConnection } from "@/tiles/editOps";
+import type { RouteStep } from "@/tiles/routePlanner";
 import {
   createSimulation,
   Simulation,
@@ -164,6 +166,14 @@ export interface CarRoute {
   segments: CarRouteSeg[];
 }
 
+// What happened to an attempted edit. `blocked` lists the tiles that refused it
+// (occupied or reserved), so a caller can tell the player which ones to wait for
+// rather than silently doing nothing.
+export interface EditResult {
+  ok: boolean;
+  blocked: string[];
+}
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -171,6 +181,15 @@ export interface Game {
   trainColors: Record<string, string>;
   switches: Record<string, Record<number, ActiveIntersection>>;
   signalTiles: string[];
+  // Incremented on every accepted edit. Views deriving from the level (grid
+  // cells, bounds) must read this so they re-render: the game mutates the RAW
+  // level object, which Vue's proxy cannot observe. See `applyEdits`.
+  levelVersion: Ref<number>;
+  // Lay track while the game runs. Rejects any edit touching a tile a train is
+  // standing on or has reserved — see the guard's note in createGame.
+  applyEdits(steps: RouteStep[]): EditResult;
+  // Whether those tiles could be edited right now, for greying out a preview.
+  canEdit(tileIds: string[]): boolean;
   // Signal aspects for rendering, keyed `${tileId}:${exitPort}`.
   signalAspects: Record<string, "stop" | "proceed">;
   // Manual override state per signal, keyed `${tileId}:${exitPort}`.
@@ -310,9 +329,21 @@ export function createGame(
   >;
 
   // Tiles that carry a signal (block boundaries) — any cell with signal ports.
-  const signalTiles = Object.entries(level)
+  // For RENDERING only: the simulation derives its own boundaries from the level
+  // live (see `isSignalTile` there), so this list going stale can't affect
+  // routing. `applyEdits` refreshes it anyway.
+  let signalTiles = Object.entries(level)
     .filter(([, tile]) => tile.signals && tile.signals.length > 0)
     .map(([id]) => id);
+
+  // Bumped whenever the level itself changes, so views can re-derive from it.
+  // Vue can NOT see these mutations on its own: `level` here is the raw object,
+  // while the view holds a reactive proxy of the same target — writing through
+  // the raw one updates the simulation (which reads it live) but notifies
+  // nobody. Handing the game the proxy instead would put a Proxy in the hot
+  // path, where `traverse` indexes the level thousands of times a tick. An
+  // explicit version counter keeps the sim fast and the view correct.
+  const levelVersion = ref(0);
 
   // Reactive signal aspects for rendering, keyed `${tileId}:${exitPort}`. The
   // game loop refreshes these from the simulation each frame.
@@ -918,13 +949,67 @@ export function createGame(
     raf = requestAnimationFrame(frame);
   }
 
+  // --- editing the world while it runs ---------------------------------------
+  //
+  // The simulation reads the level live on every `traverse`, so track laid mid-
+  // run is routable on the next tick with no rebuild. Only three things are
+  // derived rather than read, and this keeps them honest.
+  //
+  // The guard is the interesting part. A train's path caches the exit port of
+  // the tile it is standing on, and reservations cache tile ids, so editing a
+  // tile that is occupied or reserved makes both stale — the train would jump,
+  // or hold against a block that no longer looks the way it did. Rejecting
+  // those edits is also exactly the rule a player expects: you cannot rip up
+  // track under a moving train. The correctness guard and the game rule are the
+  // same line.
+  function editBlockers(tileIds: string[]): string[] {
+    return tileIds.filter(id => sim.occupiedBy(id) || sim.reservedBy(id));
+  }
+
+  function canEdit(tileIds: string[]): boolean {
+    return editBlockers(tileIds).length === 0;
+  }
+
+  function applyEdits(steps: RouteStep[]): EditResult {
+    const ids = [...new Set(steps.map(s => s.id))];
+    const blocked = editBlockers(ids);
+    if (blocked.length > 0) return { ok: false, blocked };
+
+    for (const s of steps) {
+      level[s.id] = addConnection(level[s.id] ?? { connections: [] }, s.a, s.b);
+    }
+
+    // A tile that just became a junction has no switch arm, and
+    // `connectionsToExitPort` returns NULL for a multi-partner entry with no arm
+    // — the train would stop dead on it. Merge in arms for the new entries while
+    // keeping every arm the player has already set. (Additive edits only, so an
+    // existing arm can never be left pointing at a connection that went away.)
+    const fresh = initialSwitches(level);
+    for (const id of ids) {
+      if (fresh[id]) switches[id] = { ...fresh[id], ...(switches[id] ?? {}) };
+      else delete switches[id];
+    }
+
+    signalTiles = Object.entries(level)
+      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+      .map(([id]) => id);
+
+    levelVersion.value++;
+    return { ok: true, blocked: [] };
+  }
+
   return {
     sim,
     tileSize,
     depotColors,
     trainColors,
     switches,
-    signalTiles,
+    get signalTiles() {
+      return signalTiles;
+    },
+    levelVersion,
+    canEdit,
+    applyEdits,
     signalAspects,
     signalOverrides,
     reservations,

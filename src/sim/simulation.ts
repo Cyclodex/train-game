@@ -222,7 +222,12 @@ export function createSimulation(config: SimConfig): Simulation {
   const { level } = config;
   const getSwitch: SwitchResolver = config.getSwitch ?? (() => undefined);
   const depotColors: Record<string, string> = config.depotColors ?? {};
-  const signalTiles = new Set(config.signalTiles ?? []);
+  // Signals are read from the LEVEL, not snapshotted, so a signal built or
+  // removed while the game runs is seen on the very next tick — the same way
+  // `traverse` already reads `level` live. `config.signalTiles` stays as an
+  // additive override for tests that mark boundaries on cells which carry no
+  // `signals` of their own; the two are unioned rather than either winning.
+  const explicitSignalTiles = new Set(config.signalTiles ?? []);
 
   // tileId -> trainId that has reserved it (route/block reservation).
   const reservations = new Map<string, string>();
@@ -237,9 +242,10 @@ export function createSimulation(config: SimConfig): Simulation {
   // edge-trigger blocked/proceeding events so they fire once per state change.
   const blockStates = new Map<string, BlockInfo>();
 
-  const isSignalTile = (tileId: string) => signalTiles.has(tileId);
+  const isSignalTile = (tileId: string) =>
+    explicitSignalTiles.has(tileId) || (level[tileId]?.signals?.length ?? 0) > 0;
   function isBoundary(tileId: string): boolean {
-    if (signalTiles.has(tileId)) return true;
+    if (isSignalTile(tileId)) return true;
     const tile = level[tileId];
     return !!tile && tile.role === "depot";
   }

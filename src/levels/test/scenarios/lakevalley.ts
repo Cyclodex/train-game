@@ -1,5 +1,6 @@
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { TerrainKind, TileCell } from "@/tiles/model";
 
 // Lake Valley — our reconstruction of Train Valley's first level ("See").
 //
@@ -29,10 +30,14 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 //
 // So: this verifies the WORLD half of the mode — terrain with rules, stations,
 // a route that has to respect the ground — and stands ready for the economy.
-const V = { connections: [], terrain: "water" } as const;
-const F = { connections: [], terrain: "forest" } as const;
-const R = { connections: [], terrain: "rock" } as const;
-const U = { connections: [], terrain: "urban" } as const;
+// Ground-only cells. Each call returns a FRESH cell: sharing one object across
+// tiles would make every lake tile the same reference, so a later edit to one
+// would silently change the rest.
+const ground = (terrain: TerrainKind) => (): TileCell => ({ connections: [], terrain });
+const V = ground("water");
+const F = ground("forest");
+const R = ground("rock");
+const U = ground("urban");
 
 export const lakevalley: TestScenario = {
   id: "lakevalley",
@@ -71,17 +76,17 @@ export const lakevalley: TestScenario = {
 
     // --- the ground --------------------------------------------------------
     // The lake, sitting exactly inside the ring: the reason the ring exists.
-    "3,3": V, "4,3": V, "5,3": V,
-    "3,4": V, "4,4": V, "5,4": V,
+    "3,3": V(), "4,3": V(), "5,3": V(),
+    "3,4": V(), "4,4": V(), "5,4": V(),
     // A second pond in the south, as in the original.
-    "4,6": V, "5,6": V,
+    "4,6": V(), "5,6": V(),
     // Rock: unbuildable, and it pins the ring's east side in place.
-    "0,0": R, "1,0": R, "8,3": R, "8,4": R,
+    "0,0": R(), "1,0": R(), "8,3": R(), "8,4": R(),
     // Woods around the rim.
-    "2,0": F, "3,0": F, "6,0": F, "7,0": F, "8,0": F,
-    "0,4": F, "0,5": F, "1,5": F, "0,6": F,
+    "2,0": F(), "3,0": F(), "6,0": F(), "7,0": F(), "8,0": F(),
+    "0,4": F(), "0,5": F(), "1,5": F(), "0,6": F(),
     // The towns each station serves.
-    "0,1": U, "1,1": U, "7,1": U, "8,1": U, "1,6": U,
+    "0,1": U(), "1,1": U(), "7,1": U(), "8,1": U(), "1,6": U(),
   },
   trains: {
     // One train per station, so all three junctions get used and the ring

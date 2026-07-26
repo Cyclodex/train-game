@@ -570,6 +570,12 @@ class PlayView extends Vue {
   // world is as big as its content. `gameConfig.levelSizeX`/`levelSizeY` are only
   // the default canvas a brand-new board starts on.
   get bounds(): { cols: number; rows: number } {
+    // Touch the game's edit counter so this computed invalidates when track is
+    // laid mid-run. `game.applyEdits` writes through the RAW level object (the
+    // simulation reads it live and must not pay for a Proxy on every traverse),
+    // which Vue cannot observe — the counter is the notification. See
+    // `applyEdits` in game.ts.
+    void this.game.levelVersion.value;
     return levelBounds(this.level, {
       cols: this.config.levelSizeX,
       rows: this.levelSizeY,
@@ -577,6 +583,7 @@ class PlayView extends Vue {
   }
 
   get gridCells(): { key: string; tile: Level[string] | null }[] {
+    void this.game.levelVersion.value; // see `bounds` above
     const out: { key: string; tile: Level[string] | null }[] = [];
     const { cols, rows } = this.bounds;
     for (let y = 0; y < rows; y++) {
