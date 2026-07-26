@@ -2535,7 +2535,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     };
     // Plan the route first so we can prefer the turn lane it will need (F). Routes
     // run on their own RNG stream, independent of the per-car speed/kind draws.
-    let { turns: routePlan, destination } = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
+    const throughTrip = planRoute(level, entry.coord, entry.entryPort, allMapExits, routeRng, cls);
+    const destination = throughTrip.destination;
+    let routePlan = throughTrip.turns;
     // Is this a PARKING trip? Only asked on a level that has car parks, so the
     // parking RNG stream is never drawn from elsewhere and every existing seeded
     // scenario replays exactly as before.

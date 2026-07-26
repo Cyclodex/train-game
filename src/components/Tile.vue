@@ -386,16 +386,8 @@ import {
   parkingSignAnchor,
   stallOutlinePath,
   garageGeometry,
-  rowBankPort,
 } from "@/tiles/parkingGeometry";
-import {
-  rowsOf,
-  rowSide,
-  kerbOffsetAt,
-  stallId,
-  facilityOf,
-  type ParkingRow,
-} from "@/tiles/parking";
+import { rowsOf, rowSide, stallId, facilityOf } from "@/tiles/parking";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";

@@ -9,11 +9,9 @@
 // never disagree — the same discipline that keeps the cyan debug overlay on top
 // of where cars actually drive.
 
-import { Position } from "@/types";
 import { oppositePort } from "@/sim/topology";
 import { portPoint, type Pt } from "@/sim/pathGeometry";
 import { LANE_WIDTH_FRAC } from "@/sim/laneOffset";
-import type { Port } from "./model";
 import {
   type ParkingRow,
   rowSide,
@@ -200,15 +198,4 @@ export function parkingSignAnchor(
   const depth = row.kind === "garage" ? stallDepthPx("garage", size) : stallDepthPx(row.kind, size, long);
   const out = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth + size * 0.055;
   return f.at(size * 0.5, out);
-}
-
-// The port a row's bays hug — used by the view to skip the road's own kerb line
-// on that flank (the apron's outer edge replaces it), exactly as `roadPaths`
-// skips a kerb where a lane-drop gore already draws one.
-export function rowBankPort(row: ParkingRow): Port {
-  const order: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
-  const travel = oppositePort(row.from);
-  const i = order.indexOf(travel);
-  if (i < 0) return travel;
-  return order[(i + (rowSide(row) === "right" ? 1 : 3)) % 4];
 }

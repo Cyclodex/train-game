@@ -88,15 +88,10 @@ export interface ParkingRegistry {
   capacity(facilityId: string, kind?: VehicleKind): number;
   freeCount(facilityId: string, kind?: VehicleKind): number;
   info(ref: StallRef): StallInfo | undefined;
-  occupantOf(ref: StallRef): string | null;
-  isFree(ref: StallRef): boolean;
   // Take a stall for `carId`. False when someone got there first — the caller
   // then keeps driving, which is exactly what a real driver does.
   claim(ref: StallRef, carId: string): boolean;
   release(ref: StallRef): void;
-  // Release every stall held by a car (used when a car is removed mid-park, e.g.
-  // on reset), so a stall can never leak and strand a bay forever.
-  releaseAllOf(carId: string): void;
   // The first free stall on `tileId` a vehicle of `kind` entering through `from`
   // can take, scanned in DRIVING ORDER (nearest first) so a car takes the space
   // it reaches first rather than driving past three empty bays.
@@ -230,8 +225,6 @@ export function createParkingRegistry(
     freeCount: (facilityId, kind) => count(facilityId, kind, true),
 
     info: infoOf,
-    occupantOf: ref => occupants.get(stallId(ref)) ?? null,
-    isFree: ref => infos.has(stallId(ref)) && !occupants.has(stallId(ref)),
 
     claim(ref, carId) {
       const key = stallId(ref);
@@ -264,12 +257,6 @@ export function createParkingRegistry(
       occupants.delete(stallId(ref));
     },
 
-    releaseAllOf(carId) {
-      for (const [key, owner] of occupants) {
-        if (owner === carId) occupants.delete(key);
-      }
-      aims.delete(carId);
-    },
 
     pickStallOn(tileId, from, kind) {
       const cell = level[tileId];

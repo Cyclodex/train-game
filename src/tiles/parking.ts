@@ -19,7 +19,7 @@
 // facility's capacity — is DERIVED here, so the sim and the renderer share one
 // source of truth exactly as they do for lanes (`tiles/lanes.ts`).
 
-import { Position, type Coordinates } from "@/types";
+import type { Coordinates } from "@/types";
 import { rotatePort, type Port, type TileCell, type Level } from "./model";
 import {
   laneCountAt,
@@ -228,16 +228,6 @@ export function facilityOf(cell: TileCell | undefined, tileId: string): string |
   return cell.parking.facility ?? tileId;
 }
 
-// Every stall of a cell, in a deterministic order.
-export function stallsOf(cell: TileCell | undefined, tileId: string): StallRef[] {
-  const out: StallRef[] = [];
-  for (const row of rowsOf(cell)) {
-    const side = rowSide(row);
-    for (let i = 0; i < row.count; i++) out.push({ tileId, from: row.from, side, index: i });
-  }
-  return out;
-}
-
 // The row a StallRef belongs to, or undefined when the ref is stale. RANGE
 // CHECKED: matching on `(from, side)` alone would keep resolving a ref whose
 // index no longer exists, and `stallPose` would happily place that phantom bay
@@ -264,11 +254,6 @@ export function bankOf(row: ParkingRow): Port {
   // it from the travel heading rather than by table, so it cannot drift.
   const travel = oppositePort(row.from);
   return rotatePort(travel, side === "right" ? 1 : -1);
-}
-
-// True when the cell carries any parking at all.
-export function hasParking(cell: TileCell | undefined): boolean {
-  return rowsOf(cell).length > 0;
 }
 
 // --- Geometry ----------------------------------------------------------------
@@ -863,11 +848,3 @@ function facilityHasWayOut(level: Level, f: ParkingFacility): boolean {
   }
   return false;
 }
-
-// Re-exported so callers can build a coordinate without importing Position too.
-export const PARKING_PORTS: Port[] = [
-  Position.Top,
-  Position.Right,
-  Position.Bottom,
-  Position.Left,
-];
