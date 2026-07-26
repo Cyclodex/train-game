@@ -29,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
-import { manoeuvreLength, rowSide } from "@/tiles/parking";
+import { manoeuvreLength, rowSide, turnsInAcrossKerb } from "@/tiles/parking";
 import type { Car, RoadEntry, VehicleKind } from "./road";
 
 // A body point as `road.ts` samples it — only the fields the gates below read.
@@ -314,8 +314,27 @@ export function createParkingPhases(deps: ParkingDeps) {
   // real centre, so arriving a little early only lengthens the swing.
   function stopTOf(car: Car): number {
     if (!car.stall) return 0;
-    const t = parking.startTOf(car.stall);
-    return parking.info(car.stall)?.onLane ? t + halfBody(car) : t;
+    // Half a body PAST it, for a bay as much as for a halt. `startTOf` is where
+    // the curve begins, and a curve carries the car's CENTRE — so the nose has to
+    // be half a length further on for the middle to be at the start.
+    //
+    // Braking the NOSE to it instead handed `beginEntering` a car whose centre was
+    // half a body SHORT, and the curve was anchored there: every pull-in drove an
+    // approach half a body longer than the one the geometry was designed for. That
+    // is the worst possible error to make here, because a longer approach makes a
+    // 90° pull-in cut HARDER across its neighbours, not softer (see
+    // TURN_IN_CLEARANCE_FRAC): the clearance the wider aisle bought was spent
+    // again on an approach nobody asked for.
+    //
+    // A PARALLEL bay does not care and keeps the nose stop: arriving early only
+    // lengthens a shallow slide along the kerb, which is harmless — and measured
+    // BETTER (parkingkerb: 7 completed cycles a run against 2 when the exact stop
+    // was applied there too, because the extra room is what lets a car still find
+    // its space on a busy kerb). The run is a hard constraint where the geometry
+    // depends on it and a soft target where it does not.
+    const info = parking.info(car.stall);
+    const exact = info ? info.onLane || turnsInAcrossKerb(info.row.kind) : false;
+    return parking.startTOf(car.stall) + (exact ? halfBody(car) : 0);
   }
 
   function beginEntering(car: Car): void {

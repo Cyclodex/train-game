@@ -33,7 +33,7 @@ import {
   bayClassOf,
   bayAdmits,
 } from "@/sim/parking";
-import { createRoadSim, specLength, vehicleSpec } from "@/sim/road";
+import { createRoadSim, specLength, vehicleSpec, type CarSample } from "@/sim/road";
 import { SCENARIOS } from "@/levels/test";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -836,6 +836,78 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // Every one of them from the kerb lane. Not "mostly": one car crossing a live
     // lane to reach a space is the whole complaint.
     expect([...new Set(lanes)]).toEqual([0]);
+  });
+
+  it("never drives a manoeuvre through a car that is already parked", () => {
+    // The geometric test above proves the DESIGNED curve clears its neighbours.
+    // This one proves the car actually drives that curve — which it did not: the
+    // stop line braked the nose to the curve's start, so the centre was half a
+    // body short and `beginEntering` anchored there, quietly adding half a body of
+    // approach to every pull-in. On a 90° bay a longer approach cuts HARDER, so
+    // the aisle clearance was spent again before anyone could use it.
+    //
+    // Rendered poses, in world tiles, swept against every parked body on the map.
+    const CAR_W = 0.1; // sprite width in tiles; the length comes from the pose pair
+    const sat = (A: { x: number; y: number }[], B: { x: number; y: number }[]): number => {
+      let worst = -Infinity;
+      for (const poly of [A, B]) {
+        for (let i = 0; i < poly.length; i++) {
+          const p = poly[i]!;
+          const q = poly[(i + 1) % poly.length]!;
+          const l = Math.hypot(q.y - p.y, q.x - p.x) || 1;
+          const nx = -(q.y - p.y) / l;
+          const ny = (q.x - p.x) / l;
+          const pr = (pts: typeof A) => pts.map(t => t.x * nx + t.y * ny);
+          const a = pr(A);
+          const b = pr(B);
+          const gap = Math.max(Math.min(...a) - Math.max(...b), Math.min(...b) - Math.max(...a));
+          if (gap > 0) return gap;
+          worst = Math.max(worst, gap);
+        }
+      }
+      return worst;
+    };
+    const boxOf = (u: { front: CarSample; rear: CarSample }): { x: number; y: number }[] | null => {
+      if (!u.front.pose || !u.rear.pose) return null;
+      const fx = u.front.coord.x + u.front.pose.tx;
+      const fy = u.front.coord.y + u.front.pose.ty;
+      const rx = u.rear.coord.x + u.rear.pose.tx;
+      const ry = u.rear.coord.y + u.rear.pose.ty;
+      const dx = fx - rx;
+      const dy = fy - ry;
+      const l = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / l) * (CAR_W / 2);
+      const ny = (dx / l) * (CAR_W / 2);
+      return [
+        { x: fx + nx, y: fy + ny },
+        { x: fx - nx, y: fy - ny },
+        { x: rx - nx, y: ry - ny },
+        { x: rx + nx, y: ry + ny },
+      ];
+    };
+
+    const sim = simFor("parkinglot", 5);
+    let worst = Infinity;
+    let compared = 0;
+    for (let i = 0; i < 1600; i++) {
+      sim.step(0.05, () => false);
+      const phase = new Map(sim.cars().map(c => [c.id, c.phase]));
+      const boxes = sim
+        .sample()
+        .map(c => ({ id: c.id, phase: phase.get(c.id), box: c.units[0] ? boxOf(c.units[0]) : null }))
+        .filter(c => c.box);
+      const moving = boxes.filter(c => c.phase === "entering" || c.phase === "leaving");
+      const still = boxes.filter(c => c.phase === "parked");
+      for (const m of moving) {
+        for (const p of still) {
+          worst = Math.min(worst, sat(m.box!, p.box!));
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(200);
+    // A hair of tolerance: the sprite corners graze, as they do in a real car park.
+    expect(worst).toBeGreaterThan(-0.008);
   });
 
   it("cars drive to a car park, park, dwell, and leave again", () => {

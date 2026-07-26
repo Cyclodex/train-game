@@ -134,7 +134,7 @@ export function layByTaperPx(row: ParkingRow, size: number): number {
 const TURN_IN_CLEARANCE_FRAC = 0.19;
 
 // Does this kind turn ACROSS the kerb to get in, rather than sliding along it?
-function turnsInAcrossKerb(kind: StallKind): boolean {
+export function turnsInAcrossKerb(kind: StallKind): boolean {
   return kind === "perpendicular" || kind === "angled";
 }
 

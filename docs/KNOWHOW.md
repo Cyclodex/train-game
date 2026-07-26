@@ -359,7 +359,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
     at 0.47 tiles/sec stop dead on the lane and start again. Not braking: no
     momentum. A REVERSED-OUT bay keeps the standing start and should, the driver
     really has stopped to change direction.
-  · `stopTOf` is the STOP LINE, and a HALT needs the same half: its stall `t` is
+  · `stopTOf` is the STOP LINE, and it is where the CENTRE-vs-NOSE conversion bit
+    hardest. Braking the nose to `startTOf` puts the centre half a body SHORT, and
+    `beginEntering` anchors the curve there — so every pull-in drove an approach
+    half a body longer than the geometry was designed for. On a 90° bay that is
+    the worst possible error, because a longer approach cuts HARDER across the
+    neighbours: the aisle clearance was spent again before anyone could use it
+    (swept penetration into a parked car, measured in the sim: 5.9px → 1.2px once
+    the nose stops half a body past). Applied to the TURNING kinds and to halts,
+    where the run is a hard constraint; a PARALLEL bay keeps the nose stop, since
+    arriving early only lengthens a shallow slide and measured better for it
+    (parkingkerb 7 completed cycles a run against 2).
+  · A HALT needs the same half: its stall `t` is
     the middle of the marked kerb and the bus stands ON it, so the nose goes half
     a body past. Braking the nose to the middle parked the coach BEHIND its own
     markings — hanging off the back with the front half of the stop empty, which
