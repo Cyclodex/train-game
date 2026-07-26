@@ -108,32 +108,32 @@
     <!-- The build tool's ONE piece of chrome (design doc §5.5): a toggle. While
          armed, the tiles grow the editor's edge zones and the route gesture
          owns the left drag; the cost rides the ghost preview, not this button. -->
-    <button
-      v-if="canBuild"
-      class="build-toggle"
-      :class="{ 'build-toggle--on': buildArmed }"
-      data-testid="build-toggle"
-      :title="buildToggleTitle"
-      @click="toggleBuild"
-    >
-      <span class="build-toggle__icon">🛤️</span>
-      <span>{{ buildArmed ? "Building — Esc finishes" : "Build" }}</span>
-    </button>
-    <!-- Bulldoze rides alongside Build rather than inside it: they are opposite
-         verbs on the same board, and burying the undo in a sub-mode of the
-         thing that caused the mistake is exactly where a player will not look
-         for it. Only one can be armed at a time. -->
-    <button
-      v-if="canBuild"
-      class="build-toggle build-toggle--raze"
-      :class="{ 'build-toggle--on': razeArmed }"
-      data-testid="raze-toggle"
-      :title="razeToggleTitle"
-      @click="toggleRaze"
-    >
-      <span class="build-toggle__icon">🧨</span>
-      <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
-    </button>
+    <div v-if="canBuild" class="build-dock">
+      <button
+        class="build-toggle"
+        :class="{ 'build-toggle--on': buildArmed }"
+        data-testid="build-toggle"
+        :title="buildToggleTitle"
+        @click="toggleBuild"
+      >
+        <span class="build-toggle__icon">🛤️</span>
+        <span>{{ buildArmed ? "Building — Esc finishes" : "Build" }}</span>
+      </button>
+      <!-- Bulldoze rides alongside Build rather than inside it: they are
+           opposite verbs on the same board, and burying the undo in a sub-mode
+           of the thing that caused the mistake is exactly where a player will
+           not look for it. Only one can be armed at a time. -->
+      <button
+        class="build-toggle build-toggle--raze"
+        :class="{ 'build-toggle--on': razeArmed }"
+        data-testid="raze-toggle"
+        :title="razeToggleTitle"
+        @click="toggleRaze"
+      >
+        <span class="build-toggle__icon">🧨</span>
+        <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
+      </button>
+    </div>
     <!-- The jam nudge. Collisions are impossible here by construction, so
          DEADLOCK is the failure this game actually has, and without a word it
          reads as the game having frozen. Not an overlay: the board stays live
@@ -1586,12 +1586,22 @@ export default toNative(PlayView);
 // ---- the build tool (Tycoon phase 2) ----
 // One floating toggle: the whole build HUD off the board. The cost lives on the
 // ghost preview's tag, not here.
-.build-toggle {
+// Build and Bulldoze sit in one centred row. They used to be positioned
+// individually, the second by a hand-guessed pixel offset from centre — which
+// was too small for the wider Build label and overlapped it by 76px. Laying
+// them out in a flex row makes the arrangement independent of either label's
+// width, so nothing has to be re-guessed when the wording changes.
+.build-dock {
   position: fixed;
   z-index: 2000;
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+}
+.build-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1619,11 +1629,7 @@ export default toNative(PlayView);
   border-color: rgba(245, 217, 122, 0.8);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(245, 217, 122, 0.45);
 }
-// Bulldoze sits beside Build rather than under it. Offset so the pair reads as
-// two halves of one control strip.
-.build-toggle--raze {
-  transform: translateX(calc(-50% + 168px));
-}
+// Bulldoze differs from Build only in its armed livery — the row places it.
 .build-toggle--raze.build-toggle--on {
   color: #1a0e0e;
   background: linear-gradient(90deg, #f2a488, #d9663f);
