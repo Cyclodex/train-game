@@ -18,6 +18,7 @@ import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
 import { parkinglot } from "@/levels/test/scenarios/parkinglot";
+import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
 import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
@@ -185,7 +186,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, demoworld, parkcity] },
     ],
   },
 ];

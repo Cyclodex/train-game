@@ -263,6 +263,82 @@ lean — prune as much as you add. This file only stays useful if every task ten
   lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
+## PARKING (cars stop, 2026-07-26)
+- `TileCell.parking?: ParkingCell` = the FOURTH axis (`tiles/parking.ts`). rail
+  `connections` / road `lanes` / `terrain` say what crosses or IS a cell; parking
+  says where a vehicle may STOP on it. Cell-level like `roadPriority` — rides every
+  editor reducer's spread and every JSON path untouched. NEVER model a bay as a
+  `Lane` into `Position.Center`: `roadPortsOf` counts Center, so the tile becomes a
+  junction (`isRoadJunction` >2 ports), `deriveJunctionCarLanes` silently DELETES
+  the Center lane, and `advance` despawns anything exiting through it.
+- THE UNIFICATION: a car park's AISLES are ordinary one-way `road` lanes, so the
+  router + follower model drive its rows for free. One primitive — a ROW of stalls
+  on one approach of one tile, one bank. Kerb bay / 90° lot bay / garage ramp are
+  the same thing with different depth+paint. Garage stalls are HIDDEN (inside a
+  building), `count` = capacity, all at one pose — safe only because of the
+  one-car-at-a-time barrier.
+- CAR PHASES (`road.ts CarPhase`): driving | entering | parked | leaving.
+  · parked = ZERO body points (`bodyPoints` returns []) + empty `bodyTileIds`.
+    That one fact is what keeps it out of `clearAhead`, the junction gates and
+    `worstSweptOverlap`. Do NOT try to express a bay as a lane index: `lanePosAt`
+    CLAMPS to [0, count-1], so lane −1 reads as the kerb lane and the parked car
+    seals its own street forever.
+  · entering = full lane body SHRINKING to 0 (traffic queues behind a parker —
+    correct); leaving = FULL body from tick 1 (it only sets off on a clear gap).
+  · `headProgress` is FROZEN at the peel-off point for the whole stay, so
+    `sampleAtArc` keeps working and `resumeFromStall` knows where to rejoin.
+  · advanceParking ZEROES `waitSeconds`/`waitedSec`. Left to accrue, a dwell beside
+    a crossing FAILS crossing-keeper (30s `maxCarWaitSec`) while behaving perfectly.
+  · Filter non-driving cars out of `waitingCarsAt` (else a phantom claimant with
+    waitSeconds→∞ owns the arbiter's starvation guard) and parked out of
+    `laneClearForChange` (it reads frozen `headProgress`, not body points).
+- PARKED CARS ARE OUT OF THE TRAFFIC CAP (`activeCarCount`). `maxCars` is a DENSITY
+  setting; counting a car in a bay against it empties the streets as a car park fills.
+- AIM TOKENS = plan-time reservation (`parking.aim`). `availableFor` = free − aimed,
+  and that is what `openFacilities`/the router read, so a car park that is spoken
+  for is avoided like a full one. TRAP (shipped once): take the token only AFTER
+  `cars.push`. Every bail-out in `trySpawn` above that — a blocked entry lane most
+  of all — fires constantly under `fillFast`, and a token for a car that never
+  existed can never be released. Car parks then DRAIN to empty and stay there.
+  Pinned by `parking.spec.ts` "no leaked aim tokens", measured via `parkingStatus()`.
+- The MANOEUVRE is a quadratic Bézier (lane → point abeam the bay → bay) with an
+  explicit ARC-LENGTH table. NOT `turnLaneFrame`'s fillet: that is 90°-only
+  (tangent == rf because the lane lines are perpendicular) and of the four stall
+  kinds only "perpendicular" turns 90°. Never drive `m` as the raw Bézier
+  parameter — it is not proportional to distance and the car surges mid-swing.
+- GEOMETRY (200px tile, 38x20px car): kerb = `max(laneCountAt,2)/2·W`, ONE-WAY =
+  `oneWayRunMax/2·W` (a 1-lane aisle's kerb is 14px, not 28 — the two-way floor
+  floats bays a car's width off the tarmac). Depth parallel 26 / perp 48 / angled
+  42 / garage 22. Pitch parallel 60 / perp 28 / angled 29 (= carWidth/sin45 — the
+  cars nest; deriving pitch from the 45° DIAGONAL wastes a third of the kerb).
+  ⇒ kerb parking CAPS AT A 2+2 ARTERIAL: 3+3 leaves 16px, less than a car is wide.
+  An ECHELON bay is a PARALLELOGRAM (kerb edge along the road, sides raked
+  FORWARD); rotating a rect overlaps its neighbour by 18px and lands on the tarmac.
+- `align` defaults to "pack" (row starts at the leading edge). "centre" on every
+  tile of a long row leaves a car-sized hole of kerb at EVERY tile seam.
+- AUTHORING: a car park must LOOP back to the street. There is no U-turn in the
+  lane model, so a dead-ended aisle is a car trap — `validateParking` rejects it,
+  and `createRoadSim` filters in-grid openings on facility tiles out of BOTH
+  `roadEntries` and `allMapExits` (else cars materialise between the rows, and
+  through-traffic is routed into the lot "to leave the map there" and evaporates).
+  A facility tile may carry ONLY `{facility}` — that is how an aisle joins a car park
+  and how "have I driven the whole thing?" stays answerable.
+- A FACILITY THAT CANNOT FILL NEVER SHOWS THE FEATURE. The marquee behaviour is a
+  driver finding it full and going elsewhere, so keep a demo facility small (the
+  garage: 4-6) and let the big surface lot be the one that always has room.
+  Conversely: a rank of 2 bays on a 200px tile reads as an UNFINISHED car park, not
+  a small one — fill the tile (3 parallel / 7 perpendicular).
+- Only SINGLE-BOX vehicles park (`vehicleCanPark`, no semis) and the fit gate is
+  real body length vs real bay length (`stallFits`), never a category flag. Nothing
+  downstream catches an oversized parked car: the swept-overlap check only compares
+  bodies within 0.7 lanes, and a bay is further out than that by construction.
+- Reserved `disabled`/`delivery` bays are excluded from capacity AND stay empty
+  (no permit system) — that is what makes a car park look real, not a bug.
+- TESTS: the sweep measures flow against MOVING vehicles (`movingCarCount`) and
+  swaps `lateCrossings>0` for `parkCycles >= 3` on `PARKING_SCENARIOS` — parking is
+  a CYCLE, not a sink, and that is the property to assert. `frontTiles` must skip
+  parked cars AND unit-less samples (a garaged car has `units: []`).
+  Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
@@ -574,6 +650,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   it is not just deleting three tiles.
 - The gallery is 73 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
+- PARKING landed 2026-07-26 (see the PARKING section), with `/test/parkingkerb`,
+  `/test/parkinglot` and the `/test/parkcity` world. Deferred with reasons: a
+  permit system for reserved bays (they stay empty, which is what makes a car park
+  look real), paid or time-limited parking — now that the Tycoon ledger exists
+  this has somewhere to go, so it is a real option rather than a dead end —
+  and pedestrians (a whole second sim for a 4px dot).
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.

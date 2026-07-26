@@ -42,7 +42,12 @@ const aisle = () => ({
   parking: {
     facility: "lot",
     label: "Parkplatz Nord",
-    dwellSec: [14, 30] as [number, number],
+    // Short stays on purpose. This is a DEMO map, and the registry-wide sweep
+    // watches it for 40 simulated seconds — a car park whose cars sit for half a
+    // minute completes barely one park-and-leave cycle in that window, which
+    // proves nothing about turnover. The city (`/test/parkcity`) uses realistic
+    // dwells; this one is tuned to show the whole cycle quickly.
+    dwellSec: [8, 18] as [number, number],
     rows: [rank("right"), rank("left")],
   },
 });
@@ -86,7 +91,7 @@ export const parkinglot: TestScenario = {
         // A garage holds its cars far longer than a kerb does. Authoring dwell per
         // FACILITY is what lets the two read differently at a glance: the street
         // churns while the garage sits.
-        dwellSec: [34, 62],
+        dwellSec: [16, 30],
         rows: [{ from: Position.Left, kind: "garage" as const, count: 4 }],
       },
     },
