@@ -547,6 +547,23 @@ board to do it on.
 | **`/test/taxyear`** | The mechanic in isolation: a line with a two-tile gap, a 10-second year and $300 a piece, dialled for *watching* rather than for balance. Close the gap cheaply or scenically and the upkeep line remembers which; bulldoze and it falls. |
 | **`game.advance(dt)`** | The frame body minus rendering, extracted so the loop is testable headlessly. `game.sim.step()` moves trains only — no fares, no levy, no tracker — and a hidden browser pane runs no `requestAnimationFrame` at all, so this is the only honest way to unit-test anything loop-shaped. |
 
+#### Bankruptcy, as built (2026-07-27)
+
+The tax's other half, and the reason it was promoted from nicety to gap the day
+the levy shipped: until then the only way to empty the purse was to over-spend
+on track, i.e. to make a visible mistake. Now *time* drains it too, and a board
+that silently stops responding to the build tool is the worst dead end this game
+can offer.
+
+| | |
+|---|---|
+| **The rule** | Bankrupt is **owing more than you have**, never "the balance reached zero". That distinction carries the design: measured lines finish flat broke with the railway built and the trains running, and that is a tight win. The failure is an annual levy the balance cannot cover — `Counters.unpaidTax`, gated by `ObjectiveSpec.fail.onBankruptcy`. Only the tax can produce it; an unaffordable build is refused up front, and a refusal is a choice, not insolvency. |
+| **On the way down** | The company pays what it has (being broke must not be free), records the shortfall, and stops billing there. Piling every later levy on says nothing more — "$18,000 short" and "$600 short" end the same run — and would ruin the number as a diagnostic. |
+| **The warning is the feature** | `money.taxUnaffordable` turns the calendar row red with *"can't pay next year"* a whole year before the bill lands, and the fix it names — **bulldoze** — works twice over: it refunds what you paid *and* lowers the next bill. Without that, a fail state the player cannot see coming is an ambush. Same shape as the gridlock nudge: name the failure and name the fix. |
+| **Declared mode-wide** | `fail: { onBankruptcy: true }` for all of Tycoon rather than per board, because it is self-gating — no calendar ⇒ no levy ⇒ no shortfall. `buildgap` and `/test/dispatch` carry the flag and never feel it. |
+| **`/test/bankrupt`** | $5,000, an eight-second year, $600 a piece: the annual bill is a countdown, not a drip. Measured — prompt run won at 15.7s banking $2,321; relaxed won at 22.7s banking $1,086; dawdling folded at 26.0s, $600 short. The exits are the ones M12 already gave us: Retry, or Keep playing. |
+| **Knock-on** | A Tycoon board that *deadlocks* now eventually folds rather than stalling forever. The gridlock nudge still fires first and names the real cause, so the player is told the truth before the bank is. |
+
 ### Scorecard against §1.2 — mechanic by mechanic
 
 | # | Mechanic | State | What is actually missing |
@@ -575,8 +592,8 @@ See the "as built" tables above and `KNOWHOW` → BULLDOZE + GRIDLOCK. The goal 
 what separates *the loop works* from *a finished mode*.
 
 1. ~~**Annual tax + calendar**~~ **DONE** (2026-07-26) — see "The second clock, as built".
-2. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
-2b. **A bankruptcy state** — *S–M*, and it was promoted by item 1. Until the tax existed, the only way to run the purse dry was to over-spend on track, i.e. to make a mistake; now *time itself* drains it, and a slow run can reach $0 with no misdrag and no explanation. The tax dial is currently tuned to stay a spare piece of track clear of that (pinned by a unit test), which is a floor, not a fix. What is wanted is the honest version of what §1.3 implies: reaching $0 with track still to buy should *say so* and offer Retry, the way the gridlock nudge does for a jam.
+2. ~~**A bankruptcy state**~~ **DONE** (2026-07-27) — see "Bankruptcy, as built".
+3. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting. This is now the last sliver of the mode's own scope.
 3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). Bulldoze exists already; what phase 3 adds here is a demolition/clearing PRICE.
 4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
 5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
@@ -615,24 +632,24 @@ Carried forward from the last session and still open:
   question, and the reason the build targets were NOT narrowed to open ends only
   (lakevalley-open needs an interior-edge start to buy its station junction).
 
-### The next step, concretely: goals on the Ready card, then bankruptcy
+### The next step, concretely: goals on the Ready card
 
-Item 1 is executed — the annual levy books off a calendar rendering of the
-scored clock, and the reasoning survives in `sim/calendar.ts`, in the tuning
-block of `modes/tycoon.ts`, and in `docs/KNOWHOW.md` → THE SECOND CLOCK.
+Items 1 and 2 are executed. The annual levy books off a calendar rendering of
+the scored clock, and an unpayable levy now folds the railway with a warning a
+year ahead of it; the reasoning survives in `sim/calendar.ts`, in the tuning
+block of `modes/tycoon.ts`, and in `docs/KNOWHOW.md` → THE SECOND CLOCK and
+BANKRUPTCY.
 
-What is left to make the mode *finished* rather than *working*:
+One sliver of the mode's own scope is left:
 
-- **Goals on the Ready card** (item 2, *S*). The per-board star labels already
-  exist; today they are only readable as star-pip tooltips, so the player cannot
-  see the targets before starting. Pure HUD work.
-- **Bankruptcy** (item 2b, *S–M*), which item 1 promoted from nicety to gap. The
-  tax is the first mechanic that can empty the purse without the player doing
-  anything wrong, and $0 currently means the board simply stops responding to
-  the build tool with no explanation. The gridlock nudge is the precedent for
-  how to say it.
+- **Goals on the Ready card** (*S*). The per-board star labels already exist;
+  today they are only readable as star-pip tooltips, so the player cannot see
+  the targets before starting. Pure HUD work, no sim hot path.
 
-Neither touches the sim's hot path; both are HUD + `modes/tycoon.ts` work.
+After that the mode is *finished* in its own terms, and everything remaining in
+the ordered list above is new scope rather than unfinished business: clearing
+costs over terrain, explicit destinations, the briefing screen, a campaign,
+player-called trains, and the road layer joining the economy.
 
 ---
 

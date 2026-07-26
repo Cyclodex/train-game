@@ -585,6 +585,77 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
+  test("tycoon: an unpayable levy folds the railway, and Retry gives it back", async ({
+    page,
+  }) => {
+    test.setTimeout(90000);
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    // Bankruptcy through the real UI. The rule itself is pure and covered in
+    // `bankruptcy.spec.ts`; what only a browser proves is that the frame loop
+    // runs it, that the HUD warns BEFORE the bill lands, and that the Failed
+    // overlay is a real exit rather than a dead board.
+    await page.goto("/#/play?mode=tycoon&board=bankrupt");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    const money = () =>
+      page.evaluate(() => {
+        const m = (window as any).__game.money;
+        return { balance: m.balance as number, unpaid: m.unpaidTax as number };
+      });
+    const budget = (await money()).balance;
+    expect(budget).toBe(5000);
+
+    // Close the gap: $2,000 of track, and $1,200 a year to hold it.
+    await page.getByTestId("build-toggle").click();
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    await zone("1,1", 1).click();
+    await zone("4,1", 3).click();
+    await expect.poll(async () => (await money()).balance).toBe(budget - 2000);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+    await expect(page.locator(".score-calendar")).toContainText("$1,200/yr");
+    // Not in trouble yet — $3,000 covers the next bill comfortably.
+    await expect(page.locator(".score-calendar")).not.toHaveClass(/--broke/);
+
+    // Leave the train on the platform and let the years turn.
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+
+    // The warning comes FIRST, while bulldozing could still save the run. That
+    // ordering is the feature: a Failed screen with no warning is an ambush.
+    await expect(page.locator(".score-calendar")).toHaveClass(/--broke/, {
+      timeout: 30000,
+    });
+    await expect(page.locator(".score-tax-warn")).toBeVisible();
+    expect((await money()).unpaid).toBe(0); // warned, not yet folded
+
+    // Then the bill it cannot pay.
+    await expect(page.getByText("Failed")).toBeVisible({ timeout: 30000 });
+    await expect(page.locator(".overlay-desc")).toContainText("Bankrupt");
+    await expect(page.locator(".overlay-desc")).toContainText("bulldoze");
+    const broke = await money();
+    expect(broke.balance).toBe(0);
+    expect(broke.unpaid).toBeGreaterThan(0);
+
+    // Retry is a true do-over: the purse, the calendar and the gap all return.
+    // (It resets and starts in one go — no second Ready card.)
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByText("Failed")).toHaveCount(0);
+    expect(await money()).toEqual({ balance: budget, unpaid: 0 });
+    await expect(page.locator(".score-calendar")).toContainText("1830");
+    await expect(page.locator(".score-calendar")).not.toHaveClass(/--broke/);
+    await expect(page.locator('.level-tile[data-coord="2,1"] .tile')).toHaveCount(0);
+    // Nothing was bought this run, so the levy is $0 and the clock is harmless.
+    await expect(page.locator(".score-calendar")).toContainText("$0/yr");
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
   test("tycoon: lakevalley-open — build the ring, dispatch all three, win with the money accounted", async ({
     page,
   }) => {

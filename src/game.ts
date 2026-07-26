@@ -207,6 +207,14 @@ export interface MoneyState {
   // keying the calendar row on it replays the animation exactly once per levy
   // (and a zero levy, on a board where nothing was built, correctly does not).
   taxPaid: number;
+  // Upkeep the company could not pay. Non-zero ⟺ bankrupt.
+  unpaidTax: number;
+  // Next year's bill is more than there is in hand — i.e. unless something
+  // changes, the railway folds when the year turns. The HUD's warning, and the
+  // reason bankruptcy is a decision rather than an ambush: the player can still
+  // bulldoze (refund now, lower the bill) or hurry a delivery. Literal, not
+  // predictive: it does not try to guess what the fares will bring in.
+  taxUnaffordable: boolean;
 }
 
 // Whether the board has jammed. `sec` is how long every runnable train has been
@@ -1103,6 +1111,8 @@ export function createGame(
     dateLabel: calendar ? calendarAt(calendar, 0).label : "",
     taxPerYear: 0,
     taxPaid: 0,
+    unpaidTax: 0,
+    taxUnaffordable: false,
   }) as MoneyState;
   const fareBadges = reactive([]) as FareBadge[];
   // How long the board has been jammed, and whether that has passed the point
@@ -1120,9 +1130,12 @@ export function createGame(
     money.spent = economy.spent;
     money.trackSpent = trackSpentTotal;
     money.taxPaid = taxPaidTotal;
+    money.unpaidTax = unpaidTaxTotal;
     if (calendar) {
       money.dateLabel = calendarAt(calendar, economy.clock).label;
       money.taxPerYear = taxFor(calendar, tilesBuiltTotal);
+      money.taxUnaffordable =
+        money.taxPerYear > 0 && money.taxPerYear > economy.balance;
     }
   }
 
@@ -1136,19 +1149,32 @@ export function createGame(
   //
   // The amount is read at the moment the levy falls due, so track bought during
   // the year is taxed for that year and track bulldozed before year end is not.
-  // A levy larger than the balance takes what is there rather than being refused
-  // outright: `spend` declines an unaffordable amount, which would make being
-  // broke FREE. Hitting zero is not a fail state — bankruptcy is its own
-  // decision and deliberately not in this step (design doc §8 item 1).
+  //
+  // A levy the balance cannot cover is BANKRUPTCY (design doc §8, M14's
+  // survivable half). The company pays what it has — `spend` refuses an
+  // unaffordable amount outright, which would make being broke FREE — and the
+  // shortfall is recorded, which is what the objective's `onBankruptcy` fails
+  // on. Note the condition is OWING MORE THAN YOU HAVE, not "the balance
+  // reached zero": finishing a level flat broke with the railway built and the
+  // trains running is a tight win, and measured lines do exactly that.
+  //
+  // Billing STOPS at the first shortfall. Carrying on would pile the whole of
+  // every later levy onto the total, and "you were $18,000 short" says nothing
+  // more than "you were $600 short" — the run is over either way.
   function collectTax() {
     if (!economy || !calendar) return;
     const due = leviesDue(calendar, economy.clock);
     while (leviesBilled < due) {
       leviesBilled += 1;
-      const owed = Math.min(taxFor(calendar, tilesBuiltTotal), economy.balance);
-      if (owed > 0) {
-        economy.spend(owed, "tax", `${levyYear(calendar, leviesBilled)} upkeep`);
-        taxPaidTotal += owed;
+      const owed = taxFor(calendar, tilesBuiltTotal);
+      const paid = Math.min(owed, economy.balance);
+      if (paid > 0) {
+        economy.spend(paid, "tax", `${levyYear(calendar, leviesBilled)} upkeep`);
+        taxPaidTotal += paid;
+      }
+      if (owed > paid) {
+        unpaidTaxTotal += owed - paid;
+        return;
       }
     }
   }
@@ -1187,10 +1213,12 @@ export function createGame(
   // Money committed to track, net of bulldoze refunds — kept beside the piece
   // count it moves with, and reported as an ABSOLUTE (see Observation).
   let trackSpentTotal = 0;
-  // The second clock's bookkeeping: how many annual levies have been billed, and
-  // what they came to. Both zeroed by reset(), like the ledger itself.
+  // The second clock's bookkeeping: how many annual levies have been billed,
+  // what they came to, and what the company could not cover (bankruptcy). All
+  // zeroed by reset(), like the ledger itself.
   let leviesBilled = 0;
   let taxPaidTotal = 0;
+  let unpaidTaxTotal = 0;
 
   function refreshObjective() {
     Object.assign(objective, tracker.state());
@@ -1237,6 +1265,7 @@ export function createGame(
         earned: economy.earned,
         spent: economy.spent,
         trackSpent: trackSpentTotal,
+        unpaidTax: unpaidTaxTotal,
       }),
     };
   }
@@ -1651,6 +1680,7 @@ export function createGame(
       // already billed are forgotten with the capital they were paid out of.
       leviesBilled = 0;
       taxPaidTotal = 0;
+      unpaidTaxTotal = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];

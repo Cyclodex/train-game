@@ -167,16 +167,15 @@ describe("the annual levy", () => {
   });
 
   it("takes what is there rather than letting being broke be free", () => {
-    // No bankruptcy state in this step (design doc §8 item 1) — but `spend`
-    // REFUSES an unaffordable amount, so a levy bigger than the balance would
-    // otherwise be waived entirely. It takes the remainder instead and stops.
+    // `spend` REFUSES an unaffordable amount, so a levy bigger than the balance
+    // would otherwise be waived entirely — being broke would be free. It takes
+    // the remainder instead, and the shortfall is what bankruptcy reads.
     const game = taxGame();
     game.startObjective();
     game.buildRoute(gapSteps);
     // The train is waiting for dispatch and never sent, so nothing pays in.
     for (let i = 0; i < 40; i++) game.advance(YEAR);
     expect(game.money.balance).toBe(0);
-    expect(game.money.balance).toBeGreaterThanOrEqual(0);
     // Everything that was there went on track and tax, and nothing more.
     expect(game.money.trackSpent + game.money.taxPaid).toBe(TAXYEAR_BALANCE);
   });

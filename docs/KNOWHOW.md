@@ -360,6 +360,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   scenarios on a $3,000 budget, where a levy both muddies the lesson and
   dominates it. `/test/taxyear` teaches the mechanic (10s year, $300/piece,
   $9,000 purse — dialled for watching, not for balance).
+
+## BANKRUPTCY (2026-07-27) — the tax's other half
+- BANKRUPT = OWING MORE THAN YOU HAVE, never "the balance reached zero". That
+  distinction is the whole design: measured lines finish flat broke with the
+  railway built and the trains running, and that is a tight WIN, not a failure.
+  The fail condition is a LEVY the balance cannot cover (`Counters.unpaidTax`,
+  `ObjectiveSpec.fail.onBankruptcy`). Only the tax can produce it — an
+  unaffordable BUILD is refused up front, and a refusal is a choice.
+- Declared for the whole Tycoon mode, not per board, because it is SELF-GATING:
+  no calendar ⇒ no levy ⇒ no shortfall ⇒ it can never fire. `buildgap` and
+  `/test/dispatch` carry the flag and are untouched by it.
+- The company PAYS WHAT IT HAS on the way down, then folds; billing STOPS at the
+  first shortfall. Piling every later levy onto the total would say nothing more
+  ("$18,000 short" vs "$600 short" — the run is over either way) and would make
+  the number meaningless as a diagnostic.
+- THE WARNING IS THE FEATURE, not the Failed screen. `money.taxUnaffordable`
+  (`taxPerYear > balance`) turns the calendar row red with "can't pay next year"
+  while there is still a year to act in — and the fix it names, BULLDOZE, works
+  twice over: it refunds what you paid AND lowers the next bill. Without it the
+  fail state is an ambush; same lesson as the gridlock nudge (name the failure
+  AND the fix). Deliberately literal — it does not try to predict fares.
+- `/test/bankrupt` is the scenario ($5,000, 8s year, $600/piece — the annual
+  bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
+  $2,321; relaxed won 22.7s banking $1,086; dawdling folded at 26.0s, $600
+  short. Playable at `/#/play?mode=tycoon&board=bankrupt`.
+- Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
+  still wins ties): "you ran out of money" beats any symptom another check might
+  notice on the same tick. A knock-on worth knowing: a board that DEADLOCKS in
+  Tycoon now eventually folds instead of stalling forever — the gridlock nudge
+  still fires first and names the real cause.
 - The DEFAULT board needs the player to throw switches: left alone, both trains
   lap and bounce off wrong-coloured depots forever. That is PRE-EXISTING and
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
@@ -816,10 +846,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   iterate the registry, so a new scenario is covered the day it is added.
   `npm run probe` walks the DOM instead and its coverage varies run to run
   (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
-- The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1. See
-  THE SECOND CLOCK above. NEXT UP (design doc §8): goals on the Ready card, then
-  a BANKRUPTCY state — the tax is the first mechanic that can drain the purse
-  without a misdrag, so "no money and no explanation" stopped being theoretical.
+- The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
+  BANKRUPTCY followed it (2026-07-27) — see the two sections above. NEXT UP
+  (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
