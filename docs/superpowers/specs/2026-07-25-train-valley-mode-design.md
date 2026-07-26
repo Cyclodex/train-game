@@ -534,11 +534,24 @@ board to do it on.
 | **The sim facts the goals rest on** | Trains route by the ARMS at reservation time (no destination pathfinding), an unsignalled departure reserves the whole route to its end, and a train stopped at a signal keeps ~a consist-length of stale rear reservations. The lean line works *because* yellow's short consist releases 6,2; the north-entry variant deadlocks on exactly that tile. Measured in scripted playtests, then pinned by the e2e. |
 | **The e2e** | `tests/e2e/game.spec.ts` "tycoon: lakevalley-open" drives the whole loop through the UI: Start, three build gestures, the arm table, three pin dispatches, phase `won`, `balance = budget − spent + earned`, Payday + Rail baron earned / Under budget not. |
 
+#### The second clock, as built (2026-07-26)
+
+| | |
+|---|---|
+| **M13 calendar** | `sim/calendar.ts` — pure, headless, deterministic like the rest of `src/sim/`: `calendarAt` (a date off the scored `elapsedSec`), `leviesDue` (whole in-game years completed), `taxFor(spec, pieces)`. The HUD shows "Apr 1832", and it **replaces** the stopwatch on a board that has a calendar, because M13 is explicitly *not a stopwatch* and the two are the same seconds rendered twice. |
+| **M1 tax** | Charged **per piece of track the PLAYER laid**, annually. This is the load-bearing choice: a flat levy is a steeper fare decay wearing a hat — it pushes the same way (hurry) and the player decides nothing about it, whereas upkeep on the network you chose to build is what makes §1.3's two clocks *opposed*. Taxing the authored board would be a constant nobody can act on; per-piece also means a dispatch-only board pays nothing without a special case. |
+| **Where it books** | Through the same ledger, as `"tax"` (the reason `economy.ts` reserved). A `while` loop, not an `if`: one frame at 4x can cross several year boundaries and a skipped levy is silent free money. Gated on `phase === "playing"`, so nothing accrues behind the Ready card. A levy larger than the balance takes what is there — `spend` refuses an unaffordable amount, which would otherwise make being broke free. |
+| **The trap it had to dodge** | `spend()` increments `spent`, and "Under budget ≤ $6,000" read `spent`. Booking tax there turns a **build-discipline** star into a **time** star — lost by dawdling, duplicating the axis Payday already scores. Fixed by splitting the counter, not the ledger: `Counters.trackSpent` (money on track, net of bulldoze refunds, netted by the same rule as `tilesBuilt`) and the star reads that. `spent` keeps meaning "all outgoings" and the log still sums to the balance. |
+| **Tuning** | Per board (`TycoonTuning.calendar`), never mode-wide — the generic tuning has none, because the boards that fall through to it are one-mechanic test scenarios on a $3,000 budget where a levy both muddies the lesson and dominates it. `lakevalley-open`: a 15-second year, $150 per piece per year. Both numbers are the *second* guess, corrected by measurement: 20s/year let a winning run pay the levy exactly once (a fee, not a clock), and $200/piece ran the dawdling line to −$400 of capital, i.e. a silent soft-lock with no bankruptcy state to explain it. |
+| **Measured** | Scripted playtest through the real UI. Prompt full rebuild: won 35s, $2,100 tax, banked $7,660, Payday + Rail baron. Dawdled 60s first: won 95s, $6,300 tax, banked $2,566, Payday lost. Upkeep on the prompt run exceeds its income — the sentence the mechanic exists to say. |
+| **`/test/taxyear`** | The mechanic in isolation: a line with a two-tile gap, a 10-second year and $300 a piece, dialled for *watching* rather than for balance. Close the gap cheaply or scenically and the upkeep line remembers which; bulldoze and it falls. |
+| **`game.advance(dt)`** | The frame body minus rendering, extracted so the loop is testable headlessly. `game.sim.step()` moves trains only — no fares, no levy, no tracker — and a hidden browser pane runs no `requestAnimationFrame` at all, so this is the only honest way to unit-test anything loop-shaped. |
+
 ### Scorecard against §1.2 — mechanic by mechanic
 
 | # | Mechanic | State | What is actually missing |
 |---|---|---|---|
-| M1 | Money is the master resource | **Partial → biting** | One source (fares) and one sink (track), but on `lakevalley-open` that sink now *bites*: the budget is spent almost entirely on the $7,000 rebuild, and the lean/baron goals are a real spend decision. Still missing: clearing, calling trains, and **tax** — the second clock. The balance can still only be lost to track. |
+| M1 | Money is the master resource | **Done for the core** | Two sinks now: track, and the **annual upkeep** on the track you laid. On `lakevalley-open` a prompt full rebuild pays $2,100 of tax against $1,760 earned — the railway costs more to hold than it earns, so the balance is a decision rather than a readout. Still missing (and now merely additive): clearing, and calling trains. |
 | M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
 | M3 | Build from an open end into marked land | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: the *green plot* mask (buildable land as an authored, rendered thing) and the dashed "close this gap" hint — the gap is only visible as missing rails. |
 | M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing scenery for money** — forest and town are free to build over today, with no clearing action and no price. |
@@ -550,7 +563,7 @@ board to do it on.
 | M10 | Extra trains are player-called and cost money | **Missing** | The `Spawner` contract exists (Time Attack uses it); Tycoon declares none, and there is no call-train button. Constrained by G6 (see below). |
 | M11 | A briefing screen | **Missing** | `levels/test/thumb.ts` + `ScenarioThumb.vue` are the renderer it would be built on. |
 | M12 | End screen offers three exits | **Mostly done** | Retry ✓ and ∞ "Keep playing" ✓. The third exit is *Finish / next level*, which needs a campaign that does not exist (G8). "Change game mode" stands in for it. |
-| M13 | A calendar clock, not a stopwatch; annual tax | **Half** | Pause, speed and `elapsedSec` all work. No calendar rendering, and **no tax** — `LedgerReason` reserves `"tax"` and nothing books one. Tax is the second of §1.3's two opposed clocks, so its absence is why the economy currently has no bite (§6, complaint 2). |
+| M13 | A calendar clock, not a stopwatch; annual tax | **Done** (2026-07-26) | `sim/calendar.ts` renders `elapsedSec` as "Apr 1832" and schedules the annual levy; the calendar *replaces* the stopwatch where a board has one, as M13 literally asks. The levy is per piece of **player-laid** track, which is what makes §1.3's two clocks oppose each other rather than both shouting "hurry". Per-board, like every other Tycoon dial. See "The second clock, as built". |
 | M14 | Crashes | **Not planned** | §2.2 G7, reaffirmed. |
 
 ### What remains, ordered, with sizes
@@ -561,8 +574,9 @@ late the same day — BULLDOZE (refund-what-you-bought) and the GRIDLOCK nudge.
 See the "as built" tables above and `KNOWHOW` → BULLDOZE + GRIDLOCK. The goal sentence itself is met; everything below is
 what separates *the loop works* from *a finished mode*.
 
-1. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
+1. ~~**Annual tax + calendar**~~ **DONE** (2026-07-26) — see "The second clock, as built".
 2. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
+2b. **A bankruptcy state** — *S–M*, and it was promoted by item 1. Until the tax existed, the only way to run the purse dry was to over-spend on track, i.e. to make a mistake; now *time itself* drains it, and a slow run can reach $0 with no misdrag and no explanation. The tax dial is currently tuned to stay a spare piece of track clear of that (pinned by a unit test), which is a floor, not a fix. What is wanted is the honest version of what §1.3 implies: reaching $0 with track still to buy should *say so* and offer Retry, the way the gridlock nudge does for a jam.
 3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). Bulldoze exists already; what phase 3 adds here is a demolition/clearing PRICE.
 4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
 5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
@@ -601,19 +615,24 @@ Carried forward from the last session and still open:
   question, and the reason the build targets were NOT narrowed to open ends only
   (lakevalley-open needs an interior-edge start to buy its station junction).
 
-### The next step, concretely: tax + calendar, then goals on the Ready card
+### The next step, concretely: goals on the Ready card, then bankruptcy
 
-The `routeDrawController` extraction plan that used to live here is executed —
-the controller is headless in `src/routeDrawController.ts` with its own spec,
-the editor and PlayView both drive it, and the design reasoning survives in the
-commit (`3214f08`) and in `docs/KNOWHOW.md` → BUILD IN PLAY.
+Item 1 is executed — the annual levy books off a calendar rendering of the
+scored clock, and the reasoning survives in `sim/calendar.ts`, in the tuning
+block of `modes/tycoon.ts`, and in `docs/KNOWHOW.md` → THE SECOND CLOCK.
 
-What makes the mode *finished* rather than *working* is items 1–2 above, and
-they are both small: book an annual `"tax"` ledger entry off a calendar
-rendering of `elapsedSec` (M13 — the second clock that gives M1 its bite, per
-§6 complaint 2), and list the per-board star labels on the Ready card so the
-player can read the targets before starting (the last sliver of M9). Neither
-touches the sim's hot path; both are HUD + `modes/tycoon.ts` work.
+What is left to make the mode *finished* rather than *working*:
+
+- **Goals on the Ready card** (item 2, *S*). The per-board star labels already
+  exist; today they are only readable as star-pip tooltips, so the player cannot
+  see the targets before starting. Pure HUD work.
+- **Bankruptcy** (item 2b, *S–M*), which item 1 promoted from nicety to gap. The
+  tax is the first mechanic that can empty the purse without the player doing
+  anything wrong, and $0 currently means the board simply stops responding to
+  the build tool with no explanation. The gridlock nudge is the precedent for
+  how to say it.
+
+Neither touches the sim's hot path; both are HUD + `modes/tycoon.ts` work.
 
 ---
 

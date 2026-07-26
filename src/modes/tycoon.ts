@@ -8,6 +8,7 @@ import {
 } from "@/modes/types";
 import { Counters, StarSpec } from "@/sim/objectives";
 import { FareSpec } from "@/sim/economy";
+import { CalendarSetup } from "@/sim/calendar";
 
 // Tycoon — the build-and-dispatch loop, phase 1.
 //
@@ -69,7 +70,11 @@ export function economyFor(
 ): EconomySetup {
   const fares: Record<string, FareSpec> = {};
   for (const def of trains) fares[def.id] = fareFor(def, tuning.fareDecayPerSec);
-  return { startingBalance: tuning.startingBalance, fares };
+  return {
+    startingBalance: tuning.startingBalance,
+    fares,
+    ...(tuning.calendar && { calendar: tuning.calendar }),
+  };
 }
 
 // The most this board could ever pay: every fare collected at its base value.
@@ -112,6 +117,16 @@ export interface TycoonTuning {
   startingBalance: number;
   fareDecayPerSec: number;
   stars: (maxPayout: number) => StarSpec[];
+  // The second clock (M1/M13): an in-game year and the annual upkeep levied on
+  // the track the player laid. OPT-IN PER BOARD, like every other dial here.
+  //
+  // It is deliberately absent from the generic tuning. A tax is a pressure the
+  // level has to be balanced against — Train Valley sets it per level — and the
+  // boards that fall through to the generic numbers are the tiny feature-test
+  // scenarios, each of which exists to teach exactly ONE mechanic on a $3,000
+  // budget. A levy there would both muddy the lesson and, on that budget,
+  // dominate it. `/test/taxyear` is where the mechanic gets taught instead.
+  calendar?: CalendarSetup;
 }
 
 const GENERIC_TUNING: TycoonTuning = {
@@ -156,6 +171,46 @@ export const LAKEVALLEY_OPEN_RING_PIECES = 7;
 // real headroom instead of balancing on the exact optimum.
 export const LAKEVALLEY_OPEN_PAYDAY = 1500;
 
+// The second clock (design doc §1.3). A Lake Valley year lasts 15 sim-seconds
+// and each piece of track the player laid costs $150 a year to keep — 15% of
+// what it cost to lay, which is a steep railway, but the levels are decades.
+//
+// Both dials were MEASURED, not chosen (scripted playtest through the real UI;
+// the win TIMES are the pre-existing measurements, re-confirmed). At the
+// shipping numbers:
+//
+//   full rebuild, prompt   won 35s → 2 levies × $1,050 = $2,100, earned $1,760
+//   lean rebuild           won 75s → 5 levies ×   $900 = $4,500, earned   $692
+//   full rebuild, dawdled  won 95s → 6 levies × $1,050 = $6,300, earned   $866
+//
+// That is the opposition §1.3 asks for, in one board. The lean line saves
+// $1,000 of capital and hands more than twice that back in upkeep, because it
+// runs slower; the full line pays more per year and finishes before it matters.
+// Both still finish in the black — they are alternate GOALS, not a right and a
+// wrong answer (§1.3: goals reward playing DIFFERENTLY, not better) — while
+// dawdling pays three times a prompt run's upkeep AND forfeits Payday. And the
+// upkeep on a prompt full rebuild ($2,100) is more than that run earns
+// ($1,760), which is the sentence the whole mechanic exists to say: this
+// railway costs more to hold than it earns, so finish it.
+//
+// Two rejected settings, both on the measurement rather than on taste:
+//  · 20s/year — the prompt run finished inside its SECOND year and so paid the
+//    levy exactly once. A tax you pay once is a fee, not a clock. At 15s every
+//    line pays at least twice.
+//  · $200/piece — the dawdling line then ran the capital to −$400 before its
+//    fares arrived, i.e. one bad run could no longer afford a rescue build. With
+//    no bankruptcy state to explain that (deliberately out of scope, see §8),
+//    a silent soft-lock is the worst thing this dial can buy. $150 leaves the
+//    worst measured line $1,700 — a spare piece of track — and is pinned by a
+//    unit test so the next tweak cannot quietly cross back over it.
+//
+// A 15-second year is short for a game whose levels "span decades", but the
+// level is 35-95 seconds long; with a longer year the levy never lands in a
+// winning run. Months tick every ~1.25s, so the date visibly moves.
+export const LAKEVALLEY_OPEN_START_YEAR = 1830;
+export const LAKEVALLEY_OPEN_SEC_PER_YEAR = 15;
+export const LAKEVALLEY_OPEN_TAX_PER_PIECE = 150;
+
 // Three goals that pull in different directions, Train Valley style (§1.2 M9 —
 // level 1 asks for an extra train, 46 track pieces AND $5,000, and you cannot
 // chase them all in one run): Payday wants prompt dispatch, Under budget wants
@@ -171,9 +226,17 @@ function lakevalleyOpenStars(): StarSpec[] {
       predicate: (c: Counters) => (c.earned ?? 0) >= LAKEVALLEY_OPEN_PAYDAY,
     },
     {
+      // Reads `trackSpent`, NOT `spent`. Once the annual tax books through the
+      // same ledger, `spent` is "track + upkeep" — and a star predicated on it
+      // would be lost by DAWDLING rather than by over-building, i.e. it would
+      // quietly stop measuring build discipline and start measuring time, which
+      // is the axis Payday already scores. The alternative (keeping tax out of
+      // `spent`) was rejected because it redefines a field documented as
+      // "lifetime outgoings" and would leave the ledger no longer summing to the
+      // balance. Splitting the STAR is the smaller, truer change.
       id: "under-budget",
       label: `Under budget ($${LAKEVALLEY_OPEN_LEAN_SPEND.toLocaleString("en-US")})`,
-      predicate: (c: Counters) => (c.spent ?? 0) <= LAKEVALLEY_OPEN_LEAN_SPEND,
+      predicate: (c: Counters) => (c.trackSpent ?? 0) <= LAKEVALLEY_OPEN_LEAN_SPEND,
     },
     {
       id: "rail-baron",
@@ -188,6 +251,36 @@ const LAKEVALLEY_OPEN_TUNING: TycoonTuning = {
   startingBalance: LAKEVALLEY_OPEN_BALANCE,
   fareDecayPerSec: LAKEVALLEY_OPEN_DECAY,
   stars: lakevalleyOpenStars,
+  calendar: {
+    startYear: LAKEVALLEY_OPEN_START_YEAR,
+    secPerYear: LAKEVALLEY_OPEN_SEC_PER_YEAR,
+    taxPerTrackPiecePerYear: LAKEVALLEY_OPEN_TAX_PER_PIECE,
+  },
+};
+
+// `taxyear` — the feature-test board for the second clock (project rule: every
+// mechanic ships a scenario that shows it in isolation). Everything here is
+// dialled for WATCHING rather than for balance: a 10-second year so a levy
+// lands while you are still looking at it, $300 a piece so the step in the
+// balance is unmistakable, and a purse deep enough that several years pass
+// without the board soft-locking. Deliveries are almost beside the point — the
+// thing under test is the balance falling on a schedule you did not choose, by
+// an amount you did.
+export const TAXYEAR_BALANCE = 9000;
+export const TAXYEAR_SEC_PER_YEAR = 10;
+export const TAXYEAR_TAX_PER_PIECE = 300;
+
+const TAXYEAR_TUNING: TycoonTuning = {
+  startingBalance: TAXYEAR_BALANCE,
+  // The generic 20/s would floor both fares before a single year turned, and
+  // this board is about the tax, not the fare.
+  fareDecayPerSec: LAKEVALLEY_OPEN_DECAY,
+  stars: tycoonStars,
+  calendar: {
+    startYear: 1830,
+    secPerYear: TAXYEAR_SEC_PER_YEAR,
+    taxPerTrackPiecePerYear: TAXYEAR_TAX_PER_PIECE,
+  },
 };
 
 // The board id is the levelId tail ("board:x" from /play, "test:x" from /test).
@@ -196,10 +289,13 @@ export function boardIdOf(levelId: string): string {
   return i < 0 ? levelId : levelId.slice(i + 1);
 }
 
+const TUNING_BY_BOARD: Record<string, TycoonTuning> = {
+  "lakevalley-open": LAKEVALLEY_OPEN_TUNING,
+  taxyear: TAXYEAR_TUNING,
+};
+
 export function tuningFor(levelId: string): TycoonTuning {
-  return boardIdOf(levelId) === "lakevalley-open"
-    ? LAKEVALLEY_OPEN_TUNING
-    : GENERIC_TUNING;
+  return TUNING_BY_BOARD[boardIdOf(levelId)] ?? GENERIC_TUNING;
 }
 
 export const tycoonMode: GameMode = {

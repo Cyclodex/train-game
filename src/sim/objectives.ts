@@ -44,6 +44,14 @@ export interface Counters {
   // "buy ≥ N track pieces" star reads. Optional like the other economy fields,
   // and for the same fixture-compatibility reason.
   tilesBuilt?: number;
+  // Money committed to TRACK this run, net of bulldoze refunds — i.e. `spent`
+  // minus everything that was not a build. It exists because `spent` now also
+  // carries the annual TAX, and a "win while spending at most $X" star must
+  // keep measuring build discipline: charged to `spent`, the tax would turn
+  // that star into a second time star (dawdle and lose it), which is exactly
+  // the axis Payday already scores. Same netting rule as `tilesBuilt`, so the
+  // two always agree about what the player kept.
+  trackSpent?: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -102,6 +110,11 @@ export interface Observation {
   balance?: number;
   earned?: number;
   spent?: number;
+  // Money committed to track so far, net of refunds. An ABSOLUTE for the same
+  // reason the three above are: `game.ts` already keeps this running total
+  // beside `boughtPieces`, so re-deriving it from deltas here would be a second
+  // source of truth that can drift.
+  trackSpent?: number;
   // Track pieces bought this tick (Tycoon build). A DELTA, unlike the ledger
   // absolutes above: a purchase is an event, not a running total the game
   // already owns elsewhere.
@@ -153,6 +166,7 @@ function zeroCounters(): Counters {
     balance: 0,
     earned: 0,
     spent: 0,
+    trackSpent: 0,
     tilesBuilt: 0,
   };
 }
@@ -203,6 +217,7 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (obs.balance !== undefined) counters.balance = obs.balance;
       if (obs.earned !== undefined) counters.earned = obs.earned;
       if (obs.spent !== undefined) counters.spent = obs.spent;
+      if (obs.trackSpent !== undefined) counters.trackSpent = obs.trackSpent;
       counters.tilesBuilt =
         (counters.tilesBuilt ?? 0) + (obs.tilesBuiltDelta ?? 0);
 

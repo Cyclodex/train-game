@@ -40,6 +40,17 @@
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
       </span>
+      <!-- The second clock, on the stage as well as in /play: `/test/taxyear`
+           is where the mechanic is demonstrated, so the date and the annual
+           upkeep have to be readable here. Absent on every board that named no
+           calendar. -->
+      <span
+        v-if="money.enabled && money.dateLabel"
+        class="stage-calendar"
+        title="The year, and this railway's annual upkeep"
+      >
+        📅 {{ money.dateLabel }} · 🏛 ${{ money.taxPerYear.toLocaleString("en-US") }}/yr
+      </span>
     </div>
 
     <div
@@ -522,6 +533,12 @@ export default toNative(TestStage);
   color: #f4d47a;
   font-size: 14px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.stage-calendar {
+  color: #b6c2cc;
+  font-size: 13px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 // The fare pin — the money HUD's only board chrome; mirrors PlayView (both

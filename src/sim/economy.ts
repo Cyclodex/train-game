@@ -57,6 +57,11 @@ export interface Economy {
   readonly balance: number;
   readonly earned: number; // lifetime income this run
   readonly spent: number; // lifetime outgoings this run (positive)
+  // Sim seconds of SCORED play the ledger has seen (what `tick` accumulates).
+  // Exposed because the calendar and the annual levy are denominated in exactly
+  // this clock — the one that stops behind the Ready screen and while paused —
+  // and a second accumulator alongside it would be a second source of truth.
+  readonly clock: number;
   readonly entries: readonly LedgerEntry[];
   // Advance the ledger's clock so entries carry a sim timestamp. Callers already
   // own the clock; this keeps `earn`/`spend` to the two arguments that matter.
@@ -96,6 +101,9 @@ export function createEconomy(spec: EconomySpec = {}): Economy {
     },
     get spent() {
       return spent;
+    },
+    get clock() {
+      return clock;
     },
     get entries() {
       return entries;
