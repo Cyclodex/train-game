@@ -73,6 +73,7 @@ import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
+import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -176,7 +177,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, demoworld] },
     ],
   },
 ];

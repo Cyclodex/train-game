@@ -32,6 +32,42 @@ describe("validateLevel", () => {
     expect(res.issues.some(i => i.type === "isolated-depot")).toBe(true);
   });
 
+  it("flags a line laid over water or rock", () => {
+    // The first rule that reads terrain rather than drawing it. Same predicate
+    // the editor's route planner uses, so a preview can never offer a route the
+    // level would then be flagged for.
+    const level: Level = {
+      "0,0": { ...expandKind("depot", 1), terrain: "urban" },
+      "1,0": { ...expandKind("straight", 1), terrain: "water" },
+      "2,0": expandKind("depot", 3),
+    };
+    const res = validateLevel(level);
+    expect(res.issues.map(i => i.type)).toEqual(["blocked-terrain"]);
+    expect(res.issues[0].tileId).toBe("1,0");
+  });
+
+  it("lets a line run through forest and town", () => {
+    // Deliberately buildable: you fell the trees. Only water and rock stop track,
+    // because those are what make a route a decision instead of a straight line.
+    const level: Level = {
+      "0,0": { ...expandKind("depot", 1), terrain: "forest" },
+      "1,0": { ...expandKind("straight", 1), terrain: "forest" },
+      "2,0": { ...expandKind("depot", 3), terrain: "urban" },
+    };
+    expect(validateLevel(level).issues).toEqual([]);
+  });
+
+  it("leaves terrain-only cells alone", () => {
+    // A lake tile carries no track, so it is not "a line over water".
+    const level: Level = {
+      "0,0": expandKind("depot", 1),
+      "1,0": expandKind("straight", 1),
+      "2,0": expandKind("depot", 3),
+      "1,1": { connections: [], terrain: "water" },
+    };
+    expect(validateLevel(level).issues).toEqual([]);
+  });
+
   it("flags a disconnected train route", () => {
     // Two separate one-tile lines that never meet.
     const level: Level = {

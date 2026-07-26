@@ -51,6 +51,33 @@ export function terrainOf(cell: TileCell | null | undefined): TerrainKind {
   return cell?.terrain ?? "grass";
 }
 
+// --- Rules -------------------------------------------------------------------
+//
+// The first thing that reads terrain rather than just drawing it. Kept here, as
+// one predicate, so the validator, the editor and the route planner can never
+// disagree about where a line may run.
+//
+// Forest is deliberately BUILDABLE — you fell the trees. Only water and rock
+// stop a plain track, and both are the interesting ones: they are what makes a
+// route a decision instead of a straight line. (Water stops *plain* track; a
+// bridge is a later feature and will be an exception here, not a new rule.)
+const BLOCKS_BUILDING: Record<TerrainKind, boolean> = {
+  grass: false,
+  forest: false,
+  water: true,
+  rock: true,
+  urban: false,
+};
+
+export function terrainBlocksBuilding(kind: TerrainKind): boolean {
+  return BLOCKS_BUILDING[kind];
+}
+
+/** Whether track or road may be laid on this cell. Missing cell = bare grass. */
+export function canBuildOn(cell: TileCell | null | undefined): boolean {
+  return !terrainBlocksBuilding(terrainOf(cell));
+}
+
 // The four edge neighbours' kinds, in the order a clockwise path walks them.
 export interface TerrainNeighbours {
   top: TerrainKind;

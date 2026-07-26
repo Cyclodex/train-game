@@ -345,6 +345,7 @@ import {
   setTerrain,
   isBlankCell,
 } from "@/tiles/editOps";
+import { canBuildOn } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
@@ -799,9 +800,15 @@ class EditorView extends Vue {
     return this.routeStarted && this.armed?.id === id && this.armed?.port === port;
   }
   get routeOpts() {
-    // `passable` is left default (everything passable); the future "blocked
-    // tiles" feature plugs in here without touching the router.
-    return { width: this.gridCols, height: this.gridRows };
+    // Water and rock are not buildable, so the planner routes AROUND them —
+    // which is the whole point of terrain having rules. One predicate
+    // (`canBuildOn`) is shared with the validator so a preview can never offer
+    // a route the level would then be flagged for.
+    return {
+      width: this.gridCols,
+      height: this.gridRows,
+      passable: (c: Coordinates) => canBuildOn(this.level[getCoordinatesId(c)]),
+    };
   }
 
   // The layer the route-builder is currently drawing on. `connect` lays rail
@@ -1164,6 +1171,12 @@ class EditorView extends Vue {
     const cur = this.level[id] ?? emptyCell();
     if ((cur.terrain ?? "grass") === this.terrainBrush) return; // no-op repaint
     const next = setTerrain(cur, this.terrainBrush);
+    // Refuse to flood a tile that already carries a line. Allowing it would let
+    // a single drag quietly invalidate half a level, and the validator would
+    // then report a problem the player never chose to create. Clear the track
+    // first if you really want water there.
+    const carriesLine = cur.connections.length > 0 || (cur.road?.length ?? 0) > 0;
+    if (carriesLine && !canBuildOn(next)) return;
     // Painting grass over a cell that carried nothing else removes it entirely,
     // rather than leaving a blank entry behind that still counts towards the
     // level's bounds.
