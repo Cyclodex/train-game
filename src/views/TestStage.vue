@@ -100,6 +100,9 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+        <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
+             train passes under the foliage. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
       </div>
       <div
         v-for="car in roadCars"

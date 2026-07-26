@@ -228,6 +228,9 @@
           class="tile-component"
           :switch-interactive="!buildArmed && !razeArmed"
         />
+        <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
+             train passes under the foliage. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
         <!-- In-play building: the editor's triangular edge hit-zones + ghost
              preview, driven by the same extracted routeDrawController. Mounted
              only while the Build toggle is armed, so normal play is untouched.
