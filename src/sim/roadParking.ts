@@ -359,9 +359,10 @@ export function createParkingPhases(deps: ParkingDeps) {
     return true;
   }
 
-  // Re-seat a car onto the lane slot it will REJOIN the road at. For a bay that is
-  // where it peeled off (nothing changes); for a GARAGE it is the out ramp, which
-  // is further down the street and may be on the other side of it.
+  // Re-seat a car onto the lane slot it will REJOIN the road at. For a bay it is
+  // reversed out of that is where it peeled off (nothing changes); for one driven
+  // out FORWARDS it is further down the street — the far end of the exit curve —
+  // and for a garage that may be on the other side of the road entirely.
   //
   // Done when the car starts leaving, NOT when it finishes: the body has to be at
   // the exit for the whole manoeuvre, or the car spends the manoeuvre claiming the
@@ -385,7 +386,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.lanePivot = null;
   }
 
-  // Is the lane behind the car's slot clear enough to reverse out into? Checked
+  // Is the lane behind the car's slot clear enough to pull out into? Checked
   // against real bodies on the same tile travelling the same way, so a car waits
   // for a gap in the traffic instead of materialising into it.
   function pullOutClear(car: Car): boolean {
@@ -482,9 +483,11 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.waitedSec = 0;
     car.launchTimer = 0;
     const len = car.parkPath ? manoeuvreLength(car.parkPath) : 0;
-    // Fraction of the curve covered this tick, at the crawl speed. A deep 90° bay
-    // therefore takes longer to enter than a shallow kerbside one, for free.
-    const step = len > 1e-6 ? (PARKING.speed * dt) / len : 1;
+    // Fraction of the curve covered this tick, at the crawl speed — scaled by how
+    // GENTLE the curve is (`pace`), because a long shallow swing into a lay-by is
+    // not driven at the speed of a tight turn into a 90° bay.
+    const pace = car.parkPath?.pace ?? 1;
+    const step = len > 1e-6 ? (PARKING.speed * pace * dt) / len : 1;
 
     if (car.phase === "entering") {
       car.manoeuvre = Math.min(1, car.manoeuvre + step);
@@ -513,15 +516,16 @@ export function createParkingPhases(deps: ParkingDeps) {
       //
       // `slotFree` is the one thing that must hold first — the slot cannot be
       // claimed out from under a car that is passing through it this very tick.
-      // Where this car will actually rejoin the road — the out ramp for a garage,
-      // its own peel-off point for a bay. That is the slot to test and to claim.
+      // Where this car will actually rejoin the road — the far end of its exit
+      // curve if it drives out forwards, its own peel-off point if it reverses.
+      // That is the slot to test and to claim.
       const gExit = car.stall ? parking.exitFor(car.stall, 0) : null;
       const seatPort = gExit ? (gExit.from as Port) : car.path[car.headIndex].entryPort;
       const seatT = gExit ? gExit.endT : car.headProgress;
       if (car.dwellLeft <= 0 && slotFree(car, seatPort, seatT)) {
         car.phase = "leaving";
-        // A garage drives OUT of its second ramp, forwards. Everything else backs
-        // out of its bay along the curve it came in on.
+        // A kerbside bay and a garage are driven out of nose-first; an echelon or
+        // 90° bay is backed out of along the curve it came in on.
         const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car)) : null;
         if (exit) {
           car.parkPath = exit.path;
@@ -541,7 +545,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     // is actually clear. Holding here rather than at the "parked" gate is what
     // lets the queue build up behind the waiting car.
     if (!pullOutClear(car)) return;
-    // A garage drives its exit curve FORWARD; a bay replays its entry curve
+    // Nose-first: drive the exit curve FORWARD. Otherwise replay the entry curve
     // backwards, which is a car reversing out of its space.
     if (car.parkExiting) {
       car.manoeuvre = Math.min(1, car.manoeuvre + step);

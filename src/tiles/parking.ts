@@ -65,6 +65,18 @@ export function stallOnLane(kind: StallKind): boolean {
   return kind === "busstop";
 }
 
+// Does a vehicle drive OUT of this kind of stall nose-first?
+//
+// An ECHELON or 90° bay does not: a driver reverses out of one, and replaying the
+// entry curve backwards is exactly that motion, for free. A KERBSIDE bay is the
+// opposite case — nobody backs out of a parallel space into the traffic behind
+// them; they nose out and pull away, which is also the only thing a coach in a
+// lay-by can physically do. A garage is the same story, and is why it has a
+// second mouth to come out of.
+export function exitsForward(kind: StallKind): boolean {
+  return kind === "garage" || kind === "parallel";
+}
+
 // Who may use a row. Absent = anything that physically fits.
 //  • "disabled" / "delivery" — reserved bays. v1 paints them and keeps ordinary
 //    traffic out; nothing yet issues a permit, so they simply stay empty and read
@@ -107,14 +119,40 @@ export function layByTaperPx(row: ParkingRow, size: number): number {
   return stallDepthPx(row.kind, size, true) * 1.5;
 }
 
-// Where a vehicle starts to peel off toward this row, in px back from the bay.
-// A tapered lay-by is entered ALONG its own opening — from the taper mouth, half a
-// bay further back — so the swing is long and shallow instead of a turn across the
-// kerb line. Everything else keeps the short, fixed approach.
-export function manoeuvreApproachPx(row: ParkingRow, size: number): number {
+// How much room along the road a manoeuvre into or out of this row takes, in px.
+// ONE number for both directions, because the pull-in and the pull-out are mirror
+// images of each other; two would make a bay you enter along a gentle curve and
+// leave along a sharp one.
+//
+//  • A tapered LAY-BY is driven ALONG ITS OWN OPENING — from the taper mouth, half
+//    a bay further on. The bay opening and the vehicle using it are one movement.
+//  • A KERBSIDE space is the awkward case, and the reason this is not a constant.
+//    The vehicle points down the road at BOTH ends of the move and has only to
+//    shift its own offset sideways, so the room it needs is set by that offset,
+//    not by a fixed distance. Too little and it travels at 65° to the road at the
+//    far end — measured as 0.89 of its motion sideways, which is a car sliding
+//    into its space broadside. Two lateral widths halves that.
+//  • Everything else NOSES in. A 90° or echelon bay is MEANT to turn across the
+//    kerb, and its own depth is the room that takes.
+export function manoeuvreRunPx(row: ParkingRow, size: number, kerbPx: number): number {
   const taper = layByTaperPx(row, size);
-  if (taper <= 0) return MANOEUVRE_APPROACH_FRAC * size;
-  return taper + stallPitchPx(row.kind, size, true) / 2;
+  if (taper > 0) return taper + stallPitchPx(row.kind, size, true) / 2;
+  if (row.kind === "parallel") {
+    const lateral =
+      kerbPx +
+      (row.gap ?? 0) * LANE_WIDTH_FRAC * size +
+      stallDepthPx(row.kind, size, needsBigBay(row.reserved)) / 2;
+    return Math.max(MANOEUVRE_APPROACH_FRAC * size, 2 * lateral);
+  }
+  return MANOEUVRE_APPROACH_FRAC * size;
+}
+
+// How much faster than the base crawl a row's manoeuvre is driven — see
+// `ManoeuvrePath.pace`. Straight from the room the move takes: a curve with twice
+// the run is half as sharp, so it is driven about twice as fast and takes about
+// the same TIME. The tightest kind (the fixed short approach) is the 1.
+export function manoeuvrePace(row: ParkingRow, size: number, kerbPx: number): number {
+  return manoeuvreRunPx(row, size, kerbPx) / (MANOEUVRE_APPROACH_FRAC * size);
 }
 
 // A run of stalls served by one approach of one tile, on one side of it.
@@ -626,6 +664,17 @@ export interface ManoeuvrePath {
   // parameters, so `manoeuvreAtDistance` can invert distance → parameter. Built
   // once per stall and cached by the sim; the last entry is the total length.
   arc: number[];
+  // How much faster than the base crawl this curve is driven, because it is that
+  // much gentler (1 = the tightest kind, the fixed short approach).
+  //
+  // Manoeuvre speed cannot be one constant. A long shallow swing into a lay-by is
+  // NOT driven at the speed of a tight turn into a 90° bay — that is the whole
+  // reason a town builds a tapered one. Left as a constant, lengthening the
+  // kerbside curves to stop the cars crabbing (see `manoeuvreRunPx`) made every
+  // pull-in and pull-out two and a half times slower, and the parking scenarios
+  // went from three completed park-and-leave cycles in a run to one: the street
+  // was throttled by vehicles crawling through their own manoeuvres.
+  pace: number;
 }
 
 // How far back along the lane the manoeuvre starts, as a fraction of a tile. Long
@@ -635,8 +684,13 @@ export interface ManoeuvrePath {
 export const MANOEUVRE_APPROACH_FRAC = 0.16;
 
 // Where along the approach a car aiming for stall `index` starts to peel off.
-export function manoeuvreStartT(row: ParkingRow, index: number, size: number): number {
-  return Math.max(0, stallPose(row, index, size, 0).t - manoeuvreApproachPx(row, size) / size);
+export function manoeuvreStartT(
+  row: ParkingRow,
+  index: number,
+  size: number,
+  kerbPx: number,
+): number {
+  return Math.max(0, stallPose(row, index, size, 0).t - manoeuvreRunPx(row, size, kerbPx) / size);
 }
 
 // Build the pull-in curve for `stall` from the lane a class-`cls` car drives.
@@ -657,7 +711,7 @@ export function manoeuvrePath(
   const exit = oppositePort(from);
   const pose = stallPose(row, index, size, kerbPx);
   const tStart =
-    tStartOverride ?? Math.max(0, pose.t - manoeuvreApproachPx(row, size) / size);
+    tStartOverride ?? Math.max(0, pose.t - manoeuvreRunPx(row, size, kerbPx) / size);
   const onLane = (t: number): Pt => {
     const p = laneSegmentPointAt(from, exit, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
@@ -687,6 +741,7 @@ export function manoeuvrePath(
     p2: { x: pose.x, y: pose.y },
     restAngleDeg: pose.angleDeg,
     arc: [],
+    pace: manoeuvrePace(row, size, kerbPx),
   };
   path.arc = buildArcTable(path);
   return path;
@@ -707,48 +762,101 @@ function exitRowOf(row: ParkingRow): ParkingRow {
   return row.exitTo && row.exitTo !== row.from ? { ...row, from: row.exitTo } : row;
 }
 
-// The curve a car drives OUT of a garage: from the ramp mouth, through the point
-// on the lane abeam it, to a point further along the road. Driven FORWARD (m 0→1),
-// so the car noses out of the building the way it is going.
-//
-// A rank of BAYS does not use this: reversing out of a bay and then pulling away
-// is what a driver actually does, and the entry curve replayed backwards is
-// exactly that motion. A garage is the case where it looks wrong — nobody backs
-// out of a multi-storey — so the garage gets its own forward path and its own
-// second mouth to come out of.
-export function garageExitPath(
+// The stall the forward exit LEAVES FROM. A garage comes out of its second mouth,
+// which may be on the far bank; every other kind comes out of the space it is
+// sitting in.
+function exitStall(
   row: ParkingRow,
+  index: number,
+  size: number,
+  kerbPx: number,
+): { row: ParkingRow; pose: StallPose } {
+  const garage = row.kind === "garage";
+  const framed = garage ? exitRowOf(row) : row;
+  return { row: framed, pose: stallPose(framed, garage ? 0 : index, size, kerbPx, "out") };
+}
+
+function forwardExitEnd(
+  row: ParkingRow,
+  pose: StallPose,
+  size: number,
+  kerbPx: number,
+): number {
+  return Math.min(0.999, pose.t + manoeuvreRunPx(row, size, kerbPx) / size);
+}
+
+// The curve a vehicle drives OUT of a stall nose-first: from the space, through a
+// control point on the heading it is PARKED at, to a point further along the road.
+// Driven FORWARD (m 0→1), mirroring `manoeuvrePath` — the pull-out is the pull-in
+// seen the other way, not the pull-in played backwards. See `exitsForward` for
+// which kinds get one.
+export function forwardExitPath(
+  row: ParkingRow,
+  index: number,
   size: number,
   kerbPx: number,
   laneOff: number,
 ): ManoeuvrePath {
-  const exitRow = exitRowOf(row);
+  const { row: exitRow, pose } = exitStall(row, index, size, kerbPx);
   const from = exitRow.from;
   const ahead = oppositePort(from);
-  const pose = stallPose(exitRow, 0, size, kerbPx, "out");
-  const tEnd = Math.min(0.999, pose.t + MANOEUVRE_APPROACH_FRAC);
+  const tEnd = forwardExitEnd(row, pose, size, kerbPx);
   const onLane = (t: number): Pt => {
     const p = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
   };
-  // Ends ALIGNED WITH THE ROAD, not with the ramp: the car is rejoining traffic,
-  // so its final heading is the lane's, whatever angle it left the building at.
+  // WHERE THE CONTROL POINT SITS is the mirror of `manoeuvrePath`, and for the
+  // same reason: a quadratic's LEAVING tangent is p0→p1, so p1 has to lie along
+  // the heading the vehicle is standing at or the sprite's first move is sideways
+  // — a snap from its rest angle straight into a crab.
+  //  • The entry puts p0 AND p1 on the lane, because that is the heading the car
+  //    arrives at.
+  //  • So the exit puts p0 and p1 on the STALL's own axis. For a kerbside bay that
+  //    is down the road, half a run ahead — which happens to make the longitudinal
+  //    motion exactly linear in the curve parameter, so the vehicle pulls away at
+  //    an even pace and drifts across.
+  //  • A GARAGE is the same rule with a different axis: it stands square to the
+  //    road, so its axis IS abeam and p1 lands on the lane. Left explicit rather
+  //    than derived from `pose.angleDeg`, which points INTO the building (a stall
+  //    pose is where a car RESTS, not the way it leaves).
+  const abeam = onLane(pose.t);
+  const far = onLane(tEnd);
+  const len = Math.hypot(far.x - abeam.x, far.y - abeam.y) || 1;
+  const half = ((tEnd - pose.t) * size) / 2;
+  const p1 =
+    row.kind === "garage"
+      ? abeam
+      : {
+          x: pose.x + ((far.x - abeam.x) / len) * half,
+          y: pose.y + ((far.y - abeam.y) / len) * half,
+        };
+  // Ends ALIGNED WITH THE ROAD, not with the bay: the vehicle is rejoining
+  // traffic, so its final heading is the lane's whatever angle it stood at.
   const lane = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, tEnd);
   const path: ManoeuvrePath = {
     p0: { x: pose.x, y: pose.y },
-    p1: onLane(pose.t),
-    p2: onLane(tEnd),
+    p1,
+    p2: far,
     restAngleDeg: lane.tangentDeg,
     arc: [],
+    pace: manoeuvrePace(row, size, kerbPx),
   };
   path.arc = buildArcTable(path);
   return path;
 }
 
-// Where along its exit approach a car rejoins the road after a garage — the
-// progress its path is re-seeded at, so it carries on from where it really is.
-export function garageExitEndT(row: ParkingRow, size: number): number {
-  return Math.min(0.999, stallPose(exitRowOf(row), 0, size, 0, "out").t + MANOEUVRE_APPROACH_FRAC);
+// Where along its exit approach a vehicle rejoins the road — the progress its
+// path is re-seeded at, so it carries on from where it really is. Takes the same
+// `kerbPx` as the path: the run depends on how far out the bay sits, and a second
+// answer here would re-seat the car somewhere its curve never reached.
+export function forwardExitEndT(
+  row: ParkingRow,
+  index: number,
+  size: number,
+  kerbPx: number,
+): number {
+  const { pose } = exitStall(row, index, size, kerbPx);
+  return forwardExitEnd(row, pose, size, kerbPx);
 }
 
 // How finely the manoeuvre curve is measured. 16 chords over a ~50px swing puts

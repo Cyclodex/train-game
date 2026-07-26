@@ -27,8 +27,9 @@ import {
   stallIsHidden,
   stallOnLane,
   stallLengthPx,
-  garageExitPath,
-  garageExitEndT,
+  forwardExitPath,
+  forwardExitEndT,
+  exitsForward,
   garageExitFrom,
 } from "@/tiles/parking";
 import { parseCoordId } from "@/tiles/model";
@@ -161,6 +162,10 @@ export interface StallInfo {
   onLane: boolean;
   // Where on the approach a car draws level with this stall (0..1 along the tile).
   t: number;
+  // The kerb offset of this stall's own approach, in TILE units. Resolved once
+  // because the manoeuvre's LENGTH depends on how far out the bay sits (see
+  // `manoeuvreRunPx`), and it is asked for on every tile crossing.
+  kerb: number;
 }
 
 export interface ParkingRegistry {
@@ -209,9 +214,9 @@ export interface ParkingRegistry {
   pathFor(ref: StallRef, laneOff: number, tStart?: number): ManoeuvrePath | null;
   // Where along its approach a car peels off toward `ref` (0..1 of the tile).
   startTOf(ref: StallRef): number;
-  // The FORWARD curve out of a garage, plus where on the road it ends and which
-  // approach that is. Null for a rank of bays — those reverse out along the curve
-  // they came in on, which is what a driver actually does.
+  // The FORWARD curve out of a stall, plus where on the road it ends and which
+  // approach that is. Null for the kinds that are REVERSED out of (see
+  // `exitsForward`), which drive the curve they came in on backwards instead.
   exitFor(
     ref: StallRef,
     laneOff: number,
@@ -277,6 +282,7 @@ export function createParkingRegistry(
         hidden: stallIsHidden(row.kind),
         onLane: stallOnLane(row.kind),
         t: pose.t,
+        kerb: kerbOffsetAt(level, parseCoordId(ref.tileId), row.from, 1),
       });
     }
   }
@@ -413,24 +419,28 @@ export function createParkingRegistry(
       // A halt has no pull-in to start early for: the bus stops exactly AT the
       // stop, on the lane it is already in.
       if (info.onLane) return info.t;
-      return manoeuvreStartT(info.row, ref.index, 1);
+      return manoeuvreStartT(info.row, ref.index, 1, info.kerb);
     },
 
     exitFor(ref, laneOff) {
       const info = infoOf(ref);
-      if (!info || info.row.kind !== "garage") return null;
+      if (!info || !exitsForward(info.row.kind)) return null;
+      // A garage rejoins the road at its OUT ramp, which may be on the far bank;
+      // a kerbside bay rejoins on the approach it arrived by.
+      const from =
+        info.row.kind === "garage" ? garageExitFrom(info.row) : info.row.from;
+      // A garage may come out on the far bank, so its exit kerb is its own.
+      const kerb =
+        from === info.row.from
+          ? info.kerb
+          : kerbOffsetAt(level, parseCoordId(ref.tileId), from, 1);
       const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}`;
       let path = paths.get(key);
       if (!path) {
-        const kerb = kerbOffsetAt(level, parseCoordId(ref.tileId), garageExitFrom(info.row), 1);
-        path = garageExitPath(info.row, 1, kerb, laneOff);
+        path = forwardExitPath(info.row, ref.index, 1, kerb, laneOff);
         paths.set(key, path);
       }
-      return {
-        path,
-        endT: garageExitEndT(info.row, 1),
-        from: garageExitFrom(info.row),
-      };
+      return { path, endT: forwardExitEndT(info.row, ref.index, 1, kerb), from };
     },
 
     pathFor(ref, laneOff, tStart) {
@@ -444,11 +454,9 @@ export function createParkingRegistry(
       if (cached) return cached;
       const info = infoOf(ref);
       if (!info) return null;
-      const coord = parseCoordId(ref.tileId);
       // Built in TILE units (size 1) so the sim can measure the manoeuvre in the
       // same units as `segLen`; the renderer scales by `tileSize` when it draws.
-      const kerb = kerbOffsetAt(level, coord, info.row.from, 1);
-      const path = manoeuvrePath(info.row, ref.index, 1, kerb, laneOff, tStart);
+      const path = manoeuvrePath(info.row, ref.index, 1, info.kerb, laneOff, tStart);
       paths.set(key, path);
       return path;
     },

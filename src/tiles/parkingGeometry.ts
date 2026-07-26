@@ -278,12 +278,19 @@ export function busStopGeometry(
   const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
   const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
-  // A lay-by's markings sit at the FAR edge of its bay; a halt has no bay, so they
-  // sit on the kerb itself.
+  // The furniture — shelter, sign — stands on the VERGE, beyond the bay.
   const mark = near + depth;
   const first = stallPose(row, 0, size, kerbPx);
   const a0 = first.t * size - pitch / 2;
   const a1 = a0 + pitch * row.count;
+  // THE YELLOW LINE GOES ON THE ROAD SIDE, not the verge side. It is a marking on
+  // the CARRIAGEWAY — the boundary between the bay and the running lane, the line
+  // saying "do not stop across this" — so painting it along the back of the bay
+  // put it where no traffic can ever cross it and left the bay's mouth unmarked.
+  // For a HALT `near` IS the kerb (no bay, zero depth), which is where a stopping
+  // restriction is painted anyway, so both kinds land right for the same reason.
+  // It spans the whole OPENING, tapers included, so it reads as the bay's mouth.
+  const taper = layByTaperPx(row, size);
 
   // Three bars standing in for the word BUS, centred on the stop.
   const mid = (a0 + a1) / 2;
@@ -310,7 +317,7 @@ export function busStopGeometry(
   const flagHalf = size * 0.022;
 
   return {
-    kerbLine: poly([f.at(a0, mark), f.at(a1, mark)], false),
+    kerbLine: poly([f.at(a0 - taper, near), f.at(a1 + taper, near)], false),
     legend,
     shelter: poly([
       f.at(mid - shHalf, shOut),

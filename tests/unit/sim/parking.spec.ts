@@ -11,14 +11,15 @@ import {
   needsBigBay,
   stallLengthPx,
   layByTaperPx,
-  manoeuvreApproachPx,
+  manoeuvreRunPx,
   stallBoxPoints,
   stallPose,
   validateParking,
   kerbOffsetAt,
   bankOf,
-  garageExitPath,
-  garageExitEndT,
+  forwardExitPath,
+  forwardExitEndT,
+  exitsForward,
   garageExitFrom,
   type ParkingRow,
 } from "@/tiles/parking";
@@ -31,6 +32,7 @@ import {
 } from "@/sim/parking";
 import { createRoadSim } from "@/sim/road";
 import { SCENARIOS } from "@/levels/test";
+import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // The base car body length the road sim uses in these tests, in tiles (the
 // rendered game passes 38px/200px = 0.19).
@@ -193,7 +195,7 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
   });
 
   it("drives OUT forwards, ending aligned with the road", () => {
-    const path = garageExitPath(garage, 200, 28, 7);
+    const path = forwardExitPath(garage, 0, 200, 28, 7);
     const start = manoeuvreAt(path, 0);
     const end = manoeuvreAt(path, 1);
     const mouth = stallPose(garage, 0, 200, 28, "out");
@@ -219,10 +221,60 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
   it("rejoins the road at the OUT ramp, not back at the entrance", () => {
     // The car must carry on from where it really emerged. Re-seeding it at the
     // in-ramp would teleport it backwards and make it drive the same stretch twice.
-    const endT = garageExitEndT(garage, 200);
+    const endT = forwardExitEndT(garage, 0, 200, 28);
     const inT = stallPose(garage, 0, 200, 0, "in").t;
     expect(endT).toBeGreaterThan(inT);
     expect(endT).toBeLessThanOrEqual(0.999);
+  });
+});
+
+describe("a kerbside space is pulled out of, an echelon bay is reversed out of", () => {
+  const rank: ParkingRow = { from: Position.Left, kind: "parallel", count: 3 };
+
+  it("only the kinds a driver really noses out of get a forward exit", () => {
+    // Reversing is not a fallback here, it is the RIGHT motion for a bay you back
+    // into. The line is drawn by kind, not by size or reservation.
+    expect(exitsForward("parallel")).toBe(true);
+    expect(exitsForward("garage")).toBe(true);
+    expect(exitsForward("perpendicular")).toBe(false);
+    expect(exitsForward("angled")).toBe(false);
+    // A halt never leaves the lane at all, so it has no manoeuvre either way.
+    expect(exitsForward("busstop")).toBe(false);
+  });
+
+  it("the registry hands one out for a kerb bay and withholds it from a 90° bay", () => {
+    const kerb = createParkingRegistry(levelWith([rank]), CAR_LEN);
+    const bay = kerb.pickStallOn("1,0", Position.Left, "car", "c1")!;
+    const exit = kerb.exitFor(bay, 0)!;
+    expect(exit).toBeTruthy();
+    // It rejoins the road on the approach it arrived by, downstream of the bay.
+    expect(exit.from).toBe(Position.Left);
+    expect(exit.endT).toBeGreaterThan(kerb.startTOf(bay));
+
+    const echelon = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "perpendicular", count: 3 }]),
+      CAR_LEN,
+    );
+    const slot = echelon.pickStallOn("1,0", Position.Left, "car", "c1")!;
+    expect(echelon.exitFor(slot, 0)).toBeNull();
+  });
+
+  it("noses out along the road instead of crabbing sideways into it", () => {
+    const path = forwardExitPath(rank, 1, 200, 28, 7);
+    const start = manoeuvreAt(path, 0);
+    const end = manoeuvreAt(path, 1);
+    const pose = stallPose(rank, 1, 200, 28);
+    expect(start.x).toBeCloseTo(pose.x);
+    expect(start.y).toBeCloseTo(pose.y);
+    // Ends further down the street, back on the lane, pointing the way it goes.
+    expect(end.x).toBeGreaterThan(start.x);
+    expect(Math.abs(end.angleDeg)).toBeLessThan(5);
+    // THE POINT: the first thing that happens is forward motion. With the control
+    // point abeam the bay — the garage's rule, which is right for a ramp — the
+    // opening leg of the curve is purely lateral and a car parked ALONG the road
+    // would slide out of its space broadside.
+    const first = manoeuvreAt(path, 0.12);
+    expect(first.x - start.x).toBeGreaterThan(Math.abs(first.y - start.y));
   });
 });
 
@@ -270,7 +322,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
     };
     // Same bay geometry, with and without the opening to follow.
     const square: ParkingRow = { ...bay, reserved: undefined, count: 1 };
-    expect(manoeuvreApproachPx(bay, 200)).toBeGreaterThan(manoeuvreApproachPx(square, 200));
+    expect(manoeuvreRunPx(bay, 200, 28)).toBeGreaterThan(manoeuvreRunPx(square, 200, 28));
     expect(worstTurn(bay)).toBeLessThan(worstTurn(square));
   });
 });
@@ -584,6 +636,40 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       maxCars: s.traffic?.maxCars ?? 12,
     });
   }
+
+  it("noses out of a kerbside bay — never reverses into the road", () => {
+    // The rule as a PLAYER sees it: watch a bus leave a lay-by and it drives away
+    // forwards. Asserted on the rendered pose rather than on the curve, because
+    // the geometry being right is worth nothing if the phase machine still hands
+    // the car its entry curve to replay backwards.
+    const sim = simFor("parkingkerb", 4);
+    const prev = new Map<string, { x: number; y: number; tile: string }>();
+    let steps = 0;
+    let worst = 0;
+    for (let i = 0; i < 3000; i++) {
+      sim.step(0.05, () => false);
+      const leaving = new Set(
+        sim.cars().filter(c => c.phase === "leaving").map(c => c.id),
+      );
+      for (const chord of sim.sample()) {
+        const u = chord.units[0];
+        if (!u?.front.pose || !u.rear.pose) continue;
+        const tile = getCoordinatesId(u.front.coord);
+        const now = { x: u.front.pose.tx, y: u.front.pose.ty, tile };
+        const before = prev.get(chord.id);
+        prev.set(chord.id, now);
+        if (!before || before.tile !== tile || !leaving.has(chord.id)) continue;
+        // How far it moved ALONG its own nose. Negative = reversing.
+        const hx = u.front.pose.tx - u.rear.pose.tx;
+        const hy = u.front.pose.ty - u.rear.pose.ty;
+        const h = Math.hypot(hx, hy) || 1;
+        worst = Math.min(worst, ((now.x - before.x) * hx + (now.y - before.y) * hy) / h);
+        steps++;
+      }
+    }
+    expect(steps).toBeGreaterThan(20); // cars really did leave their bays
+    expect(worst).toBeGreaterThanOrEqual(-1e-9);
+  });
 
   it("cars drive to a car park, park, dwell, and leave again", () => {
     const sim = simFor("parkinglot");

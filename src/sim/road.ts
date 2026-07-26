@@ -399,11 +399,11 @@ export interface Car {
   // halted bus KEEPS its road body, which is precisely why the traffic behind it
   // queues instead of flowing past.
   parkOnLane: boolean;
-  // True while the car is driving a garage's FORWARD exit curve, where `manoeuvre`
-  // runs 0 (at the ramp mouth) → 1 (back on the road). A rank of bays instead
-  // replays its entry curve BACKWARDS (1 → 0), which is the real motion: you
-  // reverse out of a parking bay. Nobody reverses out of a multi-storey, so a
-  // garage gets its own path and its own second mouth to come out of.
+  // True while the car is driving a FORWARD exit curve, where `manoeuvre` runs 0
+  // (in the space) → 1 (back on the road). An echelon or 90° bay instead replays
+  // its entry curve BACKWARDS (1 → 0), which is the real motion: you reverse out
+  // of one of those. Which kinds do which lives in `tiles/parking.ts`
+  // (`exitsForward`).
   parkExiting: boolean;
   // Seconds of dwell left. Counts down only while `phase === "parked"`.
   dwellLeft: number;

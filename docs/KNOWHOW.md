@@ -319,12 +319,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
   · Do NOT grow the leaving footprint in as the car emerges: a follower brakes
     against what it can see, so starting at nothing means it arrives on top (0.077
     vs 0.028). Entering shrinks; leaving is full from tick one.
-- GARAGES are driven THROUGH: two ramp mouths (`GARAGE_IN_T` / `GARAGE_OUT_T`),
-  a FORWARD exit curve (`garageExitPath`), and `exitTo` to put the out-ramp on the
-  other approach. A bay still reverses out — that IS the real motion — but nobody
-  backs out of a multi-storey. The car is re-seated on the OUT slot when it starts
-  leaving, not when it finishes, or it spends the manoeuvre claiming the entrance
-  and then materialises at the exit inside whatever queued there.
+- WHICH STALLS ARE DRIVEN OUT OF FORWARDS: `exitsForward(kind)` = garage | parallel.
+  An echelon or 90° bay is REVERSED out of — that is the real motion, and replaying
+  the entry curve backwards is exactly it, free. A KERBSIDE space is not: nobody
+  backs out of a parallel bay into the traffic behind them, and a coach in a lay-by
+  physically cannot. Both of those and the garage drive `forwardExitPath`. The car
+  is re-seated on the EXIT slot when it starts leaving, not when it finishes, or it
+  spends the manoeuvre claiming the bay and then materialises downstream inside
+  whatever queued there.
+- GARAGES are driven THROUGH: two ramp mouths (`GARAGE_IN_T` / `GARAGE_OUT_T`) and
+  `exitTo` to put the out-ramp on the other approach, so departures do not queue
+  behind arrivals.
 - STALL CHOICE is scattered by `hashOf(carId) % free.length`, filtered to bays
   still AHEAD of the nose (`atStallEntry` only fires forwards). Deterministic and
   free: a real RNG draw here would couple the parking stream to traffic state, and
@@ -422,19 +427,49 @@ lean — prune as much as you add. This file only stays useful if every task ten
   39px tapers = 188 of 200, and 2x would spill onto the neighbour where the tile's
   own viewBox clips it. A tapered bay CENTRES itself whatever `align` says — a
   packed row starts at the leading edge with no room in front for the opening.
-- CONTROL-POINT PLACEMENT is what makes a pull-in gentle, NOT approach length. A
-  quadratic's arriving tangent is p1→p2, so with p1 abeam the bay that leg is
-  purely lateral: the vehicle reaches its space travelling sideways and the whole
-  turn lands in the last few percent. Lengthening the approach then makes it WORSE
-  — same turn, concentrated harder (measured: 12.6°/step on a long lay-by vs
-  6.9° on a short bay). p1 now sits where the KERB straightens (the taper end),
-  else the midpoint, so both legs carry longitudinal extent.
+- CONTROL-POINT PLACEMENT is what makes a manoeuvre gentle, NOT its length. A
+  quadratic's arriving tangent is p1→p2 and its LEAVING tangent is p0→p1, and each
+  must match the heading the vehicle actually holds at that end:
+  · IN: p0 and p1 both on the LANE (that is the heading it arrives at). With p1
+    abeam the bay instead, the last leg is purely lateral — the vehicle reaches its
+    space sideways and the whole turn lands in the final few percent; lengthening
+    the approach then makes it WORSE, the same turn concentrated harder (measured:
+    12.6°/step on a long lay-by vs 6.9° on a short bay). p1 sits where the KERB
+    straightens (the taper end), else the midpoint.
+  · OUT: mirror it — p0 and p1 both on the STALL's axis. For a kerb bay that is
+    down the road (which incidentally makes the longitudinal motion linear in the
+    curve parameter); for a GARAGE the axis IS abeam, since it stands square to the
+    street. Get this wrong and the sprite SNAPS from its rest angle into a crab on
+    the first tick of leaving.
+- MANOEUVRE LENGTH is `manoeuvreRunPx(row, size, kerbPx)` — ONE number for both
+  directions, or a bay is entered along a gentle curve and left along a sharp one.
+  A KERBSIDE bay is the case that cannot use a constant: the vehicle points down
+  the road at both ends and only shifts its own offset sideways, so the room it
+  needs is set by that offset (2x lateral). Measured as "slip", the fraction of
+  motion that is sideways to the sprite's own heading: 0.89 peak / 0.32 mean on the
+  old fixed 0.16-tile approach — a car sliding into its space broadside — against
+  0.61 / 0.16 now. 90° and echelon bays keep the constant: they are MEANT to turn
+  across the kerb.
+- …which then needs `ManoeuvrePath.pace`. Manoeuvre speed cannot be one constant
+  either: a long shallow swing into a lay-by is not driven at the speed of a tight
+  turn into a 90° bay, and that is the whole reason a town builds a tapered one.
+  Left constant, the longer kerbside curves made every pull-in and pull-out ~2.5x
+  slower and `parkingkerb` fell from 3 completed cycles a run to 1 — the street
+  throttled by vehicles crawling through their own manoeuvres. `pace` = run ÷ the
+  fixed approach, so a gentler curve takes about the same TIME.
 - A HALT PAINTS NOTHING BOX-SHAPED. `stallBoxPoints` on a zero-depth row is
   DEGENERATE — nought long and a full pitch wide — and renders as a bare line
   straight across the road. `stallOutlinePath`/`parkingKerbPath`/`parkingApronPath`
   all return "" for it; its yellow kerb marking, tarmac legend and shelter
   (`busStopGeometry`) are what mark it. Only visible when zoomed: `npm run shot
   --scale 6` found it.
+- THE YELLOW MARKING GOES ON THE ROAD SIDE of a lay-by (`busStopGeometry.kerbLine`
+  at `near`, spanning the whole opening incl. the tapers), not along the back of
+  the bay. It is a marking on the CARRIAGEWAY — the line between the bay and the
+  running lane — so painting it against the verge put it where no traffic could
+  ever cross it and left the mouth unmarked. A HALT has zero depth, so `near` IS
+  the kerb and both kinds land right for the same reason. The shelter and sign do
+  stand at the far edge; they are furniture, not paint.
 - The sign reads **H** for a bus facility and **P** otherwise. A car-park P over a
   bus stop reads as somewhere to leave your car, which is the one thing it is not.
 - AUTHORING: put a halt UPSTREAM of a lay-by when both are on one street. A queue
