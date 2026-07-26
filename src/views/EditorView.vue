@@ -37,27 +37,38 @@
     </MenuDrawer>
 
     <ToolDock :hint="hint">
-      <button
-        v-for="t in tools"
-        :key="t"
-        class="dock-btn"
-        :class="{ on: tool === t }"
-        @click="setTool(t)"
-      >
-        <span class="dock-btn__icon">{{ toolMeta[t].icon }}</span>
-        <span>{{ toolMeta[t].label }}</span>
-      </button>
-      <!-- Terrain brush picker: which ground the brush paints. Grass is the
-           eraser — it clears the field rather than storing a value. -->
-      <div v-if="tool === 'terrain'" class="lane-picker">
+      <!-- Two-level dock (Transport Fever style): pick WHAT you are building
+           first, then which tool within it. Eight flat buttons of unrelated
+           things (rail, bus lanes, ground, erase) forced the child to scan the
+           whole row every time; grouping keeps only the handful that belong
+           together on screen. -->
+      <div class="dock-groups">
         <button
-          v-for="t in terrainMeta"
-          :key="t.kind"
-          class="dock-btn lane-btn"
-          :class="{ on: terrainBrush === t.kind }"
-          :title="t.label"
-          @click="terrainBrush = t.kind"
-        >{{ t.icon }}</button>
+          v-for="g in dockGroups"
+          :key="g.id"
+          class="dock-btn"
+          :class="{ on: group === g.id }"
+          :title="g.label"
+          @click="selectGroup(g.id)"
+        >
+          <span class="dock-btn__icon">{{ g.icon }}</span>
+          <span>{{ g.label }}</span>
+        </button>
+      </div>
+      <!-- The chosen group's tools. Hidden for a group with a single tool
+           (Erase), where a second row would just repeat the button above it. -->
+      <div v-if="activeGroup.items.length > 1" class="dock-items">
+        <button
+          v-for="it in activeGroup.items"
+          :key="it.key"
+          class="dock-btn dock-btn--item"
+          :class="{ on: isActiveItem(it) }"
+          :title="it.label"
+          @click="selectItem(it)"
+        >
+          <span class="dock-btn__icon">{{ it.icon }}</span>
+          <span>{{ it.label }}</span>
+        </button>
       </div>
       <!-- Lane-count picker: only visible when the road tool is active. -->
       <div v-if="tool === 'road'" class="lane-picker">
@@ -144,7 +155,7 @@
         }"
         @click="onCellClick(cell.key)"
         @mousedown="onTerrainDown($event, cell.key)"
-        @mouseenter="onTerrainEnter(cell.key)"
+        @mouseenter="onTerrainEnter($event, cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <Tile
@@ -378,6 +389,75 @@ type Tool =
   | "signalise"
   | "terrain";
 
+// The dock is two levels: pick the LAYER you are working on, then the tool
+// within it. Terrain's "tools" are brush kinds rather than separate Tools, so an
+// item carries an optional `terrain` — selecting it arms the terrain tool AND
+// sets the brush, which is what makes the ground buttons live inside the Terrain
+// group instead of in a second picker beside it.
+type ToolGroupId = "rail" | "road" | "terrain" | "erase";
+
+interface DockItem {
+  key: string;
+  icon: string;
+  label: string;
+  tool: Tool;
+  terrain?: TerrainKind;
+}
+
+interface DockGroup {
+  id: ToolGroupId;
+  icon: string;
+  label: string;
+  items: DockItem[];
+}
+
+const DOCK_GROUPS: DockGroup[] = [
+  {
+    id: "rail",
+    icon: "🚂",
+    label: "Rail",
+    items: [
+      { key: "connect", icon: "🛤️", label: "Track", tool: "connect" },
+      { key: "depot", icon: "🏠", label: "Depot", tool: "depot" },
+      { key: "signal", icon: "🚦", label: "Signal", tool: "signal" },
+    ],
+  },
+  {
+    id: "road",
+    icon: "🚗",
+    label: "Road",
+    items: [
+      { key: "road", icon: "🛣️", label: "Road", tool: "road" },
+      { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
+      { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
+    ],
+  },
+  {
+    id: "terrain",
+    icon: "🏞️",
+    label: "Terrain",
+    items: [
+      { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest" },
+      { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water" },
+      { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },
+      { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
+      { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
+    ],
+  },
+  {
+    id: "erase",
+    icon: "🧽",
+    label: "Erase",
+    items: [{ key: "erase", icon: "🧽", label: "Erase", tool: "erase" }],
+  },
+];
+
+// Which group a tool belongs to, so arming a tool any other way (a shortcut, a
+// hand-off from another view) still opens the right drawer.
+const GROUP_OF_TOOL = new Map<Tool, ToolGroupId>(
+  DOCK_GROUPS.flatMap(g => g.items.map(i => [i.tool, g.id] as [Tool, ToolGroupId])),
+);
+
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
 const ROAD_BUS_KEY = "train-game:editor-road-is-bus";
@@ -512,28 +592,10 @@ class EditorView extends Vue {
   levelSizeY = 6;
   // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
   // unaffected by order.
-  tools: Tool[] = [
-    "connect",
-    "road",
-    "buslane",
-    "signalise",
-    "depot",
-    "signal",
-    "terrain",
-    "erase",
-  ];
   tool: Tool = "connect";
-  // Big, kid-friendly icon + label for each build tool, shown in the dock.
-  toolMeta: Record<Tool, { icon: string; label: string }> = {
-    connect: { icon: "🚂", label: "Rail" },
-    road: { icon: "🚗", label: "Road" },
-    buslane: { icon: "🚌", label: "Bus lane" },
-    signalise: { icon: "🚥", label: "Signalise" },
-    depot: { icon: "🏠", label: "Depot" },
-    signal: { icon: "🚦", label: "Signal" },
-    terrain: { icon: "🌲", label: "Terrain" },
-    erase: { icon: "🧽", label: "Erase" },
-  };
+  // Which dock group is open. The tool and the group are separate state: the
+  // group decides what the second row OFFERS, the tool is what is armed.
+  group: ToolGroupId = "rail";
   // The kind the terrain brush paints. "grass" is the eraser: it clears the
   // field rather than storing a value, since absent means grass everywhere else.
   terrainBrush: TerrainKind = "forest";
@@ -541,13 +603,35 @@ class EditorView extends Vue {
   // an AREA of wood, not a tile of it), so it tracks its own press state instead
   // of going through the edge-based gesture the connect tool uses.
   terrainPainting = false;
-  terrainMeta: { kind: TerrainKind; icon: string; label: string }[] = [
-    { kind: "forest", icon: "🌲", label: "Forest" },
-    { kind: "water", icon: "💧", label: "Water" },
-    { kind: "rock", icon: "🪨", label: "Rock" },
-    { kind: "urban", icon: "🏘️", label: "Town" },
-    { kind: "grass", icon: "🟩", label: "Grass" },
-  ];
+
+  dockGroups: DockGroup[] = DOCK_GROUPS;
+
+  get activeGroup(): DockGroup {
+    return DOCK_GROUPS.find(g => g.id === this.group) ?? DOCK_GROUPS[0];
+  }
+
+  // A terrain item is "active" by its BRUSH, not just by its tool — otherwise
+  // every ground button would light up together whenever the brush is armed.
+  isActiveItem(item: DockItem): boolean {
+    if (item.terrain !== undefined) {
+      return this.tool === "terrain" && this.terrainBrush === item.terrain;
+    }
+    return this.tool === item.tool;
+  }
+
+  selectGroup(id: ToolGroupId) {
+    this.group = id;
+    // Opening a group arms its first tool, so one click is enough for the common
+    // case and the board is never left in a state where the highlighted group
+    // does not match the armed tool.
+    const first = this.activeGroup.items[0];
+    if (first) this.selectItem(first);
+  }
+
+  selectItem(item: DockItem) {
+    if (item.terrain !== undefined) this.terrainBrush = item.terrain;
+    this.setTool(item.tool);
+  }
   // Provided so tile-level children (TileGround) can read their neighbours'
   // terrain without every view threading it through props.
   @Provide() level: Level = reactive(loadLevel());
@@ -1156,8 +1240,17 @@ class EditorView extends Vue {
     this.terrainPainting = true;
     this.paintTerrain(id);
   }
-  onTerrainEnter(id: string) {
+  onTerrainEnter(ev: MouseEvent, id: string) {
     if (this.tool !== "terrain" || !this.terrainPainting) return;
+    // `buttons` is the LIVE state of the physical mouse buttons, so this paints
+    // only while one is actually held. The flag alone was not enough: a mouseup
+    // swallowed by another handler (the edge zones use `@mouseup.stop`, and the
+    // camera takes pointer capture) leaves it stuck true, and from then on every
+    // tile the cursor merely passes over gets painted.
+    if ((ev.buttons & 1) === 0) {
+      this.terrainPainting = false;
+      return;
+    }
     this.paintTerrain(id);
   }
   // An arrow-function FIELD, not a method: it is handed to window.addEventListener,
@@ -1222,6 +1315,10 @@ class EditorView extends Vue {
   }
   setTool(t: Tool) {
     this.tool = t;
+    // Keep the open group honest even when a tool is armed without going
+    // through the dock.
+    const g = GROUP_OF_TOOL.get(t);
+    if (g) this.group = g;
     this.pressFrom = null;
     this.hoverPort = null;
     this.finishRoute();
