@@ -10,6 +10,8 @@ import {
   maxStallsPerTile,
   needsBigBay,
   stallLengthPx,
+  layByTaperPx,
+  manoeuvreApproachPx,
   stallBoxPoints,
   stallPose,
   validateParking,
@@ -221,6 +223,55 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
     const inT = stallPose(garage, 0, 200, 0, "in").t;
     expect(endT).toBeGreaterThan(inT);
     expect(endT).toBeLessThanOrEqual(0.999);
+  });
+});
+
+describe("a lay-by opens out of the kerb, and is entered along its own opening", () => {
+  const bay: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, reserved: "bus" };
+  const rank: ParkingRow = { from: Position.Left, kind: "parallel", count: 3 };
+
+  it("tapers a lay-by and leaves an ordinary rank square", () => {
+    // A lay-by is cut INTO the verge: the kerb swings out, runs level, swings back.
+    // A run of kerbside spaces is a continuous parking LANE — tapering each tile's
+    // end would turn one street into a row of pockets.
+    expect(layByTaperPx(bay, 200)).toBeGreaterThan(0);
+    expect(layByTaperPx(rank, 200)).toBe(0);
+    // Both tapers plus the bay have to fit the tile they are painted on, or the
+    // tile's own viewBox clips the opening off.
+    const total = layByTaperPx(bay, 200) * 2 + stallLengthPx(bay, 200);
+    expect(total).toBeLessThanOrEqual(200);
+  });
+
+  it("centres a tapered bay, because a packed one has no room for its entry", () => {
+    // Packed rows start at the tile's leading edge, which leaves nothing in front
+    // of the bay for the kerb to open through.
+    const pose = stallPose(bay, 0, 200, 28);
+    expect(pose.t * 200 - stallLengthPx(bay, 200) / 2).toBeGreaterThanOrEqual(
+      layByTaperPx(bay, 200) - 0.5,
+    );
+    // An ordinary rank still packs, so consecutive tiles line up.
+    expect(stallPose(rank, 0, 200, 28).x).toBeCloseTo(30);
+  });
+
+  it("makes the entry SHALLOWER, not just longer", () => {
+    // The point of following the opening: the bus drifts in along the taper
+    // instead of turning across the kerb line. Measured as the sharpest heading
+    // change anywhere on the curve — the same swing, spread over more road.
+    const worstTurn = (row: ParkingRow) => {
+      const path = manoeuvrePath(row, 0, 200, 28, 7);
+      let worst = 0;
+      let prev = manoeuvreAt(path, 0).angleDeg;
+      for (let i = 1; i <= 20; i++) {
+        const a = manoeuvreAt(path, i / 20).angleDeg;
+        worst = Math.max(worst, Math.abs(((a - prev + 540) % 360) - 180));
+        prev = a;
+      }
+      return worst;
+    };
+    // Same bay geometry, with and without the opening to follow.
+    const square: ParkingRow = { ...bay, reserved: undefined, count: 1 };
+    expect(manoeuvreApproachPx(bay, 200)).toBeGreaterThan(manoeuvreApproachPx(square, 200));
+    expect(worstTurn(bay)).toBeLessThan(worstTurn(square));
   });
 });
 
@@ -745,19 +796,24 @@ describe("parking in the simulation — a cycle, not a sink", () => {
         seen.get(fac)!.add(kind);
       }
     }
-    // Who belongs where. Every one of these was wrong at some point.
-    const expected: Record<string, string> = {
-      "kerb-west": "car", // ordinary kerb spaces
-      lot: "car", // the surface car park
-      garage: "car", // a height barrier keeps the big vehicles out
-      lorry: "truck", // the Lieferhof lay-by
-      busstop: "bus", // the Haltestelle
+    // Who is ALLOWED where. Sets, not single values: a lay-by genuinely serves
+    // both lorries and coaches, and pinning it to whichever one a given seed
+    // happened to send first tests the seed rather than the rule.
+    const allowed: Record<string, string[]> = {
+      "kerb-west": ["car"], // ordinary kerb spaces
+      lot: ["car"], // the surface car park
+      garage: ["car"], // a height barrier keeps the big vehicles out
+      lorry: ["truck", "bus"], // the Lieferhof lay-by takes either
+      busstop: ["bus"], // the Haltestelle is coaches only
     };
-    for (const [fac, kind] of Object.entries(expected)) {
+    for (const [fac, kinds] of Object.entries(allowed)) {
       const got = seen.get(fac);
       expect(got, `nothing ever parked at ${fac} — the assertion below proves nothing`)
         .toBeTruthy();
-      expect([...got!].sort(), `wrong traffic at ${fac}`).toEqual([kind]);
+      for (const k of got!) {
+        expect(kinds, `a ${k} used ${fac}, which is for ${kinds.join(" or ")}`)
+          .toContain(k);
+      }
     }
     // And a semi never parks anywhere at all.
     for (const kinds of seen.values()) expect(kinds.has("semi")).toBe(false);

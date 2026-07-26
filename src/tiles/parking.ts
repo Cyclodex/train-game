@@ -86,6 +86,37 @@ export function needsBigBay(reserved?: StallReservation): boolean {
   return reserved === "long" || reserved === "delivery" || reserved === "bus";
 }
 
+// How far a LAY-BY's kerb opens out and closes back in again, per end, in px.
+//
+// A lay-by is not a rectangle cut out of the verge — the kerb swings away from the
+// road, runs parallel for the length of the bay, and swings back. That shape is
+// what a driver actually follows in, which is why the pull-in curve is measured
+// from the taper mouth (`manoeuvreApproachPx`) rather than from a fixed distance:
+// the bay opening and the vehicle entering it are the same movement.
+//
+// 1.5x the depth is as much as fits. At the native tile a big bay is 110px and the
+// tile is 200, so two tapers have 90px between them; 2x would need 214 and spill
+// onto the neighbour, where the tile's own viewBox would clip it off.
+//
+// ZERO for an ordinary rank. A run of kerbside car spaces is a continuous parking
+// LANE, and tapering each tile's end would turn one street into a row of pockets.
+export function layByTaperPx(row: ParkingRow, size: number): number {
+  if (!needsBigBay(row.reserved) || row.kind === "garage" || stallOnLane(row.kind)) {
+    return 0;
+  }
+  return stallDepthPx(row.kind, size, true) * 1.5;
+}
+
+// Where a vehicle starts to peel off toward this row, in px back from the bay.
+// A tapered lay-by is entered ALONG its own opening — from the taper mouth, half a
+// bay further back — so the swing is long and shallow instead of a turn across the
+// kerb line. Everything else keeps the short, fixed approach.
+export function manoeuvreApproachPx(row: ParkingRow, size: number): number {
+  const taper = layByTaperPx(row, size);
+  if (taper <= 0) return MANOEUVRE_APPROACH_FRAC * size;
+  return taper + stallPitchPx(row.kind, size, true) / 2;
+}
+
 // A run of stalls served by one approach of one tile, on one side of it.
 export interface ParkingRow {
   // The approach the row is served from: a vehicle that entered this tile through
@@ -456,7 +487,11 @@ export function stallPose(
   // leading edge so consecutive tiles form one continuous run of bays; "centre"
   // centres the row for a lone lay-by. A garage's mouth is always mid-tile.
   const span = row.kind === "garage" ? 0 : pitch * row.count;
-  const start = row.align === "centre" ? (size - span) / 2 : 0;
+  // A tapered LAY-BY centres itself: its entry taper needs room BEFORE the bay,
+  // and a packed row starts at the tile's leading edge with none to give. A rank
+  // of ordinary spaces still packs, so consecutive tiles form one continuous run.
+  const centred = row.align === "centre" || layByTaperPx(row, size) > 0;
+  const start = centred ? (size - span) / 2 : 0;
   // A GARAGE has no rank of bays: it has a RAMP MOUTH, and one for each direction
   // of travel it serves. The in-ramp sits upstream and the out-ramp downstream, so
   // a car drives in at the first driveway and comes out of the second FACING THE
@@ -601,7 +636,7 @@ export const MANOEUVRE_APPROACH_FRAC = 0.16;
 
 // Where along the approach a car aiming for stall `index` starts to peel off.
 export function manoeuvreStartT(row: ParkingRow, index: number, size: number): number {
-  return Math.max(0, stallPose(row, index, size, 0).t - MANOEUVRE_APPROACH_FRAC);
+  return Math.max(0, stallPose(row, index, size, 0).t - manoeuvreApproachPx(row, size) / size);
 }
 
 // Build the pull-in curve for `stall` from the lane a class-`cls` car drives.
@@ -621,14 +656,34 @@ export function manoeuvrePath(
   const from = row.from;
   const exit = oppositePort(from);
   const pose = stallPose(row, index, size, kerbPx);
-  const tStart = tStartOverride ?? Math.max(0, pose.t - MANOEUVRE_APPROACH_FRAC);
+  const tStart =
+    tStartOverride ?? Math.max(0, pose.t - manoeuvreApproachPx(row, size) / size);
   const onLane = (t: number): Pt => {
     const p = laneSegmentPointAt(from, exit, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
   };
+  // WHERE THE CONTROL POINT SITS decides how the swing is distributed, and it is
+  // the whole difference between drifting in and turning across the kerb.
+  //
+  // A quadratic's leaving tangent is p0→p1 and its arriving tangent is p1→p2. With
+  // p1 abeam the bay, that arriving leg is PURELY LATERAL — the vehicle reaches its
+  // space travelling sideways and the entire turn lands in the last few percent of
+  // the curve. Lengthening the approach then makes it worse, not better: the same
+  // turn, concentrated harder. (Measured, before this: 12.6° of heading change per
+  // sample step on a long lay-by against 6.9° on a short bay.)
+  //
+  // So p1 goes where the KERB straightens — the end of the lay-by's taper — and
+  // failing that the midpoint. Both legs then carry longitudinal extent, and the
+  // vehicle follows the opening in rather than crossing it.
+  const taper = layByTaperPx(row, size);
+  const halfBay = stallPitchPx(row.kind, size, needsBigBay(row.reserved)) / 2;
+  const tControl =
+    taper > 0
+      ? Math.max(tStart, pose.t - halfBay / size)
+      : (tStart + pose.t) / 2;
   const path: ManoeuvrePath = {
     p0: onLane(tStart),
-    p1: onLane(pose.t),
+    p1: onLane(tControl),
     p2: { x: pose.x, y: pose.y },
     restAngleDeg: pose.angleDeg,
     arc: [],

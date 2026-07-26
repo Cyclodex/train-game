@@ -415,6 +415,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   one lets the queue drive straight through the bus (measured: 0.04 overlap).
   A halt also skips the manoeuvre entirely (a zero-length curve divides by its own
   length), skips the gap checks, and takes `startTOf` = the stop's own `t`.
+- A LAY-BY OPENS AND CLOSES (`layByTaperPx`): the kerb swings out, runs level for
+  the bay, swings back. Only for a BIG bay (bus/lorry/delivery) — a run of ordinary
+  kerb spaces is a continuous parking LANE and tapering each tile's end would turn
+  one street into a row of pockets. 1.5x depth is the most that fits: bay 110 + two
+  39px tapers = 188 of 200, and 2x would spill onto the neighbour where the tile's
+  own viewBox clips it. A tapered bay CENTRES itself whatever `align` says — a
+  packed row starts at the leading edge with no room in front for the opening.
+- CONTROL-POINT PLACEMENT is what makes a pull-in gentle, NOT approach length. A
+  quadratic's arriving tangent is p1→p2, so with p1 abeam the bay that leg is
+  purely lateral: the vehicle reaches its space travelling sideways and the whole
+  turn lands in the last few percent. Lengthening the approach then makes it WORSE
+  — same turn, concentrated harder (measured: 12.6°/step on a long lay-by vs
+  6.9° on a short bay). p1 now sits where the KERB straightens (the taper end),
+  else the midpoint, so both legs carry longitudinal extent.
 - A HALT PAINTS NOTHING BOX-SHAPED. `stallBoxPoints` on a zero-depth row is
   DEGENERATE — nought long and a full pitch wide — and renders as a bare line
   straight across the road. `stallOutlinePath`/`parkingKerbPath`/`parkingApronPath`

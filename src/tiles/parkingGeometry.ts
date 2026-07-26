@@ -22,6 +22,7 @@ import {
   stallOnLane,
   garageExitFrom,
   needsBigBay,
+  layByTaperPx,
 } from "./parking";
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
@@ -88,9 +89,15 @@ export function parkingApronPath(
   const first = stallPose(row, 0, size, kerbPx);
   const a0 = first.t * size - pitch / 2;
   const a1 = a0 + pitch * row.count;
+  // A LAY-BY opens out of the kerb and closes back into it. The apron is then a
+  // trapezoid, not a rectangle: its road-side edge runs the full length including
+  // both tapers, while the far edge spans only the bay itself. A rank of ordinary
+  // spaces has no taper (`layByTaperPx` returns 0) and this collapses back to the
+  // rectangle it was.
+  const taper = layByTaperPx(row, size);
   return poly([
-    f.at(a0 - skew / 2, near),
-    f.at(a1 - skew / 2, near),
+    f.at(a0 - skew / 2 - taper, near),
+    f.at(a1 - skew / 2 + taper, near),
     f.at(a1 + skew / 2, far),
     f.at(a0 + skew / 2, far),
   ]);
@@ -130,12 +137,27 @@ export function parkingKerbPath(
   const big = needsBigBay(row.reserved);
   const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
-  const far = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size + depth;
+  const near = kerbPx + (row.gap ?? 0) * LANE_WIDTH_FRAC * size;
+  const far = near + depth;
   const skew = row.kind === "angled" ? depth : 0;
   const first = stallPose(row, 0, size, kerbPx);
   const a0 = first.t * size - pitch / 2 + skew / 2;
   const a1 = a0 + pitch * row.count;
-  return poly([f.at(a0, far), f.at(a1, far)], false);
+  const taper = layByTaperPx(row, size);
+  // Without a taper the kerb is just the bay's outer edge. WITH one it is the
+  // whole opening — in off the road, along the back of the bay, and out again —
+  // which is the line that makes a lay-by read as cut into the verge rather than
+  // stuck onto it.
+  if (taper <= 0) return poly([f.at(a0, far), f.at(a1, far)], false);
+  return poly(
+    [
+      f.at(a0 - skew / 2 - taper, near),
+      f.at(a0, far),
+      f.at(a1, far),
+      f.at(a1 - skew / 2 + taper, near),
+    ],
+    false,
+  );
 }
 
 // --- Garage ------------------------------------------------------------------
