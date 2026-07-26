@@ -346,16 +346,22 @@ provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.
 **Finish by handing back the links.** The last thing every task says is WHERE to
 look, so the reader never has to hunt for the right page. List every page the
 change touches — the `/test/<id>` scenario for the mechanic in isolation, and the
-`/#/play?…` board when a mode or level is involved — as clickable URLs against the
-running dev server, not as instructions to go and find them:
+`/#/play?…` board when a mode or level is involved.
 
-```
-http://localhost:5173/#/test/faredistance                       # the mechanic alone
-http://localhost:5173/#/play?mode=tycoon&board=lakevalley-open  # it in a real run
-```
+Post them as **markdown links**, one per line, each with a few words on what to
+watch for:
+
+- [Fares by distance](http://localhost:5173/#/test/faredistance) — $470 vs $680, the short one floors first
+- [Lake Valley opening](http://localhost:5173/#/play?mode=tycoon&board=lakevalley-open) — the same pricing in a real run
+
+NOT inside a fenced code block: a fence renders as plain text, so the reader
+still has to copy-paste. Fences are for shell commands, links are for pages.
+Check the dev server's live port first — usually 5173, but `npm run dev` picks
+another when it is taken.
 
 A screenshot proves what you saw; a link lets the reader see it for themselves.
 Both, every time — a change nobody can reach in one click is not handed over.
+
 
 ## Ticket ownership (don't double-build)
 
