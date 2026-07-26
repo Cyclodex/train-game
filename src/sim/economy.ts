@@ -165,11 +165,16 @@ export const DEFAULT_FARE_FLOOR_FRAC = 0.25;
 // than the arithmetic that makes the player feel hurried. 4s is the middle of
 // the 3–5s band that still feels like a live clock rather than a stuck one.
 //
-// This is a DELIVERY dial, not a balance dial: `decayPerSec` still sets the rate,
-// so every tuned number (Payday targets, the measured runs in `modes/tycoon.ts`)
-// keeps its meaning. The staircase merely sits ON the old line at each step
-// boundary — never below it, at most one step above in between.
+// This is a DELIVERY dial, not a balance dial: `decayPerSec` still sets the rate
+// and the staircase tracks it within one rounded step, so the tuned numbers
+// (Payday targets, the measured runs in `modes/tycoon.ts`) keep their meaning.
 export const DEFAULT_FARE_STEP_SEC = 4;
+
+// Step sizes are rounded to a multiple of this once they are big enough for it
+// to matter, so a pin falls 830 → 810 → 790 rather than 830 → 810 → 791. Fares
+// are now DERIVED (tycoon prices decay from the trip length, so the raw rate is
+// a fraction like 4.86/sec); without this the pin would show the arithmetic.
+const STEP_ROUNDING = 5;
 
 export function fareFloor(spec: FareSpec): number {
   return spec.floor ?? Math.round(spec.base * DEFAULT_FARE_FLOOR_FRAC);
@@ -185,7 +190,11 @@ export function fareStepSec(spec: FareSpec): number {
 // by the same round number every time instead of drifting 19/20/21 as a rounding
 // remainder accumulates.
 export function fareStepAmount(spec: FareSpec): number {
-  return Math.round(spec.decayPerSec * fareStepSec(spec));
+  const raw = spec.decayPerSec * fareStepSec(spec);
+  if (!(raw > 0)) return 0;
+  return raw >= STEP_ROUNDING
+    ? Math.round(raw / STEP_ROUNDING) * STEP_ROUNDING
+    : Math.max(1, Math.round(raw));
 }
 
 // The payout for a train that has been alive `ageSec` seconds. Whole money only

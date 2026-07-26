@@ -2,15 +2,19 @@ import { describe, it, expect } from "vitest";
 import {
   tycoonMode,
   fareFor,
+  demandTilesOf,
+  idealTravelSec,
   maxPayoutOf,
   boardIdOf,
   tuningFor,
-  BASE_FARE,
+  FARE_HANDLING,
   FARE_PER_WAGON,
-  FARE_DECAY_PER_SEC,
+  FARE_PER_TILE,
+  FALLBACK_DEMAND_TILES,
+  GENERIC_FARE_GRACE,
   STARTING_BALANCE,
   LAKEVALLEY_OPEN_BALANCE,
-  LAKEVALLEY_OPEN_DECAY,
+  LAKEVALLEY_OPEN_GRACE,
   LAKEVALLEY_OPEN_LEAN_SPEND,
   LAKEVALLEY_OPEN_RING_PIECES,
   LAKEVALLEY_OPEN_PAYDAY,
@@ -18,11 +22,17 @@ import {
 import { MODES, modeById } from "@/modes/index";
 import type { TrainDef } from "@/modes/types";
 import type { Counters } from "@/sim/objectives";
+import {
+  fareAt,
+  fareFloor,
+  fareStepAmount,
+  DEFAULT_FARE_STEP_SEC,
+} from "@/sim/economy";
 import { expandKind } from "@/tiles/kinds";
 
 const trains: TrainDef[] = [
-  { id: "a", x: 0, y: 0, type: "people", wagonIds: ["a1", "a2"] },
-  { id: "b", x: 3, y: 0, type: "fraight", wagonIds: ["b1"] },
+  { id: "a", x: 0, y: 0, type: "people", wagonIds: ["a1", "a2"], destinations: ["3,0"] },
+  { id: "b", x: 3, y: 0, type: "fraight", wagonIds: ["b1"], destinations: ["0,0"] },
 ];
 
 const ctx = {
@@ -66,12 +76,74 @@ describe("tycoon mode", () => {
     expect(withMoney).toEqual([tycoonMode]);
   });
 
-  it("prices a fare from the loco plus its cargo", () => {
-    expect(fareFor(trains[0])).toEqual({
-      base: BASE_FARE + 2 * FARE_PER_WAGON,
-      decayPerSec: FARE_DECAY_PER_SEC,
-    });
-    expect(maxPayoutOf(trains)).toBe(2 * BASE_FARE + 3 * FARE_PER_WAGON);
+  it("prices a fare from the handling fee, the cargo AND the distance", () => {
+    expect(fareFor(trains[0]).base).toBe(
+      FARE_HANDLING + 2 * FARE_PER_WAGON.people + 3 * FARE_PER_TILE
+    );
+    expect(fareFor(trains[1]).base).toBe(
+      FARE_HANDLING + FARE_PER_WAGON.fraight + 3 * FARE_PER_TILE
+    );
+    expect(maxPayoutOf(trains)).toBe(
+      fareFor(trains[0]).base + fareFor(trains[1]).base
+    );
+  });
+
+  it("pays MORE for a longer haul — the whole point of pricing the demand", () => {
+    const near = { ...trains[0], destinations: ["1,0"] };
+    const far = { ...trains[0], destinations: ["9,0"] };
+    expect(demandTilesOf(near)).toBe(1);
+    expect(demandTilesOf(far)).toBe(9);
+    expect(fareFor(far).base - fareFor(near).base).toBe(8 * FARE_PER_TILE);
+  });
+
+  it("measures the demand as the crow flies, summed over the legs it names", () => {
+    // Straight-line, not the route driven: a scenic detour must not pay for
+    // itself, and on a build board the rail does not exist yet at setup.
+    expect(demandTilesOf({ ...trains[0], destinations: ["3,4"] })).toBe(7);
+    expect(demandTilesOf({ ...trains[0], destinations: ["2,0", "2,3"] })).toBe(5);
+    // A train the level pairs with nothing still prices as a middling haul.
+    expect(demandTilesOf({ ...trains[0], destinations: undefined })).toBe(
+      FALLBACK_DEMAND_TILES
+    );
+    // Never zero — the decay below divides by the ideal trip time.
+    expect(demandTilesOf({ ...trains[0], destinations: ["0,0"] })).toBe(1);
+  });
+
+  it("pays a freight wagon more than a passenger wagon — it is heavier to haul", () => {
+    expect(FARE_PER_WAGON.fraight).toBeGreaterThan(FARE_PER_WAGON.people);
+    const people = { ...trains[0], wagonIds: ["w1"], type: "people" as const };
+    const fraight = { ...people, type: "fraight" as const };
+    expect(fareFor(fraight).base - fareFor(people).base).toBe(
+      FARE_PER_WAGON.fraight - FARE_PER_WAGON.people
+    );
+  });
+
+  it("normalises the decay to the trip: distance is a bigger prize, not a harder one", () => {
+    const near = fareFor({ ...trains[0], destinations: ["2,0"] });
+    const far = fareFor({ ...trains[0], destinations: ["10,0"] });
+    // The far haul is worth more AND burns SLOWER per second — its clock is the
+    // longer trip it has to make. Both bottom out after the same number of
+    // ideal trips, which is what makes distance a prize rather than a penalty.
+    expect(far.base).toBeGreaterThan(near.base);
+    expect(far.decayPerSec).toBeLessThan(near.decayPerSec);
+    for (const [spec, tiles] of [
+      [near, 2],
+      [far, 10],
+    ] as const) {
+      const budget = GENERIC_FARE_GRACE * idealTravelSec(tiles);
+      expect(spec.decayPerSec * budget).toBeCloseTo(spec.base - fareFloor(spec), 6);
+      // Halfway through its grace, each fare has spent about half of what it
+      // can lose — the same shape regardless of how far it has to go.
+      const half = (spec.base + fareFloor(spec)) / 2;
+      expect(fareAt(spec, budget / 2)).toBeGreaterThan(half - 30);
+      expect(fareAt(spec, budget / 2)).toBeLessThan(half + 30);
+      // The staircase lands on the floor within one step of the ideal line —
+      // it holds each value for a beat, so it can never be early.
+      expect(fareAt(spec, budget)).toBeLessThanOrEqual(
+        fareFloor(spec) + fareStepAmount(spec)
+      );
+      expect(fareAt(spec, budget + DEFAULT_FARE_STEP_SEC)).toBe(fareFloor(spec));
+    }
   });
 
   it("sets up a fare per train plus the starting capital", () => {
@@ -134,10 +206,12 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     );
   });
 
-  it("any other board keeps the generic budget, decay and stars", () => {
+  it("any other board keeps the generic budget, grace and stars", () => {
     const setup = tycoonMode.setup({ ...ctx, levelId: "board:buildgap" });
     expect(setup.economy?.startingBalance).toBe(STARTING_BALANCE);
-    expect(setup.economy?.fares?.a.decayPerSec).toBe(FARE_DECAY_PER_SEC);
+    expect(setup.economy?.fares?.a.decayPerSec).toBe(
+      fareFor(trains[0], GENERIC_FARE_GRACE).decayPerSec
+    );
     expect((setup.objective.stars ?? []).map(s => s.id)).toEqual([
       "payday",
       "hands-off",
@@ -160,7 +234,15 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     // Discipline is still scored — but on SPEND, which is independent of the
     // budget, so a generous purse cannot buy the lean star.
     expect(LAKEVALLEY_OPEN_LEAN_SPEND).toBeLessThan(rebuild);
-    expect(setup.economy?.fares?.a.decayPerSec).toBe(LAKEVALLEY_OPEN_DECAY);
+    // …and the opening level burns slower: twice the generic grace, so a fare
+    // survives twice as many ideal trips while the player learns to build.
+    expect(LAKEVALLEY_OPEN_GRACE).toBe(2 * GENERIC_FARE_GRACE);
+    expect(setup.economy?.fares?.a.decayPerSec).toBe(
+      fareFor(trains[0], LAKEVALLEY_OPEN_GRACE).decayPerSec
+    );
+    expect(setup.economy?.fares?.a.decayPerSec).toBeLessThan(
+      fareFor(trains[0], GENERIC_FARE_GRACE).decayPerSec
+    );
   });
 
   it("names three goals that pull in different directions", () => {
@@ -198,8 +280,9 @@ describe("tycoon per-board tuning (lakevalley-open)", () => {
     expect(
       payday.predicate(counters({ earned: LAKEVALLEY_OPEN_PAYDAY - 1 }))
     ).toBe(false);
-    // Letting every fare hit its 25% floor pays 550 on this roster — the star
-    // must not be earnable by dawdling.
-    expect(LAKEVALLEY_OPEN_PAYDAY).toBeGreaterThan(550);
+    // Measured in a real browser on this board (see the constant's comment):
+    // every fare left to rot to its floor pays $611, and a run sent 60s late
+    // banks $1,140. The star must not be earnable by dawdling.
+    expect(LAKEVALLEY_OPEN_PAYDAY).toBeGreaterThan(1140);
   });
 });

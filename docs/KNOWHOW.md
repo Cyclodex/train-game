@@ -269,10 +269,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The fare falls as a STAIRCASE, not a slope: `DEFAULT_FARE_STEP_SEC` (=4s, the
   middle of TV's 3–5s feel) quantises `fareAt`, so the pin holds a number and
   then drops it in one chunk. `decayPerSec` is still the BALANCE dial and the
-  staircase sits exactly on the old line at every step boundary — changing the
+  staircase tracks it to within one step (sizes round to $5) — changing the
   step never moves a Payday target, changing the rate does. Per-fare override
   `FareSpec.stepSec`; 0 = the old continuous curve. Measured on
   `lakevalley-open`: −$20 every 4.0s, vs ~6 one-dollar flickers a second before.
+- FARES ARE PRICED FROM THE DEMAND, not the consist alone (2026-07-26):
+  `base = FARE_HANDLING + FARE_PER_WAGON[type] * wagons + FARE_PER_TILE * demandTiles`
+  and `decayPerSec` is DERIVED — the decayable part spread over `fareGrace` x
+  ideal travel time. So a long haul is a bigger prize AND burns slower per
+  second; those two together are what stop distance from being a pure penalty.
+- `demandTilesOf` is MANHATTAN between the depots the level paired, deliberately
+  NOT the rail path: on a build board the rail does not exist at setup (a path
+  query answers null exactly when it matters), and a straight-line price cannot
+  be inflated by routing the long way round.
+- The mode only sees `TrainDef`, which carried no destination. `destinations` is
+  plumbed from `TrainObject.routeDestinations` in all THREE builders (PlayView,
+  TestStage, modes/daily) — miss one and every fare there silently falls back
+  to `FALLBACK_DEMAND_TILES`.
+- The per-board dial is `TycoonTuning.fareGrace` (ideal trips a fare survives),
+  not money/sec: 4 generic, 8 on lakevalley-open. Being measured in TRIPS it
+  means the same thing on a 3-tile test lane and a 20-tile ring.
+- Payday is the ONLY goal that money-and-time eats — RE-MEASURE it in a real
+  browser after any pricing change. lakevalley-open 2026-07-26: prompt run
+  $2,040 of $2,440 max, sent-60s-late $1,140, all-floors $611 ⇒ target $1,700.
+- lakevalley-open's three demands form a 3-CYCLE (each train's destination is
+  another train's shed), so it CANNOT be played one train at a time — a
+  serialized measurement run deadlocks at the first arrival. Send all three.
 - `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
   specs build `Counters` fixtures BY HAND, and required fields break them.
   Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
