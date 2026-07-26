@@ -578,7 +578,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
-- `npm run probe` = RENDER-level audit of all 73 scenarios in a real browser
+- `npm run probe` = RENDER-level audit of every registry scenario (75 today) in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
@@ -657,10 +657,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   entries into reactive arrays.
 - `config.plainBackdrop` (🌳 BG in /test) = flat green for reading kerbs/markings/gores.
 
-## STATE (2026-07-26) — read before picking up work
-- Nothing is PUSHED. `master` holds the merged road-rendering work; branch
-  `claude/terrain-world` is ahead of it with worlds+camera+demoworld, terrain,
-  live editing (phase 0) and the Tycoon economy (phase 1). Check
+## STATE (2026-07-26 evening) — read before picking up work
+- Nothing is PUSHED. Local `master` holds the `claude/terrain-world` merge
+  (worlds+camera+demoworld, terrain, live editing, the dispatch loop); branch
+  `claude/build-in-play` is ahead of it with the route-draw extraction, build
+  in play (phase 2), `lakevalley-open` and the terrain blob relaxation. Check
   `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
 - OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
   (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in

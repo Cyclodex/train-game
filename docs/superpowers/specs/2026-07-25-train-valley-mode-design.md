@@ -464,10 +464,13 @@ is mode-agnostic, `src/modes/` is a registry, and the auto flags already exist.
 
 ## 8. Where this stands, and what comes next (2026-07-26)
 
-Written at the end of the first build day, on `claude/terrain-world` (nothing
-pushed — `git log --oneline origin/master..HEAD` before assuming otherwise).
-Renumbered from §6 because there were two of those; §6 Reception and §7
-Automation keep their numbers, so every existing cross-reference still resolves.
+Updated at the end of the second build day (2026-07-26 evening). Local `master`
+now holds the terrain-world merge; branch `claude/build-in-play` sits ahead of
+it with the route-draw extraction, build-in-play, `lakevalley-open` and the
+terrain blob relaxation. Still nothing pushed — `git log --oneline
+origin/master..HEAD` before assuming otherwise. Renumbered from §6 because
+there were two of those; §6 Reception and §7 Automation keep their numbers, so
+every existing cross-reference still resolves.
 
 **The one-line verdict.** The goal sentence is *"build rails, let trains go,
 switch the route, including economics."* As of 2026-07-26 **all four verbs work
@@ -552,17 +555,19 @@ board to do it on.
 
 ### What remains, ordered, with sizes
 
-1. ~~**Extract `routeDrawController` from `EditorView`**~~ — **done 2026-07-26** (`routeDrawController.ts`).
-2. ~~**Phase 2 — build in play**~~ — **done 2026-07-26** (see "Phase 2, as built" above).
-3. ~~**Re-cut `lakevalley` to its opening state**~~ — **done 2026-07-26** (`lakevalley-open`, see "The opening level, as built" above). The tech demo is now the level.
-4. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
-5. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
-6. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, and clearing forest/town for money (M3/M4).
-7. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
-8. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
-9. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
-10. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
-11. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
+Done and struck from this list on 2026-07-26: the `routeDrawController`
+extraction, phase 2 (build in play) and the `lakevalley-open` re-cut — see the
+"as built" tables above. The goal sentence itself is met; everything below is
+what separates *the loop works* from *a finished mode*.
+
+1. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
+2. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
+3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4).
+4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
+5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
+6. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
+7. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
+8. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
 
 Not planned: crashes (M14 / G7), production chains (§5.1), reversing (§5.2).
 
@@ -580,50 +585,19 @@ Carried forward from the last session and still open:
 - **`demoworld` has no terrain painted**, so `/play` still shows the old flat
   ground.
 
-### The next step, concretely: extract `routeDrawController`
+### The next step, concretely: tax + calendar, then goals on the Ready card
 
-Phase 2 is the highest-value step — phase 0 removed its foundation risk and
-`lakevalley` gives it a board worth building on. Its only blocker is that **the
-route-drawing gesture is trapped inside `EditorView.vue`** (1 763 lines), and it
-is the trickiest interaction in the app: drag an edge dot for a one-shot route,
-or click-chain corner by corner, with a live ghost preview and a U-turn case
-where the frontier tile stays undecided.
+The `routeDrawController` extraction plan that used to live here is executed —
+the controller is headless in `src/routeDrawController.ts` with its own spec,
+the editor and PlayView both drive it, and the design reasoning survives in the
+commit (`3214f08`) and in `docs/KNOWHOW.md` → BUILD IN PLAY.
 
-**What moves.** Roughly 230 lines, interleaved through `EditorView` between
-lines ~644 and ~1179:
-
-- state — `pressFrom`, `armed`, `routeStarted`, `pendingId`, `hoverPort`;
-- behaviour — `onZoneDown` / `onZoneUp` / `onZoneClick` / `onZoneEnter` /
-  `onZoneLeave`, `extendRoute`, `commitSegment`, `finishRoute`;
-- derived view state — `previewByCell`, `previewRails`, `glowId`, `isArmed`,
-  `isFinish`.
-
-**The crux is that the two callers commit differently, and the controller must
-not know which.** `EditorView` writes cell by cell through `commit(id, cell)` →
-`level[id] = …` + `syncBusGates` + `persist()`, and its `layPair` can lay either
-rails *or* road lanes. `PlayView` must instead commit the whole route atomically
-through `game.applyEdits(steps)`, which is rail-only, additive, rejects any edit
-touching an occupied or reserved tile, merges fresh switch arms and bumps
-`levelVersion`. So the controller stays layer-agnostic: it owns press/arm/hover
-state and emits `RouteStep[]` plus a preview, over injected ports —
-`plan(from, to)` (the caller supplies `RouteOpts`, i.e. its own bounds and
-`passable`), `canCommit(tileIds)` and `commit(steps, layAnchor) => boolean`. The
-editor passes its per-cell writer; play passes `game.canEdit` / `game.applyEdits`.
-Rail-only in play falls out of `applyEdits` and is the right scope for phase 2.
-
-**Do not skip the U-turn.** `pendingId` — the frontier tile left undecided when
-you click the edge the track arrives through — is the piece most likely to be
-"simplified away" in a second copy, and it is what makes chained drawing feel
-right.
-
-**Verification for the extraction itself:** no behaviour change, guarded by the
-editor e2e run and `npm run probe` (73 scenarios). There is no unit test on the
-gesture today because it cannot be reached headlessly — making it headless *is*
-the payoff, so the extraction ships with one (`tests/unit/routeDrawController.spec.ts`:
-drag lays one route; click-chaining advances the head; a U-turn parks the
-frontier; a refused `canCommit` lays nothing).
-
-With that in place phase 2 is small, and then step 3 above makes it a level.
+What makes the mode *finished* rather than *working* is items 1–2 above, and
+they are both small: book an annual `"tax"` ledger entry off a calendar
+rendering of `elapsedSec` (M13 — the second clock that gives M1 its bite, per
+§6 complaint 2), and list the per-board star labels on the Ready card so the
+player can read the targets before starting (the last sliver of M9). Neither
+touches the sim's hot path; both are HUD + `modes/tycoon.ts` work.
 
 ---
 
