@@ -470,10 +470,11 @@ Renumbered from §6 because there were two of those; §6 Reception and §7
 Automation keep their numbers, so every existing cross-reference still resolves.
 
 **The one-line verdict.** The goal sentence is *"build rails, let trains go,
-switch the route, including economics."* Three of those four verbs work today on
-`/#/play?mode=tycoon&board=lakevalley`. **Building is the missing verb**, and it
-is blocked by an extraction rather than by any simulation work — see "The next
-step" below.
+switch the route, including economics."* As of 2026-07-26 **all four verbs work
+in one loop on `/#/play?mode=tycoon&board=lakevalley-open`** — the opening
+state of Lake Valley, where the ring's south run is missing, the yellow station
+is severed, and the $8,000 budget buys it back. That board is the deliverable
+this whole document was aiming at; everything below it is polish or scope.
 
 ### Landed
 
@@ -519,19 +520,30 @@ files passing**.
 before building phase 2 on it. `/#/play?mode=tycoon&board=lakevalley` is the
 board to do it on.
 
+#### The opening level, as built (2026-07-26)
+
+| | |
+|---|---|
+| **`lakevalley-open`** | The complete `lakevalley` minus exactly the ring's south run (`structuredClone` of the reference board with `2,5…6,5` deleted, so the two can never drift; the complete board stays the /test reference). The yellow station is severed outright; only the blue↔red trunk works on open. `allowIncomplete` extended to tolerate a severed depot. |
+| **Why the ring matters** | Proved, not assumed: the seeded assignment is a 3-cycle, and a 3-cycle over a tree of single track deadlocks in every dispatch order (the B<Y<R<B contradiction at the 1,2–2,2 needle). The ring is the passing loop; closing it *is* the level. |
+| **The economics** | Budget $8,000 against a designed 7-piece/$7,000 rebuild (5 ring + the station junction's two entries — the gesture prices a T-junction pair by pair). Fare decay slowed to 10/s for this board (per-board `TycoonTuning`, keyed off the levelId tail so /play and /test agree). |
+| **M9 goals** | Three that pull apart, each verified reachable in a real browser: **Payday ($1,100)** — a prompt full rebuild banked $1,188, a serialized lean run only $692; **Under budget ($6,000)** — the ring + east-entry-only build, won via ordered dispatch + one switch flip, using the 4,2 signal as the waiting bay; **Rail baron (7 pieces)** — the full rebuild. Under budget and Rail baron are mutually exclusive by arithmetic, so the board is worth two runs (§1.3). |
+| **The sim facts the goals rest on** | Trains route by the ARMS at reservation time (no destination pathfinding), an unsignalled departure reserves the whole route to its end, and a train stopped at a signal keeps ~a consist-length of stale rear reservations. The lean line works *because* yellow's short consist releases 6,2; the north-entry variant deadlocks on exactly that tile. Measured in scripted playtests, then pinned by the e2e. |
+| **The e2e** | `tests/e2e/game.spec.ts` "tycoon: lakevalley-open" drives the whole loop through the UI: Start, three build gestures, the arm table, three pin dispatches, phase `won`, `balance = 8000 − spent + earned`, Rail baron earned / Under budget not. |
+
 ### Scorecard against §1.2 — mechanic by mechanic
 
 | # | Mechanic | State | What is actually missing |
 |---|---|---|---|
-| M1 | Money is the master resource | **Partial** | The ledger, the balance and the HUD exist, but money has exactly **one source and no sink**. Track, clearing, calling trains and tax are all unbuilt, so the balance only ever rises. §1.3's "one resource, three sinks" — the thing that makes every decision comparable — is the part not yet there. |
+| M1 | Money is the master resource | **Partial → biting** | One source (fares) and one sink (track), but on `lakevalley-open` that sink now *bites*: the $8,000 budget covers the $7,000 rebuild with one spare piece, and the lean/baron goals are a real spend decision. Still missing: clearing, calling trains, and **tax** — the second clock. The balance can still only be lost to track. |
 | M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
-| M3 | Build from an open end into marked land | **Half** | `planRoute` already anchors on an open end and takes a `passable` predicate, and `canBuildOn` fills it. Absent: the *green plot* mask (buildable land as an authored, rendered thing distinct from terrain) and the dashed "close this gap" hint. |
+| M3 | Build from an open end into marked land | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: the *green plot* mask (buildable land as an authored, rendered thing) and the dashed "close this gap" hint — the gap is only visible as missing rails. |
 | M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing scenery for money** — forest and town are free to build over today, with no clearing action and no price. |
 | M5 | Trains wait until dispatched | **Done** | — |
 | M6 | Each train has one explicit destination | **Partial** | Colour matching guarantees a solvable, reachable pairing, and `TrainDef.routeDestinations` exists but only feeds the debug overlay: the sim still parks in *any* colour-matching depot. No destination badge under the fare pin. This is G4, still S. |
 | M7 | The fare decays with time, including while waiting | **Done** | — |
 | M8 | Switches are the moment-to-moment verb | **Done**, and past TV | Interlocking, default arms, `switchLockMode`. |
-| M9 | Three named objectives, shown before and after | **Partial** | Three orthogonal stars are evaluated live and shown as pips on both overlays, but the Ready card shows the *mode description*, not the goal list — the player cannot read the targets before starting. And no goal can mention building yet, because no counter counts tiles bought. |
+| M9 | Three named objectives, shown before and after | **Mostly done** | `lakevalley-open` names three goals that pull in different directions — Payday $1,100 / Under budget $6,000 / Rail baron 7 pieces — tuned per board (`TycoonTuning`), each verified reachable, and the lean/baron pair mutually exclusive exactly like TV1's own level 1. Counters exist for all of them (`earned`/`spent`/`tilesBuilt`). Remaining gap: the Ready card still shows the *mode description*, not the goal list, so the targets are only readable as star-pip tooltips. |
 | M10 | Extra trains are player-called and cost money | **Missing** | The `Spawner` contract exists (Time Attack uses it); Tycoon declares none, and there is no call-train button. Constrained by G6 (see below). |
 | M11 | A briefing screen | **Missing** | `levels/test/thumb.ts` + `ScenarioThumb.vue` are the renderer it would be built on. |
 | M12 | End screen offers three exits | **Mostly done** | Retry ✓ and ∞ "Keep playing" ✓. The third exit is *Finish / next level*, which needs a campaign that does not exist (G8). "Change game mode" stands in for it. |
@@ -542,9 +554,9 @@ board to do it on.
 
 1. ~~**Extract `routeDrawController` from `EditorView`**~~ — **done 2026-07-26** (`routeDrawController.ts`).
 2. ~~**Phase 2 — build in play**~~ — **done 2026-07-26** (see "Phase 2, as built" above).
-3. **Re-cut `lakevalley` to its opening state** — *S.* Now genuinely small: the authored opt-out exists (`TestScenario.allowIncomplete`, proven by `buildgap`), so this is dropping the south side of the ring and setting the flag. **This is the step that turns the tech demo into the level.**
+3. ~~**Re-cut `lakevalley` to its opening state**~~ — **done 2026-07-26** (`lakevalley-open`, see "The opening level, as built" above). The tech demo is now the level.
 4. **Give money a second sink and a second clock: annual tax + calendar** — *S each.* `"tax"` is already a `LedgerReason`; a calendar is a formatting of `elapsedSec`. Small, and together they are what makes the balance a decision rather than a readout (M1/M13).
-5. **Goals that can read the build** — *S.* A `tilesBuilt` / `spentOnTrack` counter plus the star labels listed on the Ready card, so a level can ask for "buy ≥46 pieces" and the player can read the targets before starting (M9).
+5. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting.
 6. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, and clearing forest/town for money (M3/M4).
 7. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
 8. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).

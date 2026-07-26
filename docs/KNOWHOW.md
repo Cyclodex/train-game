@@ -318,10 +318,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (pre-existing reset behaviour, unchanged).
 - A DELIBERATELY-INCOMPLETE board is now authorable: `TestScenario.
   allowIncomplete` makes `testScenarios.spec.ts` skip exactly `dangling-track`
-  + `route-disconnected` for that scenario (everything else still applies).
-  `/test/buildgap` is the worked example — playable at
+  + `route-disconnected` + `isolated-depot` for that scenario (everything else
+  still applies; the third joined 2026-07-26 when `lakevalley-open` severed a
+  station outright). `/test/buildgap` is the minimal example — playable at
   `/#/play?mode=tycoon&board=buildgap` (the /test stage shows the board; the
   build UI lives in PlayView).
+- A zone CLICK lays the planned route only UP TO the clicked edge — one pair
+  per tile, NO terminus-straight pair at the clicked tile (that lands only via
+  Esc-finish on the pending frontier). So restoring an authored T-junction
+  through the gesture prices it PAIR BY PAIR: lakevalley-open's 2,5 is three
+  gestures' worth (ring drag [T,R] + two 1-piece links [R,B], [T,B]) = 3 of
+  the rebuild's 7 pieces.
+
+## LAKEVALLEY-OPEN (the Train Valley level, 2026-07-26)
+- `lakevalley-open` = `structuredClone(lakevalley)` minus the ring's south run
+  (`LAKEVALLEY_SOUTH_RUN`), so the reference board and the opening state can't
+  drift (`lakevalleyOpen.spec.ts` pins the derivation). Never share cell/train
+  refs between scenarios — both get handed to createGame and edited in play.
+- Tycoon tuning is PER BOARD: `tuningFor(levelId)` (`modes/tycoon.ts`) keys on
+  the levelId TAIL — PlayView passes `board:<id>`, TestStage `test:<id>`, so
+  both routes into a board get the same game. lakevalley-open: $8,000 budget,
+  decay 10/s, stars Payday $1,100 / Under budget $6,000 / Rail baron 7 pieces
+  (lean+baron mutually exclusive by arithmetic — TV1's own goal design). Every
+  other board keeps the generic $3,000/20/s/payday-hands-off-colours.
+- THE RING IS THE PASSING LOOP, proved not vibed: the seeded assignment is a
+  3-cycle, and a 3-cycle of depots over a TREE of single track deadlocks in
+  every dispatch order (B<Y<R<B contradiction at the 1,2–2,2 needle). Don't
+  "simplify" the board by shrinking the ring; closing it IS the level.
+- SIM ROUTING FACTS the goals rest on (measured in scripted playtests):
+  · Trains route BY THE ARMS at reservation time — there is no destination
+    pathfinding. A flipped arm reroutes every later reservation through it.
+  · A departure with NO signal on its arm-route reserves the WHOLE route to
+    its end — a train cannot even leave its depot while that route ends on an
+    occupied tile. The 4,2 signal is the board's only mid-track waiting bay.
+  · A train STOPPED at a signal keeps ~a consist-length of stale REAR
+    reservations (3-unit train at 4,2 pins 5,2+6,2 forever). That kills the
+    north-entry lean line (every lap crosses 6,2) and is exactly why the
+    east-entry lean line works: yellow's 2-unit consist releases 6,2.
+- Verified end to end in a real browser (playtest-lakevalley-open.mjs): full
+  rebuild won in ~40 sim-s banking $1,188 (Payday+Baron); lean rebuild won in
+  ~75 sim-s banking $692 (Under budget only — serialization burns fares). The
+  e2e ("tycoon: lakevalley-open") drives the full loop through the UI.
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
@@ -621,19 +658,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   lays cell by cell (`commit`+`layPair`, rail OR road); PlayView hands the same
   array to `game.buildRoute` ATOMICALLY (rail-only, priced). Steps travel a→b.
   Still in the views, deliberately: tool→layer mapping, `layPair` (lane
-  count/bus/one-way), preview PAINT. NEXT UP (design doc §8): re-cut
-  `lakevalley` to its opening state (unblocked — `allowIncomplete` exists),
-  annual tax + calendar clock (the economy's second sink/clock), destination
-  badges.
+  count/bus/one-way), preview PAINT. `lakevalley-open` (2026-07-26) is the
+  played result — see LAKEVALLEY-OPEN above. NEXT UP (design doc §8): annual
+  tax + calendar clock (the economy's second sink/clock), goals listed on the
+  Ready card, destination badges.
 - `cfg.lay` runs through the caller's layer choice AT CALL TIME: finishing a
   pending frontier via a tool switch (`toolChanged`) lays the terminus per the
   NEW tool's layer (road route → switch tool → terminus laid as RAIL). That is
   pre-existing editor behaviour, preserved verbatim in the extraction — a fix
   would be a behaviour change, decide it separately.
-- The "start `lakevalley` with a GAP in the ring" step is now UNBLOCKED: the
-  authored opt-out exists (`TestScenario.allowIncomplete`, see BUILD IN PLAY),
-  so re-cutting the board is again mostly deleting tiles + setting the flag.
-- The gallery is 74 scenarios. `npm run probe` + the road sweep both iterate the
+- The "start `lakevalley` with a GAP in the ring" step is DONE (2026-07-26):
+  `/test/lakevalley-open`, playable at `/#/play?mode=tycoon&board=lakevalley-open`
+  — see LAKEVALLEY-OPEN above for the tuning and the sim facts it rests on.
+- The gallery is 75 scenarios. `npm run probe` + the road sweep both iterate the
   registry, so a new scenario is covered the day it is added.
 
 ## WORKFLOW

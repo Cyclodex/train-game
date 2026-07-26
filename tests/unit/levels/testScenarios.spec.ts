@@ -15,19 +15,23 @@ describe("feature test world", () => {
     describe(scenario.id, () => {
       it("is a connected level with every train route reachable", () => {
         const res = validateLevel(scenario.level, scenarioRoutes(scenario));
-        // A deliberately-incomplete board (`allowIncomplete`, e.g. buildgap)
-        // OPENS with dangling open ends and an unreachable destination — buying
-        // the track that closes that gap in play is its whole point, so those
-        // two issue types are expected there and only there. Everything else
-        // (blocked terrain, isolated depots) must still hold on such a board,
-        // and every other scenario keeps the full check. Do NOT widen this:
+        // A deliberately-incomplete board (`allowIncomplete`) OPENS with the
+        // exact states an authored gap produces — dangling open ends, an
+        // unreachable destination (buildgap), and a station severed outright
+        // (lakevalley-open's yellow depot, whose spur junction is part of the
+        // missing run) — so those three issue types are expected there and
+        // only there. Everything else (blocked terrain, trains-in-depots,
+        // grid fit, road validity) must still hold on such a board, and every
+        // other scenario keeps the full check. Do NOT widen this further:
         // the flag is per-scenario opt-in precisely so a genuinely broken map
         // elsewhere still fails CI.
+        const OPENING_STATE_ISSUES = [
+          "dangling-track",
+          "route-disconnected",
+          "isolated-depot",
+        ];
         const issues = scenario.allowIncomplete
-          ? res.issues.filter(
-              i =>
-                i.type !== "dangling-track" && i.type !== "route-disconnected"
-            )
+          ? res.issues.filter(i => !OPENING_STATE_ISSUES.includes(i.type))
           : res.issues;
         expect(issues).toEqual([]);
         if (!scenario.allowIncomplete) expect(res.ok).toBe(true);
