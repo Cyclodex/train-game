@@ -122,6 +122,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.
 
+## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
+- THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`
+  and `isBoundary` index `level[…]` on EVERY call, against the object handed to
+  `createSimulation` — never copied. Track laid mid-run routes on the next tick
+  with no rebuild. Don't "optimise" this into a snapshot; `liveEdit.spec.ts` guards it.
+- Signals are derived per call from `level[id].signals`, NOT snapshotted.
+  `config.signalTiles` is an ADDITIVE override (unioned), for tests that mark
+  boundaries on cells carrying no `signals` of their own.
+- TRAP: a tile that just became a junction has no switch arm, and
+  `connectionsToExitPort` returns **null** for a multi-partner entry with no arm →
+  the train STOPS DEAD on the tile you just built. `game.applyEdits` merges fresh
+  `initialSwitches` arms in (existing player choices win).
+- Edits touching an OCCUPIED or RESERVED tile are rejected (`game.canEdit`). A
+  train's `path[headIndex]` caches that tile's exit port and reservations cache
+  ids; editing under it makes both stale. Same line of code as the game rule
+  "you can't rip up track under a moving train".
+- `levelVersion` (a ref bumped per edit) is how the VIEW learns. `game` holds the
+  RAW level (the sim indexes it thousands of times a tick — no Proxy in that path)
+  while the view holds a reactive proxy of the same target, so raw writes notify
+  nobody. `PlayView.bounds`/`gridCells` read the counter.
+- Additive edits only so far. Removal is deferred with clearing costs.
+- TEST TRAP: a train arriving at a depot whose colour does NOT match BOUNCES BACK
+  OUT. In a test that reads like "the new track was ignored". Pass `depotColors`.
+
+## TERRAIN RULES
+- `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
+  `validateLevel` (issue `blocked-terrain`), the editor's `routeOpts.passable`,
+  and anything later. Water + rock block; forest + town don't (you fell trees).
+  A bridge will be an EXCEPTION here, not a second rule.
+- Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
+  terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
+  Painting grass back over a bare cell removes it, so repainting can't grow bounds.
+
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
   `road: Lane[]` = `{from,to[],index,kind?}` DIRECTED (undirected pairs can't do

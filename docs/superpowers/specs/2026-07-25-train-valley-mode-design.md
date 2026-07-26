@@ -462,6 +462,69 @@ is mode-agnostic, `src/modes/` is a registry, and the auto flags already exist.
 
 ---
 
+## 6. Where this stands, and what comes next (2026-07-26)
+
+Written at the end of the first build session, on `claude/terrain-world`.
+
+### Landed
+
+| | |
+|---|---|
+| **Terrain as tile data** | `TileCell.terrain?`, ground + derived scatter, organic patch outlines whose corners and shores are seeded by the lattice point / edge so neighbours agree. `tiles/terrain.ts` |
+| **Terrain authoring** | Drag-to-paint brush in the editor, grass as the eraser. |
+| **The first rule** | `canBuildOn`: water and rock are unbuildable, enforced in `validateLevel` and in the editor's route planner from one predicate. |
+| **`lakevalley`** | Our reconstruction of Train Valley level 1: three coloured stations, a ring around an unbuildable lake, a junction per spur. `/test/lakevalley`, also `/play?board=lakevalley`. |
+| **Phase 0** | The world is editable mid-run: `game.applyEdits` / `canEdit`, live signal derivation, switch-arm merging, `levelVersion`. |
+
+### The next unlock, and the one thing in its way
+
+**Phase 2 (build in play) is now the highest-value step**, because phase 0 removed
+its foundation risk and `lakevalley` gives it a board worth building on. The
+remaining blocker is not simulation — it is that **the route-drawing gesture is
+trapped inside `EditorView.vue`**. Drag an edge dot, preview with `planRoute`,
+chain clicks corner by corner, ghost the result: all of it is entangled with that
+component's `pressFrom` / `armed` / `hoverPort` state across ~1400 lines.
+
+So the first task of phase 2 is an extraction, not a feature: pull that gesture
+into a headless controller beside `cameraController.ts` — call it
+`routeDrawController.ts` — that owns the press/arm/hover state and emits
+`RouteStep[]`, so `EditorView` and `PlayView` share one implementation. Doing it
+any other way means two divergent copies of the trickiest interaction in the app.
+
+With that in place phase 2 is small: gate on `ModeControls.build`, preview cost,
+call `applyEdits`, grey out what `canEdit` refuses.
+
+### Recommended order from here
+
+1. **Extract `routeDrawController`** from `EditorView`, no behaviour change,
+   guarded by the existing editor e2e/probe runs.
+2. **Phase 1 — economy + dispatch.** `sim/economy.ts`, `TrainState "waiting"` +
+   `sim.dispatch(id)`, fare decay, typed cargo, money in the HUD. Playtest this
+   ALONE on `lakevalley` before building phase 2 on top of it: if dispatching
+   trains and watching fares decay is not fun, the build tool will not save it.
+3. **Phase 2 — build in play**, on the extracted controller.
+4. **Re-cut `lakevalley` to its opening state**: the south side of the ring
+   removed and a budget set, so the level plays as the original does — build the
+   missing link, then dispatch. That single change is the moment this stops
+   being a tech demo and becomes the level.
+5. Then phases 3–6 as originally written.
+
+### Still-open items found along the way
+
+- **Dynamic trains (G6).** `PlayView` renders `<Train v-for="t in trains">` from a
+  fixed list, so player-called trains need either a pre-declared pool (cheap,
+  enough for a campaign level) or real dynamic sprites.
+- **Removal / bulldozing.** Deliberately deferred with phase 3, where clearing
+  gets a price and "a reserved block ran through the deleted tile" is worth
+  answering properly.
+- **`generateLevel` does not paint terrain yet**, so generated and daily boards
+  are still bare grass. Contained work, and it is what makes procgen levels look
+  like places.
+- **`demoworld` has no terrain painted**, so `/play` still shows the old flat
+  ground.
+
+---
+
 ## Sources
 
 - [The Challenge of Train Valley — The Ancient Gaming Noob](https://tagn.wordpress.com/2017/01/23/the-challenge-of-train-valley/)
