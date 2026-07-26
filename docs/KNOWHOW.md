@@ -518,9 +518,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   39px tapers = 188 of 200, and 2x would spill onto the neighbour where the tile's
   own viewBox clips it. A tapered bay CENTRES itself whatever `align` says — a
   packed row starts at the leading edge with no room in front for the opening.
-- CONTROL-POINT PLACEMENT is what makes a manoeuvre gentle, NOT its length. A
-  quadratic's arriving tangent is p1→p2 and its LEAVING tangent is p0→p1, and each
-  must match the heading the vehicle actually holds at that end:
+- THE MANOEUVRE IS A CUBIC, AND ITS TANGENT IS THE HEADING. A quadratic cannot
+  leave along the lane AND arrive along the bay's own axis — its two tangents share
+  one leg — so the arriving angle was whatever the curve finished on and had to be
+  BLENDED to the stall's rest angle over the second half. That blend is a rotation
+  on a schedule, and it is exactly why parking read as an ANIMATION next to the
+  rest of the traffic model: a lane change sets no angle at all (lateral velocity
+  under an accel cap, an S-profile arriving at zero, and `lanePosAt`'s body lag
+  ANGLES the car by itself). With both ends free the car arrives already pointing
+  into the bay, so `manoeuvreAt` returns the bare tangent. Measured over a swing,
+  worst change in TURN RATE per step: 0.73° → 0.11° on a kerb bay, 0.75° → 0.20°
+  on a 90° one; and the peak turn rate on the 90° halves (6.7° → 3.5°) because the
+  turn is spread over the curve instead of crammed into the blend window.
+  · It also finished the "drives over the neighbours" story: approaching SQUARE
+    rather than diagonally clears them outright. Swept penetration into a parked
+    car across a whole `parkinglot` run: −0.029 tiles with the old narrow aisle,
+    −0.006 once the stop line stopped adding half a body, ZERO once the approach
+    became square. The sim test asserts no penetration at all now, not a tolerance.
+  · TRAP: do NOT take the lane's direction from `laneSegmentPointAt(...).tangentDeg`
+    to build a handle. It is a finite difference CLAMPED to [0,1], so at t < 0 —
+    where a car peeling off toward the first bay of a packed rank legitimately is —
+    both samples land on the same side of 0 and the heading comes out 180° WRONG.
+    That fed the cubic a reversed handle and the curve looped out and back: a
+    0.29-tile lurch, caught by the no-teleport test. `approachDeg` reads the
+    segment's two ends instead, which is exact on the straight a row must be on.
+- CONTROL-POINT PLACEMENT is what makes a manoeuvre gentle, NOT its length. Each
+  end's tangent must match the heading the vehicle actually holds there:
   · IN: p0 and p1 both on the LANE (that is the heading it arrives at). With p1
     abeam the bay instead, the last leg is purely lateral — the vehicle reaches its
     space sideways and the whole turn lands in the final few percent; lengthening

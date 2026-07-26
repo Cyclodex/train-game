@@ -702,9 +702,23 @@ function shearedBoxPoints(
 // table below. Never drive `m` as a raw Bézier parameter: it is NOT proportional
 // to distance, and a car would visibly surge through the middle of the swing.
 export interface ManoeuvrePath {
-  p0: Pt; // on the lane, BEHIND the stall (where the car halts)
-  p1: Pt; // on the lane, abeam the stall (the control point)
-  p2: Pt; // the stall pose
+  // A CUBIC, and the reason is the HEADING. A quadratic cannot leave along the
+  // lane AND arrive along the bay's own axis — its two tangents are one shared
+  // leg — so the arriving angle was whatever the curve happened to finish on and
+  // had to be BLENDED to the stall's rest angle over the second half. That blend
+  // is a rotation on a schedule, and it is exactly why the manoeuvre read as
+  // scripted next to a lane change, which sets no angle at all: there the body
+  // lag ANGLES the car into the change by itself.
+  //
+  // With a cubic both ends are free, so the curve arrives already pointing into
+  // the bay and the heading is simply the tangent. Nothing is blended, nothing is
+  // set — the car points where it is going, like the rest of the traffic model.
+  p0: Pt; // where the car IS when the move starts
+  c1: Pt; // control for the LEAVING tangent
+  c2: Pt; // control for the ARRIVING tangent
+  p3: Pt; // where it comes to rest
+  // The angle at rest. No longer blended in — kept as the fallback for a
+  // degenerate curve whose derivative vanishes.
   restAngleDeg: number;
   // Cumulative arc length at each of MANOEUVRE_SAMPLES+1 evenly-spaced Bézier
   // parameters, so `manoeuvreAtDistance` can invert distance → parameter. Built
@@ -739,6 +753,28 @@ export function manoeuvreStartT(
   return Math.max(0, stallPose(row, index, size, 0).t - manoeuvreRunPx(row, size, kerbPx) / size);
 }
 
+// The direction of travel along a straight approach, in degrees. Taken from the
+// lane's own two ends rather than from `laneSegmentPointAt`'s tangent, which is a
+// finite difference CLAMPED to [0,1]: ask it at t < 0 — which a car peeling off
+// toward the first bay of a packed rank legitimately is (its middle is still on
+// the tile behind) — and both samples land on the same side of 0, so the
+// difference points BACKWARDS and the heading comes out 180° wrong. That fed the
+// cubic a reversed handle, and the curve looped out and back: a 0.29-tile lurch,
+// caught by the no-teleport test.
+//
+// A row is only legal on a straight approach, so one direction serves the whole
+// segment and there is nothing to sample.
+function approachDeg(
+  from: Port,
+  to: Port,
+  size: number,
+  laneOff: number,
+): number {
+  const a = laneSegmentPointAt(from, to, size, laneOff, laneOff, 0);
+  const b = laneSegmentPointAt(from, to, size, laneOff, laneOff, 1);
+  return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+}
+
 // Build the pull-in curve for `stall` from the lane a class-`cls` car drives.
 // `laneOff` is the car's lateral lane offset (right-of-travel), in the same units
 // as `size` — the same number `createLaneGeometry.couplerOffsets` gives the
@@ -762,29 +798,28 @@ export function manoeuvrePath(
     const p = laneSegmentPointAt(from, exit, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
   };
-  // WHERE THE CONTROL POINT SITS decides how the swing is distributed, and it is
-  // the whole difference between drifting in and turning across the kerb.
-  //
-  // A quadratic's leaving tangent is p0→p1 and its arriving tangent is p1→p2. With
-  // p1 abeam the bay, that arriving leg is PURELY LATERAL — the vehicle reaches its
-  // space travelling sideways and the entire turn lands in the last few percent of
-  // the curve. Lengthening the approach then makes it worse, not better: the same
-  // turn, concentrated harder. (Measured, before this: 12.6° of heading change per
-  // sample step on a long lay-by against 6.9° on a short bay.)
-  //
-  // So p1 goes where the KERB straightens — the end of the lay-by's taper — and
-  // failing that the midpoint. Both legs then carry longitudinal extent, and the
-  // vehicle follows the opening in rather than crossing it.
-  const taper = layByTaperPx(row, size);
-  const halfBay = stallPitchPx(row.kind, size, needsBigBay(row.reserved)) / 2;
-  const tControl =
-    taper > 0
-      ? Math.max(tStart, pose.t - halfBay / size)
-      : (tStart + pose.t) / 2;
+  // BOTH TANGENTS ARE NAMED, which is the whole point of the cubic:
+  //  • it LEAVES along the lane, because that is the way the car is already
+  //    travelling;
+  //  • it ARRIVES along the bay's own axis, because that is the way the car has to
+  //    be pointing to be in the bay.
+  // Neither is a guess and neither is corrected afterwards. A 90° bay therefore
+  // gets approached SQUARE instead of diagonally, which is both what a driver does
+  // and what keeps the swing out of the bays either side.
+  const p0 = onLane(tStart);
+  const p3 = { x: pose.x, y: pose.y };
+  const chord = Math.hypot(p3.x - p0.x, p3.y - p0.y) || 1;
+  // A third of the chord each: the standard handle length for a cubic through two
+  // known tangents, and the one that neither flattens the middle nor loops it.
+  const h = chord / 3;
+  const laneRad = (approachDeg(from, exit, size, laneOff) * Math.PI) / 180;
+  const rad = (pose.angleDeg * Math.PI) / 180;
   const path: ManoeuvrePath = {
-    p0: onLane(tStart),
-    p1: onLane(tControl),
-    p2: { x: pose.x, y: pose.y },
+    p0,
+    c1: { x: p0.x + Math.cos(laneRad) * h, y: p0.y + Math.sin(laneRad) * h },
+    // BACK along the resting heading: the curve comes into the bay nose-first.
+    c2: { x: p3.x - Math.cos(rad) * h, y: p3.y - Math.sin(rad) * h },
+    p3,
     restAngleDeg: pose.angleDeg,
     arc: [],
     pace: 1,
@@ -858,39 +893,27 @@ export function forwardExitPath(
     const p = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, t);
     return { x: p.x, y: p.y };
   };
-  // WHERE THE CONTROL POINT SITS is the mirror of `manoeuvrePath`, and for the
-  // same reason: a quadratic's LEAVING tangent is p0→p1, so p1 has to lie along
-  // the heading the vehicle is standing at or the sprite's first move is sideways
-  // — a snap from its rest angle straight into a crab.
-  //  • The entry puts p0 AND p1 on the lane, because that is the heading the car
-  //    arrives at.
-  //  • So the exit puts p0 and p1 on the STALL's own axis. For a kerbside bay that
-  //    is down the road, half a run ahead — which happens to make the longitudinal
-  //    motion exactly linear in the curve parameter, so the vehicle pulls away at
-  //    an even pace and drifts across.
-  //  • A GARAGE is the same rule with a different axis: it stands square to the
-  //    road, so its axis IS abeam and p1 lands on the lane. Left explicit rather
-  //    than derived from `pose.angleDeg`, which points INTO the building (a stall
-  //    pose is where a car RESTS, not the way it leaves).
-  const abeam = onLane(pose.t);
+  // The MIRROR of the entry, and for the same reason: it LEAVES along the heading
+  // the vehicle is parked at, and ARRIVES along the lane. Both named, neither
+  // corrected afterwards — so a car noses out of a kerbside space and a car comes
+  // square out of a garage ramp, from one construction.
+  const p0 = { x: pose.x, y: pose.y };
   const far = onLane(tEnd);
-  const len = Math.hypot(far.x - abeam.x, far.y - abeam.y) || 1;
-  const half = ((tEnd - pose.t) * size) / 2;
-  const p1 =
-    row.kind === "garage"
-      ? abeam
-      : {
-          x: pose.x + ((far.x - abeam.x) / len) * half,
-          y: pose.y + ((far.y - abeam.y) / len) * half,
-        };
-  // Ends ALIGNED WITH THE ROAD, not with the bay: the vehicle is rejoining
-  // traffic, so its final heading is the lane's whatever angle it stood at.
-  const lane = laneSegmentPointAt(from, ahead, size, laneOff, laneOff, tEnd);
+  const chord = Math.hypot(far.x - p0.x, far.y - p0.y) || 1;
+  const h = chord / 3;
+  const aheadDeg = approachDeg(from, ahead, size, laneOff);
+  // OUT of the stall along its own axis. A garage's pose points INTO the building
+  // (a stall pose is where a car RESTS, not the way it leaves), so the ramp is the
+  // one case that runs the other way down that axis.
+  const outDeg = row.kind === "garage" ? pose.angleDeg + 180 : pose.angleDeg;
+  const outRad = (outDeg * Math.PI) / 180;
+  const laneRad = (aheadDeg * Math.PI) / 180;
   const path: ManoeuvrePath = {
-    p0: { x: pose.x, y: pose.y },
-    p1,
-    p2: far,
-    restAngleDeg: lane.tangentDeg,
+    p0,
+    c1: { x: p0.x + Math.cos(outRad) * h, y: p0.y + Math.sin(outRad) * h },
+    c2: { x: far.x - Math.cos(laneRad) * h, y: far.y - Math.sin(laneRad) * h },
+    p3: far,
+    restAngleDeg: aheadDeg,
     arc: [],
     pace: 1,
   };
@@ -921,9 +944,13 @@ const MANOEUVRE_SAMPLES = 16;
 
 function bezierAt(path: ManoeuvrePath, t: number): Pt {
   const u = 1 - t;
+  const a = u * u * u;
+  const b = 3 * u * u * t;
+  const c = 3 * u * t * t;
+  const d = t * t * t;
   return {
-    x: u * u * path.p0.x + 2 * u * t * path.p1.x + t * t * path.p2.x,
-    y: u * u * path.p0.y + 2 * u * t * path.p1.y + t * t * path.p2.y,
+    x: a * path.p0.x + b * path.c1.x + c * path.c2.x + d * path.p3.x,
+    y: a * path.p0.y + b * path.c1.y + c * path.c2.y + d * path.p3.y,
   };
 }
 
@@ -979,18 +1006,24 @@ export function manoeuvreAt(
   const u = 1 - t;
   const { x, y } = bezierAt(path, t);
   // Derivative of the quadratic — the direction the car is actually moving.
-  let dx = 2 * u * (path.p1.x - path.p0.x) + 2 * t * (path.p2.x - path.p1.x);
-  let dy = 2 * u * (path.p1.y - path.p0.y) + 2 * t * (path.p2.y - path.p1.y);
-  if (dx === 0 && dy === 0) {
-    dx = path.p2.x - path.p0.x;
-    dy = path.p2.y - path.p0.y;
+  const a = 3 * u * u;
+  const b = 6 * u * t;
+  const c = 3 * t * t;
+  let dx =
+    a * (path.c1.x - path.p0.x) + b * (path.c2.x - path.c1.x) + c * (path.p3.x - path.c2.x);
+  let dy =
+    a * (path.c1.y - path.p0.y) + b * (path.c2.y - path.c1.y) + c * (path.p3.y - path.c2.y);
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
+    dx = path.p3.x - path.p0.x;
+    dy = path.p3.y - path.p0.y;
   }
-  const tangentDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-  // Blend to the rest angle over the second half. Shortest-way blend, so a bay
-  // whose rest angle is 179° from the tangent doesn't spin the car the long way.
-  const blend = Math.max(0, (t - 0.5) * 2);
-  const delta = ((path.restAngleDeg - tangentDeg + 540) % 360) - 180;
-  return { x, y, angleDeg: tangentDeg + delta * blend };
+  // THE TANGENT IS THE HEADING. Nothing is blended and nothing is imposed: the
+  // curve already arrives along the bay's own axis (see `ManoeuvrePath`), so the
+  // car finishes square because it drove square, not because it was rotated into
+  // place over the last half of the move. That blend was the single thing that
+  // made this read as an animation next to the rest of the traffic model, where a
+  // lane change sets no angle at all and lets the body lag produce it.
+  return { x, y, angleDeg: (Math.atan2(dy, dx) * 180) / Math.PI };
 }
 
 // --- Level-wide derivations --------------------------------------------------

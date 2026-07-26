@@ -906,8 +906,12 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       }
     }
     expect(compared).toBeGreaterThan(200);
-    // A hair of tolerance: the sprite corners graze, as they do in a real car park.
-    expect(worst).toBeGreaterThan(-0.008);
+    // NOT A HAIR OF TOLERANCE — none at all. Once the curve arrives along the
+    // bay's own axis the swing stays out of the neighbours completely. The road to
+    // here, measured on this same sweep: −0.029 tiles of driving through a parked
+    // car with the old aisle, −0.006 once the stop line stopped adding half a body
+    // of approach, and clear the moment the approach became square.
+    expect(worst).toBeGreaterThanOrEqual(0);
   });
 
   it("cars drive to a car park, park, dwell, and leave again", () => {
