@@ -99,9 +99,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (`tests/e2e/game.spec.ts`) — keep them on whatever element carries the art.
 
 ## TERRAIN (ground as tile data, 2026-07-26)
-- `TileCell.terrain?` = grass|forest|water|rock|urban; absent = grass. The third
-  axis of the tile model: `connections`/`road` say what CROSSES a cell, terrain
-  says what it IS. Cosmetic only so far — no sim/validator rule reads it yet.
+- `TileCell.terrain?` = grass|forest|water|rock|mountain|urban; absent = grass.
+  The third axis of the tile model: `connections`/`road` say what CROSSES a cell,
+  terrain says what it IS. Only `canBuildOn` reads it so far (see TERRAIN RULES).
 - GRASS DRAWS NOTHING (`tileGroundSvg` returns ""). That is what makes adding
   terrain a no-op for every level authored before it: the themed board shows
   through exactly as it did. Don't "fix" it by painting a grass rect — that would
@@ -114,10 +114,34 @@ lean — prune as much as you add. This file only stays useful if every task ten
   The rim/shore (`patchRimPath`) must stroke ONLY the stopping edges — stroking
   the whole outline draws a bright line down every internal join and turns a 2x2
   lake into four visibly tiled ponds. Regression-tested.
+- SHORES BULGE OUTWARD ONLY (`edgeBow`, 2026-07-26). The bow was symmetric
+  (`(r()*2-1)*EDGE_BOW`), so half of every patch's boundaries curved INWARD and a
+  lake came out PINCHED — a star, not a body of water. Now the direction is fixed
+  and only the amount varies (`-EDGE_BOW * lerp(EDGE_BOW_MIN,1,r)`), so the
+  silhouette is convex while the outline stays irregular. SIGN: the outline is
+  wound clockwise, so **negative = outward** (same convention as `SEAM_OVERLAP`).
+  Pinned by "bows every shore OUTWARD" + a control-point-outside-the-chord test.
 - Scatter is DERIVED from `(kind, coord, seed)`, never authored: paint an area,
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
   and the distance are the same forest.
+- Per-kind scatter has its OWN band (`SCATTER_BAND`): a peak is ~50 units tall so
+  it starts low in the tile and overflows UPWARD (deliberate — the row below is
+  later in the DOM, so a near peak occludes a far one; `.tile-ground` is
+  `overflow: visible` for exactly this). Keep every `translate()` inside 10..90 —
+  a unit test sweeps all kinds and fails otherwise.
+- `groundShadow(scale, spread, fill)` — the DEFAULT tint is green because the
+  default ground is meadow. On rock/mountain/town pass your own (`STONE_SHADOW`/
+  `TOWN_SHADOW`), or every boulder gets a patch of moss under it.
+- Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
+  across a rock patch read at board zoom as stray pen strokes lying on the tile;
+  broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
+  lesson as the abandoned per-tile tone variation, one scale down.
+- Rock/mountain scatter tones sit CLOSE together (light 68-75 vs dark 44-51 on a
+  56 ground). A near-white face against a near-black one turns every boulder into
+  a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
+  lands on the break→apex segment); a free-standing white wedge hangs off the
+  silhouette and reads as a paper dart.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.
@@ -163,8 +187,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
   `validateLevel` (issue `blocked-terrain`), the editor's `routeOpts.passable`,
-  and anything later. Water + rock block; forest + town don't (you fell trees).
-  A bridge will be an EXCEPTION here, not a second rule.
+  and anything later. Water + rock + mountain block; forest + town don't (you
+  fell trees). A bridge (water) and a tunnel (mountain) will be EXCEPTIONS here,
+  not second rules.
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.

@@ -26,9 +26,16 @@ export type TileKind =
 // What a cell IS, as opposed to what crosses it. `connections` and `road` say
 // what travels through a tile; terrain says what the tile is made of. Absent =
 // "grass", so every level authored before terrain existed still means the same
-// thing. Purely cosmetic today (see tiles/terrain.ts); rules — water blocking
-// plain track, bridges, rock blocking building — arrive one at a time.
-export type TerrainKind = "grass" | "forest" | "water" | "rock" | "urban";
+// thing. One rule reads it today — `canBuildOn` (water, rock and mountain block
+// building); the rest — bridges over water, tunnels through mountain — arrive
+// one at a time as EXCEPTIONS to that predicate. See tiles/terrain.ts.
+export type TerrainKind =
+  | "grass"
+  | "forest"
+  | "water"
+  | "rock"
+  | "mountain"
+  | "urban";
 
 export interface TileCell {
   connections: PortPair[];

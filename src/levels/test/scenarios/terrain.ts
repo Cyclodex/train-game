@@ -1,7 +1,7 @@
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
 
-// Terrain as tile data: the five ground kinds, side by side, with a line running
+// Terrain as tile data: the six ground kinds, side by side, with a line running
 // through them.
 //
 // Two things this is here to show, both of which are easy to get wrong and
@@ -21,7 +21,7 @@ export const terrain: TestScenario = {
   id: "terrain",
   name: "Terrain",
   description:
-    "The five ground kinds: forest, water, rock and town around a line of track.",
+    "The six ground kinds: forest, water, rock, mountain and town around a line of track.",
   level: {
     // A wood in the top-left corner, wrapping the start of the line.
     "0,0": { connections: [], terrain: "forest" },
@@ -39,6 +39,11 @@ export const terrain: TestScenario = {
     "1,3": { connections: [], terrain: "urban" },
     "2,3": { connections: [], terrain: "urban" },
     "3,3": { connections: [], terrain: "urban" },
+    // A mountain range in the bottom-right corner, so rock and mountain can be
+    // read against each other: both block building, and they have to be tellable
+    // apart at a glance or the board lies about where a line can go.
+    "4,3": { connections: [], terrain: "mountain" },
+    "5,3": { connections: [], terrain: "mountain" },
     // The line: depot to depot, straight across the middle. Two of its tiles
     // carry terrain as well as track.
     "0,2": expandKind("depot", 1),

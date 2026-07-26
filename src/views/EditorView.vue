@@ -445,6 +445,7 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest" },
       { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water" },
       { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },
+      { key: "mountain", icon: "⛰️", label: "Mountain", tool: "terrain", terrain: "mountain" },
       { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
       { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
     ],
@@ -493,7 +494,7 @@ const HINTS: Record<Tool, string> = {
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   terrain:
-    "Pick a ground and drag across the board to paint it — woods, water, rock and towns are areas, and the trees and rocks on them follow automatically. 🟩 grass is the eraser. Terrain is scenery for now: nothing blocks a train yet.",
+    "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them).",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.

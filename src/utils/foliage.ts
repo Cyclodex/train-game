@@ -72,9 +72,20 @@ export function roundTree(rng: Rng, scale: number): string {
   );
 }
 
-/** The soft ground shadow every standing object gets, centred on its base. */
-export function groundShadow(scale: number, spread = 22): string {
-  return `<ellipse cx="0" cy="0" rx="${(spread * scale).toFixed(1)}" ry="${(spread * 0.32 * scale).toFixed(1)}" fill="rgba(30,60,30,0.18)"/>`;
+/**
+ * The soft ground shadow every standing object gets, centred on its base.
+ *
+ * The default is GREEN-tinted, because the default ground is meadow. Anything
+ * standing on another ground must pass its own tint: the green ellipse under a
+ * boulder reads as moss on grey rock, which is a shadow that has become a
+ * feature of the wrong colour.
+ */
+export function groundShadow(
+  scale: number,
+  spread = 22,
+  fill = "rgba(30,60,30,0.18)",
+): string {
+  return `<ellipse cx="0" cy="0" rx="${(spread * scale).toFixed(1)}" ry="${(spread * 0.32 * scale).toFixed(1)}" fill="${fill}"/>`;
 }
 
 /** A single tree with its shadow, centred on its base point. */
