@@ -57,10 +57,29 @@ const MID_OF_LEAN = 0.75;
 // convex, but the CUSPS BETWEEN THEM drew the tile grid back onto the shore, so
 // you could count the tiles down the side of a lake. The push gives the shore
 // somewhere else to be; the slope is what makes the two tiles' curves meet
-// smoothly rather than at a kink (see shoreEdge).
-const CORNER_PUSH_MIN = 4;
-const CORNER_PUSH_MAX = 13;
+// smoothly rather than at a kink (see patchSegments).
+const CORNER_PUSH_MIN = 7;
+const CORNER_PUSH_MAX = 19;
 const CORNER_SLOPE = 5;
+
+// A REAL corner — where the patch genuinely turns — is pulled INWARD, along the
+// tile's diagonal. This is what finally stopped an authored block silhouetting
+// as its own bounding box: outward bows alone still left every corner sitting on
+// the box corner, so a 3x2 lake was a rectangle with wavy edges. Pulling the
+// corner a third of the way into the tile (while the mid-shore points push OUT)
+// makes the outline sweep from outside the lattice line down into the tile and
+// back — an effective corner radius of most of a tile, which is what reads as a
+// rounded blob. The two amounts vary per corner so the blob is never a circle.
+const CORNER_INSET_MIN = 14;
+const CORNER_INSET_MAX = 26;
+
+// How much a real corner's end tangents lean outward, as a multiple of the old
+// bow-derived lean. At ~1 the outline turned ~78° at the corner point — a
+// softened right angle, which is why a lone tile still read as a square. Scaled
+// up until the lean is comparable to `reach`, both edges leave the corner at
+// roughly 45°, so the turn spreads over the whole corner sweep instead of
+// happening at the point. Capped just under `reach` or the cubic could loop.
+const CORNER_ROUNDING = 2.2;
 
 // A continuing (internal) edge is pushed a hair OUTWARD instead of being drawn
 // as an exact shared line. Two patches that abut precisely still show a hairline
@@ -247,6 +266,20 @@ export function cornerSlope(gx: number, gy: number, seed: number): number {
   return (r() * 2 - 1) * CORNER_SLOPE;
 }
 
+/**
+ * How far a REAL corner is pulled into its tile, along the diagonal. Seeded by
+ * the lattice point for determinism, but unlike push/slope it needs no cross-
+ * tile agreement: a corner-role point is only ever drawn through by ONE tile of
+ * the patch (a same-kind side neighbour would change the role), so the pull can
+ * be as personal as it likes. Two patches kissing diagonally each pull into
+ * their own tile and separate into two bodies — deliberate: two diagonal ponds
+ * touching at a point read as a defect, not as a lake.
+ */
+export function cornerInset(gx: number, gy: number, seed: number): number {
+  const r = makeRng(hashInts(seed, gx, gy, 0x77));
+  return lerp(CORNER_INSET_MIN, CORNER_INSET_MAX, r());
+}
+
 type Pt = { x: number; y: number };
 
 // Each edge in the order the clockwise outline walks it: the direction it runs,
@@ -286,7 +319,8 @@ function cornerRoles(stops: boolean[], diag: boolean[]): CornerRole[] {
 }
 
 // The tile's four corners in local space, each displaced by its lattice point's
-// shared offset and, mid-shore, pushed outward. Clockwise from the top-left.
+// shared offset — then, mid-shore, pushed outward, or at a real corner pulled
+// INWARD along the diagonal (see CORNER_INSET). Clockwise from the top-left.
 function corners(
   x: number,
   y: number,
@@ -309,6 +343,14 @@ function corners(
       const out = EDGE_FRAME[role.edge].out;
       p.x += out.x * push;
       p.y += out.y * push;
+    } else if (role.kind === "corner") {
+      // The inward diagonal is opposite the two adjacent edges' outward
+      // normals; their sum has length sqrt(2), so divide to get a unit pull.
+      const inset = cornerInset(gx, gy, seed);
+      const oBefore = EDGE_FRAME[(i + 3) % 4].out;
+      const oAfter = EDGE_FRAME[i].out;
+      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * inset;
+      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * inset;
     }
     return p;
   });
@@ -327,39 +369,15 @@ function cornerLattice(x: number, y: number): [number, number][] {
 
 const n1 = (v: number) => v.toFixed(1);
 
-/**
- * One boundary, as a cubic whose END TANGENTS are chosen, not implied.
- *
- * This is the whole trick. A quadratic bowing off the chord leaves each corner
- * at an angle, so where two tiles' shores met the outline kinked ~47° — a sharp
- * inward V at every tile boundary, which is the tile grid drawn back onto the
- * lake. Here each end contributes `dir * reach` along the shore plus `out *
- * lean` across it, and at a mid-shore corner BOTH tiles read the same `lean`
- * (the lattice point's shared slope) from the same frame — so the two curves
- * leave and arrive along one line and the join disappears.
- *
- * `leadOut` is the slope leaving `a`, `leadIn` the slope arriving at `b`, both
- * positive = outward. A real corner passes +lean / −lean, which bulges the edge
- * out and brings it back: that is what rounds a lone patch into a blob.
- */
-function shoreEdge(
-  a: Pt,
-  b: Pt,
-  frame: { dir: Pt; out: Pt },
-  reach: number,
-  leadOut: number,
-  leadIn: number,
-): string {
-  const { dir, out } = frame;
-  const p1 = {
-    x: a.x + dir.x * reach + out.x * leadOut,
-    y: a.y + dir.y * reach + out.y * leadOut,
-  };
-  const p2 = {
-    x: b.x - dir.x * reach - out.x * leadIn,
-    y: b.y - dir.y * reach - out.y * leadIn,
-  };
-  return `C${n1(p1.x)} ${n1(p1.y)} ${n1(p2.x)} ${n1(p2.y)} ${n1(b.x)} ${n1(b.y)}`;
+// One boundary's cubic geometry: start, both controls, end. Built by
+// patchSegments, consumed by the path builders, the rim, and the scatter
+// containment polygon — one derivation, so they can never disagree.
+interface ShoreSeg {
+  a: Pt;
+  p1: Pt;
+  p2: Pt;
+  b: Pt;
+  stops: boolean;
 }
 
 // The slope to hand `shoreEdge` at one end of an edge. `sign` is +1 leaving a
@@ -419,13 +437,86 @@ function patchFrame(same: PatchSame, x: number, y: number, seed: number, size: n
 }
 
 // The outward lean that rounds a real corner, derived from this edge's own bow
-// so each shore still bulges by a different amount (see EDGE_BOW). `edgeBow` is
-// negative for outward; `shoreEdge` takes outward as positive.
-function edgeLean(g: [number, number][], i: number, seed: number): number {
+// so each corner still turns by a different amount (see EDGE_BOW), scaled up by
+// CORNER_ROUNDING so the turn is spread over the whole sweep rather than
+// happening at the point. `edgeBow` is negative for outward; a lead takes
+// outward as positive. Capped just under `reach`: a lean past the along-shore
+// component would tip the end tangent beyond 45° and risk a loop.
+function edgeLean(
+  g: [number, number][],
+  i: number,
+  seed: number,
+  reach: number,
+): number {
   const [ax, ay] = g[i];
   const [bx, by] = g[(i + 1) % 4];
-  return -edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN;
+  const lean = (-edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN) * CORNER_ROUNDING;
+  return Math.min(lean, reach * 0.95);
 }
+
+/**
+ * Every boundary of the patch, as cubics whose END TANGENTS are chosen, not
+ * implied.
+ *
+ * This is the whole trick. A quadratic bowing off the chord leaves each corner
+ * at an angle, so where two tiles' shores met the outline kinked ~47° — a sharp
+ * inward V at every tile boundary, which is the tile grid drawn back onto the
+ * lake. Here each end contributes `dir * reach` along the shore plus `out *
+ * lead` across it, and at a mid-shore corner BOTH tiles read the same lead
+ * (the lattice point's shared slope) from the same frame — so the two curves
+ * leave and arrive along one line and the join disappears.
+ *
+ * `leadOut` is the slope leaving `a`, `leadIn` the slope arriving at `b`, both
+ * positive = outward. A real corner passes +lean / −lean, which bulges the edge
+ * out and brings it back; with the corner point itself pulled inward (see
+ * CORNER_INSET) that sweep is what rounds a lone patch into a blob. An internal
+ * join runs a hair outward on both ends so two abutting bodies overlap by ~1
+ * unit of the same colour instead of leaving an antialiasing hairline.
+ */
+function patchSegments(
+  same: PatchSame,
+  x: number,
+  y: number,
+  seed: number,
+  size: number,
+): ShoreSeg[] {
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
+  const segs: ShoreSeg[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = c[i];
+    const b = c[(i + 1) % 4];
+    const j = (i + 1) % 4;
+    const { dir, out } = EDGE_FRAME[i];
+    let leadOut: number;
+    let leadIn: number;
+    if (!stops[i]) {
+      const seam = SEAM_OVERLAP / MID_OF_LEAN;
+      leadOut = seam;
+      leadIn = -seam;
+    } else {
+      const lean = edgeLean(g, i, seed, reach);
+      leadOut = edgeLead(roles[i], g[i], seed, lean, 1);
+      leadIn = edgeLead(roles[j], g[j], seed, lean, -1);
+    }
+    segs.push({
+      a,
+      p1: {
+        x: a.x + dir.x * reach + out.x * leadOut,
+        y: a.y + dir.y * reach + out.y * leadOut,
+      },
+      p2: {
+        x: b.x - dir.x * reach - out.x * leadIn,
+        y: b.y - dir.y * reach - out.y * leadIn,
+      },
+      b,
+      stops: stops[i],
+    });
+  }
+  return segs;
+}
+
+const cubic = (s: ShoreSeg) =>
+  `C${n1(s.p1.x)} ${n1(s.p1.y)} ${n1(s.p2.x)} ${n1(s.p2.y)} ${n1(s.b.x)} ${n1(s.b.y)}`;
 
 /**
  * The outline of this tile's terrain patch. An edge whose neighbour carries the
@@ -440,31 +531,9 @@ export function patchPath(
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
-  const out = [`M${n1(c[0].x)} ${n1(c[0].y)}`];
-  for (let i = 0; i < 4; i++) {
-    const a = c[i];
-    const b = c[(i + 1) % 4];
-    const j = (i + 1) % 4;
-    if (!stops[i]) {
-      // An internal join: a hair outward on both ends so two abutting bodies
-      // overlap by ~1 unit of the same colour instead of leaving a hairline.
-      const seam = SEAM_OVERLAP / MID_OF_LEAN;
-      out.push(shoreEdge(a, b, EDGE_FRAME[i], reach, seam, -seam));
-      continue;
-    }
-    const lean = edgeLean(g, i, seed);
-    out.push(
-      shoreEdge(
-        a,
-        b,
-        EDGE_FRAME[i],
-        reach,
-        edgeLead(roles[i], g[i], seed, lean, 1),
-        edgeLead(roles[j], g[j], seed, lean, -1),
-      ),
-    );
-  }
+  const segs = patchSegments(same, x, y, seed, size);
+  const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
+  for (const s of segs) out.push(cubic(s));
   out.push("Z");
   return out.join(" ");
 }
@@ -482,26 +551,58 @@ export function patchRimPath(
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
-  const out: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    if (!stops[i]) continue;
-    const a = c[i];
-    const b = c[(i + 1) % 4];
-    const j = (i + 1) % 4;
-    const lean = edgeLean(g, i, seed);
-    out.push(
-      `M${n1(a.x)} ${n1(a.y)} ${shoreEdge(
-        a,
-        b,
-        EDGE_FRAME[i],
-        reach,
-        edgeLead(roles[i], g[i], seed, lean, 1),
-        edgeLead(roles[j], g[j], seed, lean, -1),
-      )}`,
-    );
+  return patchSegments(same, x, y, seed, size)
+    .filter(s => s.stops)
+    .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
+    .join(" ");
+}
+
+/**
+ * The patch outline flattened to a polygon, for containment tests: scatter must
+ * STAND ON the patch, and with real corners now cutting deep into the tile the
+ * per-kind bands alone no longer guarantee that — a tree placed band-legally in
+ * a corner would stand on grass, a lily on the shore. Six samples per cubic is
+ * plenty at this scale; the shapes are shallow arcs.
+ */
+export function patchOutlinePolygon(
+  same: PatchSame,
+  x = 0,
+  y = 0,
+  seed = 1,
+  size = GROUND_UNITS,
+): Pt[] {
+  const pts: Pt[] = [];
+  for (const s of patchSegments(same, x, y, seed, size)) {
+    for (let k = 0; k < 6; k++) {
+      const t = k / 6;
+      const u = 1 - t;
+      const w0 = u * u * u;
+      const w1 = 3 * u * u * t;
+      const w2 = 3 * u * t * t;
+      const w3 = t * t * t;
+      pts.push({
+        x: w0 * s.a.x + w1 * s.p1.x + w2 * s.p2.x + w3 * s.b.x,
+        y: w0 * s.a.y + w1 * s.p1.y + w2 * s.p2.y + w3 * s.b.y,
+      });
+    }
   }
-  return out.join(" ");
+  return pts;
+}
+
+/** Standard even-odd ray cast. Exported for the geometry tests. */
+export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (
+      a.y > p.y !== b.y > p.y &&
+      p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 // --- Scatter -----------------------------------------------------------------
@@ -935,7 +1036,12 @@ function garden(rng: Rng): string {
   return `<ellipse cx="0" cy="${n1(-d / 2)}" rx="${n1(w / 2)}" ry="${n1(d / 2)}" fill="${tone}" opacity="0.55"/>`;
 }
 
-function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
+function groundMarks(
+  kind: TerrainKind,
+  rng: Rng,
+  base: Hsl,
+  place: (x: number, y: number) => Pt2,
+): string {
   const spread = (
     count: number,
     make: () => string,
@@ -943,9 +1049,8 @@ function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
   ): string => {
     const out: string[] = [];
     for (let i = 0; i < count; i++) {
-      const x = lerp(14, 86, rng());
-      const y = lerp(yBand[0], yBand[1], rng());
-      out.push(`<g transform="translate(${n1(x)} ${n1(y)})">${make()}</g>`);
+      const p = place(lerp(14, 86, rng()), lerp(yBand[0], yBand[1], rng()));
+      out.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${make()}</g>`);
     }
     return out.join("");
   };
@@ -1042,6 +1147,27 @@ function buildGround(
   const d = patchPath(same, x, y, seed);
   const parts = [`<path d="${d}" fill="${css(base)}"/>`];
 
+  // Everything placed on this tile must STAND ON the patch. The bands keep
+  // objects off the tile edges, but a real corner now cedes a deep bite of the
+  // tile to the surrounding grass (CORNER_INSET) — a band-legal position there
+  // would put a tree on the lawn or a lily on the shore. A placement outside
+  // the outline walks toward the patch centroid until it is inside with a
+  // little margin (tested against the polygon inflated about the centroid, so
+  // the margin scales with how far out the point sits). Deterministic: no extra
+  // rng draws, so positions only move where the geometry demands it.
+  const poly = patchOutlinePolygon(same, x, y, seed);
+  const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
+  const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
+  const insideWithMargin = (px: number, py: number): boolean =>
+    pointInPolygon({ x: cx + (px - cx) / 0.88, y: cy + (py - cy) / 0.88 }, poly);
+  const place = (px: number, py: number): Pt2 => {
+    for (let k = 0; k <= 10; k++) {
+      const q = { x: lerp(px, cx, k / 10), y: lerp(py, cy, k / 10) };
+      if (insideWithMargin(q.x, q.y)) return q;
+    }
+    return { x: cx, y: cy };
+  };
+
   // The rim is a thick inside stroke along the STOPPING edges only (see
   // patchRimPath), clipped to the patch so it reads as a band just inside the
   // shore rather than a line drawn on it.
@@ -1066,7 +1192,7 @@ function buildGround(
 
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base);
+  const marks = groundMarks(kind, rng, base, place);
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
@@ -1075,9 +1201,12 @@ function buildGround(
   const placed: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
     // Keep objects off the very edge so a tree's canopy doesn't collide with the
-    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary.
-    const x = lerp(band.x[0], band.x[1], rng());
-    const y = lerp(band.y[0], band.y[1], rng());
+    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary
+    // — then keep them ON the patch (see `place` above).
+    const p = place(
+      lerp(band.x[0], band.x[1], rng()),
+      lerp(band.y[0], band.y[1], rng()),
+    );
     const scale = lerp(band.scale[0], band.scale[1], rng());
     let body: string;
     if (kind === "forest") body = tree(rng, scale * 0.42);
@@ -1086,8 +1215,8 @@ function buildGround(
     else if (kind === "urban") body = building(rng, scale);
     else body = lily(rng, scale);
     placed.push({
-      y,
-      g: `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})">${body}</g>`,
+      y: p.y,
+      g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
     });
   }
   // Back to front, so a nearer canopy overlaps a farther one naturally.

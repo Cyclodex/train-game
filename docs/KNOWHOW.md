@@ -138,15 +138,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   off and left ~24° the other way — a sharp inward V at each tile boundary. You
   could count the tiles down the side of a 3x2 lake, which is the tile grid drawn
   back onto the water. Fixed 2026-07-26 by making each shore a CUBIC whose end
-  TANGENTS are chosen rather than implied (`shoreEdge`): `dir*(size/3)` along the
-  shore + `out*lean` across it, with `dir`/`out` taken from the EDGE INDEX
+  TANGENTS are chosen rather than implied (`patchSegments`): `dir*(size/3)` along
+  the shore + `out*lean` across it, with `dir`/`out` taken from the EDGE INDEX
   (`EDGE_FRAME`), never measured off the jittered chord — that is what lets two
   tiles derive the identical tangent.
 - A corner is one of THREE things (`cornerRoles`), and the difference needs the
   DIAGONAL neighbours, not just the four sides (`TerrainNeighbours` carries all
   eight; the diagonals are in the memo key too):
-  · both edges stop → real CORNER: lean `+lean`/`-lean` (bulge out, come back) —
-    this is what rounds a lone patch into a blob.
+  · both edges stop → real CORNER: the point is pulled INWARD along the tile
+    diagonal (`cornerInset`, 14-26u) and the end tangents lean out ~`reach`
+    (`CORNER_ROUNDING`), so the turn is a deep sweep, not a softened right
+    angle. Needs no cross-tile agreement: only ONE tile ever draws through a
+    corner-role point (a same-kind side neighbour would change the role);
+    two patches kissing diagonally pull apart into two bodies — deliberate.
   · exactly one stops AND the diagonal differs → mid-shore RUN: push the point
     outward (`cornerPush`) and lean by the lattice's shared slope (`cornerSlope`).
     Both are seeded by the LATTICE POINT, so the two tiles agree on both.
@@ -157,6 +161,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Pushing a shared corner outward does NOT by itself remove a cusp — it is a
   translation, and a cusp is a TANGENT discontinuity. Don't reach for a bigger
   bow/jitter to fix a kink; fix the tangents.
+- SILHOUETTE ≠ BOUNDING BOX (2026-07-26): outward bows + smooth runs alone still
+  left every real corner ON the authored box corner — a 3x2 lake was a rectangle
+  with wavy edges. The inward corner pull + big leans relaxed it into a blob;
+  the mid-shore push (7-19u) gives long runs their belly. Pinned by area: a lone
+  tile's outline covers 0.55-0.85 of its square (`patchOutlinePolygon` + grid
+  sampling). An INTERIOR tile's own outline covers only ~92-96% — its jittered
+  shared chords cede a strip that the NEIGHBOUR's identical chord covers. That
+  is not a hole; don't "fix" it per tile.
+- Scatter AND ground marks are clamped INSIDE the patch outline (`place` in
+  `buildGround`: walk toward the centroid until `pointInPolygon` passes with a
+  margin) — with corners cut deep, the per-kind bands alone would stand trees on
+  the ceded grass and lilies on the shore. Unit-tested per kind.
 - The rim stroke needs `stroke-linecap="round"`. Each tile strokes only its own
   share of a shore, so the segments ABUT, and two butt caps meeting on one line
   antialias to a dark tick across the shallows at every tile boundary — the same
