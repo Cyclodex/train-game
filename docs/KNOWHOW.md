@@ -146,6 +146,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - TEST TRAP: a train arriving at a depot whose colour does NOT match BOUNCES BACK
   OUT. In a test that reads like "the new track was ignored". Pass `depotColors`.
 
+## COLOUR ASSIGNMENT = SOLVABILITY (2026-07-26)
+- A PARKED TRAIN OCCUPIES ITS DEPOT TILE FOREVER. So "two trains, one matching
+  depot" is not a slow level, it is an UNSOLVABLE one — the second train waits
+  at the door for good. Every rule below follows from that one fact.
+- Depot colours must be DISTINCT while the palette lasts (`Colors` has 5). Random
+  per depot let two depots share a colour, and the sim parks a train in the first
+  depot of its colour it reaches — so both trains chase the same tile.
+- Train homes are a MAXIMUM BIPARTITE MATCHING (`matchHomeDepots`, Kuhn's), not
+  greedy first-fit. Greedy cannot find a DERANGEMENT, and the most natural level
+  there is — n trains each starting in their own depot — needs one. Greedy swaps
+  the first two and strands the last on its own start, which then shares a depot.
+  Symptom: the last train runs, then stops dead somewhere and never delivers.
+- `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
+
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
   `validateLevel` (issue `blocked-terrain`), the editor's `routeOpts.passable`,
