@@ -5,11 +5,16 @@ import { neighborCoord } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { makeRng } from "@/utils/globalHelpers";
 import { TrainRoute, validateLevel } from "@/tiles/validate";
+import { paintTerrain } from "@/tiles/generateTerrain";
 
 export interface GenerateOptions {
   width: number;
   height: number;
   depotPairs: number;
+  // Paint ground into the empty cells (see generateTerrain.ts). On by default;
+  // the off-switch exists so a test can prove the topology is byte-identical
+  // with and without it.
+  terrain?: boolean;
 }
 
 export interface GeneratedLevel {
@@ -45,7 +50,13 @@ export function generateLevel(
   const height = Math.max(4, opts.height);
 
   for (let attempt = 0; attempt < 50; attempt++) {
-    const result = build(seed + attempt, width, height, opts.depotPairs);
+    const result = build(
+      seed + attempt,
+      width,
+      height,
+      opts.depotPairs,
+      opts.terrain !== false
+    );
     if (result && validateLevel(result.level, result.routes).ok) return result;
   }
   // Fallback: the smallest always-valid level (a 2-depot line) so callers never
@@ -57,7 +68,8 @@ function build(
   seed: number,
   width: number,
   height: number,
-  depotPairs: number
+  depotPairs: number,
+  terrain: boolean
 ): GeneratedLevel | null {
   const rand = makeRng(seed);
 
@@ -152,6 +164,20 @@ function build(
   const routes: TrainRoute[] = [];
   for (let i = 0; i + 1 < paired.length; i += 2) {
     routes.push({ from: paired[i], to: paired[i + 1] });
+  }
+
+  // Ground goes on LAST, into the cells nothing was built on. It draws from its
+  // OWN rng stream: a single extra draw from `rand` above would re-roll the
+  // depot shuffle and change the topology of every seed that already exists,
+  // silently — Daily's fixed seed would produce a different map and no test
+  // would necessarily notice.
+  if (terrain) {
+    paintTerrain(level, {
+      width,
+      height,
+      interior: { x0: rx0, y0: ry0, x1: rx1, y1: ry1 },
+      rand: makeRng(seed ^ 0x7e44a1),
+    });
   }
 
   return { level, depots: paired, routes };

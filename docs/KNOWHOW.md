@@ -267,6 +267,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## GENERATED TERRAIN (2026-07-27)
+- `generateTerrain.ts paintTerrain` gives procgen + Daily boards their ground.
+  Painted LAST, and ONLY into coordinates absent from the level — that one guard
+  IS the safety property: `validateLevel`'s single terrain branch requires
+  `connections.length > 0 || road.length > 0`, so a painted cell provably cannot
+  raise an issue nor silence one. Pinned by a test comparing the validator's
+  verdict with and without terrain across 30 seeds.
+- ITS OWN RNG STREAM (`makeRng(seed ^ 0x7e44a1)`). One extra draw from the
+  generator's `rand` would re-roll the depot shuffle for EVERY seed that already
+  exists — Daily's fixed seed would silently produce a different map. Guarded by
+  a test asserting the topology of seeds 1..30 is byte-identical with terrain on
+  and off (comparing `terrain:false` against itself would be tautological).
+- THE INTERIOR IS NOT EMPTY. The loop is a rectangle inset by 1, so the lake goes
+  inside it with no routing risk — but the generator also places DEPOTS in there,
+  so depot cells and their four neighbours are excluded from the water pool on
+  BOTH sides of the ring, not only in the margin. A depot walled in by water is
+  legal and unextendable, which reads as a bug rather than as terrain.
+- A LAKE NEEDS A RING WITH AN INSIDE. 7x6 (what Daily generates) encloses ~6
+  cells, most of them depot-adjacent, and correctly comes out with no water at
+  all; 10x8 has room. Both pinned, so neither reads as a regression later.
+- Unbuildable margin is CAPPED (22%): `planRoute` refuses water/rock/mountain, so
+  an over-stony map is one the random-map button cannot draw on.
+- Grass is never emitted (it is stored as ABSENT), and every cell gets a FRESH
+  literal — a shared one would let one in-play edit mutate the whole lake.
+- Bounds grow: a generated board now renders its full width x height, because
+  terrain-only cells count toward `levelBounds`. Intended.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.
