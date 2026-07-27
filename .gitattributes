@@ -1,0 +1,28 @@
+# ONE LINE ENDING IN THE REPOSITORY, and it is LF.
+#
+# Without this, what gets committed depends on which tool last wrote the file.
+# Several files in this repo drifted to CRLF that way, and the cost is not
+# cosmetic: a file whose endings differ from the branch you are merging has
+# EVERY line marked as changed on both sides, so git cannot line the two change
+# sets up and reports the whole file as one conflict — even when the edits are in
+# completely different places.
+#
+# That is exactly what happened merging master into the parking branch:
+# `Tile.vue` and `game.ts` came out wholly conflicted, and with the endings
+# normalised the two sets of edits turned out to have ZERO overlapping regions.
+# Twelve changed regions on one side, fifteen on the other, none of them touching.
+# An hour of hand-resolution for a merge git should have done by itself.
+#
+# `text=auto` lets git decide what is text; `eol=lf` fixes what it stores and
+# checks out. Working copies on Windows get LF too, which every tool in this
+# project (node, vite, vitest, eslint, prettier) is happy with.
+* text=auto eol=lf
+
+# Binary, so git never touches the bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
