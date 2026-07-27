@@ -134,8 +134,11 @@ export default toNative(TileGround);
   z-index: 1;
 }
 .tile-canopy {
-  // Above the rails (z2) and the trains (wagons z3 / loco z4), below the road
-  // cars (z6) and crossing booms: the one layer of scenery a train slips UNDER.
-  z-index: 5;
+  // Above the rails (z2), the trains (wagons z3 / loco z4) AND the road cars
+  // (z6): a crown overhanging a corridor shades whatever drives under it,
+  // train or car alike. Crossings stay on top (their wrapper is z15), and the
+  // cars' debug id labels can't leak through — each .road-car is its own
+  // stacking context. Fare pins (z9) and switches (z14+) also stay above.
+  z-index: 7;
 }
 </style>

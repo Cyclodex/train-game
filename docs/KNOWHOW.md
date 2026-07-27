@@ -222,9 +222,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   drop without retry. Corridors are part of the terrain cache key: building
   through a tile reflows its scatter. FOREST exception: a trunk ≥ TRUNK_CLEAR
   off the ballast whose crown overlaps the line renders on the CANOPY layer
-  (`tileCanopySvg`, second `<TileGround layer="canopy">` per cell, z-index 5 —
-  above wagons z3/loco z4, below road cars z6) so trains pass UNDER the
-  foliage. /test scenario: `clearing`.
+  (`tileCanopySvg`, second `<TileGround layer="canopy">` per cell, z-index 7 —
+  above wagons z3/loco z4 AND road cars z6, below the crossing wrapper z15) so
+  trains and cars pass UNDER the foliage. /test scenario: `clearing`.
 - Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
   default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
