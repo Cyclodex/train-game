@@ -619,13 +619,21 @@ what separates *the loop works* from *a finished mode*.
 
 1. ~~**Annual tax + calendar**~~ **DONE** (2026-07-26) — see "The second clock, as built".
 2. ~~**A bankruptcy state**~~ **DONE** (2026-07-27) — see "Bankruptcy, as built".
-3. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting. This is now the last sliver of the mode's own scope.
-3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). The demolition PRICE landed early (2026-07-27, `CLEARING_COST_PER_TILE`) because bulldoze's full refund had to go; what is left here is clearing SCENERY, at the same reason code.
-4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
-5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
-6. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
-7. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
-8. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
+3. ~~**Goals on the Ready card**~~ **DONE** (2026-07-27) — both overlays list the board's goals through one `<GoalList>`, and the HUD pip row is gated on `phase !== "ready"` (it had been showing gold stars behind the Ready overlay, because a predicate over zeroed counters is true before the run). `KNOWHOW` → GOALS ON THE READY CARD.
+4. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). The demolition PRICE landed early (2026-07-27, `CLEARING_COST_PER_TILE`) because bulldoze's full refund had to go; what is left here is clearing SCENERY, at the same reason code.
+5. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
+6. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
+7. ~~**Phase 4 — campaign / level lifecycle**~~ **DONE** (2026-07-27) — `src/campaign.ts` + `/campaign`: an ordered list, unlocks derived from `objectiveStore` (no new persisted key), and the "Next level" exit M12 wanted. Seeded with three boards proven winnable by an e2e; the eight designed levels are Part B of `…2026-07-27-campaign-and-levels-design.md`. `KNOWHOW` → CAMPAIGN.
+8. **Coach-marks / a teaching system** — *M*, and now the largest gap in the
+   mode. **We have no tutorial mechanism at all.** Train Valley pins a hint to
+   the thing it is talking about — *"Zug wartet. Per Klick losschicken."*,
+   *"Vollende das Schienennetz…"* — and our level 1 introduces build, dispatch
+   AND switch at once while explaining none of them. With the campaign in place
+   this is what stands between "three boards in a list" and a game that teaches
+   you to play it. Detail: `…2026-07-27-campaign-and-levels-design.md` §A2.3
+   and §A4 row 3.
+9. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
+10. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
 
 Not planned: crashes (M14 / G7), production chains (§5.1), reversing (§5.2).
 
