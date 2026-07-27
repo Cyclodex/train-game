@@ -1,7 +1,7 @@
 <template>
   <svg
     v-if="html"
-    :class="layer === 'canopy' ? 'tile-canopy' : 'tile-ground'"
+    :class="`tile-${layer}`"
     :viewBox="`0 0 ${units} ${units}`"
     preserveAspectRatio="none"
     v-html="html"
@@ -21,6 +21,7 @@ import {
   terrainOf,
   tileCanopySvg,
   tileGroundSvg,
+  tileScatterSvg,
 } from "@/tiles/terrain";
 
 // The world's ground, one tile at a time. A sibling of <Tile> rather than a
@@ -29,10 +30,17 @@ import {
 // somewhere. The view already renders a `.level-tile` box for every cell in the
 // bounds — occupied or not — so that box is exactly the right place for it.
 //
-// Two layers, chosen by the `layer` prop: "ground" (default) draws the terrain
-// patch and its scatter UNDER the rails; "canopy" draws the forest trees whose
-// crowns overhang a line ABOVE the trains, so a train passes beneath the
-// foliage. Views mount one of each per cell.
+// THREE layers, chosen by the `layer` prop, and views mount one of each per
+// cell:
+//  - "ground" (default): the flat patch, rim and ground marks — under
+//    everything (z0).
+//  - "scatter": the standing objects (trees, buildings, boulders, ridges) at
+//    z1, ABOVE every tile's patch fill. The split exists because tiles render
+//    in DOM order: a later tile's opaque patch used to decapitate any canopy
+//    that legitimately overhung the seam. With all patches below all scatter,
+//    an overhanging crown survives — which is also what lets deep-forest trees
+//    stand right on a shared seam. Still under roads/rails (later DOM, z>=1).
+//  - "canopy": forest crowns overhanging a corridor, above the trains (z5).
 //
 // Cosmetic only: nothing here feeds the simulation. See tiles/terrain.ts.
 const TERRAIN_SEED = 20260726;
@@ -41,7 +49,7 @@ const TERRAIN_SEED = 20260726;
 class TileGround extends Vue {
   @Inject() level!: Level;
   @Prop({ type: String, required: true }) coordId!: string;
-  @Prop({ type: String, default: "ground" }) layer!: "ground" | "canopy";
+  @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy";
 
   units = GROUND_UNITS;
 
@@ -83,7 +91,12 @@ class TileGround extends Vue {
 
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
-    const build = this.layer === "canopy" ? tileCanopySvg : tileGroundSvg;
+    const build =
+      this.layer === "canopy"
+        ? tileCanopySvg
+        : this.layer === "scatter"
+          ? tileScatterSvg
+          : tileGroundSvg;
     return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
   }
 }
@@ -92,6 +105,7 @@ export default toNative(TileGround);
 
 <style lang="scss" scoped>
 .tile-ground,
+.tile-scatter,
 .tile-canopy {
   position: absolute;
   inset: 0;
@@ -107,11 +121,17 @@ export default toNative(TileGround);
   overflow: visible;
 }
 .tile-ground {
-  // Below the road surface (z1) and the rails (z2), so nothing the player has
-  // built is ever hidden by GROUND scenery — a tree may stand beside the track,
-  // never on it. Clicks belong to the cell underneath (the editor listens
-  // there).
+  // Below the scatter (z1) and everything built, so a later tile's patch fill
+  // can never cover a neighbour's standing objects. Clicks belong to the cell
+  // underneath (the editor listens there).
   z-index: 0;
+}
+.tile-scatter {
+  // Above every tile's patch (z0), below the rails (z2). Same z as a road
+  // surface, but the road is later in the DOM within its own cell — so a road
+  // still paints over its own cell's scenery, while a canopy overhanging a
+  // plain neighbour survives.
+  z-index: 1;
 }
 .tile-canopy {
   // Above the rails (z2) and the trains (wagons z3 / loco z4), below the road

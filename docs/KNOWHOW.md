@@ -191,11 +191,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
   EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
   into the point coords, never nest a `<g transform="translate">` inside a prop.
 - FOREST DEPTH (2026-07-27): a forest tile's density scales with how many of
-  its 8 neighbours are forest too (`depth` in buildGround) — +12 trees and
+  its 8 neighbours are forest too (`depth` in buildGround) — +18 trees and
   +0.45 scale at full depth, so a big wood closes into overlapping canopy
   while a lone copse stays airy. Local by design: it needs nothing beyond the
   neighbour flags the cache key already carries, and ONLY forest reads it.
-  /test scenario: `forestworld` (a curvy line through a 10x5 deep wood).
+  Toward a same-forest neighbour the placement band runs to the SEAM (0/100),
+  so the two tiles' canopy interleaves — the count bonus also compensates for
+  that larger band area, or the deep wood comes out sparser per square unit
+  than the copse. /test scenario: `forestworld` (a curvy line, 10x5 deep wood).
+- SCATTER IS ITS OWN LAYER (2026-07-27): tiles render in DOM order, so a later
+  tile's OPAQUE PATCH FILL used to decapitate any canopy overhanging the seam.
+  Standing objects therefore render via `tileScatterSvg` on a third
+  `<TileGround layer="scatter">` at z-index 1 — above every patch (z0), below
+  rails (z2); a road (z1, later DOM in its own cell) still paints over its own
+  cell's scenery. Ground layer keeps only patch+rim+marks. Placement tests
+  parse BOTH layers.
+- GLADES (2026-07-27): forest trees are rejected where `forestDensityAt` — 
+  value noise over a 3-tile WORLD lattice, world-seeded so a clearing never
+  traces the grid — runs low; just-over-the-bar rolls keep a low `bush()`, so
+  lighter growth rims each clearing. TUNE AGAINST THE FIELD'S DISTRIBUTION:
+  bilinear noise concentrates around 0.5 (it averages four uniforms), so a
+  "full wood" bar at 0.52 rejected half the map; 0.38/0.24 gives ~3/4 full
+  wood, ~1/6 shoulder, ~1/10 clearing.
 - KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
   footprint off every rail/road through the cell AND its four side-neighbours
   (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from

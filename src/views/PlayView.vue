@@ -236,6 +236,9 @@
         @click="onTileRaze(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Standing scenery on its own layer above every patch fill, so a
+             canopy overhanging the seam isn't cut by the next tile. -->
+        <TileGround :coord-id="cell.key" layer="scatter" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
