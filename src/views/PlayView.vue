@@ -117,7 +117,7 @@
       >
         🚗 {{ crossingWaitLabel }}
       </div>
-      <div v-if="hud.stars" class="score-stars">
+      <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
         <span
           v-for="s in stars"
           :key="s.id"
@@ -365,6 +365,10 @@
       <div class="overlay-card">
         <h2 class="overlay-title">{{ game.mode.label }}</h2>
         <p class="overlay-desc">{{ game.mode.description }}</p>
+        <div v-if="hud.stars && goals.length" class="overlay-goals">
+          <h3 class="overlay-goals-title">Goals</h3>
+          <GoalList :goals="goals" />
+        </div>
         <p v-if="best" class="overlay-best">
           Best: {{ best.stars }}★ · {{ best.timeSec.toFixed(1) }}s
         </p>
@@ -382,15 +386,8 @@
         <h2 class="overlay-title">
           {{ phase === "won" ? "You win!" : "Failed" }}
         </h2>
-        <div v-if="phase === 'won' && hud.stars" class="overlay-stars">
-          <span
-            v-for="s in stars"
-            :key="s.id"
-            class="star-pip star-pip--lg"
-            :class="{ 'star-pip--on': s.earned }"
-            :title="s.label"
-            >★</span
-          >
+        <div v-if="phase === 'won' && hud.stars && goals.length" class="overlay-goals">
+          <GoalList :goals="goals" :earned="earnedGoalIds" />
         </div>
         <p v-if="phase === 'won'" class="overlay-desc">
           {{ earnedStars }}/{{ stars.length }} stars · {{ elapsedLabel }}
@@ -516,6 +513,7 @@ import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
@@ -593,7 +591,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, MenuDrawer } })
+@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -769,6 +767,17 @@ class PlayView extends Vue {
   }
   get stars() {
     return this.game.objective.stars;
+  }
+  // The board's TARGETS, built once at setup and safe to read before the run
+  // starts — unlike `stars`, whose earned flags are evaluated over zeroed
+  // counters and so hold for most goals before anything has happened.
+  get goals() {
+    return this.game.goals;
+  }
+  // Which of them the finished run actually earned. Only the win card passes
+  // this; the Ready card passes nothing, so it cannot light a star by accident.
+  get earnedGoalIds(): string[] {
+    return this.stars.filter(s => s.earned).map(s => s.id);
   }
   get elapsedLabel(): string {
     const t =
@@ -2099,11 +2108,24 @@ export default toNative(PlayView);
   color: #f0cf72;
   font-weight: 700;
 }
-.overlay-stars {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-  margin: 8px 0;
+// The goal list, on the Ready card (targets) and the win card (what you got).
+// Boxed and left-aligned: it is a list to read down, not a badge row.
+.overlay-goals {
+  align-self: stretch;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.overlay-goals-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7f8b96;
+  text-align: left;
 }
 .overlay-btn {
   padding: 12px 28px;

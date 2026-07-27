@@ -261,6 +261,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## GOALS ON THE READY CARD (M9, 2026-07-27)
+- A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
+  over `zeroCounters()`, and most goals hold trivially there — "no signal was
+  overridden" and "no train went to the wrong station" are both true of a run
+  that has not happened. So NOTHING scored may be shown in the ready phase.
+  This had already shipped as a bug: the HUD's `.score-stars` pip row rendered
+  behind the (translucent) Ready overlay with 2 of 3 pips gold. Now gated on
+  `phase !== "ready"`, pinned by an e2e asserting `.score-stars` count 0 there.
+- Hence TWO types, not one. `GoalSpec {id,label,hint?}` = the target, from
+  `goalsOf(spec)`, built ONCE into `game.goals`. `StarState {id,label,earned}` =
+  the score. `<GoalList>` renders both: `:earned` is an array of ids the Ready
+  card simply omits, so earned-ness is not a boolean anyone can pass backwards.
+- `game.goals` is a PLAIN FIELD, and that is safe here only because
+  `mode.setup()` runs exactly once — `reset()` rebuilds the sims and the tracker
+  but never re-runs setup. (Contrast `get sim()`, which must be a getter.)
+- `hint` lives on `StarSpec`, NOT `StarState`: `stars()` allocates fresh objects
+  every `state()` call and the loop assigns them over the reactive objective
+  every frame. Don't widen the frame-hot object for a string only a card reads.
+- LABELS CARRY THEIR NUMBER (`Speedrun (40s)`, `Payday ($1,700)`). Four of six
+  modes shipped targetless labels; a goal list reading "Speedrun / Hands off /
+  Perfect colours" tells the player nothing they can aim at.
+- The Ready card is a /play surface. `TestStage.vue` renders no overlay and calls
+  `startObjective()` in `mounted()`, so this feature CANNOT be shown at /test —
+  the honest demo is `/#/play?mode=tycoon&board=lakevalley-open`.
+
 ## ECONOMY + DISPATCH (Tycoon phase 1, 2026-07-26)
 - `sim/economy.ts` = pure ledger (`createEconomy`) + fare book (`createFareBook`)
   beside `objectives.ts`: no Vue, no DOM, deterministic. Ledger amounts are

@@ -110,6 +110,21 @@ test.describe("Train game", () => {
     // Puzzle mode gates play behind a start overlay.
     const start = page.getByRole("button", { name: "Start" });
     await expect(start).toBeVisible();
+
+    // The Ready card names the board's three goals BEFORE the run, and none of
+    // them is lit. That second assertion is the real guard: a star's predicate
+    // is evaluated over zeroed counters, and "no signal was overridden" / "no
+    // train went to the wrong station" both hold trivially of a run that has
+    // not happened — so anything showing scored stars here would light most of
+    // them before the player moved.
+    const goals = page.locator('[data-testid="goal-list"] li');
+    await expect(goals).toHaveCount(3);
+    await expect(goals.filter({ hasText: "Hands off" })).toBeVisible();
+    await expect(goals.filter({ hasText: "Perfect colours" })).toBeVisible();
+    await expect(page.locator(".goal--earned")).toHaveCount(0);
+    // Nor may the HUD's own pip row pre-empt it, for the same reason.
+    await expect(page.locator(".score-stars")).toHaveCount(0);
+
     await start.click();
 
     // Run fast and let the deterministic sim deliver the train.
@@ -125,6 +140,12 @@ test.describe("Train game", () => {
       .toBe("won");
 
     await expect(page.getByText("You win!")).toBeVisible();
+
+    // The win card lists the same goals, now scored — so "what was I aiming at"
+    // and "what did I get" are read in one place, in the same words.
+    const wonGoals = page.locator('[data-testid="goal-list"] li');
+    await expect(wonGoals).toHaveCount(3);
+    await expect(page.locator(".goal--earned").first()).toBeVisible();
   });
 
   test("the game-mode picker switches modes by clicking a card", async ({

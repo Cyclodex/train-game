@@ -33,7 +33,7 @@ import { makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
-import { ObjectiveState, Observation } from "@/sim/objectives";
+import { GoalSpec, ObjectiveState, Observation, goalsOf } from "@/sim/objectives";
 import { createEconomy, createFareBook, TRACK_COST_PER_TILE } from "@/sim/economy";
 import {
   CalendarSetup,
@@ -393,6 +393,12 @@ export interface Game {
   // no mode without `controls.dispatch` ever has one, so this is a no-op there.
   dispatch(trainId: string): boolean;
   mode: GameMode;
+  // The board's goals as TARGETS, readable before the run starts. A plain
+  // field, not a getter: mode.setup() runs exactly once (reset() rebuilds the
+  // sims and the tracker but never re-runs setup), so this cannot go stale.
+  // Deliberately not `objective.stars`, which is re-projected every frame and
+  // whose `earned` flags are true-by-default over zeroed counters.
+  goals: GoalSpec[];
   // Reactive snapshot of the objective tracker, refreshed each frame.
   objective: ObjectiveState;
   // Reactive live crossing-flow snapshot (the *current* worst car wait, not the
@@ -1094,6 +1100,7 @@ export function createGame(
   // The objective tracker for the active mode, driven by the per-tick observation.
   const setup = mode.setup({ level, trains: trainDefs, levelId });
   const tracker = mode.createObjective(setup);
+  const goals = goalsOf(setup.objective);
   const spawner = mode.createSpawner?.(setup);
 
   // --- the economy -----------------------------------------------------------
@@ -1631,6 +1638,7 @@ export function createGame(
       return sim.dispatch(trainId);
     },
     mode,
+    goals,
     objective,
     roadFrame,
     start() {
