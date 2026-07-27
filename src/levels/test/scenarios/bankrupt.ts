@@ -15,8 +15,8 @@ import { TerrainKind, TileCell } from "@/tiles/model";
 //   close the gap directly (2 pieces, $2,000) → $1,200/yr, and $4,000 buys
 //   exactly three years. The fourth bill lands at 32s and cannot be paid.
 //
-//   prompt   build ~3s, send at once → won at 15.7s, banked $3,321
-//   relaxed  build ~6s, send at 12s  → won at 24.7s, banked   $876
+//   prompt   build ~3s, send at once → won at 15.7s, banked $3,315
+//   relaxed  build ~6s, send at 12s  → won at 24.7s, banked   $855
 //   dawdling send at 26s             → BANKRUPT at 32s, $800 short
 //
 // What to try, at /#/play?mode=tycoon&board=bankrupt:

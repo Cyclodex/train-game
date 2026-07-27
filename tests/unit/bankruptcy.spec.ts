@@ -93,7 +93,7 @@ describe("bankruptcy", () => {
   it("does NOT fail a run that merely ends broke", () => {
     // The distinction that keeps this from being a "balance hit zero" check:
     // measured lines win with almost nothing left (the relaxed run on this very
-    // board banks $876), and a run that pays its last bill in full has not gone
+    // board banks $855), and a run that pays its last bill in full has not gone
     // bankrupt — it has been thrifty.
     const game = bankruptGame();
     game.startObjective();

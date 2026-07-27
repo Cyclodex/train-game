@@ -465,7 +465,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   became a fee and the old advice ("bulldoze") stopped being reliable.
 - `/test/bankrupt` is the scenario ($6,000, 8s year, $600/piece — the annual
   bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
-  $3,321; relaxed won 24.7s banking $876; dawdling folded at 32.0s, $800 short,
+  $3,315; relaxed won 24.7s banking $855; dawdling folded at 32.0s, $800 short,
   warned from 24s. Playable at `/#/play?mode=tycoon&board=bankrupt`.
 - Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
   still wins ties): "you ran out of money" beats any symptom another check might
