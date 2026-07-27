@@ -190,6 +190,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
   EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
   into the point coords, never nest a `<g transform="translate">` inside a prop.
+- FOREST DEPTH (2026-07-27): a forest tile's density scales with how many of
+  its 8 neighbours are forest too (`depth` in buildGround) — +12 trees and
+  +0.45 scale at full depth, so a big wood closes into overlapping canopy
+  while a lone copse stays airy. Local by design: it needs nothing beyond the
+  neighbour flags the cache key already carries, and ONLY forest reads it.
+  /test scenario: `forestworld` (a curvy line through a 10x5 deep wood).
 - KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
   footprint off every rail/road through the cell AND its four side-neighbours
   (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from
@@ -542,6 +548,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and anything later. Water + rock + mountain block; forest + town don't (you
   fell trees). A bridge (water) and a tunnel (mountain) will be EXCEPTIONS here,
   not second rules.
+- TERRAIN PRICES THE BUILD (2026-07-27): `TERRAIN_BUILD_FACTOR` (terrain.ts,
+  forest 1.5x / urban 2.5x) multiplies `TRACK_COST_PER_TILE` per PIECE in
+  `game.buildCostOf` (`pricePerPiece`, rounded per piece so preview sum ==
+  charge). Refunds re-derive the same price — terrain never changes in play, so
+  what was paid is what comes back; store no price in `boughtPieces`. Lakevalley
+  budgets are safe: its rebuild row is all grass. /test scenario: `landprices`
+  ($6,000 vs a $5,000 grass+wood+town gap, tuning in tycoon.ts). The build
+  button's hint derives its prices from the same table — keep it that way.
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.

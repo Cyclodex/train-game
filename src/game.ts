@@ -35,6 +35,7 @@ import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
 import { createEconomy, createFareBook, TRACK_COST_PER_TILE } from "@/sim/economy";
+import { terrainBuildFactor } from "@/tiles/terrain";
 import {
   CalendarSetup,
   calendarAt,
@@ -1424,9 +1425,16 @@ export function createGame(
     return out;
   }
 
+  // One tile's price: the base rate times its ground's factor (felling a wood,
+  // buying town land — see TERRAIN_BUILD_FACTOR). Rounded per PIECE so the sum
+  // of the preview tags always equals the total charged.
+  function pricePerPiece(tileId: string): number {
+    return Math.round(TRACK_COST_PER_TILE * terrainBuildFactor(level[tileId]));
+  }
+
   function buildCostOf(steps: RouteStep[]): number {
     if (!economy) return 0; // no ledger, no price (Sandbox builds free)
-    return TRACK_COST_PER_TILE * newBuildSteps(steps).length;
+    return newBuildSteps(steps).reduce((sum, s) => sum + pricePerPiece(s.id), 0);
   }
 
   // --- bulldozing (the undo half of the build verb) --------------------------
@@ -1447,7 +1455,9 @@ export function createGame(
     const paid = cell.connections.filter(c =>
       boughtPieces.has(pieceKey(tileId, c[0], c[1]))
     ).length;
-    return TRACK_COST_PER_TILE * paid;
+    // Terrain never changes during play, so re-deriving the piece price here
+    // returns exactly what was paid at build time.
+    return pricePerPiece(tileId) * paid;
   }
 
   // Clear a tile's rails. Refunds only what was bought, at the price paid — a
@@ -1474,7 +1484,7 @@ export function createGame(
     for (const c of cell.connections) {
       const key = pieceKey(tileId, c[0], c[1]);
       if (boughtPieces.delete(key)) {
-        refund += TRACK_COST_PER_TILE;
+        refund += pricePerPiece(tileId); // what was paid — terrain is stable
         refunded += 1;
       }
     }

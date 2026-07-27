@@ -52,6 +52,50 @@ function tycoonGame(level: Level = gapLevel()) {
   return createGame(level, trains, 200, tycoonMode, 1, colors);
 }
 
+describe("terrain-priced building", () => {
+  // The gap tiles carry ground: 3,1 is wood (x1.5), 4,1 is town (x2.5). The
+  // anchor straight at 2,1 stays free regardless of its ground.
+  function pricedLevel(): Level {
+    const level = gapLevel();
+    level["3,1"] = { connections: [], terrain: "forest" };
+    level["4,1"] = { connections: [], terrain: "urban" };
+    return level;
+  }
+
+  it("prices each piece by its ground, and the surcharge can price a route out", () => {
+    // Wood + town = $4,000 — over the $3,000 generic purse, though the same
+    // route on grass ($2,000) is comfortably affordable. The refusal must
+    // spend nothing.
+    const game = tycoonGame(pricedLevel());
+    const expected = 1.5 * TRACK_COST_PER_TILE + 2.5 * TRACK_COST_PER_TILE;
+    expect(game.buildCostOf(gapSteps)).toBe(expected);
+    expect(game.buildRoute(gapSteps)).toEqual({ ok: false, blocked: [] });
+    expect(game.money.balance).toBe(STARTING_BALANCE);
+    expect(game.money.spent).toBe(0);
+  });
+
+  it("charges the wood surcharge and refunds a bulldozed piece at the price paid", () => {
+    const level = gapLevel();
+    level["3,1"] = { connections: [], terrain: "forest" };
+    const game = tycoonGame(level);
+    const expected = 1.5 * TRACK_COST_PER_TILE + TRACK_COST_PER_TILE;
+    expect(game.buildCostOf(gapSteps)).toBe(expected);
+    expect(game.buildRoute(gapSteps)).toEqual({ ok: true, blocked: [] });
+    expect(game.money.balance).toBe(STARTING_BALANCE - expected);
+
+    expect(game.refundOf("3,1")).toBe(1.5 * TRACK_COST_PER_TILE);
+    expect(game.bulldoze("3,1")).toEqual({ ok: true, blocked: [] });
+    expect(game.money.balance).toBe(STARTING_BALANCE - TRACK_COST_PER_TILE);
+    // The ground itself survives the bulldozer — only the rails go.
+    expect(level["3,1"]?.terrain).toBe("forest");
+  });
+
+  it("keeps plain grass at the base rate", () => {
+    const game = tycoonGame();
+    expect(game.buildCostOf(gapSteps)).toBe(2 * TRACK_COST_PER_TILE);
+  });
+});
+
 describe("game.buildRoute", () => {
   it("lays the route, charges only the NEW pieces, and the train delivers across it", () => {
     const level = gapLevel();

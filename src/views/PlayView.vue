@@ -498,6 +498,7 @@ import { canBuildOn } from "@/tiles/terrain";
 import { railPathsFor } from "@/tiles/geometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import { TERRAIN_BUILD_FACTOR } from "@/tiles/terrain";
 import type { RouteOpts, RouteStep, OpenEnd } from "@/tiles/routePlanner";
 import { buildTargetsAt, openEndPortsAt } from "@/tiles/openEnds";
 import {
@@ -993,8 +994,14 @@ class PlayView extends Vue {
   get buildToggleTitle(): string {
     const how =
       "Click an edge, then click tiles to route track; drag edge-to-edge for a quick link; Esc finishes.";
+    // Prices derived from the same table game.buildCostOf charges from, so the
+    // hint can never drift from the bill.
+    const price = (f: number) =>
+      `$${Math.round(TRACK_COST_PER_TILE * f).toLocaleString("en-US")}`;
     return this.game.money.enabled
-      ? `Build track — $${TRACK_COST_PER_TILE.toLocaleString("en-US")} per tile. ${how}`
+      ? `Build track — ${price(TERRAIN_BUILD_FACTOR.grass)} per tile, ` +
+          `${price(TERRAIN_BUILD_FACTOR.forest)} through woods, ` +
+          `${price(TERRAIN_BUILD_FACTOR.urban)} through town. ${how}`
       : `Build track. ${how}`;
   }
 
