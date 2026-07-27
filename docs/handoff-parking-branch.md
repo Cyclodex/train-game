@@ -8,22 +8,28 @@ For a fresh session (cloud or local) picking this up cold. Written 2026-07-27.
 
 **Branch:** `claude/auto-parking-system-b7d52c`.
 
-At the time of writing there are **two commits that are not on the remote**:
-
-```
-3d053c2 chore: one line ending in the repository, and it is LF
-0c4ff23 Merge origin/master into the parking branch
-```
-
-A cloud session clones from the remote and will not see them. **Push first**, or
-you will redo an hour of merge work:
+Work on this branch has repeatedly finished with commits that were **not yet on
+the remote** — a cloud session clones from the remote and would silently redo
+them. Check before you start:
 
 ```bash
-git push origin claude/auto-parking-system-b7d52c
+git fetch origin
+git status -sb          # "ahead N" means N commits exist only locally
+git log --oneline -5
 ```
 
-If the push has already happened, `git log --oneline -2` should show those two at
-the top. Check before you start.
+If you are on a fresh clone and the log does not end with a merge of master and
+a parking commit, ask before doing anything — the work you need may still be
+sitting on somebody's laptop.
+
+**Merging master into this branch is a solved problem, and there is a tool.**
+`.gitattributes` (LF everywhere) landed here but master's blobs are still CRLF,
+so any file both sides have touched still comes out as ONE whole-file conflict.
+The last two merges were resolved by comparing each side against the merge base
+with the endings normalised and transplanting only where the change sets were
+shown to touch DISJOINT regions — seven of eight files, mechanically, the eighth
+(the scenario registry) by hand because both sides genuinely add to the same
+lists. The commit messages of those two merges carry the per-file numbers.
 
 ---
 
