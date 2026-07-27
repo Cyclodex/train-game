@@ -168,7 +168,11 @@
           :tile="cell.tile"
           :coord-id="cell.key"
           class="tile-component"
+          :switch-interactive="false"
         />
+        <!-- Canopies overhanging a line (see TileGround.vue). The editor's own
+             overlay sits at z30, so every handle stays clickable and visible. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
 
         <svg
           class="overlay"
@@ -301,7 +305,7 @@
             :key="'sw' + entry"
             :cx="switchPoint(entry).x"
             :cy="switchPoint(entry).y"
-            r="15"
+            r="22"
             class="switch-zone"
             @click.stop="onSwitchClick(cell.key, entry)"
           />
@@ -341,6 +345,7 @@ import {
   isRoadOnlyLevel,
   TerrainKind,
 } from "@/tiles/model";
+import { SWITCH_INSET as SWITCH_HUB_INSET } from "@/tiles/switchFan";
 import { levelBounds, translateLevel } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
 import { createCameraController, type CameraController } from "@/cameraController";
@@ -969,20 +974,24 @@ class EditorView extends Vue {
       isJunctionEntry(tile.connections, p)
     );
   }
-  // The centre of an entry's switch widget, in tile (overlay) coordinates, kept
-  // in step with `.switch-box--N` in Tile.vue (a 24×18 box hugging that edge).
+  // The hub of an entry's switch fan, in tile (overlay) coordinates. Must track
+  // `SWITCH_INSET` in Tile.vue: the fan's hub sits that far inside its own edge,
+  // centred on it. This is where the editor paints its own zone — Tile.vue's fan
+  // is passed `switch-interactive="false"` here, so it draws the authored arm
+  // and this zone owns the click.
   switchPoint(entry: Port): { x: number; y: number } {
     const s = this.config.tileSize;
-    const along = 0.57 * s + 12; // box offset (left/top:57%) + half its width
+    const c = s / 2;
+    const d = SWITCH_HUB_INSET;
     switch (entry) {
       case Position.Top:
-        return { x: along, y: 9 };
+        return { x: c, y: d };
       case Position.Right:
-        return { x: s - 12, y: along };
+        return { x: s - d, y: c };
       case Position.Bottom:
-        return { x: along, y: s - 9 };
+        return { x: c, y: s - d };
       default:
-        return { x: 12, y: along }; // Left
+        return { x: d, y: c }; // Left
     }
   }
   // Clicking a switch zone cycles that entry's authored starting arm and persists.

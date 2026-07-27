@@ -20,8 +20,9 @@ test.describe("Train game", () => {
     const locomotives = page.locator(".train-locomotive");
     await expect(locomotives).toHaveCount(2);
 
-    // At least one intersection switch and one depot are present.
-    await expect(page.locator(".switch-box").first()).toBeVisible();
+    // At least one intersection switch and one depot are present. (`.switch-fan`
+    // replaced the old `.switch-box` three-bulb widget — see tiles/switchFan.ts.)
+    await expect(page.locator(".switch-fan").first()).toBeVisible();
     await expect(page.locator(".depot-building").first()).toBeVisible();
 
     // The train should physically leave its depot: GSAP writes an inline

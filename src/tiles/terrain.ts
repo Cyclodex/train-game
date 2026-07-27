@@ -13,8 +13,9 @@
 // the validator reads terrain yet; that arrives one rule at a time (water blocks
 // track, then bridges, then rock), each with its own /test scenario.
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
+import { segmentPoints } from "@/sim/pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, groundShadow, lerp, tree } from "@/utils/foliage";
+import { Rng, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
@@ -88,6 +89,134 @@ const CORNER_ROUNDING = 2.2;
 // they overlap by ~1 unit of the same colour and the seam has nowhere to appear.
 // The path is wound clockwise, so a NEGATIVE bow is the outward direction.
 const SEAM_OVERLAP = 0.6;
+
+// --- Keep-out corridors ------------------------------------------------------
+//
+// Scatter must not stand on anything a vehicle runs over. A corridor is the
+// centreline of a rail connection or a road across the SAME cell (or a
+// neighbouring one), with a half-width; placement keeps each object's footprint
+// outside every corridor, so laying track through a wood fells the trees in the
+// right-of-way and a town's houses step back from the line. Forest gets one
+// deliberate exception (see buildGround): a trunk may stand BESIDE the line
+// while its canopy overhangs it — those trees render on the CANOPY layer, above
+// the trains, so a train slips under the foliage.
+
+export interface Corridor {
+  pts: Pt[];
+  half: number;
+}
+
+// Rails sit `railDistanceFromPath` (7px of 200 = 3.5 units) either side of the
+// centreline, on sleepers a little wider — ~8 units of track edge to edge.
+const RAIL_HALF = 8;
+// One lane is 14 units wide (roadGeometry's size * 0.14); a road's half-width
+// is its widest approach, since each direction's lanes sit on their own side.
+const LANE_W_UNITS = 14;
+const ROAD_MARGIN = 2;
+
+/** The corridors of ONE cell, in its own 0..GROUND_UNITS space. */
+export function cellCorridors(cell: TileCell | null | undefined): Corridor[] {
+  if (!cell) return [];
+  const out: Corridor[] = [];
+  for (const [a, b] of cell.connections) {
+    out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+  }
+  if (cell.road?.length) {
+    // One corridor per (from → to) movement, as wide as its deepest lane stack.
+    const widest = new Map<string, { corridor: Corridor; lanes: number }>();
+    for (const lane of cell.road) {
+      for (const to of [...lane.to, ...(lane.busTo ?? [])]) {
+        const key = [lane.from, to].sort().join(">");
+        const lanes = lane.index + 1;
+        const cur = widest.get(key);
+        if (cur) {
+          cur.lanes = Math.max(cur.lanes, lanes);
+          cur.corridor.half = cur.lanes * LANE_W_UNITS + ROAD_MARGIN;
+        } else {
+          widest.set(key, {
+            lanes,
+            corridor: {
+              pts: segmentPoints(lane.from, to, GROUND_UNITS),
+              half: lanes * LANE_W_UNITS + ROAD_MARGIN,
+            },
+          });
+        }
+      }
+    }
+    for (const { corridor } of widest.values()) out.push(corridor);
+  }
+  return out;
+}
+
+/**
+ * A tile's corridors PLUS its four side-neighbours', translated into this
+ * tile's space. The wide forest band lets a canopy reach ~4 units over the tile
+ * edge, and a neighbour's rail runs right up to that edge at a port — without
+ * the neighbours, a tree hugging the boundary would drape its canopy over the
+ * next tile's track on the wrong (ground) layer.
+ */
+export function corridorsFor(
+  cell: TileCell | null | undefined,
+  neighbours?: Partial<
+    Record<"top" | "right" | "bottom" | "left", TileCell | null | undefined>
+  >,
+): Corridor[] {
+  const out = cellCorridors(cell);
+  if (!neighbours) return out;
+  const shifts: [keyof typeof neighbours, number, number][] = [
+    ["top", 0, -GROUND_UNITS],
+    ["right", GROUND_UNITS, 0],
+    ["bottom", 0, GROUND_UNITS],
+    ["left", -GROUND_UNITS, 0],
+  ];
+  for (const [side, dx, dy] of shifts) {
+    for (const c of cellCorridors(neighbours[side])) {
+      out.push({
+        half: c.half,
+        pts: c.pts.map(p => ({ x: p.x + dx, y: p.y + dy })),
+      });
+    }
+  }
+  return out;
+}
+
+function distToPolyline(p: Pt, pts: Pt[]): number {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
+  }
+  return best;
+}
+
+/** Distance from a point to the EDGE of the nearest corridor. Negative = on it. */
+export function corridorClearance(p: Pt, corridors: Corridor[]): number {
+  let best = Infinity;
+  for (const c of corridors) {
+    best = Math.min(best, distToPolyline(p, c.pts) - c.half);
+  }
+  return best;
+}
+
+// The clear radius an object of this kind needs beyond a corridor's edge, per
+// unit of band scale — the drawn art's worst-case reach (forest's includes the
+// 0.42 tree conversion in buildGround).
+const FOOT: Record<TerrainKind, number> = {
+  grass: 0,
+  forest: 13,
+  water: 6,
+  rock: 15,
+  mountain: 30,
+  urban: 16,
+};
+// A trunk needs far less room than a canopy: how much clearance a FOREST
+// tree's base needs before it is standing in the ballast.
+const TRUNK_CLEAR = 4;
 
 // A cell with no `terrain` is grass. Grass is the ONE kind that draws no ground
 // of its own: the board's themed ground shows through untouched, so adding
@@ -613,33 +742,35 @@ export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
 // individual trees at full zoom.
 const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   grass: [0, 0],
-  forest: [4, 7],
+  forest: [9, 14],
   water: [0, 2],
   rock: [4, 6],
   mountain: [2, 3],
   urban: [4, 6],
 };
 
-// Where on the tile the standing objects go, and how big they get. Objects are
-// kept off the very edge so a canopy doesn't collide with the neighbour's and
-// nothing overhangs a rail on the tile boundary — but a mountain needs its feet
-// LOW in the tile, because it is tall enough to run out of headroom otherwise.
+// Where on the tile the standing objects go, and how big they get. Everything
+// is drawn TOP-DOWN now (see foliage.ts), so nothing grows upward out of its
+// band — objects only need enough margin that their own footprint stays clear
+// of a rail on the tile boundary, and `place` pulls them onto the patch anyway.
 interface ScatterBand {
   x: [number, number];
   y: [number, number];
   scale: [number, number];
 }
-const DEFAULT_BAND: ScatterBand = { x: [16, 84], y: [24, 88], scale: [0.72, 1.15] };
+const DEFAULT_BAND: ScatterBand = { x: [16, 84], y: [16, 84], scale: [0.72, 1.15] };
 const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
+  // Canopies are meant to overlap into a wood, so trees run almost to the
+  // patch edge — the containment walk keeps them on the patch.
+  forest: { x: [10, 90], y: [10, 90], scale: [0.72, 1.15] },
   // Boulders are bigger than a tree's footprint, so they keep a deeper margin.
-  rock: { x: [20, 80], y: [24, 86], scale: [0.72, 1.15] },
-  // Peaks stand ~50 units tall, so they start in the bottom half and grow up
-  // through the tile. Overflowing into the tile ABOVE is deliberate: the row
-  // below is later in the DOM, so a near peak correctly occludes a far one.
-  mountain: { x: [26, 74], y: [60, 88], scale: [0.8, 1.15] },
+  rock: { x: [20, 80], y: [20, 80], scale: [0.72, 1.15] },
+  // A ridge is the biggest footprint on the board; keep its centre well inside
+  // the tile so the massif stays on its own ground.
+  mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
   // Buildings are wider than a tree, so they need a deeper margin to stay clear
   // of the tile edge.
-  urban: { x: [22, 78], y: [32, 86], scale: [0.78, 1.1] },
+  urban: { x: [22, 78], y: [22, 80], scale: [0.78, 1.1] },
 };
 
 type Pt2 = { x: number; y: number };
@@ -660,90 +791,73 @@ function stone(rng: Rng, light: number, sat: [number, number] = [5, 13]): string
 
 // Shadow tints per ground. foliage's default is green (it is meadow shadow);
 // dropped on grey rock it reads as a patch of moss, and on a town's render as
-// a lawn. See groundShadow.
+// a lawn.
 const STONE_SHADOW = "rgba(28,36,48,0.22)";
 const TOWN_SHADOW = "rgba(58,48,38,0.18)";
 
-// One irregular silhouette, walked from the left foot over the top to the right
-// foot. The facets are then cut OUT of it, so shape and shading can never
-// disagree — the old boulder was a fixed five-point polygon with a triangle
-// stuck on the right, which meant every rock on the board was the same rock.
-function rockOutline(rng: Rng, r: number, h: number, steps = 6): Pt2[] {
+// An irregular closed blob around (0,0): the footprint of a rock seen from
+// above. Points walk the full circle with jittered radius, so no two rocks on
+// the board are the same rock.
+function blobPts(rng: Rng, r: number, n: number, squish = 1): Pt2[] {
+  const rot = rng() * Math.PI * 2;
   const pts: Pt2[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps; // 0 = left foot .. 1 = right foot
-    const ang = Math.PI * (1 - t);
-    const jit = lerp(0.8, 1.15, rng());
-    pts.push({ x: Math.cos(ang) * r * jit, y: -Math.sin(ang) * h * jit });
+  for (let i = 0; i < n; i++) {
+    const ang = rot + (i / n) * Math.PI * 2;
+    const rad = r * lerp(0.78, 1.15, rng());
+    pts.push({ x: Math.cos(ang) * rad, y: Math.sin(ang) * rad * squish });
   }
-  // Feet must sit exactly on the ground line or the rock floats.
-  pts[0] = { x: -r, y: 0 };
-  pts[steps] = { x: r, y: 0 };
   return pts;
 }
 
-/** The index of the highest point of an outline — the rock's summit. */
-function apexIndex(sil: Pt2[]): number {
-  let ai = 0;
-  for (let i = 1; i < sil.length; i++) if (sil[i].y < sil[ai].y) ai = i;
-  return ai;
+// Split a blob into its NW-facing (lit) and SE-facing (shaded) halves along the
+// chord between its most-NW and most-SE vertices. Shape and shading come from
+// the same points, so they can never disagree.
+function splitBySun(pts: Pt2[]): { lit: Pt2[]; shade: Pt2[] } {
+  const n = pts.length;
+  let i0 = 0;
+  let i1 = 0;
+  for (let i = 1; i < n; i++) {
+    if (pts[i].x + pts[i].y < pts[i0].x + pts[i0].y) i0 = i;
+    if (pts[i].x + pts[i].y > pts[i1].x + pts[i1].y) i1 = i;
+  }
+  const walk = (from: number, to: number): Pt2[] => {
+    const out: Pt2[] = [];
+    for (let i = from; ; i = (i + 1) % n) {
+      out.push(pts[i]);
+      if (i === to) break;
+    }
+    return out;
+  };
+  const a = walk(i0, i1);
+  const b = walk(i1, i0);
+  const sun = (h: Pt2[]) => h.reduce((s, p) => s + p.x + p.y, 0) / h.length;
+  return sun(a) <= sun(b) ? { lit: a, shade: b } : { lit: b, shade: a };
 }
 
 /**
- * A boulder: an irregular block split into a lit left face and a shaded right
- * face along its own ridge, with a highlight facet on the crown. Squat by
- * default, occasionally blocky and upright, so a rock field reads as varied
- * ground rather than as a row of identical props.
+ * A boulder, TOP-DOWN: an irregular blob split along the sun chord — lit toward
+ * the NW, shaded toward the SE — with a small bright crown offset toward the
+ * light and a drop shadow offset away from it.
  *
  * The tones sit CLOSE together on purpose. A near-white face against a near-
  * black one turns every rock into a paper cutout; a boulder is one lump of grey
- * catching the light unevenly, which is three tones a few steps apart.
+ * catching the light unevenly, which is tones a few steps apart.
  */
 function boulder(rng: Rng, scale: number): string {
-  const r = lerp(13, 20, rng()) * scale;
-  const upright = rng() < 0.35;
-  const h = r * (upright ? lerp(0.95, 1.25, rng()) : lerp(0.5, 0.78, rng()));
-  const sil = rockOutline(rng, r, h);
-  const light = stone(rng, lerp(68, 75, rng()));
-  const mid = stone(rng, lerp(58, 64, rng()));
-  const dark = stone(rng, lerp(44, 51, rng()));
-
-  const ai = apexIndex(sil);
-  const apex = sil[ai];
-  // Where the ridge running down the front of the rock meets the ground. Off
-  // centre, so the lit face is the bigger one (light comes from the left).
-  const front: Pt2 = { x: apex.x * 0.3 + r * 0.14, y: 0 };
-  const litFace = [...sil.slice(0, ai + 1), front];
-  const shadeFace = [apex, ...sil.slice(ai + 1), front];
-
-  // A crown facet: the sliver either side of the apex, a touch brighter than
-  // the lit face. It is what stops a big rock reading as a two-tone wedge.
-  const prev = sil[Math.max(0, ai - 1)];
-  const next = sil[Math.min(sil.length - 1, ai + 1)];
-  const crown = poly(
-    [
-      { x: lerp(prev.x, apex.x, 0.5), y: lerp(prev.y, apex.y, 0.5) },
-      apex,
-      { x: lerp(next.x, apex.x, 0.55), y: lerp(next.y, apex.y, 0.55) },
-      { x: apex.x * 0.55, y: apex.y * 0.5 },
-    ],
-    stone(rng, lerp(77, 83, rng())),
-  );
-
-  // A bedding plane / crack across the lit face, at low opacity so it reads as
-  // texture rather than as an outline.
-  const crack =
-    rng() < 0.55
-      ? `<path d="M${n1(apex.x)} ${n1(apex.y)} L${n1(lerp(sil[0].x, front.x, 0.35))} ${n1(-h * 0.12)}" stroke="${dark}" stroke-width="${n1(Math.max(0.5, r * 0.07))}" fill="none" opacity="0.3" stroke-linecap="round"/>`
-      : "";
-
+  const r = lerp(10, 16, rng()) * scale;
+  const pts = blobPts(rng, r, 8, lerp(0.72, 1, rng()));
+  const { lit, shade } = splitBySun(pts);
+  // Offsets are baked into the POINTS, not wrapped in a nested translate: the
+  // only translate() in a tile's art is the placement of each object, which is
+  // what lets the placement tests parse positions back out of the SVG.
+  const shift = (ps: Pt2[], by: number): Pt2[] =>
+    ps.map(p => ({ x: p.x + by, y: p.y + by }));
+  const crown = poly(shift(blobPts(rng, r * 0.3, 5), -r * 0.26), stone(rng, lerp(76, 82, rng())));
   return (
-    groundShadow(scale * 0.62, 18, STONE_SHADOW) +
-    poly(sil, mid) +
-    poly(litFace, light) +
-    poly(shadeFace, dark) +
-    crown +
-    crack
+    poly(shift(pts, r * 0.24), STONE_SHADOW) +
+    poly(lit, stone(rng, lerp(66, 73, rng()))) +
+    poly(shade, stone(rng, lerp(46, 53, rng()))) +
+    crown
   );
 }
 
@@ -757,17 +871,12 @@ function boulder(rng: Rng, scale: number): string {
  * ice rather than as gravel.
  */
 function pebble(rng: Rng, scale: number, light = 67): string {
-  const r = lerp(3.4, 6.2, rng()) * scale;
-  const h = r * lerp(0.35, 0.6, rng());
-  const sil = rockOutline(rng, r, h, 3);
-  const ai = apexIndex(sil);
+  const r = lerp(3.2, 5.6, rng()) * scale;
+  const pts = blobPts(rng, r, 5, lerp(0.7, 1, rng()));
+  const { lit, shade } = splitBySun(pts);
   return (
-    groundShadow(scale * 0.16, 18, STONE_SHADOW) +
-    poly(sil, stone(rng, lerp(light, light + 7, rng()))) +
-    poly(
-      [sil[ai], ...sil.slice(ai + 1), { x: sil[ai].x * 0.3, y: 0 }],
-      stone(rng, lerp(light - 23, light - 16, rng())),
-    )
+    poly(lit, stone(rng, lerp(light, light + 7, rng()))) +
+    poly(shade, stone(rng, lerp(light - 23, light - 16, rng())))
   );
 }
 
@@ -800,100 +909,91 @@ function shelf(rng: Rng, base: Hsl): string {
 // --- Mountain ----------------------------------------------------------------
 
 /**
- * A peak: a massif with a ridge, a lit and a shaded flank, and a snow cap —
- * roughly four times a boulder's height, so a mountain range never reads as a
- * rock field that happened to get big. A smaller shoulder behind it, in a hazier
- * tone, gives the range depth on a single tile.
+ * A peak, TOP-DOWN: a RIDGE — a crest line crossing the tile at a random
+ * bearing, with a lit apron falling away to the NW and a shaded one to the SE,
+ * and snow along the high middle of the crest. The aprons taper to nothing at
+ * the crest's ends, so a ridge ends in points rather than in a blunt bar; two
+ * or three of these crossing each other read as a massif.
  */
 function peak(rng: Rng, scale: number): string {
-  // Proportions matter more than size here. A tall narrow cone reads as a spike
-  // or a witch's hat; a massif is roughly as wide at the foot as it is tall.
-  const w = lerp(24, 33, rng()) * scale; // half-width at the foot
-  const h = lerp(34, 48, rng()) * scale; // apex above the foot
-  const apexX = lerp(-0.26, 0.26, rng()) * w;
-  const apex: Pt2 = { x: apexX, y: -h };
+  const len = lerp(40, 58, rng()) * scale; // total crest length
+  const th = rng() * Math.PI; // crest bearing
+  const u: Pt2 = { x: Math.cos(th), y: Math.sin(th) }; // along the crest
+  let v: Pt2 = { x: -u.y, y: u.x }; // across it
+  // `v` must point toward the sun (NW) so the lit apron is on the right side.
+  if (v.x + v.y > 0) v = { x: -v.x, y: -v.y };
 
-  const face = stone(rng, lerp(54, 62, rng()), [10, 18]);
-  const shade = stone(rng, lerp(34, 42, rng()), [12, 20]);
-  const haze = stone(rng, lerp(44, 50, rng()), [8, 14]);
+  // Wider than it is long is what separates a massif from a shard: the aprons
+  // together span more than half the crest, so the footprint is a rugged blob
+  // with a spine, not a spiky lens.
+  const wLit = lerp(14, 19, rng()) * scale;
+  const wShade = lerp(16, 22, rng()) * scale;
+  const face = stone(rng, lerp(56, 64, rng()), [10, 18]);
+  const shade = stone(rng, lerp(36, 44, rng()), [12, 20]);
 
-  // Each flank breaks once, so the ridgeline has a shoulder instead of being a
-  // clean isoceles triangle.
-  const leftBreak: Pt2 = {
-    x: lerp(-w, apexX, lerp(0.42, 0.62, rng())),
-    y: -h * lerp(0.34, 0.5, rng()),
+  // Crest stations, wobbling a little across the axis so the ridge is not a
+  // straight bar. The apron width profile peaks mid-crest and dies at the
+  // ends, and each station's width jitters so the flanks are rugged.
+  const M = 7;
+  const crest: Pt2[] = [];
+  const prof: number[] = [];
+  for (let i = 0; i < M; i++) {
+    const t = i / (M - 1);
+    const s = (t - 0.5) * len;
+    const wob = (rng() * 2 - 1) * 2.5 * scale;
+    crest.push({ x: u.x * s + v.x * wob, y: u.y * s + v.y * wob });
+    prof.push(Math.pow(Math.sin(Math.PI * t), 0.55) * lerp(0.75, 1.2, rng()));
+  }
+  const apron = (side: Pt2, w: number): Pt2[] => {
+    // Crest walked forward, offset points walked back: a closed half-ridge.
+    const out = crest.map((p, i) => ({
+      x: p.x + side.x * w * prof[i],
+      y: p.y + side.y * w * prof[i],
+    }));
+    return [...crest, ...out.reverse()];
   };
-  const rightBreak: Pt2 = {
-    x: lerp(apexX, w, lerp(0.36, 0.58, rng())),
-    y: -h * lerp(0.36, 0.52, rng()),
-  };
-  const foot: Pt2 = { x: apexX * 0.35, y: 0 };
+  const litPoly = apron(v, wLit);
+  const shadePoly = apron({ x: -v.x, y: -v.y }, wShade);
 
-  const massif = [{ x: -w, y: 0 }, leftBreak, apex, rightBreak, { x: w, y: 0 }];
-  const litFlank = [{ x: -w, y: 0 }, leftBreak, apex, foot];
-  const shadeFlank = [apex, rightBreak, { x: w, y: 0 }, foot];
-
-  // The back range: a broad, low, hazy massif standing behind the main summit,
-  // on whichever side the apex leans away from. It is what turns one peak into
-  // a RANGE, and it fills the sky a lone cone leaves empty.
-  const side = apexX > 0 ? -1 : 1;
-  const sw = w * lerp(0.75, 1.05, rng());
-  const sh = h * lerp(0.42, 0.62, rng());
-  const sx = side * w * lerp(0.65, 1.0, rng());
-  const shoulder = poly(
-    [
-      { x: sx - sw, y: 0 },
-      { x: sx - sw * 0.35, y: -sh * lerp(0.62, 0.8, rng()) },
-      { x: sx + side * sw * 0.12, y: -sh },
-      { x: sx + sw * 0.45, y: -sh * lerp(0.5, 0.7, rng()) },
-      { x: sx + sw, y: 0 },
-    ],
-    haze,
-  );
-
-  // Snow, when there is any: everything above a jagged line across the summit.
-  // The cap is cut from the massif's OWN flanks — `snowAt` lands on the segment
-  // between a break and the apex, and every other vertex is interior — so it can
-  // never hang off the silhouette the way a free-standing white wedge does.
-  const snowY = lerp(apex.y, Math.min(leftBreak.y, rightBreak.y), lerp(0.4, 0.75, rng()));
-  const snowAt = (a: Pt2, b: Pt2): Pt2 => {
-    const t = (snowY - b.y) / (a.y - b.y || 1);
-    return { x: lerp(b.x, a.x, t), y: snowY };
-  };
-  const snowL = snowAt(leftBreak, apex);
-  const snowR = snowAt(rightBreak, apex);
-  // Where the ridge running down the front of the mountain crosses the snowline.
-  const ridgeMid: Pt2 = {
-    x: lerp(apex.x, foot.x, (snowY - apex.y) / (0 - apex.y || 1)),
-    y: snowY,
-  };
-  const tongue = (a: Pt2, b: Pt2, t: number, drop: number): Pt2 => ({
-    x: lerp(a.x, b.x, t),
-    y: snowY + h * drop,
-  });
+  // A snowfield along the summit: the interior of the crest, spreading a good
+  // way down both flanks, in a bright and a dim tone so the crest line
+  // survives under it. The field carries its own taper so it dies out toward
+  // the crest ends in points — without it the snow's cut-off edge is a hard
+  // chevron across the ridge.
+  const K = M - 2;
+  const mid = crest.slice(1, M - 1);
+  const midProf = prof
+    .slice(1, M - 1)
+    .map((p, j) => p * Math.sin((Math.PI * (j + 0.5)) / K));
+  const snowSide = (side: Pt2, w: number): Pt2[] => [
+    ...mid,
+    ...mid
+      .map((p, i) => ({
+        x: p.x + side.x * w * midProf[i],
+        y: p.y + side.y * w * midProf[i],
+      }))
+      .reverse(),
+  ];
   const snow = rng() < 0.82;
   const snowLit = snow
-    ? poly(
-        [snowL, apex, ridgeMid, tongue(ridgeMid, snowL, 0.55, lerp(0.03, 0.1, rng()))],
-        "hsl(202 24% 94%)",
-      )
+    ? poly(snowSide(v, wLit * lerp(0.45, 0.6, rng())), "hsl(202 24% 94%)")
     : "";
   const snowShade = snow
-    ? poly(
-        [apex, snowR, tongue(snowR, ridgeMid, 0.45, lerp(0.02, 0.08, rng())), ridgeMid],
-        "hsl(208 18% 78%)",
-      )
+    ? poly(snowSide({ x: -v.x, y: -v.y }, wShade * lerp(0.35, 0.5, rng())), "hsl(208 18% 78%)")
     : "";
 
-  return (
-    groundShadow(scale * 0.95, 24, STONE_SHADOW) +
-    shoulder +
-    poly(massif, face) +
-    poly(litFlank, face) +
-    poly(shadeFlank, shade) +
-    snowLit +
-    snowShade
+  // The full silhouette: lit-side offsets walked forward, shade-side offsets
+  // walked back. The end stations have zero width, so the two sides meet at the
+  // crest's endpoints and the loop closes. The shadow offset is baked into the
+  // points (no nested translate — see boulder).
+  const off = 3.6 * scale;
+  const silhouette = [...[...litPoly.slice(M)].reverse(), ...shadePoly.slice(M)];
+  const shadow = poly(
+    silhouette.map(p => ({ x: p.x + off, y: p.y + off })),
+    STONE_SHADOW,
   );
+
+  return shadow + poly(litPoly, face) + poly(shadePoly, shade) + snowLit + snowShade;
 }
 
 // --- Town --------------------------------------------------------------------
@@ -903,87 +1003,88 @@ function renderTone(rng: Rng, light: number): string {
   return `hsl(${Math.round(lerp(26, 44, rng()))} ${Math.round(lerp(12, 26, rng()))}% ${Math.round(light)}%)`;
 }
 
-/** A row of little dark windows across a facade. */
-function windows(w: number, h: number, cols: number, rows: number, tone: string): string {
-  const out: string[] = [];
-  const ww = (w / cols) * 0.45;
-  const wh = (h / rows) * 0.42;
-  for (let c = 0; c < cols; c++) {
-    for (let rI = 0; rI < rows; rI++) {
-      const cx = -w / 2 + (w / cols) * (c + 0.5);
-      const cy = -h + (h / rows) * (rI + 0.5);
-      out.push(
-        `<rect x="${n1(cx - ww / 2)}" y="${n1(cy - wh / 2)}" width="${n1(ww)}" height="${n1(wh)}" fill="${tone}" opacity="0.75"/>`,
-      );
-    }
-  }
-  return out.join("");
+// A building's drop shadow: its own footprint offset to the SOUTH-EAST, matching
+// the canopies' sun (see foliage.ts). Drawn inside the building's rotated frame;
+// the jitter is small enough (±14°) that the offset still reads as one sun.
+function roofShadow(w: number, d: number, scale: number): string {
+  const off = 2.6 * scale;
+  return `<rect x="${n1(-w / 2 + off)}" y="${n1(-d / 2 + off)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${TOWN_SHADOW}"/>`;
 }
 
 /**
- * One building. A town is not a row of identical cottages, so this is three
- * archetypes off one RNG: a pitched-roof house, a flat-roofed block (the "town
- * centre" mass that makes a settlement read as bigger than a hamlet), and a low
- * hall/shed. All share the trees' lighting: lit left, shaded right.
+ * One building, TOP-DOWN: what you see of a town from above is its roofs. Three
+ * archetypes off one RNG — a pitched tile roof split along the ridge (lit half
+ * toward the NW sun), a flat block with a parapet and roof boxes, and a long
+ * metal hall — each centred on its footprint and rotated a few degrees so the
+ * town doesn't grid up.
  */
 function building(rng: Rng, scale: number): string {
   const roll = rng();
-  const lit = renderTone(rng, lerp(82, 90, rng()));
-  const dim = renderTone(rng, lerp(62, 70, rng()));
-  const glass = "hsl(210 20% 38%)";
+  const a = lerp(-14, 14, rng());
+  const wrap = (body: string) => `<g transform="rotate(${a.toFixed(1)})">${body}</g>`;
 
-  // Flat-roofed block: taller and wider than a house, with real windows.
+  // Flat-roofed block: a parapet ring around a slab, with rooftop boxes.
+  // Concrete GREY, not the walls' warm render: on the tan urban ground a warm
+  // roof at any lightness either vanishes into it or reads as blank paper —
+  // the roof has to change temperature, not just tone, to read as a roof.
   if (roll < 0.3) {
-    const w = lerp(19, 27, rng()) * scale;
-    const h = lerp(16, 24, rng()) * scale;
-    const split = w * lerp(0.55, 0.68, rng());
-    return (
-      groundShadow(scale * 0.85, 16, TOWN_SHADOW) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(split)}" height="${n1(h)}" fill="${lit}"/>` +
-      `<rect x="${n1(-w / 2 + split)}" y="${n1(-h)}" width="${n1(w - split)}" height="${n1(h)}" fill="${dim}"/>` +
-      // Parapet: a thin darker cap that reads as the roof slab's edge.
-      `<rect x="${n1(-w / 2 - 0.8 * scale)}" y="${n1(-h - 2 * scale)}" width="${n1(w + 1.6 * scale)}" height="${n1(2.4 * scale)}" fill="${renderTone(rng, lerp(52, 60, rng()))}"/>` +
-      windows(w * 0.86, h * 0.86, 3, 3, glass)
+    const w = lerp(18, 25, rng()) * scale;
+    const d = lerp(14, 19, rng()) * scale;
+    const hue = Math.round(lerp(28, 38, rng()));
+    const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
+    const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
+    const inset = 1.8 * scale;
+    const box = (): string => {
+      const bw = lerp(3, 5, rng()) * scale;
+      const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
+      const by = lerp(-d / 2 + inset + bw, d / 2 - inset - bw * 2, rng());
+      return `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bw)}" fill="hsl(210 10% 52%)"/>`;
+    };
+    return wrap(
+      roofShadow(w, d, scale) +
+        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
+        `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
+        box() +
+        box() +
+        box(),
     );
   }
 
-  // Low hall / shed: wide, shallow-pitched, one big door.
+  // Long metal hall: a shallow gable along the long axis, in cool sheet grey.
   if (roll < 0.5) {
-    const w = lerp(20, 28, rng()) * scale;
-    const h = lerp(7, 10, rng()) * scale;
-    const roof = lerp(3.5, 5.5, rng()) * scale;
-    const metal = `hsl(${Math.round(lerp(200, 216, rng()))} ${Math.round(lerp(6, 12, rng()))}% ${Math.round(lerp(46, 56, rng()))}%)`;
-    return (
-      groundShadow(scale * 0.9, 15, TOWN_SHADOW) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w)}" height="${n1(h)}" fill="${dim}"/>` +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w * 0.6)}" height="${n1(h)}" fill="${lit}"/>` +
-      `<path d="M${n1(-w / 2 - 1.5 * scale)} ${n1(-h)} L${n1(-w * 0.12)} ${n1(-h - roof)} L${n1(w * 0.12)} ${n1(-h - roof)} L${n1(w / 2 + 1.5 * scale)} ${n1(-h)} Z" fill="${metal}"/>` +
-      `<rect x="${n1(-w * 0.16)}" y="${n1(-h * 0.78)}" width="${n1(w * 0.32)}" height="${n1(h * 0.78)}" fill="${glass}" opacity="0.6"/>`
+    const w = lerp(24, 32, rng()) * scale;
+    const d = lerp(12, 16, rng()) * scale;
+    const hue = Math.round(lerp(200, 216, rng()));
+    const sat = Math.round(lerp(6, 12, rng()));
+    const litHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(58, 64, rng()))}%)`;
+    const dimHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(42, 48, rng()))}%)`;
+    return wrap(
+      roofShadow(w, d, scale) +
+        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${litHalf}"/>` +
+        `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dimHalf}"/>` +
+        `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="hsl(${hue} ${sat}% 72%)" stroke-width="${n1(0.8 * scale)}"/>`,
     );
   }
 
-  // Pitched-roof house: the common case. The roof is split down the ridge so it
-  // catches the same light as everything else on the board.
-  const w = lerp(12, 18, rng()) * scale;
-  const h = lerp(9, 14, rng()) * scale;
-  const roof = lerp(6, 9, rng()) * scale;
-  const eave = 1.6 * scale;
+  // Pitched tile roof: the common case. Split along the ridge — the NW-facing
+  // half catches the sun — with a bright ridge line and the odd chimney.
+  const w = lerp(14, 20, rng()) * scale;
+  const d = lerp(10, 14, rng()) * scale;
   const tileHue = Math.round(lerp(4, 22, rng()));
   const tileSat = Math.round(lerp(34, 52, rng()));
-  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(48, 56, rng()))}%)`;
+  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(50, 58, rng()))}%)`;
   const tileDim = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(32, 40, rng()))}%)`;
+  const ridge = `hsl(${tileHue} ${Math.max(0, tileSat - 8)}% ${Math.round(lerp(64, 70, rng()))}%)`;
   const chimney =
     rng() < 0.45
-      ? `<rect x="${n1(w * 0.18)}" y="${n1(-h - roof * 1.15)}" width="${n1(2.6 * scale)}" height="${n1(roof * 0.75)}" fill="${tileDim}"/>`
+      ? `<rect x="${n1(w * lerp(0.12, 0.3, rng()))}" y="${n1(-2.6 * scale)}" width="${n1(2.4 * scale)}" height="${n1(2.4 * scale)}" fill="hsl(${tileHue} 12% 30%)"/>`
       : "";
-  return (
-    groundShadow(scale * 0.65, 15, TOWN_SHADOW) +
-    `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w)}" height="${n1(h)}" fill="${lit}"/>` +
-    `<rect x="${n1(w * 0.08)}" y="${n1(-h)}" width="${n1(w * 0.42)}" height="${n1(h)}" fill="${dim}"/>` +
-    `<rect x="${n1(-w * 0.32)}" y="${n1(-h * 0.62)}" width="${n1(w * 0.2)}" height="${n1(h * 0.62)}" fill="${glass}" opacity="0.55"/>` +
-    chimney +
-    `<path d="M${n1(-w / 2 - eave)} ${n1(-h)} L0 ${n1(-h - roof)} L0 ${n1(-h)} Z" fill="${tileLit}"/>` +
-    `<path d="M0 ${n1(-h - roof)} L${n1(w / 2 + eave)} ${n1(-h)} L0 ${n1(-h)} Z" fill="${tileDim}"/>`
+  return wrap(
+    roofShadow(w, d, scale) +
+      `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileLit}"/>` +
+      `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileDim}"/>` +
+      `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(0.9 * scale)}"/>` +
+      chimney,
   );
 }
 
@@ -1041,38 +1142,42 @@ function groundMarks(
   rng: Rng,
   base: Hsl,
   place: (x: number, y: number) => Pt2,
+  clear: (p: Pt2, r: number) => boolean,
 ): string {
+  // Marks that land on a corridor are simply dropped (no retries): they are
+  // filler, and bare ballast beside the line reads better than a garden on it.
   const spread = (
     count: number,
+    radius: number,
     make: () => string,
     yBand: [number, number] = [20, 88],
   ): string => {
     const out: string[] = [];
     for (let i = 0; i < count; i++) {
       const p = place(lerp(14, 86, rng()), lerp(yBand[0], yBand[1], rng()));
+      if (!clear(p, radius)) continue;
       out.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${make()}</g>`);
     }
     return out.join("");
   };
   if (kind === "rock") {
     return (
-      spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(5 + Math.floor(rng() * 4), () => pebble(rng, 1))
+      spread(3 + Math.floor(rng() * 3), 12, () => shelf(rng, base)) +
+      spread(5 + Math.floor(rng() * 4), 4, () => pebble(rng, 1))
     );
   }
   if (kind === "mountain") {
-    // Shelves anywhere, but scree only along the FOOT of the range: a standing
-    // stone placed high in a mountain tile reads as gravel floating in the sky,
-    // because that part of the picture is where the peaks are.
+    // Top-down, there is no "foot of the range" — scree lies wherever the
+    // ridges are not, and the depth sort keeps a massif on top of its gravel.
     return (
-      spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85, 53), [70, 88])
+      spread(3 + Math.floor(rng() * 3), 12, () => shelf(rng, base)) +
+      spread(4 + Math.floor(rng() * 3), 4, () => pebble(rng, 0.85, 53))
     );
   }
   if (kind === "urban") {
     return (
-      spread(3 + Math.floor(rng() * 3), () => paving(rng)) +
-      spread(2 + Math.floor(rng() * 3), () => garden(rng))
+      spread(3 + Math.floor(rng() * 3), 10, () => paving(rng)) +
+      spread(2 + Math.floor(rng() * 3), 8, () => garden(rng))
     );
   }
   return "";
@@ -1092,22 +1197,18 @@ function tileRng(coordId: string, seed: number): Rng {
 // --- Assembly ----------------------------------------------------------------
 
 // Memo: the ground of a tile only changes when its kind, its neighbours' kinds,
-// its coord or the world seed change — none of which move during play. Without
-// this, panning a 20x14 board would redraw ~280 tiles of procedural art per
-// frame.
-const cache = new Map<string, string>();
+// its coord, the world seed or the tracks/roads through it change — none of
+// which move during play. Without this, panning a 20x14 board would redraw
+// ~280 tiles of procedural art per frame.
+const cache = new Map<string, { ground: string; canopy: string }>();
 
-/**
- * The complete ground art for one tile as an SVG fragment, in a 0..100 box:
- * the terrain patch, its rim, and whatever stands on it, painted back to front.
- * Returns "" for grass (see terrainOf) so the common tile costs nothing.
- */
-export function tileGroundSvg(
+function buildCached(
   kind: TerrainKind,
   coordId: string,
-  neighbours: TerrainNeighbours = ALL_GRASS,
-  seed = 1,
-): string {
+  neighbours: TerrainNeighbours,
+  seed: number,
+  corridors: Corridor[],
+): { ground: string; canopy: string } {
   const same: PatchSame = {
     top: neighbours.top === kind,
     right: neighbours.right === kind,
@@ -1120,16 +1221,53 @@ export function tileGroundSvg(
   };
   // The diagonals belong in the key too: two tiles with identical sides but a
   // different corner neighbour draw different outlines (mid-shore vs turn).
+  // The corridors belong in it because building a line THROUGH a tile reflows
+  // its scatter — that is the whole feature.
+  const corrKey = corridors
+    .map(c => `${c.half}:${c.pts.map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(";")}`)
+    .join("|");
   const key =
     `${kind}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
     `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}`;
+    `|${coordId}|${seed}|${corrKey}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
 
-  const svg = buildGround(kind, coordId, same, seed);
-  cache.set(key, svg);
-  return svg;
+  const built = buildGround(kind, coordId, same, seed, corridors);
+  cache.set(key, built);
+  return built;
+}
+
+/**
+ * The complete ground art for one tile as an SVG fragment, in a 0..100 box:
+ * the terrain patch, its rim, and whatever stands on it, painted back to front.
+ * Returns "" for grass (see terrainOf) so the common tile costs nothing.
+ * Everything here renders UNDER the rails.
+ */
+export function tileGroundSvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).ground;
+}
+
+/**
+ * The tile's OVERHEAD art: forest trees whose trunks stand beside a corridor
+ * but whose canopies reach over it. Rendered on a layer above the trains (see
+ * TileGround.vue), so a train passes underneath. "" for every other kind, and
+ * for any forest tile with no line through or beside it.
+ */
+export function tileCanopySvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
 }
 
 function buildGround(
@@ -1137,9 +1275,10 @@ function buildGround(
   coordId: string,
   same: PatchSame,
   seed: number,
-): string {
+  corridors: Corridor[],
+): { ground: string; canopy: string } {
   const base = GROUND[kind];
-  if (!base) return "";
+  if (!base) return { ground: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -1190,40 +1329,61 @@ function buildGround(
     );
   }
 
+  // How much room a point has to the nearest line. Infinity when the tile and
+  // its neighbours carry none, which short-circuits every check below.
+  const room = (p: Pt2): number =>
+    corridors.length ? corridorClearance(p, corridors) : Infinity;
+
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base, place);
+  const marks = groundMarks(kind, rng, base, place, (p, r) => room(p) >= r);
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
   const count = lo + Math.floor(rng() * (hi - lo + 1));
   const band = SCATTER_BAND[kind] ?? DEFAULT_BAND;
   const placed: { y: number; g: string }[] = [];
+  const overhead: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
     // Keep objects off the very edge so a tree's canopy doesn't collide with the
-    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary
-    // — then keep them ON the patch (see `place` above).
-    const p = place(
-      lerp(band.x[0], band.x[1], rng()),
-      lerp(band.y[0], band.y[1], rng()),
-    );
-    const scale = lerp(band.scale[0], band.scale[1], rng());
-    let body: string;
-    if (kind === "forest") body = tree(rng, scale * 0.42);
-    else if (kind === "rock") body = boulder(rng, scale);
-    else if (kind === "mountain") body = peak(rng, scale);
-    else if (kind === "urban") body = building(rng, scale);
-    else body = lily(rng, scale);
-    placed.push({
-      y: p.y,
-      g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
-    });
+    // neighbouring tile's, keep them ON the patch (see `place` above) — and keep
+    // their footprint OFF every corridor. An object that can't find clear ground
+    // in a few tries is dropped: the wood thins along the railway, the town
+    // steps back from it, which is what a cleared right-of-way looks like.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const p = place(
+        lerp(band.x[0], band.x[1], rng()),
+        lerp(band.y[0], band.y[1], rng()),
+      );
+      const scale = lerp(band.scale[0], band.scale[1], rng());
+      const clear = room(p);
+      // The forest exception: a trunk standing just OFF the ballast whose
+      // canopy reaches over the line. It renders on the canopy layer, above the
+      // trains — the pass-under effect — and leans big, because a sapling's
+      // crown wouldn't reach the ballast in the first place.
+      const overhang =
+        kind === "forest" && clear < FOOT.forest * scale && clear >= TRUNK_CLEAR;
+      if (clear < FOOT[kind] * scale && !overhang) continue;
+      let body: string;
+      if (kind === "forest") {
+        body = tree(rng, (overhang ? Math.max(scale, 1.05) : scale) * 0.42);
+      } else if (kind === "rock") body = boulder(rng, scale);
+      else if (kind === "mountain") body = peak(rng, scale);
+      else if (kind === "urban") body = building(rng, scale);
+      else body = lily(rng, scale);
+      (overhang ? overhead : placed).push({
+        y: p.y,
+        g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
+      });
+      break;
+    }
   }
   // Back to front, so a nearer canopy overlaps a farther one naturally.
   placed.sort((a, b) => a.y - b.y);
+  overhead.sort((a, b) => a.y - b.y);
   parts.push(...placed.map(p => p.g));
 
-  return parts.join("");
+  return { ground: parts.join(""), canopy: overhead.map(p => p.g).join("") };
 }
 
 // Test seam: the memo would otherwise make "same input, same output" untestable

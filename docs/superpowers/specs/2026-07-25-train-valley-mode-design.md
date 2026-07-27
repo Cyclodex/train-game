@@ -497,12 +497,14 @@ this whole document was aiming at; everything below it is polish or scope.
 | | |
 |---|---|
 | **G1 economy** | `sim/economy.ts`: a pure ledger (signed entries, running totals, a capped log, `canAfford`/`spend` that refuses debt by default) plus a **fare book** — per-train decaying fares with an idempotent `settle`. Headless, deterministic, 23 unit tests. |
-| **M7 decay** | The fare falls from `base` at `decayPerSec` down to a floor (25% of base by default), and it decays **while the train waits**, which is the point. The curve is a per-mode dial, as §4.2 asked. |
+| **M7 decay** | The fare falls from `base` at `decayPerSec` down to a floor (25% of base by default), and it decays **while the train waits**, which is the point. It falls as a **staircase, not a slope** (`DEFAULT_FARE_STEP_SEC` = 4s): the pin holds a number and then drops it in one chunk, like TV's ~100$/3s, instead of trickling every frame. Measured on `lakevalley-open`: −$20 every 4.0s (was ~6 flickering 1$ decrements per second). |
+| **Pricing (2026-07-26)** | A fare answers two questions with two terms. **Base** = the demand: `FARE_HANDLING 250 + FARE_PER_WAGON[type] (150 people / 200 freight, matching `physics.ts`' 1.6× freight weight) × wagons + FARE_PER_TILE 35 × demandTiles`, where `demandTiles` is **Manhattan between the paired depots** — not the route driven (a detour must not pay for itself) and not a rail query (on a build board the rail does not exist at setup). **Decay** = normalised: the decayable part spread over `fareGrace × idealTravelSec`, so a long haul is a bigger prize *and* burns slower per second, and every train bottoms out after the same number of ideal trips. Before this, distance was priced only as decay eaten in transit, i.e. a far delivery was strictly worse than a near one — which would have made a demoworld-sized board pay worst exactly where it is most interesting. The genre dial §4.2 asked for is now `fareGrace` (4 generic, 8 on `lakevalley-open` = the old hand-tuned 5/sec, but portable to any board size). |
 | **G3 waiting** | `TrainState "waiting"` + `sim.dispatch(id)`, gated by `SimConfig.waitForDispatch`. **Default OFF** — every board and all pre-existing tests assume immediate departure, and the full suite is green unchanged. A waiting train occupies its depot tile but reserves nothing ahead. |
 | **Counters** | `balance` / `earned` / `spent` on `Counters`, fed the ledger's absolutes, so a star predicate can score money. |
 | **The mode** | `modes/tycoon.ts` — `controls.dispatch`, `hud.money`, an economy per setup, three orthogonal stars (Payday / Hands off / Perfect colours). Registered in `modes/index.ts`. |
 | **HUD** | One balance line on the existing score card, and **one fare pin per train** floating over its loco — a waiting pin is the dispatch button. Nothing else, per §5.5. |
 | **`/test/dispatch`** | Two identical lanes, two waiting trains: send one now and one late, and the pins show what waiting costs. Also covered end-to-end by an e2e test. |
+| **`/test/faredistance`** | The pricing model in isolation: identical trains, a 2-tile job and an 8-tile job. Opens at $470 vs $680 (distance in the base) and then falls −$90 vs −$30 per 4s step (decay normalised to each trip), so the short fare is at its floor in 16s while the long one still reads $500 at 24s. |
 
 Green at the end of the day: `npm run build` clean, **1 568 unit tests in 58
 files passing**.
@@ -529,8 +531,8 @@ board to do it on.
 |---|---|
 | **`lakevalley-open`** | The complete `lakevalley` minus exactly the ring's south run (`structuredClone` of the reference board with `2,5…6,5` deleted, so the two can never drift; the complete board stays the /test reference). The yellow station is severed outright; only the blue↔red trunk works on open. `allowIncomplete` extended to tolerate a severed depot. |
 | **Why the ring matters** | Proved, not assumed: the seeded assignment is a 3-cycle, and a 3-cycle over a tree of single track deadlocks in every dispatch order (the B<Y<R<B contradiction at the 1,2–2,2 needle). The ring is the passing loop; closing it *is* the level. |
-| **The economics** | Budget $15,000 against a designed 7-piece/$7,000 rebuild (5 ring + the station junction's two entries — the gesture prices a T-junction pair by pair). Deliberately ~2x the rebuild: an opening level teaches the verbs and steers with goals, not scarcity (TV1 gives 100,000$ against a ~10,000$ ring), a misdrag is recoverable (Bulldoze refunds what you bought) but there is still no bankruptcy state. Fare decay 5/s for this board (per-board `TycoonTuning`, keyed off the levelId tail so /play and /test agree). |
-| **M9 goals** | Three that pull apart, each verified reachable in a real browser: **Payday ($1,500)** — re-measured after the decay dial moved to 5/s: the same prompt full rebuild banks $1,763 of the $2,200 maximum (it banked $1,188 at 10/s), a serialized lean run $692, all-floor $550; **Under budget ($6,000)** — the ring + east-entry-only build, won via ordered dispatch + one switch flip, using the 4,2 signal as the waiting bay; **Rail baron (7 pieces)** — the full rebuild. Under budget and Rail baron are mutually exclusive by arithmetic, so the board is worth two runs (§1.3). |
+| **The economics** | Budget $15,000 against a designed 7-piece/$7,000 rebuild (5 ring + the station junction's two entries — the gesture prices a T-junction pair by pair). Deliberately ~2x the rebuild: an opening level teaches the verbs and steers with goals, not scarcity (TV1 gives 100,000$ against a ~10,000$ ring), a misdrag is recoverable (Bulldoze refunds what you bought) but there is still no bankruptcy state. Fares burn slowly here: `fareGrace` 8, twice the generic grace, which reproduces the 5/s this board carried before fares were normalised (per-board `TycoonTuning`, keyed off the levelId tail so /play and /test agree). |
+| **M9 goals** | Three that pull apart, each verified reachable in a real browser: **Payday ($1,700)** — re-measured after fares were priced by distance (2026-07-26): the prompt full rebuild banks $2,040 of the $2,440 maximum, the same run sent 60s late banks $1,140, all-floor $611. (Earlier, cargo-only pricing at 5/s: $1,763 of $2,200, target $1,500.) **Under budget ($6,000)** — the ring + east-entry-only build, won via ordered dispatch + one switch flip, using the 4,2 signal as the waiting bay; **Rail baron (7 pieces)** — the full rebuild. Under budget and Rail baron are mutually exclusive by arithmetic, so the board is worth two runs (§1.3). |
 | **The sim facts the goals rest on** | Trains route by the ARMS at reservation time (no destination pathfinding), an unsignalled departure reserves the whole route to its end, and a train stopped at a signal keeps ~a consist-length of stale rear reservations. The lean line works *because* yellow's short consist releases 6,2; the north-entry variant deadlocks on exactly that tile. Measured in scripted playtests, then pinned by the e2e. |
 | **The e2e** | `tests/e2e/game.spec.ts` "tycoon: lakevalley-open" drives the whole loop through the UI: Start, three build gestures, the arm table, three pin dispatches, phase `won`, `balance = budget − spent + earned`, Payday + Rail baron earned / Under budget not. |
 
@@ -597,7 +599,7 @@ can offer.
 | M3 | Build from an open end into marked land | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: the *green plot* mask (buildable land as an authored, rendered thing) and the dashed "close this gap" hint — the gap is only visible as missing rails. |
 | M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing SCENERY for money** — forest and town are free to build over. (Clearing your own TRACK is priced as of 2026-07-27, `CLEARING_COST_PER_TILE`; the reason is reserved and the pattern is set.) |
 | M5 | Trains wait until dispatched | **Done** | — |
-| M6 | Each train has one explicit destination | **Partial** | Colour matching guarantees a solvable, reachable pairing, and `TrainDef.routeDestinations` exists but only feeds the debug overlay: the sim still parks in *any* colour-matching depot. No destination badge under the fare pin. This is G4, still S. |
+| M6 | Each train has one explicit destination | **Partial → load-bearing** | Colour matching guarantees a solvable, reachable pairing, and the authored destination now **prices the fare** (`TrainDef.destinations` → `demandTilesOf`), so it is real data rather than debug decoration. Still missing: the sim parks in *any* colour-matching depot, and there is no destination badge under the fare pin. That badge is G4, still S. |
 | M7 | The fare decays with time, including while waiting | **Done** | — |
 | M8 | Switches are the moment-to-moment verb | **Done**, and past TV | Interlocking, default arms, `switchLockMode`. |
 | M9 | Three named objectives, shown before and after | **Mostly done** | `lakevalley-open` names three goals that pull in different directions — Payday $1,500 / Under budget $6,000 / Rail baron 7 pieces — tuned per board (`TycoonTuning`), each verified reachable, and the lean/baron pair mutually exclusive exactly like TV1's own level 1. Counters exist for all of them (`earned`/`spent`/`tilesBuilt`). Remaining gap: the Ready card still shows the *mode description*, not the goal list, so the targets are only readable as star-pip tooltips. |
@@ -700,6 +702,128 @@ player-called trains, and the road layer joining the economy.
 
 ---
 
+## 9. Progression — what changes level to level (2026-07-27)
+
+Researched 2026-07-27. §8 says the mode's *mechanics* are nearly finished. This
+section is the layer above them: what a campaign varies from level to level, why
+Train Valley's own campaigns lose people, and the rules we adopt so ours does not.
+(Numbered 9 because §8 was claimed by the status section while this was being
+written; §§1–7 keep their numbers.)
+
+### What Train Valley actually changes over a campaign
+
+**TV1** — four "seasons", each a *time span* rather than a place: Europe
+1830–1980, America 1840–1960, USSR 1880–1980, Japan 1900–2020 (Germany on
+console). Rolling stock ages with the decades inside a season. Levels hang on real
+events: the 1849 Gold Rush, the Florida Overseas Railroad, WWII, the Cold War,
+Vostok 1.
+
+The difficulty curve is expressed almost entirely **in one currency**. Budget
+management "starts to cause occasional bankruptcies on the US levels", becomes
+"critical" on the USSR ones, and the Japan levels "were the original end game
+where players started having to make multiple attempts."
+
+Three modes, three session shapes: **story** (5–10 min levels), **random**
+(15–20 min, procedurally different each launch), **sandbox** (no time or money).
+
+**TV2** — 50 levels over five ages (Steam, Industrial, Electrical, Globalization,
+Space), each age adding a mechanic: cargo types, then workers, then electricity.
+
+### What works
+
+1. **The pressure that rises is one number the player already understands.** No
+   new systems in the back half; money just gets tighter, so the late game tests
+   the skill the early game taught.
+2. **Era is a free novelty dial** — same mechanics, new look and new trains each
+   chapter. Cheap to build, and it makes a run feel like it is going somewhere.
+3. **5–10 minute levels.** The single biggest retention lever. Short enough that a
+   failure costs nothing and "one more" is always cheap.
+4. **Every level has a nameable hook.** "The Gold Rush one." "The Vostok one." A
+   level with an identity is remembered; without one, twenty-four levels blur.
+5. **Three modes for three moods** — authored, infinite, pressure-free. The same
+   shape this project already has (puzzle / daily / sandbox).
+
+### What leaks the interest — TV2 is the cautionary tale
+
+1. **Difficulty by micromanagement instead of by decision.** Later levels add
+   trains and switches, so the challenge becomes hand speed. Players report
+   abandoning the 5-star chase **around level 10 of 50** because it "suddenly
+   became a royal pain."
+2. **Stars that punish instead of reward.** "Don't let any train enter a wrong
+   station" across a 40-train level is a single-mistake fail spread over twenty
+   minutes; stacked with three time tiers it becomes work.
+3. **Level length inflation.** TV1's 5–10 minutes became TV2's long chain levels.
+   A failed 30-minute run is a bad trade, so players stop retrying — and then stop.
+4. **A same-y middle.** "Tedious once you're around one-third of the way in…
+   almost all the same, with more or less the same difficulty." The level count
+   kept rising after the dials stopped moving.
+5. **Tone whiplash.** TV2 opens relaxed and methodical, then "ruins that
+   relaxation by cramming in every stress-building challenge." It never decides.
+6. **Nothing accumulates.** Every level starts from zero and stars only unlock the
+   next one, so no thread pulls the player through fifty of them.
+
+### The rules we adopt
+
+- **Difficulty comes from decisions, not from hands.** The test: if a level gets
+  harder at 4× speed but not when you think about it longer, it is the wrong kind
+  of hard. This is the rule TV2 broke and the one this engine is best placed to
+  keep — interlocking makes *which route do I set* a thinking problem, where
+  *click forty switches faster* is a reflex problem.
+- **Levels stay 5–8 minutes.** A hard cap. If a level needs longer, it is two
+  levels.
+- **Three orthogonal stars, never tiers of one axis** — and a perfection star
+  ("no mismatches") only on a *short* level, where a retry costs a minute.
+- **One new dial per level, then combine.** Never two.
+- **Every level gets a name and a one-sentence hook.** TV1's historical
+  set-pieces are this trick with a research budget; our map shapes can do it free.
+- **The rising pressure is money, and it rises because of what the player built.**
+  The annual levy already scales with the network (§8) — keep that as the curve,
+  because a late-game squeeze that emerges from your own success beats one a
+  designer typed in.
+- **Something accumulates.** Cheapest version: tools unlock in teaching order —
+  signals, then bridges, then crossings — so the campaign's progression *is* its
+  tutorial.
+- **One tone per mode.** The campaign is tight; the network builder (§7) is chill.
+  Do not blend them.
+
+### The dials
+
+Board size · terrain hostility (how far the detour) · starting capital vs.
+required spend · demand rate · **single-track sections that force interlocking** ·
+**level crossings and road density** · fare-decay steepness.
+
+The last two are ours alone, and they should carry the back half of the campaign —
+that is where Train Valley has nothing to compare against.
+
+### A first arc — eight levels, each 5–8 minutes
+
+| # | Name | New dial |
+|---|---|---|
+| 1 | The Lake | Build around terrain. Two stations, generous money, no clock. |
+| 2 | The Fork | Switches — one junction, two destinations. |
+| 3 | The Squeeze | Money. A tight budget forces the short, awkward route. |
+| 4 | Single Track | Signals and a passing loop. **The dial nobody else has.** |
+| 5 | The Crossing | Road interaction — one level crossing, cars queue on the boom. |
+| 6 | Rush Hour | Combine: demand up, two crossings, no new mechanic. |
+| 7 | The Bypass | Bridge vs. crossing as a money decision. |
+| 8 | The Valley | Everything, levy biting. No new mechanic — this one tests. |
+
+Note the shape: nothing new after level 7, and the two hardest levels are
+*combinations* rather than additions. That is the anti-TV2 move.
+
+**Level 1 already exists**: `lakevalley-open` is exactly "The Lake" — a severed
+ring around an unbuildable lake with a budget that buys it back.
+
+### The content answer
+
+TV1 already showed the right structure for a small team: a **short authored
+campaign** plus **procgen** plus **sandbox**. Eight hand-made levels is a weekend
+of design, not a year, and the daily seeded puzzle plus the chill network mode
+(§7) carry everything after level 8. The procgen, the editor and a deterministic
+sim that makes dailies comparable are all already here.
+
+---
+
 ## Sources
 
 - [The Challenge of Train Valley — The Ancient Gaming Noob](https://tagn.wordpress.com/2017/01/23/the-challenge-of-train-valley/)
@@ -718,3 +842,8 @@ player-called trains, and the road layer joining the economy.
 - [Train Valley 2 reviews — Steambase](https://steambase.io/games/train-valley-2/reviews)
 - [Train Valley — Metacritic](https://www.metacritic.com/game/train-valley/)
 - [Train Valley World review — Geeky Hobbies](https://www.geekyhobbies.com/train-valley-world-indie-video-game-review/)
+- [Flazm presskit — Train Valley](https://flazm.com/pr-train-valley) (seasons,
+  eras, mode session lengths; §9)
+- [TV2 Community Edition review — TheXboxHub](https://www.thexboxhub.com/train-valley-2-community-edition-review/)
+- [Steam — "Disappointed" thread, TV2](https://steamcommunity.com/app/602320/discussions/1/1812044473321542242/)
+  (the level-10 star abandonment; §9)

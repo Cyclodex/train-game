@@ -21,75 +21,70 @@ export function green(rng: Rng, light: number): string {
   return `hsl(${hue} ${sat}% ${Math.round(light)}%)`;
 }
 
+// Trees are drawn TOP-DOWN: the board is a plan view (tracks, trains and roads
+// all are), so a tree is its canopy seen from above, centred on (0,0). Light
+// comes from the NORTH-WEST — a lit lobe offset up-left, a shaded rim down-right
+// — and the drop shadow is a same-size disc offset to the SOUTH-EAST. That one
+// sun direction is shared by every standing object on the board.
+
+// How far a canopy's drop shadow is displaced, as a fraction of its radius.
+const SHADOW_SHIFT = 0.3;
+
+function canopyShadow(r: number, fill = "rgba(30,60,30,0.2)"): string {
+  const off = (r * SHADOW_SHIFT).toFixed(1);
+  return `<circle cx="${off}" cy="${off}" r="${r.toFixed(1)}" fill="${fill}"/>`;
+}
+
 /**
- * A conifer: a trunk and three stacked triangular tiers, lit from the left.
- * Drawn centred on its BASE point (the trunk foot at 0,0), growing up (-y), so
- * callers can place it by ground position and sort by y for depth.
+ * A conifer from above: a spiky whorl of branch tips — a star polygon whose
+ * long and short radii both jitter — darker and denser than a broadleaf, with a
+ * smaller lit whorl nudged toward the light.
  */
 export function conifer(rng: Rng, scale: number): string {
-  const w = 26 * scale; // canopy half-width at the base
-  const h = 58 * scale; // canopy height (grows upward, -y)
-  const lit = green(rng, lerp(40, 50, rng()));
-  const shade = green(rng, lerp(24, 32, rng()));
-  const trunkH = 9 * scale;
-  const trunkW = 4 * scale;
-  const tiers: string[] = [];
-  for (let i = 0; i < 3; i++) {
-    const t = i / 3; // 0 (bottom) .. ~0.67 (top)
-    const baseY = -trunkH - h * t;
-    const tierTop = baseY - h * 0.42;
-    const halfW = w * (1 - t * 0.55);
-    // Split each tier down the middle: lit left half, shaded right half.
-    tiers.push(
-      `<path d="M0 ${baseY.toFixed(1)} L${(-halfW).toFixed(1)} ${baseY.toFixed(1)} L0 ${tierTop.toFixed(1)} Z" fill="${lit}"/>`,
-      `<path d="M0 ${baseY.toFixed(1)} L${halfW.toFixed(1)} ${baseY.toFixed(1)} L0 ${tierTop.toFixed(1)} Z" fill="${shade}"/>`,
-    );
-  }
+  const r = lerp(22, 30, rng()) * scale; // canopy radius
+  const lit = green(rng, lerp(36, 44, rng()));
+  const shade = green(rng, lerp(24, 30, rng()));
+  const spikes = 9 + Math.floor(rng() * 3);
+  const rot = rng() * Math.PI;
+  const star = (radius: number, cx: number, cy: number): string => {
+    const pts: string[] = [];
+    for (let i = 0; i < spikes * 2; i++) {
+      const ang = rot + (i / (spikes * 2)) * Math.PI * 2;
+      const rad = radius * (i % 2 === 0 ? lerp(0.92, 1.08, rng()) : lerp(0.55, 0.68, rng()));
+      pts.push(
+        `${(cx + Math.cos(ang) * rad).toFixed(1)} ${(cy + Math.sin(ang) * rad).toFixed(1)}`,
+      );
+    }
+    return `M${pts.join(" L")} Z`;
+  };
   return (
-    `<rect x="${(-trunkW / 2).toFixed(1)}" y="${(-trunkH).toFixed(1)}" width="${trunkW.toFixed(1)}" height="${(trunkH + 1).toFixed(1)}" fill="#6b4a2b"/>` +
-    tiers.join("")
+    canopyShadow(r * 0.92) +
+    `<path d="${star(r, 0, 0)}" fill="${shade}"/>` +
+    `<path d="${star(r * 0.55, -r * 0.12, -r * 0.12)}" fill="${lit}"/>`
   );
 }
 
-/** A round-canopy tree: a trunk and a clump of overlapping leafy blobs. */
+/** A broadleaf from above: a clump of overlapping round lobes, lit toward NW. */
 export function roundTree(rng: Rng, scale: number): string {
-  const r = 20 * scale; // canopy radius
-  const trunkH = 12 * scale;
-  const trunkW = 5 * scale;
+  const r = lerp(17, 23, rng()) * scale; // canopy radius
   const lit = green(rng, lerp(42, 52, rng()));
   const mid = green(rng, lerp(34, 40, rng()));
   const shade = green(rng, lerp(24, 30, rng()));
-  const cy = -trunkH - r * 0.7;
-  const blobs = [
-    `<circle cx="0" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="${mid}"/>`,
-    `<circle cx="${(-r * 0.6).toFixed(1)}" cy="${(cy + r * 0.25).toFixed(1)}" r="${(r * 0.75).toFixed(1)}" fill="${lit}"/>`,
-    `<circle cx="${(r * 0.55).toFixed(1)}" cy="${(cy + r * 0.3).toFixed(1)}" r="${(r * 0.7).toFixed(1)}" fill="${shade}"/>`,
-    `<circle cx="${(r * 0.1).toFixed(1)}" cy="${(cy - r * 0.45).toFixed(1)}" r="${(r * 0.6).toFixed(1)}" fill="${lit}"/>`,
-  ];
+  const lobe = (cx: number, cy: number, rad: number, fill: string) =>
+    `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${fill}"/>`;
   return (
-    `<rect x="${(-trunkW / 2).toFixed(1)}" y="${(-trunkH).toFixed(1)}" width="${trunkW.toFixed(1)}" height="${(trunkH + 1).toFixed(1)}" fill="#6f4c2a"/>` +
-    blobs.join("")
+    canopyShadow(r) +
+    lobe(0, 0, r, mid) +
+    // The shaded rim: a lobe pushed down-right, then the lit crown up-left on
+    // top of it, plus two smaller lumps so the outline is a clump, not a disc.
+    lobe(r * 0.3, r * 0.3, r * 0.72, shade) +
+    lobe(-r * 0.22, -r * 0.22, r * 0.66, lit) +
+    lobe(r * 0.55, -r * 0.28, r * 0.4, mid) +
+    lobe(-r * 0.3, r * 0.5, r * 0.38, shade)
   );
 }
 
-/**
- * The soft ground shadow every standing object gets, centred on its base.
- *
- * The default is GREEN-tinted, because the default ground is meadow. Anything
- * standing on another ground must pass its own tint: the green ellipse under a
- * boulder reads as moss on grey rock, which is a shadow that has become a
- * feature of the wrong colour.
- */
-export function groundShadow(
-  scale: number,
-  spread = 22,
-  fill = "rgba(30,60,30,0.18)",
-): string {
-  return `<ellipse cx="0" cy="0" rx="${(spread * scale).toFixed(1)}" ry="${(spread * 0.32 * scale).toFixed(1)}" fill="${fill}"/>`;
-}
-
-/** A single tree with its shadow, centred on its base point. */
+/** A single tree with its shadow, centred on its canopy centre. */
 export function tree(rng: Rng, scale: number): string {
-  const body = rng() < 0.62 ? conifer(rng, scale) : roundTree(rng, scale);
-  return groundShadow(scale) + body;
+  return rng() < 0.62 ? conifer(rng, scale) : roundTree(rng, scale);
 }

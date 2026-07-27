@@ -183,14 +183,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the trees follow. Same seed = same trees, or screenshots stop being comparable.
   Tree art is shared with the backdrop (`utils/foliage.ts`) so the world's woods
   and the distance are the same forest.
-- Per-kind scatter has its OWN band (`SCATTER_BAND`): a peak is ~50 units tall so
-  it starts low in the tile and overflows UPWARD (deliberate — the row below is
-  later in the DOM, so a near peak occludes a far one; `.tile-ground` is
-  `overflow: visible` for exactly this). Keep every `translate()` inside 10..90 —
-  a unit test sweeps all kinds and fails otherwise.
-- `groundShadow(scale, spread, fill)` — the DEFAULT tint is green because the
-  default ground is meadow. On rock/mountain/town pass your own (`STONE_SHADOW`/
-  `TOWN_SHADOW`), or every boulder gets a patch of moss under it.
+- ALL scatter is TOP-DOWN (2026-07-27): canopies, roof plans, blob boulders,
+  ridges — one projection with the tracks/trains, one NW sun (lit up-left facet,
+  drop shadow offset down-right). Nothing grows upward out of its band any more,
+  so bands are symmetric and forest runs to [10,90]. Keep every `translate()`
+  inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
+  EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
+  into the point coords, never nest a `<g transform="translate">` inside a prop.
+- KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
+  footprint off every rail/road through the cell AND its four side-neighbours
+  (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from
+  `segmentPoints` in sim/pathGeometry — same quad the trains drive, ONE
+  derivation). An object re-rolls up to 8 spots then is DROPPED (the wood thins
+  along the line — that's the cleared right-of-way, not a bug); ground marks
+  drop without retry. Corridors are part of the terrain cache key: building
+  through a tile reflows its scatter. FOREST exception: a trunk ≥ TRUNK_CLEAR
+  off the ballast whose crown overlaps the line renders on the CANOPY layer
+  (`tileCanopySvg`, second `<TileGround layer="canopy">` per cell, z-index 5 —
+  above wagons z3/loco z4, below road cars z6) so trains pass UNDER the
+  foliage. /test scenario: `clearing`.
+- Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
+  default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
   across a rock patch read at board zoom as stray pen strokes lying on the tile;
   broad low-contrast `shelf()` polygons (±3.5% lightness) read as bedrock. Same
@@ -201,9 +214,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   rock's L=56 (gravel) but ~30 over mountain's L=42: bright flecks on dark slate,
   reading as litter. It takes a `light` base now (rock 67, mountain 53).
   A near-white face against a near-black one turns every boulder into
-  a paper cutout. A snow cap must be cut from the massif's OWN flanks (`snowAt`
-  lands on the break→apex segment); a free-standing white wedge hangs off the
-  silhouette and reads as a paper dart.
+  a paper cutout. Snow lives ON the ridge polygon's own crest stations and
+  carries its own end-taper (`midProf` × sin) — cut off square it leaves a hard
+  white chevron across the ridge. On the tan urban ground a flat roof must
+  change TEMPERATURE (concrete grey), not just tone: warm at any lightness
+  either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
   and rails (2), so scenery never covers track.
@@ -266,6 +281,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
   mechanic (Train Valley M7). Ticked from `game.ts frame()` only while
   `objective.phase === "playing"`, so nothing burns behind the Ready screen.
   `settle()` is idempotent, so a duplicated `arrived` event cannot pay twice.
+- The fare falls as a STAIRCASE, not a slope: `DEFAULT_FARE_STEP_SEC` (=4s, the
+  middle of TV's 3–5s feel) quantises `fareAt`, so the pin holds a number and
+  then drops it in one chunk. `decayPerSec` is still the BALANCE dial and the
+  staircase tracks it to within one step (sizes round to $5) — changing the
+  step never moves a Payday target, changing the rate does. Per-fare override
+  `FareSpec.stepSec`; 0 = the old continuous curve. Measured on
+  `lakevalley-open`: −$20 every 4.0s, vs ~6 one-dollar flickers a second before.
+- FARES ARE PRICED FROM THE DEMAND, not the consist alone (2026-07-26):
+  `base = FARE_HANDLING + FARE_PER_WAGON[type] * wagons + FARE_PER_TILE * demandTiles`
+  and `decayPerSec` is DERIVED — the decayable part spread over `fareGrace` x
+  ideal travel time. So a long haul is a bigger prize AND burns slower per
+  second; those two together are what stop distance from being a pure penalty.
+- `demandTilesOf` is MANHATTAN between the depots the level paired, deliberately
+  NOT the rail path: on a build board the rail does not exist at setup (a path
+  query answers null exactly when it matters), and a straight-line price cannot
+  be inflated by routing the long way round.
+- The mode only sees `TrainDef`, which carried no destination. `destinations` is
+  plumbed from `TrainObject.routeDestinations` in all THREE builders (PlayView,
+  TestStage, modes/daily) — miss one and every fare there silently falls back
+  to `FALLBACK_DEMAND_TILES`.
+- The per-board dial is `TycoonTuning.fareGrace` (ideal trips a fare survives),
+  not money/sec: 4 generic, 8 on lakevalley-open. Being measured in TRIPS it
+  means the same thing on a 3-tile test lane and a 20-tile ring.
+- Payday is the ONLY goal that money-and-time eats — RE-MEASURE it in a real
+  browser after any pricing change. lakevalley-open 2026-07-26: prompt run
+  $2,040 of $2,440 max, sent-60s-late $1,140, all-floors $611 ⇒ target $1,700.
+- lakevalley-open's three demands form a 3-CYCLE (each train's destination is
+  another train's shed), so it CANNOT be played one train at a time — a
+  serialized measurement run deadlocks at the first arrival. Send all three.
 - `Counters.balance/earned/spent` are OPTIONAL, like `spawned`/`active`: the mode
   specs build `Counters` fixtures BY HAND, and required fields break them.
   Observation carries the ledger's ABSOLUTES (not deltas) — one source of truth.
@@ -566,6 +610,91 @@ lean — prune as much as you add. This file only stays useful if every task ten
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
   old "strange bend" on mixed-width junctions). =concentric arc when offsets equal.
+
+## RAIL SWITCH UI — arrows on the rails (2026-07-27)
+- The player-facing switch is a FAN: one per SWITCHABLE ENTRY (`isJunctionEntry`
+  = >1 partner), geometry in `src/tiles/switchFan.ts`, drawn by `Tile.vue` as a
+  single `.switch-layer` svg in TILE coordinates. It replaced `.switch-box` (a
+  24x18 box of three 3px bulbs) — don't reintroduce that class; `game.spec.ts`
+  asserts `.switch-fan`.
+- TRAIN VALLEY'S MODEL: the control is a MARKING ON THE TRACK, not a widget
+  beside it. Each arm is an arrow laid along the rail curve a train would take.
+  `railArrow` samples the SAME quadratic `segmentPathD` draws (control point =
+  tile centre; for opposite ports that degenerates to the straight line), so an
+  arrow physically cannot disagree with the rail it marks. One code path for
+  straight and curved — don't split them.
+- ARROWS ARE ANCHORED AT THEIR ENTRY: start on the edge the train comes from,
+  walk toward the exit, stop as a short stub (`ARROW_T_END_REST`). Version one
+  anchored them at the exit (tail mid-air, head on the exit edge) and the player
+  read it backwards — "something arrives here" — and couldn't tell which entry
+  owned which arrow on a cross. Entry-anchored + mid-stop keeps each entry in
+  its own quadrant, which is how OUR all-pairs crosses stay readable (TV never
+  has that case).
+- WHY IT IS NOT ALL DRAWN AT ONCE. An all-pairs 4-way cross has FOUR independent
+  settings and TWELVE possible movements. Drawing them together makes an asterisk
+  nobody can read — this was built and thrown away, twice (12 arrows, then 4 long
+  + 8 stubs). What works: **at rest each entry draws ONE arrow, its set route,
+  a SHORT stub from its entry edge (`ARROW_T_END_REST`, TV proportions)**; a fan
+  OPENS (all arms, run further out, `ARROW_T_END_OPEN`) only when a train is
+  arriving by that entry or the pointer is on it. Never more than one fan open at a time. Before making arrows more
+  visible, re-shoot `switch-fan` — that scenario exists because it is the dense
+  case.
+- OPENING is per-ENTRY and sticky: `openEntry` is set by `@pointerover` on any of
+  that fan's arms, and cleared by `@pointerleave` on the TILE root.
+  Per-arm hover would collapse the fan as the pointer travelled from the set
+  arrow to an alternative — i.e. it would be unclickable.
+- SIZE: the arrows are track markings, so their GEOMETRY scales with the board;
+  their WEIGHT must not (that is what made the old widget unusable). Every stroke
+  width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
+  on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
+  capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
+  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
+  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
+  the "strange black dot" the player asked about; with entry-anchored arrows it
+  marked nothing. `switchHubAt` survives for the EDITOR, which centres its
+  authored-arm cycle zone on that point.
+- TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
+  the build tool's `.zone` edge targets and eat the click that would lay track
+  (the old edge-hugging box was too small to notice). PlayView passes
+  `:switch-interactive="!buildArmed && !razeArmed"`; the lakevalley-open e2e
+  catches it, because building the station junction reveals a fan mid-drag.
+- NOTHING IN A FAN MAY LOOK LIKE AN ARROW EXCEPT AN ARM. An early version put a
+  chevron on the entry marker to say "trains arrive here"; it read as an extra
+  arm, being colinear with the Straight arm and pointing the same way.
+- Arrows sit DEAD-CENTRE on the rail. An early 8px right-of-travel offset (to
+  separate the two directions of one arc) read as a misdrawn arrow — the player
+  said so. Centring is safe because opposing directions only co-exist AT REST,
+  where the short crop keeps each on its own end of the curve.
+- ARROW STYLE (chosen from a 4-variant mockup round, "A1/A3 hybrid"): a stroked
+  near-black body in a WHITE casing bending along the curve, finished with a
+  filled flat-backed triangle head (`HEAD_LEN`/`HEAD_HALF`; capped at 45% of a
+  short arrow's run). The SHAFT stops at the head's back — `railArrow` walks the
+  sampled arc length backwards, so don't reintroduce an even-t mapping (the unit
+  test checks point-on-curve, not parameters). SET arm = black body/white
+  casing; ALTERNATIVES = the inverse ghost (white body, dark casing) — current
+  vs available is a colour inversion, not an opacity guess. Head polygons scale
+  with the board (geometry); only stroke WIDTHS counter-scale.
+- RESTING FANS ARE TRANSLUCENT (`.switch-fan` opacity 0.55): quiet at rest, full
+  strength exactly when they matter — `--open` (train due OR pointer on it),
+  and always in the EDITOR (`.switch-layer--static`, an editing surface).
+  `--muted` (a train is due on a DIFFERENT entry) drops further, to 0.28.
+- WHICH FAN MATTERS: `Tile.approachEntry` promotes the fan whose NEIGHBOUR tile
+  holds a train pointing at us (`--armed`, glow) and mutes the rest. It keys off
+  the reactive `occupied` map — `updateReservations` refills that every frame
+  regardless of `switchLockMode` — and only then reads the markRaw'd
+  `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
+  proxied, so nothing would re-render.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
+  widget could only cycle, which is why reaching a specific exit on a 4-way took
+  up to three clicks and a guess.
+- EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
+  `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
+  `defaultArms` and persists, a different verb from the live throw. Its
+  `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
+  re-deriving it.
+- Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
 
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
@@ -897,6 +1026,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Commit your scoped change as soon as done+green, unasked. Heavy parallel editing
   of same files (`road.ts`, `editOps.ts`, scenario `index.ts`) — stage only your
   hunks. NO AI attribution in commit msgs.
+- LINE ENDINGS ARE MIXED IN THIS REPO (KNOWHOW.md is CRLF for ~716 lines then LF;
+  most src/ files are LF). An editor that normalises the whole file turns a 7-line
+  note into a 129-line phantom diff. After editing a doc, check `git diff --stat`
+  against `git diff --stat -w`: if they disagree, you rewrote endings, so
+  restore the file and re-apply the edit preserving them (strip CR with tr).
 - Worktrees: node_modules usually resolves up to repo root (try tooling first). If
   junctioned, remove junction (`cmd /c rmdir`) BEFORE `git worktree remove` or it
   deletes the real install. Kill bg dev servers when done.
