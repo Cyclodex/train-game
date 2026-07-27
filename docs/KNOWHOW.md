@@ -411,6 +411,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   dominates it. `/test/taxyear` teaches the mechanic (10s year, $300/piece,
   $9,000 purse — dialled for watching, not for balance).
 
+## UNDO vs BULLDOZE (2026-07-27) — two verbs, so each price can be honest
+- They were ONE verb (bulldoze, refunding in full) and that is why the price was
+  wrong: it had to double as the escape hatch for a MISDRAG. A misdrag is an
+  INPUT ERROR, not a world event — every builder that solves it well solves it
+  with Ctrl+Z, not with economics. Split:
+  · `undoBuild()` reverses a PURCHASE — rails go, full money back as an
+    `adjustment`, no fee, and `trackSpent`/`tilesBuilt` both fall because the
+    buy never really happened.
+  · `bulldoze()` removes a RAILWAY — costs `CLEARING_COST_PER_TILE` (=300, 30%
+    of the build price), never pays, and books under the `"clearing"` reason
+    that `economy.ts` had reserved. `trackSpent` does NOT fall: you spent that
+    money, and "Under budget" must not be winnable by building wide and razing
+    the evidence. `tilesBuilt` DOES fall — it counts the railway you kept.
+- The undo window closes on what the PLAYER does — next build replaces it, a
+  bulldoze or a DISPATCH drops it — never on a clock. A window that closes by
+  itself is an invisible timer, which is the thing undo was chosen over. Only
+  the LAST gesture is undoable, so "undo the level at the end" is not a strategy.
+- TRAP (cost a browser round trip): a gesture can buy NOTHING and must then NOT
+  replace the window. The Esc-finish whose terminus duplicates existing rail
+  fires after every real gesture, so recording it as "the last purchase" set the
+  window to 0 pieces and the undo control vanished the instant the drag ended.
+  Guard is `if (pieces > 0)` in `buildRoute`; pinned by a unit test AND an e2e,
+  because it only reproduces through the real gesture.
+- The view reads `game.undoable` (a Ref), not `canUndoBuild()`: `game` is
+  markRaw'd, `lastBuild` is a closure variable, and DISPATCH clears it without
+  touching `levelVersion` — so there would be nothing to re-evaluate on. Keyed
+  on `pieces`, not `value`, because Sandbox builds free and a $0 undo is real.
+- Clearing is priced ABOVE a year's upkeep on the same piece (300 vs 150 on
+  lakevalley), so razing surplus pays for itself only with years left to run.
+  That is the decision the two prices make together — and it is why the
+  insolvency warning names DELIVERING first: clearing is an escape route that
+  itself needs money, and `bulldoze` refuses a fee the balance cannot cover.
+
 ## BANKRUPTCY (2026-07-27) — the tax's other half
 - BANKRUPT = OWING MORE THAN YOU HAVE, never "the balance reached zero". That
   distinction is the whole design: measured lines finish flat broke with the
@@ -427,14 +460,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the number meaningless as a diagnostic.
 - THE WARNING IS THE FEATURE, not the Failed screen. `money.taxUnaffordable`
   (`taxPerYear > balance`) turns the calendar row red with "can't pay next year"
-  while there is still a year to act in — and the fix it names, BULLDOZE, works
-  twice over: it refunds what you paid AND lowers the next bill. Without it the
-  fail state is an ambush; same lesson as the gridlock nudge (name the failure
-  AND the fix). Deliberately literal — it does not try to predict fares.
-- `/test/bankrupt` is the scenario ($5,000, 8s year, $600/piece — the annual
+  a full in-game YEAR before the bill lands. Without it the fail state is an
+  ambush; same lesson as the gridlock nudge (name the failure AND the fix).
+  Deliberately literal — it does not try to predict fares.
+- The fix it names is DELIVERING, not clearing. Fares are the income; clearing
+  track costs a fee (see UNDO vs BULLDOZE) and `bulldoze` refuses one the
+  balance cannot cover, so it is an escape route that itself needs money. It is
+  also only an escape where there is SURPLUS — razing a piece of a minimal link
+  just re-opens the gap. Wording was corrected on 2026-07-27 when the refund
+  became a fee and the old advice ("bulldoze") stopped being reliable.
+- `/test/bankrupt` is the scenario ($6,000, 8s year, $600/piece — the annual
   bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
-  $2,321; relaxed won 22.7s banking $1,086; dawdling folded at 26.0s, $600
-  short. Playable at `/#/play?mode=tycoon&board=bankrupt`.
+  $3,315; relaxed won 24.7s banking $855; dawdling folded at 32.0s, $800 short,
+  warned from 24s. Playable at `/#/play?mode=tycoon&board=bankrupt`.
 - Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
   still wins ties): "you ran out of money" beats any symptom another check might
   notice on the same tick. A knock-on worth knowing: a board that DEADLOCKS in
@@ -551,8 +589,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - TERRAIN PRICES THE BUILD (2026-07-27): `TERRAIN_BUILD_FACTOR` (terrain.ts,
   forest 1.5x / urban 2.5x) multiplies `TRACK_COST_PER_TILE` per PIECE in
   `game.buildCostOf` (`pricePerPiece`, rounded per piece so preview sum ==
-  charge). Refunds re-derive the same price — terrain never changes in play, so
-  what was paid is what comes back; store no price in `boughtPieces`. Lakevalley
+  charge). UNDO hands back `lastBuild.cost`, which is already terrain-priced —
+  no second price table; BULLDOZE charges flat CLEARING_COST_PER_TILE and
+  refunds nothing (see the undo-vs-bulldoze split in game.ts). Lakevalley
   budgets are safe: its rebuild row is all grass. /test scenario: `landprices`
   ($6,000 vs a $5,000 grass+wood+town gap, tuning in tycoon.ts). The build
   button's hint derives its prices from the same table — keep it that way.
@@ -586,6 +625,91 @@ lean — prune as much as you add. This file only stays useful if every task ten
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
   old "strange bend" on mixed-width junctions). =concentric arc when offsets equal.
+
+## RAIL SWITCH UI — arrows on the rails (2026-07-27)
+- The player-facing switch is a FAN: one per SWITCHABLE ENTRY (`isJunctionEntry`
+  = >1 partner), geometry in `src/tiles/switchFan.ts`, drawn by `Tile.vue` as a
+  single `.switch-layer` svg in TILE coordinates. It replaced `.switch-box` (a
+  24x18 box of three 3px bulbs) — don't reintroduce that class; `game.spec.ts`
+  asserts `.switch-fan`.
+- TRAIN VALLEY'S MODEL: the control is a MARKING ON THE TRACK, not a widget
+  beside it. Each arm is an arrow laid along the rail curve a train would take.
+  `railArrow` samples the SAME quadratic `segmentPathD` draws (control point =
+  tile centre; for opposite ports that degenerates to the straight line), so an
+  arrow physically cannot disagree with the rail it marks. One code path for
+  straight and curved — don't split them.
+- ARROWS ARE ANCHORED AT THEIR ENTRY: start on the edge the train comes from,
+  walk toward the exit, stop as a short stub (`ARROW_T_END_REST`). Version one
+  anchored them at the exit (tail mid-air, head on the exit edge) and the player
+  read it backwards — "something arrives here" — and couldn't tell which entry
+  owned which arrow on a cross. Entry-anchored + mid-stop keeps each entry in
+  its own quadrant, which is how OUR all-pairs crosses stay readable (TV never
+  has that case).
+- WHY IT IS NOT ALL DRAWN AT ONCE. An all-pairs 4-way cross has FOUR independent
+  settings and TWELVE possible movements. Drawing them together makes an asterisk
+  nobody can read — this was built and thrown away, twice (12 arrows, then 4 long
+  + 8 stubs). What works: **at rest each entry draws ONE arrow, its set route,
+  a SHORT stub from its entry edge (`ARROW_T_END_REST`, TV proportions)**; a fan
+  OPENS (all arms, run further out, `ARROW_T_END_OPEN`) only when a train is
+  arriving by that entry or the pointer is on it. Never more than one fan open at a time. Before making arrows more
+  visible, re-shoot `switch-fan` — that scenario exists because it is the dense
+  case.
+- OPENING is per-ENTRY and sticky: `openEntry` is set by `@pointerover` on any of
+  that fan's arms, and cleared by `@pointerleave` on the TILE root.
+  Per-arm hover would collapse the fan as the pointer travelled from the set
+  arrow to an alternative — i.e. it would be unclickable.
+- SIZE: the arrows are track markings, so their GEOMETRY scales with the board;
+  their WEIGHT must not (that is what made the old widget unusable). Every stroke
+  width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
+  on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
+  capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
+  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
+  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
+  the "strange black dot" the player asked about; with entry-anchored arrows it
+  marked nothing. `switchHubAt` survives for the EDITOR, which centres its
+  authored-arm cycle zone on that point.
+- TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
+  the build tool's `.zone` edge targets and eat the click that would lay track
+  (the old edge-hugging box was too small to notice). PlayView passes
+  `:switch-interactive="!buildArmed && !razeArmed"`; the lakevalley-open e2e
+  catches it, because building the station junction reveals a fan mid-drag.
+- NOTHING IN A FAN MAY LOOK LIKE AN ARROW EXCEPT AN ARM. An early version put a
+  chevron on the entry marker to say "trains arrive here"; it read as an extra
+  arm, being colinear with the Straight arm and pointing the same way.
+- Arrows sit DEAD-CENTRE on the rail. An early 8px right-of-travel offset (to
+  separate the two directions of one arc) read as a misdrawn arrow — the player
+  said so. Centring is safe because opposing directions only co-exist AT REST,
+  where the short crop keeps each on its own end of the curve.
+- ARROW STYLE (chosen from a 4-variant mockup round, "A1/A3 hybrid"): a stroked
+  near-black body in a WHITE casing bending along the curve, finished with a
+  filled flat-backed triangle head (`HEAD_LEN`/`HEAD_HALF`; capped at 45% of a
+  short arrow's run). The SHAFT stops at the head's back — `railArrow` walks the
+  sampled arc length backwards, so don't reintroduce an even-t mapping (the unit
+  test checks point-on-curve, not parameters). SET arm = black body/white
+  casing; ALTERNATIVES = the inverse ghost (white body, dark casing) — current
+  vs available is a colour inversion, not an opacity guess. Head polygons scale
+  with the board (geometry); only stroke WIDTHS counter-scale.
+- RESTING FANS ARE TRANSLUCENT (`.switch-fan` opacity 0.55): quiet at rest, full
+  strength exactly when they matter — `--open` (train due OR pointer on it),
+  and always in the EDITOR (`.switch-layer--static`, an editing surface).
+  `--muted` (a train is due on a DIFFERENT entry) drops further, to 0.28.
+- WHICH FAN MATTERS: `Tile.approachEntry` promotes the fan whose NEIGHBOUR tile
+  holds a train pointing at us (`--armed`, glow) and mutes the rest. It keys off
+  the reactive `occupied` map — `updateReservations` refills that every frame
+  regardless of `switchLockMode` — and only then reads the markRaw'd
+  `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
+  proxied, so nothing would re-render.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
+  widget could only cycle, which is why reaching a specific exit on a 4-way took
+  up to three clicks and a guess.
+- EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
+  `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
+  `defaultArms` and persists, a different verb from the live throw. Its
+  `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
+  re-deriving it.
+- Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
 
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
@@ -905,7 +1029,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `npm run probe` walks the DOM instead and its coverage varies run to run
   (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
 - The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
-  BANKRUPTCY followed it (2026-07-27) — see the two sections above. NEXT UP
+  BANKRUPTCY followed it (2026-07-27), and the refund became a demolition FEE
+  with UNDO taking over the misdrag case — see the three sections above. NEXT UP
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
@@ -926,12 +1051,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   deletes the real install. Kill bg dev servers when done.
 
 ## BULLDOZE + GRIDLOCK (2026-07-26)
-- REFUNDS MUST TRACK PURCHASES, not track. `boughtPieces` (`game.ts`) records the
-  connection keys `buildRoute` actually charged for; `bulldoze` refunds only
-  those. Without it every board's AUTHORED rail is a cash machine — you would
-  bulldoze the pre-laid ring for income. You may raze anything (bar a depot);
-  only what you bought pays back. Full refund by design: bulldoze exists so a
-  misdrag is not fatal. A demolition FEE belongs with phase 3 clearing costs.
+- SUPERSEDED 2026-07-27 — bulldoze no longer refunds; see UNDO vs BULLDOZE. The
+  old rule ("refunds must track purchases, or the authored ring is a cash
+  machine") is gone with the refund itself: `boughtPieces` now only backs UNDO.
 - Removal is the mirror of the new-junction trap: an arm can be left pointing at
   an exit that no longer exists, and `connectionsToExitPort` answers NULL for
   that (train stops dead). `bulldoze` re-derives `initialSwitches` for the tile

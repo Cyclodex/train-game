@@ -250,8 +250,8 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (spec.fail?.onBankruptcy && (counters.unpaidTax ?? 0) > 0) {
         phase = "lost";
         lostReason =
-          "Bankrupt — the upkeep outgrew the railway. Build leaner, " +
-          "or bulldoze track you no longer need.";
+          "Bankrupt — the upkeep outgrew the railway. Deliver sooner, " +
+          "or build leaner: every piece costs money every year you keep it.";
         return;
       }
       if (

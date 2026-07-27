@@ -102,11 +102,12 @@
         📅 {{ dateLabel }}
         <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
         <!-- The warning that keeps bankruptcy a decision rather than an
-             ambush: while it shows, bulldozing surplus track both refunds now
-             and lowers the bill. Same job as the gridlock nudge — name the
-             failure before it lands, and name the fix. -->
+             ambush. Same job as the gridlock nudge: name the failure before it
+             lands, and name the fix — which is DELIVERING, because fares are
+             the income. Clearing surplus track is the second way out and it
+             costs a fee, so it is only worth it with years left to save. -->
         <span v-if="taxUnaffordable" class="score-tax-warn">
-          ⚠ can't pay next year
+          ⚠ can't pay next year — deliver, or clear surplus track
         </span>
       </div>
       <div
@@ -161,6 +162,20 @@
         <span class="build-toggle__icon">🧨</span>
         <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
       </button>
+      <!-- Undo is a THIRD control, not a mode: it reverses the last PURCHASE
+           rather than acting on the board, which is why it can be free while
+           Bulldoze costs. It only appears while there is a purchase to take
+           back, so it never sits there as a dead button. -->
+      <button
+        v-if="canUndoBuild"
+        class="build-toggle build-toggle--undo"
+        data-testid="undo-build"
+        :title="undoTitle"
+        @click="undoBuild"
+      >
+        <span class="build-toggle__icon">↩︎</span>
+        <span>Undo {{ undoLabel }}</span>
+      </button>
     </div>
     <!-- The jam nudge. Collisions are impossible here by construction, so
          DEADLOCK is the failure this game actually has, and without a word it
@@ -194,6 +209,7 @@
         gridTemplateColumns: `repeat(${bounds.cols}, ${config.tileSize}px)`,
         width: config.tileSize * bounds.cols + 'px',
         transform: levelTransform,
+        '--switch-scale': switchScale,
       }"
       @click="onBackgroundClick"
       @mouseup="onLevelPointerGone"
@@ -225,6 +241,7 @@
           :tile="cell.tile"
           :coord-id="cell.key"
           class="tile-component"
+          :switch-interactive="!buildArmed && !razeArmed"
         />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
@@ -518,6 +535,7 @@ import FarePin from "@/components/FarePin.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
+import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
 
 // The four tile edges, for the build tool's triangular hit-zones (same order as
@@ -818,7 +836,7 @@ class PlayView extends Vue {
   }
   get calendarTitle(): string {
     return this.taxUnaffordable
-      ? "Next year's upkeep is more than you have — bulldoze track you don't need, or finish first"
+      ? "Next year's upkeep is more than you have — deliver before the year turns, or clear track you don't need"
       : "The year, and this railway's annual upkeep";
   }
   get fareBadges(): FareBadge[] {
@@ -919,6 +937,11 @@ class PlayView extends Vue {
   }
   get levelTransform(): string {
     return this.cam.transform;
+  }
+  // Counter-scale for the junction switch fans, so a zoomed-out world does not
+  // shrink them back to the unusable size the old widget had. See switchFan.ts.
+  get switchScale(): number {
+    return switchFanScale(this.camera.zoom);
   }
   // Also a method: it reads `viewportSize()`, which is not a reactive dependency.
   worldOverflows(): boolean {
@@ -1033,8 +1056,32 @@ class PlayView extends Vue {
   get razeToggleTitle(): string {
     const how = "Click a piece of track to remove it.";
     return this.game.money.enabled
-      ? `Bulldoze track — refunds what you paid for it. ${how}`
+      ? `Bulldoze track — costs a demolition fee, and never pays back. ${how}`
       : `Bulldoze track. ${how}`;
+  }
+
+  // --- undo ------------------------------------------------------------------
+  // Reverses the last PURCHASE, not the board: full money back, no fee. It is
+  // the answer to a misdrag, and keeping it apart from Bulldoze is what lets
+  // the demolition price be honest (see CLEARING_COST_PER_TILE).
+  get canUndoBuild(): boolean {
+    // Through the reactive ref, not the method: `game` is markRaw'd, and
+    // dispatching clears the window without touching `levelVersion`, so there
+    // would be nothing else to re-evaluate on.
+    return this.game.undoable.value.pieces > 0 && this.game.canUndoBuild();
+  }
+  get undoLabel(): string {
+    const v = this.game.undoable.value.value;
+    return v > 0 ? `(+$${v.toLocaleString("en-US")})` : "";
+  }
+  get undoTitle(): string {
+    return (
+      "Take back the last track you bought — full price returned, no fee. " +
+      "Available until you build again, bulldoze, or send a train."
+    );
+  }
+  undoBuild(): void {
+    this.game.undoBuild();
   }
 
   toggleRaze(): void {
@@ -1331,6 +1378,16 @@ class PlayView extends Vue {
   private boundKeyup!: (e: KeyboardEvent) => void;
 
   handleBuildKeydown(e: KeyboardEvent): void {
+    // Ctrl/Cmd+Z is checked BEFORE the buildArmed gate: the whole point of undo
+    // is that it is reachable after you have put the tool down and noticed the
+    // mistake. Everything below it is build-mode-only.
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      if (this.canUndoBuild) {
+        e.preventDefault();
+        this.undoBuild();
+      }
+      return;
+    }
     if (!this.buildArmed) return;
     if (e.key === "Escape") {
       this.routeCtrl.finishRoute();
@@ -1652,6 +1709,16 @@ export default toNative(PlayView);
   background: linear-gradient(90deg, #f2a488, #d9663f);
   border-color: rgba(242, 164, 136, 0.8);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(217, 102, 63, 0.45);
+}
+// Undo is not a mode, so it never gets the armed treatment — it is a plain
+// action that appears only while there is a purchase to take back.
+.build-toggle--undo {
+  color: #cfe6d6;
+  border-color: rgba(95, 211, 154, 0.5);
+
+  &:hover {
+    background: rgba(95, 211, 154, 0.16);
+  }
 }
 // Only tiles that would actually go light up, so the affordance never promises
 // a removal the guard will refuse.

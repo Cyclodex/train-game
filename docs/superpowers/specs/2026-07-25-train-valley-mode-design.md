@@ -549,6 +549,30 @@ board to do it on.
 | **`/test/taxyear`** | The mechanic in isolation: a line with a two-tile gap, a 10-second year and $300 a piece, dialled for *watching* rather than for balance. Close the gap cheaply or scenically and the upkeep line remembers which; bulldoze and it falls. |
 | **`game.advance(dt)`** | The frame body minus rendering, extracted so the loop is testable headlessly. `game.sim.step()` moves trains only — no fares, no levy, no tracker — and a hidden browser pane runs no `requestAnimationFrame` at all, so this is the only honest way to unit-test anything loop-shaped. |
 
+#### Undo vs bulldoze, as built (2026-07-27)
+
+Bulldoze used to refund in full. Raised by the player as unrealistic — *"das hat
+ja nichts mit der richtigen Welt zu tun"* — and they were right, but the
+interesting part is *why* the price had gone wrong: one button was doing two
+jobs. It had to be the escape hatch for a **misdrag**, which is an input error,
+and the removal of a **railway**, which is a world event. No single price can be
+honest about both.
+
+Every builder that solves the first one well solves it with **undo**, not with
+economics (Cities: Skylines 2, Planet Coaster, Foundation). Refunds for
+demolition are rare outside RollerCoaster Tycoon; SimCity charges to bulldoze,
+Cities: Skylines returns nothing, Anno/Tropico take a small fee. So the fix was
+to split the verb rather than to pick a compromise number.
+
+| | |
+|---|---|
+| **Undo** | `game.undoBuild()` — reverses the last PURCHASE. Rails go, full price back as an `adjustment`, no fee; `trackSpent` and `tilesBuilt` both fall, because the buy never really happened. That is what lets "Under budget" survive a fumbled drag while still refusing to survive an over-build the player *kept*. `Ctrl+Z` or a button that only exists while there is something to take back. |
+| **The window** | Closes on what the PLAYER does — the next build replaces it, a bulldoze or a **dispatch** drops it — and never on a clock. A window that closes by itself is an invisible timer, which is precisely what undo was chosen over. Only the LAST gesture is ever undoable, so "undo the level at the end" is not a strategy. |
+| **Bulldoze** | Removes a RAILWAY for `CLEARING_COST_PER_TILE` ($300, 30% of the build price), booked under the `"clearing"` reason `economy.ts` had reserved for it. It never pays back, it costs the same for authored track as for bought track (the old "only what you bought pays back" guard is unnecessary once nothing pays back), and `trackSpent` does **not** fall — you spent that money, and a goal about build discipline must not be winnable by razing the evidence. |
+| **The decision the two prices make** | Clearing is priced *above* a year's upkeep on the same piece ($300 vs $150 on `lakevalley-open`), so razing surplus track pays for itself only with years left to run. Early in a run it is worth it; late it is not. |
+| **Why the insolvency warning changed its advice** | It used to say "bulldoze track you no longer need", which was reliable only while clearing paid. Now clearing costs money and `bulldoze` refuses a fee the balance cannot cover, so the warning names **delivering** first — fares are the income — and clearing second. It is also only an escape where there is *surplus*: razing part of a minimal link just re-opens the gap. |
+| **Trap** | A gesture can buy nothing, and must then not replace the undo window. The Esc-finish whose terminus duplicates existing rail fires after *every* real gesture — recording it as "the last purchase" set the window to zero pieces and the undo control vanished the instant the drag ended. Only reproducible through the real gesture, so it is pinned by an e2e as well as a unit test. |
+
 #### Bankruptcy, as built (2026-07-27)
 
 The tax's other half, and the reason it was promoted from nicety to gap the day
@@ -563,7 +587,7 @@ can offer.
 | **On the way down** | The company pays what it has (being broke must not be free), records the shortfall, and stops billing there. Piling every later levy on says nothing more — "$18,000 short" and "$600 short" end the same run — and would ruin the number as a diagnostic. |
 | **The warning is the feature** | `money.taxUnaffordable` turns the calendar row red with *"can't pay next year"* a whole year before the bill lands, and the fix it names — **bulldoze** — works twice over: it refunds what you paid *and* lowers the next bill. Without that, a fail state the player cannot see coming is an ambush. Same shape as the gridlock nudge: name the failure and name the fix. |
 | **Declared mode-wide** | `fail: { onBankruptcy: true }` for all of Tycoon rather than per board, because it is self-gating — no calendar ⇒ no levy ⇒ no shortfall. `buildgap` and `/test/dispatch` carry the flag and never feel it. |
-| **`/test/bankrupt`** | $5,000, an eight-second year, $600 a piece: the annual bill is a countdown, not a drip. Measured — prompt run won at 15.7s banking $2,321; relaxed won at 22.7s banking $1,086; dawdling folded at 26.0s, $600 short. The exits are the ones M12 already gave us: Retry, or Keep playing. |
+| **`/test/bankrupt`** | $6,000, an eight-second year, $600 a piece: the annual bill is a countdown, not a drip. Measured — prompt run won at 15.7s banking $3,315; relaxed won at 24.7s banking $855; dawdling folded at 32.0s, $800 short, warned from 24s. The exits are the ones M12 already gave us: Retry, or Keep playing. |
 | **Knock-on** | A Tycoon board that *deadlocks* now eventually folds rather than stalling forever. The gridlock nudge still fires first and names the real cause, so the player is told the truth before the bank is. |
 
 ### Scorecard against §1.2 — mechanic by mechanic
@@ -573,7 +597,7 @@ can offer.
 | M1 | Money is the master resource | **Done for the core** | Two sinks now: track, and the **annual upkeep** on the track you laid. On `lakevalley-open` a prompt full rebuild pays $2,100 of tax against $1,760 earned — the railway costs more to hold than it earns, so the balance is a decision rather than a readout. Still missing (and now merely additive): clearing, and calling trains. |
 | M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
 | M3 | Build from an open end into marked land | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: the *green plot* mask (buildable land as an authored, rendered thing) and the dashed "close this gap" hint — the gap is only visible as missing rails. |
-| M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing scenery for money** — forest and town are free to build over today, with no clearing action and no price. |
+| M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing SCENERY for money** — forest and town are free to build over. (Clearing your own TRACK is priced as of 2026-07-27, `CLEARING_COST_PER_TILE`; the reason is reserved and the pattern is set.) |
 | M5 | Trains wait until dispatched | **Done** | — |
 | M6 | Each train has one explicit destination | **Partial → load-bearing** | Colour matching guarantees a solvable, reachable pairing, and the authored destination now **prices the fare** (`TrainDef.destinations` → `demandTilesOf`), so it is real data rather than debug decoration. Still missing: the sim parks in *any* colour-matching depot, and there is no destination badge under the fare pin. That badge is G4, still S. |
 | M7 | The fare decays with time, including while waiting | **Done** | — |
@@ -596,7 +620,7 @@ what separates *the loop works* from *a finished mode*.
 1. ~~**Annual tax + calendar**~~ **DONE** (2026-07-26) — see "The second clock, as built".
 2. ~~**A bankruptcy state**~~ **DONE** (2026-07-27) — see "Bankruptcy, as built".
 3. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting. This is now the last sliver of the mode's own scope.
-3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). Bulldoze exists already; what phase 3 adds here is a demolition/clearing PRICE.
+3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). The demolition PRICE landed early (2026-07-27, `CLEARING_COST_PER_TILE`) because bulldoze's full refund had to go; what is left here is clearing SCENERY, at the same reason code.
 4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
 5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
 6. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
@@ -610,10 +634,10 @@ Carried forward from the last session and still open:
 - **Dynamic trains (G6).** `PlayView` renders `<Train v-for="t in trains">` from a
   fixed list, so player-called trains need either a pre-declared pool (cheap,
   enough for a campaign level) or real dynamic sprites.
-- ~~Removal / bulldozing~~ **DONE** (`game.bulldoze`): refunds only pieces the
-  player bought (`boughtPieces`), refuses depots and any tile a train occupies
-  or has reserved — which is also the answer to "what if a reserved block runs
-  through the deleted tile". A demolition FEE still belongs with phase 3.
+- ~~Removal / bulldozing~~ **DONE** (`game.bulldoze`), and re-priced 2026-07-27:
+  it charges `CLEARING_COST_PER_TILE` and never refunds, with `undoBuild()`
+  taking over the misdrag case. Refuses depots, any tile a train occupies or has
+  reserved, and a fee the balance cannot cover.
 - **`generateLevel` does not paint terrain yet**, so generated and daily boards
   are still bare grass. Contained work, and it is what makes procgen levels look
   like places.
@@ -633,6 +657,29 @@ Carried forward from the last session and still open:
   turnout. Open-end growth is the honest gesture; real turnouts are a phase-3
   question, and the reason the build targets were NOT narrowed to open ends only
   (lakevalley-open needs an interior-edge start to buy its station junction).
+
+### Deferred with a trigger: loans
+
+Raised while building bankruptcy — *"man kann ein Darlehen nehmen, das aber auch
+kostet und zurückbezahlt werden kann"*. It is the classic answer, and the
+classic answer to a different genre: OpenTTD starts you *with* a loan and
+charges interest, Railroad Tycoon has bonds and a board that can fire you,
+SimCity issues them annually. What those share is a **persistent company** whose
+run lasts hours, where one bad quarter must not end everything.
+
+Our Tycoon levels last 35–95 seconds and Retry is one click, so a loan would be
+more mechanic than the thing it protects — and it would work against the tax.
+Three concrete objections:
+
+1. §1.3's virtue is **one resource**; principal, interest and repayment are a
+   second money concept needing their own tutorial.
+2. The tax says *finish*. A loan says *or don't, borrow instead*. They argue.
+3. There are already two outs that cost nothing to maintain: the year-ahead
+   warning, and Retry.
+
+**The trigger for revisiting:** a campaign (G8) or an endless/sandbox Tycoon,
+where a run spans many levels or many minutes. Then "a bad year must not end the
+company" becomes true and the loan is the right answer.
 
 ### The next step, concretely: goals on the Ready card
 
@@ -655,6 +702,128 @@ player-called trains, and the road layer joining the economy.
 
 ---
 
+## 9. Progression — what changes level to level (2026-07-27)
+
+Researched 2026-07-27. §8 says the mode's *mechanics* are nearly finished. This
+section is the layer above them: what a campaign varies from level to level, why
+Train Valley's own campaigns lose people, and the rules we adopt so ours does not.
+(Numbered 9 because §8 was claimed by the status section while this was being
+written; §§1–7 keep their numbers.)
+
+### What Train Valley actually changes over a campaign
+
+**TV1** — four "seasons", each a *time span* rather than a place: Europe
+1830–1980, America 1840–1960, USSR 1880–1980, Japan 1900–2020 (Germany on
+console). Rolling stock ages with the decades inside a season. Levels hang on real
+events: the 1849 Gold Rush, the Florida Overseas Railroad, WWII, the Cold War,
+Vostok 1.
+
+The difficulty curve is expressed almost entirely **in one currency**. Budget
+management "starts to cause occasional bankruptcies on the US levels", becomes
+"critical" on the USSR ones, and the Japan levels "were the original end game
+where players started having to make multiple attempts."
+
+Three modes, three session shapes: **story** (5–10 min levels), **random**
+(15–20 min, procedurally different each launch), **sandbox** (no time or money).
+
+**TV2** — 50 levels over five ages (Steam, Industrial, Electrical, Globalization,
+Space), each age adding a mechanic: cargo types, then workers, then electricity.
+
+### What works
+
+1. **The pressure that rises is one number the player already understands.** No
+   new systems in the back half; money just gets tighter, so the late game tests
+   the skill the early game taught.
+2. **Era is a free novelty dial** — same mechanics, new look and new trains each
+   chapter. Cheap to build, and it makes a run feel like it is going somewhere.
+3. **5–10 minute levels.** The single biggest retention lever. Short enough that a
+   failure costs nothing and "one more" is always cheap.
+4. **Every level has a nameable hook.** "The Gold Rush one." "The Vostok one." A
+   level with an identity is remembered; without one, twenty-four levels blur.
+5. **Three modes for three moods** — authored, infinite, pressure-free. The same
+   shape this project already has (puzzle / daily / sandbox).
+
+### What leaks the interest — TV2 is the cautionary tale
+
+1. **Difficulty by micromanagement instead of by decision.** Later levels add
+   trains and switches, so the challenge becomes hand speed. Players report
+   abandoning the 5-star chase **around level 10 of 50** because it "suddenly
+   became a royal pain."
+2. **Stars that punish instead of reward.** "Don't let any train enter a wrong
+   station" across a 40-train level is a single-mistake fail spread over twenty
+   minutes; stacked with three time tiers it becomes work.
+3. **Level length inflation.** TV1's 5–10 minutes became TV2's long chain levels.
+   A failed 30-minute run is a bad trade, so players stop retrying — and then stop.
+4. **A same-y middle.** "Tedious once you're around one-third of the way in…
+   almost all the same, with more or less the same difficulty." The level count
+   kept rising after the dials stopped moving.
+5. **Tone whiplash.** TV2 opens relaxed and methodical, then "ruins that
+   relaxation by cramming in every stress-building challenge." It never decides.
+6. **Nothing accumulates.** Every level starts from zero and stars only unlock the
+   next one, so no thread pulls the player through fifty of them.
+
+### The rules we adopt
+
+- **Difficulty comes from decisions, not from hands.** The test: if a level gets
+  harder at 4× speed but not when you think about it longer, it is the wrong kind
+  of hard. This is the rule TV2 broke and the one this engine is best placed to
+  keep — interlocking makes *which route do I set* a thinking problem, where
+  *click forty switches faster* is a reflex problem.
+- **Levels stay 5–8 minutes.** A hard cap. If a level needs longer, it is two
+  levels.
+- **Three orthogonal stars, never tiers of one axis** — and a perfection star
+  ("no mismatches") only on a *short* level, where a retry costs a minute.
+- **One new dial per level, then combine.** Never two.
+- **Every level gets a name and a one-sentence hook.** TV1's historical
+  set-pieces are this trick with a research budget; our map shapes can do it free.
+- **The rising pressure is money, and it rises because of what the player built.**
+  The annual levy already scales with the network (§8) — keep that as the curve,
+  because a late-game squeeze that emerges from your own success beats one a
+  designer typed in.
+- **Something accumulates.** Cheapest version: tools unlock in teaching order —
+  signals, then bridges, then crossings — so the campaign's progression *is* its
+  tutorial.
+- **One tone per mode.** The campaign is tight; the network builder (§7) is chill.
+  Do not blend them.
+
+### The dials
+
+Board size · terrain hostility (how far the detour) · starting capital vs.
+required spend · demand rate · **single-track sections that force interlocking** ·
+**level crossings and road density** · fare-decay steepness.
+
+The last two are ours alone, and they should carry the back half of the campaign —
+that is where Train Valley has nothing to compare against.
+
+### A first arc — eight levels, each 5–8 minutes
+
+| # | Name | New dial |
+|---|---|---|
+| 1 | The Lake | Build around terrain. Two stations, generous money, no clock. |
+| 2 | The Fork | Switches — one junction, two destinations. |
+| 3 | The Squeeze | Money. A tight budget forces the short, awkward route. |
+| 4 | Single Track | Signals and a passing loop. **The dial nobody else has.** |
+| 5 | The Crossing | Road interaction — one level crossing, cars queue on the boom. |
+| 6 | Rush Hour | Combine: demand up, two crossings, no new mechanic. |
+| 7 | The Bypass | Bridge vs. crossing as a money decision. |
+| 8 | The Valley | Everything, levy biting. No new mechanic — this one tests. |
+
+Note the shape: nothing new after level 7, and the two hardest levels are
+*combinations* rather than additions. That is the anti-TV2 move.
+
+**Level 1 already exists**: `lakevalley-open` is exactly "The Lake" — a severed
+ring around an unbuildable lake with a budget that buys it back.
+
+### The content answer
+
+TV1 already showed the right structure for a small team: a **short authored
+campaign** plus **procgen** plus **sandbox**. Eight hand-made levels is a weekend
+of design, not a year, and the daily seeded puzzle plus the chill network mode
+(§7) carry everything after level 8. The procgen, the editor and a deterministic
+sim that makes dailies comparable are all already here.
+
+---
+
 ## Sources
 
 - [The Challenge of Train Valley — The Ancient Gaming Noob](https://tagn.wordpress.com/2017/01/23/the-challenge-of-train-valley/)
@@ -673,3 +842,8 @@ player-called trains, and the road layer joining the economy.
 - [Train Valley 2 reviews — Steambase](https://steambase.io/games/train-valley-2/reviews)
 - [Train Valley — Metacritic](https://www.metacritic.com/game/train-valley/)
 - [Train Valley World review — Geeky Hobbies](https://www.geekyhobbies.com/train-valley-world-indie-video-game-review/)
+- [Flazm presskit — Train Valley](https://flazm.com/pr-train-valley) (seasons,
+  eras, mode session lengths; §9)
+- [TV2 Community Edition review — TheXboxHub](https://www.thexboxhub.com/train-valley-2-community-edition-review/)
+- [Steam — "Disappointed" thread, TV2](https://steamcommunity.com/app/602320/discussions/1/1812044473321542242/)
+  (the level-10 star abandonment; §9)

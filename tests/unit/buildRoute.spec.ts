@@ -74,7 +74,7 @@ describe("terrain-priced building", () => {
     expect(game.money.spent).toBe(0);
   });
 
-  it("charges the wood surcharge and refunds a bulldozed piece at the price paid", () => {
+  it("charges the wood surcharge, and undo hands back exactly what was paid", () => {
     const level = gapLevel();
     level["3,1"] = { connections: [], terrain: "forest" };
     const game = tycoonGame(level);
@@ -83,11 +83,12 @@ describe("terrain-priced building", () => {
     expect(game.buildRoute(gapSteps)).toEqual({ ok: true, blocked: [] });
     expect(game.money.balance).toBe(STARTING_BALANCE - expected);
 
-    expect(game.refundOf("3,1")).toBe(1.5 * TRACK_COST_PER_TILE);
-    expect(game.bulldoze("3,1")).toEqual({ ok: true, blocked: [] });
-    expect(game.money.balance).toBe(STARTING_BALANCE - TRACK_COST_PER_TILE);
-    // The ground itself survives the bulldozer — only the rails go.
+    // Undo reverses the purchase at the terrain-priced cost — the surcharge
+    // comes back with the base rate, and the ground itself never moves.
+    expect(game.undoBuild()).toEqual({ ok: true, blocked: [] });
+    expect(game.money.balance).toBe(STARTING_BALANCE);
     expect(level["3,1"]?.terrain).toBe("forest");
+    expect(level["3,1"]?.connections ?? []).toHaveLength(0);
   });
 
   it("keeps plain grass at the base rate", () => {
