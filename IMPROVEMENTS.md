@@ -101,8 +101,11 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 
 ## Road traffic
 
-0. **PARKING — the next four pieces**, written up with the measurements that are
-   their acceptance criteria: `docs/handoff-parking-next.md`. The pivot-arc
+0. **PARKING — start here**: `docs/handoff-parking-branch.md` is the branch
+   handover (what this branch is, what state it is in, and the modularisation to
+   do first). The four outstanding pieces are written up with the
+   measurements that are their acceptance criteria in
+   `docs/handoff-parking-next.md`. The pivot-arc
    reverse (which unblocks reverse-parking for 90°/echelon bays), right of way
    when leaving a bay, a slower reversing speed, and the echelon apron that
    overhangs its tile. Take them in that order — the first two are the ones the
