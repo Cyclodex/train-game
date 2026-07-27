@@ -73,6 +73,8 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    sized and sequenced. The first two are S each and are the next commits.
    Two loose ends from the same work: `generateLevel` and `demoworld` paint no
    terrain yet, so generated/daily boards and `/play`'s demo are still bare grass.
+   The generator half is designed and ready to build:
+   `docs/superpowers/specs/2026-07-28-procedural-terrain-generation-design.md`.
 2. **A road-first game mode**. "Keep the city flowing": move N cars through the
    map inside a time limit without any car waiting too long. The counters
    (`maxCarWaitSec`, `carsDelivered`) and the objective state machine already
