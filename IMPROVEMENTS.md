@@ -65,16 +65,20 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 
 ## Gameplay
 
-1. **Finish the Tycoon mode** (the active thread). The loop works; the ordered
-   remainder — annual tax + calendar clock (what gives the money bite), goals on
-   the Ready card, clearing costs + buildable plots, destination badges, briefing
-   screen, campaign, player-called trains, the road layer joining the economy —
-   lives in `docs/superpowers/specs/2026-07-25-train-valley-mode-design.md` §8,
-   sized and sequenced. The first two are S each and are the next commits.
-   Two loose ends from the same work: `generateLevel` and `demoworld` paint no
-   terrain yet, so generated/daily boards and `/play`'s demo are still bare grass.
-   The generator half is designed and ready to build:
-   `docs/superpowers/specs/2026-07-28-procedural-terrain-generation-design.md`.
+1. **Finish the Tycoon mode** (the active thread). The loop works, and as of
+   2026-07-27 so do the annual tax + calendar, bankruptcy, land prices, **goals on
+   the Ready card** and an **ordered campaign** with unlocks and a next-level exit.
+   The ordered remainder — coach-marks (the biggest gap now: level 1 introduces
+   three verbs and explains none), buildable plots + the dashed gap hint,
+   destination badges, briefing screen, player-called trains, bridges, the road
+   layer joining the economy — lives in
+   `docs/superpowers/specs/2026-07-25-train-valley-mode-design.md` §8 and
+   `…2026-07-27-campaign-and-levels-design.md` §A4, sized and sequenced. The
+   eight designed levels are Part B of the latter; seven need no engine work.
+   One loose end from the same work: `demoworld` still paints no terrain, so
+   `/play`'s demo board is bare grass (generated and Daily boards now have ground).
+   The wider terrain roadmap (demoworld, farmland, rivers+bridges, industry) is
+   `docs/superpowers/specs/2026-07-28-terrain-roadmap-handoff.md`.
 2. **A road-first game mode**. "Keep the city flowing": move N cars through the
    map inside a time limit without any car waiting too long. The counters
    (`maxCarWaitSec`, `carsDelivered`) and the objective state machine already

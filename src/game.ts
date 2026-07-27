@@ -33,7 +33,12 @@ import { makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
-import { ObjectiveState, Observation } from "@/sim/objectives";
+import {
+  GoalSpec,
+  ObjectiveState,
+  Observation,
+  goalsOf,
+} from "@/sim/objectives";
 import {
   createEconomy,
   createFareBook,
@@ -413,6 +418,12 @@ export interface Game {
   // no mode without `controls.dispatch` ever has one, so this is a no-op there.
   dispatch(trainId: string): boolean;
   mode: GameMode;
+  // The board's goals as TARGETS, readable before the run starts. A plain
+  // field, not a getter: mode.setup() runs exactly once (reset() rebuilds the
+  // sims and the tracker but never re-runs setup), so this cannot go stale.
+  // Deliberately not `objective.stars`, which is re-projected every frame and
+  // whose `earned` flags are true-by-default over zeroed counters.
+  goals: GoalSpec[];
   // Reactive snapshot of the objective tracker, refreshed each frame.
   objective: ObjectiveState;
   // Reactive live crossing-flow snapshot (the *current* worst car wait, not the
@@ -1114,6 +1125,7 @@ export function createGame(
   // The objective tracker for the active mode, driven by the per-tick observation.
   const setup = mode.setup({ level, trains: trainDefs, levelId });
   const tracker = mode.createObjective(setup);
+  const goals = goalsOf(setup.objective);
   const spawner = mode.createSpawner?.(setup);
 
   // --- the economy -----------------------------------------------------------
@@ -1384,8 +1396,33 @@ export function createGame(
   // those edits is also exactly the rule a player expects: you cannot rip up
   // track under a moving train. The correctness guard and the game rule are the
   // same line.
+  // Tiles an edit may not touch: any a train occupies or has reserved, because
+  // a train's segment caches the exit it committed to and its reservations name
+  // tiles by id — change the track under either and both go stale.
+  //
+  // With ONE exception, and it is the difference between a rescue and a dead
+  // board: a train that has RUN OUT OF TRACK has committed to no exit at all.
+  // Nothing it is doing can be contradicted by laying the rail it is waiting
+  // for. Without this, the tile a stranded train stands on is exactly the tile
+  // the player needs to build on, and the tool refuses — the rescue has to be
+  // drawn from the far side, which is neither obvious nor always possible.
+  // Lake Valley reaches this state honestly: buy the ring but not the station
+  // entry, and the yellow train leaves its own depot onto a tile with no way
+  // out and sits there.
   function editBlockers(tileIds: string[]): string[] {
-    return tileIds.filter(id => sim.occupiedBy(id) || sim.reservedBy(id));
+    return tileIds.filter(id => {
+      const claimants = new Set<string>();
+      const occupant = sim.occupiedBy(id);
+      const reserver = sim.reservedBy(id);
+      if (occupant) claimants.add(occupant);
+      if (reserver) claimants.add(reserver);
+      if (claimants.size === 0) return false;
+      // Editable only if EVERY train laying claim to this tile is stranded on
+      // it. A train whose tail merely lies here still blocks: the segment under
+      // its wagons carries a committed exit.
+      const stranded = sim.strandedOn(id);
+      return ![...claimants].every(t => stranded.includes(t));
+    });
   }
 
   function canEdit(tileIds: string[]): boolean {
@@ -1396,6 +1433,12 @@ export function createGame(
     const ids = [...new Set(steps.map(s => s.id))];
     const blocked = editBlockers(ids);
     if (blocked.length > 0) return { ok: false, blocked };
+
+    // Whoever was stranded on these tiles BEFORE the edit. Collected first,
+    // because once the rail is laid they are no longer stranded by the test
+    // above — and they are exactly the trains whose dead-ended head segment
+    // still points nowhere.
+    const rescued = new Set(ids.flatMap(id => sim.strandedOn(id)));
 
     for (const s of steps) {
       level[s.id] = addConnection(level[s.id] ?? { connections: [] }, s.a, s.b);
@@ -1415,6 +1458,11 @@ export function createGame(
     signalTiles = Object.entries(level)
       .filter(([, tile]) => tile.signals && tile.signals.length > 0)
       .map(([id]) => id);
+
+    // Point the rescued trains at the track that now exists. Their head segment
+    // was built when the tile had no way out, so without this they would move
+    // off while still being DRAWN along the stub they dead-ended on.
+    for (const id of rescued) sim.releaseStranded(id);
 
     levelVersion.value++;
     return { ok: true, blocked: [] };
@@ -1751,6 +1799,7 @@ export function createGame(
       return sent;
     },
     mode,
+    goals,
     objective,
     roadFrame,
     start() {

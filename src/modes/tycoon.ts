@@ -160,16 +160,19 @@ function tycoonStars(maxPayout: number): StarSpec[] {
     {
       id: "payday",
       label: `Payday (${payday})`,
+      hint: "Bank at least that much in fares",
       predicate: (c: Counters) => (c.earned ?? 0) >= payday,
     },
     {
       id: "hands-off",
       label: "Hands off",
+      hint: "Win without holding or forcing a single signal",
       predicate: (c: Counters) => c.manualHolds + c.manualGreens === 0,
     },
     {
       id: "perfect-colours",
       label: "Perfect colours",
+      hint: "No train ever arrives at the wrong station",
       predicate: (c: Counters) => c.mismatchedArrivals === 0,
     },
   ];
@@ -301,6 +304,7 @@ function lakevalleyOpenStars(): StarSpec[] {
     {
       id: "payday",
       label: `Payday ($${LAKEVALLEY_OPEN_PAYDAY.toLocaleString("en-US")})`,
+      hint: "Bank at least that much in fares - send trains promptly",
       predicate: (c: Counters) => (c.earned ?? 0) >= LAKEVALLEY_OPEN_PAYDAY,
     },
     {
@@ -314,11 +318,13 @@ function lakevalleyOpenStars(): StarSpec[] {
       // balance. Splitting the STAR is the smaller, truer change.
       id: "under-budget",
       label: `Under budget ($${LAKEVALLEY_OPEN_LEAN_SPEND.toLocaleString("en-US")})`,
+      hint: "Spend no more than that on track",
       predicate: (c: Counters) => (c.trackSpent ?? 0) <= LAKEVALLEY_OPEN_LEAN_SPEND,
     },
     {
       id: "rail-baron",
       label: `Rail baron (${LAKEVALLEY_OPEN_RING_PIECES} pieces)`,
+      hint: "Buy the full restoration - rules out Under budget",
       predicate: (c: Counters) =>
         (c.tilesBuilt ?? 0) >= LAKEVALLEY_OPEN_RING_PIECES,
     },

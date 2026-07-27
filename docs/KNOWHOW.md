@@ -284,6 +284,114 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## BUILDING UNDER A STRANDED TRAIN (2026-07-27)
+- The old rule was "no edit on any tile a train occupies or has reserved",
+  because a segment caches the exit it committed to and reservations name tiles
+  by id. ONE exception now: a train that has RUN OUT OF TRACK has committed to
+  no exit at all, so laying the rail it is waiting for contradicts nothing.
+- `sim.strandedOn(tileId)` = trains whose HEAD sits there and whose live
+  `traverse` gives no next (and is not a depot Center — that is docking, not
+  stuck). Asks the LEVEL, not the cached exit, because the cache is the thing
+  the rescue is about to change. A train held at a RED SIGNAL has somewhere to
+  go and is therefore NOT stranded — it still blocks.
+- A tile is editable iff EVERY train claiming it (occupancy OR reservation) is
+  stranded on it. A train whose TAIL lies there still blocks: the segment under
+  its wagons carries a committed exit. Note a stranded train reserves its own
+  body tiles, so the reservation check has to be per-train, not a bare truthy test.
+- After the edit, `sim.releaseStranded(id)` re-derives the head's exit — and
+  ONLY when it is still null. Without it the train moves off while still being
+  DRAWN along the stub it dead-ended on; rewriting a committed exit would
+  teleport the body onto a different curve.
+- WHY IT MATTERS: `lakevalley-open` reaches this state honestly. Buy the 5-piece
+  ring and skip the station entry and 2,5 is [N,E] — the train leaving the
+  yellow depot enters from the SOUTH, finds no partner, and strands directly
+  above its own station. The depot sprite underneath makes it look docked, so it
+  gets reported as "the train went into the depot but did not count". The rescue
+  is 2,5's missing link, i.e. the tile the train is standing on. E2e:
+  "a train that ran out of track can be rescued from the tile it is stuck on".
+
+## GENERATED TERRAIN (2026-07-27)
+- `generateTerrain.ts paintTerrain` gives procgen + Daily boards their ground.
+  Painted LAST, and ONLY into coordinates absent from the level — that one guard
+  IS the safety property: `validateLevel`'s single terrain branch requires
+  `connections.length > 0 || road.length > 0`, so a painted cell provably cannot
+  raise an issue nor silence one. Pinned by a test comparing the validator's
+  verdict with and without terrain across 30 seeds.
+- ITS OWN RNG STREAM (`makeRng(seed ^ 0x7e44a1)`). One extra draw from the
+  generator's `rand` would re-roll the depot shuffle for EVERY seed that already
+  exists — Daily's fixed seed would silently produce a different map. Guarded by
+  a test asserting the topology of seeds 1..30 is byte-identical with terrain on
+  and off (comparing `terrain:false` against itself would be tautological).
+- THE INTERIOR IS NOT EMPTY. The loop is a rectangle inset by 1, so the lake goes
+  inside it with no routing risk — but the generator also places DEPOTS in there,
+  so depot cells and their four neighbours are excluded from the water pool on
+  BOTH sides of the ring, not only in the margin. A depot walled in by water is
+  legal and unextendable, which reads as a bug rather than as terrain.
+- A LAKE NEEDS A RING WITH AN INSIDE. 7x6 (what Daily generates) encloses ~6
+  cells, most of them depot-adjacent, and correctly comes out with no water at
+  all; 10x8 has room. Both pinned, so neither reads as a regression later.
+- Unbuildable margin is CAPPED (22%): `planRoute` refuses water/rock/mountain, so
+  an over-stony map is one the random-map button cannot draw on.
+- Grass is never emitted (it is stored as ABSENT), and every cell gets a FRESH
+  literal — a shared one would let one in-play edit mutate the whole lake.
+- Bounds grow: a generated board now renders its full width x height, because
+  terrain-only cells count toward `levelBounds`. Intended.
+
+## CAMPAIGN (2026-07-27)
+- `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
+  star total. Headless and pure, so the progression is unit-tested without a DOM.
+- NO NEW PERSISTED KEY. Unlock is DERIVED from `objectiveStore`, which PlayView's
+  phase watcher already writes on a win under `board:<scenarioId>`. So "cleared"
+  is `loadBest(...) !== null`. A second store would be a second source of truth.
+- CLEARED IS A NULL CHECK, never `stars > 0`. A scraped zero-star win is a win;
+  gating on a star would strand a player who beat a board the hard way.
+- A campaign level IS a /test scenario id — no new board plumbing. But the entry
+  MUST carry its own `modeId`: `PlayView` resolves the mode from `?mode=` or the
+  last-used mode and IGNORES `scenario.modeId` (only `TestStage` honours that),
+  so a level pushed without it silently runs under whatever was played last.
+- Navigation is `$router.push({name:"play", query:{mode, board}})`. `App.vue`
+  keys the router-view on the full path, so a query change fully REMOUNTS
+  PlayView and every class-field initialiser re-runs against the new hash.
+- A TYPO IN A LEVEL ID FAILS SILENTLY, twice over: `scenarioById` returns the
+  registry's FIRST entry for an unknown id, and PlayView falls through to the
+  default board. Hence the unit test asserting every id is in `SCENARIOS`.
+- SEED LEVELS MUST BE PROVEN WINNABLE — the unlock rule is a chain, so an
+  unwinnable level is a wall across the whole campaign, not a hard level.
+  Measured 2026-07-27: `dispatch` and `faredistance` deliver ONE of their two
+  trains and then run forever (`mismatchedArrivals` climbing — the second train
+  bounces off a deliberately mismatched depot). They are shuttle demos of a
+  mechanic, like `/test/rollingstock`, NOT levels. Only boards with an e2e that
+  reaches `phase === "won"` are seeded.
+- `CampaignView` reads storage ONCE in `created()` into plain fields. Getters are
+  cached computeds over a non-reactive source — it would freeze at its first read.
+- It is a SCREEN (`/campaign`), not a mode: a `GameMode` is a ruleset with a
+  `setup()` to run, a campaign is an index over boards.
+
+## GOALS ON THE READY CARD (M9, 2026-07-27)
+- A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
+  over `zeroCounters()`, and most goals hold trivially there — "no signal was
+  overridden" and "no train went to the wrong station" are both true of a run
+  that has not happened. So NOTHING scored may be shown in the ready phase.
+  This had already shipped as a bug: the HUD's `.score-stars` pip row rendered
+  behind the (translucent) Ready overlay with 2 of 3 pips gold. Now gated on
+  `phase !== "ready"`, pinned by an e2e asserting `.score-stars` count 0 there.
+- Hence TWO types, not one. `GoalSpec {id,label,hint?}` = the target, from
+  `goalsOf(spec)`, built ONCE into `game.goals`. `StarState {id,label,earned}` =
+  the score. `<GoalList>` renders both: `:earned` is an array of ids the Ready
+  card simply omits, so earned-ness is not a boolean anyone can pass backwards.
+- `game.goals` is a PLAIN FIELD, and that is safe here only because
+  `mode.setup()` runs exactly once — `reset()` rebuilds the sims and the tracker
+  but never re-runs setup. (Contrast `get sim()`, which must be a getter.)
+- `hint` lives on `StarSpec`, NOT `StarState`: `stars()` allocates fresh objects
+  every `state()` call and the loop assigns them over the reactive objective
+  every frame. Don't widen the frame-hot object for a string only a card reads.
+- LABELS CARRY THEIR NUMBER (`Speedrun (40s)`, `Payday ($1,700)`). Four of six
+  modes shipped targetless labels; a goal list reading "Speedrun / Hands off /
+  Perfect colours" tells the player nothing they can aim at.
+- The Ready card is a /play surface. `TestStage.vue` renders no overlay and calls
+  `startObjective()` in `mounted()`, so this feature CANNOT be shown at /test —
+  the honest demo is `/#/play?mode=tycoon&board=lakevalley-open`.
+
 ## ECONOMY + DISPATCH (Tycoon phase 1, 2026-07-26)
 - `sim/economy.ts` = pure ledger (`createEconomy`) + fare book (`createFareBook`)
   beside `objectives.ts`: no Vue, no DOM, deterministic. Ledger amounts are
