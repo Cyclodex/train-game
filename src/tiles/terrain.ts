@@ -15,7 +15,7 @@
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
 import { segmentPoints } from "@/sim/pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, lerp, tree } from "@/utils/foliage";
+import { Rng, bush, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
@@ -217,6 +217,54 @@ const FOOT: Record<TerrainKind, number> = {
 // A trunk needs far less room than a canopy: how much clearance a FOREST
 // tree's base needs before it is standing in the ballast.
 const TRUNK_CLEAR = 4;
+
+// --- Glades ------------------------------------------------------------------
+//
+// A real wood is not wall-to-wall trees: it has clearings, and thinner, lighter
+// growth around them. The density field is VALUE NOISE over a coarse WORLD
+// lattice — seeded by world position, never by the tile — so a glade spans tile
+// boundaries seamlessly and can never redraw the grid the jittered patches
+// exist to hide. Trees are rejected where the field runs low (a rejected spot
+// occasionally keeps a low bush instead — light gets through where the canopy
+// doesn't close), and the survivors shrink a little toward a glade's rim.
+
+// Tiles per noise cell: a glade spans a couple of tiles, not a couple of trees.
+const GLADE_CELL = 3;
+
+function fieldCorner(gx: number, gy: number, seed: number): number {
+  return makeRng(hashInts(seed, gx, gy, 0x6e))();
+}
+
+const smoothT = (t: number) => t * t * (3 - 2 * t);
+
+/** Forest density 0..1 at a WORLD position (in tile units). Deterministic. */
+export function forestDensityAt(wx: number, wy: number, seed: number): number {
+  const cx = Math.floor(wx / GLADE_CELL);
+  const cy = Math.floor(wy / GLADE_CELL);
+  const fx = smoothT(wx / GLADE_CELL - cx);
+  const fy = smoothT(wy / GLADE_CELL - cy);
+  const a = fieldCorner(cx, cy, seed);
+  const b = fieldCorner(cx + 1, cy, seed);
+  const c = fieldCorner(cx, cy + 1, seed);
+  const d = fieldCorner(cx + 1, cy + 1, seed);
+  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+}
+
+// How likely a tree at this density is to stand: full wood above, none below,
+// a soft shoulder between. THE THRESHOLDS ARE PITCHED AGAINST THE FIELD'S REAL
+// DISTRIBUTION: bilinear noise concentrates hard around 0.5 (it averages four
+// uniforms), so a "full wood" bar at 0.52 rejected trees across half the map
+// and turned every forest into sparse shrubland. At 0.38/0.24 roughly three
+// quarters of the world is full wood, a sixth is the lighter shoulder, and a
+// tenth is true clearing — a forest with glades, not a glade with trees.
+const GLADE_FULL = 0.38;
+const GLADE_FLOOR = 0.24;
+
+function gladeKeep(density: number): number {
+  if (density >= GLADE_FULL) return 1;
+  if (density <= GLADE_FLOOR) return 0.04;
+  return smoothT((density - GLADE_FLOOR) / (GLADE_FULL - GLADE_FLOOR));
+}
 
 // A cell with no `terrain` is grass. Grass is the ONE kind that draws no ground
 // of its own: the board's themed ground shows through untouched, so adding
@@ -1220,7 +1268,7 @@ function tileRng(coordId: string, seed: number): Rng {
 // its coord, the world seed or the tracks/roads through it change — none of
 // which move during play. Without this, panning a 20x14 board would redraw
 // ~280 tiles of procedural art per frame.
-const cache = new Map<string, { ground: string; canopy: string }>();
+const cache = new Map<string, { ground: string; scatter: string; canopy: string }>();
 
 function buildCached(
   kind: TerrainKind,
@@ -1228,7 +1276,7 @@ function buildCached(
   neighbours: TerrainNeighbours,
   seed: number,
   corridors: Corridor[],
-): { ground: string; canopy: string } {
+): { ground: string; scatter: string; canopy: string } {
   const same: PatchSame = {
     top: neighbours.top === kind,
     right: neighbours.right === kind,
@@ -1259,10 +1307,10 @@ function buildCached(
 }
 
 /**
- * The complete ground art for one tile as an SVG fragment, in a 0..100 box:
- * the terrain patch, its rim, and whatever stands on it, painted back to front.
- * Returns "" for grass (see terrainOf) so the common tile costs nothing.
- * Everything here renders UNDER the rails.
+ * The FLAT ground for one tile as an SVG fragment, in a 0..100 box: the terrain
+ * patch, its rim and its ground marks (paving, scree, gardens). Returns "" for
+ * grass (see terrainOf) so the common tile costs nothing. Renders UNDER
+ * everything, including every neighbour's standing objects.
  */
 export function tileGroundSvg(
   kind: TerrainKind,
@@ -1272,6 +1320,23 @@ export function tileGroundSvg(
   corridors: Corridor[] = [],
 ): string {
   return buildCached(kind, coordId, neighbours, seed, corridors).ground;
+}
+
+/**
+ * The tile's STANDING objects — trees, bushes, boulders, ridges, buildings —
+ * on their own layer above every tile's ground patch. The split is what stops
+ * the next tile's opaque patch fill (later in the DOM) decapitating a canopy
+ * that legitimately overhangs the seam: patches all live below, scatter all
+ * lives above. Still under the rails and roads (see TileGround.vue).
+ */
+export function tileScatterSvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).scatter;
 }
 
 /**
@@ -1296,9 +1361,9 @@ function buildGround(
   same: PatchSame,
   seed: number,
   corridors: Corridor[],
-): { ground: string; canopy: string } {
+): { ground: string; scatter: string; canopy: string } {
   const base = GROUND[kind];
-  if (!base) return { ground: "", canopy: "" };
+  if (!base) return { ground: "", scatter: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -1380,26 +1445,66 @@ function buildGround(
         same.bottomRight,
         same.bottomLeft,
       ].filter(Boolean).length / 8;
-    count += Math.round(12 * depth);
+    // The bonus also compensates for the band: at full depth the placement
+    // area grows from the 80x80 interior box to the whole tile, so the count
+    // has to grow with it or the deep wood comes out SPARSER per square unit
+    // than the copse (which is how the seam-widening first shipped).
+    count += Math.round(18 * depth);
     band = {
       ...band,
+      // Where the wood continues into the next tile, trees may stand right on
+      // the seam — the two tiles' scatter interleaves and the forest closes
+      // over the boundary. (The scatter layer renders above every patch fill,
+      // so an overhanging canopy no longer gets cut by the neighbour; and a
+      // neighbour's rails are already in `corridors`.) Toward grass or another
+      // kind the margin stays.
+      x: [same.left ? 0 : band.x[0], same.right ? GROUND_UNITS : band.x[1]],
+      y: [same.top ? 0 : band.y[0], same.bottom ? GROUND_UNITS : band.y[1]],
       scale: [band.scale[0], band.scale[1] + 0.45 * depth],
     };
   }
   const placed: { y: number; g: string }[] = [];
   const overhead: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
-    // Keep objects off the very edge so a tree's canopy doesn't collide with the
-    // neighbouring tile's, keep them ON the patch (see `place` above) — and keep
-    // their footprint OFF every corridor. An object that can't find clear ground
-    // in a few tries is dropped: the wood thins along the railway, the town
-    // steps back from it, which is what a cleared right-of-way looks like.
+    // Keep objects ON the patch (see `place` above) and their footprint OFF
+    // every corridor. An object that can't find clear ground in a few tries is
+    // dropped: the wood thins along the railway, the town steps back from it,
+    // which is what a cleared right-of-way looks like.
     for (let attempt = 0; attempt < 8; attempt++) {
       const p = place(
         lerp(band.x[0], band.x[1], rng()),
         lerp(band.y[0], band.y[1], rng()),
       );
-      const scale = lerp(band.scale[0], band.scale[1], rng());
+      let scale = lerp(band.scale[0], band.scale[1], rng());
+      // Glades: reject trees where the density field runs low. A rejected spot
+      // occasionally keeps a low BUSH — the lighter growth of a clearing —
+      // and trees near a glade's rim come out a little smaller. The roll is
+      // drawn every attempt regardless, so the rng stream's shape doesn't
+      // depend on the field.
+      const gladeRoll = rng();
+      if (kind === "forest") {
+        const density = forestDensityAt(
+          x + p.x / GROUND_UNITS,
+          y + p.y / GROUND_UNITS,
+          seed,
+        );
+        const keep = gladeKeep(density);
+        if (gladeRoll > keep) {
+          // A roll JUST over the bar keeps a low bush: the lighter growth rims
+          // the glade rather than carpeting it.
+          if (gladeRoll < keep + 0.15 && room(p) >= TRUNK_CLEAR) {
+            placed.push({
+              y: p.y,
+              g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${bush(rng, scale * 0.42)}</g>`,
+            });
+            break;
+          }
+          continue;
+        }
+        // Trees shrink only in the shoulder around a glade; the full wood
+        // keeps its full-grown crowns.
+        scale *= lerp(0.8, 1, Math.min(1, keep + 0.2));
+      }
       const clear = room(p);
       // The forest exception: a trunk standing just OFF the ballast whose
       // canopy reaches over the line. It renders on the canopy layer, above the
@@ -1425,9 +1530,12 @@ function buildGround(
   // Back to front, so a nearer canopy overlaps a farther one naturally.
   placed.sort((a, b) => a.y - b.y);
   overhead.sort((a, b) => a.y - b.y);
-  parts.push(...placed.map(p => p.g));
 
-  return { ground: parts.join(""), canopy: overhead.map(p => p.g).join("") };
+  return {
+    ground: parts.join(""),
+    scatter: placed.map(p => p.g).join(""),
+    canopy: overhead.map(p => p.g).join(""),
+  };
 }
 
 // Test seam: the memo would otherwise make "same input, same output" untestable

@@ -88,3 +88,23 @@ export function roundTree(rng: Rng, scale: number): string {
 export function tree(rng: Rng, scale: number): string {
   return rng() < 0.62 ? conifer(rng, scale) : roundTree(rng, scale);
 }
+
+/**
+ * A low bush: a couple of small bright lobes hugging the ground, with barely
+ * any shadow. This is what grows in a GLADE — the light gets through where the
+ * canopy doesn't close — so it reads a step lighter and lower than the trees
+ * around it.
+ */
+export function bush(rng: Rng, scale: number): string {
+  const r = lerp(6, 9, rng()) * scale;
+  const lit = green(rng, lerp(48, 56, rng()));
+  const mid = green(rng, lerp(40, 46, rng()));
+  const lobe = (cx: number, cy: number, rad: number, fill: string) =>
+    `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${fill}"/>`;
+  return (
+    canopyShadow(r * 0.8, "rgba(30,60,30,0.12)") +
+    lobe(r * 0.25, r * 0.15, r * 0.8, mid) +
+    lobe(-r * 0.3, -r * 0.1, r * 0.7, lit) +
+    lobe(r * 0.05, -r * 0.35, r * 0.5, lit)
+  );
+}
