@@ -90,6 +90,13 @@ on this list: **the world has no terrain.** See item 1 below.
 
 ## Road traffic
 
+0. **PARKING — the next four pieces**, written up with the measurements that are
+   their acceptance criteria: `docs/handoff-parking-next.md`. The pivot-arc
+   reverse (which unblocks reverse-parking for 90°/echelon bays), right of way
+   when leaving a bay, a slower reversing speed, and the echelon apron that
+   overhangs its tile. Take them in that order — the first two are the ones the
+   feature is actually waiting on.
+
 8. **Oncoming-lane overtaking** on 1-lane-each-way roads — the distance/speed
    feasibility math plus abort. Same-direction overtaking is done. Spec:
    `docs/superpowers/specs/2026-06-07-overtaking-driver-behaviour-design.md` §3b.
