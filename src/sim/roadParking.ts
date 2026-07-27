@@ -29,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
-import { manoeuvreLength, rowSide, turnsInAcrossKerb } from "@/tiles/parking";
+import { manoeuvreLength, rowSide, type EntryStyle } from "@/tiles/parking";
 import type { Car, RoadEntry, VehicleKind } from "./road";
 
 // A body point as `road.ts` samples it — only the fields the gates below read.
@@ -80,6 +80,7 @@ export interface ParkingTuning {
   dwellMax: number;
   speed: number;
   maxTries: number;
+  reverseFraction: number;
   pullOutGap: number;
   arriveEps: number;
   stoppedYielding: number;
@@ -259,7 +260,16 @@ export function createParkingPhases(deps: ParkingDeps) {
     const head = car.path[car.headIndex];
     if (getCoordinatesId(head.coord) !== car.stall.tileId) return false;
     if (head.entryPort !== car.stall.from) return false;
-    if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
+    // AT the line, or STOPPED just short of it. The tolerance exists because
+    // `clearAhead` binds the clear distance to exactly this point and the brake
+    // ramp approaches it asymptotically — a strict `>=` leaves the car creeping
+    // toward its own bay for ever. But spending it while still ROLLING is not
+    // free: the curve is then anchored up to a twentieth of a tile early, and on a
+    // kerbside bay that extra approach is what drifts the body across the
+    // neighbour (measured: 2.4px of overlap that goes away without it).
+    const line = stopTOf(car);
+    if (car.headProgress < line && car.velocity > STOPPED_YIELDING) return false;
+    if (car.headProgress < line - PARK_ARRIVE_EPS) return false;
     return !inServedLane(car);
   }
 
@@ -274,7 +284,16 @@ export function createParkingPhases(deps: ParkingDeps) {
     // toward its own bay for ever. A fifth of a car length is invisible, and
     // `beginEntering` anchors the curve at the car's REAL position anyway, so
     // arriving early costs nothing.
-    if (car.headProgress < stopTOf(car) - PARK_ARRIVE_EPS) return false;
+    // AT the line, or STOPPED just short of it. The tolerance exists because
+    // `clearAhead` binds the clear distance to exactly this point and the brake
+    // ramp approaches it asymptotically — a strict `>=` leaves the car creeping
+    // toward its own bay for ever. But spending it while still ROLLING is not
+    // free: the curve is then anchored up to a twentieth of a tile early, and on a
+    // kerbside bay that extra approach is what drifts the body across the
+    // neighbour (measured: 2.4px of overlap that goes away without it).
+    const line = stopTOf(car);
+    if (car.headProgress < line && car.velocity > STOPPED_YIELDING) return false;
+    if (car.headProgress < line - PARK_ARRIVE_EPS) return false;
     // ONLY FROM THE LANE THE BAY IS SERVED FROM. A car peeling off out of the
     // inner lane crosses the stream beside it to reach the kerb, which is both
     // wrong and unmistakable on a 2+2 street.
@@ -358,9 +377,18 @@ export function createParkingPhases(deps: ParkingDeps) {
     // was applied there too, because the extra room is what lets a car still find
     // its space on a busy kerb). The run is a hard constraint where the geometry
     // depends on it and a soft target where it does not.
-    const info = parking.info(car.stall);
-    const exact = info ? info.onLane || turnsInAcrossKerb(info.row.kind) : false;
-    return parking.startTOf(car.stall) + (exact ? halfBody(car) : 0);
+    // EVERY kind. `startTOf` is where the CURVE begins and a curve carries the
+    // car's centre, so the nose has to be half a body further on for the middle to
+    // land on it — otherwise `beginEntering` anchors half a body early and the car
+    // drives a longer approach than the geometry was designed for.
+    //
+    // A parallel bay was exempted at first because applying it there starved the
+    // street (7 completed cycles a run against 2). That was an artefact of the run
+    // being measured from the wrong datum: at 138px the stop lines clamped to the
+    // tile edge. With the real 54px run the exemption costs 5px of swept overlap
+    // (7.5 → 2.4 into a parked neighbour) and buys nothing — measured at 76
+    // completed cycles either way.
+    return parking.startTOf(car.stall) + halfBody(car);
   }
 
   function beginEntering(car: Car): void {
@@ -374,6 +402,31 @@ export function createParkingPhases(deps: ParkingDeps) {
       car.dwellLeft = drawDwell(car);
       return;
     }
+    // WHICH MANOEUVRE. Geometry first, driver second:
+    //  • a KERBSIDE space with a car parked in front of it cannot be nosed into
+    //    at all — 60px of pitch for a 40px car leaves 20px of slack against a
+    //    27px sideways shift, so the swing goes through the neighbour whatever
+    //    shape it is given (measured: 7.6px through, every curve tried). Backing
+    //    in pivots about the rear and stays in the bay's own column. Not a
+    //    preference: with the space ahead free it noses in, otherwise it reverses.
+    //  • a 90° or echelon bay is entered across the AISLE, where the clearance
+    //    that matters is the aisle's width and not who is parked either side. Both
+    //    work, so the DRIVER decides — and one who backs in drives out forwards.
+    //
+    // THE DRIVER PREFERENCE IS NOT LIVE FOR THE TURNING KINDS, and the reason is
+    // measured, not a decision: backing into a 90° or echelon bay with the curve
+    // built here comes out WORSE than nosing in. Swept clearance against the
+    // parked neighbours, 1+1 street, kerb 28:
+    //     90°      forward +3.3 / +0.1 px      reverse −3.3 / −5.6 px
+    //     echelon  forward −2.3 / +0.3 px      reverse −8.6 / −15.0 px
+    // and widening the aisle barely moves it (−5.6 → −1.8 at 42px more). A real
+    // reverse into a bay swings the FRONT through the aisle about a pivot roughly
+    // abeam the space; a Bézier laid between the two known tangents bulges across
+    // the bays either side instead. It needs a pivot ARC, which is its own piece
+    // of work — until then a car that would rather back in noses in like everyone
+    // else, because shipping the preference would make the picture worse.
+    const style: EntryStyle = parking.canNoseIn(car.stall!) ? "forward" : "reverse";
+    car.parkedReverse = style === "reverse";
     // Anchor the curve at where the car ACTUALLY is, so the sprite never jumps
     // as the swing starts — and mind WHICH POINT OF THE CAR that is. The sim
     // tracks the NOSE (`headProgress`, arc 0 of `sampleAtArc`); a manoeuvre curve
@@ -381,7 +434,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     // stall pose is where a car RESTS, which is its middle). Anchoring nose-on-
     // centre teleports the body half its own length — forward here, and backwards
     // again when it rejoins the road, which is what a bus leaving a lay-by showed.
-    const path = parking.pathFor(car.stall!, laneOffsetOf(car), centreT(car));
+    const path = parking.pathFor(car.stall!, laneOffsetOf(car), centreT(car), style);
     if (!path) {
       // The level changed under the claim — give the bay back and drive on.
       releaseStall(car);
@@ -496,7 +549,7 @@ export function createParkingPhases(deps: ParkingDeps) {
   // ENTRANCE and then materialises at the exit — inside whatever had queued there
   // in the meantime. Measured as a 0.064 body overlap on /test/parkinglot.
   function seatAtExitSlot(car: Car): void {
-    const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car)) : null;
+    const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car), car.parkedReverse) : null;
     if (!gExit) return;
     const head = car.path[car.headIndex];
     const entryPort = gExit.from as Port;
@@ -670,14 +723,14 @@ export function createParkingPhases(deps: ParkingDeps) {
       // Where this car will actually rejoin the road — the far end of its exit
       // curve if it drives out forwards, its own peel-off point if it reverses.
       // That is the slot to test and to claim.
-      const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car)) : null;
+      const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car), car.parkedReverse) : null;
       const seatPort = gExit ? (gExit.from as Port) : car.path[car.headIndex].entryPort;
       const seatT = gExit ? gExit.endT + halfBody(car) : car.headProgress;
       if (car.dwellLeft <= 0 && slotFree(car, seatPort, seatT)) {
         car.phase = "leaving";
         // A kerbside bay and a garage are driven out of nose-first; an echelon or
         // 90° bay is backed out of along the curve it came in on.
-        const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car), halfBody(car)) : null;
+        const exit = car.stall ? parking.exitFor(car.stall, laneOffsetOf(car), halfBody(car), car.parkedReverse) : null;
         if (exit) {
           car.parkPath = exit.path;
           car.parkExiting = true;

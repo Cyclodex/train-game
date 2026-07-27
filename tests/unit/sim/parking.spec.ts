@@ -839,6 +839,49 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect([...new Set(lanes)]).toEqual([0]);
   });
 
+  const CAR_W = 0.1; // sprite width in tiles; the length comes from the pose pair
+  const sat = (A: { x: number; y: number }[], B: { x: number; y: number }[]): number => {
+    let worst = -Infinity;
+    for (const poly of [A, B]) {
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i]!;
+        const q = poly[(i + 1) % poly.length]!;
+        const l = Math.hypot(q.y - p.y, q.x - p.x) || 1;
+        const nx = -(q.y - p.y) / l;
+        const ny = (q.x - p.x) / l;
+        const pr = (pts: typeof A) => pts.map(t => t.x * nx + t.y * ny);
+        const a = pr(A);
+        const b = pr(B);
+        const gap = Math.max(Math.min(...a) - Math.max(...b), Math.min(...b) - Math.max(...a));
+        if (gap > 0) return gap;
+        worst = Math.max(worst, gap);
+      }
+    }
+    return worst;
+  };
+  const boxOf = (u: { front: CarSample; rear: CarSample }): { x: number; y: number }[] | null => {
+    if (!u.front.pose || !u.rear.pose) return null;
+    const fx = u.front.coord.x + u.front.pose.tx;
+    const fy = u.front.coord.y + u.front.pose.ty;
+    const rx = u.rear.coord.x + u.rear.pose.tx;
+    const ry = u.rear.coord.y + u.rear.pose.ty;
+    const dx = fx - rx;
+    const dy = fy - ry;
+    const l = Math.hypot(dx, dy) || 1;
+    const nx = (-dy / l) * (CAR_W / 2);
+    const ny = (dx / l) * (CAR_W / 2);
+    return [
+      { x: fx + nx, y: fy + ny },
+      { x: fx - nx, y: fy - ny },
+      { x: rx - nx, y: ry - ny },
+      { x: rx + nx, y: ry + ny },
+    ];
+  };
+
+  // EVERY parking map, not just the 90° one. A kerbside bay whose neighbour is
+  // parked is BACKED into now (`canNoseIn` decides, not the driver), which is
+  // what took these from −7.6px of driving through a parked car to clear.
+
   it("never drives a manoeuvre through a car that is already parked", () => {
     // The geometric test above proves the DESIGNED curve clears its neighbours.
     // This one proves the car actually drives that curve — which it did not: the
@@ -848,52 +891,13 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // the aisle clearance was spent again before anyone could use it.
     //
     // Rendered poses, in world tiles, swept against every parked body on the map.
-    const CAR_W = 0.1; // sprite width in tiles; the length comes from the pose pair
-    const sat = (A: { x: number; y: number }[], B: { x: number; y: number }[]): number => {
-      let worst = -Infinity;
-      for (const poly of [A, B]) {
-        for (let i = 0; i < poly.length; i++) {
-          const p = poly[i]!;
-          const q = poly[(i + 1) % poly.length]!;
-          const l = Math.hypot(q.y - p.y, q.x - p.x) || 1;
-          const nx = -(q.y - p.y) / l;
-          const ny = (q.x - p.x) / l;
-          const pr = (pts: typeof A) => pts.map(t => t.x * nx + t.y * ny);
-          const a = pr(A);
-          const b = pr(B);
-          const gap = Math.max(Math.min(...a) - Math.max(...b), Math.min(...b) - Math.max(...a));
-          if (gap > 0) return gap;
-          worst = Math.max(worst, gap);
-        }
-      }
-      return worst;
-    };
-    const boxOf = (u: { front: CarSample; rear: CarSample }): { x: number; y: number }[] | null => {
-      if (!u.front.pose || !u.rear.pose) return null;
-      const fx = u.front.coord.x + u.front.pose.tx;
-      const fy = u.front.coord.y + u.front.pose.ty;
-      const rx = u.rear.coord.x + u.rear.pose.tx;
-      const ry = u.rear.coord.y + u.rear.pose.ty;
-      const dx = fx - rx;
-      const dy = fy - ry;
-      const l = Math.hypot(dx, dy) || 1;
-      const nx = (-dy / l) * (CAR_W / 2);
-      const ny = (dx / l) * (CAR_W / 2);
-      return [
-        { x: fx + nx, y: fy + ny },
-        { x: fx - nx, y: fy - ny },
-        { x: rx - nx, y: ry - ny },
-        { x: rx + nx, y: ry + ny },
-      ];
-    };
+    for (const [map, seed] of [["parkinglot", 5], ["parkingkerb", 1], ["parkcity", 5]] as const) {
+      expectNoSweptOverlap(map, seed);
+    }
+  }, 60_000);
 
-    // 90° bays only. A PARALLEL bay cannot be entered nose-first at all when both
-    // neighbours are taken, and that is geometry, not tuning: the pitch is 60px
-    // for a 40px car, so there is 20px of slack, and the car has to shift 27px
-    // sideways to get in. Real drivers reverse into one for exactly this reason.
-    // Measured, so the reverse-in work has a number to beat and cannot silently
-    // get worse: parkingkerb −7.6px, parkcity −7.5px, parkinglorry −7.1px.
-    const sim = simFor("parkinglot", 5);
+  function expectNoSweptOverlap(map: string, seed: number) {
+    const sim = simFor(map, seed);
     let worst = Infinity;
     let compared = 0;
     for (let i = 0; i < 1600; i++) {
@@ -912,14 +916,16 @@ describe("parking in the simulation — a cycle, not a sink", () => {
         }
       }
     }
-    expect(compared).toBeGreaterThan(200);
-    // NOT A HAIR OF TOLERANCE — none at all. Once the curve arrives along the
-    // bay's own axis the swing stays out of the neighbours completely. The road to
-    // here, measured on this same sweep: −0.029 tiles of driving through a parked
-    // car with the old aisle, −0.006 once the stop line stopped adding half a body
-    // of approach, and clear the moment the approach became square.
-    expect(worst).toBeGreaterThanOrEqual(0);
-  });
+    expect(compared, `${map}: nothing manoeuvred past a parked car`).toBeGreaterThan(150);
+    // NOT A HAIR OF TOLERANCE — none at all. The road here, measured on this same
+    // sweep: −0.029 tiles of driving THROUGH a parked car with the old narrow
+    // aisle, −0.006 once the stop line stopped adding half a body of approach,
+    // clear on the 90° maps the moment the approach became square, and clear on
+    // the kerbside ones once a hemmed-in space is backed into instead of nosed
+    // into (−7.6px → +0.1) and the trigger stopped firing early while still
+    // rolling (−2.4px → 0).
+    expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
+  }
 
   it("spawns nothing in the middle of the map", () => {
     // A seam whose neighbour is a ONE-WAY pointing away feeds nothing, and that

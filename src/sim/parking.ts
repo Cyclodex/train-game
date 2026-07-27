@@ -18,6 +18,7 @@ import {
   facilitiesOf,
   manoeuvrePath,
   manoeuvreStartT,
+  type EntryStyle,
   type ManoeuvrePath,
   kerbOffsetAt,
   rowFor,
@@ -211,7 +212,17 @@ export interface ParkingRegistry {
   // The manoeuvre curve for a stall, in TILE units (size 1). `laneOff` is the
   // car's lateral lane offset in tile units; `tStart` anchors the curve at the
   // car's real position so the sprite does not jump when the swing begins.
-  pathFor(ref: StallRef, laneOff: number, tStart?: number): ManoeuvrePath | null;
+  pathFor(
+    ref: StallRef,
+    laneOff: number,
+    tStart?: number,
+    style?: EntryStyle,
+  ): ManoeuvrePath | null;
+  // Is there room to NOSE into this space, or must it be backed into? True when
+  // the bay immediately ahead in the direction of travel is free (or the row ends
+  // there): that is the room a car uses to swing in and straighten up. With both
+  // neighbours taken a parallel bay is a reverse-in space and nothing else.
+  canNoseIn(ref: StallRef): boolean;
   // Where along its approach a car peels off toward `ref` (0..1 of the tile).
   startTOf(ref: StallRef): number;
   // The FORWARD curve out of a stall, plus where on the road it ends and which
@@ -226,6 +237,7 @@ export interface ParkingRegistry {
     ref: StallRef,
     laneOff: number,
     headRoom?: number,
+    enteredReverse?: boolean,
   ): { path: ManoeuvrePath; endT: number; from: number } | null;
   // Everything the renderer needs to draw the parked fleet + a debug overlay:
   // stall id -> occupant car id.
@@ -419,6 +431,20 @@ export function createParkingRegistry(
       return free[hashOf(carId) % free.length];
     },
 
+    canNoseIn(ref) {
+      const info = infoOf(ref);
+      if (!info) return true;
+      // A KERBSIDE space is hemmed in by its neighbours along the kerb, and so is
+      // an ECHELON one: its along-kerb pitch is 29px for a car 20px wide, so a
+      // forward swing needs the mouth of the bay ahead. A 90° bay is the exception
+      // — it is entered straight across the AISLE, where the clearance that
+      // matters is the aisle's width (`bayNearPx`) and not who is parked beside it.
+      if (info.row.kind !== "parallel" && info.row.kind !== "angled") return true;
+      const ahead: StallRef = { ...ref, index: ref.index + 1 };
+      if (ref.index + 1 >= info.row.count) return true; // the row ends: open kerb
+      return !occupants.has(stallId(ahead));
+    },
+
     startTOf(ref) {
       const info = infoOf(ref);
       if (!info) return 0;
@@ -428,9 +454,9 @@ export function createParkingRegistry(
       return manoeuvreStartT(info.row, ref.index, 1, info.kerb);
     },
 
-    exitFor(ref, laneOff, headRoom = 0) {
+    exitFor(ref, laneOff, headRoom = 0, enteredReverse = false) {
       const info = infoOf(ref);
-      if (!info || !exitsForward(info.row.kind)) return null;
+      if (!info || !exitsForward(info.row.kind, enteredReverse)) return null;
       // A garage rejoins the road at its OUT ramp, which may be on the far bank;
       // a kerbside bay rejoins on the approach it arrived by.
       const from =
@@ -441,29 +467,29 @@ export function createParkingRegistry(
           ? info.kerb
           : kerbOffsetAt(level, parseCoordId(ref.tileId), from, 1);
       const maxT = Math.max(0, 0.999 - headRoom);
-      const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}|${Math.round(headRoom * 1000)}`;
+      const key = `exit|${stallId(ref)}|${Math.round(laneOff * 1000)}|${Math.round(headRoom * 1000)}|${enteredReverse ? "r" : "f"}`;
       let path = paths.get(key);
       if (!path) {
-        path = forwardExitPath(info.row, ref.index, 1, kerb, laneOff, maxT);
+        path = forwardExitPath(info.row, ref.index, 1, kerb, laneOff, enteredReverse, maxT);
         paths.set(key, path);
       }
       return { path, endT: forwardExitEndT(info.row, ref.index, 1, kerb, maxT), from };
     },
 
-    pathFor(ref, laneOff, tStart) {
+    pathFor(ref, laneOff, tStart, style = "forward") {
       // The cache key carries the anchor too: two cars peeling off toward the
       // same bay from slightly different points get their own curves, and a
       // replayed seed hits the same entries.
       const key = `${stallId(ref)}|${Math.round(laneOff * 1000)}|${
         tStart === undefined ? "d" : Math.round(tStart * 1000)
-      }`;
+      }|${style}`;
       const cached = paths.get(key);
       if (cached) return cached;
       const info = infoOf(ref);
       if (!info) return null;
       // Built in TILE units (size 1) so the sim can measure the manoeuvre in the
       // same units as `segLen`; the renderer scales by `tileSize` when it draws.
-      const path = manoeuvrePath(info.row, ref.index, 1, info.kerb, laneOff, tStart);
+      const path = manoeuvrePath(info.row, ref.index, 1, info.kerb, laneOff, tStart, style);
       paths.set(key, path);
       return path;
     },

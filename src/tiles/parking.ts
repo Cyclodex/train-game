@@ -73,7 +73,11 @@ export function stallOnLane(kind: StallKind): boolean {
 // them; they nose out and pull away, which is also the only thing a coach in a
 // lay-by can physically do. A garage is the same story, and is why it has a
 // second mouth to come out of.
-export function exitsForward(kind: StallKind): boolean {
+export function exitsForward(kind: StallKind, enteredReverse = false): boolean {
+  // HOW YOU GOT IN DECIDES HOW YOU GET OUT, and that is the whole rule. Back into
+  // a space and you drive out of it — which is exactly why drivers reverse into a
+  // bay in the first place: you leave facing the traffic you are joining.
+  if (enteredReverse) return true;
   return kind === "garage" || kind === "parallel";
 }
 
@@ -216,6 +220,14 @@ export function manoeuvreRunPx(row: ParkingRow, size: number, kerbPx: number): n
 // Never below 1: a degenerate stub of a curve is not a reason to crawl.
 function paceOf(path: ManoeuvrePath, size: number): number {
   return Math.max(1, manoeuvreLength(path) / (MANOEUVRE_APPROACH_FRAC * size));
+}
+
+// Assemble the legs into a path: measure it, then price it. The one place a
+// ManoeuvrePath is ever built, so a new manoeuvre shape cannot forget either.
+function finishPath(legs: ManoeuvreLeg[], restAngleDeg: number, size: number): ManoeuvrePath {
+  const path: ManoeuvrePath = { legs, arc: buildArcTable(legs), restAngleDeg, pace: 1 };
+  path.pace = paceOf(path, size);
+  return path;
 }
 
 // A run of stalls served by one approach of one tile, on one side of it.
@@ -718,39 +730,36 @@ function shearedBoxPoints(
 // Bézier stays and the arc-length property is restored explicitly by the sample
 // table below. Never drive `m` as a raw Bézier parameter: it is NOT proportional
 // to distance, and a car would visibly surge through the middle of the swing.
+// ONE STRETCH of a manoeuvre, driven in ONE direction. A cubic, because a curve
+// has to leave along the heading the car is already at and arrive along the one it
+// has to end at, and a quadratic's two tangents share a leg (see `manoeuvreAt`).
+export interface ManoeuvreLeg {
+  p0: Pt;
+  c1: Pt;
+  c2: Pt;
+  p3: Pt;
+  // The car drives this leg BACKWARDS: it moves p0 → p3 while pointing the other
+  // way. Reversing is not a special case of the phase machine — it is one flag on
+  // one leg, and everything downstream (arc length, speed, the sampled heading)
+  // falls out unchanged.
+  reverse: boolean;
+}
+
 export interface ManoeuvrePath {
-  // A CUBIC, and the reason is the HEADING. A quadratic cannot leave along the
-  // lane AND arrive along the bay's own axis — its two tangents are one shared
-  // leg — so the arriving angle was whatever the curve happened to finish on and
-  // had to be BLENDED to the stall's rest angle over the second half. That blend
-  // is a rotation on a schedule, and it is exactly why the manoeuvre read as
-  // scripted next to a lane change, which sets no angle at all: there the body
-  // lag ANGLES the car into the change by itself.
-  //
-  // With a cubic both ends are free, so the curve arrives already pointing into
-  // the bay and the heading is simply the tangent. Nothing is blended, nothing is
-  // set — the car points where it is going, like the rest of the traffic model.
-  p0: Pt; // where the car IS when the move starts
-  c1: Pt; // control for the LEAVING tangent
-  c2: Pt; // control for the ARRIVING tangent
-  p3: Pt; // where it comes to rest
-  // The angle at rest. No longer blended in — kept as the fallback for a
-  // degenerate curve whose derivative vanishes.
-  restAngleDeg: number;
-  // Cumulative arc length at each of MANOEUVRE_SAMPLES+1 evenly-spaced Bézier
-  // parameters, so `manoeuvreAtDistance` can invert distance → parameter. Built
-  // once per stall and cached by the sim; the last entry is the total length.
+  // A SEQUENCE, because a real parking manoeuvre changes direction. Nosing into a
+  // space is one forward leg; backing into one is "drive past, then reverse in",
+  // which is two. `m` still runs 0 → 1 over the whole thing by ARC LENGTH, so the
+  // phase machine never learns that there is more than one.
+  legs: ManoeuvreLeg[];
+  // Cumulative arc length, MANOEUVRE_SAMPLES entries per leg, so `m` means
+  // DISTANCE. Never drive a Bézier by its raw parameter: it is not proportional
+  // to distance and the car visibly surges through the middle of a swing.
   arc: number[];
-  // How much faster than the base crawl this curve is driven, because it is that
-  // much gentler (1 = the tightest kind, the fixed short approach).
-  //
-  // Manoeuvre speed cannot be one constant. A long shallow swing into a lay-by is
-  // NOT driven at the speed of a tight turn into a 90° bay — that is the whole
-  // reason a town builds a tapered one. Left as a constant, lengthening the
-  // kerbside curves to stop the cars crabbing (see `manoeuvreRunPx`) made every
-  // pull-in and pull-out two and a half times slower, and the parking scenarios
-  // went from three completed park-and-leave cycles in a run to one: the street
-  // was throttled by vehicles crawling through their own manoeuvres.
+  // The angle at rest — the fallback for a degenerate curve whose derivative
+  // vanishes. NOT blended in: the last leg already arrives pointing the right way.
+  restAngleDeg: number;
+  // How much faster than the base crawl this is driven, because it is that much
+  // gentler. See `paceOf`.
   pace: number;
 }
 
@@ -792,6 +801,14 @@ function approachDeg(
   return (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
 }
 
+// HOW a vehicle gets into a space. Not a cosmetic choice — see `manoeuvrePath`.
+export type EntryStyle = "forward" | "reverse";
+
+// How far PAST the bay a car pulls before backing in, as a fraction of the bay's
+// own pitch. Three quarters puts its rear axle roughly level with the back of the
+// car in front, which is where a driver actually stops before reversing.
+const REVERSE_PULL_PAST = 0.75;
+
 // Build the pull-in curve for `stall` from the lane a class-`cls` car drives.
 // `laneOff` is the car's lateral lane offset (right-of-travel), in the same units
 // as `size` — the same number `createLaneGeometry.couplerOffsets` gives the
@@ -805,6 +822,7 @@ export function manoeuvrePath(
   kerbPx: number,
   laneOff: number,
   tStartOverride?: number,
+  style: EntryStyle = "forward",
 ): ManoeuvrePath {
   const from = row.from;
   const exit = oppositePort(from);
@@ -831,19 +849,69 @@ export function manoeuvrePath(
   const h = chord / 3;
   const laneRad = (approachDeg(from, exit, size, laneOff) * Math.PI) / 180;
   const rad = (pose.angleDeg * Math.PI) / 180;
-  const path: ManoeuvrePath = {
-    p0,
-    c1: { x: p0.x + Math.cos(laneRad) * h, y: p0.y + Math.sin(laneRad) * h },
-    // BACK along the resting heading: the curve comes into the bay nose-first.
-    c2: { x: p3.x - Math.cos(rad) * h, y: p3.y - Math.sin(rad) * h },
-    p3,
-    restAngleDeg: pose.angleDeg,
-    arc: [],
-    pace: 1,
-  };
-  path.arc = buildArcTable(path);
-  path.pace = paceOf(path, size);
-  return path;
+  const big = needsBigBay(row.reserved);
+  if (style === "reverse") {
+    // BACKING IN: drive PAST the space, stop, then reverse into it.
+    //
+    // This is the only motion that fits a parallel bay whose neighbours are
+    // taken, and the reason is which way the car pivots. Nosing in swings the
+    // FRONT into the space while the tail is still out in the lane, so the swept
+    // area runs diagonally across the bay in front; reversing pivots about the
+    // REAR, and the swept area stays in the bay's own column. That is why a 1.5x
+    // space (60px of pitch for a 40px car — ours exactly) is a reverse-in space
+    // in life, and why nose-first cut the neighbours by 7.6px however the curve
+    // was shaped.
+    // HOW FAR PAST before backing in, and it is not the same distance for the two
+    // shapes. A KERBSIDE space is entered along the kerb, so three quarters of the
+    // bay's own pitch puts the rear axle level with the car in front. A 90° or
+    // echelon bay is entered ACROSS the aisle: the pitch there is 28px against a
+    // 40px car, so a proportion of it is meaningless — what the car needs is room
+    // to swing its front out, which is its own length.
+    const pastPx = turnsInAcrossKerb(row.kind)
+      ? TURN_IN_CLEARANCE_FRAC * size
+      : REVERSE_PULL_PAST * stallPitchPx(row.kind, size, big);
+    const pastT = pose.t + pastPx / size;
+    const past = onLane(Math.min(0.999, pastT));
+    const back = Math.hypot(p3.x - past.x, p3.y - past.y) || 1;
+    const hb = back / 3;
+    return finishPath(
+      [
+        // 1. Forward along the lane, past the space. Straight: both handles run
+        //    down the lane, so this leg does not wander.
+        {
+          p0,
+          c1: { x: p0.x + Math.cos(laneRad) * (h / 2), y: p0.y + Math.sin(laneRad) * (h / 2) },
+          c2: { x: past.x - Math.cos(laneRad) * (h / 2), y: past.y - Math.sin(laneRad) * (h / 2) },
+          p3: past,
+          reverse: false,
+        },
+        // 2. Backwards into the space. The car is pointing DOWN THE LANE as this
+        //    leg starts and at its RESTING angle as it ends, and it is moving the
+        //    other way both times — so the curve's own tangents are the reverse of
+        //    both, and `reverse: true` turns the rendered heading back round.
+        {
+          p0: past,
+          c1: { x: past.x - Math.cos(laneRad) * hb, y: past.y - Math.sin(laneRad) * hb },
+          c2: { x: p3.x + Math.cos(rad) * hb, y: p3.y + Math.sin(rad) * hb },
+          p3,
+          reverse: true,
+        },
+      ],
+      pose.angleDeg,
+      size,
+    );
+  }
+  const legs: ManoeuvreLeg[] = [
+    {
+      p0,
+      c1: { x: p0.x + Math.cos(laneRad) * h, y: p0.y + Math.sin(laneRad) * h },
+      // BACK along the resting heading: the curve comes into the bay nose-first.
+      c2: { x: p3.x - Math.cos(rad) * h, y: p3.y - Math.sin(rad) * h },
+      p3,
+      reverse: false,
+    },
+  ];
+  return finishPath(legs, pose.angleDeg, size);
 }
 
 // The approach a car rejoins the road on when it leaves a GARAGE, and therefore
@@ -896,6 +964,10 @@ export function forwardExitPath(
   size: number,
   kerbPx: number,
   laneOff: number,
+  // Which way the vehicle is FACING as it stands there — see `exitsForward`. A car
+  // that backed in is pointing out and drives away; one that nosed in is pointing
+  // into the bay, which only a garage and a kerbside space ever do forwards.
+  enteredReverse = false,
   // The furthest along the tile the curve may END, as `forwardExitEndT` takes it.
   // The caller owns this because it depends on the VEHICLE: the curve carries the
   // body's centre, so its nose needs half a length of tile left in front of it to
@@ -922,21 +994,20 @@ export function forwardExitPath(
   // OUT of the stall along its own axis. A garage's pose points INTO the building
   // (a stall pose is where a car RESTS, not the way it leaves), so the ramp is the
   // one case that runs the other way down that axis.
-  const outDeg = row.kind === "garage" ? pose.angleDeg + 180 : pose.angleDeg;
+  const outDeg =
+    row.kind === "garage" || enteredReverse ? pose.angleDeg + 180 : pose.angleDeg;
   const outRad = (outDeg * Math.PI) / 180;
   const laneRad = (aheadDeg * Math.PI) / 180;
-  const path: ManoeuvrePath = {
-    p0,
-    c1: { x: p0.x + Math.cos(outRad) * h, y: p0.y + Math.sin(outRad) * h },
-    c2: { x: far.x - Math.cos(laneRad) * h, y: far.y - Math.sin(laneRad) * h },
-    p3: far,
-    restAngleDeg: aheadDeg,
-    arc: [],
-    pace: 1,
-  };
-  path.arc = buildArcTable(path);
-  path.pace = paceOf(path, size);
-  return path;
+  const legs: ManoeuvreLeg[] = [
+    {
+      p0,
+      c1: { x: p0.x + Math.cos(outRad) * h, y: p0.y + Math.sin(outRad) * h },
+      c2: { x: far.x - Math.cos(laneRad) * h, y: far.y - Math.sin(laneRad) * h },
+      p3: far,
+      reverse: false,
+    },
+  ];
+  return finishPath(legs, aheadDeg, size);
 }
 
 // Where along its exit approach a vehicle rejoins the road — the progress its
@@ -959,25 +1030,44 @@ export function forwardExitEndT(
 // table is built once per stall, not per tick.
 const MANOEUVRE_SAMPLES = 16;
 
-function bezierAt(path: ManoeuvrePath, t: number): Pt {
+function bezierAt(leg: ManoeuvreLeg, t: number): Pt {
   const u = 1 - t;
   const a = u * u * u;
   const b = 3 * u * u * t;
   const c = 3 * u * t * t;
   const d = t * t * t;
   return {
-    x: a * path.p0.x + b * path.c1.x + c * path.c2.x + d * path.p3.x,
-    y: a * path.p0.y + b * path.c1.y + c * path.c2.y + d * path.p3.y,
+    x: a * leg.p0.x + b * leg.c1.x + c * leg.c2.x + d * leg.p3.x,
+    y: a * leg.p0.y + b * leg.c1.y + c * leg.c2.y + d * leg.p3.y,
   };
 }
 
-function buildArcTable(path: ManoeuvrePath): number[] {
+function bezierTangent(leg: ManoeuvreLeg, t: number): { dx: number; dy: number } {
+  const u = 1 - t;
+  const a = 3 * u * u;
+  const b = 6 * u * t;
+  const c = 3 * t * t;
+  let dx = a * (leg.c1.x - leg.p0.x) + b * (leg.c2.x - leg.c1.x) + c * (leg.p3.x - leg.c2.x);
+  let dy = a * (leg.c1.y - leg.p0.y) + b * (leg.c2.y - leg.c1.y) + c * (leg.p3.y - leg.c2.y);
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
+    dx = leg.p3.x - leg.p0.x;
+    dy = leg.p3.y - leg.p0.y;
+  }
+  return { dx, dy };
+}
+
+// Cumulative arc length across every leg, end to end. One table for the whole
+// manoeuvre is what lets `m` be a single 0..1 the phase machine can advance
+// without knowing where the direction changes.
+function buildArcTable(legs: ManoeuvreLeg[]): number[] {
   const arc = [0];
-  let prev = bezierAt(path, 0);
-  for (let i = 1; i <= MANOEUVRE_SAMPLES; i++) {
-    const p = bezierAt(path, i / MANOEUVRE_SAMPLES);
-    arc.push(arc[i - 1] + Math.hypot(p.x - prev.x, p.y - prev.y));
-    prev = p;
+  for (const leg of legs) {
+    let prev = bezierAt(leg, 0);
+    for (let i = 1; i <= MANOEUVRE_SAMPLES; i++) {
+      const p = bezierAt(leg, i / MANOEUVRE_SAMPLES);
+      arc.push(arc[arc.length - 1] + Math.hypot(p.x - prev.x, p.y - prev.y));
+      prev = p;
+    }
   }
   return arc;
 }
@@ -987,60 +1077,47 @@ export function manoeuvreLength(path: ManoeuvrePath): number {
   return path.arc[path.arc.length - 1] ?? 0;
 }
 
-// The Bézier parameter at a fraction `m` (0..1) of the manoeuvre's ARC LENGTH.
-// This is what makes `m` mean distance, so a car crawls into its bay at a
-// constant speed instead of surging through the middle of the swing.
-function paramAtArcFraction(path: ManoeuvrePath, m: number): number {
+// Which leg, and how far along it, a fraction `m` of the TOTAL arc length lands
+// on. This is what makes `m` mean distance rather than curve parameter.
+function locate(path: ManoeuvrePath, m: number): { leg: ManoeuvreLeg; t: number } {
+  const legs = path.legs;
   const total = manoeuvreLength(path);
-  if (total <= 0) return Math.max(0, Math.min(1, m));
+  const last = legs[legs.length - 1]!;
+  if (total <= 0) return { leg: last, t: Math.max(0, Math.min(1, m)) };
   const want = Math.max(0, Math.min(1, m)) * total;
   const arc = path.arc;
   for (let i = 1; i < arc.length; i++) {
-    if (arc[i] >= want) {
-      const span = arc[i] - arc[i - 1];
-      const frac = span > 0 ? (want - arc[i - 1]) / span : 0;
-      return (i - 1 + frac) / MANOEUVRE_SAMPLES;
+    if (arc[i]! >= want) {
+      const span = arc[i]! - arc[i - 1]!;
+      const frac = span > 0 ? (want - arc[i - 1]!) / span : 0;
+      // `i-1` counts sample steps across the whole table; MANOEUVRE_SAMPLES of
+      // them belong to each leg in order.
+      const step = i - 1;
+      const legIndex = Math.min(legs.length - 1, Math.floor(step / MANOEUVRE_SAMPLES));
+      const within = step - legIndex * MANOEUVRE_SAMPLES;
+      return { leg: legs[legIndex]!, t: (within + frac) / MANOEUVRE_SAMPLES };
     }
   }
-  return 1;
+  return { leg: last, t: 1 };
 }
 
-// Point + heading at `m` (0..1) along the manoeuvre. `m = 0` is on the lane,
-// `m = 1` is at rest in the stall. The heading eases from the curve's own tangent
-// to the stall's rest angle over the last part of the move, so a car finishes
-// square in its bay instead of at whatever angle the Bézier happened to end on
-// (the tangent of a quadratic at t=1 is the p1→p2 chord, which for a shallow
-// parallel bay is nearly along the road — right — but for a 90° bay is a few
-// degrees short of square).
+// Point + heading at `m` (0..1) of the manoeuvre's arc length. `m = 0` is where
+// the car set off, `m = 1` is where it comes to rest.
 export function manoeuvreAt(
   path: ManoeuvrePath,
   m: number,
 ): { x: number; y: number; angleDeg: number } {
-  // `m` is a fraction of ARC LENGTH; convert it to the curve's own parameter
-  // first, or the car speeds up and slows down for no reason (see the note on
-  // ManoeuvrePath).
-  const t = paramAtArcFraction(path, m);
-  const u = 1 - t;
-  const { x, y } = bezierAt(path, t);
-  // Derivative of the quadratic — the direction the car is actually moving.
-  const a = 3 * u * u;
-  const b = 6 * u * t;
-  const c = 3 * t * t;
-  let dx =
-    a * (path.c1.x - path.p0.x) + b * (path.c2.x - path.c1.x) + c * (path.p3.x - path.c2.x);
-  let dy =
-    a * (path.c1.y - path.p0.y) + b * (path.c2.y - path.c1.y) + c * (path.p3.y - path.c2.y);
-  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
-    dx = path.p3.x - path.p0.x;
-    dy = path.p3.y - path.p0.y;
-  }
-  // THE TANGENT IS THE HEADING. Nothing is blended and nothing is imposed: the
-  // curve already arrives along the bay's own axis (see `ManoeuvrePath`), so the
-  // car finishes square because it drove square, not because it was rotated into
-  // place over the last half of the move. That blend was the single thing that
-  // made this read as an animation next to the rest of the traffic model, where a
-  // lane change sets no angle at all and lets the body lag produce it.
-  return { x, y, angleDeg: (Math.atan2(dy, dx) * 180) / Math.PI };
+  const { leg, t } = locate(path, m);
+  const { x, y } = bezierAt(leg, t);
+  const { dx, dy } = bezierTangent(leg, t);
+  // THE TANGENT IS THE HEADING — and on a REVERSING leg it is the tangent turned
+  // round, because the car moves along the curve while pointing the other way.
+  // Nothing is blended and nothing is imposed: the curve already arrives pointing
+  // where the car has to end up. That blend was the single thing that made this
+  // read as an animation next to the rest of the traffic model, where a lane
+  // change sets no angle at all and lets the body lag produce it.
+  const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return { x, y, angleDeg: leg.reverse ? deg + 180 : deg };
 }
 
 // --- Level-wide derivations --------------------------------------------------

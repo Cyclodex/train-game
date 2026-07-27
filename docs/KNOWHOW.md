@@ -446,11 +446,29 @@ lean — prune as much as you add. This file only stays useful if every task ten
   abeam the neighbours — the "cuts across the next bay" that was reported.
 - A PARALLEL BAY CANNOT BE ENTERED NOSE-FIRST when both neighbours are taken, and
   that is geometry, not tuning: 60px of pitch for a 40px car is 20px of slack, and
-  the car has to shift 27px sideways. Measured swept penetration into a parked
-  neighbour, after every fix above: 90° bays CLEAR (+0.0001 tiles), parallel ones
-  -7.6px (parkingkerb), -7.5 (parkcity), -7.1 (parkinglorry). Real drivers reverse
-  into one for exactly this reason; the numbers are pinned so the reverse-in work
-  has a target.
+  the car has to shift 27px sideways. So it is BACKED INTO — `canNoseIn` decides,
+  the driver does not: free space ahead means nose in, otherwise reverse in.
+  Swept penetration into a parked neighbour went -7.6px -> +0.1 (parkingkerb) and
+  -7.5 -> 0.0 (parkcity) with no throughput cost (75-76 completed cycles either way).
+  - A MANOEUVRE IS A SEQUENCE OF LEGS, each with its own direction
+    (`ManoeuvreLeg.reverse`). `m` still runs 0->1 over the whole thing by arc
+    length, so the phase machine never learns there is more than one. Reversing is
+    one flag: the rendered heading is the tangent turned round, and arc length,
+    speed and pace fall out unchanged.
+  - THE TRIGGER MUST NOT FIRE WHILE STILL ROLLING. `PARK_ARRIVE_EPS` exists because
+    `clearAhead` binds the clear distance to exactly the stop line and the brake
+    ramp approaches it asymptotically — but spending the tolerance while moving
+    anchors the curve up to a twentieth of a tile early, and on a kerbside bay that
+    extra approach drifts the body across the neighbour (2.4px, gone once the
+    trigger needs either the line or a standstill).
+  - BACKING INTO A 90 deg OR ECHELON BAY IS NOT SHIPPED, and the reason is measured.
+    With the curve laid between the two known tangents it comes out WORSE than
+    nosing in: 90 deg forward +3.3/+0.1px against reverse -3.3/-5.6; echelon
+    forward -2.3/+0.3 against reverse -8.6/-15.0. Widening the aisle barely moves
+    it (-5.6 -> -1.8 at 42px more), because a real reverse swings the FRONT through
+    the aisle about a pivot roughly abeam the space, and a Bezier between two known
+    tangents bulges across the bays either side instead. It needs a pivot ARC. The
+    `reverseParker` trait is drawn and stable; the preference is simply not live.
 - A BAY IS ENTERED FROM ITS OWN LANE ONLY. `atStallEntry` refuses any other, and
   `desiredLane` branch (P) gets a car with a `parkTarget` over to the kerb-most
   lane as soon as it is on a tile of that facility — early, so the merge has room.

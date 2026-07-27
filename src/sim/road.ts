@@ -359,6 +359,15 @@ export interface Car {
   // Driver behaviour: an `overtaker` will pull into the lane to its left to pass a
   // slower leader when held below cruise; a disciplined driver (false) never does.
   overtaker: boolean;
+  // Driver behaviour: a `reverseParker` backs into a 90° or echelon bay rather
+  // than nosing in, and then drives out of it forwards — which is the reason
+  // people do it. Drawn from the driver stream at spawn, like `overtaker`, so it
+  // is a property of the driver and not of the space.
+  //
+  // It does NOT decide a KERBSIDE space: whether one of those can be nosed into is
+  // geometry, not taste (see `canNoseIn`), and with both neighbours parked there
+  // is no forward entry to prefer.
+  reverseParker: boolean;
   // Seconds spent held below cruise speed by a car ahead (resets when free). Once
   // it passes the patience threshold an overtaker looks to pass.
   heldSec: number;
@@ -408,6 +417,9 @@ export interface Car {
   // halted bus KEEPS its road body, which is precisely why the traffic behind it
   // queues instead of flowing past.
   parkOnLane: boolean;
+  // Did it BACK into the space it is in? Decides which way it leaves, because
+  // that is the point of backing in: you drive out facing the traffic.
+  parkedReverse: boolean;
   // True while the car is driving a FORWARD exit curve, where `manoeuvre` runs 0
   // (in the space) → 1 (back on the road). An echelon or 90° bay instead replays
   // its entry curve BACKWARDS (1 → 0), which is the real motion: you reverse out
@@ -452,6 +464,12 @@ const PARKING = {
   speed: 0.16,
   // How many car parks a driver will try before giving up and driving on.
   maxTries: 2,
+  // Fraction of drivers who BACK INTO a 90° or echelon bay instead of nosing in
+  // — and who therefore drive out of it forwards, which is why they do it. A
+  // minority, so both manoeuvres are on screen at once without either dominating.
+  // Does not apply to a kerbside space: whether one of those can be nosed into is
+  // geometry, not preference.
+  reverseFraction: 0.35,
   // Clear road (tiles) a car needs BEHIND its slot before it pulls out of a bay.
   // Clear road (tiles) a car wants behind its slot before it actually rolls out of
   // a bay — about a car's braking distance at cruise plus its following gap.
@@ -823,6 +841,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // A third independent stream for driver-behaviour (overtaker?) draws, so adding
   // it doesn't shift the seeded speed/kind or route sequences.
   const driverRng = makeRng((config.seed ?? 1) ^ 0x517cc1b7);
+  // A fourth: which drivers BACK INTO a bay. Separate so the trait can be added
+  // without moving anybody's speed, kind, route or overtaking decision.
+  const parkerRng = makeRng((config.seed ?? 1) ^ 0x2545f491);
   const overtakeFraction = Math.max(0, Math.min(1, config.overtakeFraction ?? OVERTAKE.fraction));
   const spawnInterval = config.spawnInterval ?? DEFAULT_SPAWN_INTERVAL;
   const fillFast = config.fillFast ?? false;
@@ -2090,6 +2111,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     carGap: CAR_GAP,
     tuning: {
       ...PARKING,
+      reverseFraction: PARKING.reverseFraction,
       arriveEps: PARK_ARRIVE_EPS,
       stoppedYielding: STOPPED_YIELDING,
     },
@@ -2375,6 +2397,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneVel: 0,
       lanePivot: null,
       overtaker: false,
+      reverseParker: false,
+      parkedReverse: false,
       heldSec: 0,
       overtakePhase: "none",
       overtakeOf: null,
@@ -2445,6 +2469,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // Buses never overtake (they ride their lane, preferring the bus lane). Draw
     // from the driver RNG regardless so its stream stays stable across mixes.
     const overtaker = driverRng() < overtakeFraction && cls !== "bus";
+    // A minority back into a 90° bay. Its OWN stream: a draw added to the driver
+    // stream shifts every later draw on it, and two seeded overtaking tests failed
+    // the moment it shared one. A new decision class gets a new stream — the same
+    // rule that keeps route planning off the speed/kind sequence.
+    const reverseParker = parkerRng() < PARKING.reverseFraction;
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
     // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
@@ -2479,6 +2508,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneVel: 0,
       lanePivot: null,
       overtaker,
+      reverseParker,
+      parkedReverse: false,
       heldSec: 0,
       overtakePhase: "none",
       overtakeOf: null,
