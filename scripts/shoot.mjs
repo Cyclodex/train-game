@@ -14,6 +14,10 @@
 //   --label <name>    filename suffix, e.g. --label before  → roadoneway-before.png
 //   --no-debug        hide the debug overlay (paint/markings only)
 //   --backdrop        keep the themed backdrop (default: flat for clarity)
+//   --send            click every fare pin before settling (Tycoon boards start
+//                     with every train WAITING, so nothing on them moves — and
+//                     states that only exist once trains are rolling, like a pin
+//                     held by another train's block, are otherwise unshootable)
 //   --density <0-100> car density % (default: 60)
 //   --wait <ms>       settle time before the shot (default: 4500)
 //   --port <n>        dev-server port (default: 5181)
@@ -35,6 +39,7 @@ function parseArgs(argv) {
     label: "",
     debug: true,
     backdrop: false,
+    send: false,
     density: 60,
     wait: 4500,
     port: 5181,
@@ -44,6 +49,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--no-debug") opt.debug = false;
     else if (a === "--backdrop") opt.backdrop = true;
+    else if (a === "--send") opt.send = true;
     else if (a === "--out") opt.out = argv[++i];
     else if (a === "--label") opt.label = argv[++i];
     else if (a === "--density") opt.density = Number(argv[++i]);
@@ -99,10 +105,33 @@ async function waitForServer(url, timeoutMs, died) {
   throw new Error(`dev server did not start at ${url} within ${timeoutMs}ms`);
 }
 
+// Is anything already answering on our port? `--strictPort` stops Vite sharing a
+// port, but it does NOT stop us from photographing a server that is not ours:
+// waitForServer accepts any 200, so an orphaned dev server left behind by an
+// earlier run — quite possibly from a different worktree, with a different
+// checkout of the scenarios — would be shot instead, silently, and the pictures
+// would look plausible. Refuse loudly rather than lie.
+async function portInUse(url) {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(2000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const { ids, opt } = parseArgs(process.argv.slice(2));
   mkdirSync(opt.out, { recursive: true });
   const base = `http://localhost:${opt.port}`;
+
+  if (await portInUse(base)) {
+    throw new Error(
+      `something is already serving ${base} — it is not the server this script ` +
+        `started, so the shots would be of someone else's checkout. Stop it ` +
+        `(it is usually an orphaned dev server from an earlier run) or pass --port <n>.`,
+    );
+  }
 
   // Start a dedicated dev server (strict port so we never hit a stale one).
   // On Windows the npm launcher is `npm.cmd`; spawning bare "npm" there ENOENTs.
@@ -116,13 +145,15 @@ async function main() {
   );
   const shutdown = () => {
     try {
-      // Kill the process TREE, not the handle we hold. On Windows `shell: true`
-      // makes `server` the cmd.exe wrapper, and `.kill()` reaps only that — vite
-      // itself lives on, still holding the port. Every run then leaked a server,
-      // and the NEXT run collided with its own leftovers (and, before the guard
-      // above, silently shot whatever that stale server was serving).
-      if (onWin && server.pid) {
-        spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"], { stdio: "ignore" });
+      if (onWin) {
+        // `shell: true` means what we actually spawned is cmd.exe, and killing
+        // THAT leaves the vite process it launched running — an orphan holding
+        // the port, which the next run would have silently photographed (see the
+        // pre-flight check above; it exists because this leak went unnoticed for
+        // a day). /T takes the whole tree with it.
+        spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"], {
+          stdio: "ignore",
+        });
       } else {
         server.kill("SIGTERM");
       }
@@ -168,6 +199,24 @@ async function main() {
       if (await slider.count()) {
         await slider.fill(String(opt.density));
         await slider.dispatchEvent("input");
+      }
+
+      // Tycoon boards open with every train WAITING behind its fare pin, so a
+      // plain shot of one is a still life. --send clicks every pin — that click
+      // IS the dispatch verb — so the settle window below catches the board in
+      // motion, including states that only exist once trains are rolling (a pin
+      // held by another train's reserved block). Pair it with a short --wait:
+      // 4.5s is long enough for a small board to finish its runs and go quiet.
+      if (opt.send) {
+        const pins = page.locator(".fare-pin");
+        for (let i = 0, n = await pins.count(); i < n; i++) {
+          // A pin can vanish between the count and the click (its train parks),
+          // and one that is already gone is not an error worth failing a shot for.
+          await pins
+            .nth(i)
+            .click({ force: true, timeout: 2000 })
+            .catch(() => {});
+        }
       }
 
       // Grow the viewport to fit the whole board BEFORE settling. A screenshot

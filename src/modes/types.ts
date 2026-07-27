@@ -8,6 +8,7 @@ import {
   createObjectiveTracker,
 } from "@/sim/objectives";
 import { EconomySpec, FareSpec } from "@/sim/economy";
+import { CalendarSetup } from "@/sim/calendar";
 
 // Which existing player controls a mode enables. The sim already implements all
 // of these; a mode only gates whether the view exposes them.
@@ -41,6 +42,11 @@ export interface EconomySetup extends EconomySpec {
   // The fare each train carries, by train id. A train with no entry is simply
   // worth nothing — useful for scenery//test trains that only exist to move.
   fares?: Record<string, FareSpec>;
+  // The SECOND clock (design doc §1.3): an in-game calendar and the annual
+  // upkeep levied on the track the player laid. Omitted → no calendar and no
+  // tax, which is every board that has not been tuned for one; the money HUD
+  // then shows the balance line alone, exactly as before.
+  calendar?: CalendarSetup;
 }
 
 // What a mode hands back from setup(): the board, trains, optional pinned colours,

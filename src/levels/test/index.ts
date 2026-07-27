@@ -6,6 +6,7 @@ import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
 import { switchDefault } from "@/levels/test/scenarios/switch-default";
+import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
@@ -16,13 +17,6 @@ import { roadcurveloops } from "@/levels/test/scenarios/roadcurveloops";
 import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
 import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
-import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
-import { parkinglot } from "@/levels/test/scenarios/parkinglot";
-import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
-import { busstops } from "@/levels/test/scenarios/busstops";
-import { buslayby } from "@/levels/test/scenarios/buslayby";
-import { parkvariants } from "@/levels/test/scenarios/parkvariants";
-import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
 import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
@@ -78,10 +72,23 @@ import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
+import { faredistance } from "@/levels/test/scenarios/faredistance";
+import { heldby } from "@/levels/test/scenarios/heldby";
+import { buildgap } from "@/levels/test/scenarios/buildgap";
+import { taxyear } from "@/levels/test/scenarios/taxyear";
+import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
 import { lakevalley } from "@/levels/test/scenarios/lakevalley";
+import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
+import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
+import { parkinglot } from "@/levels/test/scenarios/parkinglot";
+import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
+import { busstops } from "@/levels/test/scenarios/busstops";
+import { buslayby } from "@/levels/test/scenarios/buslayby";
+import { parkvariants } from "@/levels/test/scenarios/parkvariants";
+import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -120,7 +127,7 @@ export const DOMAINS: ScenarioDomain[] = [
     label: "Trains",
     categories: [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
-      { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault] },
+      { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross] },
       {
         id: "crossings",
@@ -185,12 +192,12 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, daily] },
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, taxyear, bankrupt, daily] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, demoworld, parkcity] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, lakevalleyOpen, demoworld, parkcity] },
     ],
   },
 ];

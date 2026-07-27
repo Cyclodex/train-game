@@ -14,7 +14,7 @@
 // track, then bridges, then rock), each with its own /test scenario.
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, groundShadow, lerp, tree } from "@/utils/foliage";
+import { Rng, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
@@ -57,10 +57,29 @@ const MID_OF_LEAN = 0.75;
 // convex, but the CUSPS BETWEEN THEM drew the tile grid back onto the shore, so
 // you could count the tiles down the side of a lake. The push gives the shore
 // somewhere else to be; the slope is what makes the two tiles' curves meet
-// smoothly rather than at a kink (see shoreEdge).
-const CORNER_PUSH_MIN = 4;
-const CORNER_PUSH_MAX = 13;
+// smoothly rather than at a kink (see patchSegments).
+const CORNER_PUSH_MIN = 7;
+const CORNER_PUSH_MAX = 19;
 const CORNER_SLOPE = 5;
+
+// A REAL corner — where the patch genuinely turns — is pulled INWARD, along the
+// tile's diagonal. This is what finally stopped an authored block silhouetting
+// as its own bounding box: outward bows alone still left every corner sitting on
+// the box corner, so a 3x2 lake was a rectangle with wavy edges. Pulling the
+// corner a third of the way into the tile (while the mid-shore points push OUT)
+// makes the outline sweep from outside the lattice line down into the tile and
+// back — an effective corner radius of most of a tile, which is what reads as a
+// rounded blob. The two amounts vary per corner so the blob is never a circle.
+const CORNER_INSET_MIN = 14;
+const CORNER_INSET_MAX = 26;
+
+// How much a real corner's end tangents lean outward, as a multiple of the old
+// bow-derived lean. At ~1 the outline turned ~78° at the corner point — a
+// softened right angle, which is why a lone tile still read as a square. Scaled
+// up until the lean is comparable to `reach`, both edges leave the corner at
+// roughly 45°, so the turn spreads over the whole corner sweep instead of
+// happening at the point. Capped just under `reach` or the cubic could loop.
+const CORNER_ROUNDING = 2.2;
 
 // A continuing (internal) edge is pushed a hair OUTWARD instead of being drawn
 // as an exact shared line. Two patches that abut precisely still show a hairline
@@ -247,6 +266,20 @@ export function cornerSlope(gx: number, gy: number, seed: number): number {
   return (r() * 2 - 1) * CORNER_SLOPE;
 }
 
+/**
+ * How far a REAL corner is pulled into its tile, along the diagonal. Seeded by
+ * the lattice point for determinism, but unlike push/slope it needs no cross-
+ * tile agreement: a corner-role point is only ever drawn through by ONE tile of
+ * the patch (a same-kind side neighbour would change the role), so the pull can
+ * be as personal as it likes. Two patches kissing diagonally each pull into
+ * their own tile and separate into two bodies — deliberate: two diagonal ponds
+ * touching at a point read as a defect, not as a lake.
+ */
+export function cornerInset(gx: number, gy: number, seed: number): number {
+  const r = makeRng(hashInts(seed, gx, gy, 0x77));
+  return lerp(CORNER_INSET_MIN, CORNER_INSET_MAX, r());
+}
+
 type Pt = { x: number; y: number };
 
 // Each edge in the order the clockwise outline walks it: the direction it runs,
@@ -286,7 +319,8 @@ function cornerRoles(stops: boolean[], diag: boolean[]): CornerRole[] {
 }
 
 // The tile's four corners in local space, each displaced by its lattice point's
-// shared offset and, mid-shore, pushed outward. Clockwise from the top-left.
+// shared offset — then, mid-shore, pushed outward, or at a real corner pulled
+// INWARD along the diagonal (see CORNER_INSET). Clockwise from the top-left.
 function corners(
   x: number,
   y: number,
@@ -309,6 +343,14 @@ function corners(
       const out = EDGE_FRAME[role.edge].out;
       p.x += out.x * push;
       p.y += out.y * push;
+    } else if (role.kind === "corner") {
+      // The inward diagonal is opposite the two adjacent edges' outward
+      // normals; their sum has length sqrt(2), so divide to get a unit pull.
+      const inset = cornerInset(gx, gy, seed);
+      const oBefore = EDGE_FRAME[(i + 3) % 4].out;
+      const oAfter = EDGE_FRAME[i].out;
+      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * inset;
+      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * inset;
     }
     return p;
   });
@@ -327,39 +369,15 @@ function cornerLattice(x: number, y: number): [number, number][] {
 
 const n1 = (v: number) => v.toFixed(1);
 
-/**
- * One boundary, as a cubic whose END TANGENTS are chosen, not implied.
- *
- * This is the whole trick. A quadratic bowing off the chord leaves each corner
- * at an angle, so where two tiles' shores met the outline kinked ~47° — a sharp
- * inward V at every tile boundary, which is the tile grid drawn back onto the
- * lake. Here each end contributes `dir * reach` along the shore plus `out *
- * lean` across it, and at a mid-shore corner BOTH tiles read the same `lean`
- * (the lattice point's shared slope) from the same frame — so the two curves
- * leave and arrive along one line and the join disappears.
- *
- * `leadOut` is the slope leaving `a`, `leadIn` the slope arriving at `b`, both
- * positive = outward. A real corner passes +lean / −lean, which bulges the edge
- * out and brings it back: that is what rounds a lone patch into a blob.
- */
-function shoreEdge(
-  a: Pt,
-  b: Pt,
-  frame: { dir: Pt; out: Pt },
-  reach: number,
-  leadOut: number,
-  leadIn: number,
-): string {
-  const { dir, out } = frame;
-  const p1 = {
-    x: a.x + dir.x * reach + out.x * leadOut,
-    y: a.y + dir.y * reach + out.y * leadOut,
-  };
-  const p2 = {
-    x: b.x - dir.x * reach - out.x * leadIn,
-    y: b.y - dir.y * reach - out.y * leadIn,
-  };
-  return `C${n1(p1.x)} ${n1(p1.y)} ${n1(p2.x)} ${n1(p2.y)} ${n1(b.x)} ${n1(b.y)}`;
+// One boundary's cubic geometry: start, both controls, end. Built by
+// patchSegments, consumed by the path builders, the rim, and the scatter
+// containment polygon — one derivation, so they can never disagree.
+interface ShoreSeg {
+  a: Pt;
+  p1: Pt;
+  p2: Pt;
+  b: Pt;
+  stops: boolean;
 }
 
 // The slope to hand `shoreEdge` at one end of an edge. `sign` is +1 leaving a
@@ -419,13 +437,86 @@ function patchFrame(same: PatchSame, x: number, y: number, seed: number, size: n
 }
 
 // The outward lean that rounds a real corner, derived from this edge's own bow
-// so each shore still bulges by a different amount (see EDGE_BOW). `edgeBow` is
-// negative for outward; `shoreEdge` takes outward as positive.
-function edgeLean(g: [number, number][], i: number, seed: number): number {
+// so each corner still turns by a different amount (see EDGE_BOW), scaled up by
+// CORNER_ROUNDING so the turn is spread over the whole sweep rather than
+// happening at the point. `edgeBow` is negative for outward; a lead takes
+// outward as positive. Capped just under `reach`: a lean past the along-shore
+// component would tip the end tangent beyond 45° and risk a loop.
+function edgeLean(
+  g: [number, number][],
+  i: number,
+  seed: number,
+  reach: number,
+): number {
   const [ax, ay] = g[i];
   const [bx, by] = g[(i + 1) % 4];
-  return -edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN;
+  const lean = (-edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN) * CORNER_ROUNDING;
+  return Math.min(lean, reach * 0.95);
 }
+
+/**
+ * Every boundary of the patch, as cubics whose END TANGENTS are chosen, not
+ * implied.
+ *
+ * This is the whole trick. A quadratic bowing off the chord leaves each corner
+ * at an angle, so where two tiles' shores met the outline kinked ~47° — a sharp
+ * inward V at every tile boundary, which is the tile grid drawn back onto the
+ * lake. Here each end contributes `dir * reach` along the shore plus `out *
+ * lead` across it, and at a mid-shore corner BOTH tiles read the same lead
+ * (the lattice point's shared slope) from the same frame — so the two curves
+ * leave and arrive along one line and the join disappears.
+ *
+ * `leadOut` is the slope leaving `a`, `leadIn` the slope arriving at `b`, both
+ * positive = outward. A real corner passes +lean / −lean, which bulges the edge
+ * out and brings it back; with the corner point itself pulled inward (see
+ * CORNER_INSET) that sweep is what rounds a lone patch into a blob. An internal
+ * join runs a hair outward on both ends so two abutting bodies overlap by ~1
+ * unit of the same colour instead of leaving an antialiasing hairline.
+ */
+function patchSegments(
+  same: PatchSame,
+  x: number,
+  y: number,
+  seed: number,
+  size: number,
+): ShoreSeg[] {
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
+  const segs: ShoreSeg[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = c[i];
+    const b = c[(i + 1) % 4];
+    const j = (i + 1) % 4;
+    const { dir, out } = EDGE_FRAME[i];
+    let leadOut: number;
+    let leadIn: number;
+    if (!stops[i]) {
+      const seam = SEAM_OVERLAP / MID_OF_LEAN;
+      leadOut = seam;
+      leadIn = -seam;
+    } else {
+      const lean = edgeLean(g, i, seed, reach);
+      leadOut = edgeLead(roles[i], g[i], seed, lean, 1);
+      leadIn = edgeLead(roles[j], g[j], seed, lean, -1);
+    }
+    segs.push({
+      a,
+      p1: {
+        x: a.x + dir.x * reach + out.x * leadOut,
+        y: a.y + dir.y * reach + out.y * leadOut,
+      },
+      p2: {
+        x: b.x - dir.x * reach - out.x * leadIn,
+        y: b.y - dir.y * reach - out.y * leadIn,
+      },
+      b,
+      stops: stops[i],
+    });
+  }
+  return segs;
+}
+
+const cubic = (s: ShoreSeg) =>
+  `C${n1(s.p1.x)} ${n1(s.p1.y)} ${n1(s.p2.x)} ${n1(s.p2.y)} ${n1(s.b.x)} ${n1(s.b.y)}`;
 
 /**
  * The outline of this tile's terrain patch. An edge whose neighbour carries the
@@ -440,31 +531,9 @@ export function patchPath(
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
-  const out = [`M${n1(c[0].x)} ${n1(c[0].y)}`];
-  for (let i = 0; i < 4; i++) {
-    const a = c[i];
-    const b = c[(i + 1) % 4];
-    const j = (i + 1) % 4;
-    if (!stops[i]) {
-      // An internal join: a hair outward on both ends so two abutting bodies
-      // overlap by ~1 unit of the same colour instead of leaving a hairline.
-      const seam = SEAM_OVERLAP / MID_OF_LEAN;
-      out.push(shoreEdge(a, b, EDGE_FRAME[i], reach, seam, -seam));
-      continue;
-    }
-    const lean = edgeLean(g, i, seed);
-    out.push(
-      shoreEdge(
-        a,
-        b,
-        EDGE_FRAME[i],
-        reach,
-        edgeLead(roles[i], g[i], seed, lean, 1),
-        edgeLead(roles[j], g[j], seed, lean, -1),
-      ),
-    );
-  }
+  const segs = patchSegments(same, x, y, seed, size);
+  const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
+  for (const s of segs) out.push(cubic(s));
   out.push("Z");
   return out.join(" ");
 }
@@ -482,26 +551,58 @@ export function patchRimPath(
   seed = 1,
   size = GROUND_UNITS,
 ): string {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
-  const out: string[] = [];
-  for (let i = 0; i < 4; i++) {
-    if (!stops[i]) continue;
-    const a = c[i];
-    const b = c[(i + 1) % 4];
-    const j = (i + 1) % 4;
-    const lean = edgeLean(g, i, seed);
-    out.push(
-      `M${n1(a.x)} ${n1(a.y)} ${shoreEdge(
-        a,
-        b,
-        EDGE_FRAME[i],
-        reach,
-        edgeLead(roles[i], g[i], seed, lean, 1),
-        edgeLead(roles[j], g[j], seed, lean, -1),
-      )}`,
-    );
+  return patchSegments(same, x, y, seed, size)
+    .filter(s => s.stops)
+    .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
+    .join(" ");
+}
+
+/**
+ * The patch outline flattened to a polygon, for containment tests: scatter must
+ * STAND ON the patch, and with real corners now cutting deep into the tile the
+ * per-kind bands alone no longer guarantee that — a tree placed band-legally in
+ * a corner would stand on grass, a lily on the shore. Six samples per cubic is
+ * plenty at this scale; the shapes are shallow arcs.
+ */
+export function patchOutlinePolygon(
+  same: PatchSame,
+  x = 0,
+  y = 0,
+  seed = 1,
+  size = GROUND_UNITS,
+): Pt[] {
+  const pts: Pt[] = [];
+  for (const s of patchSegments(same, x, y, seed, size)) {
+    for (let k = 0; k < 6; k++) {
+      const t = k / 6;
+      const u = 1 - t;
+      const w0 = u * u * u;
+      const w1 = 3 * u * u * t;
+      const w2 = 3 * u * t * t;
+      const w3 = t * t * t;
+      pts.push({
+        x: w0 * s.a.x + w1 * s.p1.x + w2 * s.p2.x + w3 * s.b.x,
+        y: w0 * s.a.y + w1 * s.p1.y + w2 * s.p2.y + w3 * s.b.y,
+      });
+    }
   }
-  return out.join(" ");
+  return pts;
+}
+
+/** Standard even-odd ray cast. Exported for the geometry tests. */
+export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (
+      a.y > p.y !== b.y > p.y &&
+      p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 // --- Scatter -----------------------------------------------------------------
@@ -512,33 +613,35 @@ export function patchRimPath(
 // individual trees at full zoom.
 const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   grass: [0, 0],
-  forest: [4, 7],
+  forest: [9, 14],
   water: [0, 2],
   rock: [4, 6],
   mountain: [2, 3],
   urban: [4, 6],
 };
 
-// Where on the tile the standing objects go, and how big they get. Objects are
-// kept off the very edge so a canopy doesn't collide with the neighbour's and
-// nothing overhangs a rail on the tile boundary — but a mountain needs its feet
-// LOW in the tile, because it is tall enough to run out of headroom otherwise.
+// Where on the tile the standing objects go, and how big they get. Everything
+// is drawn TOP-DOWN now (see foliage.ts), so nothing grows upward out of its
+// band — objects only need enough margin that their own footprint stays clear
+// of a rail on the tile boundary, and `place` pulls them onto the patch anyway.
 interface ScatterBand {
   x: [number, number];
   y: [number, number];
   scale: [number, number];
 }
-const DEFAULT_BAND: ScatterBand = { x: [16, 84], y: [24, 88], scale: [0.72, 1.15] };
+const DEFAULT_BAND: ScatterBand = { x: [16, 84], y: [16, 84], scale: [0.72, 1.15] };
 const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
+  // Canopies are meant to overlap into a wood, so trees run almost to the
+  // patch edge — the containment walk keeps them on the patch.
+  forest: { x: [10, 90], y: [10, 90], scale: [0.72, 1.15] },
   // Boulders are bigger than a tree's footprint, so they keep a deeper margin.
-  rock: { x: [20, 80], y: [24, 86], scale: [0.72, 1.15] },
-  // Peaks stand ~50 units tall, so they start in the bottom half and grow up
-  // through the tile. Overflowing into the tile ABOVE is deliberate: the row
-  // below is later in the DOM, so a near peak correctly occludes a far one.
-  mountain: { x: [26, 74], y: [60, 88], scale: [0.8, 1.15] },
+  rock: { x: [20, 80], y: [20, 80], scale: [0.72, 1.15] },
+  // A ridge is the biggest footprint on the board; keep its centre well inside
+  // the tile so the massif stays on its own ground.
+  mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
   // Buildings are wider than a tree, so they need a deeper margin to stay clear
   // of the tile edge.
-  urban: { x: [22, 78], y: [32, 86], scale: [0.78, 1.1] },
+  urban: { x: [22, 78], y: [22, 80], scale: [0.78, 1.1] },
 };
 
 type Pt2 = { x: number; y: number };
@@ -559,90 +662,73 @@ function stone(rng: Rng, light: number, sat: [number, number] = [5, 13]): string
 
 // Shadow tints per ground. foliage's default is green (it is meadow shadow);
 // dropped on grey rock it reads as a patch of moss, and on a town's render as
-// a lawn. See groundShadow.
+// a lawn.
 const STONE_SHADOW = "rgba(28,36,48,0.22)";
 const TOWN_SHADOW = "rgba(58,48,38,0.18)";
 
-// One irregular silhouette, walked from the left foot over the top to the right
-// foot. The facets are then cut OUT of it, so shape and shading can never
-// disagree — the old boulder was a fixed five-point polygon with a triangle
-// stuck on the right, which meant every rock on the board was the same rock.
-function rockOutline(rng: Rng, r: number, h: number, steps = 6): Pt2[] {
+// An irregular closed blob around (0,0): the footprint of a rock seen from
+// above. Points walk the full circle with jittered radius, so no two rocks on
+// the board are the same rock.
+function blobPts(rng: Rng, r: number, n: number, squish = 1): Pt2[] {
+  const rot = rng() * Math.PI * 2;
   const pts: Pt2[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps; // 0 = left foot .. 1 = right foot
-    const ang = Math.PI * (1 - t);
-    const jit = lerp(0.8, 1.15, rng());
-    pts.push({ x: Math.cos(ang) * r * jit, y: -Math.sin(ang) * h * jit });
+  for (let i = 0; i < n; i++) {
+    const ang = rot + (i / n) * Math.PI * 2;
+    const rad = r * lerp(0.78, 1.15, rng());
+    pts.push({ x: Math.cos(ang) * rad, y: Math.sin(ang) * rad * squish });
   }
-  // Feet must sit exactly on the ground line or the rock floats.
-  pts[0] = { x: -r, y: 0 };
-  pts[steps] = { x: r, y: 0 };
   return pts;
 }
 
-/** The index of the highest point of an outline — the rock's summit. */
-function apexIndex(sil: Pt2[]): number {
-  let ai = 0;
-  for (let i = 1; i < sil.length; i++) if (sil[i].y < sil[ai].y) ai = i;
-  return ai;
+// Split a blob into its NW-facing (lit) and SE-facing (shaded) halves along the
+// chord between its most-NW and most-SE vertices. Shape and shading come from
+// the same points, so they can never disagree.
+function splitBySun(pts: Pt2[]): { lit: Pt2[]; shade: Pt2[] } {
+  const n = pts.length;
+  let i0 = 0;
+  let i1 = 0;
+  for (let i = 1; i < n; i++) {
+    if (pts[i].x + pts[i].y < pts[i0].x + pts[i0].y) i0 = i;
+    if (pts[i].x + pts[i].y > pts[i1].x + pts[i1].y) i1 = i;
+  }
+  const walk = (from: number, to: number): Pt2[] => {
+    const out: Pt2[] = [];
+    for (let i = from; ; i = (i + 1) % n) {
+      out.push(pts[i]);
+      if (i === to) break;
+    }
+    return out;
+  };
+  const a = walk(i0, i1);
+  const b = walk(i1, i0);
+  const sun = (h: Pt2[]) => h.reduce((s, p) => s + p.x + p.y, 0) / h.length;
+  return sun(a) <= sun(b) ? { lit: a, shade: b } : { lit: b, shade: a };
 }
 
 /**
- * A boulder: an irregular block split into a lit left face and a shaded right
- * face along its own ridge, with a highlight facet on the crown. Squat by
- * default, occasionally blocky and upright, so a rock field reads as varied
- * ground rather than as a row of identical props.
+ * A boulder, TOP-DOWN: an irregular blob split along the sun chord — lit toward
+ * the NW, shaded toward the SE — with a small bright crown offset toward the
+ * light and a drop shadow offset away from it.
  *
  * The tones sit CLOSE together on purpose. A near-white face against a near-
  * black one turns every rock into a paper cutout; a boulder is one lump of grey
- * catching the light unevenly, which is three tones a few steps apart.
+ * catching the light unevenly, which is tones a few steps apart.
  */
 function boulder(rng: Rng, scale: number): string {
-  const r = lerp(13, 20, rng()) * scale;
-  const upright = rng() < 0.35;
-  const h = r * (upright ? lerp(0.95, 1.25, rng()) : lerp(0.5, 0.78, rng()));
-  const sil = rockOutline(rng, r, h);
-  const light = stone(rng, lerp(68, 75, rng()));
-  const mid = stone(rng, lerp(58, 64, rng()));
-  const dark = stone(rng, lerp(44, 51, rng()));
-
-  const ai = apexIndex(sil);
-  const apex = sil[ai];
-  // Where the ridge running down the front of the rock meets the ground. Off
-  // centre, so the lit face is the bigger one (light comes from the left).
-  const front: Pt2 = { x: apex.x * 0.3 + r * 0.14, y: 0 };
-  const litFace = [...sil.slice(0, ai + 1), front];
-  const shadeFace = [apex, ...sil.slice(ai + 1), front];
-
-  // A crown facet: the sliver either side of the apex, a touch brighter than
-  // the lit face. It is what stops a big rock reading as a two-tone wedge.
-  const prev = sil[Math.max(0, ai - 1)];
-  const next = sil[Math.min(sil.length - 1, ai + 1)];
-  const crown = poly(
-    [
-      { x: lerp(prev.x, apex.x, 0.5), y: lerp(prev.y, apex.y, 0.5) },
-      apex,
-      { x: lerp(next.x, apex.x, 0.55), y: lerp(next.y, apex.y, 0.55) },
-      { x: apex.x * 0.55, y: apex.y * 0.5 },
-    ],
-    stone(rng, lerp(77, 83, rng())),
-  );
-
-  // A bedding plane / crack across the lit face, at low opacity so it reads as
-  // texture rather than as an outline.
-  const crack =
-    rng() < 0.55
-      ? `<path d="M${n1(apex.x)} ${n1(apex.y)} L${n1(lerp(sil[0].x, front.x, 0.35))} ${n1(-h * 0.12)}" stroke="${dark}" stroke-width="${n1(Math.max(0.5, r * 0.07))}" fill="none" opacity="0.3" stroke-linecap="round"/>`
-      : "";
-
+  const r = lerp(10, 16, rng()) * scale;
+  const pts = blobPts(rng, r, 8, lerp(0.72, 1, rng()));
+  const { lit, shade } = splitBySun(pts);
+  // Offsets are baked into the POINTS, not wrapped in a nested translate: the
+  // only translate() in a tile's art is the placement of each object, which is
+  // what lets the placement tests parse positions back out of the SVG.
+  const shift = (ps: Pt2[], by: number): Pt2[] =>
+    ps.map(p => ({ x: p.x + by, y: p.y + by }));
+  const crown = poly(shift(blobPts(rng, r * 0.3, 5), -r * 0.26), stone(rng, lerp(76, 82, rng())));
   return (
-    groundShadow(scale * 0.62, 18, STONE_SHADOW) +
-    poly(sil, mid) +
-    poly(litFace, light) +
-    poly(shadeFace, dark) +
-    crown +
-    crack
+    poly(shift(pts, r * 0.24), STONE_SHADOW) +
+    poly(lit, stone(rng, lerp(66, 73, rng()))) +
+    poly(shade, stone(rng, lerp(46, 53, rng()))) +
+    crown
   );
 }
 
@@ -656,17 +742,12 @@ function boulder(rng: Rng, scale: number): string {
  * ice rather than as gravel.
  */
 function pebble(rng: Rng, scale: number, light = 67): string {
-  const r = lerp(3.4, 6.2, rng()) * scale;
-  const h = r * lerp(0.35, 0.6, rng());
-  const sil = rockOutline(rng, r, h, 3);
-  const ai = apexIndex(sil);
+  const r = lerp(3.2, 5.6, rng()) * scale;
+  const pts = blobPts(rng, r, 5, lerp(0.7, 1, rng()));
+  const { lit, shade } = splitBySun(pts);
   return (
-    groundShadow(scale * 0.16, 18, STONE_SHADOW) +
-    poly(sil, stone(rng, lerp(light, light + 7, rng()))) +
-    poly(
-      [sil[ai], ...sil.slice(ai + 1), { x: sil[ai].x * 0.3, y: 0 }],
-      stone(rng, lerp(light - 23, light - 16, rng())),
-    )
+    poly(lit, stone(rng, lerp(light, light + 7, rng()))) +
+    poly(shade, stone(rng, lerp(light - 23, light - 16, rng())))
   );
 }
 
@@ -699,100 +780,91 @@ function shelf(rng: Rng, base: Hsl): string {
 // --- Mountain ----------------------------------------------------------------
 
 /**
- * A peak: a massif with a ridge, a lit and a shaded flank, and a snow cap —
- * roughly four times a boulder's height, so a mountain range never reads as a
- * rock field that happened to get big. A smaller shoulder behind it, in a hazier
- * tone, gives the range depth on a single tile.
+ * A peak, TOP-DOWN: a RIDGE — a crest line crossing the tile at a random
+ * bearing, with a lit apron falling away to the NW and a shaded one to the SE,
+ * and snow along the high middle of the crest. The aprons taper to nothing at
+ * the crest's ends, so a ridge ends in points rather than in a blunt bar; two
+ * or three of these crossing each other read as a massif.
  */
 function peak(rng: Rng, scale: number): string {
-  // Proportions matter more than size here. A tall narrow cone reads as a spike
-  // or a witch's hat; a massif is roughly as wide at the foot as it is tall.
-  const w = lerp(24, 33, rng()) * scale; // half-width at the foot
-  const h = lerp(34, 48, rng()) * scale; // apex above the foot
-  const apexX = lerp(-0.26, 0.26, rng()) * w;
-  const apex: Pt2 = { x: apexX, y: -h };
+  const len = lerp(40, 58, rng()) * scale; // total crest length
+  const th = rng() * Math.PI; // crest bearing
+  const u: Pt2 = { x: Math.cos(th), y: Math.sin(th) }; // along the crest
+  let v: Pt2 = { x: -u.y, y: u.x }; // across it
+  // `v` must point toward the sun (NW) so the lit apron is on the right side.
+  if (v.x + v.y > 0) v = { x: -v.x, y: -v.y };
 
-  const face = stone(rng, lerp(54, 62, rng()), [10, 18]);
-  const shade = stone(rng, lerp(34, 42, rng()), [12, 20]);
-  const haze = stone(rng, lerp(44, 50, rng()), [8, 14]);
+  // Wider than it is long is what separates a massif from a shard: the aprons
+  // together span more than half the crest, so the footprint is a rugged blob
+  // with a spine, not a spiky lens.
+  const wLit = lerp(14, 19, rng()) * scale;
+  const wShade = lerp(16, 22, rng()) * scale;
+  const face = stone(rng, lerp(56, 64, rng()), [10, 18]);
+  const shade = stone(rng, lerp(36, 44, rng()), [12, 20]);
 
-  // Each flank breaks once, so the ridgeline has a shoulder instead of being a
-  // clean isoceles triangle.
-  const leftBreak: Pt2 = {
-    x: lerp(-w, apexX, lerp(0.42, 0.62, rng())),
-    y: -h * lerp(0.34, 0.5, rng()),
+  // Crest stations, wobbling a little across the axis so the ridge is not a
+  // straight bar. The apron width profile peaks mid-crest and dies at the
+  // ends, and each station's width jitters so the flanks are rugged.
+  const M = 7;
+  const crest: Pt2[] = [];
+  const prof: number[] = [];
+  for (let i = 0; i < M; i++) {
+    const t = i / (M - 1);
+    const s = (t - 0.5) * len;
+    const wob = (rng() * 2 - 1) * 2.5 * scale;
+    crest.push({ x: u.x * s + v.x * wob, y: u.y * s + v.y * wob });
+    prof.push(Math.pow(Math.sin(Math.PI * t), 0.55) * lerp(0.75, 1.2, rng()));
+  }
+  const apron = (side: Pt2, w: number): Pt2[] => {
+    // Crest walked forward, offset points walked back: a closed half-ridge.
+    const out = crest.map((p, i) => ({
+      x: p.x + side.x * w * prof[i],
+      y: p.y + side.y * w * prof[i],
+    }));
+    return [...crest, ...out.reverse()];
   };
-  const rightBreak: Pt2 = {
-    x: lerp(apexX, w, lerp(0.36, 0.58, rng())),
-    y: -h * lerp(0.36, 0.52, rng()),
-  };
-  const foot: Pt2 = { x: apexX * 0.35, y: 0 };
+  const litPoly = apron(v, wLit);
+  const shadePoly = apron({ x: -v.x, y: -v.y }, wShade);
 
-  const massif = [{ x: -w, y: 0 }, leftBreak, apex, rightBreak, { x: w, y: 0 }];
-  const litFlank = [{ x: -w, y: 0 }, leftBreak, apex, foot];
-  const shadeFlank = [apex, rightBreak, { x: w, y: 0 }, foot];
-
-  // The back range: a broad, low, hazy massif standing behind the main summit,
-  // on whichever side the apex leans away from. It is what turns one peak into
-  // a RANGE, and it fills the sky a lone cone leaves empty.
-  const side = apexX > 0 ? -1 : 1;
-  const sw = w * lerp(0.75, 1.05, rng());
-  const sh = h * lerp(0.42, 0.62, rng());
-  const sx = side * w * lerp(0.65, 1.0, rng());
-  const shoulder = poly(
-    [
-      { x: sx - sw, y: 0 },
-      { x: sx - sw * 0.35, y: -sh * lerp(0.62, 0.8, rng()) },
-      { x: sx + side * sw * 0.12, y: -sh },
-      { x: sx + sw * 0.45, y: -sh * lerp(0.5, 0.7, rng()) },
-      { x: sx + sw, y: 0 },
-    ],
-    haze,
-  );
-
-  // Snow, when there is any: everything above a jagged line across the summit.
-  // The cap is cut from the massif's OWN flanks — `snowAt` lands on the segment
-  // between a break and the apex, and every other vertex is interior — so it can
-  // never hang off the silhouette the way a free-standing white wedge does.
-  const snowY = lerp(apex.y, Math.min(leftBreak.y, rightBreak.y), lerp(0.4, 0.75, rng()));
-  const snowAt = (a: Pt2, b: Pt2): Pt2 => {
-    const t = (snowY - b.y) / (a.y - b.y || 1);
-    return { x: lerp(b.x, a.x, t), y: snowY };
-  };
-  const snowL = snowAt(leftBreak, apex);
-  const snowR = snowAt(rightBreak, apex);
-  // Where the ridge running down the front of the mountain crosses the snowline.
-  const ridgeMid: Pt2 = {
-    x: lerp(apex.x, foot.x, (snowY - apex.y) / (0 - apex.y || 1)),
-    y: snowY,
-  };
-  const tongue = (a: Pt2, b: Pt2, t: number, drop: number): Pt2 => ({
-    x: lerp(a.x, b.x, t),
-    y: snowY + h * drop,
-  });
+  // A snowfield along the summit: the interior of the crest, spreading a good
+  // way down both flanks, in a bright and a dim tone so the crest line
+  // survives under it. The field carries its own taper so it dies out toward
+  // the crest ends in points — without it the snow's cut-off edge is a hard
+  // chevron across the ridge.
+  const K = M - 2;
+  const mid = crest.slice(1, M - 1);
+  const midProf = prof
+    .slice(1, M - 1)
+    .map((p, j) => p * Math.sin((Math.PI * (j + 0.5)) / K));
+  const snowSide = (side: Pt2, w: number): Pt2[] => [
+    ...mid,
+    ...mid
+      .map((p, i) => ({
+        x: p.x + side.x * w * midProf[i],
+        y: p.y + side.y * w * midProf[i],
+      }))
+      .reverse(),
+  ];
   const snow = rng() < 0.82;
   const snowLit = snow
-    ? poly(
-        [snowL, apex, ridgeMid, tongue(ridgeMid, snowL, 0.55, lerp(0.03, 0.1, rng()))],
-        "hsl(202 24% 94%)",
-      )
+    ? poly(snowSide(v, wLit * lerp(0.45, 0.6, rng())), "hsl(202 24% 94%)")
     : "";
   const snowShade = snow
-    ? poly(
-        [apex, snowR, tongue(snowR, ridgeMid, 0.45, lerp(0.02, 0.08, rng())), ridgeMid],
-        "hsl(208 18% 78%)",
-      )
+    ? poly(snowSide({ x: -v.x, y: -v.y }, wShade * lerp(0.35, 0.5, rng())), "hsl(208 18% 78%)")
     : "";
 
-  return (
-    groundShadow(scale * 0.95, 24, STONE_SHADOW) +
-    shoulder +
-    poly(massif, face) +
-    poly(litFlank, face) +
-    poly(shadeFlank, shade) +
-    snowLit +
-    snowShade
+  // The full silhouette: lit-side offsets walked forward, shade-side offsets
+  // walked back. The end stations have zero width, so the two sides meet at the
+  // crest's endpoints and the loop closes. The shadow offset is baked into the
+  // points (no nested translate — see boulder).
+  const off = 3.6 * scale;
+  const silhouette = [...[...litPoly.slice(M)].reverse(), ...shadePoly.slice(M)];
+  const shadow = poly(
+    silhouette.map(p => ({ x: p.x + off, y: p.y + off })),
+    STONE_SHADOW,
   );
+
+  return shadow + poly(litPoly, face) + poly(shadePoly, shade) + snowLit + snowShade;
 }
 
 // --- Town --------------------------------------------------------------------
@@ -802,87 +874,88 @@ function renderTone(rng: Rng, light: number): string {
   return `hsl(${Math.round(lerp(26, 44, rng()))} ${Math.round(lerp(12, 26, rng()))}% ${Math.round(light)}%)`;
 }
 
-/** A row of little dark windows across a facade. */
-function windows(w: number, h: number, cols: number, rows: number, tone: string): string {
-  const out: string[] = [];
-  const ww = (w / cols) * 0.45;
-  const wh = (h / rows) * 0.42;
-  for (let c = 0; c < cols; c++) {
-    for (let rI = 0; rI < rows; rI++) {
-      const cx = -w / 2 + (w / cols) * (c + 0.5);
-      const cy = -h + (h / rows) * (rI + 0.5);
-      out.push(
-        `<rect x="${n1(cx - ww / 2)}" y="${n1(cy - wh / 2)}" width="${n1(ww)}" height="${n1(wh)}" fill="${tone}" opacity="0.75"/>`,
-      );
-    }
-  }
-  return out.join("");
+// A building's drop shadow: its own footprint offset to the SOUTH-EAST, matching
+// the canopies' sun (see foliage.ts). Drawn inside the building's rotated frame;
+// the jitter is small enough (±14°) that the offset still reads as one sun.
+function roofShadow(w: number, d: number, scale: number): string {
+  const off = 2.6 * scale;
+  return `<rect x="${n1(-w / 2 + off)}" y="${n1(-d / 2 + off)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${TOWN_SHADOW}"/>`;
 }
 
 /**
- * One building. A town is not a row of identical cottages, so this is three
- * archetypes off one RNG: a pitched-roof house, a flat-roofed block (the "town
- * centre" mass that makes a settlement read as bigger than a hamlet), and a low
- * hall/shed. All share the trees' lighting: lit left, shaded right.
+ * One building, TOP-DOWN: what you see of a town from above is its roofs. Three
+ * archetypes off one RNG — a pitched tile roof split along the ridge (lit half
+ * toward the NW sun), a flat block with a parapet and roof boxes, and a long
+ * metal hall — each centred on its footprint and rotated a few degrees so the
+ * town doesn't grid up.
  */
 function building(rng: Rng, scale: number): string {
   const roll = rng();
-  const lit = renderTone(rng, lerp(82, 90, rng()));
-  const dim = renderTone(rng, lerp(62, 70, rng()));
-  const glass = "hsl(210 20% 38%)";
+  const a = lerp(-14, 14, rng());
+  const wrap = (body: string) => `<g transform="rotate(${a.toFixed(1)})">${body}</g>`;
 
-  // Flat-roofed block: taller and wider than a house, with real windows.
+  // Flat-roofed block: a parapet ring around a slab, with rooftop boxes.
+  // Concrete GREY, not the walls' warm render: on the tan urban ground a warm
+  // roof at any lightness either vanishes into it or reads as blank paper —
+  // the roof has to change temperature, not just tone, to read as a roof.
   if (roll < 0.3) {
-    const w = lerp(19, 27, rng()) * scale;
-    const h = lerp(16, 24, rng()) * scale;
-    const split = w * lerp(0.55, 0.68, rng());
-    return (
-      groundShadow(scale * 0.85, 16, TOWN_SHADOW) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(split)}" height="${n1(h)}" fill="${lit}"/>` +
-      `<rect x="${n1(-w / 2 + split)}" y="${n1(-h)}" width="${n1(w - split)}" height="${n1(h)}" fill="${dim}"/>` +
-      // Parapet: a thin darker cap that reads as the roof slab's edge.
-      `<rect x="${n1(-w / 2 - 0.8 * scale)}" y="${n1(-h - 2 * scale)}" width="${n1(w + 1.6 * scale)}" height="${n1(2.4 * scale)}" fill="${renderTone(rng, lerp(52, 60, rng()))}"/>` +
-      windows(w * 0.86, h * 0.86, 3, 3, glass)
+    const w = lerp(18, 25, rng()) * scale;
+    const d = lerp(14, 19, rng()) * scale;
+    const hue = Math.round(lerp(28, 38, rng()));
+    const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
+    const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
+    const inset = 1.8 * scale;
+    const box = (): string => {
+      const bw = lerp(3, 5, rng()) * scale;
+      const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
+      const by = lerp(-d / 2 + inset + bw, d / 2 - inset - bw * 2, rng());
+      return `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bw)}" fill="hsl(210 10% 52%)"/>`;
+    };
+    return wrap(
+      roofShadow(w, d, scale) +
+        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
+        `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
+        box() +
+        box() +
+        box(),
     );
   }
 
-  // Low hall / shed: wide, shallow-pitched, one big door.
+  // Long metal hall: a shallow gable along the long axis, in cool sheet grey.
   if (roll < 0.5) {
-    const w = lerp(20, 28, rng()) * scale;
-    const h = lerp(7, 10, rng()) * scale;
-    const roof = lerp(3.5, 5.5, rng()) * scale;
-    const metal = `hsl(${Math.round(lerp(200, 216, rng()))} ${Math.round(lerp(6, 12, rng()))}% ${Math.round(lerp(46, 56, rng()))}%)`;
-    return (
-      groundShadow(scale * 0.9, 15, TOWN_SHADOW) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w)}" height="${n1(h)}" fill="${dim}"/>` +
-      `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w * 0.6)}" height="${n1(h)}" fill="${lit}"/>` +
-      `<path d="M${n1(-w / 2 - 1.5 * scale)} ${n1(-h)} L${n1(-w * 0.12)} ${n1(-h - roof)} L${n1(w * 0.12)} ${n1(-h - roof)} L${n1(w / 2 + 1.5 * scale)} ${n1(-h)} Z" fill="${metal}"/>` +
-      `<rect x="${n1(-w * 0.16)}" y="${n1(-h * 0.78)}" width="${n1(w * 0.32)}" height="${n1(h * 0.78)}" fill="${glass}" opacity="0.6"/>`
+    const w = lerp(24, 32, rng()) * scale;
+    const d = lerp(12, 16, rng()) * scale;
+    const hue = Math.round(lerp(200, 216, rng()));
+    const sat = Math.round(lerp(6, 12, rng()));
+    const litHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(58, 64, rng()))}%)`;
+    const dimHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(42, 48, rng()))}%)`;
+    return wrap(
+      roofShadow(w, d, scale) +
+        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${litHalf}"/>` +
+        `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dimHalf}"/>` +
+        `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="hsl(${hue} ${sat}% 72%)" stroke-width="${n1(0.8 * scale)}"/>`,
     );
   }
 
-  // Pitched-roof house: the common case. The roof is split down the ridge so it
-  // catches the same light as everything else on the board.
-  const w = lerp(12, 18, rng()) * scale;
-  const h = lerp(9, 14, rng()) * scale;
-  const roof = lerp(6, 9, rng()) * scale;
-  const eave = 1.6 * scale;
+  // Pitched tile roof: the common case. Split along the ridge — the NW-facing
+  // half catches the sun — with a bright ridge line and the odd chimney.
+  const w = lerp(14, 20, rng()) * scale;
+  const d = lerp(10, 14, rng()) * scale;
   const tileHue = Math.round(lerp(4, 22, rng()));
   const tileSat = Math.round(lerp(34, 52, rng()));
-  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(48, 56, rng()))}%)`;
+  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(50, 58, rng()))}%)`;
   const tileDim = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(32, 40, rng()))}%)`;
+  const ridge = `hsl(${tileHue} ${Math.max(0, tileSat - 8)}% ${Math.round(lerp(64, 70, rng()))}%)`;
   const chimney =
     rng() < 0.45
-      ? `<rect x="${n1(w * 0.18)}" y="${n1(-h - roof * 1.15)}" width="${n1(2.6 * scale)}" height="${n1(roof * 0.75)}" fill="${tileDim}"/>`
+      ? `<rect x="${n1(w * lerp(0.12, 0.3, rng()))}" y="${n1(-2.6 * scale)}" width="${n1(2.4 * scale)}" height="${n1(2.4 * scale)}" fill="hsl(${tileHue} 12% 30%)"/>`
       : "";
-  return (
-    groundShadow(scale * 0.65, 15, TOWN_SHADOW) +
-    `<rect x="${n1(-w / 2)}" y="${n1(-h)}" width="${n1(w)}" height="${n1(h)}" fill="${lit}"/>` +
-    `<rect x="${n1(w * 0.08)}" y="${n1(-h)}" width="${n1(w * 0.42)}" height="${n1(h)}" fill="${dim}"/>` +
-    `<rect x="${n1(-w * 0.32)}" y="${n1(-h * 0.62)}" width="${n1(w * 0.2)}" height="${n1(h * 0.62)}" fill="${glass}" opacity="0.55"/>` +
-    chimney +
-    `<path d="M${n1(-w / 2 - eave)} ${n1(-h)} L0 ${n1(-h - roof)} L0 ${n1(-h)} Z" fill="${tileLit}"/>` +
-    `<path d="M0 ${n1(-h - roof)} L${n1(w / 2 + eave)} ${n1(-h)} L0 ${n1(-h)} Z" fill="${tileDim}"/>`
+  return wrap(
+    roofShadow(w, d, scale) +
+      `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileLit}"/>` +
+      `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileDim}"/>` +
+      `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(0.9 * scale)}"/>` +
+      chimney,
   );
 }
 
@@ -935,7 +1008,12 @@ function garden(rng: Rng): string {
   return `<ellipse cx="0" cy="${n1(-d / 2)}" rx="${n1(w / 2)}" ry="${n1(d / 2)}" fill="${tone}" opacity="0.55"/>`;
 }
 
-function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
+function groundMarks(
+  kind: TerrainKind,
+  rng: Rng,
+  base: Hsl,
+  place: (x: number, y: number) => Pt2,
+): string {
   const spread = (
     count: number,
     make: () => string,
@@ -943,9 +1021,8 @@ function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
   ): string => {
     const out: string[] = [];
     for (let i = 0; i < count; i++) {
-      const x = lerp(14, 86, rng());
-      const y = lerp(yBand[0], yBand[1], rng());
-      out.push(`<g transform="translate(${n1(x)} ${n1(y)})">${make()}</g>`);
+      const p = place(lerp(14, 86, rng()), lerp(yBand[0], yBand[1], rng()));
+      out.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${make()}</g>`);
     }
     return out.join("");
   };
@@ -956,12 +1033,11 @@ function groundMarks(kind: TerrainKind, rng: Rng, base: Hsl): string {
     );
   }
   if (kind === "mountain") {
-    // Shelves anywhere, but scree only along the FOOT of the range: a standing
-    // stone placed high in a mountain tile reads as gravel floating in the sky,
-    // because that part of the picture is where the peaks are.
+    // Top-down, there is no "foot of the range" — scree lies wherever the
+    // ridges are not, and the depth sort keeps a massif on top of its gravel.
     return (
       spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85, 53), [70, 88])
+      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85, 53))
     );
   }
   if (kind === "urban") {
@@ -1042,6 +1118,27 @@ function buildGround(
   const d = patchPath(same, x, y, seed);
   const parts = [`<path d="${d}" fill="${css(base)}"/>`];
 
+  // Everything placed on this tile must STAND ON the patch. The bands keep
+  // objects off the tile edges, but a real corner now cedes a deep bite of the
+  // tile to the surrounding grass (CORNER_INSET) — a band-legal position there
+  // would put a tree on the lawn or a lily on the shore. A placement outside
+  // the outline walks toward the patch centroid until it is inside with a
+  // little margin (tested against the polygon inflated about the centroid, so
+  // the margin scales with how far out the point sits). Deterministic: no extra
+  // rng draws, so positions only move where the geometry demands it.
+  const poly = patchOutlinePolygon(same, x, y, seed);
+  const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
+  const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
+  const insideWithMargin = (px: number, py: number): boolean =>
+    pointInPolygon({ x: cx + (px - cx) / 0.88, y: cy + (py - cy) / 0.88 }, poly);
+  const place = (px: number, py: number): Pt2 => {
+    for (let k = 0; k <= 10; k++) {
+      const q = { x: lerp(px, cx, k / 10), y: lerp(py, cy, k / 10) };
+      if (insideWithMargin(q.x, q.y)) return q;
+    }
+    return { x: cx, y: cy };
+  };
+
   // The rim is a thick inside stroke along the STOPPING edges only (see
   // patchRimPath), clipped to the patch so it reads as a band just inside the
   // shore rather than a line drawn on it.
@@ -1066,7 +1163,7 @@ function buildGround(
 
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base);
+  const marks = groundMarks(kind, rng, base, place);
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
@@ -1075,9 +1172,12 @@ function buildGround(
   const placed: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
     // Keep objects off the very edge so a tree's canopy doesn't collide with the
-    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary.
-    const x = lerp(band.x[0], band.x[1], rng());
-    const y = lerp(band.y[0], band.y[1], rng());
+    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary
+    // — then keep them ON the patch (see `place` above).
+    const p = place(
+      lerp(band.x[0], band.x[1], rng()),
+      lerp(band.y[0], band.y[1], rng()),
+    );
     const scale = lerp(band.scale[0], band.scale[1], rng());
     let body: string;
     if (kind === "forest") body = tree(rng, scale * 0.42);
@@ -1086,8 +1186,8 @@ function buildGround(
     else if (kind === "urban") body = building(rng, scale);
     else body = lily(rng, scale);
     placed.push({
-      y,
-      g: `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)})">${body}</g>`,
+      y: p.y,
+      g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
     });
   }
   // Back to front, so a nearer canopy overlaps a farther one naturally.

@@ -4,8 +4,10 @@ import {
   canBuildOn,
   edgeBow,
   latticeOffset,
+  patchOutlinePolygon,
   patchPath,
   patchRimPath,
+  pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
   tileGroundSvg,
@@ -144,6 +146,56 @@ describe("terrain", () => {
       // grid would still be legible through the art.
       const d = patchPath(all(false), 4, 1, 9);
       expect(d).not.toMatch(/(^|[ ,])(0\.0|100\.0)([ ,]|$)/);
+    });
+
+    it("pulls a real corner deep inside the tile, off the bounding box", () => {
+      // The rectangle-silhouette fix. Outward bows alone still left every real
+      // corner sitting ON the corner of the authored bounding box, so a 3x2
+      // lake was a rectangle with wavy edges. A corner-role point now sits a
+      // CORNER_INSET (>= 14 units, along the diagonal) inside the jittered
+      // lattice point it used to sit on — for every seed, not just a lucky one.
+      for (const seed of [1, 3, 7, 9, 42]) {
+        for (const [gx, gy] of [
+          [0, 0],
+          [2, 3],
+          [5, 1],
+        ]) {
+          const segs = parsePath(patchPath(all(false), gx, gy, seed));
+          const { dx, dy } = latticeOffset(gx, gy, seed);
+          // Corner 0 (the M point): its distance along the inward diagonal from
+          // the bare jittered lattice point is the inset times sqrt(2).
+          expect(segs[0].start.x + segs[0].start.y).toBeGreaterThan(dx + dy + 15);
+        }
+      }
+    });
+
+    it("covers meaningfully less than the tile square when it stands alone", () => {
+      // The silhouette property itself, pinned by area: a lone patch is a blob,
+      // not a rounded square. Its outline covers well under the full tile (the
+      // corners are ceded) but still most of it (it is a pond, not a puddle).
+      // An interior tile stays near-full — the cut is a corner phenomenon; the
+      // few percent an interior tile "loses" to its jittered shared chords is
+      // covered by the neighbour that shares each chord.
+      const coverage = (same: Parameters<typeof patchOutlinePolygon>[0], seed: number) => {
+        const poly = patchOutlinePolygon(same, 2, 3, seed);
+        const steps = 40;
+        let inside = 0;
+        for (let i = 0; i < steps; i++) {
+          for (let j = 0; j < steps; j++) {
+            const p = { x: ((i + 0.5) * 100) / steps, y: ((j + 0.5) * 100) / steps };
+            if (pointInPolygon(p, poly)) inside++;
+          }
+        }
+        return inside / (steps * steps);
+      };
+      for (const seed of [1, 2, 3, 5, 8, 13, 42, 99]) {
+        const lone = coverage(all(false), seed);
+        expect(lone).toBeLessThan(0.85);
+        expect(lone).toBeGreaterThan(0.55);
+      }
+      for (const seed of [1, 9, 42]) {
+        expect(coverage(all(true), seed)).toBeGreaterThan(0.88);
+      }
     });
   });
 
@@ -322,6 +374,26 @@ describe("terrain", () => {
       // draw no lily pads at all (its scatter range starts at zero).
       expect(total).toBeGreaterThan(20);
     });
+
+    it("keeps every placed object standing ON the patch, not on ceded ground", () => {
+      // With real corners cutting deep into the tile (see CORNER_INSET), the
+      // per-kind placement bands alone no longer keep an object on its own
+      // ground: a band-legal position in a corner would put a tree on the lawn
+      // or a lily pad on the shore. Lone tiles are the worst case — all four
+      // corners are cut.
+      const alone = { top: false, right: false, bottom: false, left: false };
+      for (const kind of TERRAIN_KINDS) {
+        if (kind === "grass") continue;
+        for (const coord of ["6,6", "2,9", "11,4"]) {
+          const svg = tileGroundSvg(kind, coord, around("grass"), 3);
+          const [x, y] = coord.split(",").map(Number);
+          const poly = patchOutlinePolygon(alone, x, y, 3);
+          for (const [, px, py] of svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)) {
+            expect(pointInPolygon({ x: Number(px), y: Number(py) }, poly)).toBe(true);
+          }
+        }
+      }
+    });
   });
 
   describe("mountain", () => {
@@ -339,14 +411,18 @@ describe("terrain", () => {
 
     it("does not look like rock", () => {
       // The two blocking grounds sit next to each other on real boards, so they
-      // have to be tellable apart at a glance: different ground colour, and a
-      // scatter that stands much taller.
+      // have to be tellable apart at a glance. Top-down nothing "stands taller"
+      // any more — what separates them is the ground tone (dark blue slate vs
+      // cool light grey) and the snow that only a ridge carries.
       const rock = tileGroundSvg("rock", "3,3", around("rock"), 5);
       const mountain = tileGroundSvg("mountain", "3,3", around("mountain"), 5);
       expect(mountain).not.toBe(rock);
-      const highest = (svg: string) =>
-        Math.min(...[...svg.matchAll(/[ML]([-\d.]+) (-[\d.]+)/g)].map(m => Number(m[2])));
-      expect(highest(mountain)).toBeLessThan(highest(rock) * 1.8);
+      expect(mountain).toContain("hsl(214 13% 42.0%)");
+      expect(rock).toContain("hsl(210 7% 56.0%)");
+      // Snow tones appear on ridges and nowhere on rock. (Deterministic: the
+      // seed is fixed, and each of this tile's peaks rolls snow at ~82%.)
+      expect(mountain).toContain("hsl(202 24% 94%)");
+      expect(rock).not.toContain("hsl(202 24% 94%)");
     });
 
     it("fuses with its neighbours like every other patch", () => {

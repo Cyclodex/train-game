@@ -118,7 +118,7 @@ export type SimEvent =
 
 // Internal record of why a train is currently held, used to edge-trigger the
 // blocked/proceeding events (only emit on a change of state).
-interface BlockInfo {
+export interface BlockInfo {
   reason: BlockReason;
   tileId: string;
   blockedBy?: string;
@@ -217,6 +217,12 @@ export interface Simulation {
   dispatch(id: string): boolean;
   // The trains currently waiting for the player, in a stable (sorted) order.
   waitingTrains(): string[];
+  // Why this train is currently held, or undefined if it is free to move. The
+  // sim already tracks this to edge-trigger blocked/proceeding events; exposing
+  // it lets the view tell a DEADLOCK (everything waiting on everything) apart
+  // from the player deliberately holding a signal, which look identical from
+  // outside — both are trains standing still.
+  trainBlock(id: string): Readonly<BlockInfo> | undefined;
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -234,7 +240,10 @@ export interface Simulation {
   isProceedForced(tileId: string, exitPort: Port): boolean;
 }
 
-const DEFAULT_SPEED = 0.5;
+// Cruise speed in tiles/sec. Exported because the fare model prices a delivery
+// against its IDEAL travel time (`modes/tycoon.ts`), and a second copy of this
+// number would silently mis-price every fare the day it is retuned here.
+export const DEFAULT_SPEED = 0.5;
 
 export function createSimulation(config: SimConfig): Simulation {
   const { level } = config;
@@ -824,6 +833,9 @@ export function createSimulation(config: SimConfig): Simulation {
       return Object.keys(trains)
         .filter(id => trains[id].state === "waiting")
         .sort();
+    },
+    trainBlock(id: string) {
+      return blockStates.get(id);
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);

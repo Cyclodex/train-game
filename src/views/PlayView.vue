@@ -74,12 +74,40 @@
         <div class="score-bar-fill" :style="{ width: deliveredPct + '%' }"></div>
         <span class="score-pct">{{ deliveredPct }}%</span>
       </div>
-      <div v-if="hud.timer" class="score-timer">⏱ {{ elapsedLabel }}</div>
+      <!-- The stopwatch gives way to the calendar where there is one: M13 is
+           explicitly "a calendar clock, NOT a stopwatch", and the two are the
+           same elapsed seconds rendered twice — exactly the HUD density §5.5
+           warns against. Boards with no calendar (every other mode, and every
+           untuned Tycoon board) keep the timer unchanged. -->
+      <div v-if="hud.timer && !dateLabel" class="score-timer">
+        ⏱ {{ elapsedLabel }}
+      </div>
       <!-- The whole money HUD off the board is this one line. The fares live on
            the board as pins over their trains; anything more and we are building
            TV2's chrome (design doc §5.5). -->
       <div v-if="hud.money" class="score-money" title="Balance">
         💰 {{ balanceLabel }}
+      </div>
+      <!-- The second clock (§1.3), and the whole of it: a date instead of a
+           stopwatch, and what the railway costs to hold for a year. Keyed on
+           the tax paid so the row flashes exactly once per levy — money leaving
+           silently is the one thing a balance readout must not do. -->
+      <div
+        v-if="hud.money && dateLabel"
+        :key="taxPaid"
+        class="score-calendar"
+        :class="{ 'score-calendar--broke': taxUnaffordable }"
+        :title="calendarTitle"
+      >
+        📅 {{ dateLabel }}
+        <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
+        <!-- The warning that keeps bankruptcy a decision rather than an
+             ambush: while it shows, bulldozing surplus track both refunds now
+             and lowers the bill. Same job as the gridlock nudge — name the
+             failure before it lands, and name the fix. -->
+        <span v-if="taxUnaffordable" class="score-tax-warn">
+          ⚠ can't pay next year
+        </span>
       </div>
       <div
         v-if="showCrossingFlow"
@@ -105,6 +133,43 @@
         </div>
       </transition>
     </div>
+    <!-- The build tool's ONE piece of chrome (design doc §5.5): a toggle. While
+         armed, the tiles grow the editor's edge zones and the route gesture
+         owns the left drag; the cost rides the ghost preview, not this button. -->
+    <div v-if="canBuild" class="build-dock">
+      <button
+        class="build-toggle"
+        :class="{ 'build-toggle--on': buildArmed }"
+        data-testid="build-toggle"
+        :title="buildToggleTitle"
+        @click="toggleBuild"
+      >
+        <span class="build-toggle__icon">🛤️</span>
+        <span>{{ buildArmed ? "Building — Esc finishes" : "Build" }}</span>
+      </button>
+      <!-- Bulldoze rides alongside Build rather than inside it: they are
+           opposite verbs on the same board, and burying the undo in a sub-mode
+           of the thing that caused the mistake is exactly where a player will
+           not look for it. Only one can be armed at a time. -->
+      <button
+        class="build-toggle build-toggle--raze"
+        :class="{ 'build-toggle--on': razeArmed }"
+        data-testid="raze-toggle"
+        :title="razeToggleTitle"
+        @click="toggleRaze"
+      >
+        <span class="build-toggle__icon">🧨</span>
+        <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
+      </button>
+    </div>
+    <!-- The jam nudge. Collisions are impossible here by construction, so
+         DEADLOCK is the failure this game actually has, and without a word it
+         reads as the game having frozen. Not an overlay: the board stays live
+         so the fix (flip a switch) is one click away. -->
+    <div v-if="gridlocked" class="gridlock-nudge" data-testid="gridlock-nudge">
+      <span class="gridlock-nudge__icon">{{ gridlockIcon }}</span>
+      <span>{{ gridlockMessage }}</span>
+    </div>
     <div class="world">
     <div
       ref="viewport"
@@ -129,8 +194,11 @@
         gridTemplateColumns: `repeat(${bounds.cols}, ${config.tileSize}px)`,
         width: config.tileSize * bounds.cols + 'px',
         transform: levelTransform,
+        '--switch-scale': switchScale,
       }"
       @click="onBackgroundClick"
+      @mouseup="onLevelPointerGone"
+      @mouseleave="onLevelPointerGone"
     >
       <Train
         v-for="trainObject in trains"
@@ -141,10 +209,16 @@
         v-for="cell in gridCells"
         :key="cell.key"
         class="level-tile"
+        :data-coord="cell.key"
+        :class="{
+          'level-tile--build-glow': buildArmed && buildGlowId === cell.key,
+          'level-tile--razeable': razeArmed && canRaze(cell.key),
+        }"
         :style="{
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
         }"
+        @click="onTileRaze(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <Tile
@@ -152,7 +226,77 @@
           :tile="cell.tile"
           :coord-id="cell.key"
           class="tile-component"
+          :switch-interactive="!buildArmed && !razeArmed"
         />
+        <!-- In-play building: the editor's triangular edge hit-zones + ghost
+             preview, driven by the same extracted routeDrawController. Mounted
+             only while the Build toggle is armed, so normal play is untouched.
+             z-index sits ABOVE rails but BELOW cars and fare pins, so a waiting
+             train can still be dispatched mid-build. -->
+        <svg
+          v-if="buildArmed"
+          class="build-overlay"
+          :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+        >
+          <path
+            v-for="(d, i) in previewRails(cell.key)"
+            :key="'pv' + i"
+            :d="d"
+            class="preview-rail"
+            :class="{ 'preview-rail--refused': previewRefused }"
+          />
+          <!-- The four edge wedges, unchanged: every edge stays reachable,
+               because growing a branch off an existing line (which is how Lake
+               Valley's station junction gets bought back) starts on an interior
+               edge, not an open end. -->
+          <path
+            v-for="p in wedgePorts(cell.key)"
+            :key="'z' + p"
+            :data-port="p"
+            :d="zonePath(p)"
+            class="zone"
+            :class="{
+              'zone--armed': isBuildArmed(cell.key, p),
+              'zone--finish': isBuildFinish(cell.key, p),
+            }"
+            @mousedown.stop="onZoneDown(cell.key, p)"
+            @mouseup.stop="onZoneUp(cell.key, p)"
+            @click.stop="onZoneClick(cell.key, p)"
+            @mouseenter="onZoneEnter(cell.key, p)"
+            @mouseleave="onZoneLeave(cell.key, p)"
+          />
+          <!-- The fix for aiming at the end of a line: a big disc ON TOP of the
+               wedges, centred exactly on the open end. Drawn last, so it takes
+               the click from the tapering triangle underneath.
+               Both tiles either side draw one at the SAME world point — each
+               clipped to its own half — so together they form one disc spanning
+               the boundary, and both halves arm the same open end. That is what
+               makes overshooting onto the empty neighbour harmless. Only while
+               idle: once a gesture owns the board the wedges pick direction. -->
+          <path
+            v-for="t in openEndTargets(cell.key)"
+            :key="'oe' + t.port"
+            class="zone zone--open"
+            :data-port="t.port"
+            :d="edgeBandPath(t.port)"
+            :class="{ 'zone--armed': isBuildArmed(t.end.id, t.end.edge) }"
+            @mousedown.stop="onZoneDown(t.end.id, t.end.edge)"
+            @mouseup.stop="onZoneUp(t.end.id, t.end.edge)"
+            @click.stop="onZoneClick(t.end.id, t.end.edge)"
+            @mouseenter="onZoneEnter(t.end.id, t.end.edge)"
+            @mouseleave="onZoneLeave(t.end.id, t.end.edge)"
+          />
+          <!-- The knob that says "a line ends here". Owner-drawn only, or the
+               facing pair would stack two. Never takes a click itself. -->
+          <circle
+            v-for="p in ownOpenEnds(cell.key)"
+            :key="'oek' + p"
+            class="open-end"
+            :cx="edgeMid(p).x"
+            :cy="edgeMid(p).y"
+            :r="config.tileSize * 0.1"
+          />
+        </svg>
       </div>
       <div
         v-for="car in roadCars"
@@ -182,22 +326,29 @@
       <!-- Fare pins. Absolutely positioned, like the road cars — a direct child
            of `.level` that generates a box becomes a GRID ITEM and eats a tile
            cell (see KNOWHOW → RENDER LAYOUT). A pin over a waiting train is its
-           dispatch button; over a running one it just counts down. -->
-      <button
+           dispatch button; over a held one it names what it is waiting for; over
+           a running one it just counts down. -->
+      <FarePin
         v-for="badge in fareBadges"
         :key="`fare-${badge.trainId}`"
-        class="fare-pin"
-        :class="{ 'fare-pin--waiting': badge.waiting }"
+        :badge="badge"
+        @send="onFareClick(badge)"
+      />
+      <!-- Build cost tag: rides the hovered tile while the ghost route is up —
+           Train Valley's live "-2000$" (M2). Absolutely positioned like the
+           fare pins (a box-generating direct child of .level would become a
+           grid ITEM and eat a tile cell — KNOWHOW → RENDER LAYOUT). -->
+      <div
+        v-if="buildCostTag"
+        class="build-cost-tag"
+        :class="{ 'build-cost-tag--refused': buildCostTag.refused }"
+        data-testid="build-cost"
         :style="{
-          borderColor: badge.color,
-          transform: `translate(-50%, -50%) translate(${badge.x}px, ${badge.y}px)`,
+          transform: `translate(-50%, -50%) translate(${buildCostTag.x}px, ${buildCostTag.y}px)`,
         }"
-        :title="badge.waiting ? 'Waiting — click to send this train' : 'Fare, falling'"
-        @click.stop="onFareClick(badge)"
       >
-        <span class="fare-pin__amount">{{ badge.amount }}</span>
-        <span v-if="badge.waiting" class="fare-pin__go">▶</span>
-      </button>
+        {{ buildCostTag.label }}
+      </div>
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"
@@ -333,8 +484,25 @@ import {
   setWorldTheme,
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
-import { TrainsDefinition, TrainStatus } from "@/types";
-import { Level, TileCell, isLevelCrossing, isRoadOnlyLevel } from "@/tiles/model";
+import { Coordinates, Position, TrainsDefinition, TrainStatus } from "@/types";
+import {
+  Level,
+  Port,
+  TileCell,
+  isLevelCrossing,
+  isRoadOnlyLevel,
+  parseCoordId,
+} from "@/tiles/model";
+import { canBuildOn } from "@/tiles/terrain";
+import { railPathsFor } from "@/tiles/geometry";
+import { getCoordinatesId } from "@/utils/tileHelpers";
+import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import type { RouteOpts, RouteStep, OpenEnd } from "@/tiles/routePlanner";
+import { buildTargetsAt, openEndPortsAt } from "@/tiles/openEnds";
+import {
+  createRouteDrawController,
+  type RouteDrawController,
+} from "@/routeDrawController";
 import { createGame, FareBadge, Game, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
@@ -344,10 +512,21 @@ import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import Crossing from "@/components/Crossing.vue";
+import FarePin from "@/components/FarePin.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
+import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
+
+// The four tile edges, for the build tool's triangular hit-zones (same order as
+// the editor's).
+const EDGES: Port[] = [
+  Position.Top,
+  Position.Right,
+  Position.Bottom,
+  Position.Left,
+];
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
@@ -356,6 +535,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     y: t.y,
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
     spawnAtSec: t.spawnAtSec,
   }));
 }
@@ -410,7 +590,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, MenuDrawer } })
+@Component({ components: { Crossing, FarePin, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -439,16 +619,25 @@ class PlayView extends Vue {
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
   // and promotes the generated board so the renderer and sim agree.
   private _resolved = (() => {
-    const fallbackLevel = this.board
-      ? this.board.level
-      : this.custom
-        ? this.custom.level
-        : DEFAULT_LEVEL;
-    const fallbackTrains = this.board
-      ? this.board.trains
-      : this.custom
-        ? this.custom.trains
-        : defaultTrains();
+    // CLONE the board before the game gets it. `this.board` is the scenario
+    // registry's module-level singleton (and `this.custom` can be the editor's
+    // live reactive level), while build-in-play writes through `applyEdits`
+    // into whatever level object the game holds. Handing the singleton over
+    // raw meant bought track was written INTO THE REGISTRY: browser Back /
+    // re-entering the URL remounted onto the mutated board with a fresh
+    // balance (free track), Retry's "pristine" snapshot was taken after the
+    // mutation, and /test rendered the same corrupted object. A clone makes
+    // the game's world private; the registry stays what the author wrote.
+    const fallbackLevel = structuredClone(
+      this.board ? this.board.level : this.custom ? this.custom.level : DEFAULT_LEVEL,
+    );
+    const fallbackTrains = structuredClone(
+      this.board
+        ? this.board.trains
+        : this.custom
+          ? this.custom.trains
+          : defaultTrains(),
+    );
     const fallbackLevelId = this.board
       ? `board:${this.board.id}`
       : this.custom
@@ -486,6 +675,14 @@ class PlayView extends Vue {
     // like a broken level rather than a big one.
     this.$nextTick(() => this.fitWorld());
     window.addEventListener("resize", this.onWindowResize);
+    // Build-tool keys: Esc finishes an open route, Space is the pan modifier
+    // while build owns the left drag. Both no-op unless build is armed. The
+    // closures are created HERE so they capture the live component (see the
+    // note on handleBuildKeydown).
+    this.boundKeydown = e => this.handleBuildKeydown(e);
+    this.boundKeyup = e => this.handleBuildKeyup(e);
+    window.addEventListener("keydown", this.boundKeydown);
+    window.addEventListener("keyup", this.boundKeyup);
     // Remember the mode we ended up in, so a later plain /play reopens it.
     saveLastModeId(this.mode.id);
     this.best = loadBest(this.levelId);
@@ -604,6 +801,25 @@ class PlayView extends Vue {
   get balanceLabel(): string {
     return this.game.money.balance.toLocaleString("en-US");
   }
+  // The calendar row. Empty `dateLabel` = this board named no calendar, and the
+  // row is not rendered at all — the pre-tax money HUD, unchanged.
+  get dateLabel(): string {
+    return this.game.money.dateLabel;
+  }
+  get taxPerYearLabel(): string {
+    return "$" + this.game.money.taxPerYear.toLocaleString("en-US");
+  }
+  get taxPaid(): number {
+    return this.game.money.taxPaid;
+  }
+  get taxUnaffordable(): boolean {
+    return this.game.money.taxUnaffordable;
+  }
+  get calendarTitle(): string {
+    return this.taxUnaffordable
+      ? "Next year's upkeep is more than you have — bulldoze track you don't need, or finish first"
+      : "The year, and this railway's annual upkeep";
+  }
   get fareBadges(): FareBadge[] {
     return this.game.fareBadges;
   }
@@ -617,6 +833,8 @@ class PlayView extends Vue {
   beforeUnmount() {
     this.game.stop();
     window.removeEventListener("resize", this.onWindowResize);
+    window.removeEventListener("keydown", this.boundKeydown);
+    window.removeEventListener("keyup", this.boundKeyup);
   }
 
   // Re-clamp on resize: a window that grew could otherwise leave the board
@@ -670,12 +888,25 @@ class PlayView extends Vue {
   // re-renders.
   private cam!: CameraController;
 
+  // The in-play build gesture: the exact controller the editor uses (edge
+  // press/drag one-shot, click chaining incl. the U-turn pending case, hover
+  // ghost), pointed at `game.buildRoute` instead of the editor's per-cell
+  // writer. Built in `created()` and markRaw'd for the same reasons as `cam`.
+  private routeCtrl!: RouteDrawController;
+
   created() {
     this.cam = markRaw(
       createCameraController(
         () => this.worldSize,
         () => this.viewportSize(),
       ),
+    );
+    this.routeCtrl = markRaw(
+      createRouteDrawController({
+        drawing: () => (this.buildArmed ? "rail" : null),
+        planOpts: () => this.buildPlanOpts(),
+        lay: steps => this.layBuild(steps),
+      }),
     );
   }
 
@@ -687,6 +918,11 @@ class PlayView extends Vue {
   }
   get levelTransform(): string {
     return this.cam.transform;
+  }
+  // Counter-scale for the junction switch fans, so a zoomed-out world does not
+  // shrink them back to the unusable size the old widget had. See switchFan.ts.
+  get switchScale(): number {
+    return switchFanScale(this.camera.zoom);
   }
   // Also a method: it reads `viewportSize()`, which is not a reactive dependency.
   worldOverflows(): boolean {
@@ -726,6 +962,12 @@ class PlayView extends Vue {
     // so the same muscle memory works here and in the editor (where left has to
     // stay with the drawing tools).
     if (e.button !== 0 && e.button !== 1) return;
+    // …EXCEPT while the build tool is armed: then the left drag belongs to
+    // drawing (edge → edge one-shot routes), exactly the editor's policy —
+    // stealing it makes the board unbuildable (KNOWHOW → WORLD SIZE + CAMERA).
+    // Pan stays on middle-drag or space+left, and left-pan returns the moment
+    // build is disarmed.
+    if (this.buildArmed && e.button === 0 && !this.spaceHeld) return;
     this.cam.onPointerDown(e);
   }
   onViewportPointerMove(e: PointerEvent): void {
@@ -733,6 +975,373 @@ class PlayView extends Vue {
   }
   onViewportPointerUp(e: PointerEvent): void {
     this.cam.onPointerUp(e);
+  }
+
+  // --- building during play (Tycoon phase 2) ---------------------------------
+  // One toggle arms the tool; while armed, every tile grows the editor's
+  // triangular edge zones and the shared routeDrawController drives the
+  // gesture. Committing goes through `game.buildRoute`: affordability gate →
+  // `applyEdits` → spend, so a refused edit costs nothing.
+  EDGES = EDGES;
+  buildArmed = false;
+  spaceHeld = false;
+  // Set by layBuild when game.buildRoute refuses (unaffordable, or a train
+  // moved onto a route tile between preview and click). The controller advances
+  // its head AFTER lay() returns, so the abort must run after the gesture
+  // handler finishes — see settleBuildGesture.
+  private buildRefusedFlag = false;
+
+  get canBuild(): boolean {
+    return this.game.mode.controls.build;
+  }
+
+  get buildToggleTitle(): string {
+    const how =
+      "Click an edge, then click tiles to route track; drag edge-to-edge for a quick link; Esc finishes.";
+    return this.game.money.enabled
+      ? `Build track — $${TRACK_COST_PER_TILE.toLocaleString("en-US")} per tile. ${how}`
+      : `Build track. ${how}`;
+  }
+
+  toggleBuild(): void {
+    if (!this.buildArmed) {
+      // Both directions must disarm the other, or the exclusion is a half-rule:
+      // this branch used to arm Build without clearing Bulldoze, so going
+      // Bulldoze → Build left BOTH lit, with raze-hover highlights under live
+      // build zones and a tile click meaning two different things.
+      this.razeArmed = false;
+      this.buildArmed = true;
+      return;
+    }
+    // Disarm ABANDONS rather than finishes: finishing would lay (and charge
+    // for) a terminus straight on the pending frontier tile that no cost tag
+    // ever showed. The order is load-bearing — dropAnchors clears the head, so
+    // the finishRoute after it cannot lay the pending tile, only forget it.
+    this.routeCtrl.dropAnchors();
+    this.routeCtrl.finishRoute();
+    this.routeCtrl.state.hoverPort = null;
+    this.buildArmed = false;
+  }
+
+  // --- bulldoze --------------------------------------------------------------
+  // Armed separately from Build, and mutually exclusive with it: the two verbs
+  // both claim the left click on a tile, so only one can own it at a time.
+  razeArmed = false;
+
+  get razeToggleTitle(): string {
+    const how = "Click a piece of track to remove it.";
+    return this.game.money.enabled
+      ? `Bulldoze track — refunds what you paid for it. ${how}`
+      : `Bulldoze track. ${how}`;
+  }
+
+  toggleRaze(): void {
+    if (this.razeArmed) {
+      this.razeArmed = false;
+      return;
+    }
+    // Arming Bulldoze disarms Build through its own EXIT path (not by clearing
+    // the flag), so a half-drawn route is abandoned rather than left pending
+    // behind the other tool. toggleBuild clears `razeArmed` on the way in, so
+    // set it after.
+    if (this.buildArmed) this.toggleBuild();
+    this.razeArmed = true;
+  }
+
+  // Clicking a tile while Bulldoze is armed. Refusals (a depot, or track a
+  // train occupies or has reserved) are deliberately quiet on the board — the
+  // tile simply does not go — because the honest signal is the one the player
+  // can see: the train sitting on it.
+  onTileRaze(tileId: string): void {
+    if (!this.razeArmed || this.panning) return;
+    this.game.bulldoze(tileId);
+  }
+
+  // Whether a click here would actually remove something — drives the hover
+  // affordance, so the player can see which tiles are theirs to take back
+  // before clicking. Cheap: it reads the level, not the sim's reservations,
+  // because those change every frame and the truth is enforced by `bulldoze`.
+  canRaze(tileId: string): boolean {
+    const cell = this.level[tileId];
+    return !!cell && cell.role !== "depot" && cell.connections.length > 0;
+  }
+
+  get gridlocked(): boolean {
+    return this.game.gridlock.stuck;
+  }
+
+  get gridlockIcon(): string {
+    return this.game.gridlock.reason === "dead-end" ? "🛤️" : "🚦";
+  }
+
+  // Name the actual fix, which differs by cause: a deadlock frees on a switch,
+  // a dead end needs rails. Telling a player to flip switches at a severed line
+  // would send them hunting for a junction that cannot help.
+  get gridlockMessage(): string {
+    if (this.game.gridlock.reason === "dead-end") {
+      return this.canBuild
+        ? "A train has run out of track. Build the missing link — or bulldoze a wrong turn and try again."
+        : "A train has run out of track: the line does not reach its station.";
+    }
+    // Deliberately does NOT offer "build a passing loop": building grows a line
+    // from its OPEN END, and a deadlock happens on a network that is already
+    // joined up — so there is usually nothing to build from. Promising a fix
+    // the tool cannot perform is worse than naming the one that works.
+    // Branching a siding off the side of a line needs real turnouts first
+    // (today it would buy an unreachable crossing — see KNOWHOW).
+    return "Trains are waiting on each other. Flip a switch to let one through.";
+  }
+
+  // Live plan options for the route controller: the current world bounds and
+  // the passable gate. Terrain (water/rock/mountain) AND tiles a train occupies
+  // or has reserved are unplannable, so the preview can never offer a route
+  // `applyEdits` would then refuse for a stationary reason — only a train
+  // moving in AFTER the preview can still refuse the commit.
+  buildPlanOpts(): RouteOpts {
+    const { cols, rows } = this.bounds;
+    return {
+      width: cols,
+      height: rows,
+      passable: (c: Coordinates) => {
+        const id = getCoordinatesId(c);
+        return canBuildOn(this.level[id]) && this.game.canEdit([id]);
+      },
+    };
+  }
+
+  private layBuild(steps: RouteStep[]): void {
+    const res = this.game.buildRoute(steps);
+    if (!res.ok) this.buildRefusedFlag = true;
+  }
+
+  // Runs after a controller entry point returns. On a refused lay the gesture
+  // is abandoned outright — without this the controller's head points at track
+  // that was never laid and the finish wedge floats over empty ground. The
+  // dropAnchors→finishRoute order matters (see toggleBuild).
+  private settleBuildGesture(): void {
+    if (!this.buildRefusedFlag) return;
+    this.buildRefusedFlag = false;
+    this.routeCtrl.dropAnchors();
+    this.routeCtrl.finishRoute();
+  }
+
+  onZoneDown(id: string, port: Port): void {
+    this.routeCtrl.onZoneDown(id, port);
+  }
+  onZoneUp(id: string, port: Port): void {
+    this.routeCtrl.onZoneUp(id, port);
+    this.settleBuildGesture();
+  }
+  onZoneClick(id: string, port: Port): void {
+    this.routeCtrl.onZoneClick(id, port);
+    this.settleBuildGesture();
+  }
+  onZoneEnter(id: string, port: Port): void {
+    this.routeCtrl.onZoneEnter(id, port);
+  }
+  onZoneLeave(id: string, port: Port): void {
+    this.routeCtrl.onZoneLeave(id, port);
+  }
+  // A press released off the zones (grid mouseup / mouseleave) is abandoned,
+  // matching the editor's grid-level clearPress wiring.
+  onLevelPointerGone(): void {
+    if (this.buildArmed) this.routeCtrl.clearPress();
+  }
+
+  isBuildArmed(id: string, port: Port): boolean {
+    return this.routeCtrl.isArmed(id, port);
+  }
+  isBuildFinish(id: string, port: Port): boolean {
+    return this.routeCtrl.isFinish(id, port);
+  }
+  get buildGlowId(): string | null {
+    return this.routeCtrl.glowId;
+  }
+
+  // The triangular hit-zone for one edge: edge corners to the tile centre, so
+  // every point of the tile maps to exactly one edge (the editor's shape).
+  // Which edges of this tile are build targets right now, and how big a shape
+  // each gets. Idle: only open ends (this tile's own, or the facing neighbour's,
+  // which is what makes clicking either side of a line's end work). Routing: all
+  // four, unchanged — the click then chooses a direction, not an anchor.
+  // True only before a gesture has begun. The narrowing applies to the click
+  // that STARTS a route, not to the ones that steer it: `routeStarted` alone is
+  // the wrong test, because it only flips once the first segment is actually
+  // laid — so the second click of every gesture would still see the narrowed
+  // set and land on a delegating open-end target instead of the tile it aimed
+  // at. `armed` (and a live drag) is what says "a gesture owns the board now".
+  get buildIdle(): boolean {
+    const s = this.routeCtrl.state;
+    // Deliberately NOT gated on `pressFrom`. Doing so swapped the band for a
+    // wedge on MOUSEDOWN, so mouseup landed on a different element — and a
+    // browser fires `click` on the nearest common ancestor of the two, which
+    // carries no handler. The click silently never reached the controller and
+    // nothing armed. Whatever decides this must not change mid-press.
+    return !s.armed && !s.routeStarted;
+  }
+
+  // The open ends a click on THIS tile should be able to grab: its own, plus a
+  // facing neighbour's (so the empty side of a line's end works too).
+  openEndTargets(id: string): { port: Port; end: OpenEnd }[] {
+    if (!this.buildIdle) return [];
+    void this.game.levelVersion.value; // ends move when track is laid or razed
+    return buildTargetsAt(this.level, id);
+  }
+
+  // Ports still served by the tapering wedge. An open-end port is served by the
+  // disc INSTEAD — one element per port, so the two never overlap and neither
+  // can intercept the other's click. Interior edges keep their wedge, because
+  // branching a line (Lake Valley's station junction) starts on one.
+  wedgePorts(id: string): Port[] {
+    const taken = new Set(this.openEndTargets(id).map(t => t.port));
+    return taken.size === 0 ? EDGES : EDGES.filter(p => !taken.has(p));
+  }
+
+  // The open ends this tile OWNS (rail on this side), for drawing the knob.
+  ownOpenEnds(id: string): Port[] {
+    if (!this.buildIdle) return [];
+    void this.game.levelVersion.value;
+    return openEndPortsAt(this.level, id);
+  }
+
+  edgeMid(port: Port): { x: number; y: number } {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    if (port === Position.Top) return { x: c, y: 0 };
+    if (port === Position.Right) return { x: s, y: c };
+    if (port === Position.Bottom) return { x: c, y: s };
+    return { x: 0, y: c };
+  }
+
+  // The pinwheel wedge, one per edge, dividing the tile between the four ports.
+  // Fine while a gesture is steering (the click picks a direction), and hopeless
+  // as a way to grab the END of a line — it tapers to a point at the tile centre
+  // and at a fitted zoom (30px tiles) is a few pixels wide. That case is served
+  // by the open-end disc drawn on top of these.
+  // The open-end target: the half-tile band along that edge, used INSTEAD of the
+  // wedge for that port. Both tiles either side of a line's end draw their own
+  // band, so together they form one tile-wide strip centred on the boundary and
+  // both halves arm the same end — overshooting onto the empty neighbour is
+  // harmless. A whole half-tile where there was a triangle tapering to a point.
+  edgeBandPath(port: Port): string {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    switch (port) {
+      case Position.Top:
+        return `M0 0 L${s} 0 L${s} ${c} L0 ${c} Z`;
+      case Position.Right:
+        return `M${c} 0 L${s} 0 L${s} ${s} L${c} ${s} Z`;
+      case Position.Bottom:
+        return `M0 ${c} L${s} ${c} L${s} ${s} L0 ${s} Z`;
+      default:
+        return `M0 0 L${c} 0 L${c} ${s} L0 ${s} Z`;
+    }
+  }
+
+  zonePath(port: Port): string {
+    const s = this.config.tileSize;
+    const c = s / 2;
+    switch (port) {
+      case Position.Top:
+        return `M0 0 L${s} 0 L${c} ${c} Z`;
+      case Position.Right:
+        return `M${s} 0 L${s} ${s} L${c} ${c} Z`;
+      case Position.Bottom:
+        return `M${s} ${s} L0 ${s} L${c} ${c} Z`;
+      default:
+        return `M0 ${s} L0 0 L${c} ${c} Z`;
+    }
+  }
+
+  // The route the pointer is describing, priced. The controller decides WHICH
+  // steps (anchor inclusion, U-turn trimming); the game prices only the NEW
+  // pieces — the same filter the commit charges, so the tag never lies.
+  get buildPreview(): { steps: RouteStep[]; cost: number; refused: boolean } | null {
+    if (!this.buildArmed) return null;
+    // The cost reads the RAW level (which connections already exist), which Vue
+    // cannot observe — the edit counter is the notification (see `bounds`).
+    void this.game.levelVersion.value;
+    const steps = this.routeCtrl.previewSteps();
+    if (steps.length === 0) return null;
+    const cost = this.game.buildCostOf(steps);
+    const refused = this.game.money.enabled && cost > this.game.money.balance;
+    return { steps, cost, refused };
+  }
+
+  get previewRefused(): boolean {
+    return this.buildPreview?.refused ?? false;
+  }
+
+  // Ghost rails per cell for the previewed route (the editor's rail-pair paint).
+  get previewByCell(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    const pv = this.buildPreview;
+    if (!pv) return out;
+    const size = this.config.tileSize;
+    const off = this.config.railDistanceFromPath;
+    for (const s of pv.steps) {
+      (out[s.id] ??= []).push(...railPathsFor(s.a, s.b, size, off));
+    }
+    return out;
+  }
+  previewRails(id: string): string[] {
+    return this.previewByCell[id] ?? [];
+  }
+
+  // The floating cost tag: Train Valley's live price on the pending route. On a
+  // hover that plans NO route (blocked terrain in the way, or off the world) it
+  // shows a refusal ✕ instead, so "can't build there" is visible rather than
+  // just a missing ghost.
+  get buildCostTag(): { x: number; y: number; label: string; refused: boolean } | null {
+    if (!this.buildArmed) return null;
+    const hover = this.routeCtrl.state.hoverPort;
+    if (!hover) return null;
+    const { x, y } = parseCoordId(hover.id);
+    const px = (x + 0.5) * this.config.tileSize;
+    const py = (y + 0.14) * this.config.tileSize;
+    const pv = this.buildPreview;
+    if (!pv) {
+      const from = this.routeCtrl.state.pressFrom ?? this.routeCtrl.state.armed;
+      // No route to show: only meaningful mid-gesture, over a different tile —
+      // and never over the pending frontier tile, where a click FINISHES the
+      // route rather than failing (its "no plan" is the U-turn trim, not a
+      // refusal).
+      if (!from || (from.id === hover.id && from.port === hover.port)) return null;
+      if (hover.id === this.routeCtrl.state.pendingId) return null;
+      return { x: px, y: py, label: "✕ no route", refused: true };
+    }
+    if (!this.game.money.enabled || pv.cost === 0) return null; // free — no tag
+    return {
+      x: px,
+      y: py,
+      label: `−$${pv.cost.toLocaleString("en-US")}`,
+      refused: pv.refused,
+    };
+  }
+
+  // Window key handlers. Bound in mounted() — NOT arrow-function fields: a
+  // field initialiser's closure captures the data-collection `this` (the same
+  // vue-facing-decorator trap as the camera), and here that bit for real — the
+  // handler ran, read a forever-false `buildArmed` off the dead instance, and
+  // Esc silently did nothing. `!:` fields keep the bound references stable so
+  // removeEventListener matches.
+  private boundKeydown!: (e: KeyboardEvent) => void;
+  private boundKeyup!: (e: KeyboardEvent) => void;
+
+  handleBuildKeydown(e: KeyboardEvent): void {
+    if (!this.buildArmed) return;
+    if (e.key === "Escape") {
+      this.routeCtrl.finishRoute();
+      this.settleBuildGesture();
+    }
+    if (e.code === "Space" && !this.spaceHeld) {
+      this.spaceHeld = true;
+      // Space is the pan modifier while building; keep the page still under it.
+      e.preventDefault();
+    }
+  }
+  handleBuildKeyup(e: KeyboardEvent): void {
+    if (e.code === "Space") this.spaceHeld = false;
   }
 
   // Level-crossing cells (rail + road on the same tile) — overlaid with the
@@ -987,48 +1596,220 @@ export default toNative(PlayView);
     rgba(30, 44, 60, 0.55) 10px
   );
 }
-// The fare pin — the money HUD's ONLY board chrome. One per live train, floating
-// over its loco, coloured by the train's livery so it names its train without
-// text. A waiting one pulses and is clickable; a running one just counts down.
-.fare-pin {
-  position: absolute;
-  z-index: 8; // above cars (6) and their ids (7); crossing booms stay on top
-  top: 0;
-  left: 0;
+// The fare pin lives in `components/FarePin.vue` — markup and styles both, so the
+// two views that draw it cannot drift apart.
+// ---- the build tool (Tycoon phase 2) ----
+// One floating toggle: the whole build HUD off the board. The cost lives on the
+// ghost preview's tag, not here.
+// Build and Bulldoze sit in one centred row. They used to be positioned
+// individually, the second by a hand-guessed pixel offset from centre — which
+// was too small for the wider Build label and overlapped it by 76px. Laying
+// them out in a flex row makes the arrangement independent of either label's
+// width, so nothing has to be re-guessed when the wording changes.
+.build-dock {
+  position: fixed;
+  z-index: 2000;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+}
+.build-toggle {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border: 2px solid #fff;
+  gap: 8px;
+  padding: 12px 22px;
+  font: 700 15px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #eef2f6;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.92),
+    rgba(18, 22, 28, 0.92)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 999px;
-  background: rgba(18, 22, 28, 0.9);
-  color: #f4d47a;
-  font: 800 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
-  cursor: default;
-}
-.fare-pin--waiting {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
   cursor: pointer;
-  animation: fare-pin-pulse 1.4s ease-in-out infinite;
 
   &:hover {
-    background: rgba(38, 50, 62, 0.95);
+    border-color: rgba(95, 211, 154, 0.55);
   }
 }
-.fare-pin__go {
-  color: #5fd39a;
-  font-size: 10px;
+.build-toggle--on {
+  color: #0d1117;
+  background: linear-gradient(90deg, #f5d97a, #d6a93c);
+  border-color: rgba(245, 217, 122, 0.8);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(245, 217, 122, 0.45);
 }
-@keyframes fare-pin-pulse {
-  0%,
-  100% {
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+// Bulldoze differs from Build only in its armed livery — the row places it.
+.build-toggle--raze.build-toggle--on {
+  color: #1a0e0e;
+  background: linear-gradient(90deg, #f2a488, #d9663f);
+  border-color: rgba(242, 164, 136, 0.8);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(217, 102, 63, 0.45);
+}
+// Only tiles that would actually go light up, so the affordance never promises
+// a removal the guard will refuse.
+.level-tile--razeable {
+  cursor: pointer;
+
+  &:hover::after {
+    content: "";
+    position: absolute;
+    inset: 6px;
+    border: 2px dashed rgba(217, 102, 63, 0.9);
+    border-radius: 10px;
+    background: rgba(217, 102, 63, 0.16);
+    pointer-events: none;
+    z-index: 5;
   }
-  50% {
-    box-shadow: 0 3px 16px rgba(95, 211, 154, 0.65);
+}
+// The jam nudge: a strip under the score card, deliberately NOT an overlay —
+// the fix is a click on the board behind it.
+.gridlock-nudge {
+  position: fixed;
+  z-index: 2000;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 18px;
+  font: 600 14px/1.35 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #2a1a06;
+  background: linear-gradient(90deg, #ffd88a, #f5b942);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  animation: gridlock-in 0.25s ease-out;
+}
+.gridlock-nudge__icon {
+  font-size: 18px;
+}
+@keyframes gridlock-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
   }
+}
+.build-toggle__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+// The edge hit-zone overlay: above the rails, but BELOW the road cars (6) and
+// the fare pins (8) so a waiting train stays dispatchable mid-build.
+.build-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+}
+// Edge hit-zones + wedge cues, matching the editor's look so the gesture reads
+// as the same tool (both stylesheets are scoped, so the rules can't be shared).
+.zone {
+  fill: rgba(66, 184, 131, 0.05);
+  stroke: none;
+  cursor: pointer;
+  transition: fill 0.08s;
+  &:hover {
+    fill: rgba(66, 184, 131, 0.28);
+  }
+}
+.level-tile:hover .zone {
+  stroke: rgba(44, 62, 80, 0.25);
+  stroke-width: 1;
+}
+// An open-end target is the only zone on its tile, so it can afford to be
+// obvious — and it needs to be, because before this the player was aiming at an
+// invisible triangle tapering to a point.
+.zone--open {
+  fill: rgba(66, 184, 131, 0.14);
+
+  &:hover {
+    fill: rgba(66, 184, 131, 0.34);
+  }
+}
+// The knob that says "a line ends here, build from it". Not interactive itself
+// — the zone under it takes the click, across the whole half-tile.
+.open-end {
+  fill: #ffd76a;
+  stroke: rgba(60, 44, 8, 0.75);
+  stroke-width: 2;
+  pointer-events: none;
+  animation: open-end-pulse 1.6s ease-in-out infinite alternate;
+}
+@keyframes open-end-pulse {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.zone--armed,
+.zone--armed:hover {
+  fill: rgba(255, 179, 0, 0.45);
+}
+.zone--finish,
+.zone--finish:hover {
+  fill: rgba(255, 82, 82, 0.55);
+  stroke: #d32f2f;
+  stroke-width: 2;
+  animation: finish-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes finish-pulse {
+  from {
+    fill: rgba(255, 82, 82, 0.3);
+  }
+  to {
+    fill: rgba(255, 82, 82, 0.65);
+  }
+}
+// Translucent ghost of the rails a commit would lay; red when the route cannot
+// be afforded (the tag says why) — a refusal you can see before you click.
+.preview-rail {
+  fill: none;
+  stroke: #2c3e50;
+  stroke-width: 4;
+  opacity: 0.45;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+.preview-rail--refused {
+  stroke: #d32f2f;
+  opacity: 0.6;
+}
+// The head/frontier tile of an in-progress route.
+.level-tile--build-glow {
+  outline: 3px solid rgba(255, 179, 0, 0.75);
+  outline-offset: -3px;
+}
+// The live price tag riding the hovered tile (Train Valley's -2000$).
+.build-cost-tag {
+  position: absolute;
+  z-index: 9; // above the fare pins — it is the thing being decided right now
+  top: 0;
+  left: 0;
+  padding: 4px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(18, 22, 28, 0.92);
+  color: #f4d47a;
+  font: 800 14px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+}
+.build-cost-tag--refused {
+  color: #ff6b5e;
+  border-color: rgba(255, 107, 94, 0.6);
 }
 .score-card {
   position: fixed;
@@ -1190,6 +1971,61 @@ export default toNative(PlayView);
   font-size: 17px;
   letter-spacing: 0.01em;
   color: #f4d47a;
+}
+.score-calendar {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 13px;
+  color: #b6c2cc;
+  // Replayed on every levy: the element is keyed on the tax paid, so a new
+  // total re-creates it and the animation runs once. A silent balance drop is
+  // the failure this guards against.
+  animation: tax-levy 1.1s ease-out;
+}
+.score-tax {
+  margin-left: 6px;
+  color: #d9a3a3;
+}
+// Insolvency warning: the bill outgrew the balance. Loud on purpose — this is
+// the last moment bulldozing can still save the run.
+.score-calendar--broke {
+  color: #e2574c;
+
+  .score-tax {
+    color: #e2574c;
+  }
+}
+.score-tax-warn {
+  display: block;
+  margin-top: 2px;
+  color: #e2574c;
+  font-size: 12px;
+  animation: tax-warn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tax-warn-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes tax-levy {
+  0% {
+    color: #e2574c;
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-2px);
+  }
+  30% {
+    transform: translateX(2px);
+  }
+  45% {
+    transform: translateX(0);
+  }
 }
 .score-crossing {
   margin-top: 4px;

@@ -1,8 +1,9 @@
 <template>
   <div
-    class="tile clickable"
+    class="tile"
     :class="[kindClass, { 'tile-depot': isDepot }, isDepot ? depotFacingClass : '']"
     :style="reservationStyle"
+    @pointerleave="closeSwitchFan"
   >
     <!-- Road layer (under the rails): paved surface + dashed lane marking,
          derived from the cell's `road` pairs. Only when roads are enabled. -->
@@ -219,43 +220,53 @@
       />
     </svg>
 
-    <!-- Junction switches -->
+    <!-- Junction switches, Train Valley style: the control IS a marking on the
+         track. One fan per switchable entry, one arrow per reachable exit, each
+         anchored on the edge its trains ARRIVE by and running toward its exit
+         along the exact rail curve a train would take. The gold arrow is where
+         the points stand; point at it to unfold the alternatives and click the
+         one you want. Geometry: src/tiles/switchFan.ts. -->
     <svg
-      v-for="entry in junctionEntries"
-      :key="'sw' + entry"
-      :class="[
-        `switch-box switch-box--${entry}`,
-        { 'switch-box--locked': isSwitchLocked },
-      ]"
-      width="24"
-      height="18"
-      @click.stop="changeSwitch(entry)"
+      v-if="switchWidgets.length"
+      class="switch-layer"
+      :class="{ 'switch-layer--static': !switchInteractive }"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
-      <circle class="bulb--base" cx="12" cy="13" r="3" />
-      <circle
-        v-if="switchArmEnabled(entry, 0)"
-        class="bulp--direction bulb--left"
-        :class="{ 'bulb--active': activeArm(entry) === 0 }"
-        cx="4"
-        cy="13"
-        r="3"
-      />
-      <circle
-        v-if="switchArmEnabled(entry, 1)"
-        class="bulp--direction bulb--straight"
-        :class="{ 'bulb--active': activeArm(entry) === 1 }"
-        cx="12"
-        cy="5"
-        r="3"
-      />
-      <circle
-        v-if="switchArmEnabled(entry, 2)"
-        class="bulp--direction bulb--right"
-        :class="{ 'bulb--active': activeArm(entry) === 2 }"
-        cx="20"
-        cy="13"
-        r="3"
-      />
+      <g
+        v-for="sw in switchWidgets"
+        :key="'sw' + sw.entry"
+        class="switch-fan"
+        :data-entry="sw.entry"
+        :class="{
+          'switch-fan--locked': isSwitchLocked,
+          'switch-fan--armed': sw.armed,
+          'switch-fan--open': sw.open,
+          'switch-fan--muted': sw.muted,
+        }"
+      >
+        <g v-for="a in sw.arms" :key="'a' + a.arm">
+          <path class="switch-arm-casing" :class="{ 'is-on': a.on }" :d="a.shaft" />
+          <path
+            class="switch-arm"
+            :class="{ 'is-on': a.on, 'is-hover': a.hover }"
+            :d="a.shaft"
+          />
+          <path
+            class="switch-arm-head"
+            :class="{ 'is-on': a.on, 'is-hover': a.hover }"
+            :d="a.head"
+          />
+          <!-- The target is the whole arrow, not a 3px bulb. -->
+          <path
+            class="switch-hit"
+            :d="a.shaft"
+            @click.stop="pickArm(sw.entry, a.arm)"
+            @pointerenter="hoverArm(sw.entry, a.arm)"
+            @pointerleave="hoverArm(null, null)"
+            @pointerover="openSwitchFan(sw.entry)"
+          />
+        </g>
+      </g>
     </svg>
 
     <!-- Road-junction traffic signals (#38): per-lane signal heads on a dark
@@ -345,6 +356,9 @@
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import type { Game } from "@/game";
+import type { SimTrain } from "@/sim/simulation";
+import { getCoordinatesId } from "@/utils/tileHelpers";
+import { fanArms } from "@/tiles/switchFan";
 import { Position, ActiveIntersection, Route, type Coordinates } from "@/types";
 import {
   TileCell,
@@ -414,12 +428,6 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
 
-const ARMS = [
-  ActiveIntersection.Left,
-  ActiveIntersection.Straight,
-  ActiveIntersection.Right,
-];
-
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
 // markings stay in agreement.
@@ -431,6 +439,10 @@ class Tile extends Vue {
   @Inject({ from: "game" }) game!: Game;
   @Prop({ type: Object, required: true }) tile!: TileCell;
   @Prop({ type: String, required: true }) coordId!: string;
+  // The editor paints its own switch hit-zones on top of the tile (they cycle
+  // the AUTHORED starting arm and persist it), so there the fan is a read-only
+  // picture of that authored state and must not swallow the editor's clicks.
+  @Prop({ type: Boolean, default: true }) switchInteractive!: boolean;
 
   // The engine shed is drawn, not loaded: see utils/trainArt.ts. Constant per
   // tile, so it is a plain field rather than a getter.
@@ -1541,13 +1553,107 @@ class Tile extends Vue {
     this.game.cycleRoadSignal?.(this.coordId);
   }
 
-  // --- switches ---
+  // --- switches (the fan: see src/tiles/switchFan.ts) ---
+  // The arm the pointer is currently over, so it can light up as a preview.
+  hoveredArm: { entry: Position; arm: ActiveIntersection } | null = null;
+  // The entry whose fan is OPEN (showing its alternatives). Held per-entry
+  // rather than per-arm so the pointer can travel from the set arrow onto an
+  // alternative without the fan collapsing out from under it; the tile's own
+  // pointerleave closes it.
+  openEntry: Position | null = null;
+
   switchArmEnabled(entry: Position, arm: ActiveIntersection): boolean {
     const exit = armExit(entry, arm);
     return exit !== null && partnersOf(this.tile.connections, entry).includes(exit);
   }
   activeArm(entry: Position): ActiveIntersection | undefined {
     return this.game.switches[this.coordId]?.[entry];
+  }
+
+  // The entry a train is about to arrive by: a train sitting on the neighbour
+  // tile whose current exit port points at us. A 4-way cross carries four
+  // independent settings and only ONE of them decides where the next train
+  // goes — this is how the fan for that one gets promoted and the rest recede,
+  // which is the whole answer to "which of these do I care about?".
+  //
+  // Keyed off the reactive `occupied` map, so it re-evaluates exactly when a
+  // train changes tile (the raw sim behind it is markRaw'd and never proxied).
+  get approachEntry(): Position | null {
+    const entries = this.junctionEntries;
+    if (!entries.length) return null;
+    const occupied = this.game.occupied;
+    const trains = (this.game.sim as { trains?: Record<string, SimTrain> } | undefined)
+      ?.trains;
+    if (!occupied || !trains) return null;
+    const coord = parseCoordId(this.coordId);
+    for (const entry of entries) {
+      const nb = neighborCoord(coord, entry);
+      if (!nb) continue;
+      const trainId = occupied[getCoordinatesId(nb)];
+      if (!trainId) continue;
+      const train = trains[trainId];
+      const seg = train?.path?.[train.headIndex];
+      if (seg && seg.exitPort === oppositePort(entry)) return entry;
+    }
+    return null;
+  }
+
+  // One fan per switchable entry: its hub marker and its arms, already laid on
+  // the rail curves in TILE coordinates — a single <svg> covers the whole tile,
+  // so there is no per-entry rotated frame to keep in step with the geometry.
+  get switchWidgets() {
+    const size = this.config.tileSize;
+    const approach = this.approachEntry;
+    const hovered = this.hoveredArm;
+    return this.junctionEntries.map(entry => {
+      // A fan opens — showing the routes it is NOT set to — for the entry a
+      // train is arriving by, or the one the pointer is on. Both are the moment
+      // the player is choosing rather than reading, and only one opens at a time.
+      const expanded = entry === approach || entry === this.openEntry;
+      const arms = fanArms(
+        this.tile.connections,
+        entry,
+        size,
+        this.activeArm(entry),
+        expanded
+      ).map(a => ({
+        ...a,
+        hover: hovered?.entry === entry && hovered.arm === a.arm,
+      }));
+      return {
+        entry,
+        arms,
+        // "Armed" is the TRAIN case only — it drives the glow. "Open" covers
+        // both ways a fan expands (train due, or pointer on it) and drives the
+        // full-strength paint.
+        armed: entry === approach,
+        open: expanded,
+        muted: approach !== null && entry !== approach,
+      };
+    });
+  }
+
+  hoverArm(entry: Position | null, arm: ActiveIntersection | null) {
+    if (!this.switchInteractive) return;
+    this.hoveredArm = entry === null || arm === null ? null : { entry, arm };
+  }
+  openSwitchFan(entry: Position) {
+    if (!this.switchInteractive) return;
+    this.openEntry = entry;
+  }
+  closeSwitchFan() {
+    this.openEntry = null;
+    this.hoveredArm = null;
+  }
+
+  // Throw the points straight to the arm that was clicked. The old widget could
+  // only cycle, so reaching a specific exit on a 4-way took up to three clicks
+  // and a guess about which bulb meant what.
+  pickArm(entry: Position, arm: ActiveIntersection) {
+    if (!this.switchInteractive || this.isSwitchLocked) return;
+    if (!this.switchArmEnabled(entry, arm)) return;
+    if (!this.game.switches[this.coordId]) this.game.switches[this.coordId] = {};
+    this.game.switches[this.coordId][entry] = arm;
   }
   get isSwitchLocked(): boolean {
     switch (this.config.switchLockMode) {
@@ -1562,23 +1668,6 @@ class Tile extends Vue {
         return false;
     }
   }
-  changeSwitch(entry: Position) {
-    if (this.isSwitchLocked) return;
-    const partners = partnersOf(this.tile.connections, entry);
-    const cur = this.activeArm(entry) ?? ActiveIntersection.Left;
-    // Advance to the next arm whose geometric exit is an actual partner.
-    for (let i = 1; i <= ARMS.length; i++) {
-      const arm = ARMS[(ARMS.indexOf(cur) + i) % ARMS.length];
-      const exit = armExit(entry, arm);
-      if (exit !== null && partners.includes(exit)) {
-        if (!this.game.switches[this.coordId])
-          this.game.switches[this.coordId] = {};
-        this.game.switches[this.coordId][entry] = arm;
-        return;
-      }
-    }
-  }
-
   // --- depot ---
   get depotFacingClass(): string {
     const conn = this.tile.connections[0];
@@ -1886,48 +1975,123 @@ $signal-offset: 20px;
   background: rgba(20, 20, 20, 0.45);
 }
 
-/* --- switches (from TileIntersectionComplete.vue) --- */
-.switch-box {
-  background-color: black;
-  z-index: 20;
+/* --- junction switches ------------------------------------------------------
+   Train Valley's language: the control is a MARKING ON THE TRACK, not a widget
+   beside it. Each arm is an arrow laid along the rail curve a train would take,
+   headed at the edge it leaves by; gold = where the points stand.
+
+   Replaces a 24x18 black box of three 3px bulbs at the tile edge — ~16px on
+   screen at a fitted zoom, with nothing in it saying which bulb meant which way.
+
+   The GEOMETRY scales with the board (these are track markings, and they must
+   stay glued to the rails), but the WEIGHT does not: every stroke width is
+   multiplied by `--switch-scale`, which the view derives from the camera zoom.
+   That is what keeps them heavy on a zoomed-out world without letting them drift
+   off the rail they belong to. */
+.switch-layer {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  // Above the rails (TileRail is z2 and earlier in the DOM), UNDER the trains
+  // (wagons z3, loco z10): the arrows are paint on the track, and a train
+  // physically rolls over paint. While a train covers a fan the tile is locked
+  // anyway, so no clickable target is being buried.
+  z-index: 2;
+  overflow: visible;
+  // Only the arrows take clicks — the layer covers the whole tile.
+  pointer-events: none;
+}
+.switch-fan {
+  // At rest the arrows are track markings, not the main event: translucent
+  // enough to sit under the scenery's volume, opaque enough to read. They come
+  // up to full strength exactly when they matter — a train approaching that
+  // entry, or the pointer on it (and always in the editor, an editing surface).
+  opacity: 0.55;
+  transition: opacity 0.18s ease;
+}
+.switch-fan--open,
+.switch-fan--armed,
+.switch-layer--static .switch-fan {
+  opacity: 1;
+}
+// A train is arriving by a different entry — that fan is the one that matters,
+// so this one steps back rather than competing with it.
+.switch-fan--muted {
+  opacity: 0.28;
+}
 
-  :deep(circle) {
-    fill: white;
-    transition: all 0.5s cubic-bezier(0.89, 0.27, 0.78, 0.59);
-  }
+// The Train Valley arrow (the A1/A3 hybrid): a near-black body in a white
+// casing, so it reads on grass, ballast, sand and water alike — the same
+// two-pass trick TV itself uses. The SET arm is the solid black arrow;
+// the alternatives (only visible while a fan is open) are the inverse ghost —
+// white body, dark casing — so "current" and "available" are never confused.
+.switch-arm-casing {
+  fill: none;
+  stroke: #f4f4f2;
+  stroke-width: calc(19px * var(--switch-scale, 1));
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.switch-arm-casing:not(.is-on) {
+  stroke: rgba(24, 24, 24, 0.55);
+}
+.switch-arm {
+  fill: none;
+  stroke: rgba(250, 250, 248, 0.82);
+  stroke-width: calc(13px * var(--switch-scale, 1));
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.15s ease, opacity 0.15s ease;
+}
+.switch-arm.is-on {
+  stroke: #232323;
+}
+.switch-arm-head {
+  fill: rgba(250, 250, 248, 0.82);
+  stroke: rgba(24, 24, 24, 0.55);
+  stroke-width: calc(3px * var(--switch-scale, 1));
+  stroke-linejoin: round;
+  transition: fill 0.15s ease, opacity 0.15s ease;
+}
+.switch-arm-head.is-on {
+  fill: #232323;
+  stroke: #f4f4f2;
+}
+.switch-arm.is-hover:not(.is-on) {
+  stroke: #ffffff;
+}
+.switch-arm-head.is-hover:not(.is-on) {
+  fill: #ffffff;
+}
+.switch-fan--armed .switch-arm.is-on,
+.switch-fan--armed .switch-arm-head.is-on {
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.85));
+}
 
-  &.switch-box--0 {
-    left: 57%;
-    top: 0;
-    transform: rotate(180deg);
-  }
-  &.switch-box--1 {
-    right: 0;
-    top: 57%;
-    transform: rotate(-90deg);
-  }
-  &.switch-box--2 {
-    left: 57%;
-    bottom: 0;
-  }
-  &.switch-box--3 {
-    left: 0;
-    top: 57%;
-    transform: rotate(90deg);
-  }
-
-  :deep(.bulp--direction) {
-    opacity: 0.4;
-  }
-  :deep(.bulb--active) {
-    opacity: 1;
-  }
-
-  &.switch-box--locked {
-    cursor: not-allowed;
-    outline: 2px solid #ff3b30;
-  }
+.switch-hit {
+  fill: none;
+  stroke: transparent;
+  // Grows as the board zooms out, so the target stays tappable even though the
+  // arrow it follows is shrinking with the tile.
+  stroke-width: calc(26px * var(--switch-scale, 1));
+  stroke-linecap: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+// In the editor the arrows are a picture of the AUTHORED arm; the editor's own
+// zones own the clicks.
+.switch-layer--static .switch-hit {
+  pointer-events: none;
+  cursor: default;
+}
+// Interlocked: a train has this tile reserved or is standing on it, so the
+// points are bolted. Still hoverable, so the cursor can say why.
+.switch-fan--locked {
+  filter: saturate(0.15);
+}
+.switch-fan--locked .switch-hit {
+  cursor: not-allowed;
 }
 
 /* --- depot (from TileDepot.vue) --- */

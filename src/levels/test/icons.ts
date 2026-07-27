@@ -78,6 +78,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   // Challenges
   objectives: "🎯",
   timeattack: "⏱️",
+  buildgap: "🏗️",
   daily: "📅",
 };
 
