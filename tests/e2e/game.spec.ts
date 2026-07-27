@@ -885,6 +885,84 @@ test.describe("Train game", () => {
     expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
   });
 
+  test("tycoon: a train that ran out of track can be rescued from the tile it is stuck on", async ({
+    page,
+  }) => {
+    test.setTimeout(120000);
+    // Reported from a real game. Buy the RING only (5 pieces) and skip the
+    // yellow station's entry: the train standing in that station leaves it,
+    // steps onto 2,5 — which now has [N,E] and no southern connection — and
+    // strands there, directly above its own depot. The big station sprite
+    // underneath makes it look docked, which is how it gets reported as "went
+    // into the depot but did not count".
+    //
+    // The rescue is to lay 2,5's missing link. That is the very tile the
+    // stranded train is standing on, and "you cannot build where a train is"
+    // used to refuse it outright, leaving the board unwinnable from the side
+    // the player is looking at.
+    await page.goto("/#/play?mode=tycoon&board=lakevalley-open");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    const zone = (coord: string, port: number) =>
+      page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
+    const trackSpent = () =>
+      page.evaluate(() => (window as any).__game.money.trackSpent as number);
+
+    // The ring, and nothing else.
+    await page.getByTestId("build-toggle").click();
+    await zone("2,4", 2).click();
+    await zone("6,4", 2).click();
+    await expect.poll(trackSpent).toBe(5000);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+
+    // Send everything, then let the trap spring.
+    const pins = page.locator(".fare-pin");
+    for (let i = 0, n = await pins.count(); i < n; i++) {
+      await pins.nth(i).click({ force: true, timeout: 2000 }).catch(() => {});
+    }
+    await page.evaluate(() => {
+      (window as any).__game.speed.value = 4;
+    });
+
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => ((window as any).__game.sim.strandedOn("2,5") as string[]).length
+          ),
+        { timeout: 30000, intervals: [400] }
+      )
+      .toBeGreaterThan(0);
+
+    // The tile is occupied, and editable anyway — that is the whole fix.
+    expect(
+      await page.evaluate(() => !!(window as any).__game.occupied["2,5"])
+    ).toBe(true);
+    expect(
+      await page.evaluate(() => (window as any).__game.canEdit(["2,5"]))
+    ).toBe(true);
+
+    // Lay the missing link under it.
+    await page.getByTestId("build-toggle").click();
+    await zone("3,5", 3).click();
+    await zone("2,5", 2).click();
+    await expect.poll(trackSpent).toBe(6000);
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+
+    // And it goes: nobody is stranded on 2,5 any more, and the train has left.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => ((window as any).__game.sim.strandedOn("2,5") as string[]).length
+          ),
+        { timeout: 30000, intervals: [400] }
+      )
+      .toBe(0);
+  });
+
   test("signals are drawn and a manual hold turns a signal to Stop", async ({
     page,
   }) => {

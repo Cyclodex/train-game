@@ -267,6 +267,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## BUILDING UNDER A STRANDED TRAIN (2026-07-27)
+- The old rule was "no edit on any tile a train occupies or has reserved",
+  because a segment caches the exit it committed to and reservations name tiles
+  by id. ONE exception now: a train that has RUN OUT OF TRACK has committed to
+  no exit at all, so laying the rail it is waiting for contradicts nothing.
+- `sim.strandedOn(tileId)` = trains whose HEAD sits there and whose live
+  `traverse` gives no next (and is not a depot Center — that is docking, not
+  stuck). Asks the LEVEL, not the cached exit, because the cache is the thing
+  the rescue is about to change. A train held at a RED SIGNAL has somewhere to
+  go and is therefore NOT stranded — it still blocks.
+- A tile is editable iff EVERY train claiming it (occupancy OR reservation) is
+  stranded on it. A train whose TAIL lies there still blocks: the segment under
+  its wagons carries a committed exit. Note a stranded train reserves its own
+  body tiles, so the reservation check has to be per-train, not a bare truthy test.
+- After the edit, `sim.releaseStranded(id)` re-derives the head's exit — and
+  ONLY when it is still null. Without it the train moves off while still being
+  DRAWN along the stub it dead-ended on; rewriting a committed exit would
+  teleport the body onto a different curve.
+- WHY IT MATTERS: `lakevalley-open` reaches this state honestly. Buy the 5-piece
+  ring and skip the station entry and 2,5 is [N,E] — the train leaving the
+  yellow depot enters from the SOUTH, finds no partner, and strands directly
+  above its own station. The depot sprite underneath makes it look docked, so it
+  gets reported as "the train went into the depot but did not count". The rescue
+  is 2,5's missing link, i.e. the tile the train is standing on. E2e:
+  "a train that ran out of track can be rescued from the tile it is stuck on".
+
 ## GENERATED TERRAIN (2026-07-27)
 - `generateTerrain.ts paintTerrain` gives procgen + Daily boards their ground.
   Painted LAST, and ONLY into coordinates absent from the level — that one guard
