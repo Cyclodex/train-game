@@ -53,6 +53,23 @@ const DEFAULT_MAX_ENTRIES = 200;
 // re-laying a connection a tile already has is free (see `buildRoute`).
 export const TRACK_COST_PER_TILE = 1000;
 
+// What it costs to TAKE ONE PIECE OF TRACK OUT — a demolition fee, not a
+// refund. Ripping up rail is work somebody has to do, so it can never pay.
+//
+// This replaced a full refund, which was the wrong shape for two reasons. The
+// obvious one: money back for demolition is not a thing that happens. The
+// subtler one: the full refund existed to soften a MISDRAG, and a misdrag is an
+// input error, not a world event. Games solve input errors with UNDO — so that
+// is what `game.undoBuild()` is for, and it leaves this price free to be
+// honest.
+//
+// 30% of the build price: enough to make an over-build hurt, never enough to
+// make one fatal. It is deliberately more than a year's upkeep on the same
+// piece, so clearing surplus track pays for itself only if there is enough
+// railway left to run — which is the decision the tax and this price make
+// together.
+export const CLEARING_COST_PER_TILE = 300;
+
 export interface Economy {
   readonly balance: number;
   readonly earned: number; // lifetime income this run

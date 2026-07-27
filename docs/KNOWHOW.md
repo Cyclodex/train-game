@@ -190,6 +190,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
   EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
   into the point coords, never nest a `<g transform="translate">` inside a prop.
+- FOREST DEPTH (2026-07-27): a forest tile's density scales with how many of
+  its 8 neighbours are forest too (`depth` in buildGround) — +12 trees and
+  +0.45 scale at full depth, so a big wood closes into overlapping canopy
+  while a lone copse stays airy. Local by design: it needs nothing beyond the
+  neighbour flags the cache key already carries, and ONLY forest reads it.
+  /test scenario: `forestworld` (a curvy line through a 10x5 deep wood).
 - KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
   footprint off every rail/road through the cell AND its four side-neighbours
   (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from
@@ -430,6 +436,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   dominates it. `/test/taxyear` teaches the mechanic (10s year, $300/piece,
   $9,000 purse — dialled for watching, not for balance).
 
+## UNDO vs BULLDOZE (2026-07-27) — two verbs, so each price can be honest
+- They were ONE verb (bulldoze, refunding in full) and that is why the price was
+  wrong: it had to double as the escape hatch for a MISDRAG. A misdrag is an
+  INPUT ERROR, not a world event — every builder that solves it well solves it
+  with Ctrl+Z, not with economics. Split:
+  · `undoBuild()` reverses a PURCHASE — rails go, full money back as an
+    `adjustment`, no fee, and `trackSpent`/`tilesBuilt` both fall because the
+    buy never really happened.
+  · `bulldoze()` removes a RAILWAY — costs `CLEARING_COST_PER_TILE` (=300, 30%
+    of the build price), never pays, and books under the `"clearing"` reason
+    that `economy.ts` had reserved. `trackSpent` does NOT fall: you spent that
+    money, and "Under budget" must not be winnable by building wide and razing
+    the evidence. `tilesBuilt` DOES fall — it counts the railway you kept.
+- The undo window closes on what the PLAYER does — next build replaces it, a
+  bulldoze or a DISPATCH drops it — never on a clock. A window that closes by
+  itself is an invisible timer, which is the thing undo was chosen over. Only
+  the LAST gesture is undoable, so "undo the level at the end" is not a strategy.
+- TRAP (cost a browser round trip): a gesture can buy NOTHING and must then NOT
+  replace the window. The Esc-finish whose terminus duplicates existing rail
+  fires after every real gesture, so recording it as "the last purchase" set the
+  window to 0 pieces and the undo control vanished the instant the drag ended.
+  Guard is `if (pieces > 0)` in `buildRoute`; pinned by a unit test AND an e2e,
+  because it only reproduces through the real gesture.
+- The view reads `game.undoable` (a Ref), not `canUndoBuild()`: `game` is
+  markRaw'd, `lastBuild` is a closure variable, and DISPATCH clears it without
+  touching `levelVersion` — so there would be nothing to re-evaluate on. Keyed
+  on `pieces`, not `value`, because Sandbox builds free and a $0 undo is real.
+- Clearing is priced ABOVE a year's upkeep on the same piece (300 vs 150 on
+  lakevalley), so razing surplus pays for itself only with years left to run.
+  That is the decision the two prices make together — and it is why the
+  insolvency warning names DELIVERING first: clearing is an escape route that
+  itself needs money, and `bulldoze` refuses a fee the balance cannot cover.
+
 ## BANKRUPTCY (2026-07-27) — the tax's other half
 - BANKRUPT = OWING MORE THAN YOU HAVE, never "the balance reached zero". That
   distinction is the whole design: measured lines finish flat broke with the
@@ -446,14 +485,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the number meaningless as a diagnostic.
 - THE WARNING IS THE FEATURE, not the Failed screen. `money.taxUnaffordable`
   (`taxPerYear > balance`) turns the calendar row red with "can't pay next year"
-  while there is still a year to act in — and the fix it names, BULLDOZE, works
-  twice over: it refunds what you paid AND lowers the next bill. Without it the
-  fail state is an ambush; same lesson as the gridlock nudge (name the failure
-  AND the fix). Deliberately literal — it does not try to predict fares.
-- `/test/bankrupt` is the scenario ($5,000, 8s year, $600/piece — the annual
+  a full in-game YEAR before the bill lands. Without it the fail state is an
+  ambush; same lesson as the gridlock nudge (name the failure AND the fix).
+  Deliberately literal — it does not try to predict fares.
+- The fix it names is DELIVERING, not clearing. Fares are the income; clearing
+  track costs a fee (see UNDO vs BULLDOZE) and `bulldoze` refuses one the
+  balance cannot cover, so it is an escape route that itself needs money. It is
+  also only an escape where there is SURPLUS — razing a piece of a minimal link
+  just re-opens the gap. Wording was corrected on 2026-07-27 when the refund
+  became a fee and the old advice ("bulldoze") stopped being reliable.
+- `/test/bankrupt` is the scenario ($6,000, 8s year, $600/piece — the annual
   bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
-  $2,321; relaxed won 22.7s banking $1,086; dawdling folded at 26.0s, $600
-  short. Playable at `/#/play?mode=tycoon&board=bankrupt`.
+  $3,315; relaxed won 24.7s banking $855; dawdling folded at 32.0s, $800 short,
+  warned from 24s. Playable at `/#/play?mode=tycoon&board=bankrupt`.
 - Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
   still wins ties): "you ran out of money" beats any symptom another check might
   notice on the same tick. A knock-on worth knowing: a board that DEADLOCKS in
@@ -567,6 +611,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and anything later. Water + rock + mountain block; forest + town don't (you
   fell trees). A bridge (water) and a tunnel (mountain) will be EXCEPTIONS here,
   not second rules.
+- TERRAIN PRICES THE BUILD (2026-07-27): `TERRAIN_BUILD_FACTOR` (terrain.ts,
+  forest 1.5x / urban 2.5x) multiplies `TRACK_COST_PER_TILE` per PIECE in
+  `game.buildCostOf` (`pricePerPiece`, rounded per piece so preview sum ==
+  charge). UNDO hands back `lastBuild.cost`, which is already terrain-priced —
+  no second price table; BULLDOZE charges flat CLEARING_COST_PER_TILE and
+  refunds nothing (see the undo-vs-bulldoze split in game.ts). Lakevalley
+  budgets are safe: its rebuild row is all grass. /test scenario: `landprices`
+  ($6,000 vs a $5,000 grass+wood+town gap, tuning in tycoon.ts). The build
+  button's hint derives its prices from the same table — keep it that way.
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.
@@ -1001,10 +1054,21 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `npm run probe` walks the DOM instead and its coverage varies run to run
   (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
 - The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
-  BANKRUPTCY followed it (2026-07-27) — see the two sections above. NEXT UP
+  BANKRUPTCY followed it (2026-07-27), and the refund became a demolition FEE
+  with UNDO taking over the misdrag case — see the three sections above. NEXT UP
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
+  BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
+  one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
+  and at a glance in `git diff`; what you see is a commit of 5,268 lines where
+  830 were meant, and then a MERGE THAT CONFLICTS ON ENTIRE FILES, because every
+  line differs. Cost a merge and an amend on 2026-07-27. The repo is MIXED:
+  `src/` and `tests/` are LF, `docs/KNOWHOW.md` is CRLF — so normalise per file
+  (`file <path>` says what is on disk, `git show HEAD:<path> | file -` says what
+  is STORED). Prefer the Edit tool; if a script is genuinely easier, read and
+  write `"rb"`/`"wb"` and do the replacement on bytes.
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
 - `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
   path `"C:\Program Files\GitHub CLI\gh.exe"`. Bare `gh` ENOENTs and the REST API
@@ -1022,12 +1086,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   deletes the real install. Kill bg dev servers when done.
 
 ## BULLDOZE + GRIDLOCK (2026-07-26)
-- REFUNDS MUST TRACK PURCHASES, not track. `boughtPieces` (`game.ts`) records the
-  connection keys `buildRoute` actually charged for; `bulldoze` refunds only
-  those. Without it every board's AUTHORED rail is a cash machine — you would
-  bulldoze the pre-laid ring for income. You may raze anything (bar a depot);
-  only what you bought pays back. Full refund by design: bulldoze exists so a
-  misdrag is not fatal. A demolition FEE belongs with phase 3 clearing costs.
+- SUPERSEDED 2026-07-27 — bulldoze no longer refunds; see UNDO vs BULLDOZE. The
+  old rule ("refunds must track purchases, or the authored ring is a cash
+  machine") is gone with the refund itself: `boughtPieces` now only backs UNDO.
 - Removal is the mirror of the new-junction trap: an arm can be left pointing at
   an exit that no longer exists, and `connectionsToExitPort` answers NULL for
   that (train stops dead). `bulldoze` re-derives `initialSwitches` for the tile

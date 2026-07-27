@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createGame, TrainDef } from "@/game";
 import { tycoonMode, TAXYEAR_BALANCE, TAXYEAR_TAX_PER_PIECE, TAXYEAR_SEC_PER_YEAR } from "@/modes/tycoon";
 import { puzzleMode } from "@/modes/puzzle";
-import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import { CLEARING_COST_PER_TILE, TRACK_COST_PER_TILE } from "@/sim/economy";
 import { expandKind } from "@/tiles/kinds";
 import { Level } from "@/tiles/model";
 import { Position } from "@/types";
@@ -149,21 +149,33 @@ describe("the annual levy", () => {
     expect(game.objective.counters.trackSpent).toBe(track);
   });
 
-  it("charges upkeep on the railway that is standing, so bulldozing lowers it", () => {
+  it("charges upkeep on the railway that is STANDING, so clearing lowers it", () => {
+    // Clearing surplus track is the second way out of an upkeep spiral (the
+    // first is delivering). It costs a fee and is worth it only with years left
+    // to save — here, one year of upkeep on the spur is $300 and so is the fee,
+    // so it pays from the second year on.
     const game = taxGame();
     game.startObjective();
     game.buildRoute(gapSteps);
     expect(game.money.taxPerYear).toBe(2 * TAXYEAR_TAX_PER_PIECE);
 
-    expect(game.bulldoze("3,1").ok).toBe(true);
-    // Refund and rate move together — `trackSpent` nets by the same rule as
-    // `tilesBuilt`, so the two can never disagree about what was kept.
-    expect(game.money.taxPerYear).toBe(1 * TAXYEAR_TAX_PER_PIECE);
-    expect(game.money.trackSpent).toBe(TRACK_COST_PER_TILE);
+    // A pointless spur, on its own tile so it can be cleared by itself.
+    const spur: RouteStep[] = [{ id: "2,2", a: Position.Top, b: Position.Bottom }];
+    game.buildRoute(spur);
+    expect(game.money.taxPerYear).toBe(3 * TAXYEAR_TAX_PER_PIECE);
+    const beforeClearing = game.money.balance;
+
+    expect(game.bulldoze("2,2").ok).toBe(true);
+    expect(game.money.taxPerYear).toBe(2 * TAXYEAR_TAX_PER_PIECE);
+    // It COST money — clearing never pays back...
+    expect(game.money.balance).toBe(beforeClearing - CLEARING_COST_PER_TILE);
+    // ...and `trackSpent` does not fall with it: that money was spent. Only
+    // `tilesBuilt` (and so the upkeep) counts the railway you kept.
+    expect(game.money.trackSpent).toBe(3 * TRACK_COST_PER_TILE);
 
     const before = game.money.balance;
     game.advance(YEAR);
-    expect(game.money.balance).toBe(before - TAXYEAR_TAX_PER_PIECE);
+    expect(game.money.balance).toBe(before - 2 * TAXYEAR_TAX_PER_PIECE);
   });
 
   it("takes what is there rather than letting being broke be free", () => {
