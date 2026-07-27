@@ -17,6 +17,11 @@ files involved.
 > [`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`](docs/superpowers/specs/2026-07-25-train-valley-mode-design.md)
 > §8 — that is the active worklist for this mode.
 >
+> **Picking up the Tycoon thread in a fresh session?** Start at
+> [`docs/handoff-tycoon-next.md`](docs/handoff-tycoon-next.md) — what is left,
+> ordered, each item written to be started on its own, with the traps that have
+> already cost someone a night.
+>
 > **Wider brainstorm:** for a broader (less filtered) exploration of future
 > directions — objectives & game modes, terrain (tunnels, bridges, level
 > crossings, stations, obstacles), trains/cargo/economy, atmosphere, advanced
