@@ -13,8 +13,9 @@
 // the validator reads terrain yet; that arrives one rule at a time (water blocks
 // track, then bridges, then rock), each with its own /test scenario.
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
+import { segmentPoints } from "@/sim/pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, lerp, tree } from "@/utils/foliage";
+import { Rng, bush, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
@@ -89,6 +90,182 @@ const CORNER_ROUNDING = 2.2;
 // The path is wound clockwise, so a NEGATIVE bow is the outward direction.
 const SEAM_OVERLAP = 0.6;
 
+// --- Keep-out corridors ------------------------------------------------------
+//
+// Scatter must not stand on anything a vehicle runs over. A corridor is the
+// centreline of a rail connection or a road across the SAME cell (or a
+// neighbouring one), with a half-width; placement keeps each object's footprint
+// outside every corridor, so laying track through a wood fells the trees in the
+// right-of-way and a town's houses step back from the line. Forest gets one
+// deliberate exception (see buildGround): a trunk may stand BESIDE the line
+// while its canopy overhangs it — those trees render on the CANOPY layer, above
+// the trains, so a train slips under the foliage.
+
+export interface Corridor {
+  pts: Pt[];
+  half: number;
+}
+
+// Rails sit `railDistanceFromPath` (7px of 200 = 3.5 units) either side of the
+// centreline, on sleepers a little wider — ~8 units of track edge to edge.
+const RAIL_HALF = 8;
+// One lane is 14 units wide (roadGeometry's size * 0.14); a road's half-width
+// is its widest approach, since each direction's lanes sit on their own side.
+const LANE_W_UNITS = 14;
+const ROAD_MARGIN = 2;
+
+/** The corridors of ONE cell, in its own 0..GROUND_UNITS space. */
+export function cellCorridors(cell: TileCell | null | undefined): Corridor[] {
+  if (!cell) return [];
+  const out: Corridor[] = [];
+  for (const [a, b] of cell.connections) {
+    out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+  }
+  if (cell.road?.length) {
+    // One corridor per (from → to) movement, as wide as its deepest lane stack.
+    const widest = new Map<string, { corridor: Corridor; lanes: number }>();
+    for (const lane of cell.road) {
+      for (const to of [...lane.to, ...(lane.busTo ?? [])]) {
+        const key = [lane.from, to].sort().join(">");
+        const lanes = lane.index + 1;
+        const cur = widest.get(key);
+        if (cur) {
+          cur.lanes = Math.max(cur.lanes, lanes);
+          cur.corridor.half = cur.lanes * LANE_W_UNITS + ROAD_MARGIN;
+        } else {
+          widest.set(key, {
+            lanes,
+            corridor: {
+              pts: segmentPoints(lane.from, to, GROUND_UNITS),
+              half: lanes * LANE_W_UNITS + ROAD_MARGIN,
+            },
+          });
+        }
+      }
+    }
+    for (const { corridor } of widest.values()) out.push(corridor);
+  }
+  return out;
+}
+
+/**
+ * A tile's corridors PLUS its four side-neighbours', translated into this
+ * tile's space. The wide forest band lets a canopy reach ~4 units over the tile
+ * edge, and a neighbour's rail runs right up to that edge at a port — without
+ * the neighbours, a tree hugging the boundary would drape its canopy over the
+ * next tile's track on the wrong (ground) layer.
+ */
+export function corridorsFor(
+  cell: TileCell | null | undefined,
+  neighbours?: Partial<
+    Record<"top" | "right" | "bottom" | "left", TileCell | null | undefined>
+  >,
+): Corridor[] {
+  const out = cellCorridors(cell);
+  if (!neighbours) return out;
+  const shifts: [keyof typeof neighbours, number, number][] = [
+    ["top", 0, -GROUND_UNITS],
+    ["right", GROUND_UNITS, 0],
+    ["bottom", 0, GROUND_UNITS],
+    ["left", -GROUND_UNITS, 0],
+  ];
+  for (const [side, dx, dy] of shifts) {
+    for (const c of cellCorridors(neighbours[side])) {
+      out.push({
+        half: c.half,
+        pts: c.pts.map(p => ({ x: p.x + dx, y: p.y + dy })),
+      });
+    }
+  }
+  return out;
+}
+
+function distToPolyline(p: Pt, pts: Pt[]): number {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2));
+    best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
+  }
+  return best;
+}
+
+/** Distance from a point to the EDGE of the nearest corridor. Negative = on it. */
+export function corridorClearance(p: Pt, corridors: Corridor[]): number {
+  let best = Infinity;
+  for (const c of corridors) {
+    best = Math.min(best, distToPolyline(p, c.pts) - c.half);
+  }
+  return best;
+}
+
+// The clear radius an object of this kind needs beyond a corridor's edge, per
+// unit of band scale — the drawn art's worst-case reach (forest's includes the
+// 0.42 tree conversion in buildGround).
+const FOOT: Record<TerrainKind, number> = {
+  grass: 0,
+  forest: 13,
+  water: 6,
+  rock: 15,
+  mountain: 30,
+  urban: 16,
+};
+// A trunk needs far less room than a canopy: how much clearance a FOREST
+// tree's base needs before it is standing in the ballast.
+const TRUNK_CLEAR = 4;
+
+// --- Glades ------------------------------------------------------------------
+//
+// A real wood is not wall-to-wall trees: it has clearings, and thinner, lighter
+// growth around them. The density field is VALUE NOISE over a coarse WORLD
+// lattice — seeded by world position, never by the tile — so a glade spans tile
+// boundaries seamlessly and can never redraw the grid the jittered patches
+// exist to hide. Trees are rejected where the field runs low (a rejected spot
+// occasionally keeps a low bush instead — light gets through where the canopy
+// doesn't close), and the survivors shrink a little toward a glade's rim.
+
+// Tiles per noise cell: a glade spans a couple of tiles, not a couple of trees.
+const GLADE_CELL = 3;
+
+function fieldCorner(gx: number, gy: number, seed: number): number {
+  return makeRng(hashInts(seed, gx, gy, 0x6e))();
+}
+
+const smoothT = (t: number) => t * t * (3 - 2 * t);
+
+/** Forest density 0..1 at a WORLD position (in tile units). Deterministic. */
+export function forestDensityAt(wx: number, wy: number, seed: number): number {
+  const cx = Math.floor(wx / GLADE_CELL);
+  const cy = Math.floor(wy / GLADE_CELL);
+  const fx = smoothT(wx / GLADE_CELL - cx);
+  const fy = smoothT(wy / GLADE_CELL - cy);
+  const a = fieldCorner(cx, cy, seed);
+  const b = fieldCorner(cx + 1, cy, seed);
+  const c = fieldCorner(cx, cy + 1, seed);
+  const d = fieldCorner(cx + 1, cy + 1, seed);
+  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+}
+
+// How likely a tree at this density is to stand: full wood above, none below,
+// a soft shoulder between. THE THRESHOLDS ARE PITCHED AGAINST THE FIELD'S REAL
+// DISTRIBUTION: bilinear noise concentrates hard around 0.5 (it averages four
+// uniforms), so a "full wood" bar at 0.52 rejected trees across half the map
+// and turned every forest into sparse shrubland. At 0.38/0.24 roughly three
+// quarters of the world is full wood, a sixth is the lighter shoulder, and a
+// tenth is true clearing — a forest with glades, not a glade with trees.
+const GLADE_FULL = 0.38;
+const GLADE_FLOOR = 0.24;
+
+function gladeKeep(density: number): number {
+  if (density >= GLADE_FULL) return 1;
+  if (density <= GLADE_FLOOR) return 0.04;
+  return smoothT((density - GLADE_FLOOR) / (GLADE_FULL - GLADE_FLOOR));
+}
+
 // A cell with no `terrain` is grass. Grass is the ONE kind that draws no ground
 // of its own: the board's themed ground shows through untouched, so adding
 // terrain to the model changes nothing about how existing levels look. Painting
@@ -119,6 +296,26 @@ const BLOCKS_BUILDING: Record<TerrainKind, boolean> = {
 
 export function terrainBlocksBuilding(kind: TerrainKind): boolean {
   return BLOCKS_BUILDING[kind];
+}
+
+// Terrain's SECOND gameplay rule (after canBuildOn): what laying track on this
+// ground multiplies the base tile price by. Felling a wood costs half again;
+// buying town land costs two and a half times. Only modes with a ledger feel
+// it — sandbox and puzzle build free — and only the three buildable grounds
+// matter here: water/rock/mountain refuse track outright, and a future bridge
+// or tunnel is expected to bring its OWN price, not read this table.
+export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
+  grass: 1,
+  forest: 1.5,
+  water: 1,
+  rock: 1,
+  mountain: 1,
+  urban: 2.5,
+};
+
+/** The build-price factor for a cell. Missing cell = bare grass = 1. */
+export function terrainBuildFactor(cell: TileCell | null | undefined): number {
+  return TERRAIN_BUILD_FACTOR[terrainOf(cell)];
 }
 
 /** Whether track or road may be laid on this cell. Missing cell = bare grass. */
@@ -1013,37 +1210,42 @@ function groundMarks(
   rng: Rng,
   base: Hsl,
   place: (x: number, y: number) => Pt2,
+  clear: (p: Pt2, r: number) => boolean,
 ): string {
+  // Marks that land on a corridor are simply dropped (no retries): they are
+  // filler, and bare ballast beside the line reads better than a garden on it.
   const spread = (
     count: number,
+    radius: number,
     make: () => string,
     yBand: [number, number] = [20, 88],
   ): string => {
     const out: string[] = [];
     for (let i = 0; i < count; i++) {
       const p = place(lerp(14, 86, rng()), lerp(yBand[0], yBand[1], rng()));
+      if (!clear(p, radius)) continue;
       out.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${make()}</g>`);
     }
     return out.join("");
   };
   if (kind === "rock") {
     return (
-      spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(5 + Math.floor(rng() * 4), () => pebble(rng, 1))
+      spread(3 + Math.floor(rng() * 3), 12, () => shelf(rng, base)) +
+      spread(5 + Math.floor(rng() * 4), 4, () => pebble(rng, 1))
     );
   }
   if (kind === "mountain") {
     // Top-down, there is no "foot of the range" — scree lies wherever the
     // ridges are not, and the depth sort keeps a massif on top of its gravel.
     return (
-      spread(3 + Math.floor(rng() * 3), () => shelf(rng, base)) +
-      spread(4 + Math.floor(rng() * 3), () => pebble(rng, 0.85, 53))
+      spread(3 + Math.floor(rng() * 3), 12, () => shelf(rng, base)) +
+      spread(4 + Math.floor(rng() * 3), 4, () => pebble(rng, 0.85, 53))
     );
   }
   if (kind === "urban") {
     return (
-      spread(3 + Math.floor(rng() * 3), () => paving(rng)) +
-      spread(2 + Math.floor(rng() * 3), () => garden(rng))
+      spread(3 + Math.floor(rng() * 3), 10, () => paving(rng)) +
+      spread(2 + Math.floor(rng() * 3), 8, () => garden(rng))
     );
   }
   return "";
@@ -1063,22 +1265,18 @@ function tileRng(coordId: string, seed: number): Rng {
 // --- Assembly ----------------------------------------------------------------
 
 // Memo: the ground of a tile only changes when its kind, its neighbours' kinds,
-// its coord or the world seed change — none of which move during play. Without
-// this, panning a 20x14 board would redraw ~280 tiles of procedural art per
-// frame.
-const cache = new Map<string, string>();
+// its coord, the world seed or the tracks/roads through it change — none of
+// which move during play. Without this, panning a 20x14 board would redraw
+// ~280 tiles of procedural art per frame.
+const cache = new Map<string, { ground: string; scatter: string; canopy: string }>();
 
-/**
- * The complete ground art for one tile as an SVG fragment, in a 0..100 box:
- * the terrain patch, its rim, and whatever stands on it, painted back to front.
- * Returns "" for grass (see terrainOf) so the common tile costs nothing.
- */
-export function tileGroundSvg(
+function buildCached(
   kind: TerrainKind,
   coordId: string,
-  neighbours: TerrainNeighbours = ALL_GRASS,
-  seed = 1,
-): string {
+  neighbours: TerrainNeighbours,
+  seed: number,
+  corridors: Corridor[],
+): { ground: string; scatter: string; canopy: string } {
   const same: PatchSame = {
     top: neighbours.top === kind,
     right: neighbours.right === kind,
@@ -1091,16 +1289,70 @@ export function tileGroundSvg(
   };
   // The diagonals belong in the key too: two tiles with identical sides but a
   // different corner neighbour draw different outlines (mid-shore vs turn).
+  // The corridors belong in it because building a line THROUGH a tile reflows
+  // its scatter — that is the whole feature.
+  const corrKey = corridors
+    .map(c => `${c.half}:${c.pts.map(p => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(";")}`)
+    .join("|");
   const key =
     `${kind}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
     `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}`;
+    `|${coordId}|${seed}|${corrKey}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
 
-  const svg = buildGround(kind, coordId, same, seed);
-  cache.set(key, svg);
-  return svg;
+  const built = buildGround(kind, coordId, same, seed, corridors);
+  cache.set(key, built);
+  return built;
+}
+
+/**
+ * The FLAT ground for one tile as an SVG fragment, in a 0..100 box: the terrain
+ * patch, its rim and its ground marks (paving, scree, gardens). Returns "" for
+ * grass (see terrainOf) so the common tile costs nothing. Renders UNDER
+ * everything, including every neighbour's standing objects.
+ */
+export function tileGroundSvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).ground;
+}
+
+/**
+ * The tile's STANDING objects — trees, bushes, boulders, ridges, buildings —
+ * on their own layer above every tile's ground patch. The split is what stops
+ * the next tile's opaque patch fill (later in the DOM) decapitating a canopy
+ * that legitimately overhangs the seam: patches all live below, scatter all
+ * lives above. Still under the rails and roads (see TileGround.vue).
+ */
+export function tileScatterSvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).scatter;
+}
+
+/**
+ * The tile's OVERHEAD art: forest trees whose trunks stand beside a corridor
+ * but whose canopies reach over it. Rendered on a layer above the trains (see
+ * TileGround.vue), so a train passes underneath. "" for every other kind, and
+ * for any forest tile with no line through or beside it.
+ */
+export function tileCanopySvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
 }
 
 function buildGround(
@@ -1108,9 +1360,10 @@ function buildGround(
   coordId: string,
   same: PatchSame,
   seed: number,
-): string {
+  corridors: Corridor[],
+): { ground: string; scatter: string; canopy: string } {
   const base = GROUND[kind];
-  if (!base) return "";
+  if (!base) return { ground: "", scatter: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -1161,40 +1414,128 @@ function buildGround(
     );
   }
 
+  // How much room a point has to the nearest line. Infinity when the tile and
+  // its neighbours carry none, which short-circuits every check below.
+  const room = (p: Pt2): number =>
+    corridors.length ? corridorClearance(p, corridors) : Infinity;
+
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base, place);
+  const marks = groundMarks(kind, rng, base, place, (p, r) => room(p) >= r);
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
-  const count = lo + Math.floor(rng() * (hi - lo + 1));
-  const band = SCATTER_BAND[kind] ?? DEFAULT_BAND;
+  let count = lo + Math.floor(rng() * (hi - lo + 1));
+  let band = SCATTER_BAND[kind] ?? DEFAULT_BAND;
+  if (kind === "forest") {
+    // The deeper in the wood, the denser and taller. A tile's depth is how many
+    // of its 8 neighbours are forest too — a local measure, but it is exactly
+    // the interior of a LARGE area that scores high, so a big wood closes into
+    // overlapping canopy while a lone copse keeps today's airy scatter. Local
+    // also means it needs nothing beyond the neighbours the cache key already
+    // carries.
+    const depth =
+      [
+        same.top,
+        same.right,
+        same.bottom,
+        same.left,
+        same.topLeft,
+        same.topRight,
+        same.bottomRight,
+        same.bottomLeft,
+      ].filter(Boolean).length / 8;
+    // The bonus also compensates for the band: at full depth the placement
+    // area grows from the 80x80 interior box to the whole tile, so the count
+    // has to grow with it or the deep wood comes out SPARSER per square unit
+    // than the copse (which is how the seam-widening first shipped).
+    count += Math.round(18 * depth);
+    band = {
+      ...band,
+      // Where the wood continues into the next tile, trees may stand right on
+      // the seam — the two tiles' scatter interleaves and the forest closes
+      // over the boundary. (The scatter layer renders above every patch fill,
+      // so an overhanging canopy no longer gets cut by the neighbour; and a
+      // neighbour's rails are already in `corridors`.) Toward grass or another
+      // kind the margin stays.
+      x: [same.left ? 0 : band.x[0], same.right ? GROUND_UNITS : band.x[1]],
+      y: [same.top ? 0 : band.y[0], same.bottom ? GROUND_UNITS : band.y[1]],
+      scale: [band.scale[0], band.scale[1] + 0.45 * depth],
+    };
+  }
   const placed: { y: number; g: string }[] = [];
+  const overhead: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
-    // Keep objects off the very edge so a tree's canopy doesn't collide with the
-    // neighbouring tile's, and so nothing overhangs a rail on the tile boundary
-    // — then keep them ON the patch (see `place` above).
-    const p = place(
-      lerp(band.x[0], band.x[1], rng()),
-      lerp(band.y[0], band.y[1], rng()),
-    );
-    const scale = lerp(band.scale[0], band.scale[1], rng());
-    let body: string;
-    if (kind === "forest") body = tree(rng, scale * 0.42);
-    else if (kind === "rock") body = boulder(rng, scale);
-    else if (kind === "mountain") body = peak(rng, scale);
-    else if (kind === "urban") body = building(rng, scale);
-    else body = lily(rng, scale);
-    placed.push({
-      y: p.y,
-      g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
-    });
+    // Keep objects ON the patch (see `place` above) and their footprint OFF
+    // every corridor. An object that can't find clear ground in a few tries is
+    // dropped: the wood thins along the railway, the town steps back from it,
+    // which is what a cleared right-of-way looks like.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const p = place(
+        lerp(band.x[0], band.x[1], rng()),
+        lerp(band.y[0], band.y[1], rng()),
+      );
+      let scale = lerp(band.scale[0], band.scale[1], rng());
+      // Glades: reject trees where the density field runs low. A rejected spot
+      // occasionally keeps a low BUSH — the lighter growth of a clearing —
+      // and trees near a glade's rim come out a little smaller. The roll is
+      // drawn every attempt regardless, so the rng stream's shape doesn't
+      // depend on the field.
+      const gladeRoll = rng();
+      if (kind === "forest") {
+        const density = forestDensityAt(
+          x + p.x / GROUND_UNITS,
+          y + p.y / GROUND_UNITS,
+          seed,
+        );
+        const keep = gladeKeep(density);
+        if (gladeRoll > keep) {
+          // A roll JUST over the bar keeps a low bush: the lighter growth rims
+          // the glade rather than carpeting it.
+          if (gladeRoll < keep + 0.15 && room(p) >= TRUNK_CLEAR) {
+            placed.push({
+              y: p.y,
+              g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${bush(rng, scale * 0.42)}</g>`,
+            });
+            break;
+          }
+          continue;
+        }
+        // Trees shrink only in the shoulder around a glade; the full wood
+        // keeps its full-grown crowns.
+        scale *= lerp(0.8, 1, Math.min(1, keep + 0.2));
+      }
+      const clear = room(p);
+      // The forest exception: a trunk standing just OFF the ballast whose
+      // canopy reaches over the line. It renders on the canopy layer, above the
+      // trains — the pass-under effect — and leans big, because a sapling's
+      // crown wouldn't reach the ballast in the first place.
+      const overhang =
+        kind === "forest" && clear < FOOT.forest * scale && clear >= TRUNK_CLEAR;
+      if (clear < FOOT[kind] * scale && !overhang) continue;
+      let body: string;
+      if (kind === "forest") {
+        body = tree(rng, (overhang ? Math.max(scale, 1.05) : scale) * 0.42);
+      } else if (kind === "rock") body = boulder(rng, scale);
+      else if (kind === "mountain") body = peak(rng, scale);
+      else if (kind === "urban") body = building(rng, scale);
+      else body = lily(rng, scale);
+      (overhang ? overhead : placed).push({
+        y: p.y,
+        g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
+      });
+      break;
+    }
   }
   // Back to front, so a nearer canopy overlaps a farther one naturally.
   placed.sort((a, b) => a.y - b.y);
-  parts.push(...placed.map(p => p.g));
+  overhead.sort((a, b) => a.y - b.y);
 
-  return parts.join("");
+  return {
+    ground: parts.join(""),
+    scatter: placed.map(p => p.g).join(""),
+    canopy: overhead.map(p => p.g).join(""),
+  };
 }
 
 // Test seam: the memo would otherwise make "same input, same output" untestable

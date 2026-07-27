@@ -48,6 +48,9 @@
       <router-link class="drawer-btn" to="/editor">
         <span>✏️</span><span>Editor</span>
       </router-link>
+      <router-link class="drawer-btn" to="/campaign">
+        <span>🗺️</span><span>Campaign</span>
+      </router-link>
       <router-link class="drawer-btn" to="/test">
         <span>🧪</span><span>Test world</span>
       </router-link>
@@ -102,11 +105,12 @@
         📅 {{ dateLabel }}
         <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
         <!-- The warning that keeps bankruptcy a decision rather than an
-             ambush: while it shows, bulldozing surplus track both refunds now
-             and lowers the bill. Same job as the gridlock nudge — name the
-             failure before it lands, and name the fix. -->
+             ambush. Same job as the gridlock nudge: name the failure before it
+             lands, and name the fix — which is DELIVERING, because fares are
+             the income. Clearing surplus track is the second way out and it
+             costs a fee, so it is only worth it with years left to save. -->
         <span v-if="taxUnaffordable" class="score-tax-warn">
-          ⚠ can't pay next year
+          ⚠ can't pay next year — deliver, or clear surplus track
         </span>
       </div>
       <div
@@ -117,7 +121,7 @@
       >
         🚗 {{ crossingWaitLabel }}
       </div>
-      <div v-if="hud.stars" class="score-stars">
+      <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
         <span
           v-for="s in stars"
           :key="s.id"
@@ -160,6 +164,20 @@
       >
         <span class="build-toggle__icon">🧨</span>
         <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
+      </button>
+      <!-- Undo is a THIRD control, not a mode: it reverses the last PURCHASE
+           rather than acting on the board, which is why it can be free while
+           Bulldoze costs. It only appears while there is a purchase to take
+           back, so it never sits there as a dead button. -->
+      <button
+        v-if="canUndoBuild"
+        class="build-toggle build-toggle--undo"
+        data-testid="undo-build"
+        :title="undoTitle"
+        @click="undoBuild"
+      >
+        <span class="build-toggle__icon">↩︎</span>
+        <span>Undo {{ undoLabel }}</span>
       </button>
     </div>
     <!-- The jam nudge. Collisions are impossible here by construction, so
@@ -221,6 +239,9 @@
         @click="onTileRaze(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Standing scenery on its own layer above every patch fill, so a
+             canopy overhanging the seam isn't cut by the next tile. -->
+        <TileGround :coord-id="cell.key" layer="scatter" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
@@ -228,6 +249,9 @@
           class="tile-component"
           :switch-interactive="!buildArmed && !razeArmed"
         />
+        <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
+             train passes under the foliage. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
         <!-- In-play building: the editor's triangular edge hit-zones + ghost
              preview, driven by the same extracted routeDrawController. Mounted
              only while the Build toggle is armed, so normal play is untouched.
@@ -362,6 +386,10 @@
       <div class="overlay-card">
         <h2 class="overlay-title">{{ game.mode.label }}</h2>
         <p class="overlay-desc">{{ game.mode.description }}</p>
+        <div v-if="hud.stars && goals.length" class="overlay-goals">
+          <h3 class="overlay-goals-title">Goals</h3>
+          <GoalList :goals="goals" />
+        </div>
         <p v-if="best" class="overlay-best">
           Best: {{ best.stars }}★ · {{ best.timeSec.toFixed(1) }}s
         </p>
@@ -379,21 +407,31 @@
         <h2 class="overlay-title">
           {{ phase === "won" ? "You win!" : "Failed" }}
         </h2>
-        <div v-if="phase === 'won' && hud.stars" class="overlay-stars">
-          <span
-            v-for="s in stars"
-            :key="s.id"
-            class="star-pip star-pip--lg"
-            :class="{ 'star-pip--on': s.earned }"
-            :title="s.label"
-            >★</span
-          >
+        <div v-if="phase === 'won' && hud.stars && goals.length" class="overlay-goals">
+          <GoalList :goals="goals" :earned="earnedGoalIds" />
         </div>
         <p v-if="phase === 'won'" class="overlay-desc">
           {{ earnedStars }}/{{ stars.length }} stars · {{ elapsedLabel }}
         </p>
         <p v-else class="overlay-desc">{{ lostReason }}</p>
-        <button class="overlay-btn" @click="retry">Retry</button>
+        <!-- On a campaign level, going ON is the primary action; Retry is for
+             chasing the stars you missed and steps back to a ghost button. -->
+        <button
+          v-if="phase === 'won' && nextCampaignLevel"
+          class="overlay-btn"
+          @click="goNextLevel"
+        >
+          Next: {{ nextCampaignLevel.name }} →
+        </button>
+        <button
+          class="overlay-btn"
+          :class="{
+            'overlay-btn--ghost': phase === 'won' && !!nextCampaignLevel,
+          }"
+          @click="retry"
+        >
+          Retry
+        </button>
         <!-- Train Valley's ∞: the result screen must not be a trap. Without it
              the overlay covers the whole board for good, and a level that
              completes on its own (or one you simply want to keep playing with)
@@ -497,6 +535,7 @@ import { canBuildOn } from "@/tiles/terrain";
 import { railPathsFor } from "@/tiles/geometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import { TERRAIN_BUILD_FACTOR } from "@/tiles/terrain";
 import type { RouteOpts, RouteStep, OpenEnd } from "@/tiles/routePlanner";
 import { buildTargetsAt, openEndPortsAt } from "@/tiles/openEnds";
 import {
@@ -511,8 +550,10 @@ import { GameMode, ModeSetup } from "@/modes/types";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
+import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { type Camera, type Size } from "@/camera";
@@ -590,7 +631,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, MenuDrawer } })
+@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -712,6 +753,27 @@ class PlayView extends Vue {
     this.game.startObjective();
   }
 
+  // The level after this one in the campaign, or null off the campaign / at its
+  // end. Safe as a getter: pure over a module constant and a levelId that never
+  // changes for the life of the view.
+  get nextCampaignLevel(): CampaignLevel | null {
+    return nextLevelAfter(this.levelId);
+  }
+
+  // The mode is NOT optional in the query. PlayView resolves the mode from the
+  // hash or the last-used mode and ignores the scenario's own modeId, so a
+  // campaign level opened without it would silently run under whatever mode the
+  // player last chose. The router-view is keyed on the full path, so pushing a
+  // new query remounts this view against the new board.
+  goNextLevel() {
+    const next = this.nextCampaignLevel;
+    if (!next) return;
+    this.$router.push({
+      name: "play",
+      query: { mode: next.modeId, board: next.id },
+    });
+  }
+
   // ---- Game-mode picker -------------------------------------------------
   // The card grid of game types. Opened from the menu drawer or the start
   // overlay; picking a card navigates to `#/play?mode=<id>`, which remounts the
@@ -767,6 +829,17 @@ class PlayView extends Vue {
   get stars() {
     return this.game.objective.stars;
   }
+  // The board's TARGETS, built once at setup and safe to read before the run
+  // starts — unlike `stars`, whose earned flags are evaluated over zeroed
+  // counters and so hold for most goals before anything has happened.
+  get goals() {
+    return this.game.goals;
+  }
+  // Which of them the finished run actually earned. Only the win card passes
+  // this; the Ready card passes nothing, so it cannot light a star by accident.
+  get earnedGoalIds(): string[] {
+    return this.stars.filter(s => s.earned).map(s => s.id);
+  }
   get elapsedLabel(): string {
     const t =
       this.game.objective.timeLeftSec ??
@@ -817,7 +890,7 @@ class PlayView extends Vue {
   }
   get calendarTitle(): string {
     return this.taxUnaffordable
-      ? "Next year's upkeep is more than you have — bulldoze track you don't need, or finish first"
+      ? "Next year's upkeep is more than you have — deliver before the year turns, or clear track you don't need"
       : "The year, and this railway's annual upkeep";
   }
   get fareBadges(): FareBadge[] {
@@ -998,8 +1071,14 @@ class PlayView extends Vue {
   get buildToggleTitle(): string {
     const how =
       "Click an edge, then click tiles to route track; drag edge-to-edge for a quick link; Esc finishes.";
+    // Prices derived from the same table game.buildCostOf charges from, so the
+    // hint can never drift from the bill.
+    const price = (f: number) =>
+      `$${Math.round(TRACK_COST_PER_TILE * f).toLocaleString("en-US")}`;
     return this.game.money.enabled
-      ? `Build track — $${TRACK_COST_PER_TILE.toLocaleString("en-US")} per tile. ${how}`
+      ? `Build track — ${price(TERRAIN_BUILD_FACTOR.grass)} per tile, ` +
+          `${price(TERRAIN_BUILD_FACTOR.forest)} through woods, ` +
+          `${price(TERRAIN_BUILD_FACTOR.urban)} through town. ${how}`
       : `Build track. ${how}`;
   }
 
@@ -1031,8 +1110,32 @@ class PlayView extends Vue {
   get razeToggleTitle(): string {
     const how = "Click a piece of track to remove it.";
     return this.game.money.enabled
-      ? `Bulldoze track — refunds what you paid for it. ${how}`
+      ? `Bulldoze track — costs a demolition fee, and never pays back. ${how}`
       : `Bulldoze track. ${how}`;
+  }
+
+  // --- undo ------------------------------------------------------------------
+  // Reverses the last PURCHASE, not the board: full money back, no fee. It is
+  // the answer to a misdrag, and keeping it apart from Bulldoze is what lets
+  // the demolition price be honest (see CLEARING_COST_PER_TILE).
+  get canUndoBuild(): boolean {
+    // Through the reactive ref, not the method: `game` is markRaw'd, and
+    // dispatching clears the window without touching `levelVersion`, so there
+    // would be nothing else to re-evaluate on.
+    return this.game.undoable.value.pieces > 0 && this.game.canUndoBuild();
+  }
+  get undoLabel(): string {
+    const v = this.game.undoable.value.value;
+    return v > 0 ? `(+$${v.toLocaleString("en-US")})` : "";
+  }
+  get undoTitle(): string {
+    return (
+      "Take back the last track you bought — full price returned, no fee. " +
+      "Available until you build again, bulldoze, or send a train."
+    );
+  }
+  undoBuild(): void {
+    this.game.undoBuild();
   }
 
   toggleRaze(): void {
@@ -1329,6 +1432,16 @@ class PlayView extends Vue {
   private boundKeyup!: (e: KeyboardEvent) => void;
 
   handleBuildKeydown(e: KeyboardEvent): void {
+    // Ctrl/Cmd+Z is checked BEFORE the buildArmed gate: the whole point of undo
+    // is that it is reachable after you have put the tool down and noticed the
+    // mistake. Everything below it is build-mode-only.
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      if (this.canUndoBuild) {
+        e.preventDefault();
+        this.undoBuild();
+      }
+      return;
+    }
     if (!this.buildArmed) return;
     if (e.key === "Escape") {
       this.routeCtrl.finishRoute();
@@ -1650,6 +1763,16 @@ export default toNative(PlayView);
   background: linear-gradient(90deg, #f2a488, #d9663f);
   border-color: rgba(242, 164, 136, 0.8);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(217, 102, 63, 0.45);
+}
+// Undo is not a mode, so it never gets the armed treatment — it is a plain
+// action that appears only while there is a purchase to take back.
+.build-toggle--undo {
+  color: #cfe6d6;
+  border-color: rgba(95, 211, 154, 0.5);
+
+  &:hover {
+    background: rgba(95, 211, 154, 0.16);
+  }
 }
 // Only tiles that would actually go light up, so the affordance never promises
 // a removal the guard will refuse.
@@ -2096,11 +2219,24 @@ export default toNative(PlayView);
   color: #f0cf72;
   font-weight: 700;
 }
-.overlay-stars {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-  margin: 8px 0;
+// The goal list, on the Ready card (targets) and the win card (what you got).
+// Boxed and left-aligned: it is a list to read down, not a badge row.
+.overlay-goals {
+  align-self: stretch;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.overlay-goals-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7f8b96;
+  text-align: left;
 }
 .overlay-btn {
   padding: 12px 28px;

@@ -1,7 +1,7 @@
 <template>
   <svg
     v-if="html"
-    class="tile-ground"
+    :class="`tile-${layer}`"
     :viewBox="`0 0 ${units} ${units}`"
     preserveAspectRatio="none"
     v-html="html"
@@ -14,10 +14,14 @@ import { Level } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
+  Corridor,
   GROUND_UNITS,
   TerrainNeighbours,
+  corridorsFor,
   terrainOf,
+  tileCanopySvg,
   tileGroundSvg,
+  tileScatterSvg,
 } from "@/tiles/terrain";
 
 // The world's ground, one tile at a time. A sibling of <Tile> rather than a
@@ -26,6 +30,18 @@ import {
 // somewhere. The view already renders a `.level-tile` box for every cell in the
 // bounds — occupied or not — so that box is exactly the right place for it.
 //
+// THREE layers, chosen by the `layer` prop, and views mount one of each per
+// cell:
+//  - "ground" (default): the flat patch, rim and ground marks — under
+//    everything (z0).
+//  - "scatter": the standing objects (trees, buildings, boulders, ridges) at
+//    z1, ABOVE every tile's patch fill. The split exists because tiles render
+//    in DOM order: a later tile's opaque patch used to decapitate any canopy
+//    that legitimately overhung the seam. With all patches below all scatter,
+//    an overhanging crown survives — which is also what lets deep-forest trees
+//    stand right on a shared seam. Still under roads/rails (later DOM, z>=1).
+//  - "canopy": forest crowns overhanging a corridor, above the trains (z5).
+//
 // Cosmetic only: nothing here feeds the simulation. See tiles/terrain.ts.
 const TERRAIN_SEED = 20260726;
 
@@ -33,6 +49,7 @@ const TERRAIN_SEED = 20260726;
 class TileGround extends Vue {
   @Inject() level!: Level;
   @Prop({ type: String, required: true }) coordId!: string;
+  @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy";
 
   units = GROUND_UNITS;
 
@@ -58,30 +75,70 @@ class TileGround extends Vue {
     };
   }
 
+  // Rails and roads through this cell AND the four side-neighbours: scatter
+  // keeps its footprint off them (a canopy can reach over the tile edge).
+  get corridors(): Corridor[] {
+    const { x, y } = parseCoordId(this.coordId);
+    const at = (dx: number, dy: number) =>
+      this.level[getCoordinatesId({ x: x + dx, y: y + dy })];
+    return corridorsFor(this.level[this.coordId], {
+      top: at(0, -1),
+      right: at(1, 0),
+      bottom: at(0, 1),
+      left: at(-1, 0),
+    });
+  }
+
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
-    return tileGroundSvg(kind, this.coordId, this.neighbours, TERRAIN_SEED);
+    const build =
+      this.layer === "canopy"
+        ? tileCanopySvg
+        : this.layer === "scatter"
+          ? tileScatterSvg
+          : tileGroundSvg;
+    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
   }
 }
 export default toNative(TileGround);
 </script>
 
 <style lang="scss" scoped>
-.tile-ground {
+.tile-ground,
+.tile-scatter,
+.tile-canopy {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  // Below the road surface (z1) and the rails (z2), so nothing the player has
-  // built is ever hidden by scenery — a tree may stand beside the track, never
-  // on it. Clicks belong to the cell underneath (the editor listens there).
-  z-index: 0;
   pointer-events: none;
   // A patch's corners are nudged OFF the tile grid and its shores bow between
   // them, so the outline legitimately crosses the tile boundary — that overlap
   // is exactly how two neighbouring patches interlock instead of butting up in
   // a straight line. Clipping it back to the box would reinstate the grid we
-  // just spent the jitter escaping.
+  // just spent the jitter escaping. (And a canopy overhanging the line reaches
+  // over the tile edge by design.)
   overflow: visible;
+}
+.tile-ground {
+  // Below the scatter (z1) and everything built, so a later tile's patch fill
+  // can never cover a neighbour's standing objects. Clicks belong to the cell
+  // underneath (the editor listens there).
+  z-index: 0;
+}
+.tile-scatter {
+  // Above every tile's patch (z0), below the rails (z2). Same z as a road
+  // surface, but the road is later in the DOM within its own cell — so a road
+  // still paints over its own cell's scenery, while a canopy overhanging a
+  // plain neighbour survives.
+  z-index: 1;
+}
+.tile-canopy {
+  // Above the rails (z2), the trains (wagons z3 / loco z4) AND the road cars
+  // (z6): a crown overhanging a corridor shades whatever drives under it,
+  // train or car alike. Crossings stay on top (their wrapper is z15), and the
+  // cars' debug id labels can't leak through — each .road-car is its own
+  // stacking context. Fare pins (z9) and switches (z14+) also stay above.
+  z-index: 7;
 }
 </style>

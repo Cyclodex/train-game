@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   _clearTerrainCache,
   canBuildOn,
+  cellCorridors,
+  corridorsFor,
   edgeBow,
+  forestDensityAt,
   latticeOffset,
   patchOutlinePolygon,
   patchPath,
@@ -10,10 +13,14 @@ import {
   pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
+  tileCanopySvg,
   tileGroundSvg,
+  tileScatterSvg,
   TERRAIN_KINDS,
 } from "@/tiles/terrain";
 import { TerrainNeighbours } from "@/tiles/terrain";
+import { TileCell } from "@/tiles/model";
+import { Position } from "@/types";
 
 const around = (kind: TerrainNeighbours["top"]): TerrainNeighbours => ({
   top: kind,
@@ -350,23 +357,27 @@ describe("terrain", () => {
       expect(inLake).not.toBe(alone);
     });
 
-    it("scatters nothing onto the rails: no object sits on a tile edge", () => {
-      // Objects are placed with a margin so a canopy never overhangs the tile
-      // boundary a train runs through. Parse the placement transforms back out.
-      // Every kind, not just forest: buildings and peaks are far bigger than a
-      // tree and each carries its own placement band.
+    it("keeps placements inside the tile, except deep forest which may reach the seam", () => {
+      // Objects keep a margin from the tile boundary — EXCEPT a forest tile
+      // surrounded by forest, whose trees may stand right on the seam (the
+      // scatter layer renders above every patch fill, so nothing decapitates
+      // them, and rails are handled by the corridors, not the band). Parse the
+      // placement transforms back out of both layers.
       let total = 0;
       for (const kind of TERRAIN_KINDS) {
         if (kind === "grass") continue;
         for (const coord of ["6,6", "2,9", "11,4"]) {
-          const svg = tileGroundSvg(kind, coord, around(kind), 3);
+          const svg =
+            tileGroundSvg(kind, coord, around(kind), 3) +
+            tileScatterSvg(kind, coord, around(kind), 3);
           const coords = [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)];
           total += coords.length;
+          const [lo, hi] = kind === "forest" ? [0, 100] : [10, 90];
           for (const [, x, y] of coords) {
-            expect(Number(x)).toBeGreaterThanOrEqual(10);
-            expect(Number(x)).toBeLessThanOrEqual(90);
-            expect(Number(y)).toBeGreaterThanOrEqual(10);
-            expect(Number(y)).toBeLessThanOrEqual(90);
+            expect(Number(x)).toBeGreaterThanOrEqual(lo);
+            expect(Number(x)).toBeLessThanOrEqual(hi);
+            expect(Number(y)).toBeGreaterThanOrEqual(lo);
+            expect(Number(y)).toBeLessThanOrEqual(hi);
           }
         }
       }
@@ -385,7 +396,9 @@ describe("terrain", () => {
       for (const kind of TERRAIN_KINDS) {
         if (kind === "grass") continue;
         for (const coord of ["6,6", "2,9", "11,4"]) {
-          const svg = tileGroundSvg(kind, coord, around("grass"), 3);
+          const svg =
+            tileGroundSvg(kind, coord, around("grass"), 3) +
+            tileScatterSvg(kind, coord, around("grass"), 3);
           const [x, y] = coord.split(",").map(Number);
           const poly = patchOutlinePolygon(alone, x, y, 3);
           for (const [, px, py] of svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)) {
@@ -393,6 +406,146 @@ describe("terrain", () => {
           }
         }
       }
+    });
+  });
+
+  describe("forest depth", () => {
+    const trees = (svg: string) =>
+      [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)].length;
+
+    it("packs the interior of a big wood far denser than a lone copse", () => {
+      // Depth = same-kind neighbours / 8: a surrounded tile rolls +12 extra
+      // trees. Glades legitimately thin individual tiles (the density field is
+      // world-seeded, so a coord can land in a clearing), so the pin is the
+      // SUM over a handful of tiles, not any single one.
+      const coords = ["6,6", "2,9", "11,4", "5,5", "8,3"];
+      const sum = (n: Parameters<typeof around>[0]) =>
+        coords.reduce(
+          (s, c) => s + trees(tileScatterSvg("forest", c, around(n), 3)),
+          0,
+        );
+      expect(sum("forest")).toBeGreaterThan(sum("grass") * 1.3);
+    });
+
+    it("leaves every other kind's density alone", () => {
+      // Depth only feeds forest. For every other kind the neighbour flags
+      // change the patch SHAPE but not the object counts — the rng stream that
+      // decides them is identical either way.
+      for (const kind of TERRAIN_KINDS) {
+        if (kind === "grass" || kind === "forest") continue;
+        const deep = trees(tileScatterSvg(kind, "6,6", around(kind), 3));
+        const lone = trees(tileScatterSvg(kind, "6,6", around("grass"), 3));
+        expect(deep).toBe(lone);
+      }
+    });
+
+    it("derives glades from WORLD position, deterministically", () => {
+      // Same point, same answer; and the field is continuous across a tile
+      // boundary — the two sides of a seam read almost the same density, which
+      // is what stops a clearing from ever tracing the grid.
+      expect(forestDensityAt(6.5, 4.5, 3)).toBe(forestDensityAt(6.5, 4.5, 3));
+      const a = forestDensityAt(6.999, 4.5, 3);
+      const b = forestDensityAt(7.001, 4.5, 3);
+      expect(Math.abs(a - b)).toBeLessThan(0.01);
+      expect(a).toBeGreaterThanOrEqual(0);
+      expect(a).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe("keep-out corridors", () => {
+    const straight: TileCell = {
+      connections: [[Position.Left, Position.Right]],
+    };
+    const translates = (svg: string) =>
+      [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)].map(m => ({
+        x: Number(m[1]),
+        y: Number(m[2]),
+      }));
+
+    it("derives a rail corridor from a connection", () => {
+      const cs = cellCorridors(straight);
+      expect(cs).toHaveLength(1);
+      expect(cs[0].pts).toEqual([
+        { x: 0, y: 50 },
+        { x: 100, y: 50 },
+      ]);
+    });
+
+    it("keeps every ground object and mark clear of the line", () => {
+      // A W-E straight runs along y=50. Nothing on the ground or scatter
+      // layers — trees, bushes, buildings, boulders, paving, gardens, scree —
+      // may put its footprint on the corridor (half-width 8, plus each
+      // object's own clear radius; a glade bush needs only TRUNK_CLEAR).
+      const cs = cellCorridors(straight);
+      for (const kind of TERRAIN_KINDS) {
+        if (kind === "grass") continue;
+        for (const coord of ["6,6", "2,9", "11,4"]) {
+          const svg =
+            tileGroundSvg(kind, coord, around(kind), 3, cs) +
+            tileScatterSvg(kind, coord, around(kind), 3, cs);
+          for (const p of translates(svg)) {
+            expect(Math.abs(p.y - 50)).toBeGreaterThan(11);
+          }
+        }
+      }
+    });
+
+    it("sends overhanging forest trees to the canopy layer, trunks off the ballast", () => {
+      // The pass-under effect: trees whose trunks stand just OFF the line but
+      // whose crowns reach over it. Trunk at >= half+TRUNK_CLEAR (12) from the
+      // centreline, and close enough that the canopy actually overhangs.
+      const cs = cellCorridors(straight);
+      let seen = 0;
+      for (const coord of ["6,6", "2,9", "11,4", "5,5", "7,2"]) {
+        const canopy = tileCanopySvg("forest", coord, around("forest"), 3, cs);
+        for (const p of translates(canopy)) {
+          seen++;
+          const d = Math.abs(p.y - 50);
+          expect(d).toBeGreaterThanOrEqual(11.9);
+          // Upper bound: half (8) + the canopy's worst-case reach — FOOT.forest
+          // (13) at the deep-wood scale cap (1.15 + 0.45 = 1.6).
+          expect(d).toBeLessThan(8 + 13 * 1.6 + 0.15);
+        }
+      }
+      expect(seen).toBeGreaterThan(0);
+    });
+
+    it("draws no canopy without a line, and none for other kinds", () => {
+      expect(tileCanopySvg("forest", "6,6", around("forest"), 3)).toBe("");
+      expect(
+        tileCanopySvg("urban", "6,6", around("urban"), 3, cellCorridors(straight)),
+      ).toBe("");
+      expect(
+        tileCanopySvg("rock", "6,6", around("rock"), 3, cellCorridors(straight)),
+      ).toBe("");
+    });
+
+    it("carries a neighbour's line into this tile's space", () => {
+      const cs = corridorsFor(undefined, { top: straight });
+      expect(cs).toHaveLength(1);
+      expect(cs[0].pts[0]).toEqual({ x: 0, y: -50 });
+    });
+
+    it("widens a road corridor with its lane count", () => {
+      const oneLane: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      };
+      const twoLane: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Left, to: [Position.Right], index: 1 },
+        ],
+      };
+      const narrow = cellCorridors(oneLane)[0].half;
+      const wide = cellCorridors(twoLane)[0].half;
+      expect(wide).toBeGreaterThan(narrow);
+      // A road is wider than a rail line.
+      expect(narrow).toBeGreaterThan(cellCorridors(straight)[0].half);
     });
   });
 
@@ -414,8 +567,12 @@ describe("terrain", () => {
       // have to be tellable apart at a glance. Top-down nothing "stands taller"
       // any more — what separates them is the ground tone (dark blue slate vs
       // cool light grey) and the snow that only a ridge carries.
-      const rock = tileGroundSvg("rock", "3,3", around("rock"), 5);
-      const mountain = tileGroundSvg("mountain", "3,3", around("mountain"), 5);
+      const rock =
+        tileGroundSvg("rock", "3,3", around("rock"), 5) +
+        tileScatterSvg("rock", "3,3", around("rock"), 5);
+      const mountain =
+        tileGroundSvg("mountain", "3,3", around("mountain"), 5) +
+        tileScatterSvg("mountain", "3,3", around("mountain"), 5);
       expect(mountain).not.toBe(rock);
       expect(mountain).toContain("hsl(214 13% 42.0%)");
       expect(rock).toContain("hsl(210 7% 56.0%)");

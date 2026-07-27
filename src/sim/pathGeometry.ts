@@ -46,6 +46,38 @@ export function segmentPathD(
   return `M ${a.x} ${a.y} Q ${c.x} ${c.y} ${b.x} ${b.y}`;
 }
 
+/**
+ * The same segment as `segmentPathD`, but as sampled POINTS instead of an SVG
+ * string — for callers that need distance-to-track maths rather than a drawing
+ * (terrain scatter keeps trees and houses off the line). One derivation, so the
+ * keep-out corridor can never disagree with the path the train draws.
+ */
+export function segmentPoints(
+  entryPort: Port,
+  exitPort: Port,
+  size: number,
+  steps = 8
+): Pt[] {
+  const a = portPoint(entryPort, size);
+  const b = portPoint(exitPort, size);
+  const c = portPoint(Position.Center, size);
+
+  const isCenter =
+    entryPort === Position.Center || exitPort === Position.Center;
+  if (isCenter || oppositePort(entryPort) === exitPort) return [a, b];
+
+  const pts: Pt[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    pts.push({
+      x: u * u * a.x + 2 * u * t * c.x + t * t * b.x,
+      y: u * u * a.y + 2 * u * t * c.y + t * t * b.y,
+    });
+  }
+  return pts;
+}
+
 // --- Road turn geometry: a circular arc around the wrapped tile corner -------
 //
 // RAIL curves sweep through the tile centre (the quadratic above) — right for

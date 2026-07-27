@@ -1,19 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { createGame, TrainDef, assessGridlock, GridlockSample } from "@/game";
 import { tycoonMode, STARTING_BALANCE } from "@/modes/tycoon";
-import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import { CLEARING_COST_PER_TILE, TRACK_COST_PER_TILE } from "@/sim/economy";
 import { expandKind } from "@/tiles/kinds";
 import { Level } from "@/tiles/model";
 import { Position } from "@/types";
 import type { RouteStep } from "@/tiles/routePlanner";
 
-// game.bulldoze — the undo half of the build verb.
+// game.bulldoze — removing a RAILWAY, which costs a demolition fee.
 //
-// It exists because a first level had no way back from a misdrag: with no
-// refund and no bankruptcy state, one fumbled gesture silently soft-locked the
-// board into Retry. The contract has one sharp edge worth guarding hard — a
-// refund must never pay for track the player did not buy, or the authored rail
-// on any board becomes a cash machine.
+// It used to refund in full, because it doubled as the escape hatch for a
+// MISDRAG. That forced a price that could not be honest — money back for
+// demolition — and it is now split in two: `undoBuild` reverses a purchase
+// (see undo.spec.ts), and this removes track for CLEARING_COST_PER_TILE.
+//
+// The sharp edge left here is the mirror of the old one. It used to be "a
+// refund must never pay for track the player did not buy"; now it is "clearing
+// must never REDUCE `trackSpent`", because a goal that scores build discipline
+// cannot be winnable by building wide and razing the evidence.
 
 const L = Position.Left;
 const R = Position.Right;
@@ -51,49 +55,80 @@ function tycoonGame(level: Level = gapLevel()) {
 }
 
 describe("game.bulldoze", () => {
-  it("refunds a bought piece in full and takes the track away", () => {
+  it("charges a demolition fee and takes the track away — it never pays back", () => {
     const level = gapLevel();
     const game = tycoonGame(level);
     game.buildRoute(gapSteps);
     const afterBuild = game.money.balance;
     expect(afterBuild).toBe(STARTING_BALANCE - 2 * TRACK_COST_PER_TILE);
 
-    expect(game.refundOf("3,1")).toBe(TRACK_COST_PER_TILE);
+    expect(game.bulldozeCostOf("3,1")).toBe(CLEARING_COST_PER_TILE);
     expect(game.bulldoze("3,1")).toEqual({ ok: true, blocked: [] });
 
-    expect(game.money.balance).toBe(afterBuild + TRACK_COST_PER_TILE);
+    // Money LEFT. Pulling rails up is work somebody has to do.
+    expect(game.money.balance).toBe(afterBuild - CLEARING_COST_PER_TILE);
     expect(level["3,1"]).toBeUndefined(); // nothing else on the cell — it goes
   });
 
-  it("NEVER refunds track the player did not buy", () => {
-    // The money-printing exploit this set exists to prevent: every board ships
-    // with authored rail, and paying it out would make bulldozing free income.
+  it("costs the same for authored track as for bought track", () => {
+    // The old rule was "only what you bought pays back", to stop the authored
+    // rail on every board becoming a cash machine. With a fee instead of a
+    // refund the exploit is gone by construction, and the price can be uniform:
+    // it costs the same to clear a mile of line whoever laid it.
     const level = gapLevel();
     const game = tycoonGame(level);
     const before = game.money.balance;
 
-    expect(game.refundOf("1,1")).toBe(0); // authored, never purchased
+    expect(game.bulldozeCostOf("1,1")).toBe(CLEARING_COST_PER_TILE);
     expect(game.bulldoze("1,1")).toEqual({ ok: true, blocked: [] });
 
-    expect(game.money.balance).toBe(before); // removed, but not a penny paid
+    expect(game.money.balance).toBe(before - CLEARING_COST_PER_TILE);
     expect(level["1,1"]).toBeUndefined();
   });
 
-  it("pays back each piece exactly once, however often it is rebuilt", () => {
-    const level = gapLevel();
-    const game = tycoonGame(level);
+  it("does not reduce `trackSpent` — you cannot raze the evidence", () => {
+    // The replacement for the old money-printing guard. "Under budget" scores
+    // how much went on track; if clearing gave that back, the lean star would
+    // be winnable by building wide and tidying up afterwards. `tilesBuilt` DOES
+    // fall, because it counts the railway you kept.
+    const game = tycoonGame();
+    game.buildRoute(gapSteps);
+    expect(game.money.trackSpent).toBe(2 * TRACK_COST_PER_TILE);
+
+    game.bulldoze("3,1");
+    expect(game.money.trackSpent).toBe(2 * TRACK_COST_PER_TILE); // unchanged
+  });
+
+  it("charges every cycle, so build/raze churn only ever loses money", () => {
+    const game = tycoonGame();
     game.buildRoute(gapSteps);
     const afterBuild = game.money.balance;
 
     game.bulldoze("3,1");
-    game.bulldoze("3,1"); // second call has nothing left to refund
-    expect(game.money.balance).toBe(afterBuild + TRACK_COST_PER_TILE);
+    game.bulldoze("3,1"); // nothing left on the tile — free no-op
+    expect(game.money.balance).toBe(afterBuild - CLEARING_COST_PER_TILE);
 
-    // Rebuild and re-bulldoze: net zero, no ratchet.
-    game.buildRoute([{ id: "3,1", a: L, b: R }]);
-    expect(game.money.balance).toBe(afterBuild);
-    game.bulldoze("3,1");
-    expect(game.money.balance).toBe(afterBuild + TRACK_COST_PER_TILE);
+    // And the round trip is now UNAFFORDABLE, which is the honest end of the
+    // story: the fee left $700 against a $1,000 piece, so the rebuild is
+    // refused outright. Churn does not just cost money, it runs out of it.
+    const res = game.buildRoute([{ id: "3,1", a: L, b: R }]);
+    expect(res.ok).toBe(false);
+    expect(game.money.balance).toBe(afterBuild - CLEARING_COST_PER_TILE);
+  });
+
+  it("refuses a fee the balance cannot cover", () => {
+    // The same rule as an unaffordable build — and the reason the insolvency
+    // warning names DELIVERING first: clearing track is an escape route that
+    // itself needs money.
+    const game = tycoonGame();
+    game.buildRoute(gapSteps); // $1,000 left of $3,000
+    // Drain it to under the fee by buying the last affordable piece.
+    game.buildRoute([{ id: "5,1", a: L, b: B }]);
+    expect(game.money.balance).toBe(0);
+
+    const res = game.bulldoze("3,1");
+    expect(res.ok).toBe(false);
+    expect(game.money.balance).toBe(0);
   });
 
   it("refuses a tile a train is standing on or has reserved", () => {
@@ -112,7 +147,7 @@ describe("game.bulldoze", () => {
     expect(res.ok).toBe(false);
     expect(res.blocked).toContain(here);
     expect(level[here].connections.length).toBeGreaterThan(0); // still there
-    expect(game.money.balance).toBe(balance); // and nothing paid out
+    expect(game.money.balance).toBe(balance); // and nothing charged
   });
 
   it("refuses a depot — it is the level's furniture, not the player's track", () => {
@@ -175,7 +210,7 @@ describe("game.bulldoze", () => {
     const game = createGame(level, trains, 200, tycoonMode, 1, colors);
     game.buildRoute(gapSteps);
     expect(() => game.bulldoze("4,1")).not.toThrow();
-    expect(game.refundOf("9,9")).toBe(0); // a tile that does not exist
+    expect(game.bulldozeCostOf("9,9")).toBe(0); // a tile that does not exist
     expect(game.bulldoze("9,9")).toEqual({ ok: true, blocked: [] });
   });
 });

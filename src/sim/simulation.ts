@@ -229,6 +229,16 @@ export interface Simulation {
   reservedBy(tileId: string): string | undefined;
   // The train (if any) physically on `tileId` right now — for the switch lock.
   occupiedBy(tileId: string): string | undefined;
+  // Trains STRANDED on this tile: the head sits here and there is no onward
+  // connection from the port it came in through. Such a train has committed to
+  // no exit, which is precisely what makes it safe to lay track under it — the
+  // editor's "you cannot build where a train is" rule would otherwise make a
+  // dead-ended train unrescuable from the side it is stuck on.
+  strandedOn(tileId: string): string[];
+  // Re-derive a stranded train's head exit after the level gained the track it
+  // was waiting for, so it can leave — and so the renderer stops drawing it
+  // along the stub it dead-ended on. Never rewrites a committed exit.
+  releaseStranded(trainId: string): void;
   // Player-forced Stop hold on a signal.
   toggleHold(tileId: string, exitPort: Port): void;
   isHeld(tileId: string, exitPort: Port): boolean;
@@ -845,6 +855,31 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     occupiedBy(tileId: string) {
       return occupantOf(tileId);
+    },
+    strandedOn(tileId: string) {
+      const out: string[] = [];
+      for (const id of Object.keys(trains)) {
+        const train = trains[id];
+        if (train.state !== "running") continue; // parking/parked = docking, not stuck
+        const head = train.path[train.headIndex];
+        if (getCoordinatesId(head.coord) !== tileId) continue;
+        // Ask the LEVEL, not the cached exit — the cache is the thing a rescue
+        // is about to make stale, and a train held at a red signal (which has
+        // somewhere to go) must not be mistaken for one that has nowhere.
+        const t = traverse(level, getSwitch, head.coord, head.entryPort);
+        if (t.next === null && t.exitPort !== Position.Center) out.push(id);
+      }
+      return out;
+    },
+    releaseStranded(trainId: string) {
+      const train = trains[trainId];
+      if (!train) return;
+      const head = train.path[train.headIndex];
+      // Only a segment with NO exit is re-derived. A committed exit is the port
+      // the train visibly travelled along, and rewriting it would teleport the
+      // body onto a different curve.
+      if (head.exitPort !== null) return;
+      head.exitPort = resolveExitPort(level, getSwitch, head.coord, head.entryPort);
     },
     isHeld(tileId: string, exitPort: Port) {
       return manualHold.has(`${tileId}:${exitPort}`);

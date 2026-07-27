@@ -73,7 +73,7 @@ export const GAME_CONFIG_KEY = "gameConfig";
 export const gameConfig: GameConfig = reactive({
   tileSize: 200,
   levelSizeX: 7,
-  debug: true,
+  debug: false,
   automaticTrafficLights: true,
   automaticRoutePlanning: false,
   railDistanceFromPath: 7,

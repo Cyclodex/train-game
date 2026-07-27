@@ -12,17 +12,20 @@ function puzzleStars(trainCount: number): StarSpec[] {
   return [
     {
       id: "speedrun",
-      label: "Speedrun",
+      label: `Speedrun (${starTime}s)`,
+      hint: "Get every train home inside the time",
       predicate: (c: Counters) => c.elapsedSec <= starTime,
     },
     {
       id: "hands-off",
       label: "Hands off",
+      hint: "Win without holding or forcing a single signal",
       predicate: (c: Counters) => c.manualHolds + c.manualGreens === 0,
     },
     {
       id: "perfect-colours",
       label: "Perfect colours",
+      hint: "No train ever arrives at the wrong station",
       predicate: (c: Counters) => c.mismatchedArrivals === 0,
     },
   ];

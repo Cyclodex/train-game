@@ -1,13 +1,26 @@
 #!/usr/bin/env node
 // Reproducible scenario screenshots for the ticket workflow.
 //
-//   npm run shot -- <scenarioId> [<scenarioId> ...] [options]
+//   npm run shot -- <scenarioId|#route> [more ...] [options]
 //
 // Loads a /test scenario in a real browser with the Debug overlay on (the cyan
 // car / amber bus driving-lines) and the flat backdrop, lets traffic populate,
 // and writes a tight PNG of just the road/rail tiles. Use it to attach a
 // screenshot to a visual issue, and a before/after pair to a fix PR
 // (see docs/TICKET_WORKFLOW.md → "Visual verification").
+//
+// An argument beginning with `#` is taken as a RAW HASH ROUTE rather than a
+// scenario id, so anything the app can show can be photographed — the Ready
+// card, a win overlay, the campaign screen — not just the /test stage:
+//
+//   npm run shot -- '#/play?mode=tycoon&board=dispatch' --label ready
+//   npm run shot -- '#/campaign'
+//
+// Route shots differ in two ways, both because they are about CHROME, not the
+// board: the stage-only BG/Debug/Cars controls are skipped (they do not exist
+// outside /test — their absence is detected, not assumed), and the shot is the
+// whole viewport rather than a tight clip around the tiles, since an overlay
+// lives outside the tile bounding box.
 //
 // Options:
 //   --out <dir>       output directory (default: screenshots/)
@@ -177,22 +190,36 @@ async function main() {
     });
 
     for (const id of ids) {
-      await page.goto(`${base}/#/test/${id}`);
+      // `#…` = a raw hash route (any screen); anything else = a /test scenario.
+      const isRoute = id.startsWith("#");
+      await page.goto(isRoute ? `${base}/${id}` : `${base}/#/test/${id}`);
       // Generous wait: a cold Vite dev server compiles modules on first load,
-      // which can take well over 8s before the stage sets window.__game.
-      await page.waitForFunction(() => !!window.__game, null, { timeout: 30000 });
-
-      // Flat backdrop (unless --backdrop): click the 🌳 BG button.
-      if (!opt.backdrop) {
-        await page.getByRole("button", { name: /BG/ }).click();
+      // which can take well over 8s before the stage sets window.__game. Screens
+      // with no board (e.g. /campaign) never set it, so they settle on the load
+      // state instead of timing out on a game that is never coming.
+      const hasGame = !isRoute || id.includes("/play");
+      if (hasGame) {
+        await page.waitForFunction(() => !!window.__game, null, { timeout: 30000 });
+      } else {
+        await page.waitForLoadState("networkidle").catch(() => {});
       }
-      // Debug overlay on by default (the driving-lines). The button toggles it;
-      // ensure it ends up in the requested state.
-      const debugOn = await page.evaluate(
-        () => !!document.querySelector(".test-stage.debug"),
-      );
-      if (debugOn !== opt.debug) {
-        await page.getByRole("button", { name: "Debug", exact: true }).click();
+
+      // Flat backdrop (unless --backdrop): click the 🌳 BG button. Stage-only
+      // chrome from here down — detect it rather than assume it, so a route shot
+      // outside /test skips what isn't there instead of failing on it.
+      const bg = page.getByRole("button", { name: /BG/ });
+      if (!opt.backdrop && (await bg.count())) {
+        await bg.click();
+      }
+      // Debug overlay (the driving-lines): read the current state and toggle
+      // the button so it ends up in the requested state (on unless --no-debug),
+      // independent of the app's default. Absent outside /test, hence the count.
+      const debugBtn = page.getByRole("button", { name: "Debug", exact: true });
+      if (await debugBtn.count()) {
+        const debugOn = await page.evaluate(
+          () => !!document.querySelector(".test-stage.debug"),
+        );
+        if (debugOn !== opt.debug) await debugBtn.click();
       }
       // Density via the Cars slider (v-model.number).
       const slider = page.locator(".stage-cars-range");
@@ -235,8 +262,10 @@ async function main() {
 
       await page.waitForTimeout(opt.wait);
 
-      // Tight clip = union bbox of the non-empty tiles, padded.
-      const clip = await page.evaluate(() => {
+      // Tight clip = union bbox of the non-empty tiles, padded. A route shot is
+      // about the CHROME (a Ready card, a win overlay, the campaign screen),
+      // which lives outside the tile bounding box — so it takes the viewport.
+      const clip = isRoute ? null : await page.evaluate(() => {
         const tiles = Array.from(document.querySelectorAll(".tile-component"));
         if (!tiles.length) return null;
         let x0 = Infinity,
@@ -260,7 +289,12 @@ async function main() {
       });
 
       const suffix = opt.label ? `-${opt.label}` : "";
-      const path = `${opt.out}/${id}${suffix}.png`;
+      // A route is not a filename: `#/play?mode=tycoon&board=dispatch` becomes
+      // `play-mode-tycoon-board-dispatch`.
+      const slug = isRoute
+        ? id.replace(/^#\/?/, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")
+        : id;
+      const path = `${opt.out}/${slug}${suffix}.png`;
       await page.screenshot({ path, clip: clip ?? undefined });
       console.log(`shot: ${path}`);
     }

@@ -64,7 +64,36 @@ export interface Counters {
 export interface StarSpec {
   id: string;
   label: string;
+  // One line saying what the player has to DO, for the Ready card's goal list.
+  // Lives here and not on StarState because `stars()` allocates a fresh array
+  // of fresh objects on every `state()` call and the game loop assigns that
+  // over the reactive objective every frame — there is no reason to widen the
+  // frame-hot object with a string only the pre-run card reads.
+  hint?: string;
   predicate: (c: Counters) => boolean;
+}
+
+// A goal as a TARGET, with no score attached: what the board asks for, readable
+// before the run starts.
+//
+// Deliberately not StarState. In the ready phase every predicate is evaluated
+// over zeroed counters, and most goals hold trivially there — "no signal was
+// overridden" and "no train went to the wrong station" are both true of a run
+// that has not happened. A Ready card handed StarStates would light most of its
+// stars before the player moved.
+export interface GoalSpec {
+  id: string;
+  label: string;
+  hint?: string;
+}
+
+// The board's goals as targets, for a pre-run listing. Pure.
+export function goalsOf(spec: ObjectiveSpec): GoalSpec[] {
+  return (spec.stars ?? []).map(s => ({
+    id: s.id,
+    label: s.label,
+    ...(s.hint !== undefined && { hint: s.hint }),
+  }));
 }
 
 // The objective attached to a board. All fail conditions are opt-in so a spec
@@ -250,8 +279,8 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (spec.fail?.onBankruptcy && (counters.unpaidTax ?? 0) > 0) {
         phase = "lost";
         lostReason =
-          "Bankrupt — the upkeep outgrew the railway. Build leaner, " +
-          "or bulldoze track you no longer need.";
+          "Bankrupt — the upkeep outgrew the railway. Deliver sooner, " +
+          "or build leaner: every piece costs money every year you keep it.";
         return;
       }
       if (

@@ -64,19 +64,22 @@ function timeAttackStars(starTime: number, calmActive: number): StarSpec[] {
   return [
     {
       id: "speedrun",
-      label: "Speedrun",
+      label: `Speedrun (${starTime}s)`,
+      hint: "Clear the whole schedule inside the time",
       predicate: (c: Counters) => c.elapsedSec <= starTime,
     },
     {
       // Never let the backlog climb past a calm threshold — rewards keeping the
       // yard flowing rather than merely surviving the overflow cap.
       id: "no-overflow",
-      label: "Free flowing",
+      label: `Free flowing (max ${calmActive})`,
+      hint: "Never let more than that many trains be running at once",
       predicate: (c: Counters) => (c.peakActive ?? 0) <= calmActive,
     },
     {
       id: "perfect-colours",
       label: "Perfect colours",
+      hint: "No train ever arrives at the wrong station",
       predicate: (c: Counters) => c.mismatchedArrivals === 0,
     },
   ];

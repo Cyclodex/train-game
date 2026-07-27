@@ -130,7 +130,7 @@ npm ci                 # .npmrc sets ignore-scripts, so browsers are NOT install
 npm run browsers       # once per machine, before probe or shot
 npm run test:unit
 npm run build          # vue-tsc + vite; the fastest correctness gate
-npm run probe          # render-level audit of all 80 scenarios in a real browser
+npm run probe          # render-level audit of all 90 scenarios in a real browser
 npm run shot -- <id> --label after --port 5190
 ```
 

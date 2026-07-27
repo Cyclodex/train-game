@@ -202,6 +202,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
   inside 10..90 — a unit test sweeps all kinds and fails otherwise, and it parses
   EVERY translate as a placement: bake prop-internal offsets (shadows, crowns)
   into the point coords, never nest a `<g transform="translate">` inside a prop.
+- FOREST DEPTH (2026-07-27): a forest tile's density scales with how many of
+  its 8 neighbours are forest too (`depth` in buildGround) — +18 trees and
+  +0.45 scale at full depth, so a big wood closes into overlapping canopy
+  while a lone copse stays airy. Local by design: it needs nothing beyond the
+  neighbour flags the cache key already carries, and ONLY forest reads it.
+  Toward a same-forest neighbour the placement band runs to the SEAM (0/100),
+  so the two tiles' canopy interleaves — the count bonus also compensates for
+  that larger band area, or the deep wood comes out sparser per square unit
+  than the copse. /test scenario: `forestworld` (a curvy line, 10x5 deep wood).
+- SCATTER IS ITS OWN LAYER (2026-07-27): tiles render in DOM order, so a later
+  tile's OPAQUE PATCH FILL used to decapitate any canopy overhanging the seam.
+  Standing objects therefore render via `tileScatterSvg` on a third
+  `<TileGround layer="scatter">` at z-index 1 — above every patch (z0), below
+  rails (z2); a road (z1, later DOM in its own cell) still paints over its own
+  cell's scenery. Ground layer keeps only patch+rim+marks. Placement tests
+  parse BOTH layers.
+- GLADES (2026-07-27): forest trees are rejected where `forestDensityAt` — 
+  value noise over a 3-tile WORLD lattice, world-seeded so a clearing never
+  traces the grid — runs low; just-over-the-bar rolls keep a low `bush()`, so
+  lighter growth rims each clearing. TUNE AGAINST THE FIELD'S DISTRIBUTION:
+  bilinear noise concentrates around 0.5 (it averages four uniforms), so a
+  "full wood" bar at 0.52 rejected half the map; 0.38/0.24 gives ~3/4 full
+  wood, ~1/6 shoulder, ~1/10 clearing.
+- KEEP-OUT CORRIDORS (2026-07-27): scatter placement keeps each object's
+  footprint off every rail/road through the cell AND its four side-neighbours
+  (`cellCorridors`/`corridorsFor` in tiles/terrain.ts; centrelines from
+  `segmentPoints` in sim/pathGeometry — same quad the trains drive, ONE
+  derivation). An object re-rolls up to 8 spots then is DROPPED (the wood thins
+  along the line — that's the cleared right-of-way, not a bug); ground marks
+  drop without retry. Corridors are part of the terrain cache key: building
+  through a tile reflows its scatter. FOREST exception: a trunk ≥ TRUNK_CLEAR
+  off the ballast whose crown overlaps the line renders on the CANOPY layer
+  (`tileCanopySvg`, second `<TileGround layer="canopy">` per cell, z-index 7 —
+  above wagons z3/loco z4 AND road cars z6, below the crossing wrapper z15) so
+  trains and cars pass UNDER the foliage. /test scenario: `clearing`.
 - Shadow tints per ground: `STONE_SHADOW`/`TOWN_SHADOW` in terrain.ts, green
   default in foliage.ts — a green shadow on grey rock reads as moss.
 - Ground UNEVENNESS must be painted in BLOCKS, not lines. Hairline "fissures"
@@ -260,6 +295,114 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the first two and strands the last on its own start, which then shares a depot.
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
+
+## BUILDING UNDER A STRANDED TRAIN (2026-07-27)
+- The old rule was "no edit on any tile a train occupies or has reserved",
+  because a segment caches the exit it committed to and reservations name tiles
+  by id. ONE exception now: a train that has RUN OUT OF TRACK has committed to
+  no exit at all, so laying the rail it is waiting for contradicts nothing.
+- `sim.strandedOn(tileId)` = trains whose HEAD sits there and whose live
+  `traverse` gives no next (and is not a depot Center — that is docking, not
+  stuck). Asks the LEVEL, not the cached exit, because the cache is the thing
+  the rescue is about to change. A train held at a RED SIGNAL has somewhere to
+  go and is therefore NOT stranded — it still blocks.
+- A tile is editable iff EVERY train claiming it (occupancy OR reservation) is
+  stranded on it. A train whose TAIL lies there still blocks: the segment under
+  its wagons carries a committed exit. Note a stranded train reserves its own
+  body tiles, so the reservation check has to be per-train, not a bare truthy test.
+- After the edit, `sim.releaseStranded(id)` re-derives the head's exit — and
+  ONLY when it is still null. Without it the train moves off while still being
+  DRAWN along the stub it dead-ended on; rewriting a committed exit would
+  teleport the body onto a different curve.
+- WHY IT MATTERS: `lakevalley-open` reaches this state honestly. Buy the 5-piece
+  ring and skip the station entry and 2,5 is [N,E] — the train leaving the
+  yellow depot enters from the SOUTH, finds no partner, and strands directly
+  above its own station. The depot sprite underneath makes it look docked, so it
+  gets reported as "the train went into the depot but did not count". The rescue
+  is 2,5's missing link, i.e. the tile the train is standing on. E2e:
+  "a train that ran out of track can be rescued from the tile it is stuck on".
+
+## GENERATED TERRAIN (2026-07-27)
+- `generateTerrain.ts paintTerrain` gives procgen + Daily boards their ground.
+  Painted LAST, and ONLY into coordinates absent from the level — that one guard
+  IS the safety property: `validateLevel`'s single terrain branch requires
+  `connections.length > 0 || road.length > 0`, so a painted cell provably cannot
+  raise an issue nor silence one. Pinned by a test comparing the validator's
+  verdict with and without terrain across 30 seeds.
+- ITS OWN RNG STREAM (`makeRng(seed ^ 0x7e44a1)`). One extra draw from the
+  generator's `rand` would re-roll the depot shuffle for EVERY seed that already
+  exists — Daily's fixed seed would silently produce a different map. Guarded by
+  a test asserting the topology of seeds 1..30 is byte-identical with terrain on
+  and off (comparing `terrain:false` against itself would be tautological).
+- THE INTERIOR IS NOT EMPTY. The loop is a rectangle inset by 1, so the lake goes
+  inside it with no routing risk — but the generator also places DEPOTS in there,
+  so depot cells and their four neighbours are excluded from the water pool on
+  BOTH sides of the ring, not only in the margin. A depot walled in by water is
+  legal and unextendable, which reads as a bug rather than as terrain.
+- A LAKE NEEDS A RING WITH AN INSIDE. 7x6 (what Daily generates) encloses ~6
+  cells, most of them depot-adjacent, and correctly comes out with no water at
+  all; 10x8 has room. Both pinned, so neither reads as a regression later.
+- Unbuildable margin is CAPPED (22%): `planRoute` refuses water/rock/mountain, so
+  an over-stony map is one the random-map button cannot draw on.
+- Grass is never emitted (it is stored as ABSENT), and every cell gets a FRESH
+  literal — a shared one would let one in-play edit mutate the whole lake.
+- Bounds grow: a generated board now renders its full width x height, because
+  terrain-only cells count toward `levelBounds`. Intended.
+
+## CAMPAIGN (2026-07-27)
+- `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
+  star total. Headless and pure, so the progression is unit-tested without a DOM.
+- NO NEW PERSISTED KEY. Unlock is DERIVED from `objectiveStore`, which PlayView's
+  phase watcher already writes on a win under `board:<scenarioId>`. So "cleared"
+  is `loadBest(...) !== null`. A second store would be a second source of truth.
+- CLEARED IS A NULL CHECK, never `stars > 0`. A scraped zero-star win is a win;
+  gating on a star would strand a player who beat a board the hard way.
+- A campaign level IS a /test scenario id — no new board plumbing. But the entry
+  MUST carry its own `modeId`: `PlayView` resolves the mode from `?mode=` or the
+  last-used mode and IGNORES `scenario.modeId` (only `TestStage` honours that),
+  so a level pushed without it silently runs under whatever was played last.
+- Navigation is `$router.push({name:"play", query:{mode, board}})`. `App.vue`
+  keys the router-view on the full path, so a query change fully REMOUNTS
+  PlayView and every class-field initialiser re-runs against the new hash.
+- A TYPO IN A LEVEL ID FAILS SILENTLY, twice over: `scenarioById` returns the
+  registry's FIRST entry for an unknown id, and PlayView falls through to the
+  default board. Hence the unit test asserting every id is in `SCENARIOS`.
+- SEED LEVELS MUST BE PROVEN WINNABLE — the unlock rule is a chain, so an
+  unwinnable level is a wall across the whole campaign, not a hard level.
+  Measured 2026-07-27: `dispatch` and `faredistance` deliver ONE of their two
+  trains and then run forever (`mismatchedArrivals` climbing — the second train
+  bounces off a deliberately mismatched depot). They are shuttle demos of a
+  mechanic, like `/test/rollingstock`, NOT levels. Only boards with an e2e that
+  reaches `phase === "won"` are seeded.
+- `CampaignView` reads storage ONCE in `created()` into plain fields. Getters are
+  cached computeds over a non-reactive source — it would freeze at its first read.
+- It is a SCREEN (`/campaign`), not a mode: a `GameMode` is a ruleset with a
+  `setup()` to run, a campaign is an index over boards.
+
+## GOALS ON THE READY CARD (M9, 2026-07-27)
+- A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
+  over `zeroCounters()`, and most goals hold trivially there — "no signal was
+  overridden" and "no train went to the wrong station" are both true of a run
+  that has not happened. So NOTHING scored may be shown in the ready phase.
+  This had already shipped as a bug: the HUD's `.score-stars` pip row rendered
+  behind the (translucent) Ready overlay with 2 of 3 pips gold. Now gated on
+  `phase !== "ready"`, pinned by an e2e asserting `.score-stars` count 0 there.
+- Hence TWO types, not one. `GoalSpec {id,label,hint?}` = the target, from
+  `goalsOf(spec)`, built ONCE into `game.goals`. `StarState {id,label,earned}` =
+  the score. `<GoalList>` renders both: `:earned` is an array of ids the Ready
+  card simply omits, so earned-ness is not a boolean anyone can pass backwards.
+- `game.goals` is a PLAIN FIELD, and that is safe here only because
+  `mode.setup()` runs exactly once — `reset()` rebuilds the sims and the tracker
+  but never re-runs setup. (Contrast `get sim()`, which must be a getter.)
+- `hint` lives on `StarSpec`, NOT `StarState`: `stars()` allocates fresh objects
+  every `state()` call and the loop assigns them over the reactive objective
+  every frame. Don't widen the frame-hot object for a string only a card reads.
+- LABELS CARRY THEIR NUMBER (`Speedrun (40s)`, `Payday ($1,700)`). Four of six
+  modes shipped targetless labels; a goal list reading "Speedrun / Hands off /
+  Perfect colours" tells the player nothing they can aim at.
+- The Ready card is a /play surface. `TestStage.vue` renders no overlay and calls
+  `startObjective()` in `mounted()`, so this feature CANNOT be shown at /test —
+  the honest demo is `/#/play?mode=tycoon&board=lakevalley-open`.
 
 ## ECONOMY + DISPATCH (Tycoon phase 1, 2026-07-26)
 - `sim/economy.ts` = pure ledger (`createEconomy`) + fare book (`createFareBook`)
@@ -405,6 +548,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   dominates it. `/test/taxyear` teaches the mechanic (10s year, $300/piece,
   $9,000 purse — dialled for watching, not for balance).
 
+## UNDO vs BULLDOZE (2026-07-27) — two verbs, so each price can be honest
+- They were ONE verb (bulldoze, refunding in full) and that is why the price was
+  wrong: it had to double as the escape hatch for a MISDRAG. A misdrag is an
+  INPUT ERROR, not a world event — every builder that solves it well solves it
+  with Ctrl+Z, not with economics. Split:
+  · `undoBuild()` reverses a PURCHASE — rails go, full money back as an
+    `adjustment`, no fee, and `trackSpent`/`tilesBuilt` both fall because the
+    buy never really happened.
+  · `bulldoze()` removes a RAILWAY — costs `CLEARING_COST_PER_TILE` (=300, 30%
+    of the build price), never pays, and books under the `"clearing"` reason
+    that `economy.ts` had reserved. `trackSpent` does NOT fall: you spent that
+    money, and "Under budget" must not be winnable by building wide and razing
+    the evidence. `tilesBuilt` DOES fall — it counts the railway you kept.
+- The undo window closes on what the PLAYER does — next build replaces it, a
+  bulldoze or a DISPATCH drops it — never on a clock. A window that closes by
+  itself is an invisible timer, which is the thing undo was chosen over. Only
+  the LAST gesture is undoable, so "undo the level at the end" is not a strategy.
+- TRAP (cost a browser round trip): a gesture can buy NOTHING and must then NOT
+  replace the window. The Esc-finish whose terminus duplicates existing rail
+  fires after every real gesture, so recording it as "the last purchase" set the
+  window to 0 pieces and the undo control vanished the instant the drag ended.
+  Guard is `if (pieces > 0)` in `buildRoute`; pinned by a unit test AND an e2e,
+  because it only reproduces through the real gesture.
+- The view reads `game.undoable` (a Ref), not `canUndoBuild()`: `game` is
+  markRaw'd, `lastBuild` is a closure variable, and DISPATCH clears it without
+  touching `levelVersion` — so there would be nothing to re-evaluate on. Keyed
+  on `pieces`, not `value`, because Sandbox builds free and a $0 undo is real.
+- Clearing is priced ABOVE a year's upkeep on the same piece (300 vs 150 on
+  lakevalley), so razing surplus pays for itself only with years left to run.
+  That is the decision the two prices make together — and it is why the
+  insolvency warning names DELIVERING first: clearing is an escape route that
+  itself needs money, and `bulldoze` refuses a fee the balance cannot cover.
+
 ## BANKRUPTCY (2026-07-27) — the tax's other half
 - BANKRUPT = OWING MORE THAN YOU HAVE, never "the balance reached zero". That
   distinction is the whole design: measured lines finish flat broke with the
@@ -421,14 +597,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the number meaningless as a diagnostic.
 - THE WARNING IS THE FEATURE, not the Failed screen. `money.taxUnaffordable`
   (`taxPerYear > balance`) turns the calendar row red with "can't pay next year"
-  while there is still a year to act in — and the fix it names, BULLDOZE, works
-  twice over: it refunds what you paid AND lowers the next bill. Without it the
-  fail state is an ambush; same lesson as the gridlock nudge (name the failure
-  AND the fix). Deliberately literal — it does not try to predict fares.
-- `/test/bankrupt` is the scenario ($5,000, 8s year, $600/piece — the annual
+  a full in-game YEAR before the bill lands. Without it the fail state is an
+  ambush; same lesson as the gridlock nudge (name the failure AND the fix).
+  Deliberately literal — it does not try to predict fares.
+- The fix it names is DELIVERING, not clearing. Fares are the income; clearing
+  track costs a fee (see UNDO vs BULLDOZE) and `bulldoze` refuses one the
+  balance cannot cover, so it is an escape route that itself needs money. It is
+  also only an escape where there is SURPLUS — razing a piece of a minimal link
+  just re-opens the gap. Wording was corrected on 2026-07-27 when the refund
+  became a fee and the old advice ("bulldoze") stopped being reliable.
+- `/test/bankrupt` is the scenario ($6,000, 8s year, $600/piece — the annual
   bill is a countdown, not a drip). Measured: prompt run won 15.7s banking
-  $2,321; relaxed won 22.7s banking $1,086; dawdling folded at 26.0s, $600
-  short. Playable at `/#/play?mode=tycoon&board=bankrupt`.
+  $3,315; relaxed won 24.7s banking $855; dawdling folded at 32.0s, $800 short,
+  warned from 24s. Playable at `/#/play?mode=tycoon&board=bankrupt`.
 - Fail checks are ordered, and bankruptcy goes FIRST (after the win check, which
   still wins ties): "you ran out of money" beats any symptom another check might
   notice on the same tick. A knock-on worth knowing: a board that DEADLOCKS in
@@ -968,6 +1149,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and anything later. Water + rock + mountain block; forest + town don't (you
   fell trees). A bridge (water) and a tunnel (mountain) will be EXCEPTIONS here,
   not second rules.
+- TERRAIN PRICES THE BUILD (2026-07-27): `TERRAIN_BUILD_FACTOR` (terrain.ts,
+  forest 1.5x / urban 2.5x) multiplies `TRACK_COST_PER_TILE` per PIECE in
+  `game.buildCostOf` (`pricePerPiece`, rounded per piece so preview sum ==
+  charge). UNDO hands back `lastBuild.cost`, which is already terrain-priced —
+  no second price table; BULLDOZE charges flat CLEARING_COST_PER_TILE and
+  refunds nothing (see the undo-vs-bulldoze split in game.ts). Lakevalley
+  budgets are safe: its rebuild row is all grass. /test scenario: `landprices`
+  ($6,000 vs a $5,000 grass+wood+town gap, tuning in tycoon.ts). The build
+  button's hint derives its prices from the same table — keep it that way.
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.
@@ -1257,7 +1447,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
 
 ## VERIFY
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
-- `npm run probe` = RENDER-level audit of every registry scenario (80 today) in a real browser
+- `npm run probe` = RENDER-level audit of every registry scenario (90 today) in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the
   survivors. Sits between unit tests (sim behaviour) and `shot` (eyeball). Run it
@@ -1410,10 +1600,21 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `npm run probe` walks the DOM instead and its coverage varies run to run
   (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
 - The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
-  BANKRUPTCY followed it (2026-07-27) — see the two sections above. NEXT UP
+  BANKRUPTCY followed it (2026-07-27), and the refund became a demolition FEE
+  with UNDO taking over the misdrag case — see the three sections above. NEXT UP
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
+  BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
+  one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
+  and at a glance in `git diff`; what you see is a commit of 5,268 lines where
+  830 were meant, and then a MERGE THAT CONFLICTS ON ENTIRE FILES, because every
+  line differs. Cost a merge and an amend on 2026-07-27. The repo is MIXED:
+  `src/` and `tests/` are LF, `docs/KNOWHOW.md` is CRLF — so normalise per file
+  (`file <path>` says what is on disk, `git show HEAD:<path> | file -` says what
+  is STORED). Prefer the Edit tool; if a script is genuinely easier, read and
+  write `"rb"`/`"wb"` and do the replacement on bytes.
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
 - `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
   path `"C:\Program Files\GitHub CLI\gh.exe"`. Bare `gh` ENOENTs and the REST API
@@ -1431,12 +1632,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   deletes the real install. Kill bg dev servers when done.
 
 ## BULLDOZE + GRIDLOCK (2026-07-26)
-- REFUNDS MUST TRACK PURCHASES, not track. `boughtPieces` (`game.ts`) records the
-  connection keys `buildRoute` actually charged for; `bulldoze` refunds only
-  those. Without it every board's AUTHORED rail is a cash machine — you would
-  bulldoze the pre-laid ring for income. You may raze anything (bar a depot);
-  only what you bought pays back. Full refund by design: bulldoze exists so a
-  misdrag is not fatal. A demolition FEE belongs with phase 3 clearing costs.
+- SUPERSEDED 2026-07-27 — bulldoze no longer refunds; see UNDO vs BULLDOZE. The
+  old rule ("refunds must track purchases, or the authored ring is a cash
+  machine") is gone with the refund itself: `boughtPieces` now only backs UNDO.
 - Removal is the mirror of the new-junction trap: an arm can be left pointing at
   an exit that no longer exists, and `connectionsToExitPort` answers NULL for
   that (train stops dead). `bulldoze` re-derives `initialSwitches` for the tile

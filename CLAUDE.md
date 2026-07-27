@@ -331,8 +331,9 @@ See `IMPROVEMENTS.md` for the prioritised backlog.
 boots a real browser and asserts the level renders 41 tiles + 2 trains, the
 trains physically leave their depots, no two trains share a tile, a puzzle-mode
 run reaches its win overlay, and there are no console errors. For visual
-work, `npm run dev` and open http://localhost:5173 (debug overlay is on by
-default). When you add a feature, verify it in its `/test/:id` scenario (see
+work, `npm run dev` and open http://localhost:5173 (debug overlay is off by
+default — toggle it in the UI). When you add a feature, verify it in its
+`/test/:id` scenario (see
 **Feature test world** above) — that is the required check that the mechanic
 works in isolation.
 

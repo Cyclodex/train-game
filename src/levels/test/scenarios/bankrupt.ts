@@ -6,34 +6,40 @@ import { TerrainKind, TileCell } from "@/tiles/model";
 // doc §1.2 M1/M14, §8).
 //
 // `/test/taxyear` shows that upkeep exists and scales with what you built. This
-// board shows what happens when it wins. The purse is $5,000, a year is eight
+// board shows what happens when it wins. The purse is $6,000, a year is eight
 // seconds, and every piece you lay costs $600 a year to keep — so the annual
 // bill is not a drip here, it is a countdown.
 //
 // The arithmetic the board is built on, measured headlessly:
 //
-//   close the gap directly (2 pieces, $2,000) → $1,200/yr, and $3,000 buys
-//   exactly two years. The third bill lands around 24s and cannot be paid.
+//   close the gap directly (2 pieces, $2,000) → $1,200/yr, and $4,000 buys
+//   exactly three years. The fourth bill lands at 32s and cannot be paid.
 //
-//   prompt   build ~3s, send at once → won at 15.7s, banked $2,321
-//   relaxed  build ~6s, send at 10s  → won at 22.7s, banked $1,086
-//   dawdling send at 26s             → BANKRUPT at 26s, $600 short
+//   prompt   build ~3s, send at once → won at 15.7s, banked $3,315
+//   relaxed  build ~6s, send at 12s  → won at 24.7s, banked   $855
+//   dawdling send at 26s             → BANKRUPT at 32s, $800 short
 //
 // What to try, at /#/play?mode=tycoon&board=bankrupt:
 //
 //  1. Close the gap and send the train straight away. You win with change.
-//  2. Do it again and leave the train on the platform. Watch the calendar row
-//     turn red and say "can't pay next year" — that warning is the last moment
-//     the run can still be saved, which is why it is there rather than a
-//     surprise Failed screen. Then let the year turn: "Bankrupt — the upkeep
-//     outgrew the railway."
-//  3. Close the same gap the scenic way instead, by chaining clicks up over row
-//     0 and back down. The delivery is identical and the upkeep is double, so
-//     the railway folds before the train arrives — and BULLDOZING the surplus
-//     is the way out: it refunds what you paid AND lowers next year's bill.
+//  2. Do it again and leave the train on the platform. After the third bill the
+//     calendar row turns red — "can't pay next year" — and you have a whole
+//     in-game year to act before the fourth. That warning is the feature; a
+//     fail state you cannot see coming is an ambush. Then let the year turn.
+//  3. Misdraw the route on purpose and press UNDO (or Ctrl+Z). Full price back,
+//     no fee: undo reverses a purchase, and a misdrag is an input error rather
+//     than a world event. Now try BULLDOZE instead and watch it charge you —
+//     that one removes a railway, and somebody has to pull the rails up.
 //
-// The pond under the gap is the `canBuildOn` gate, so the scenic route has to
-// go north — a detour, not a shortcut.
+// Note what this board does NOT teach: clearing your way out of an upkeep
+// spiral. A two-piece link has no SURPLUS — take a piece out and the gap is
+// open again — so here the only real escape is to deliver. `/test/taxyear` has
+// the deep purse and the room to over-build, and that is where clearing is
+// worth its fee.
+//
+// The pond under the gap is the `canBuildOn` gate, so a wandering route has to
+// go north — a detour, not a shortcut. It is not survivable on this purse, and
+// that is a lesson too.
 //
 // DELIBERATELY INCOMPLETE (`allowIncomplete`), like `buildgap` and `taxyear`:
 // the dangling ends either side of the gap are the point. The /test stage shows

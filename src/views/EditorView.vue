@@ -211,6 +211,9 @@
           class="facility-tint"
           :style="{ background: facilityTint(cell.tile.parking.facility) }"
         >{{ cell.tile.parking.facility }}</div>
+        <!-- Standing scenery on its own layer above every patch fill, so a
+             canopy overhanging the seam isn't cut by the next tile. -->
+        <TileGround :coord-id="cell.key" layer="scatter" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
@@ -218,6 +221,9 @@
           class="tile-component"
           :switch-interactive="false"
         />
+        <!-- Canopies overhanging a line (see TileGround.vue). The editor's own
+             overlay sits at z30, so every handle stays clickable and visible. -->
+        <TileGround :coord-id="cell.key" layer="canopy" />
 
         <svg
           class="overlay"

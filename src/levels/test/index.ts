@@ -80,6 +80,9 @@ import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
+import { clearing } from "@/levels/test/scenarios/clearing";
+import { forestworld } from "@/levels/test/scenarios/forestworld";
+import { landprices } from "@/levels/test/scenarios/landprices";
 import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
 import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
@@ -192,12 +195,12 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, taxyear, bankrupt, daily] },
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, landprices, taxyear, bankrupt, daily] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, lakevalley, lakevalleyOpen, demoworld, parkcity] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, clearing, forestworld, lakevalley, lakevalleyOpen, demoworld, parkcity] },
     ],
   },
 ];

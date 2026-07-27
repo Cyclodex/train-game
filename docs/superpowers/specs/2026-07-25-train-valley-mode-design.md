@@ -549,6 +549,30 @@ board to do it on.
 | **`/test/taxyear`** | The mechanic in isolation: a line with a two-tile gap, a 10-second year and $300 a piece, dialled for *watching* rather than for balance. Close the gap cheaply or scenically and the upkeep line remembers which; bulldoze and it falls. |
 | **`game.advance(dt)`** | The frame body minus rendering, extracted so the loop is testable headlessly. `game.sim.step()` moves trains only — no fares, no levy, no tracker — and a hidden browser pane runs no `requestAnimationFrame` at all, so this is the only honest way to unit-test anything loop-shaped. |
 
+#### Undo vs bulldoze, as built (2026-07-27)
+
+Bulldoze used to refund in full. Raised by the player as unrealistic — *"das hat
+ja nichts mit der richtigen Welt zu tun"* — and they were right, but the
+interesting part is *why* the price had gone wrong: one button was doing two
+jobs. It had to be the escape hatch for a **misdrag**, which is an input error,
+and the removal of a **railway**, which is a world event. No single price can be
+honest about both.
+
+Every builder that solves the first one well solves it with **undo**, not with
+economics (Cities: Skylines 2, Planet Coaster, Foundation). Refunds for
+demolition are rare outside RollerCoaster Tycoon; SimCity charges to bulldoze,
+Cities: Skylines returns nothing, Anno/Tropico take a small fee. So the fix was
+to split the verb rather than to pick a compromise number.
+
+| | |
+|---|---|
+| **Undo** | `game.undoBuild()` — reverses the last PURCHASE. Rails go, full price back as an `adjustment`, no fee; `trackSpent` and `tilesBuilt` both fall, because the buy never really happened. That is what lets "Under budget" survive a fumbled drag while still refusing to survive an over-build the player *kept*. `Ctrl+Z` or a button that only exists while there is something to take back. |
+| **The window** | Closes on what the PLAYER does — the next build replaces it, a bulldoze or a **dispatch** drops it — and never on a clock. A window that closes by itself is an invisible timer, which is precisely what undo was chosen over. Only the LAST gesture is ever undoable, so "undo the level at the end" is not a strategy. |
+| **Bulldoze** | Removes a RAILWAY for `CLEARING_COST_PER_TILE` ($300, 30% of the build price), booked under the `"clearing"` reason `economy.ts` had reserved for it. It never pays back, it costs the same for authored track as for bought track (the old "only what you bought pays back" guard is unnecessary once nothing pays back), and `trackSpent` does **not** fall — you spent that money, and a goal about build discipline must not be winnable by razing the evidence. |
+| **The decision the two prices make** | Clearing is priced *above* a year's upkeep on the same piece ($300 vs $150 on `lakevalley-open`), so razing surplus track pays for itself only with years left to run. Early in a run it is worth it; late it is not. |
+| **Why the insolvency warning changed its advice** | It used to say "bulldoze track you no longer need", which was reliable only while clearing paid. Now clearing costs money and `bulldoze` refuses a fee the balance cannot cover, so the warning names **delivering** first — fares are the income — and clearing second. It is also only an escape where there is *surplus*: razing part of a minimal link just re-opens the gap. |
+| **Trap** | A gesture can buy nothing, and must then not replace the undo window. The Esc-finish whose terminus duplicates existing rail fires after *every* real gesture — recording it as "the last purchase" set the window to zero pieces and the undo control vanished the instant the drag ended. Only reproducible through the real gesture, so it is pinned by an e2e as well as a unit test. |
+
 #### Bankruptcy, as built (2026-07-27)
 
 The tax's other half, and the reason it was promoted from nicety to gap the day
@@ -563,7 +587,7 @@ can offer.
 | **On the way down** | The company pays what it has (being broke must not be free), records the shortfall, and stops billing there. Piling every later levy on says nothing more — "$18,000 short" and "$600 short" end the same run — and would ruin the number as a diagnostic. |
 | **The warning is the feature** | `money.taxUnaffordable` turns the calendar row red with *"can't pay next year"* a whole year before the bill lands, and the fix it names — **bulldoze** — works twice over: it refunds what you paid *and* lowers the next bill. Without that, a fail state the player cannot see coming is an ambush. Same shape as the gridlock nudge: name the failure and name the fix. |
 | **Declared mode-wide** | `fail: { onBankruptcy: true }` for all of Tycoon rather than per board, because it is self-gating — no calendar ⇒ no levy ⇒ no shortfall. `buildgap` and `/test/dispatch` carry the flag and never feel it. |
-| **`/test/bankrupt`** | $5,000, an eight-second year, $600 a piece: the annual bill is a countdown, not a drip. Measured — prompt run won at 15.7s banking $2,321; relaxed won at 22.7s banking $1,086; dawdling folded at 26.0s, $600 short. The exits are the ones M12 already gave us: Retry, or Keep playing. |
+| **`/test/bankrupt`** | $6,000, an eight-second year, $600 a piece: the annual bill is a countdown, not a drip. Measured — prompt run won at 15.7s banking $3,315; relaxed won at 24.7s banking $855; dawdling folded at 32.0s, $800 short, warned from 24s. The exits are the ones M12 already gave us: Retry, or Keep playing. |
 | **Knock-on** | A Tycoon board that *deadlocks* now eventually folds rather than stalling forever. The gridlock nudge still fires first and names the real cause, so the player is told the truth before the bank is. |
 
 ### Scorecard against §1.2 — mechanic by mechanic
@@ -573,7 +597,7 @@ can offer.
 | M1 | Money is the master resource | **Done for the core** | Two sinks now: track, and the **annual upkeep** on the track you laid. On `lakevalley-open` a prompt full rebuild pays $2,100 of tax against $1,760 earned — the railway costs more to hold than it earns, so the balance is a decision rather than a readout. Still missing (and now merely additive): clearing, and calling trains. |
 | M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
 | M3 | Build from an open end into marked land | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: the *green plot* mask (buildable land as an authored, rendered thing) and the dashed "close this gap" hint — the gap is only visible as missing rails. |
-| M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing scenery for money** — forest and town are free to build over today, with no clearing action and no price. |
+| M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing SCENERY for money** — forest and town are free to build over. (Clearing your own TRACK is priced as of 2026-07-27, `CLEARING_COST_PER_TILE`; the reason is reserved and the pattern is set.) |
 | M5 | Trains wait until dispatched | **Done** | — |
 | M6 | Each train has one explicit destination | **Partial → load-bearing** | Colour matching guarantees a solvable, reachable pairing, and the authored destination now **prices the fare** (`TrainDef.destinations` → `demandTilesOf`), so it is real data rather than debug decoration. Still missing: the sim parks in *any* colour-matching depot, and there is no destination badge under the fare pin. That badge is G4, still S. |
 | M7 | The fare decays with time, including while waiting | **Done** | — |
@@ -595,13 +619,21 @@ what separates *the loop works* from *a finished mode*.
 
 1. ~~**Annual tax + calendar**~~ **DONE** (2026-07-26) — see "The second clock, as built".
 2. ~~**A bankruptcy state**~~ **DONE** (2026-07-27) — see "Bankruptcy, as built".
-3. **Goals on the Ready card** — *S.* The counters and per-board goals exist (`tilesBuilt`, `TycoonTuning`); what's left of M9 is listing the star labels on the Ready card so the player can read the targets before starting. This is now the last sliver of the mode's own scope.
-3. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). Bulldoze exists already; what phase 3 adds here is a demolition/clearing PRICE.
-4. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
-5. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
-6. **Phase 4 — campaign / level lifecycle** — *M*, mostly UI. An ordered list, unlocks over `objectiveStore`, and the "Finish → next" exit M12 wants (G8).
-7. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
-8. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
+3. ~~**Goals on the Ready card**~~ **DONE** (2026-07-27) — both overlays list the board's goals through one `<GoalList>`, and the HUD pip row is gated on `phase !== "ready"` (it had been showing gold stars behind the Ready overlay, because a predicate over zeroed counters is true before the run). `KNOWHOW` → GOALS ON THE READY CARD.
+4. **Phase 3 — build rules over terrain** — *M.* Green buildable plots, clearing forest/town for money, and the dashed "close this gap" hint (M3/M4). The demolition PRICE landed early (2026-07-27, `CLEARING_COST_PER_TILE`) because bulldoze's full refund had to go; what is left here is clearing SCENERY, at the same reason code.
+5. **Explicit destinations + a destination badge** — *S–M.* Make `routeDestinations` authoritative in the sim, keep colour as the visual encoding (M6, G4).
+6. **Phase 4 — briefing screen** — *M.* Greyscale map from `thumb.ts`, a coloured line per demand, the fare on each (M11).
+7. ~~**Phase 4 — campaign / level lifecycle**~~ **DONE** (2026-07-27) — `src/campaign.ts` + `/campaign`: an ordered list, unlocks derived from `objectiveStore` (no new persisted key), and the "Next level" exit M12 wanted. Seeded with three boards proven winnable by an e2e; the eight designed levels are Part B of `…2026-07-27-campaign-and-levels-design.md`. `KNOWHOW` → CAMPAIGN.
+8. **Coach-marks / a teaching system** — *M*, and now the largest gap in the
+   mode. **We have no tutorial mechanism at all.** Train Valley pins a hint to
+   the thing it is talking about — *"Zug wartet. Per Klick losschicken."*,
+   *"Vollende das Schienennetz…"* — and our level 1 introduces build, dispatch
+   AND switch at once while explaining none of them. With the campaign in place
+   this is what stands between "three boards in a list" and a game that teaches
+   you to play it. Detail: `…2026-07-27-campaign-and-levels-design.md` §A2.3
+   and §A4 row 3.
+9. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6).
+10. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
 
 Not planned: crashes (M14 / G7), production chains (§5.1), reversing (§5.2).
 
@@ -610,10 +642,10 @@ Carried forward from the last session and still open:
 - **Dynamic trains (G6).** `PlayView` renders `<Train v-for="t in trains">` from a
   fixed list, so player-called trains need either a pre-declared pool (cheap,
   enough for a campaign level) or real dynamic sprites.
-- ~~Removal / bulldozing~~ **DONE** (`game.bulldoze`): refunds only pieces the
-  player bought (`boughtPieces`), refuses depots and any tile a train occupies
-  or has reserved — which is also the answer to "what if a reserved block runs
-  through the deleted tile". A demolition FEE still belongs with phase 3.
+- ~~Removal / bulldozing~~ **DONE** (`game.bulldoze`), and re-priced 2026-07-27:
+  it charges `CLEARING_COST_PER_TILE` and never refunds, with `undoBuild()`
+  taking over the misdrag case. Refuses depots, any tile a train occupies or has
+  reserved, and a fee the balance cannot cover.
 - **`generateLevel` does not paint terrain yet**, so generated and daily boards
   are still bare grass. Contained work, and it is what makes procgen levels look
   like places.
@@ -622,17 +654,46 @@ Carried forward from the last session and still open:
 
 ### Known warts in the build tool (documented, not fixed)
 
-- **A train stranded at a dead end sits on its own anchor.** You cannot build or
-  raze under a train, so the rescue must be drawn from the FAR side, ending one
-  tile short of it (edge adjacency joins them). Recoverable but not
-  discoverable; the honest fix is the nudge pointing at the tile to build FROM.
-  Pinned by the "nowhere to go" e2e.
+- ~~**A train stranded at a dead end sits on its own anchor.**~~ **FIXED**
+  2026-07-27. A train that has run out of track has committed to no exit, so
+  laying the rail it is waiting for contradicts nothing it is doing — the tile
+  it stands on is now editable, and its head exit is re-derived on the spot.
+  Everything else still blocks: a moving train, a train held at a red signal
+  (it *has* somewhere to go), and a tile where only the TAIL lies. Reported from
+  a real game, where the failure reads as "the train went into the depot but did
+  not count" — on `lakevalley-open`, a ring-only build leaves 2,5 as [N,E] and
+  the train leaving the yellow depot enters from the south, finds no partner and
+  strands directly above its own station, with the depot sprite underneath
+  making it look docked. See `KNOWHOW` → BUILDING UNDER A STRANDED TRAIN.
 - **Esc-finishing a route into the side of an existing line** lays a charged
   $1,000 straight the cost tag never showed.
 - **Branching off the side of a line** buys an unreachable crossing rather than a
   turnout. Open-end growth is the honest gesture; real turnouts are a phase-3
   question, and the reason the build targets were NOT narrowed to open ends only
   (lakevalley-open needs an interior-edge start to buy its station junction).
+
+### Deferred with a trigger: loans
+
+Raised while building bankruptcy — *"man kann ein Darlehen nehmen, das aber auch
+kostet und zurückbezahlt werden kann"*. It is the classic answer, and the
+classic answer to a different genre: OpenTTD starts you *with* a loan and
+charges interest, Railroad Tycoon has bonds and a board that can fire you,
+SimCity issues them annually. What those share is a **persistent company** whose
+run lasts hours, where one bad quarter must not end everything.
+
+Our Tycoon levels last 35–95 seconds and Retry is one click, so a loan would be
+more mechanic than the thing it protects — and it would work against the tax.
+Three concrete objections:
+
+1. §1.3's virtue is **one resource**; principal, interest and repayment are a
+   second money concept needing their own tutorial.
+2. The tax says *finish*. A loan says *or don't, borrow instead*. They argue.
+3. There are already two outs that cost nothing to maintain: the year-ahead
+   warning, and Retry.
+
+**The trigger for revisiting:** a campaign (G8) or an endless/sandbox Tycoon,
+where a run spans many levels or many minutes. Then "a bad year must not end the
+company" becomes true and the loan is the right answer.
 
 ### The next step, concretely: goals on the Ready card
 
