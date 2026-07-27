@@ -162,8 +162,9 @@ async function main() {
       if (!opt.backdrop) {
         await page.getByRole("button", { name: /BG/ }).click();
       }
-      // Debug overlay on by default (the driving-lines). The button toggles it;
-      // ensure it ends up in the requested state.
+      // Debug overlay (the driving-lines): read the current state and toggle
+      // the button so it ends up in the requested state (on unless --no-debug),
+      // independent of the app's default.
       const debugOn = await page.evaluate(
         () => !!document.querySelector(".test-stage.debug"),
       );

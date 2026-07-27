@@ -13,7 +13,7 @@ import { fromPairs } from "@/tiles/lanes";
 //
 // There are exactly TWO map-edge exits on every side (8 in all), giving the BFS
 // router plenty of distinct destinations. This is the test stage for the **car
-// route debug overlay**: with debug on (default in /test), hover a car to preview
+// route debug overlay**: toggle Debug on in the stage bar, hover a car to preview
 // its route and click to pin it — watch the line snake through the turn-only
 // crosses on its way to the chosen edge. There is no rail — pure road.
 const { Top, Right, Bottom, Left } = Position;
