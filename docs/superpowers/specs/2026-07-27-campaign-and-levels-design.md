@@ -20,6 +20,18 @@ Two parts:
 
 ## Part A — what is still missing
 
+> **[amended 2026-07-27, after §1.2 was re-researched]** Part A's parity list
+> shrank and grew on the same day. **Two items left it**: the briefing screen (A4
+> row 4) and the green-plot mask (A4 row 6's first half) are not Train Valley
+> mechanics at all — both are *tutorial* devices, mis-read from screenshots of the
+> tutorial level. **One item joined it, larger than both**: TV's loop *pushes*.
+> Trains spawn on a timer, a train left standing is ejected when the stations fill,
+> and **new stations open mid-level**. Every level below is designed for a fixed
+> cast that waits for the player, which is a legitimate choice but is now a choice
+> rather than an assumption — see `…2026-07-25-train-valley-mode-design.md` §1.2
+> M5/M15 and the handoff's §3.6. Part B's designs stand either way; what would
+> change is the *pressure* they run under.
+
 ### A1. The §8 scorecard holds up
 
 Spot-checked against the code rather than taken on trust:
@@ -45,12 +57,21 @@ yet:
    next" exit M12 wants, and a running star total. `objectiveStore` already
    persists a per-level best, so this is an index and a screen. **Without it
    there is no game, only boards** — and it is the single largest remaining gap.
-2. **The briefing screen** (M11). Already tracked in §8's list.
+2. ~~**The briefing screen** (M11).~~ **Struck 2026-07-27** — not a parity item.
+   TV1's demand map is a tutorial device, and the screen it really shows before
+   every level is the goal list, which shipped the same day. A demand plan is
+   still a fine idea of ours; it just is not something a campaign *needs* to
+   match Train Valley.
 3. **A teaching system.** Train Valley pins coach-marks to the thing they talk
    about — *"Zug wartet. Per Klick losschicken."*, *"Vollende das Schienennetz…"*.
    We have **no tutorial mechanism at all**. A first level that introduces build,
    dispatch and switch at once needs one; without it, level 1 is a puzzle players
    bounce off rather than a level they learn from. Not currently on any list.
+   **[2026-07-27]** This item is bigger than it looked: TV's tutorial also paints
+   **green plots** on the cells to build from, draws a **dashed line** across the
+   gap to close, and shows a **map of the demand** — devices our own §1.2 mistook
+   for permanent mechanics. They belong here, appearing while a lesson is live and
+   gone afterwards, not in the HUD.
 4. **Variety across the arc.** TV changes era and rolling stock per chapter —
    novelty for free. We have `worldTheme` and procedural rolling stock, so both
    hooks exist, but nothing drives them per level. Cheap, and it is what stops
@@ -83,10 +104,11 @@ None of these should be traded for parity items.
 |---|---|---|---|
 | 1 | ~~Goals on the Ready card~~ | S | **DONE** 2026-07-27 — and it turned out the HUD pip row was showing gold stars *behind* the Ready overlay, because a predicate over zeroed counters is mostly true before the run |
 | 2 | ~~**Campaign shell**~~ | M | **DONE** 2026-07-27 — `src/campaign.ts`, `/campaign`, unlock chain derived from `objectiveStore`, "Next level" on the win card |
-| 3 | **Coach-marks / teaching** | M | Level 1 does not work without it — now the largest remaining gap |
-| 4 | Briefing screen (M11) | M | Built on `thumb.ts` |
-| 5 | Explicit destinations + badge (M6/G4) | S–M | Also removes the two-same-colour-depots hazard |
-| 6 | Clearing costs + green plots (M3/M4) | M | Phase 3. Land prices landed 2026-07-27 (`TERRAIN_BUILD_FACTOR`); the green-plot mask and the dashed gap hint remain |
+| 3 | **Coach-marks / teaching** | M | Level 1 does not work without it — now the largest remaining gap, and it absorbed rows 4 and 6's mask (see A2.3) |
+| 3b | **The push half (M5/M15)** | M–L | **Added 2026-07-27.** A spawn timer and stations opening mid-level. A *fork*, not a chore — decide it before authoring Part B against the current answer |
+| 4 | ~~Briefing screen (M11)~~ | M | **Not a parity item** — TV's demand map is a tutorial device; the pre-level screen TV really shows is the goal list, which shipped 2026-07-27. Keep as our own idea, lower |
+| 5 | Explicit destinations + badge (M6/G4) | S–M | Also removes the two-same-colour-depots hazard. Cheap companion: TV1's colourblind **letter per station** |
+| 6 | Clearing costs (M4) + a demolition cap | M | Phase 3. Land prices landed 2026-07-27 (`TERRAIN_BUILD_FACTOR`); what remains is clearing scenery for money and a per-level cap on how much may be razed. The *green mask* left this row — TV1 has none |
 | 7 | **Bridges** | M–L | The *only* engine work the eight-level arc needs |
 | 8 | Called trains (M10) | M | Pre-declared pool; L if truly dynamic |
 | 9 | Road layer joins the economy | M–L | The differentiator (§4.1) |

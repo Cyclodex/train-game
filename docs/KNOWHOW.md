@@ -675,8 +675,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   other board keeps the generic $3,000/20/s/payday-hands-off-colours.
 - AN OPENING LEVEL WANTS A LOOSE BUDGET, and steers with GOALS instead. TV1
   hands you 100,000$ against a ~10,000$ ring. Ours was $8,000 vs a $7,000
-  rebuild (one spare piece) and that was too tight, because we have neither of
-  TV's safety nets: no bulldoze to refund a misdrag, and no bankruptcy state to
+  rebuild (one spare piece) and that was too tight, because at the time we had
+  no escape hatch at all: no undo for a misdrag, and no bankruptcy state to
   explain the dead end — a fumbled drag just soft-locks into Retry silently.
   Discipline still gets rewarded because "Under budget" measures SPEND, which is
   independent of what you were given.
@@ -704,6 +704,55 @@ lean — prune as much as you add. This file only stays useful if every task ten
   rebuild won in ~40 sim-s banking $1,188 (Payday+Baron); lean rebuild won in
   ~75 sim-s banking $692 (Under budget only — serialization burns fares). The
   e2e ("tycoon: lakevalley-open") drives the full loop through the UI.
+
+## WHAT TRAIN VALLEY ACTUALLY DOES (re-researched 2026-07-27)
+- THE TRAP THAT PRODUCED THIS SECTION: the mode's mechanic list was read off
+  screenshots of TV's TUTORIAL level, so four tutorial devices were written down
+  as mechanics. When the only evidence for a mechanic is a tutorial frame, record
+  what the TUTORIAL IS TEACHING, not what the mechanic is. Full audit:
+  `specs/2026-07-25-train-valley-mode-design.md` §1.2 (marked rows) + §1.4.
+- NOT MECHANICS — tutorial only: the GREYSCALE DEMAND MAP (we had it as a
+  per-level briefing screen, M11) and the GREEN BUILDABLE PLOTS + dashed gap line
+  (we had them as a standing buildable mask, M3). TV1 has neither outside its
+  tutorial. Both left our backlog as parity items; build them only as OUR ideas.
+- WHAT TV DOES SHOW BEFORE EVERY LEVEL is the goal list — which we ship (GOALS ON
+  THE READY CARD). M11 is therefore satisfied, not missing.
+- TV'S LOOP PUSHES, ours pulls. Trains SPAWN ON A TIMER (bottom-right gauge —
+  the same dial reviewers call the "train pressure gauge", removed in TV2), a
+  train left standing is EJECTED (~5s warning) when the timer fires with every
+  station full, and NEW STATIONS OPEN MID-LEVEL. "Zug wartet, per Klick
+  losschicken" means send it NOW, not nothing-happens-until-you-click. Our
+  `waitForDispatch` is only the pull half. Deciding whether to adopt the push
+  half is an open FORK: `docs/handoff-tycoon-next.md` §3.6.
+- PRICES, confirmed: track is a FLAT $1,000 a piece (ours matches), displacing a
+  building costs $5,000–$20,000 EXTRA, removing track COSTS money (TV never
+  refunds — so "TV refunds a misdrag" was wrong; undo is our own answer), and an
+  extra train costs ~25% of what it pays (~$1.5k for ~$6k) with a RANDOMISED
+  consist.
+- TAX is `max(minimum, annual income × rate)` charged at the Dec→Jan boundary and
+  RISING WITH INFLATION over a level's 50+ in-game years — an INCOME tax, not the
+  per-piece upkeep we built. Keep ours (it opposes the fare clock; an income tax
+  punishes the good run), but the RISING RATE is worth stealing: one field on
+  `CalendarSetup` turns a flat levy into a difficulty curve.
+- WE ALREADY MATCH, unknowingly: a level is won by delivering the quota while
+  solvent and LOST by an unpayable levy (`deliveriesRequired` + `fail.onBankruptcy`);
+  the three named goals are OPTIONAL stamps on top (so a star may be hard — it
+  must never gate); speeds are 1x/2x/4x + pause; the fare falls in STEPS.
+- TV1 HAS STOP AND REVERSE per train, and actionable pause (you can build while
+  paused). We decline reversing for a better reason than the doc used to give:
+  reservations mean two trains cannot converge, so the emergency reverse has no
+  emergency. TV also runs trains at DIFFERENT SPEEDS; our `physics.ts` mass model
+  produces that free and no board exploits it yet.
+- ACCESSIBILITY, free from TV1: its colourblind mode replaces each station's
+  symbol with a LETTER A–H, and puts the target's letter on the train. Cheaper
+  than the typed-cargo model the design doc had queued for the same problem.
+- SEASON SHAPE (if a campaign chapter ever needs one): 5 mission levels + 1
+  free-play level, 3 optional goals each = 15 stamps a chapter; 5–10 min a level;
+  NO MID-LEVEL SAVE, which is why the levels are short.
+- RESEARCH CHANNEL WARNING: in the cloud sandbox `WebFetch` and `curl` are BOTH
+  blocked by egress policy (403 from Wikipedia, Steam, every review host), so
+  WebSearch result summaries are the only channel. Corroborate anything
+  load-bearing across two independent results.
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by
@@ -1155,8 +1204,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (see VERIFY) — read its listing, don't trust "all scenarios clean" alone.
 - The SECOND CLOCK is built (2026-07-26): calendar + annual tax, §8 item 1, and
   BANKRUPTCY followed it (2026-07-27), and the refund became a demolition FEE
-  with UNDO taking over the misdrag case — see the three sections above. NEXT UP
-  (design doc §8): goals on the Ready card, the last sliver of M9.
+  with UNDO taking over the misdrag case — see the three sections above. Goals
+  on the Ready card and the CAMPAIGN shell followed (2026-07-27).
+- THE LIVE WORKLIST IS `docs/handoff-tycoon-next.md`, not this section — it is
+  written for an agent with no memory of how the mode got here. Its §3.1
+  (coach-marks) is the next thing; its §3.6 (the push half — spawn timer,
+  stations opening mid-level) is a FORK worth deciding before more levels are
+  authored. Both grew out of the 2026-07-27 Train Valley re-research — see WHAT
+  TRAIN VALLEY ACTUALLY DOES above for what that corrected.
 
 ## WORKFLOW
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in

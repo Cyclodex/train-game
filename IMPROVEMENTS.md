@@ -12,10 +12,13 @@ files involved.
 > **The first real mode exists (2026-07-26): Tycoon.** The Train Valley loop —
 > build rails for money, dispatch waiting trains, flip switches, bank decaying
 > fares — runs end to end on `/#/play?mode=tycoon&board=lakevalley-open`. The
-> teardown, gap analysis, per-mechanic scorecard (M1–M14) and the ordered list of
+> teardown, gap analysis, per-mechanic scorecard (M1–M16) and the ordered list of
 > what separates *the loop works* from *a finished mode* live in
 > [`docs/superpowers/specs/2026-07-25-train-valley-mode-design.md`](docs/superpowers/specs/2026-07-25-train-valley-mode-design.md)
-> §8 — that is the active worklist for this mode.
+> §8 — that is the active worklist for this mode. **§1 of that doc was corrected
+> on 2026-07-27**: it had been read off screenshots of Train Valley's *tutorial*
+> level, so four tutorial devices were recorded as mechanics and two real ones
+> were missed. §1.4 records what changed and why.
 >
 > **Picking up the Tycoon thread in a fresh session?** Start at
 > [`docs/handoff-tycoon-next.md`](docs/handoff-tycoon-next.md) — what is left,

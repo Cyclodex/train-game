@@ -87,6 +87,25 @@ generated boards.
 **Not planned, deliberately** (each has a reasoned entry in the design doc):
 crashes, production chains, reversing trains.
 
+### Corrected on 2026-07-27 — read this before trusting an old "TV does X"
+
+The design doc's mechanic list (§1.2) was read off screenshots of Train Valley's
+**tutorial level**, and four tutorial devices got written down as mechanics. The
+list was re-researched against public sources on 2026-07-27; the corrections are
+marked in place there, and the two that change this worklist are:
+
+| Was believed | Actually |
+|---|---|
+| TV briefs every level with a greyscale map of its demands | **Tutorial only.** What every level shows before Start is its goal list — which we ship. §3.3 is demoted from parity item to our own idea. |
+| TV marks buildable land with green plots | **Tutorial only**, coaching one gap. No standing mask in TV1. §3.4 re-scoped to the surcharge and a demolition cap. |
+| Trains wait in the station until clicked | **Half true.** Trains *spawn on a timer*, and one left standing is ejected when the stations fill. The click means "send it now". This is the **new §3.6**, and it is a fork worth deciding early. |
+| A TV level's cast is fixed at the start | **New stations open while you play** — which is why building matters for a whole TV level, not just its first minute. Also §3.6. |
+
+Two mechanics were missing entirely (stations opening mid-level; per-train
+stop/reverse) and are now M15/M16 in the design doc. **The lesson, in one line:
+when the only evidence for a mechanic is a tutorial frame, write down what the
+tutorial is teaching — not what the mechanic is.**
+
 ---
 
 ## 3. The open items
@@ -102,6 +121,22 @@ Train Valley pins a short hint to the thing it is talking about — *"Zug wartet
 Per Klick losschicken."* over a waiting train, *"Vollende das Schienennetz…"*
 over the gap. That anchoring is the whole idea: a hint in a corner is a manual, a
 hint on the object is a lesson.
+
+**The 2026-07-27 research made this item bigger, and clearer.** Everything the
+design doc's §1.2 got wrong turned out to be TV's *tutorial* doing work we had
+mistaken for mechanics — the green plots, the dashed gap line, the demand map.
+That is not embarrassing for TV; it is a compliment. Its tutorial is so integrated
+that an outside observer reads it as part of the game. Two consequences here:
+
+- **Steal the devices, not just the coach-marks.** A green highlight on the cells
+  the player should build from, a dashed line across the gap to close, a one-time
+  map of who wants to go where — these are *teaching* tools that appear when a
+  lesson is live and vanish afterwards. Scoping them here is cheaper and truer
+  than shipping them as permanent HUD (which is what §3.3 and §3.4 were about to
+  do).
+- **That makes this item the home for the demand map.** §3.3 is demoted precisely
+  because its content belongs in a tutorial, and a tutorial is what this item
+  builds.
 
 - **Where.** A new component plus a per-board hint list. Key the list by board id
   the way `TycoonTuning` does (`tuningFor` / `boardIdOf` in `src/modes/tycoon.ts`)
@@ -138,34 +173,56 @@ is going.
 - **Done when** a train only counts at its named depot, the badge shows which,
   and the existing colour-assignment tests still pass.
 
-### 3.3 The briefing screen (M11) · **M**
+### 3.3 A demand-plan screen · **M** · *ours, not parity — demoted 2026-07-27*
 
-Train Valley shows a greyscale map of the level with a coloured line from each
-origin to its destination and the fare on each — a *plan of the demand*, shown
-before you start.
+**Corrected.** This item used to open *"Train Valley shows a greyscale map of the
+level with a coloured line from each origin to its destination and the fare on
+each — a plan of the demand, shown before you start."* **That is wrong.** The map
+is a **tutorial illustration**, shown in the tutorial world to teach a player what
+a demand *is*. Train Valley does not brief every level that way.
+
+What TV shows before every level is its **goal list**, and we ship that already
+(goals on the Ready card, 2026-07-27). So the parity gap this item was tracking
+does not exist — M11 in the design doc is now marked accordingly.
+
+The idea survives on its own merit, at lower priority: is a player who reads
+`lakevalley-open`'s three demands off a map better prepared than one who reads
+them off the board? Probably yes on a big board, probably noise on a small one —
+which makes this a **later** item, and one to test on `demoworld` rather than on a
+three-station level.
 
 - **Where.** `src/levels/test/thumb.ts` + `src/components/ScenarioThumb.vue`
   already render a sim-free map of any board. That is the renderer; this item is
   the overlay around it.
-- **Interaction with the Ready card**, which now lists the goals: decide whether
-  the briefing replaces it, precedes it, or is a panel inside it. Recommend
-  inside — one screen before the level, not two.
-- **Done when** `lakevalley-open` opens with a readable plan of its three
-  demands, plus a screenshot.
+- **Cheaper alternative to try first.** §3.2's destination badge puts the same
+  information on the board itself, live, and TV's own answer to "which station is
+  which" is a **letter on each station** (its colourblind mode) — an afternoon,
+  and it also fixes colour accessibility.
+- **If built, it goes inside the Ready card**, not before it. One screen before
+  the level, never two.
 
-### 3.4 Green plots, clearing scenery, and the gap hint · **M**
+### 3.4 Clearing scenery, a demolition cap, and the gap hint · **M**
 
 The remains of phase 3. The *prices* already exist — `TERRAIN_BUILD_FACTOR` in
 `src/tiles/terrain.ts` (the per-ground build surcharge, applied in `game.ts`) and
 `CLEARING_COST_PER_TILE` in `src/sim/economy.ts` — what is missing is the reading
 and the verbs:
 
-- a **green buildable mask** — Train Valley marks where you may build, we only
-  refuse where you may not;
 - **clearing scenery** as an action with a price (forest and town are buildable
-  but should cost to clear);
-- the **dashed "close this gap" hint** — today a gap is visible only as absent
-  rails.
+  but should cost to clear). TV charges **$5,000–$20,000 to displace a building**
+  against $1,000 for a plain piece, so the surcharge is not a rounding error —
+  it is the thing that makes the long way round the cheap way;
+- a **per-level cap on how much scenery may be demolished** — TV does this and we
+  have no equivalent. It is a level-design dial that shapes the *route* rather
+  than the budget, and it is cheaper than any rendering work here;
+- a **hint that names the gap** — today a gap is visible only as absent rails.
+
+**Corrected 2026-07-27:** this item used to lead with *"a green buildable mask —
+Train Valley marks where you may build, we only refuse where you may not."*
+Train Valley does no such thing. The green plots in the screenshots are the
+**tutorial** coaching one specific gap; there is no standing buildable overlay in
+TV1. Build a mask if we decide we want one, but budget it as our own idea — the
+parity items in this area are the two above.
 
 ### 3.5 Bridges · **M–L** · the only engine work the level arc needs
 
@@ -177,7 +234,41 @@ already supports two non-interacting pairs; design it as an *exception inside
 This is what level 7 of the designed arc ("The Bypass" — cross the road, or fly
 over it) needs, and nothing else in the arc does.
 
-### 3.6 Player-called extra trains (M10) · **M**
+### 3.6 The push half of the loop (M5/M15) · **M–L** · *a fork — decide before you build*
+
+**New 2026-07-27, and by weight it belongs second in this list.** Re-researching
+Train Valley turned up a whole half of its loop that our teardown missed, because
+it cannot appear in the tutorial level the teardown was read from:
+
+- trains **spawn on a timer** (a gauge counts down to the next one) rather than
+  being placed once at setup;
+- a train you sit on **leaves without you** — the reported trigger is capacity:
+  when the timer fires with every station occupied, one waiting train is ejected
+  after ~5 seconds;
+- **new stations open mid-level**, each demanding to be connected to what you
+  already built.
+
+Our boards do none of this. A Tycoon level hands the player a fixed cast and then
+waits for them, so the fare decay is the only thing that ever pushes.
+
+**Why it is a fork and not a chore.** With the push half, a level is a *shift you
+work* and the enemy is falling behind; without it, a level is a *board you solve*
+and the enemy is your own indecision. Both are good games. But the eight designed
+levels in the campaign spec are authored against the second reading, so this is
+cheaper to decide now than after they exist.
+
+- **The cheap probe, before committing to anything:** one board where a second
+  wave of trains arrives on a timer — no new stations, no ejection. If that reads
+  as pressure, the rest is worth building; if it reads as noise, close the fork
+  and write down why.
+- **What exists.** The `Spawner` contract (Time Attack) and `game.ts`'s
+  `injectTrain` cover timed *trains*. A new *depot* mid-run does not exist and is
+  G6-shaped: colours (`utils/colorAssignment.ts`) and sprite lengths resolve once
+  at setup, and `matchHomeDepots` guarantees solvability over a fixed set.
+- **Design doc:** `…2026-07-25-train-valley-mode-design.md` §1.2 M5/M15, §2.2 G3
+  and "What remains" item 11.
+
+### 3.7 Player-called extra trains (M10) · **M**
 
 A button that spends money and pays a premium. The `Spawner` contract exists
 (Time Attack uses it) and `game.ts` can inject a train mid-run.
@@ -187,7 +278,14 @@ list resolved at setup, so genuinely dynamic sprites are an *L*. A **pre-declare
 pool** — say twenty trains, hidden until called — is the cheap path and is enough
 for a campaign level. Take that first.
 
-### 3.7 The road layer joins the economy · **M–L** · the differentiator
+**Numbers to copy** (TV1, verified 2026-07-27): the buy costs roughly a **quarter**
+of what the train pays — ~$1,500 for a train worth ~$6,000 — and the consist is
+**randomised at spawn**, so it is a small gamble rather than a vending machine.
+It does not shift any spawn timer. Players report extra trains are only ever
+*needed* for a level's optional goals, which is the role to give ours too: a star
+mechanic, never a requirement.
+
+### 3.8 The road layer joins the economy · **M–L** · the differentiator
 
 Neither Train Valley game simulates road traffic; ours does. Where rail meets
 road the player should choose: a **level crossing** (cheap, but every closure
@@ -199,7 +297,7 @@ The counters already exist and are already scored by Crossing Keeper —
 new engine work at all: make a Tycoon **star** read `maxCarWaitSec`, so the fast
 route through town costs you a star. See level 5 of the designed arc.
 
-### 3.8 The eight campaign levels · content, not engine
+### 3.9 The eight campaign levels · content, not engine
 
 `docs/superpowers/specs/2026-07-27-campaign-and-levels-design.md` Part B designs
 eight levels — board, gap, budget, trains, three stars and a session length each.
@@ -215,7 +313,7 @@ unwinnable level is a wall across the whole campaign. Every seeded board must be
 `faredistance`) turned out to be shuttle demos whose second train bounces off a
 mismatched depot forever.
 
-### 3.9 Smaller, whenever
+### 3.10 Smaller, whenever
 
 - **Sound** — none at all today. Disproportionate effect on whether it feels
   finished.
@@ -227,7 +325,17 @@ mismatched depot forever.
   long-tail answer: a new board every day, forever.
 - **`demoworld` paints no terrain**, so `/play`'s demo board is still bare grass.
 - **`TRACK_COST_PER_TILE` is a global $1,000.** A per-board cost is the most
-  obvious missing level-design dial.
+  obvious missing level-design dial. (The $1,000 is not arbitrary — it is TV1's
+  own flat rate per piece, confirmed 2026-07-27. TV's *other* price is the one we
+  lack: $5,000–$20,000 to displace a building. See §3.4.)
+- **Letters on the depots** (*S*) — TV1's colourblind mode replaces each station's
+  symbol with a letter A–H, and puts the target's letter on the train. Ours is a
+  pure colour match today, which is the one accessibility hole in the board. This
+  is an afternoon and it also makes §3.2's badge legible.
+- **A levy rate that rises year on year** (*S*) — TV's tax climbs with inflation
+  across a level's decades. One field on `CalendarSetup`, and it turns a flat
+  upkeep into a difficulty curve that comes from the clock instead of from a
+  designer's number.
 
 ---
 
@@ -235,4 +343,10 @@ mismatched depot forever.
 
 §3.1. The campaign made the game finishable; the teaching is what makes it
 learnable, and every level in Part B assumes a player who was taught the verbs in
-level 1.
+level 1. The 2026-07-27 research sharpened this rather than changing it: almost
+everything we admired about Train Valley's level 1 and mistook for a mechanic was
+its tutorial, working so well it was invisible.
+
+**And if you do a second thing, make it a decision rather than a build:** §3.6,
+the push half of the loop. It is the one open question that would change what the
+other items are *for*, and it costs an hour of playtest to answer.
