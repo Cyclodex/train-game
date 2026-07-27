@@ -401,6 +401,34 @@ describe("terrain", () => {
     });
   });
 
+  describe("forest depth", () => {
+    const trees = (svg: string) =>
+      [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)].length;
+
+    it("packs the interior of a big wood far denser than a lone copse", () => {
+      // Depth = same-kind neighbours / 8. A surrounded tile adds +10 trees, so
+      // its minimum (19) clears a lone tile's maximum (14) for every seed.
+      for (const coord of ["6,6", "2,9", "11,4"]) {
+        const deep = trees(tileGroundSvg("forest", coord, around("forest"), 3));
+        const lone = trees(tileGroundSvg("forest", coord, around("grass"), 3));
+        expect(deep).toBeGreaterThan(lone);
+        expect(deep).toBeGreaterThanOrEqual(19);
+      }
+    });
+
+    it("leaves every other kind's density alone", () => {
+      // Depth only feeds forest. For every other kind the neighbour flags
+      // change the patch SHAPE but not the object counts — the rng stream that
+      // decides them is identical either way.
+      for (const kind of TERRAIN_KINDS) {
+        if (kind === "grass" || kind === "forest") continue;
+        const deep = trees(tileGroundSvg(kind, "6,6", around(kind), 3));
+        const lone = trees(tileGroundSvg(kind, "6,6", around("grass"), 3));
+        expect(deep).toBe(lone);
+      }
+    });
+  });
+
   describe("keep-out corridors", () => {
     const straight: TileCell = {
       connections: [[Position.Left, Position.Right]],
@@ -448,7 +476,9 @@ describe("terrain", () => {
           seen++;
           const d = Math.abs(p.y - 50);
           expect(d).toBeGreaterThanOrEqual(11.9);
-          expect(d).toBeLessThan(23.1);
+          // Upper bound: half (8) + the canopy's worst-case reach — FOOT.forest
+          // (13) at the deep-wood scale cap (1.15 + 0.45 = 1.6).
+          expect(d).toBeLessThan(8 + 13 * 1.6 + 0.15);
         }
       }
       expect(seen).toBeGreaterThan(0);

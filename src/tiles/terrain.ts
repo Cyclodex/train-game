@@ -250,6 +250,26 @@ export function terrainBlocksBuilding(kind: TerrainKind): boolean {
   return BLOCKS_BUILDING[kind];
 }
 
+// Terrain's SECOND gameplay rule (after canBuildOn): what laying track on this
+// ground multiplies the base tile price by. Felling a wood costs half again;
+// buying town land costs two and a half times. Only modes with a ledger feel
+// it — sandbox and puzzle build free — and only the three buildable grounds
+// matter here: water/rock/mountain refuse track outright, and a future bridge
+// or tunnel is expected to bring its OWN price, not read this table.
+export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
+  grass: 1,
+  forest: 1.5,
+  water: 1,
+  rock: 1,
+  mountain: 1,
+  urban: 2.5,
+};
+
+/** The build-price factor for a cell. Missing cell = bare grass = 1. */
+export function terrainBuildFactor(cell: TileCell | null | undefined): number {
+  return TERRAIN_BUILD_FACTOR[terrainOf(cell)];
+}
+
 /** Whether track or road may be laid on this cell. Missing cell = bare grass. */
 export function canBuildOn(cell: TileCell | null | undefined): boolean {
   return !terrainBlocksBuilding(terrainOf(cell));
@@ -1340,8 +1360,32 @@ function buildGround(
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
-  const count = lo + Math.floor(rng() * (hi - lo + 1));
-  const band = SCATTER_BAND[kind] ?? DEFAULT_BAND;
+  let count = lo + Math.floor(rng() * (hi - lo + 1));
+  let band = SCATTER_BAND[kind] ?? DEFAULT_BAND;
+  if (kind === "forest") {
+    // The deeper in the wood, the denser and taller. A tile's depth is how many
+    // of its 8 neighbours are forest too — a local measure, but it is exactly
+    // the interior of a LARGE area that scores high, so a big wood closes into
+    // overlapping canopy while a lone copse keeps today's airy scatter. Local
+    // also means it needs nothing beyond the neighbours the cache key already
+    // carries.
+    const depth =
+      [
+        same.top,
+        same.right,
+        same.bottom,
+        same.left,
+        same.topLeft,
+        same.topRight,
+        same.bottomRight,
+        same.bottomLeft,
+      ].filter(Boolean).length / 8;
+    count += Math.round(12 * depth);
+    band = {
+      ...band,
+      scale: [band.scale[0], band.scale[1] + 0.45 * depth],
+    };
+  }
   const placed: { y: number; g: string }[] = [];
   const overhead: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {

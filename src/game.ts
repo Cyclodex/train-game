@@ -40,6 +40,7 @@ import {
   CLEARING_COST_PER_TILE,
   TRACK_COST_PER_TILE,
 } from "@/sim/economy";
+import { terrainBuildFactor } from "@/tiles/terrain";
 import {
   CalendarSetup,
   calendarAt,
@@ -1443,9 +1444,16 @@ export function createGame(
     return out;
   }
 
+  // One tile's price: the base rate times its ground's factor (felling a wood,
+  // buying town land — see TERRAIN_BUILD_FACTOR). Rounded per PIECE so the sum
+  // of the preview tags always equals the total charged.
+  function pricePerPiece(tileId: string): number {
+    return Math.round(TRACK_COST_PER_TILE * terrainBuildFactor(level[tileId]));
+  }
+
   function buildCostOf(steps: RouteStep[]): number {
     if (!economy) return 0; // no ledger, no price (Sandbox builds free)
-    return TRACK_COST_PER_TILE * newBuildSteps(steps).length;
+    return newBuildSteps(steps).reduce((sum, s) => sum + pricePerPiece(s.id), 0);
   }
 
   // --- taking track back: TWO different verbs --------------------------------

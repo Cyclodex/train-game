@@ -393,10 +393,24 @@ const BANKRUPT_TUNING: TycoonTuning = {
   },
 };
 
+// Land prices (`landprices`): the terrain build surcharge in isolation. The
+// three-tile gap crosses grass, wood and town — $1,000 + $1,500 + $2,500 =
+// $5,000 for the direct link (TERRAIN_BUILD_FACTOR × TRACK_COST_PER_TILE) —
+// and the budget covers that with one spare grass piece: the surcharge, not
+// the base rate, is what makes a wandering route unaffordable.
+export const LANDPRICES_BALANCE = 6000;
+
+const LANDPRICES_TUNING: TycoonTuning = {
+  startingBalance: LANDPRICES_BALANCE,
+  fareGrace: GENERIC_FARE_GRACE,
+  stars: tycoonStars,
+};
+
 const TUNING_BY_BOARD: Record<string, TycoonTuning> = {
   "lakevalley-open": LAKEVALLEY_OPEN_TUNING,
   taxyear: TAXYEAR_TUNING,
   bankrupt: BANKRUPT_TUNING,
+  landprices: LANDPRICES_TUNING,
 };
 
 export function tuningFor(levelId: string): TycoonTuning {
