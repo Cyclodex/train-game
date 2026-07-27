@@ -1,7 +1,7 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
-import { Level, TileCell, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
-import { addConnection, isBlankCell } from "@/tiles/editOps";
+import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
+import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
 import type { RouteStep } from "@/tiles/routePlanner";
 import {
   createSimulation,
@@ -34,7 +34,12 @@ import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import { ObjectiveState, Observation } from "@/sim/objectives";
-import { createEconomy, createFareBook, TRACK_COST_PER_TILE } from "@/sim/economy";
+import {
+  createEconomy,
+  createFareBook,
+  CLEARING_COST_PER_TILE,
+  TRACK_COST_PER_TILE,
+} from "@/sim/economy";
 import {
   CalendarSetup,
   calendarAt,
@@ -376,12 +381,26 @@ export interface Game {
   money: MoneyState;
   // Live jam state, for the "your trains are stuck" nudge. See GridlockState.
   gridlock: GridlockState;
-  // Clear a tile's rails, refunding only pieces the player actually bought.
-  // Refuses on a depot, or a tile a train occupies or has reserved.
+  // Clear a tile's rails for a DEMOLITION FEE (never a refund — see
+  // CLEARING_COST_PER_TILE). Refuses on a depot, on a tile a train occupies or
+  // has reserved, and on a fee the balance cannot cover.
   bulldoze(tileId: string): EditResult;
-  // What bulldozing that tile would pay back — for the preview, so what is
-  // shown is what is paid.
-  refundOf(tileId: string): number;
+  // What bulldozing that tile would COST — for the preview, so what is shown is
+  // what is charged.
+  bulldozeCostOf(tileId: string): number;
+  // Take back the last build gesture: rails gone, money back in full, nothing
+  // charged. This is the answer to a MISDRAG, which is an input error rather
+  // than a world event — keeping it separate from `bulldoze` is what lets the
+  // demolition price be honest. Available until the player does something else
+  // (another build replaces it; a bulldoze or a dispatch drops it).
+  undoBuild(): EditResult;
+  canUndoBuild(): boolean;
+  // What undo would hand back, and 0 when there is nothing to take back.
+  undoValue(): number;
+  // Reactive mirror of the above, for the view. `pieces > 0` ⟺ there is a
+  // purchase to take back (Sandbox builds free, so `value` can be 0 and the
+  // undo still real).
+  undoable: Ref<{ pieces: number; value: number }>;
   // One fare pin per live, unpaid train, refreshed each frame beside the sprites.
   fareBadges: FareBadge[];
   // Send a waiting train (Tycoon). Returns false when the train isn't waiting —
@@ -1424,32 +1443,123 @@ export function createGame(
     return TRACK_COST_PER_TILE * newBuildSteps(steps).length;
   }
 
-  // --- bulldozing (the undo half of the build verb) --------------------------
+  // --- taking track back: TWO different verbs --------------------------------
   //
+  // They were one verb once, and that is why it felt wrong. Bulldoze refunded
+  // in full, because it had to double as the escape hatch for a MISDRAG — and a
+  // misdrag is an input error, not a world event. Conflating them forced a
+  // price that could not be honest: money back for demolition.
+  //
+  //   UNDO      reverses a PURCHASE. The gesture never happened: the rails go,
+  //             the money comes back in full, nothing is charged. It exists
+  //             outside the fiction, like Ctrl+Z anywhere else, so it costs the
+  //             world nothing to explain.
+  //   BULLDOZE  removes a RAILWAY. Somebody has to pull the rails up, so it
+  //             costs CLEARING_COST_PER_TILE and never pays.
+  //
+  // Split like that, each price is the truthful one.
+
   // Every connection the player has actually PAID for, keyed the same way
-  // `newBuildSteps` de-duplicates. This set is why a refund cannot print money:
-  // a board arrives with authored track nobody bought, and refunding that would
-  // turn `lakevalley-open`'s pre-existing ring into a cash machine. You may
-  // bulldoze anything (it is your railway), but only pieces in here pay back.
+  // `newBuildSteps` de-duplicates. Undo only ever gives money back for pieces
+  // in here — a board arrives with authored track nobody bought, and it must
+  // stay impossible to turn `lakevalley-open`'s pre-existing ring into income.
   const boughtPieces = new Set<string>();
   const pieceKey = (id: string, a: Port, b: Port) =>
     `${id}:${Math.min(a, b)}-${Math.max(a, b)}`;
 
-  function refundOf(tileId: string): number {
-    if (!economy) return 0;
-    const cell = level[tileId];
-    if (!cell) return 0;
-    const paid = cell.connections.filter(c =>
-      boughtPieces.has(pieceKey(tileId, c[0], c[1]))
-    ).length;
-    return TRACK_COST_PER_TILE * paid;
+  // The last build gesture, for as long as it is still undoable. Cleared by the
+  // next thing the PLAYER does — another build replaces it, a bulldoze or a
+  // dispatch drops it. Deliberately not by anything the WORLD does (a levy, a
+  // fare): a window that closes on its own is an invisible timer, and the whole
+  // reason undo beat a timed grace period is that it has none. Only the LAST
+  // gesture is ever undoable, so "undo the level at the end" is not a strategy.
+  let lastBuild: { steps: RouteStep[]; cost: number } | null = null;
+  // The view's reactive window onto it. `game` is markRaw'd and `lastBuild` is a
+  // plain closure variable, so a getter reading it would never re-evaluate —
+  // and unlike an edit, DISPATCHING clears it without touching `levelVersion`,
+  // so there is nothing else to hang the reactivity on. `pieces` rather than
+  // `value` decides whether the control shows, because Sandbox builds free and
+  // an undo worth $0 is still an undo.
+  const undoable = ref({ pieces: 0, value: 0 });
+  function setLastBuild(b: { steps: RouteStep[]; cost: number } | null) {
+    lastBuild = b;
+    undoable.value = { pieces: b?.steps.length ?? 0, value: b?.cost ?? 0 };
   }
 
-  // Clear a tile's rails. Refunds only what was bought, at the price paid — a
-  // full refund, deliberately: bulldoze exists so a misdrag is not fatal, and a
-  // partial refund would invent an economy rule we have not playtested. A
-  // DEMOLITION FEE belongs with phase 3's clearing costs (paying to remove
-  // scenery), where charging to change the world is the point.
+  function bulldozeCostOf(tileId: string): number {
+    if (!economy) return 0; // no ledger, no price (Sandbox clears free)
+    return CLEARING_COST_PER_TILE * (level[tileId]?.connections.length ?? 0);
+  }
+
+  // What undoing the last purchase would hand back. 0 when there is nothing to
+  // undo, which is also how the view knows to hide the control.
+  function undoValue(): number {
+    return lastBuild?.cost ?? 0;
+  }
+  function canUndoBuild(): boolean {
+    return lastBuild !== null && canEdit([...new Set(lastBuild.steps.map(s => s.id))]);
+  }
+
+  // Shared by both verbs: drop these connections and put the world back in a
+  // consistent state. Removal is the case additive edits never had — an arm can
+  // be left pointing at an exit that no longer exists, and
+  // `connectionsToExitPort` answers NULL for that, so the train stops dead on
+  // the tile. Re-derive the arms from scratch rather than merging, so no stale
+  // arm survives.
+  function stripConnections(pieces: { id: string; a: Port; b: Port }[]) {
+    const touched = new Set<string>();
+    for (const p of pieces) {
+      const cell = level[p.id];
+      if (!cell) continue;
+      const next = removeConnection(cell, p.a, p.b);
+      // Keep the cell if it still carries road or terrain — taking track out
+      // must not erase the ground under it.
+      if (isBlankCell(next)) delete level[p.id];
+      else level[p.id] = next;
+      touched.add(p.id);
+    }
+    const fresh = initialSwitches(level);
+    for (const id of touched) {
+      for (const n of [id, ...neighbourIds(id)]) {
+        if (fresh[n]) switches[n] = fresh[n];
+        else delete switches[n];
+      }
+    }
+    signalTiles = Object.entries(level)
+      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+      .map(([id]) => id);
+    levelVersion.value++;
+  }
+
+  // Take back the last purchase. The money returns as an `adjustment` that
+  // CANCELS the build entry rather than as income: `trackSpent` and
+  // `tilesBuilt` both fall back, because the pieces were never really bought —
+  // which is exactly what makes "Under budget" survive a fumbled drag while
+  // still refusing to survive an over-build the player kept.
+  function undoBuild(): EditResult {
+    if (!lastBuild) return { ok: true, blocked: [] };
+    const ids = [...new Set(lastBuild.steps.map(s => s.id))];
+    const blocked = editBlockers(ids);
+    if (blocked.length > 0) return { ok: false, blocked };
+
+    const { steps, cost } = lastBuild;
+    setLastBuild(null);
+    stripConnections(steps);
+    for (const s of steps) boughtPieces.delete(pieceKey(s.id, s.a, s.b));
+    if (economy && cost > 0) {
+      economy.earn(cost, "adjustment", `undo ${steps.length} tile${steps.length === 1 ? "" : "s"}`);
+    }
+    tilesBuiltTotal = Math.max(0, tilesBuiltTotal - steps.length);
+    trackSpentTotal = Math.max(0, trackSpentTotal - cost);
+    refreshMoney();
+    return { ok: true, blocked: [] };
+  }
+
+  // Clear a tile's rails, for a fee. Note what does NOT happen: `trackSpent`
+  // stays where it was. You spent that money; taking the rails out again does
+  // not un-spend it, and a "win while spending at most $X" goal must not be
+  // winnable by building wide and razing the evidence. `tilesBuilt` DOES fall,
+  // because it counts the railway you kept.
   //
   // Guarded by the same `editBlockers` as building — you cannot rip up track a
   // train stands on or has reserved. That is also the answer to the question
@@ -1463,50 +1573,33 @@ export function createGame(
     if (cell.role === "depot") return { ok: false, blocked: [tileId] };
     const blocked = editBlockers([tileId]);
     if (blocked.length > 0) return { ok: false, blocked };
-
-    let refund = 0;
-    let refunded = 0;
-    for (const c of cell.connections) {
-      const key = pieceKey(tileId, c[0], c[1]);
-      if (boughtPieces.delete(key)) {
-        refund += TRACK_COST_PER_TILE;
-        refunded += 1;
-      }
+    // A demolition you cannot pay for does not happen — the same rule as an
+    // unaffordable build, and it is why the insolvency warning names DELIVERING
+    // first: clearing track is an out that itself needs money.
+    const fee = bulldozeCostOf(tileId);
+    if (economy && fee > 0 && !economy.canAfford(fee)) {
+      return { ok: false, blocked: [] };
     }
 
-    // Drop the rails but keep the cell if it still carries road or terrain —
-    // bulldozing track must not erase the ground under it.
-    const next: TileCell = { ...cell, connections: [] };
-    if (isBlankCell(next)) delete level[tileId];
-    else level[tileId] = next;
-
-    // Removal is the case additive edits never had: an arm can now point at an
-    // exit that no longer exists, and `connectionsToExitPort` answers NULL for
-    // that — a train would stop dead on the tile. Re-derive from scratch here
-    // rather than merging, so no stale arm survives.
-    const fresh = initialSwitches(level);
-    for (const id of [tileId, ...neighbourIds(tileId)]) {
-      if (fresh[id]) switches[id] = fresh[id];
-      else delete switches[id];
+    const pieces = cell.connections.map(c => ({ id: tileId, a: c[0], b: c[1] }));
+    let owned = 0;
+    for (const p of pieces) {
+      if (boughtPieces.delete(pieceKey(p.id, p.a, p.b))) owned += 1;
     }
+    // Razing anything ends the undo window: the layout the player is taking
+    // back is no longer the one they bought.
+    setLastBuild(null);
+    stripConnections(pieces);
 
-    signalTiles = Object.entries(level)
-      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
-      .map(([id]) => id);
-
-    if (economy && refund > 0) {
-      economy.earn(refund, "refund", `${refunded} tile${refunded === 1 ? "" : "s"}`);
+    if (economy && fee > 0) {
+      economy.spend(fee, "clearing", `${pieces.length} tile${pieces.length === 1 ? "" : "s"}`);
     }
-    // Net, so "buy >= N pieces" counts the railway you kept, not the churn.
-    // `trackSpent` nets by the same rule, so the two can never disagree about
-    // what the player kept — and so a levy is charged on the railway that is
-    // still standing.
-    tilesBuiltTotal = Math.max(0, tilesBuiltTotal - refunded);
-    trackSpentTotal = Math.max(0, trackSpentTotal - refund);
+    // Net, so "buy >= N pieces" counts the railway you kept, not the churn —
+    // and so a levy is charged on the railway that is still standing.
+    tilesBuiltTotal = Math.max(0, tilesBuiltTotal - owned);
     // After the totals, not before: the mirror carries `trackSpent` and the
     // upkeep rate now, and both are derived from what was just written.
     refreshMoney();
-    levelVersion.value++;
     return { ok: true, blocked: [] };
   }
 
@@ -1575,8 +1668,18 @@ export function createGame(
     // existed a line ago. (Headless callers — unit tests, probes — see the
     // balance move without waiting for a frame.)
     refreshMoney();
-    // Record what was PAID for, so bulldoze can refund it and only it.
+    // Record what was PAID for, so only that can ever be handed back.
     for (const s of newSteps) boughtPieces.add(pieceKey(s.id, s.a, s.b));
+    // This gesture is now the undoable one, replacing whatever came before —
+    // only the LAST purchase can be taken back.
+    //
+    // ONLY IF IT BOUGHT SOMETHING. A gesture can lay nothing chargeable — an
+    // Esc-finish whose terminus duplicates rail the tile already has is the
+    // common one, and it fires immediately after every real gesture. Recording
+    // that as "the last purchase" replaced a live window with an empty one and
+    // the undo control vanished the moment the player let go. Nothing happened,
+    // so nothing changes: the previous purchase stays the undoable one.
+    if (pieces > 0) setLastBuild({ steps: newSteps, cost });
     return res;
   }
 
@@ -1604,7 +1707,11 @@ export function createGame(
     buildCostOf,
     buildRoute,
     bulldoze,
-    refundOf,
+    bulldozeCostOf,
+    undoBuild,
+    canUndoBuild,
+    undoValue,
+    undoable,
     signalAspects,
     signalOverrides,
     reservations,
@@ -1623,7 +1730,12 @@ export function createGame(
     gridlock,
     fareBadges,
     dispatch(trainId: string) {
-      return sim.dispatch(trainId);
+      const sent = sim.dispatch(trainId);
+      // Sending a train puts the railway into service: the layout stops being a
+      // draft, so the last purchase is no longer a draft either. From here,
+      // taking track out is a demolition job.
+      if (sent) setLastBuild(null);
+      return sent;
     },
     mode,
     objective,
@@ -1676,6 +1788,7 @@ export function createGame(
       tilesBuiltTotal = 0;
       lastTilesBuiltTotal = 0;
       trackSpentTotal = 0;
+      setLastBuild(null);
       // Retry re-opens the level on 1 January of its starting year: the levies
       // already billed are forgotten with the capital they were paid out of.
       leviesBilled = 0;

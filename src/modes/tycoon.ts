@@ -297,7 +297,7 @@ export function boardIdOf(levelId: string): string {
 // delivers well inside that, a dawdled one does not, and an over-built one
 // folds sooner still — with bulldoze as the way back, which is the whole reason
 // the HUD warns before the bill lands rather than after.
-export const BANKRUPT_BALANCE = 5000;
+export const BANKRUPT_BALANCE = 6000;
 export const BANKRUPT_SEC_PER_YEAR = 8;
 export const BANKRUPT_TAX_PER_PIECE = 600;
 

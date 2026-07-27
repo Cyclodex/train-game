@@ -23,7 +23,13 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 //     That is the whole mechanic: the balance became a decision.
 //  4. Bulldoze one of the pieces and the annual figure falls with it. Upkeep is
 //     charged on the railway that is standing when the year turns, not on what
-//     you once bought.
+//     you once bought. Clearing costs a fee and never pays back — on the scenic
+//     build it is still worth it, because one year of upkeep on the surplus
+//     costs the same as removing it, so it pays from the second year on.
+//  5. Misdraw a route and press UNDO (or Ctrl+Z) instead: full price back, no
+//     fee. That is the difference the two verbs exist to draw — undo reverses a
+//     PURCHASE, bulldoze removes a RAILWAY. The window stays open until you
+//     build again, clear something, or send a train.
 //
 // The dials are tuned for WATCHING, not for balance (`TAXYEAR_TUNING` in
 // `modes/tycoon.ts`): a 10-second year and $300 a piece make each levy a step

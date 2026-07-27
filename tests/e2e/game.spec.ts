@@ -371,12 +371,15 @@ test.describe("Train game", () => {
     await expect(raze).not.toHaveClass(on);
   });
 
-  test("tycoon: bulldoze takes back a misdrag, and pays only for what was bought", async ({
+  test("tycoon: undo takes back a misdrag free, bulldoze charges to clear", async ({
     page,
   }) => {
     test.setTimeout(90000);
-    // Why this exists: with no refund and no bankruptcy state, one fumbled
-    // gesture on a tight budget silently soft-locked the board into Retry.
+    // The two verbs, through the real UI, in the one place their difference is
+    // visible. They used to be one button that refunded in full — which meant
+    // demolition paid you, because it had to double as the escape hatch for a
+    // MISDRAG. A misdrag is an input error, so it gets an input-level answer
+    // (undo), and clearing track is then free to cost what it should.
     await page.goto("/#/play?mode=tycoon&board=buildgap");
     await page.getByRole("button", { name: "Start", exact: true }).click();
 
@@ -388,37 +391,82 @@ test.describe("Train game", () => {
       );
     const budget = await balance();
 
-    // Buy the two gap tiles.
-    await page.getByTestId("build-toggle").click();
     const zone = (coord: string, port: number) =>
       page.locator(`.level-tile[data-coord="${coord}"] .zone[data-port="${port}"]`);
-    await zone("2,1", 1).click();
-    await zone("5,1", 3).click();
-    await expect.poll(balance).toBe(budget - 2000);
-    await expect.poll(tilesBuilt).toBe(2);
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    const buyTheGap = async () => {
+      await page.getByTestId("build-toggle").click();
+      await zone("2,1", 1).click();
+      await zone("5,1", 3).click();
+      await expect.poll(balance).toBe(budget - 2000);
+      await page.keyboard.press("Escape");
+      await page.getByTestId("build-toggle").click();
+    };
 
-    // Bulldoze one of them back: money returns and the rails go.
+    // --- undo: the whole purchase comes back, and costs nothing -------------
+    await buyTheGap();
+    await expect.poll(tilesBuilt).toBe(2);
+    const undo = page.getByTestId("undo-build");
+    await expect(undo).toBeVisible();
+    await expect(undo).toContainText("$2,000");
+    await undo.click();
+    expect(await balance()).toBe(budget); // every penny, no fee
+    await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
+    await expect(page.locator('.level-tile[data-coord="4,1"] .tile')).toHaveCount(0);
+    // And it un-counts the purchase — a fumbled drag costs no goal either.
+    await expect.poll(tilesBuilt).toBe(0);
+    // Nothing left to take back, so the control goes away rather than sitting
+    // there as a dead button.
+    await expect(undo).toHaveCount(0);
+
+    // --- bulldoze: clearing track COSTS, and never pays back ----------------
+    await buyTheGap();
+    const afterBuild = await balance();
     await page.getByTestId("raze-toggle").click();
     await page.locator('.level-tile[data-coord="3,1"]').click();
-    await expect.poll(balance).toBe(budget - 1000);
+    await expect.poll(balance).toBe(afterBuild - 300); // the demolition fee
     await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
-    // Net, so a "buy >= N pieces" star cannot be farmed by build/bulldoze
-    // cycling. (Asserted here rather than in a unit test: the counter reaches
-    // the objective through the per-frame observation, which needs real frames.)
+    // Net, so a "buy >= N pieces" star cannot be farmed by build/raze cycling.
+    // (Asserted here rather than in a unit test: the counter reaches the
+    // objective through the per-frame observation, which needs real frames.)
     await expect.poll(tilesBuilt).toBe(1);
+    // Razing also ends the undo window — the layout is no longer the one bought.
+    await expect(undo).toHaveCount(0);
 
-    // Bulldozing AUTHORED track removes it but pays nothing — otherwise every
-    // board's pre-laid rail would be a cash machine.
+    // AUTHORED track costs the same to clear. The old rule was "only what you
+    // bought pays back", to stop pre-laid rail becoming a cash machine; with a
+    // fee instead of a refund that exploit is gone by construction, so the
+    // price can simply be uniform.
     const beforeAuthored = await balance();
     await page.locator('.level-tile[data-coord="1,1"]').click();
     await expect(page.locator('.level-tile[data-coord="1,1"] .tile')).toHaveCount(0);
-    expect(await balance()).toBe(beforeAuthored);
+    expect(await balance()).toBe(beforeAuthored - 300);
 
     // And a depot is the level's furniture, not the player's track.
     await page.locator('.level-tile[data-coord="0,1"]').click();
     await expect(page.locator('.level-tile[data-coord="0,1"] .tile')).toHaveCount(1);
+  });
+
+  test("tycoon: sending a train closes the undo window", async ({ page }) => {
+    test.setTimeout(60000);
+    // The rule that stops undo being a full-refund bulldoze in disguise. It is
+    // not a timer — a window that closes on its own would be invisible — it
+    // closes on what the PLAYER does, and putting the railway into service is
+    // the clearest of those.
+    await page.goto("/#/play?mode=tycoon&board=buildgap");
+    await page.getByRole("button", { name: "Start", exact: true }).click();
+    await page.getByTestId("build-toggle").click();
+    await page
+      .locator('.level-tile[data-coord="2,1"] .zone[data-port="1"]')
+      .click();
+    await page
+      .locator('.level-tile[data-coord="5,1"] .zone[data-port="3"]')
+      .click();
+    await page.keyboard.press("Escape");
+    await page.getByTestId("build-toggle").click();
+
+    await expect(page.getByTestId("undo-build")).toBeVisible();
+    await page.locator(".fare-pin").click(); // send the train
+    await expect(page.getByTestId("undo-build")).toHaveCount(0);
   });
 
   test("tycoon: a train with nowhere to go says so", async ({ page }) => {
@@ -607,7 +655,7 @@ test.describe("Train game", () => {
         return { balance: m.balance as number, unpaid: m.unpaidTax as number };
       });
     const budget = (await money()).balance;
-    expect(budget).toBe(5000);
+    expect(budget).toBe(6000);
 
     // Close the gap: $2,000 of track, and $1,200 a year to hold it.
     await page.getByTestId("build-toggle").click();
@@ -638,7 +686,7 @@ test.describe("Train game", () => {
     // Then the bill it cannot pay.
     await expect(page.getByText("Failed")).toBeVisible({ timeout: 30000 });
     await expect(page.locator(".overlay-desc")).toContainText("Bankrupt");
-    await expect(page.locator(".overlay-desc")).toContainText("bulldoze");
+    await expect(page.locator(".overlay-desc")).toContainText("Deliver sooner");
     const broke = await money();
     expect(broke.balance).toBe(0);
     expect(broke.unpaid).toBeGreaterThan(0);

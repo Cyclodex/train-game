@@ -7,7 +7,7 @@ import {
   BANKRUPT_TAX_PER_PIECE,
 } from "@/modes/tycoon";
 import { puzzleMode } from "@/modes/puzzle";
-import { TRACK_COST_PER_TILE } from "@/sim/economy";
+import { CLEARING_COST_PER_TILE, TRACK_COST_PER_TILE } from "@/sim/economy";
 import { expandKind } from "@/tiles/kinds";
 import { Level } from "@/tiles/model";
 import { Position } from "@/types";
@@ -69,21 +69,22 @@ describe("bankruptcy", () => {
     const game = bankruptGame();
     game.startObjective();
     game.buildRoute(gapSteps);
-    // $5,000 − $2,000 of track buys exactly two years at $1,200.
+    // $6,000 minus $2,000 of track buys exactly three years at $1,200.
     expect(game.money.balance).toBe(BANKRUPT_BALANCE - 2 * TRACK_COST_PER_TILE);
-    game.advance(YEAR);
-    game.advance(YEAR);
-    expect(game.money.taxPaid).toBe(2 * LEVY);
+    for (let i = 0; i < 3; i++) game.advance(YEAR);
+    expect(game.money.taxPaid).toBe(3 * LEVY);
     expect(game.objective.phase).toBe("playing");
     expect(game.money.unpaidTax).toBe(0);
 
-    // The third bill cannot be met.
+    // The fourth bill cannot be met.
     game.advance(YEAR);
     expect(game.money.unpaidTax).toBeGreaterThan(0);
     expect(game.objective.phase).toBe("lost");
     expect(game.objective.lostReason).toMatch(/Bankrupt/);
-    // It names the fix, the way the gridlock nudge does.
-    expect(game.objective.lostReason).toMatch(/bulldoze/i);
+    // It names the fix, the way the gridlock nudge does — and the fix it names
+    // is DELIVERING, because fares are the income. Clearing track is the second
+    // way out and it costs a fee, so it is not the headline advice.
+    expect(game.objective.lostReason).toMatch(/deliver/i);
     // The company paid what it had on the way down — being broke is not free.
     expect(game.money.balance).toBe(0);
     expect(game.money.taxPaid).toBe(BANKRUPT_BALANCE - 2 * TRACK_COST_PER_TILE);
@@ -91,59 +92,67 @@ describe("bankruptcy", () => {
 
   it("does NOT fail a run that merely ends broke", () => {
     // The distinction that keeps this from being a "balance hit zero" check:
-    // several measured lines win with almost nothing left, and a run that pays
-    // its last bill in full has not gone bankrupt — it has been thrifty.
+    // measured lines win with almost nothing left (the relaxed run on this very
+    // board banks $876), and a run that pays its last bill in full has not gone
+    // bankrupt — it has been thrifty.
     const game = bankruptGame();
     game.startObjective();
     game.buildRoute(gapSteps);
-    game.advance(YEAR);
-    game.advance(YEAR);
-    expect(game.money.balance).toBe(600); // exactly half a levy left
+    for (let i = 0; i < 3; i++) game.advance(YEAR);
+    expect(game.money.balance).toBe(400); // a third of a levy left
     expect(game.objective.phase).toBe("playing");
     expect(game.objective.lostReason).toBeUndefined();
   });
 
   it("stops billing at the first shortfall instead of piling on", () => {
-    // "You were $18,000 short" says nothing more than "$600 short", and the run
+    // "You were $18,000 short" says nothing more than "$800 short", and the run
     // is over either way — so the loop stops rather than accruing every later
     // levy against a zero balance.
     const game = bankruptGame();
     game.startObjective();
     game.buildRoute(gapSteps);
     game.advance(YEAR * 20);
-    expect(game.money.unpaidTax).toBe(LEVY - 600);
+    expect(game.money.unpaidTax).toBe(LEVY - 400);
   });
 
-  it("bulldozing before the year turns is the way out", () => {
-    // The warning names a fix, so the fix has to work: razing surplus track
-    // refunds what it cost AND lowers the next bill.
-    const game = bankruptGame();
-    game.startObjective();
-    game.buildRoute(gapSteps);
-    game.advance(YEAR);
-    game.advance(YEAR);
-    expect(game.money.taxUnaffordable).toBe(true); // $600 in hand, $1,200 due
-
-    expect(game.bulldoze("3,1").ok).toBe(true);
-    expect(game.money.balance).toBe(600 + TRACK_COST_PER_TILE);
-    expect(game.money.taxPerYear).toBe(BANKRUPT_TAX_PER_PIECE);
-    expect(game.money.taxUnaffordable).toBe(false);
-
-    game.advance(YEAR);
-    expect(game.objective.phase).toBe("playing");
-    expect(game.money.unpaidTax).toBe(0);
-  });
-
-  it("warns only when the next bill is really out of reach", () => {
+  it("warns a whole year before the bill it cannot pay", () => {
+    // The warning IS the feature — a fail state you cannot see coming is an
+    // ambush. Here it lights up after the third levy and the run ends on the
+    // fourth, so there is a full in-game year to act in.
     const game = bankruptGame();
     game.startObjective();
     expect(game.money.taxUnaffordable).toBe(false); // nothing built, nothing due
     game.buildRoute(gapSteps);
-    expect(game.money.taxUnaffordable).toBe(false); // $3,000 against $1,200
+    expect(game.money.taxUnaffordable).toBe(false); // $4,000 against $1,200
     game.advance(YEAR);
-    expect(game.money.taxUnaffordable).toBe(false); // $1,800
+    expect(game.money.taxUnaffordable).toBe(false); // $2,800
     game.advance(YEAR);
-    expect(game.money.taxUnaffordable).toBe(true); // $600 — cannot pay
+    expect(game.money.taxUnaffordable).toBe(false); // $1,600 — still payable
+    game.advance(YEAR);
+    expect(game.money.taxUnaffordable).toBe(true); // $400 — cannot pay
+    expect(game.objective.phase).toBe("playing"); // warned, not yet folded
+    game.advance(YEAR);
+    expect(game.objective.phase).toBe("lost");
+  });
+
+  it("cannot be escaped by clearing track once there is no surplus", () => {
+    // Clearing is an escape route that itself costs money, which is exactly why
+    // the warning names DELIVERING first. And on a two-piece link there is no
+    // SURPLUS to clear at all: taking a piece out re-opens the gap, so the
+    // train can never arrive. An honest consequence, not an oversight — the
+    // clearing escape belongs to over-built boards (see tax.spec.ts).
+    const game = bankruptGame();
+    game.startObjective();
+    game.buildRoute(gapSteps);
+    for (let i = 0; i < 3; i++) game.advance(YEAR);
+    expect(game.money.balance).toBe(400);
+    expect(game.money.taxUnaffordable).toBe(true);
+
+    expect(game.bulldozeCostOf("3,1")).toBe(CLEARING_COST_PER_TILE);
+    expect(game.bulldoze("3,1").ok).toBe(true);
+    expect(game.money.balance).toBe(400 - CLEARING_COST_PER_TILE);
+    // The bill did fall, but the line is severed.
+    expect(game.money.taxPerYear).toBe(BANKRUPT_TAX_PER_PIECE);
   });
 
   it("Retry clears it: a fresh purse, a fresh calendar, no shortfall", () => {
