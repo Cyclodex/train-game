@@ -267,6 +267,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Symptom: the last train runs, then stops dead somewhere and never delivers.
 - `/test/lakevalley` is the regression case (3 trains, 3 depots, each in its own).
 
+## CAMPAIGN (2026-07-27)
+- `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
+  star total. Headless and pure, so the progression is unit-tested without a DOM.
+- NO NEW PERSISTED KEY. Unlock is DERIVED from `objectiveStore`, which PlayView's
+  phase watcher already writes on a win under `board:<scenarioId>`. So "cleared"
+  is `loadBest(...) !== null`. A second store would be a second source of truth.
+- CLEARED IS A NULL CHECK, never `stars > 0`. A scraped zero-star win is a win;
+  gating on a star would strand a player who beat a board the hard way.
+- A campaign level IS a /test scenario id — no new board plumbing. But the entry
+  MUST carry its own `modeId`: `PlayView` resolves the mode from `?mode=` or the
+  last-used mode and IGNORES `scenario.modeId` (only `TestStage` honours that),
+  so a level pushed without it silently runs under whatever was played last.
+- Navigation is `$router.push({name:"play", query:{mode, board}})`. `App.vue`
+  keys the router-view on the full path, so a query change fully REMOUNTS
+  PlayView and every class-field initialiser re-runs against the new hash.
+- A TYPO IN A LEVEL ID FAILS SILENTLY, twice over: `scenarioById` returns the
+  registry's FIRST entry for an unknown id, and PlayView falls through to the
+  default board. Hence the unit test asserting every id is in `SCENARIOS`.
+- SEED LEVELS MUST BE PROVEN WINNABLE — the unlock rule is a chain, so an
+  unwinnable level is a wall across the whole campaign, not a hard level.
+  Measured 2026-07-27: `dispatch` and `faredistance` deliver ONE of their two
+  trains and then run forever (`mismatchedArrivals` climbing — the second train
+  bounces off a deliberately mismatched depot). They are shuttle demos of a
+  mechanic, like `/test/rollingstock`, NOT levels. Only boards with an e2e that
+  reaches `phase === "won"` are seeded.
+- `CampaignView` reads storage ONCE in `created()` into plain fields. Getters are
+  cached computeds over a non-reactive source — it would freeze at its first read.
+- It is a SCREEN (`/campaign`), not a mode: a `GameMode` is a ruleset with a
+  `setup()` to run, a campaign is an index over boards.
+
 ## GOALS ON THE READY CARD (M9, 2026-07-27)
 - A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
   over `zeroCounters()`, and most goals hold trivially there — "no signal was

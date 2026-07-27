@@ -48,6 +48,9 @@
       <router-link class="drawer-btn" to="/editor">
         <span>✏️</span><span>Editor</span>
       </router-link>
+      <router-link class="drawer-btn" to="/campaign">
+        <span>🗺️</span><span>Campaign</span>
+      </router-link>
       <router-link class="drawer-btn" to="/test">
         <span>🧪</span><span>Test world</span>
       </router-link>
@@ -408,7 +411,24 @@
           {{ earnedStars }}/{{ stars.length }} stars · {{ elapsedLabel }}
         </p>
         <p v-else class="overlay-desc">{{ lostReason }}</p>
-        <button class="overlay-btn" @click="retry">Retry</button>
+        <!-- On a campaign level, going ON is the primary action; Retry is for
+             chasing the stars you missed and steps back to a ghost button. -->
+        <button
+          v-if="phase === 'won' && nextCampaignLevel"
+          class="overlay-btn"
+          @click="goNextLevel"
+        >
+          Next: {{ nextCampaignLevel.name }} →
+        </button>
+        <button
+          class="overlay-btn"
+          :class="{
+            'overlay-btn--ghost': phase === 'won' && !!nextCampaignLevel,
+          }"
+          @click="retry"
+        >
+          Retry
+        </button>
         <!-- Train Valley's ∞: the result screen must not be a trap. Without it
              the overlay covers the whole board for good, and a level that
              completes on its own (or one you simply want to keep playing with)
@@ -527,6 +547,7 @@ import { GameMode, ModeSetup } from "@/modes/types";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
+import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
 import GoalList from "@/components/GoalList.vue";
@@ -727,6 +748,27 @@ class PlayView extends Vue {
     this.endDismissed = false;
     this.game.reset();
     this.game.startObjective();
+  }
+
+  // The level after this one in the campaign, or null off the campaign / at its
+  // end. Safe as a getter: pure over a module constant and a levelId that never
+  // changes for the life of the view.
+  get nextCampaignLevel(): CampaignLevel | null {
+    return nextLevelAfter(this.levelId);
+  }
+
+  // The mode is NOT optional in the query. PlayView resolves the mode from the
+  // hash or the last-used mode and ignores the scenario's own modeId, so a
+  // campaign level opened without it would silently run under whatever mode the
+  // player last chose. The router-view is keyed on the full path, so pushing a
+  // new query remounts this view against the new board.
+  goNextLevel() {
+    const next = this.nextCampaignLevel;
+    if (!next) return;
+    this.$router.push({
+      name: "play",
+      query: { mode: next.modeId, board: next.id },
+    });
   }
 
   // ---- Game-mode picker -------------------------------------------------
