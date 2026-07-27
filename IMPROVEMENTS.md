@@ -80,9 +80,11 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    `docs/superpowers/specs/2026-07-25-train-valley-mode-design.md` §8 and
    `…2026-07-27-campaign-and-levels-design.md` §A4, sized and sequenced. The
    eight designed levels are Part B of the latter; seven need no engine work.
-   One loose end from the same work: `demoworld` still paints no terrain, so
-   `/play`'s demo board is bare grass (generated and Daily boards now have ground).
-   The wider terrain roadmap (demoworld, farmland, rivers+bridges, industry) is
+   The loose end from the same work is closed (2026-07-28): `demoworld` is
+   hand-painted now — woods the ring runs through, a tarn and a corner lake, the
+   town the street grid serves, rock and a range pinning two edges — so no board
+   in the game opens on bare grass. The wider terrain roadmap (farmland,
+   rivers+bridges, industry) is
    `docs/superpowers/specs/2026-07-28-terrain-roadmap-handoff.md`.
 2. **A road-first game mode**. "Keep the city flowing": move N cars through the
    map inside a time limit without any car waiting too long. The counters

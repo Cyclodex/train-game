@@ -27,17 +27,38 @@ scatter, keep-out corridors, forest depth, canopy layer, build pricing), and
   density scales with 8-neighbour depth.
 - Gallery: `terrain`, `clearing` (rail + street through wood/town),
   `forestworld` (deep wood, curvy line), `landprices` (build surcharge),
-  `lakevalley*`, `daily` (generated, now terrained).
+  `lakevalley*`, `daily` (generated, now terrained), `demoworld` (hand-painted
+  20x14 world — see item 1).
 
 ## Remaining work, ranked
 
-### 1. Paint `demoworld` (S — the named loose end)
+### 1. ~~Paint `demoworld`~~ — **DONE 2026-07-28**
 
-`/play`'s default 20x14 demo is still bare grass. Hand-author terrain in
-`src/levels/test/scenarios/demoworld.ts`: woods in the dead corners, a lake
-outside the ring, towns hugging the street grid, rock pinning an edge. Traps:
-keep blockers off every cell with `connections` or `road` (validator will
-catch it); big blobs, not confetti; before/after shots per the visual rule.
+Hand-authored in `src/levels/test/scenarios/demoworld.ts` as a `GROUND` list of
+rectangles (`rect`/`without`), painted by `paintGround` as the last step of
+`build()` so it sees everything already laid: a range on the north-west corner,
+two woods the ring's top straight runs through, a tarn between the streets, the
+town around the 9/13 × 6/9 crossroads plus a hamlet on the avenues, the
+south-west wood the bottom straight runs through, a lake wrapping the south-west
+corner, and rock pinning the south-east. ~16% of the board is unbuildable, well
+under the 22% `generateTerrain` allows itself.
+
+What the doing taught, beyond the traps listed here:
+
+- **The blocker rule is best enforced, not just avoided.** `paintGround` SKIPS a
+  blocking kind on any cell carrying `connections` or `road`, so an authored area
+  is simply interrupted by the railway instead of the board failing validation.
+  That makes regions safe to draw as plain rectangles — no hand-cut holes around
+  the ring, and no way for a later edit to the layout to invalidate the ground.
+- **Forest and urban are the opposite case: paint them straight over rail and
+  road on purpose.** The corridor/canopy work (`/test/clearing`) means a line
+  through a wood clears its own right-of-way and gets crowns overhanging it, and
+  a street through town steps the houses back. Keeping non-blocking ground OFF
+  the built cells throws that away and leaves patches that stop dead at every
+  line.
+- Leave the DEPOT cells bare inside a wood (here 6,3): the depot building wants
+  its own clearing to read.
+- Before/after: `docs/verify/demoworld-terrain/`.
 
 ### 2. Farmland kind (M — best visual value per effort)
 

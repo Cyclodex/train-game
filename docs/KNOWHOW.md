@@ -337,6 +337,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## HAND-PAINTED TERRAIN (demoworld, 2026-07-28)
+- The DEMO world's ground is authored, not seeded: `GROUND` in demoworld.ts is a
+  list of `{kind, cells}` built from `rect()`/`without()`, painted by
+  `paintGround` as the LAST step of `build()` so it sees everything already laid.
+  Composition beats a seed for the one board that is the shop window; procgen
+  (`generateTerrain.ts`) still owns generated + Daily boards.
+- ENFORCE THE BLOCKER RULE, DON'T DODGE IT: `paintGround` SKIPS a blocking kind
+  (water/rock/mountain) on any cell carrying `connections` or `road`. That is what
+  lets a region be a plain rectangle — the railway simply interrupts the lake
+  instead of the board failing `validateLevel` — and it means a later change to
+  the ring or the streets cannot invalidate the ground.
+- PAINT FOREST/URBAN STRAIGHT OVER RAIL AND ROAD, deliberately. Since corridors +
+  canopy (see KEEP-OUT CORRIDORS), a line through a wood clears its own
+  right-of-way and gets crowns over it, and a street through town steps the houses
+  back. Ground kept OFF the built cells instead stops dead at every line and reads
+  as track laid on scenery. Leave the DEPOT cell bare inside a wood, though — the
+  depot building wants its own clearing.
+- demoworld is ~16% unbuildable (SW lake, tarn, SE rock, NW range), inside the 22%
+  `generateTerrain` allows itself — the same reason applies to an authored board:
+  the build tool has to have somewhere to go.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.
