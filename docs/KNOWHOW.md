@@ -1019,6 +1019,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
+  BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
+  one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
+  and at a glance in `git diff`; what you see is a commit of 5,268 lines where
+  830 were meant, and then a MERGE THAT CONFLICTS ON ENTIRE FILES, because every
+  line differs. Cost a merge and an amend on 2026-07-27. The repo is MIXED:
+  `src/` and `tests/` are LF, `docs/KNOWHOW.md` is CRLF — so normalise per file
+  (`file <path>` says what is on disk, `git show HEAD:<path> | file -` says what
+  is STORED). Prefer the Edit tool; if a script is genuinely easier, read and
+  write `"rb"`/`"wb"` and do the replacement on bytes.
 - Trunk-based MASTER-ONLY (since 2026-06-11); develop deleted. Branch from / PR to master.
 - `gh` IS installed + authed, but NOT on the agent shells' PATH: call it by full
   path `"C:\Program Files\GitHub CLI\gh.exe"`. Bare `gh` ENOENTs and the REST API
