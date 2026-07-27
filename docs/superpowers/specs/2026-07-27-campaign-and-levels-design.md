@@ -59,10 +59,12 @@ yet:
    effect on whether a thing feels finished.
 6. **The sibling modes, wired to Tycoon.** TV1 ships story *plus* random (15–20
    min, procedurally different each launch) *plus* sandbox. We have Daily and
-   Sandbox, but neither runs the economy, and `generateLevel` paints no terrain —
-   so **there is no procedural Tycoon board**. This is §9's long-tail answer, and
-   it is closer than it looks: the generator, the economy and the tuning
-   indirection all exist; they have never been pointed at each other.
+   Sandbox, but neither runs the economy, so **there is no procedural Tycoon
+   board**. This is §9's long-tail answer, and it is closer than it looks: the
+   generator, the economy and the tuning indirection all exist and have simply
+   never been pointed at each other. Half of it closed on 2026-07-27 — generated
+   boards now paint terrain, so a procgen board is a *place* rather than a
+   diagram; what remains is a Tycoon tuning entry that accepts a generated level.
 
 ### A3. Where we are already past Train Valley
 
@@ -79,17 +81,26 @@ None of these should be traded for parity items.
 
 | # | Item | Size | Why here |
 |---|---|---|---|
-| 1 | Goals on the Ready card | S | §8's last sliver of the mode's own scope |
-| 2 | **Campaign shell** | M | Unblocks the entire arc; everything else is a level without it |
-| 3 | **Coach-marks / teaching** | M | Level 1 does not work without it |
+| 1 | ~~Goals on the Ready card~~ | S | **DONE** 2026-07-27 — and it turned out the HUD pip row was showing gold stars *behind* the Ready overlay, because a predicate over zeroed counters is mostly true before the run |
+| 2 | ~~**Campaign shell**~~ | M | **DONE** 2026-07-27 — `src/campaign.ts`, `/campaign`, unlock chain derived from `objectiveStore`, "Next level" on the win card |
+| 3 | **Coach-marks / teaching** | M | Level 1 does not work without it — now the largest remaining gap |
 | 4 | Briefing screen (M11) | M | Built on `thumb.ts` |
 | 5 | Explicit destinations + badge (M6/G4) | S–M | Also removes the two-same-colour-depots hazard |
-| 6 | Clearing costs + green plots (M3/M4) | M | Phase 3 |
+| 6 | Clearing costs + green plots (M3/M4) | M | Phase 3. Land prices landed 2026-07-27 (`TERRAIN_BUILD_FACTOR`); the green-plot mask and the dashed gap hint remain |
 | 7 | **Bridges** | M–L | The *only* engine work the eight-level arc needs |
 | 8 | Called trains (M10) | M | Pre-declared pool; L if truly dynamic |
 | 9 | Road layer joins the economy | M–L | The differentiator (§4.1) |
-| 10 | Terrain in `generateLevel` | S–M | Unlocks a procedural Tycoon board — the long tail |
+| 10 | ~~Terrain in `generateLevel`~~ | S–M | **DONE** 2026-07-27 — `paintTerrain`; a procedural Tycoon board is now only a tuning entry away |
 | 11 | Sound | M | Finish |
+
+**Seeding the campaign turned up a rule worth keeping.** The unlock chain means
+an unwinnable level is a wall across the whole campaign, so a seed list has to be
+*measured*, not assumed. Probed 2026-07-27: `dispatch` and `faredistance` each
+deliver one of their two trains and then run forever (`mismatchedArrivals`
+climbing — the second train bounces off a deliberately mismatched depot). They
+are shuttle demos of a mechanic, not levels. The campaign therefore seeds only
+boards with an e2e that reaches a win: `objectives` → `buildgap` →
+`lakevalley-open`, placeholders for Part B's eight.
 
 ### A5. The finding that matters
 

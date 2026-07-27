@@ -15,17 +15,20 @@ function crossingStars(starTime: number): StarSpec[] {
   return [
     {
       id: "speedrun",
-      label: "Speedrun",
+      label: `Speedrun (${starTime}s)`,
+      hint: "Get every train through inside the time",
       predicate: (c: Counters) => c.elapsedSec <= starTime,
     },
     {
       id: "smooth-operator",
-      label: "Smooth operator",
+      label: `Smooth operator (${SMOOTH_WAIT_SEC}s)`,
+      hint: "Never leave a car waiting at a crossing longer than that",
       predicate: (c: Counters) => c.maxCarWaitSec <= SMOOTH_WAIT_SEC,
     },
     {
       id: "flawless",
       label: "Flawless",
+      hint: "No train ever meets a car on a crossing",
       predicate: (c: Counters) => c.crossingIncidents === 0,
     },
   ];

@@ -646,11 +646,17 @@ Carried forward from the last session and still open:
 
 ### Known warts in the build tool (documented, not fixed)
 
-- **A train stranded at a dead end sits on its own anchor.** You cannot build or
-  raze under a train, so the rescue must be drawn from the FAR side, ending one
-  tile short of it (edge adjacency joins them). Recoverable but not
-  discoverable; the honest fix is the nudge pointing at the tile to build FROM.
-  Pinned by the "nowhere to go" e2e.
+- ~~**A train stranded at a dead end sits on its own anchor.**~~ **FIXED**
+  2026-07-27. A train that has run out of track has committed to no exit, so
+  laying the rail it is waiting for contradicts nothing it is doing — the tile
+  it stands on is now editable, and its head exit is re-derived on the spot.
+  Everything else still blocks: a moving train, a train held at a red signal
+  (it *has* somewhere to go), and a tile where only the TAIL lies. Reported from
+  a real game, where the failure reads as "the train went into the depot but did
+  not count" — on `lakevalley-open`, a ring-only build leaves 2,5 as [N,E] and
+  the train leaving the yellow depot enters from the south, finds no partner and
+  strands directly above its own station, with the depot sprite underneath
+  making it look docked. See `KNOWHOW` → BUILDING UNDER A STRANDED TRAIN.
 - **Esc-finishing a route into the side of an existing line** lays a charged
   $1,000 straight the cost tag never showed.
 - **Branching off the side of a line** buys an unreachable crossing rather than a
