@@ -70,6 +70,51 @@ export function rowFrame(row: ParkingRow, size: number): RowFrame {
   };
 }
 
+// HOW FAR ALONG THE ROAD a row's tarmac runs — the one answer the apron, its
+// outer kerb line and any test share, so a strip and the line along its edge can
+// never disagree about where the strip ends.
+//
+// TWO RULES, both learned from the echelon rank, which is the only kind whose
+// bays are RAKED:
+//
+//  • THE APRON IS A RECTANGLE, not a parallelogram. It used to follow the rake —
+//    road-side edge from `a0 − skew/2`, far edge from `a0 + skew/2` — which on a
+//    45° rank of 6 bays put the road-side edge at −21..153 on a 200px tile while
+//    the far edge ran 21..195. The last 47px of that tile's road edge had no
+//    apron under it at all, and on a run of echelon tiles the aprons stepped past
+//    each other instead of meeting. Squaring it off costs two triangles of tarmac
+//    at the ends of a rank, which is what the end of a real echelon rank looks
+//    like anyway.
+//  • A PACKED ROW REACHES THE SEAM. `align: "pack"` means "I am part of a run"
+//    (that is why it starts at the leading edge), so where the bays come within
+//    half a pitch of a tile edge the tarmac goes all the way to it. Otherwise
+//    every seam keeps a hairline of grass — 5px on the echelon rank, 4px on a 90°
+//    one — down the middle of what should read as one car park. A row that does
+//    NOT pack (a centred bay, a tapered lay-by) is a pocket and keeps its own
+//    extent: paving a whole tile for one bay would read as a mistake.
+export function apronSpan(
+  row: ParkingRow,
+  size: number,
+): { from: number; to: number } {
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
+  const skew = row.kind === "angled" ? depth : 0;
+  const taper = layByTaperPx(row, size);
+  // Mirrors `stallPose`: a packed row starts at the leading edge, a centred or
+  // tapered one is centred on the tile.
+  const span = pitch * row.count;
+  const centred = row.align === "centre" || taper > 0;
+  const a0 = centred ? (size - span) / 2 : 0;
+  let from = a0 - skew / 2 - taper;
+  let to = a0 + span + skew / 2 + taper;
+  if (!centred) {
+    if (from <= pitch / 2) from = Math.min(from, 0);
+    if (to >= size - pitch / 2) to = Math.max(to, size);
+  }
+  return { from, to };
+}
+
 // The strip of tarmac the bays stand on. Painted UNDER the road's own kerb line
 // and markings so the two read as one continuous surface — the same trick
 // `.road-gore-fill` uses to stop a hatched closure looking like grass.
@@ -82,7 +127,6 @@ export function parkingApronPath(
   if (stallOnLane(row.kind)) return ""; // no bay, so no apron to pave
   const f = rowFrame(row, size);
   const big = needsBigBay(row.reserved);
-  const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
   const near = bayNearPx(row, size, kerbPx);
   const far = near + depth;
@@ -91,22 +135,17 @@ export function parkingApronPath(
   // so it has to be tarmac. Left starting at the bays it would be a band of GRASS
   // between the road and the car park, which is not what a car park looks like.
   const paveFrom = apronNearPx(row, size, kerbPx);
-  // An echelon rank's apron has to cover the rake as well as the bays.
-  const skew = row.kind === "angled" ? depth : 0;
-  const first = stallPose(row, 0, size, kerbPx);
-  const a0 = first.t * size - pitch / 2;
-  const a1 = a0 + pitch * row.count;
-  // A LAY-BY opens out of the kerb and closes back into it. The apron is then a
-  // trapezoid, not a rectangle: its road-side edge runs the full length including
-  // both tapers, while the far edge spans only the bay itself. A rank of ordinary
-  // spaces has no taper (`layByTaperPx` returns 0) and this collapses back to the
-  // rectangle it was.
+  const { from, to } = apronSpan(row, size);
+  // A LAY-BY opens out of the kerb and closes back into it, so its road-side edge
+  // runs the full length including both tapers while the far edge spans only the
+  // bay — the one case that is deliberately NOT square (`apronSpan` carries the
+  // taper in `from`/`to`; the far edge steps back inside it).
   const taper = layByTaperPx(row, size);
   return poly([
-    f.at(a0 - skew / 2 - taper, paveFrom),
-    f.at(a1 - skew / 2 + taper, paveFrom),
-    f.at(a1 + skew / 2, far),
-    f.at(a0 + skew / 2, far),
+    f.at(from, paveFrom),
+    f.at(to, paveFrom),
+    f.at(to - taper, far),
+    f.at(from + taper, far),
   ]);
 }
 
@@ -142,27 +181,22 @@ export function parkingKerbPath(
   if (stallOnLane(row.kind)) return "";
   const f = rowFrame(row, size);
   const big = needsBigBay(row.reserved);
-  const pitch = stallPitchPx(row.kind, size, big);
   const depth = stallDepthPx(row.kind, size, big);
   const near = bayNearPx(row, size, kerbPx);
   const far = near + depth;
-  const skew = row.kind === "angled" ? depth : 0;
-  const first = stallPose(row, 0, size, kerbPx);
-  const a0 = first.t * size - pitch / 2 + skew / 2;
-  const a1 = a0 + pitch * row.count;
   const taper = layByTaperPx(row, size);
+  // THE SAME SPAN AS THE APRON, or the white line would sit somewhere the tarmac
+  // does not end. It followed the rake when the apron did, and squaring one off
+  // without the other is what would leave an echelon rank with its kerb line
+  // 21px inside its own concrete.
+  const { from, to } = apronSpan(row, size);
   // Without a taper the kerb is just the bay's outer edge. WITH one it is the
   // whole opening — in off the road, along the back of the bay, and out again —
   // which is the line that makes a lay-by read as cut into the verge rather than
   // stuck onto it.
-  if (taper <= 0) return poly([f.at(a0, far), f.at(a1, far)], false);
+  if (taper <= 0) return poly([f.at(from, far), f.at(to, far)], false);
   return poly(
-    [
-      f.at(a0 - skew / 2 - taper, near),
-      f.at(a0, far),
-      f.at(a1, far),
-      f.at(a1 - skew / 2 + taper, near),
-    ],
+    [f.at(from, near), f.at(from + taper, far), f.at(to - taper, far), f.at(to, near)],
     false,
   );
 }

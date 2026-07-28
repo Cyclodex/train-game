@@ -669,6 +669,11 @@ export interface RoadSim {
     // has no right of way" rule has to be judged on — the wait must be seconds,
     // not tens of seconds — and it is unobservable without this.
     dwellLeft: number;
+    // How far through its parking manoeuvre the car is, 0..1 by ARC LENGTH. Its
+    // per-tick change IS the manoeuvre's speed, which is the only way to see from
+    // outside that a reversing leg is driven slower than a forward one
+    // (`REVERSE_PACE`) rather than the whole path sharing one pace.
+    manoeuvre: number;
   }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
