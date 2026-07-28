@@ -24,6 +24,8 @@ import {
   forwardExitEndT,
   exitsForward,
   garageExitFrom,
+  canReverseIn,
+  parkedHeadingDeg,
   type ParkingRow,
 } from "@/tiles/parking";
 import {
@@ -330,6 +332,82 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     );
     const slot = echelon.pickStallOn("1,0", Position.Left, "car", "c1")!;
     expect(echelon.exitFor(slot, 0)).toBeNull();
+  });
+
+  it("a car faces ONE way in its bay, and the exit sets off along it", () => {
+    // THE 180° SPIN. The entry curve and the exit curve each answered "which way
+    // is this car pointing?" for themselves and disagreed: a kerbside car that had
+    // backed in rested pointing down the road (right) while its exit set off
+    // assuming it pointed back up the road (wrong). Measured on /test/parkingkerb
+    // before `parkedHeadingDeg`: 47 per-tick heading jumps over 25°, worst 180.0°.
+    const cases: [ParkingRow, number][] = [
+      // A KERBSIDE bay lies along the road, so backing in changes nothing about
+      // which way the car ends up facing.
+      [{ from: Position.Left, kind: "parallel", count: 3 }, 0],
+      // A 90° bay turns across the kerb, so backing in leaves it NOSE-OUT — which
+      // is the entire reason a driver does it.
+      [{ from: Position.Left, kind: "perpendicular", count: 3 }, 180],
+    ];
+    for (const [row, flip] of cases) {
+      const pose = stallPose(row, 1, 200, 28);
+      const rest = ((parkedHeadingDeg(row.kind, pose.angleDeg, true) - pose.angleDeg) % 360 + 360) % 360;
+      expect(rest, `${row.kind} rest heading`).toBe(flip);
+      // What the ENTRY curve actually leaves the car at, and what the EXIT curve
+      // sets off at, both measured rather than asserted from the constant.
+      const inPath = manoeuvrePath(row, 1, 200, 28, 7, undefined, "reverse");
+      const out = forwardExitPath(row, 1, 200, 28, 7, true);
+      const parked = manoeuvreAt(inPath, 1).angleDeg;
+      const away = manoeuvreAt(out, 0).angleDeg;
+      const gap = Math.abs(((((parked - away) % 360) + 540) % 360) - 180);
+      expect(gap, `${row.kind}: entry and exit disagree by ${gap.toFixed(0)}°`).toBeLessThan(2);
+    }
+  });
+
+  it("backs into a 90° bay, and never into an echelon one", () => {
+    // Which kinds can be backed into is GEOMETRY, not driver taste. An echelon bay
+    // is raked FORWARD — you reach it by turning toward its side — so a car backed
+    // into one comes to rest facing back up the aisle it arrived down, and on a
+    // one-way aisle (the only place a far-bank rank is legal) there is nowhere for
+    // it to go. Nosing in measures better too: −2.3/+0.3px against −8.6/−15.0.
+    expect(canReverseIn("perpendicular")).toBe(true);
+    expect(canReverseIn("parallel")).toBe(true);
+    expect(canReverseIn("angled")).toBe(false);
+    expect(canReverseIn("garage")).toBe(false);
+    // And so a hemmed-in echelon bay is still NOSED into: `canNoseIn` must not
+    // send it down a road that does not exist.
+    const echelon = createParkingRegistry(
+      levelWith([{ from: Position.Left, kind: "angled", count: 5 }]),
+      CAR_LEN,
+    );
+    const a = echelon.pickStallOn("1,0", Position.Left, "car", "c1")!;
+    echelon.claim({ ...a, index: a.index + 1 }, "blocker");
+    expect(echelon.canNoseIn(a)).toBe(true);
+  });
+
+  it("pivots into a 90° bay instead of bulging across its neighbours", () => {
+    // A REVERSE IS A PIVOT, and a cubic between two known tangents is not one.
+    // The old curve swung out beyond the bay and came back, which is why it
+    // measured worse than nosing in (−3.3/−5.6px against +3.3/+0.1) and why
+    // widening the aisle barely helped (−5.6 → −1.8 at 42px more).
+    const row: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 5 };
+    const pose = stallPose(row, 2, 200, 28);
+    const path = manoeuvrePath(row, 2, 200, 28, 14, undefined, "reverse");
+    // It pulls PAST the bay and then comes back: the furthest point along the road
+    // is reached mid-manoeuvre, not at either end.
+    let far = -Infinity;
+    for (let i = 0; i <= 40; i++) far = Math.max(far, manoeuvreAt(path, i / 40).x);
+    expect(far).toBeGreaterThan(pose.x + 20);
+    // NOTHING GOES DEEPER THAN THE BAY. That is the bulge, and it is what used to
+    // put the curve through the rank behind: the old construction overshot to
+    // y=182 on a bay whose centre is at 162.
+    let deepest = -Infinity;
+    for (let i = 0; i <= 40; i++) deepest = Math.max(deepest, manoeuvreAt(path, i / 40).y);
+    expect(deepest).toBeLessThanOrEqual(pose.y + 0.5);
+    // And it finishes square in the bay, facing out.
+    const end = manoeuvreAt(path, 1);
+    expect(end.x).toBeCloseTo(pose.x, 1);
+    expect(end.y).toBeCloseTo(pose.y, 1);
+    expect(Math.abs(end.angleDeg - (pose.angleDeg + 180))).toBeLessThan(1);
   });
 
   it("noses out along the road instead of crabbing sideways into it", () => {
@@ -926,6 +1004,44 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // rolling (−2.4px → 0).
     expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
   }
+
+  it("never spins on the spot, and really does back into a 90° bay", () => {
+    // A CAR TURNS BY DRIVING. Every heading on the board comes from a curve
+    // tangent, so a big per-tick step means two curves were joined at poses that
+    // disagree — which is exactly what shipped: a kerbside car that had backed in
+    // flipped 180° the tick its dwell ended, then unwound another 102° over the
+    // next few ticks as its looping exit curve straightened out. Measured before
+    // `parkedHeadingDeg`: worst 180.0°, 47 such ticks on parkingkerb seed 1 alone.
+    const norm = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
+    let reversed = 0;
+    for (const [map, seed] of [["parkingkerb", 1], ["parkinglot", 5], ["parkvariants", 1]] as const) {
+      const sim = simFor(map, seed);
+      let worst = 0;
+      let prev = new Map<string, number>();
+      for (let i = 0; i < 2400; i++) {
+        sim.step(0.05, () => false);
+        for (const c of sim.cars()) if (c.parkedReverse) reversed++;
+        const now = new Map<string, number>();
+        for (const c of sim.sample()) {
+          const u = c.units[0];
+          if (!u?.front.pose || !u.rear.pose) continue;
+          const dx = u.front.coord.x + u.front.pose.tx - (u.rear.coord.x + u.rear.pose.tx);
+          const dy = u.front.coord.y + u.front.pose.ty - (u.rear.coord.y + u.rear.pose.ty);
+          now.set(c.id, (Math.atan2(dy, dx) * 180) / Math.PI);
+          const before = prev.get(c.id);
+          if (before !== undefined) worst = Math.max(worst, Math.abs(norm(now.get(c.id)! - before)));
+        }
+        prev = now;
+      }
+      // A tick is 50ms. The pivot arc's sharpest moment measures ~29°; anything
+      // near a right angle is a discontinuity, not a manoeuvre.
+      expect(worst, `${map} seed ${seed}: worst per-tick heading step`).toBeLessThan(45);
+    }
+    // AND THE PREFERENCE IS LIVE. Without this the test above passes trivially on
+    // a build where nothing ever backs in — which is what the gate used to make
+    // true for 90° bays.
+    expect(reversed, "no car ever backed into a bay").toBeGreaterThan(0);
+  }, 120_000);
 
   it("spawns nothing in the middle of the map", () => {
     // A seam whose neighbour is a ONE-WAY pointing away feeds nothing, and that

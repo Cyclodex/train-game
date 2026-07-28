@@ -142,6 +142,47 @@ export function turnsInAcrossKerb(kind: StallKind): boolean {
   return kind === "perpendicular" || kind === "angled";
 }
 
+// Can this kind of bay be BACKED into at all? Two can, for different reasons, and
+// the third cannot for a reason that is geometry and not tuning.
+//
+//  • PARALLEL — must be, when its neighbours are taken. Reversing pivots about the
+//    rear and the swept area stays in the bay's own column.
+//  • PERPENDICULAR — may be, and a driver who does drives out forwards. The turn
+//    is a quarter circle, which is exactly what one pivot arc expresses.
+//  • ANGLED — no, and not for want of a better curve. An echelon bay is raked
+//    FORWARD (`shearedBoxPoints`: you reach it by turning toward its side), so a
+//    car backed into one comes to rest at `angle + 180` — facing back up the
+//    aisle it arrived down. On a one-way aisle, which is the only place a far-bank
+//    rank is legal at all, there is nowhere for it to go. Real car parks that want
+//    reverse-in echelon parking rake the bays the OTHER way; ours do not, and the
+//    measured "reverse is worse here" (−8.6/−15.0px against −2.3/+0.3 nosing in)
+//    was that fact showing up as a swept overlap rather than as a heading.
+export function canReverseIn(kind: StallKind): boolean {
+  return kind === "parallel" || kind === "perpendicular";
+}
+
+// WHICH WAY THE CAR IS FACING as it stands in the bay. One answer, because two
+// were measured to disagree: the entry curve left a kerbside car pointing down the
+// road (right) while the exit curve set off assuming it pointed back up the road
+// (wrong), so every car leaving a reverse-parked kerbside bay spun 180° on the
+// spot and then unwound another 102° over the next few ticks. Measured on
+// /test/parkingkerb: 47 per-tick heading jumps over 25°, worst 180.0°.
+export function parkedHeadingDeg(
+  kind: StallKind,
+  poseAngleDeg: number,
+  enteredReverse: boolean,
+): number {
+  // A garage pose points INTO the building — a stall pose is where a car RESTS,
+  // not the way it leaves — so the ramp is the one case that always turns round.
+  if (kind === "garage") return poseAngleDeg + 180;
+  // Backing into a bay that turns ACROSS the kerb leaves the car nose-out, which
+  // is the entire reason a driver does it. Backing into a KERBSIDE space does
+  // not: the bay lies ALONG the road, so the car ends up pointing the same way
+  // whichever way it got in.
+  if (enteredReverse && turnsInAcrossKerb(kind)) return poseAngleDeg + 180;
+  return poseAngleDeg;
+}
+
 // Where a row's bays START, measured out from the lane's centreline. The one place
 // that answers it: the expression was repeated at nine call sites, and the
 // clearance rule below would have been missed by every one of them.
@@ -809,6 +850,74 @@ export type EntryStyle = "forward" | "reverse";
 // car in front, which is where a driver actually stops before reversing.
 const REVERSE_PULL_PAST = 0.75;
 
+// A cubic's handle length for a quarter-circle arc of radius 1: 4/3·tan(θ/4).
+// The radial error is 2.7 parts in ten thousand — a hundredth of a pixel at the
+// radii here — which is why the pivot arc did NOT need a new leg SHAPE. A union
+// (`{kind:"bezier"} | {kind:"arc"}`) would have touched `bezierAt`,
+// `bezierTangent`, `buildArcTable` and `locate` to buy a hundredth of a pixel.
+const ARC_K = (4 / 3) * Math.tan(Math.PI / 8);
+
+// THE PIVOT ARC: what backing into a 90° bay actually is.
+//
+// The old reverse leg was a cubic laid between the two known tangents, and it
+// measured WORSE than nosing in (90°: −3.3/−5.6px against +3.3/+0.1). Widening
+// the aisle barely moved it (−5.6 → −1.8 at 42px more), so it was never a
+// clearance problem — it was the shape. A real reverse PIVOTS: the rear goes into
+// the space while the front swings out through the aisle, about a centre abeam
+// the bay. A Bézier between two tangents cannot express that; it bulges across
+// the bays either side instead.
+//
+// The construction, in the row's own frame (`f` along travel, `s` toward the
+// row's side, `R` the lateral distance from the car's lane to the bay centre):
+//
+//   • the car pulls forward to `A`, exactly `r` PAST the bay, still on its lane;
+//   • it reverses through a quarter circle of radius `r` about `C = A + r·s`,
+//     which puts it square to the bay and `r` back down the aisle;
+//   • it reverses straight the remaining `R − r` into the space.
+//
+// The straight finish is not a detail — it is what a driver does, and it is what
+// keeps the pull-past at one car's length (`r`) instead of the whole lateral
+// shift. A pure quarter circle would need `R` of pull-past (48–62px here), which
+// on a packed rank runs off the end of the tile.
+//
+// `r` is TURN_IN_CLEARANCE_FRAC — the car's own length, and the same number
+// `bayNearPx` already guarantees as aisle. So the room this manoeuvre needs is
+// room the layout is already required to have.
+function pivotReverseLegs(
+  A: Pt,
+  target: Pt,
+  f: Pt,
+  s: Pt,
+  r: number,
+  straight: number,
+): ManoeuvreLeg[] {
+  const mid = { x: target.x - s.x * straight, y: target.y - s.y * straight };
+  const h = ARC_K * r;
+  const legs: ManoeuvreLeg[] = [
+    {
+      p0: A,
+      // The car MOVES backwards down the lane as the swing starts (it is pointing
+      // forwards; `reverse` turns the rendered heading round), and it moves
+      // straight INTO the bay as it ends.
+      c1: { x: A.x - f.x * h, y: A.y - f.y * h },
+      c2: { x: mid.x - s.x * h, y: mid.y - s.y * h },
+      p3: mid,
+      reverse: true,
+    },
+  ];
+  if (straight > 1e-6) {
+    const hs = straight / 3;
+    legs.push({
+      p0: mid,
+      c1: { x: mid.x + s.x * hs, y: mid.y + s.y * hs },
+      c2: { x: target.x - s.x * hs, y: target.y - s.y * hs },
+      p3: target,
+      reverse: true,
+    });
+  }
+  return legs;
+}
+
 // Build the pull-in curve for `stall` from the lane a class-`cls` car drives.
 // `laneOff` is the car's lateral lane offset (right-of-travel), in the same units
 // as `size` — the same number `createLaneGeometry.couplerOffsets` gives the
@@ -850,6 +959,44 @@ export function manoeuvrePath(
   const laneRad = (approachDeg(from, exit, size, laneOff) * Math.PI) / 180;
   const rad = (pose.angleDeg * Math.PI) / 180;
   const big = needsBigBay(row.reserved);
+  if (style === "reverse" && turnsInAcrossKerb(row.kind)) {
+    // A 90° BAY IS PIVOTED INTO — see `pivotReverseLegs`. `canReverseIn` keeps the
+    // echelon rank out of here: it is raked forward, so a car backed into one ends
+    // up facing the wrong way down a one-way aisle, whatever shape the curve is.
+    if (!canReverseIn(row.kind)) return manoeuvrePath(row, index, size, kerbPx, laneOff, tStartOverride);
+    // The row's own frame: along travel, and out toward the side the bays are on.
+    const f = { x: Math.cos(laneRad), y: Math.sin(laneRad) };
+    // Right-of-travel in screen space (y down) is (-fy, fx); the row's side flips
+    // it for a far-bank rank. Never read a side out of the sign of an offset.
+    const sign = rowSide(row) === "right" ? 1 : -1;
+    const s = { x: -f.y * sign, y: f.x * sign };
+    const abeam = onLane(pose.t);
+    // How far the car has to move SIDEWAYS to get from its lane into the bay.
+    const R = (p3.x - abeam.x) * s.x + (p3.y - abeam.y) * s.y;
+    const r = Math.min(R, TURN_IN_CLEARANCE_FRAC * size);
+    if (r > 1e-6) {
+      // `A` is the point it reverses FROM: on its own lane, exactly `r` past the
+      // bay. Not clamped to the tile — at one car's length it stays on it, and a
+      // clamp would break the tangency the whole construction rests on.
+      const A = { x: abeam.x + f.x * r, y: abeam.y + f.y * r };
+      return finishPath(
+        [
+          {
+            p0,
+            c1: { x: p0.x + f.x * (h / 2), y: p0.y + f.y * (h / 2) },
+            c2: { x: A.x - f.x * (h / 2), y: A.y - f.y * (h / 2) },
+            p3: A,
+            reverse: false,
+          },
+          ...pivotReverseLegs(A, p3, f, s, r, R - r),
+        ],
+        // NOSE-OUT. That is what backing in buys, and it is why `exitsForward`
+        // hands this car a forward exit afterwards.
+        pose.angleDeg + 180,
+        size,
+      );
+    }
+  }
   if (style === "reverse") {
     // BACKING IN: drive PAST the space, stop, then reverse into it.
     //
@@ -991,11 +1138,10 @@ export function forwardExitPath(
   const chord = Math.hypot(far.x - p0.x, far.y - p0.y) || 1;
   const h = chord / 3;
   const aheadDeg = approachDeg(from, ahead, size, laneOff);
-  // OUT of the stall along its own axis. A garage's pose points INTO the building
-  // (a stall pose is where a car RESTS, not the way it leaves), so the ramp is the
-  // one case that runs the other way down that axis.
-  const outDeg =
-    row.kind === "garage" || enteredReverse ? pose.angleDeg + 180 : pose.angleDeg;
+  // OUT of the stall along the heading the car is REALLY standing at — one
+  // answer, `parkedHeadingDeg`, shared with the entry curve. Asking the question
+  // twice is what put a 180° spin on every kerbside car that had backed in.
+  const outDeg = parkedHeadingDeg(row.kind, pose.angleDeg, enteredReverse);
   const outRad = (outDeg * Math.PI) / 180;
   const laneRad = (aheadDeg * Math.PI) / 180;
   const legs: ManoeuvreLeg[] = [

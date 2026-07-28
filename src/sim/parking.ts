@@ -434,12 +434,19 @@ export function createParkingRegistry(
     canNoseIn(ref) {
       const info = infoOf(ref);
       if (!info) return true;
-      // A KERBSIDE space is hemmed in by its neighbours along the kerb, and so is
-      // an ECHELON one: its along-kerb pitch is 29px for a car 20px wide, so a
-      // forward swing needs the mouth of the bay ahead. A 90° bay is the exception
-      // — it is entered straight across the AISLE, where the clearance that
-      // matters is the aisle's width (`bayNearPx`) and not who is parked beside it.
-      if (info.row.kind !== "parallel" && info.row.kind !== "angled") return true;
+      // A KERBSIDE space is the one that is genuinely hemmed in: 60px of pitch for
+      // a 40px car is 20px of slack against a 27px sideways shift, so with the bay
+      // ahead taken there is no forward swing that fits.
+      //
+      // A bay that turns ACROSS the kerb is entered from the AISLE, and the
+      // clearance that matters there is the aisle's width (`bayNearPx`), not who
+      // is parked beside it. That was already the rule for a 90° bay; the ECHELON
+      // rank used to be lumped in with the kerbside one and it should not have
+      // been — it is raked FORWARD precisely so a car can nose in past its
+      // neighbour's tail, and the alternative it was being sent to (backing in)
+      // leaves it facing back up a one-way aisle. Measured either way: nosing in
+      // −2.3/+0.3px of swept clearance, backing in −8.6/−15.0.
+      if (info.row.kind !== "parallel") return true;
       const ahead: StallRef = { ...ref, index: ref.index + 1 };
       if (ref.index + 1 >= info.row.count) return true; // the row ends: open kerb
       return !occupants.has(stallId(ahead));

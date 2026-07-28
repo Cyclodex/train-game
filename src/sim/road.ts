@@ -648,6 +648,10 @@ export interface RoadSim {
     parked: boolean;
     // The car park this trip is aimed at, for the HUD / debug overlay.
     parkTarget: string | null;
+    // WHICH WAY IT GOT IN. Not cosmetic: it decides the heading the car rests at
+    // and whether it drives out forwards. A test that cannot see it cannot tell
+    // "the driver preference is live" from "it never fired once".
+    parkedReverse: boolean;
   }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
@@ -2739,6 +2743,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         phase: c.phase,
         parked: c.phase === "parked",
         parkTarget: c.parkTarget,
+        // WHICH WAY IT GOT IN. Not cosmetic: it decides the heading the car rests
+        // at and whether it drives out forwards, and a test that cannot see it
+        // cannot tell "the driver preference is live" from "it never fired".
+        parkedReverse: c.parkedReverse,
       }));
     },
     sample() {

@@ -815,14 +815,43 @@ lean — prune as much as you add. This file only stays useful if every task ten
     anchors the curve up to a twentieth of a tile early, and on a kerbside bay that
     extra approach drifts the body across the neighbour (2.4px, gone once the
     trigger needs either the line or a standstill).
-  - BACKING INTO A 90 deg OR ECHELON BAY IS NOT SHIPPED, and the reason is measured.
-    With the curve laid between the two known tangents it comes out WORSE than
-    nosing in: 90 deg forward +3.3/+0.1px against reverse -3.3/-5.6; echelon
-    forward -2.3/+0.3 against reverse -8.6/-15.0. Widening the aisle barely moves
-    it (-5.6 -> -1.8 at 42px more), because a real reverse swings the FRONT through
-    the aisle about a pivot roughly abeam the space, and a Bezier between two known
-    tangents bulges across the bays either side instead. It needs a pivot ARC. The
-    `reverseParker` trait is drawn and stable; the preference is simply not live.
+  - BACKING INTO A 90 deg BAY IS A PIVOT, and shipped 2026-07-27 as one
+    (`pivotReverseLegs`). Pull forward exactly `r` PAST the bay, reverse through a
+    quarter circle of radius `r` about `C = A + r*side`, then reverse STRAIGHT the
+    remaining `R - r` in (`R` = the lane-to-bay lateral distance, `r` =
+    TURN_IN_CLEARANCE_FRAC = a car's length). The straight finish is load-bearing:
+    a pure quarter circle needs `R` of pull-past (48-62px here) and runs off the
+    end of a packed tile, while `r` is room `bayNearPx` already guarantees.
+    · NO NEW LEG TYPE. A cubic with handles 4/3*tan(45deg/2)*r approximates a
+      quarter arc to 2.7e-4 of the radius — a hundredth of a pixel. A
+      `{kind:"arc"}` union would have touched bezierAt/bezierTangent/buildArcTable/
+      locate to buy that.
+    · ECHELON IS NOSE-IN ONLY (`canReverseIn`), and NOT for want of a better curve:
+      the bay is raked FORWARD, so a car backed into one rests facing back up the
+      aisle it came down, and a far-bank rank is only legal on a ONE-WAY aisle.
+      The old "-8.6/-15.0px reverse vs -2.3/+0.3 forward" was that fact showing up
+      as a swept overlap. `canNoseIn` therefore hems in `parallel` ALONE now.
+    · Measured, 3000 ticks x 2 seeds, before -> after: parkinglot reverse-parkers
+      0 -> 19/10 with swept clearance unchanged at +0.02px; cycles 34/40 -> 32/39
+      (a reverse takes longer than a nose-in; that is the price). parkcity 23 -> 20
+      and +0.21 -> +0.11px. Nothing went negative.
+  - WHICH WAY A CAR FACES IN ITS BAY HAS EXACTLY ONE ANSWER (`parkedHeadingDeg`),
+    and it did not: the entry curve left a kerbside car pointing DOWN the road and
+    the exit curve set off assuming it pointed back UP it, so every reverse-parked
+    kerbside car SPUN 180 deg on the spot the tick its dwell ended and unwound
+    another 102 deg as the looping exit straightened. Measured on parkingkerb: 47
+    per-tick heading jumps over 25 deg, worst 180.0; now worst 26.3 (the pivot's
+    own sharpest moment). Backing in flips the heading only for a kind that turns
+    ACROSS the kerb — a parallel bay lies along the road, so it does not.
+    Pinned by "never spins on the spot", which also asserts something DID back in
+    (`cars()` exposes `parkedReverse` for exactly that: a spin test passes
+    trivially on a build where nothing ever reverses).
+  - PARKVARIANTS SEED 1 STILL SWEEPS -2.10px, on tile 1,1 — a car NOSING into an
+    echelon bay clipping its parked neighbour. Pre-existing and unchanged by the
+    pivot work (identical to the tenth of a pixel before and after); it is the
+    "-2.3px echelon forward" already recorded above. It is the only manoeuvre
+    overlap left on the parking maps, and parkvariants is NOT in the swept test's
+    guarded set for that reason.
 - A BAY IS ENTERED FROM ITS OWN LANE ONLY. `atStallEntry` refuses any other, and
   `desiredLane` branch (P) gets a car with a `parkTarget` over to the kerb-most
   lane as soon as it is on a tile of that facility — early, so the merge has room.
