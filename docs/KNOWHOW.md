@@ -874,6 +874,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
     10-13s; with it 3-4, worst 9.6-33.4s, average 2.9-5.8s. It trades throughput
     for fairness under saturation (125 → 87 cycles at 2.5x) and is neutral at 1x
     (606 → 610 cycles across twelve runs).
+  · ONE LEAVER AT A TIME PER CAR PARK, the same serialisation the entering
+    barrier runs on, and for a sharper reason: bays are 28px apart and a car is
+    38px long, so on a rank of 90° spaces EVERY place a yielding driver can stop
+    is inside SOME neighbour's slot. Let three ask at once and the driver who
+    stops for one blocks the other two, who are holding the queue that is holding
+    the first. Measured on parkinglot seed 4 at the slower reverse: 88s of total
+    standstill, three cars 22-38s past their dwell. Longest wait first, ties by id.
   · THE TWO GAPS MUST AGREE OR THE HELPER BECOMES THE OBSTACLE. Measured: with the
     claim gate counting a STOPPED car against `pullOutGap` (0.16) while the
     courtesy yield stopped one at CAR_GAP (0.06) behind the slot, the courteous
@@ -1027,8 +1034,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
   - A MANOEUVRE IS A SEQUENCE OF LEGS, each with its own direction
     (`ManoeuvreLeg.reverse`). `m` still runs 0->1 over the whole thing by arc
     length, so the phase machine never learns there is more than one. Reversing is
-    one flag: the rendered heading is the tangent turned round, and arc length,
-    speed and pace fall out unchanged.
+    one flag: the rendered heading is the tangent turned round, and arc length
+    falls out unchanged.
+  - SPEED IS PER LEG (`REVERSE_PACE` 0.55, 2026-07-27). One pace for the whole
+    path meant a car backed into a space at exactly the speed it drove past it.
+    "Is this leg reversed" is the leg's own flag XOR the direction `m` is being
+    driven — read it off the LEG, not the phase, or a car backing out of a 90° bay
+    (forward legs, replayed backwards) is the one case that stays fast.
+    · 0.55 IS A FLOOR, NOT A TASTE. Swept 6 seeds x 4 maps, completed cycles
+      lot/kerb/city/variants: pace 1.0 → 275/348/207/290, 0.55 → 257/357/213/299,
+      0.4 → 235/343/208/284, 0.3 → 206/349/209/281. Everything at or below 0.4
+      DEADLOCKS parkinglot (37s of all-stop at 0.4, 117s at 0.3): a slower
+      manoeuvre holds the single-lane aisle longer and the queue behind it reaches
+      back past the entrance. 0.55 is the slowest value that is clean on every
+      seed, and it costs nothing (1126 cycles against 1120).
+    · The per-tick change in `manoeuvre` IS the speed, and it is constant within a
+      leg — so a reverse manoeuvre shows exactly TWO speeds in the ratio
+      REVERSE_PACE and a forward one shows a single speed. That signature is what
+      the guard test asserts; `cars()` exposes `manoeuvre` for it.
   - THE TRIGGER MUST NOT FIRE WHILE STILL ROLLING. `PARK_ARRIVE_EPS` exists because
     `clearAhead` binds the clear distance to exactly the stop line and the brake
     ramp approaches it asymptotically — but spending the tolerance while moving

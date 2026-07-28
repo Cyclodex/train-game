@@ -31,6 +31,8 @@ import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
 import {
   manoeuvreLength,
+  reverseAt,
+  REVERSE_PACE,
   rowSide,
   canReverseIn,
   turnsInAcrossKerb,
@@ -740,10 +742,26 @@ export function createParkingPhases(deps: ParkingDeps) {
     // GENTLE the curve is (`pace`), because a long shallow swing into a lay-by is
     // not driven at the speed of a tight turn into a 90° bay.
     const pace = car.parkPath?.pace ?? 1;
-    const step = len > 1e-6 ? (PARKING.speed * pace * dt) / len : 1;
+    // ...and by WHICH WAY the car is pointing on this leg. One pace for the whole
+    // path meant a car reversed into a space at the speed it drove past it.
+    //
+    // A manoeuvre has a direction of its own — `entering` and a nose-first exit
+    // drive `m` UP, while a bay that is reversed out of replays its entry curve
+    // with `m` going DOWN — so "is the car going backwards" is the leg's own flag
+    // XOR the direction the path is being driven. Read it off the leg rather than
+    // the phase, or a car backing out of a 90° bay (forward legs, played
+    // backwards) would be the one case that stayed fast.
+    const legStep = (playedBackwards: boolean): number => {
+      if (len <= 1e-6) return 1;
+      const backing = car.parkPath
+        ? reverseAt(car.parkPath, car.manoeuvre) !== playedBackwards
+        : false;
+      const factor = backing ? REVERSE_PACE : 1;
+      return (PARKING.speed * pace * factor * dt) / len;
+    };
 
     if (car.phase === "entering") {
-      car.manoeuvre = Math.min(1, car.manoeuvre + step);
+      car.manoeuvre = Math.min(1, car.manoeuvre + legStep(false));
       if (car.manoeuvre >= 1) {
         car.phase = "parked";
         car.dwellLeft = drawDwell(car);
@@ -804,11 +822,11 @@ export function createParkingPhases(deps: ParkingDeps) {
     // Nose-first: drive the exit curve FORWARD. Otherwise replay the entry curve
     // backwards, which is a car reversing out of its space.
     if (car.parkExiting) {
-      car.manoeuvre = Math.min(1, car.manoeuvre + step);
+      car.manoeuvre = Math.min(1, car.manoeuvre + legStep(false));
       if (car.manoeuvre >= 1) resumeFromStall(car);
       return;
     }
-    car.manoeuvre = Math.max(0, car.manoeuvre - step);
+    car.manoeuvre = Math.max(0, car.manoeuvre - legStep(true));
     if (car.manoeuvre <= 0) resumeFromStall(car);
   }
   // LETTING SOMEBODY OUT. A car whose dwell ended keeps no road body, so nothing
@@ -825,13 +843,37 @@ export function createParkingPhases(deps: ParkingDeps) {
   // Computed once a tick (road.ts calls it before the movement loop), not per
   // follower: it is a scan of every vehicle, and `clearAhead` runs per car.
   function courtesyClaims(): CourtesyClaim[] {
-    const out: CourtesyClaim[] = [];
+    // ONE LEAVER AT A TIME PER CAR PARK, the same rule the entering barrier
+    // already runs on — and for a sharper reason. Bays are 28px apart and a car
+    // is 38px long, so on a rank of 90° spaces EVERY place a yielding driver can
+    // stop is inside SOME neighbour's slot. Let three cars ask at once and the
+    // driver who stops to help one of them blocks the other two, who are then
+    // holding the queue that is holding the first: measured on parkinglot seed 4
+    // at the slower reverse, 88 seconds of total standstill with three cars in
+    // their bays 22–38 seconds past their dwell. Serialised, the yielder stops
+    // clear of exactly one slot, that car goes, and the next one's turn comes.
+    //
+    // Longest wait first, ties by id — deterministic, and it is also the fair
+    // answer.
+    const best = new Map<string, { car: Car; slot: { from: Port; t: number } }>();
     for (const car of cars) {
       if (car.phase !== "parked" || car.parkOnLane || !car.stall) continue;
       if (-car.dwellLeft < PARKING.courtesySec) continue;
-      const slot = exitSlotOf(car);
+      const fid = parking.info(car.stall)?.facilityId ?? car.stall.tileId;
+      const held = best.get(fid);
+      if (
+        held &&
+        !(car.dwellLeft < held.car.dwellLeft ||
+          (car.dwellLeft === held.car.dwellLeft && car.id < held.car.id))
+      ) {
+        continue;
+      }
+      best.set(fid, { car, slot: exitSlotOf(car) });
+    }
+    const out: CourtesyClaim[] = [];
+    for (const { car, slot } of best.values()) {
       out.push({
-        tileId: car.stall.tileId,
+        tileId: car.stall!.tileId,
         entry: slot.from,
         // Stop short of the whole slot, not of its nose: the leaver needs its own
         // length of road, and a follower that noses up to the middle of it has

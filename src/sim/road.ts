@@ -2794,6 +2794,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         parkedReverse: c.parkedReverse,
         // NEGATIVE once the stay is over — see the declaration.
         dwellLeft: c.dwellLeft,
+        manoeuvre: c.manoeuvre,
       }));
     },
     sample() {

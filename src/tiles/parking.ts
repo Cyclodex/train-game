@@ -1223,6 +1223,23 @@ export function manoeuvreLength(path: ManoeuvrePath): number {
   return path.arc[path.arc.length - 1] ?? 0;
 }
 
+// Is the stretch of the manoeuvre at `m` driven BACKWARDS? Per leg, because a
+// manoeuvre changes direction halfway through and the two halves are not driven
+// at the same speed — see `REVERSE_PACE`.
+export function reverseAt(path: ManoeuvrePath, m: number): boolean {
+  return locate(path, m).leg.reverse;
+}
+
+// How much slower a car goes BACKWARDS than it crawls forwards into a space.
+// Reversing is the careful part of the manoeuvre and it did not read as one: the
+// whole path ran at a single `pace`, so a car reversed into a kerbside space at
+// exactly the speed it drove past it.
+//
+// Two fifths. The trade is real and it is with THROUGHPUT — a slower reverse
+// holds the lane longer — so it was measured rather than picked: see KNOWHOW
+// → PARKING for the sweep.
+export const REVERSE_PACE = 0.55;
+
 // Which leg, and how far along it, a fraction `m` of the TOTAL arc length lands
 // on. This is what makes `m` mean distance rather than curve parameter.
 function locate(path: ManoeuvrePath, m: number): { leg: ManoeuvreLeg; t: number } {
