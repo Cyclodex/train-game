@@ -1005,6 +1005,50 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
   }
 
+  it("a car leaving a bay waits for a real gap, and still gets out in seconds", () => {
+    // NO RIGHT OF WAY. A car whose dwell has ended waits IN ITS BAY — phase stays
+    // `parked`, so it has no road body and nobody brakes for it. It used to claim
+    // its lane slot the instant the dwell ended and let the traffic brake for a
+    // car that had not moved, which is priority, and a car pulling out of a space
+    // does not have it.
+    //
+    // The number that says whether the rule is livable is the wait between
+    // dwell-end and rolling — `dwellLeft` keeps counting down past zero, so
+    // `-dwellLeft` IS that wait. Seconds, not tens of seconds.
+    let sampled = 0;
+    for (const id of ["parkingkerb", "parkinglot", "parkcity"]) {
+      for (const seed of [1, 3, 5]) {
+        const sim = simFor(id, seed);
+        let worst = 0;
+        const waited = new Map<string, number>();
+        for (let i = 0; i < 4000; i++) {
+          sim.step(0.05, () => false);
+          for (const c of sim.cars()) {
+            if (c.parked) {
+              if (c.dwellLeft < 0) waited.set(c.id, -c.dwellLeft);
+            } else if (c.phase === "leaving" && waited.has(c.id)) {
+              worst = Math.max(worst, waited.get(c.id)!);
+              waited.delete(c.id);
+              sampled++;
+            }
+          }
+        }
+        const where = `${id} seed ${seed}`;
+        // Measured across these nine runs: worst 1.4–9.6s, average 0.7–2.4s.
+        expect(worst, `${where}: worst wait from dwell-end to rolling`).toBeLessThan(20);
+        // AND NOBODY IS STILL SITTING THERE at the end of a 200-second run. This
+        // is the half the courtesy yield buys: with the gap rule alone and the
+        // traffic at 2.5x, parkinglot left 4–9 cars waiting, the worst of them
+        // 45.8s. With drivers letting them out: 3–4, worst 9.6–33.4s.
+        const stranded = sim.cars().filter(c => c.parked && c.dwellLeft < -30);
+        expect(stranded.length, `${where}: cars stranded in their bays`).toBe(0);
+      }
+    }
+    // The rule has to have FIRED. A wait test passes trivially on a build where
+    // every car happens to leave on the tick its dwell ends.
+    expect(sampled, "no car ever waited for a gap").toBeGreaterThan(50);
+  }, 240_000);
+
   it("never spins on the spot, and really does back into a 90° bay", () => {
     // A CAR TURNS BY DRIVING. Every heading on the board comes from a curve
     // tangent, so a big per-tick step means two curves were joined at poses that

@@ -860,12 +860,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   of all — fires constantly under `fillFast`, and a token for a car that never
   existed can never be released. Car parks then DRAIN to empty and stay there.
   Pinned by `parking.spec.ts` "no leaked aim tokens", measured via `parkingStatus()`.
-- LEAVING A BAY is a two-step claim, and every shortcut here was measured worse:
-  · The dwell ends → the car goes to `leaving` and CLAIMS its lane slot at full
-    length, but does not move. Traffic brakes for it, so the gap it needs forms
-    BECAUSE it is waiting. Claiming only once it starts rolling is a no-win dial
-    (0.5-tile gap ⇒ 12 parked / 2 ever out on `parkinglot`; 0.16 ⇒ real clips;
-    raising it again just fires the patience valve and barges into traffic, 0.175).
+- LEAVING A BAY BUYS NO RIGHT OF WAY (2026-07-27). The dwell ends and the car
+  WAITS IN ITS BAY: phase stays `parked`, so it has no road body and nobody brakes
+  for it. It claims the slot and rolls in the same moment, once the slot is
+  genuinely clear. `dwellLeft` keeps counting DOWN past zero, so `-dwellLeft` is
+  the wait — no second timer, and `cars()` exposes it because that number is the
+  whole acceptance test.
+  · THE COURTESY YIELD IS THE OTHER HALF (`courtesyClaims` → `clearAhead`). After
+    `courtesySec` (4s) the drivers behind stop short of the leaver's slot. At the
+    shipped density it costs nothing and shortens the worst wait (parkingkerb s1
+    7.0 → 5.3s); at 2.5x traffic it is what keeps a leaver from starving —
+    parkinglot without it 4-9 cars still waiting at 200s, worst 45.8s, average
+    10-13s; with it 3-4, worst 9.6-33.4s, average 2.9-5.8s. It trades throughput
+    for fairness under saturation (125 → 87 cycles at 2.5x) and is neutral at 1x
+    (606 → 610 cycles across twelve runs).
+  · THE TWO GAPS MUST AGREE OR THE HELPER BECOMES THE OBSTACLE. Measured: with the
+    claim gate counting a STOPPED car against `pullOutGap` (0.16) while the
+    courtesy yield stopped one at CAR_GAP (0.06) behind the slot, the courteous
+    driver parked itself inside the window the leaver tests — 115s of total
+    standstill on parkinglot seed 5, three cars never out. The margin is BRAKING
+    room, so it applies to moving traffic only; a stopped car is measured against
+    the slot itself. And a driver ALREADY level with the slot carries on rather
+    than braking to 0 inside it — the one behind yields instead.
+  · An over-saturated single-lane aisle still deadlocks at 2.5x traffic, and did
+    BEFORE this rule too (parkinglot baseline: 122.6s all-stop on seed 3). Do not
+    read a heavy-density gridlock there as this rule's doing.
+  · The history, kept because the numbers are still the map of the space: the
+    ORIGINAL design claimed the slot at full length the moment the dwell ended and
+    let traffic brake for it, and every shortcut off it measured worse at the time
+    — claiming only once rolling was a no-win dial (0.5-tile gap ⇒ 12 parked / 2
+    ever out on `parkinglot`; 0.16 ⇒ real clips; 0.175 ⇒ the patience valve barges
+    into traffic). What dissolves that trade-off is not the gap size but the
+    courtesy yield: with it, 0.16 drains fine and nobody is braking for a car that
+    has not moved.
   · It may only claim a slot the traffic behind can BRAKE for: `slotFree` adds
     `v²/2b` per moving car, not just CAR_GAP.
   · It may not claim one an ADJACENT bay is about to use. Two 90° bays are 28px
