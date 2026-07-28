@@ -29,7 +29,13 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
-import { manoeuvreLength, rowSide, type EntryStyle } from "@/tiles/parking";
+import {
+  manoeuvreLength,
+  rowSide,
+  canReverseIn,
+  turnsInAcrossKerb,
+  type EntryStyle,
+} from "@/tiles/parking";
 import type { Car, RoadEntry, VehicleKind } from "./road";
 
 // A body point as `road.ts` samples it — only the fields the gates below read.
@@ -413,19 +419,19 @@ export function createParkingPhases(deps: ParkingDeps) {
     //    that matters is the aisle's width and not who is parked either side. Both
     //    work, so the DRIVER decides — and one who backs in drives out forwards.
     //
-    // THE DRIVER PREFERENCE IS NOT LIVE FOR THE TURNING KINDS, and the reason is
-    // measured, not a decision: backing into a 90° or echelon bay with the curve
-    // built here comes out WORSE than nosing in. Swept clearance against the
-    // parked neighbours, 1+1 street, kerb 28:
-    //     90°      forward +3.3 / +0.1 px      reverse −3.3 / −5.6 px
-    //     echelon  forward −2.3 / +0.3 px      reverse −8.6 / −15.0 px
-    // and widening the aisle barely moves it (−5.6 → −1.8 at 42px more). A real
-    // reverse into a bay swings the FRONT through the aisle about a pivot roughly
-    // abeam the space; a Bézier laid between the two known tangents bulges across
-    // the bays either side instead. It needs a pivot ARC, which is its own piece
-    // of work — until then a car that would rather back in noses in like everyone
-    // else, because shipping the preference would make the picture worse.
-    const style: EntryStyle = parking.canNoseIn(car.stall!) ? "forward" : "reverse";
+    // THE DRIVER PREFERENCE IS NOW LIVE, for the 90° bay and for it alone. Backing
+    // into one used to measure worse than nosing in (−3.3/−5.6px against
+    // +3.3/+0.1) and the shape was why: a Bézier between two known tangents bulges
+    // across the bays either side. With the pivot arc (`pivotReverseLegs`) the
+    // real motion is expressed — pull one length past, swing square, reverse
+    // straight in — and `canReverseIn` keeps the echelon rank out, because a
+    // forward-raked bay backed into leaves the car facing the wrong way up a
+    // one-way aisle however good the curve is.
+    const kind = parking.info(car.stall!)?.row.kind;
+    const wants = car.reverseParker && !!kind && turnsInAcrossKerb(kind);
+    const canReverse = !!kind && canReverseIn(kind);
+    const style: EntryStyle =
+      canReverse && (wants || !parking.canNoseIn(car.stall!)) ? "reverse" : "forward";
     car.parkedReverse = style === "reverse";
     // Anchor the curve at where the car ACTUALLY is, so the sprite never jumps
     // as the swing starts — and mind WHICH POINT OF THE CAR that is. The sim
