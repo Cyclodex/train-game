@@ -95,6 +95,7 @@ import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
 import { busstops } from "@/levels/test/scenarios/busstops";
 import { buslayby } from "@/levels/test/scenarios/buslayby";
 import { parkvariants } from "@/levels/test/scenarios/parkvariants";
+import { parkechelon } from "@/levels/test/scenarios/parkechelon";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
@@ -191,7 +192,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkinglorry, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, busstops, buslayby],
       },
     ],
   },

@@ -31,6 +31,11 @@ import {
   type ParkingRow,
 } from "@/tiles/parking";
 import {
+  apronSpan,
+  parkingApronPath,
+  parkingKerbPath,
+} from "@/tiles/parkingGeometry";
+import {
   createParkingRegistry,
   stallFits,
   vehicleCanPark,
@@ -302,6 +307,66 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
     expect(apronNearPx(lot, 200, 14)).toBeCloseTo(14); // paved from the kerb out
     expect(bayNearPx(kerbside, 200, 28)).toBeCloseTo(56);
     expect(apronNearPx(kerbside, 200, 28)).toBeCloseTo(56); // the verge stays green
+  });
+
+  it("runs one unbroken strip of tarmac across a tile seam", () => {
+    // THE ECHELON APRON USED TO FOLLOW THE RAKE, so its road-side edge ran
+    // −21..153 on a 200px tile while its far edge ran 21..195: consecutive tiles
+    // stepped past each other and left a wedge of grass hard against the
+    // carriageway in the middle of one car park. Squared off, and a packed row
+    // reaches the seam, so two tiles' aprons meet or overlap.
+    //
+    // Measured on the PATH, not on the span function alone — the point is what
+    // gets painted.
+    const edges = (d: string) => {
+      const n = d.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
+      return pts;
+    };
+    // The counts a tile actually holds — six echelon bays, seven 90° ones, three
+    // kerbside. A rank that does NOT fill its tile is a different case, below.
+    const FULL = { angled: 6, perpendicular: 7, parallel: 3 } as const;
+    for (const kind of ["angled", "perpendicular", "parallel"] as const) {
+      const row: ParkingRow = { from: Position.Left, kind, count: FULL[kind] };
+      const pts = edges(parkingApronPath(row, 200, 14));
+      // The row runs left→right, so the apron's two long edges are its two
+      // distinct `y`s; each must cover the same stretch of `x`. A parallelogram
+      // does not, which is the whole defect.
+      const ys = [...new Set(pts.map(p => Math.round(p.y)))];
+      expect(ys.length, `${kind}: apron is not a four-sided strip`).toBe(2);
+      for (const y of ys) {
+        const xs = pts.filter(p => Math.round(p.y) === y).map(p => p.x);
+        expect(Math.min(...xs), `${kind}: near/far edges start apart`).toBeCloseTo(
+          Math.min(...pts.map(p => p.x)),
+          5,
+        );
+        expect(Math.max(...xs), `${kind}: near/far edges end apart`).toBeCloseTo(
+          Math.max(...pts.map(p => p.x)),
+          5,
+        );
+      }
+      // And it reaches BOTH seams, so the next tile's strip continues it. Without
+      // this the echelon rank leaves 5px of grass at every seam and the 90° one 4.
+      const span = apronSpan(row, 200);
+      expect(span.from, `${kind}: apron stops short of the leading seam`).toBeLessThanOrEqual(0);
+      expect(span.to, `${kind}: apron stops short of the trailing seam`).toBeGreaterThanOrEqual(200);
+      // The outer kerb line has to end where the tarmac does, or it floats.
+      const kerb = edges(parkingKerbPath(row, 200, 14));
+      expect(Math.min(...kerb.map(p => p.x))).toBeCloseTo(span.from, 5);
+      expect(Math.max(...kerb.map(p => p.x))).toBeCloseTo(span.to, 5);
+    }
+    // A row that does NOT pack is a pocket and keeps its own extent: paving a
+    // whole tile for one centred bay would read as a mistake, not as a car park.
+    const lone: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, align: "centre" };
+    expect(apronSpan(lone, 200)).toEqual({ from: 70, to: 130 });
+    // Nor is a packed rank that simply does not REACH the far seam stretched to
+    // it: six 90° bays are 168px of a 200px tile, and 32px of bare tarmac past
+    // the last one would read as a rank someone gave up on. "Within half a pitch"
+    // is what separates "part of a run" from "short".
+    const short: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 6 };
+    expect(apronSpan(short, 200).from).toBeCloseTo(0);
+    expect(apronSpan(short, 200).to).toBeCloseTo(168);
   });
 });
 

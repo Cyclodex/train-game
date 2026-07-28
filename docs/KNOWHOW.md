@@ -1122,6 +1122,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
   FORWARD); rotating a rect overlaps its neighbour by 18px and lands on the tarmac.
 - `align` defaults to "pack" (row starts at the leading edge). "centre" on every
   tile of a long row leaves a car-sized hole of kerb at EVERY tile seam.
+- THE APRON IS A RECTANGLE, and `apronSpan` is the ONE answer for how far along
+  the road it runs (the apron, its outer kerb line and the tests all read it).
+  Two rules, both learned from the echelon rank — the only kind whose bays are
+  RAKED (2026-07-27):
+  · IT USED TO FOLLOW THE RAKE. Road-side edge from `a0 − skew/2`, far edge from
+    `a0 + skew/2`, so six 45° bays on a 200px tile put the near edge at −21..153
+    and the far edge at 21..195: the last 47px of that tile's road edge had NO
+    apron, and on a run the aprons stepped past each other leaving a wedge of
+    grass hard against the carriageway in the middle of one car park. Squaring it
+    costs two triangles of tarmac at the ends of a rank, which is what the end of
+    a real echelon rank looks like anyway.
+  · A PACKED ROW REACHES THE SEAM. `align: "pack"` MEANS "part of a run", so where
+    the bays come within half a pitch of a tile edge the tarmac goes all the way
+    to it — otherwise every seam keeps a hairline of grass (5px echelon, 4px 90°)
+    down the middle of one car park. A row that does not pack (centred bay,
+    tapered lay-by) is a POCKET and keeps its own extent, and so does a packed
+    rank that simply does not reach (six 90° bays = 168px of a 200px tile stays
+    at 168): 32px of bare tarmac past the last bay reads as a rank someone gave
+    up on.
+  · A SINGLE-TILE RANK CANNOT SHOW THIS. Every echelon rank in the gallery sat on
+    one tile, where a rake just reads as a rake — hence `/test/parkechelon`, two
+    tiles of 45° bays on both banks, which exists precisely to have a SEAM.
+  · The 10px band of apron with no bay on it (`apronNearPx` 28 vs `bayNearPx` 38)
+    is BY DESIGN — the turn-in clearance is aisle, so it is paved. On a one-way
+    aisle (kerb 14) it is 24px for the same reason.
 - EDITOR TOOL (2026-07-26): the target is a KERB, not a tile edge and not a lane.
   An edge wedge names a DIRECTION and covers the carriageway; on a two-way street
   the two kerbs are reached from different approaches. So the hit strip is keyed
