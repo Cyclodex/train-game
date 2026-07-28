@@ -37,7 +37,12 @@ function binaryPaths(dir) {
 // Any Chromium in the registry root, whatever revision. Prefers the full browser
 // over the headless shell: the shell cannot do everything a screenshot run asks
 // of it, and both are usually present side by side.
-function findAnyChromium() {
+//
+// Exported because `playwright.config.ts` needs the same answer: the e2e runner
+// launches browsers itself and never calls `launchChromium`, so without it
+// `npm run test:e2e` fails 29 tests on "Executable doesn't exist" in exactly the
+// container where `shot` and `probe` work fine.
+export function findAnyChromium() {
   const explicit = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.CHROME_PATH;
   if (explicit && existsSync(explicit)) return explicit;
   const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
@@ -57,6 +62,17 @@ function findAnyChromium() {
     }
   }
   return null;
+}
+
+// Is the build playwright-core pins actually installed? Cheap enough to ask
+// before launching, which is what the e2e config needs — it cannot catch a
+// failure and retry the way `launchChromium` does.
+export function pinnedChromiumMissing() {
+  try {
+    return !existsSync(chromium.executablePath());
+  } catch {
+    return true;
+  }
 }
 
 export async function launchChromium(options = {}) {

@@ -1626,6 +1626,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   parking extraction measured 24,748 differing px against its baseline and 24,650
   against a second run of ITSELF, with 4 of 5 maps byte-identical. Quote the
   control number or the claim is unfalsifiable.
+- `npm run test:e2e` NEEDS THE SAME FALLBACK SEPARATELY. The runner launches
+  Chromium itself and never goes through `launchChromium`, so all 29 specs failed
+  on "Executable doesn't exist" in the very container where `shot` and `probe`
+  were working. `playwright.config.ts` now sets `launchOptions.executablePath`,
+  but ONLY when the pinned build is genuinely absent (`pinnedChromiumMissing`) —
+  a machine that ran `npm run browsers` is untouched.
 - BROWSERS, IN A CLOUD SESSION: the box already HAS a Chromium
   (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`) and it is not the revision
   playwright-core pins, and the CDN the installer downloads from is off the
