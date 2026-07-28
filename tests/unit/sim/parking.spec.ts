@@ -26,6 +26,8 @@ import {
   garageExitFrom,
   canReverseIn,
   parkedHeadingDeg,
+  reverseAt,
+  REVERSE_PACE,
   type ParkingRow,
 } from "@/tiles/parking";
 import {
@@ -403,6 +405,12 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     let deepest = -Infinity;
     for (let i = 0; i <= 40; i++) deepest = Math.max(deepest, manoeuvreAt(path, i / 40).y);
     expect(deepest).toBeLessThanOrEqual(pose.y + 0.5);
+    // The first leg is driven FORWARDS and the rest backwards — which is what the
+    // per-leg speed reads (`REVERSE_PACE`), so it is worth pinning here rather
+    // than inferring it from the shape.
+    expect(reverseAt(path, 0.05)).toBe(false);
+    expect(reverseAt(path, 0.95)).toBe(true);
+    expect(reverseAt(manoeuvrePath(row, 2, 200, 28, 14), 0.5)).toBe(false);
     // And it finishes square in the bay, facing out.
     const end = manoeuvreAt(path, 1);
     expect(end.x).toBeCloseTo(pose.x, 1);
@@ -1004,6 +1012,58 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // rolling (−2.4px → 0).
     expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
   }
+
+  it("reverses at a careful crawl, not at the speed it drove in", () => {
+    // ONE PACE FOR THE WHOLE PATH meant a car backed into a space exactly as fast
+    // as it drove past it, which is the thing that was reported. A manoeuvre has
+    // legs and each has its own direction, so the speed is per leg now.
+    //
+    // Measured on `manoeuvre` itself — its per-tick change IS the speed, in arc
+    // length, and it is constant within a leg. So a reverse manoeuvre shows
+    // exactly TWO speeds and a forward one shows a single speed: the cleanest
+    // possible signature of the rule, and one no amount of geometry can fake.
+    for (const map of ["parkingkerb", "parkinglot"]) {
+      const sim = simFor(map, 1);
+      const dm = new Map<string, number[]>();
+      const rev = new Map<string, boolean>();
+      let prev = new Map<string, number>();
+      const done: { rev: boolean; ratio: number }[] = [];
+      for (let i = 0; i < 3000; i++) {
+        sim.step(0.05, () => false);
+        const now = new Map<string, number>();
+        for (const c of sim.cars()) {
+          if (c.phase === "entering") {
+            now.set(c.id, c.manoeuvre);
+            rev.set(c.id, c.parkedReverse);
+            const p = prev.get(c.id);
+            if (p !== undefined) dm.set(c.id, [...(dm.get(c.id) ?? []), c.manoeuvre - p]);
+          } else if (dm.has(c.id)) {
+            const s = dm.get(c.id)!.filter(v => v > 1e-9).sort((a, b) => a - b);
+            dm.delete(c.id);
+            // Percentiles, not min/max: a tick that straddles the join between two
+            // legs is a blend of both speeds and belongs to neither.
+            if (s.length > 8) {
+              done.push({
+                rev: rev.get(c.id)!,
+                ratio: s[Math.floor(0.15 * s.length)]! / s[Math.floor(0.85 * s.length)]!,
+              });
+            }
+          }
+        }
+        prev = now;
+      }
+      const backed = done.filter(x => x.rev);
+      const nosed = done.filter(x => !x.rev);
+      expect(backed.length, `${map}: no car backed into a bay`).toBeGreaterThan(3);
+      expect(nosed.length, `${map}: no car nosed into a bay`).toBeGreaterThan(3);
+      for (const c of backed) {
+        expect(c.ratio, `${map}: a reverse manoeuvre ran at one speed`).toBeCloseTo(REVERSE_PACE, 2);
+      }
+      for (const c of nosed) {
+        expect(c.ratio, `${map}: a forward manoeuvre changed speed`).toBeCloseTo(1, 2);
+      }
+    }
+  }, 120_000);
 
   it("a car leaving a bay waits for a real gap, and still gets out in seconds", () => {
     // NO RIGHT OF WAY. A car whose dwell has ended waits IN ITS BAY — phase stays
