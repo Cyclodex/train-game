@@ -43,7 +43,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { mkdirSync } from "node:fs";
-import { chromium } from "@playwright/test";
+import { launchChromium } from "./browser.mjs";
 
 function parseArgs(argv) {
   const ids = [];
@@ -154,7 +154,9 @@ async function main() {
   const server = spawn(
     onWin ? "npm.cmd" : "npm",
     ["run", "dev", "--", "--port", String(opt.port), "--strictPort"],
-    { stdio: "ignore", shell: onWin },
+    // `detached` puts the npm launcher and the vite it spawns in their OWN
+    // process group, so `shutdown` can take both. See there.
+    { stdio: "ignore", shell: onWin, detached: !onWin },
   );
   const shutdown = () => {
     try {
@@ -168,7 +170,11 @@ async function main() {
           stdio: "ignore",
         });
       } else {
-        server.kill("SIGTERM");
+        // THE SAME LEAK, ON POSIX. `npm run dev` is a launcher that spawns vite
+        // as a child; SIGTERM to the launcher alone left vite holding the port,
+        // so the very next run tripped the pre-flight check above and refused to
+        // shoot anything. The negative pid signals the whole group.
+        process.kill(-server.pid, "SIGTERM");
       }
     } catch {
       /* ignore */
@@ -183,7 +189,7 @@ async function main() {
   let browser;
   try {
     await waitForServer(base, 60000, new Promise(res => server.once("exit", res)));
-    browser = await chromium.launch();
+    browser = await launchChromium();
     const page = await browser.newPage({
       viewport: { width: 1500, height: 1200 },
       deviceScaleFactor: opt.scale,

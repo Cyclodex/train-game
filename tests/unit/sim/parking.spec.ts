@@ -988,7 +988,13 @@ describe("parking in the simulation — a cycle, not a sink", () => {
         expect(cycles, `${where} completed park-and-leave cycles`).toBeGreaterThan(20);
       }
     }
-  }, 60_000);
+    // NINE two-hundred-second runs of a full road sim. It fits inside 60s on a
+    // dev laptop and does not on a shared CI/cloud container, where it timed out
+    // at 60s while the suite around it stayed green — a red that says nothing
+    // about the code. The budget is generous on purpose: the thing this test
+    // guards is a map that DIES, and that shows up as an assertion, never as a
+    // clock.
+  }, 240_000);
 
   it("cars drive to a car park, park, dwell, and leave again", () => {
     const sim = simFor("parkinglot");
