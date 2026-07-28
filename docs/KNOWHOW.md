@@ -813,6 +813,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
 ## PARKING (cars stop, 2026-07-26)
+- THE PAINT LIVES IN `TileParking.vue`, not `Tile.vue` (moved 2026-07-27). It needs
+  THREE z-layers and cannot be dropped in at one point, so it is one component
+  with a `layer` prop the caller places three times: `apron` (under the road's own
+  kerb line + markings, so bays read as a widening of the street rather than a
+  slab beside it), `paint` (bay lines, outer kerb, garage mouths, bus markings)
+  and `sign` (the "P 3/12" chip, an HTML overlay OUTSIDE the road SVG). Geometry
+  is recomputed per instance — path strings, on parking tiles only, gated by
+  `Tile.vue`'s `hasParking`. `kerbFor` moved with it and still mirrors
+  `tiles/parking.ts kerbOffsetAt` through the injected Game: keep them in lockstep
+  or the painted bay and the driven curve disagree about where the kerb is.
 - `TileCell.parking?: ParkingCell` = the FOURTH axis (`tiles/parking.ts`). rail
   `connections` / road `lanes` / `terrain` say what crosses or IS a cell; parking
   says where a vehicle may STOP on it. Cell-level like `roadPriority` — rides every
@@ -1697,6 +1707,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
   A hidden pane still answers static queries (see the rAF/hidden-tab note below).
   For behaviour across a reset, drive Playwright directly (`node_modules/
   playwright/index.mjs`) rather than the hidden preview pane.
+- A SHOT IS NOT REPRODUCIBLE PIXEL-FOR-PIXEL WHILE TRAFFIC MOVES, so "identical
+  before/after" needs saying carefully. Two runs of the SAME tree on
+  `parkvariants` differ by ~24.7k pixels — the rAF loop steps on wall-clock time,
+  so every car is a few px along. Diffing paint (a refactor, a marking, an apron)
+  means `--density 0` AND a same-code control diff to establish the floor: the
+  parking extraction measured 24,748 differing px against its baseline and 24,650
+  against a second run of ITSELF, with 4 of 5 maps byte-identical. Quote the
+  control number or the claim is unfalsifiable.
+- BROWSERS, IN A CLOUD SESSION: the box already HAS a Chromium
+  (`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`) and it is not the revision
+  playwright-core pins, and the CDN the installer downloads from is off the
+  network policy — so `chromium.launch()` said "Executable doesn't exist" and
+  advised a download that cannot happen. `scripts/browser.mjs` (`launchChromium`,
+  used by `shot` + `probe`) tries the pinned build, then falls back to any
+  chromium in the registry root, and PRINTS which — a shot taken with another
+  build is worth knowing when comparing pixels. `install-browsers.mjs` had also
+  mapped win64 archives only and threw on Linux; every platform is mapped now.
+- `npm run shot`/`npm run probe` ORPHANED THEIR DEV SERVER ON POSIX TOO, for the
+  same reason as the Windows case below: `npm run dev` LAUNCHES vite, and
+  SIGTERM to the launcher left vite holding the port, so the very next run hit
+  the pre-flight refusal. Both now spawn `detached` and signal the process GROUP
+  (`process.kill(-pid)`) — the POSIX `taskkill /T`.
 - BROWSERS: run `npm run browsers` (NOT `npx playwright install`). `.npmrc` sets
   `ignore-scripts` so nothing is auto-downloaded, and on this machine
   `playwright install` HANGS: it fetches the 149MB zip in ~4s, logs "extracting
