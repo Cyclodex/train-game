@@ -20,7 +20,7 @@ import {
   vehicleCanPark,
   type ParkingRegistry,
 } from "./parking";
-import { createParkingPhases } from "./roadParking";
+import { createParkingPhases, type CourtesyClaim } from "./roadParking";
 import { manoeuvreAt, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
@@ -486,6 +486,17 @@ const PARKING = {
   // dissolves the trade-off: the queue forms behind the indicator, the gap appears
   // because of it, and no valve is needed.
   pullOutGap: 0.16,
+  // Seconds a car sits in its bay, dwell over, before the drivers behind start
+  // leaving it room. Four is a real driver's "oh, they want out" — long enough
+  // that a car with a genuine gap is simply gone before it matters, short enough
+  // that nobody watches a leaver starve.
+  //
+  // THE OTHER HALF OF "no right of way". A leaver keeps no road body while it
+  // waits, so without this nothing in the traffic model can see it at all and on
+  // a busy street the gap never comes: the gap-only rule was measured a no-win
+  // dial (12 parked, 2 ever out on parkinglot). Waiting and yielding ship
+  // together or not at all.
+  courtesySec: 4,
 };
 
 // How close to its peel-off point a car counts as having arrived at its bay.
@@ -652,6 +663,12 @@ export interface RoadSim {
     // and whether it drives out forwards. A test that cannot see it cannot tell
     // "the driver preference is live" from "it never fired once".
     parkedReverse: boolean;
+    // Seconds left of the stay, and it goes NEGATIVE: a car whose dwell is over
+    // keeps counting down while it waits in its bay for a gap, so `-dwellLeft` is
+    // how long it has been waiting to get out. That is the number the "a leaver
+    // has no right of way" rule has to be judged on — the wait must be seconds,
+    // not tens of seconds — and it is unobservable without this.
+    dwellLeft: number;
   }[];
   // Each live car sampled as its rendered body units (one per segment) for the
   // renderer: a car/truck has one, a semi has a cab + a trailer.
@@ -1791,6 +1808,25 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (lead >= 0 && closed(tileId)) crossingClear = Math.min(crossingClear, lead);
     }
     bind(crossingClear, 0);
+    // LETTING SOMEBODY OUT OF A BAY. A car whose dwell ended has no road body —
+    // it is still `parked`, and that is the point: it has claimed nothing and
+    // nobody brakes for it. But a leaver on a busy street would then never get a
+    // gap at all, so once it has waited `courtesySec` the drivers coming up
+    // behind stop short of the slot it needs. Bound to the REAR of that slot: a
+    // follower that noses up to the middle of it has yielded nothing.
+    for (const claim of courtesy) {
+      const proj = projectPoint(route, { tileId: claim.tileId, entry: claim.entry, t: claim.rearT });
+      // Same stream only (`projectPoint` flags oncoming), and only a slot still
+      // ahead of us — one we are already level with is not ours to leave open.
+      if (!proj || proj.opposing || proj.perpendicular || proj.d < 0) continue;
+      // ONLY IF IT CAN STOP SHORT. A driver already level with the slot does not
+      // stamp on the brakes to leave a gap it is standing in — it carries on, and
+      // the one behind it yields instead. Binding at 0 there would park the
+      // yielder INSIDE the space it is trying to leave open, which is the same
+      // car-blocks-the-car-it-is-helping deadlock the margin rule above avoids.
+      const stop = proj.d - CAR_GAP;
+      if (stop >= 0) bind(stop, 0);
+    }
     // A claimed parking bay is a stop line: never roll past the point where the
     // car must peel off, or it would sail by its own space and have to go round.
     // Binding here (rather than letting `advance` catch it after the fact) is also
@@ -2120,6 +2156,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       stoppedYielding: STOPPED_YIELDING,
     },
   });
+  // The leavers the traffic is currently letting out. Refreshed ONCE a tick, at
+  // the top of `step`, because it is a scan of every vehicle and `clearAhead`
+  // runs per car — recomputing it there would be O(n²) for a list that is empty
+  // on every map without a car park.
+  let courtesy: CourtesyClaim[] = [];
   const {
     planParkingTrip,
     giveUpAndReplan,
@@ -2683,6 +2724,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       for (const [id, ctrl] of signals) {
         ctrl.step(dt, approaches.get(id) ?? EMPTY_ARMS);
       }
+      // Who is waiting to get out of a bay, for this tick's following decisions.
+      // Before the cars move, so a leaver that becomes eligible is yielded to on
+      // the same tick rather than one late.
+      courtesy = phases.courtesyClaims();
       if (fillFast) {
         // Fill toward the cap as fast as the road physically clears: each tick,
         // keep attempting spawns until the cap is hit or a run of attempts all
@@ -2747,6 +2792,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // at and whether it drives out forwards, and a test that cannot see it
         // cannot tell "the driver preference is live" from "it never fired".
         parkedReverse: c.parkedReverse,
+        // NEGATIVE once the stay is over — see the declaration.
+        dwellLeft: c.dwellLeft,
       }));
     },
     sample() {

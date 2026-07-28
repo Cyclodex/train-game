@@ -90,6 +90,18 @@ export interface ParkingTuning {
   pullOutGap: number;
   arriveEps: number;
   stoppedYielding: number;
+  // Seconds a car waits in its bay before the traffic behind starts leaving it
+  // room to get out. See `courtesyClaims`.
+  courtesySec: number;
+}
+
+// A car that has been waiting in its bay long enough for other drivers to let it
+// out, and the stretch of lane they must not close up into.
+export interface CourtesyClaim {
+  tileId: string;
+  entry: Port;
+  // The REAR of the slot the leaver will occupy, in tile progress along `entry`.
+  rearT: number;
 }
 
 // The lane-access class of a vehicle. Pure, so it lives here rather than being
@@ -575,13 +587,36 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.lanePivot = null;
   }
 
+  // Where this car will REJOIN the road: the approach and the nose position of
+  // the slot it needs. The far end of its exit curve if it drives out forwards,
+  // its own frozen peel-off point if it reverses out.
+  //
+  // ONE function, because three separate places were computing it — the claim
+  // gate, the re-seat, and (once cars started yielding to a waiting leaver)
+  // road.ts. A fourth answer would put a courtesy gap somewhere the car does not
+  // actually emerge.
+  function exitSlotOf(car: Car): { from: Port; t: number } {
+    const gExit = car.stall
+      ? parking.exitFor(car.stall, 0, halfBody(car), car.parkedReverse)
+      : null;
+    if (gExit) return { from: gExit.from as Port, t: gExit.endT + halfBody(car) };
+    const head = car.path[car.headIndex];
+    return { from: head.entryPort, t: car.headProgress };
+  }
+
   // Is the lane behind the car's slot clear enough to pull out into? Checked
   // against real bodies on the same tile travelling the same way, so a car waits
   // for a gap in the traffic instead of materialising into it.
-  function pullOutClear(car: Car): boolean {
+  //
+  // `at` names the slot. Defaults to where the car is SEATED, which is right once
+  // it has committed and been re-seated on its exit; the claim gate asks about
+  // the slot it has not moved to yet.
+  function pullOutClear(car: Car, at?: { from: Port; t: number }): boolean {
     if (!car.stall) return true;
     const head = car.path[car.headIndex];
     const tileId = getCoordinatesId(head.coord);
+    const slotPort = at ? at.from : head.entryPort;
+    const slotT = at ? at.t : car.headProgress;
     for (const other of cars) {
       // Another car waiting to leave its own bay must not veto this one — two
       // neighbours would hold each other in place for ever, each waiting for a road
@@ -606,13 +641,21 @@ export function createParkingPhases(deps: ParkingDeps) {
       // about to reverse into still blocks. Which is the collision reported on the
       // 90° bays: the wide margin let this gate wave a stopped car through, and
       // the car backed straight into it.
+      //
+      // The margin is BRAKING ROOM, which is why only moving traffic is measured
+      // against it — and that is as true of the claim gate as of the roll gate. A
+      // stopped car is measured against the slot itself, so one genuinely sitting
+      // in the space still blocks, and one waiting a bumper's length behind it
+      // (which is where the courtesy yield stops) does not. Widen this and the
+      // courteous driver becomes the obstacle: measured on parkinglot seed 5,
+      // 115 seconds of total standstill and three cars never getting out.
       const stopped = other.velocity <= STOPPED_YIELDING;
       const margin = stopped ? 0 : PARKING.pullOutGap;
-      const slotRear = car.headProgress - car.length - margin;
-      const slotFront = car.headProgress + margin;
+      const slotRear = slotT - car.length - margin;
+      const slotFront = slotT + margin;
       for (const p of bodyPoints(other)) {
         if (p.tileId !== tileId) continue;
-        if (p.entry !== head.entryPort) continue; // same travel direction only
+        if (p.entry !== slotPort) continue; // same travel direction only
         if (p.t > slotRear && p.t < slotFront) return false;
       }
     }
@@ -716,23 +759,26 @@ export function createParkingPhases(deps: ParkingDeps) {
         if (car.dwellLeft <= 0) resumeFromStall(car);
         return;
       }
-      // Dwell over: START LEAVING — indicator on. The car does not move yet (the
-      // "leaving" branch below only rolls when the road is clear), but it claims
-      // its lane slot from this moment, so traffic behind it brakes and the gap it
-      // needs forms BECAUSE it is waiting. Making the claim conditional on already
-      // having a gap is what made this a no-win dial: a car that is invisible
-      // until it moves is one that either never gets out, or appears in front of
-      // traffic that had no reason to slow down.
+      // DWELL OVER, BUT NO RIGHT OF WAY. The car waits IN ITS BAY — phase stays
+      // `parked`, so it has no road body and nobody brakes for it — until the slot
+      // it needs is genuinely clear. Claiming the slot the moment the dwell ended
+      // (what shipped before) made traffic brake for a car that had not moved, so
+      // the gap formed BECAUSE it was waiting: that is priority, and a car pulling
+      // out of a space does not have it.
       //
-      // `slotFree` is the one thing that must hold first — the slot cannot be
-      // claimed out from under a car that is passing through it this very tick.
-      // Where this car will actually rejoin the road — the far end of its exit
-      // curve if it drives out forwards, its own peel-off point if it reverses.
-      // That is the slot to test and to claim.
-      const gExit = car.stall ? parking.exitFor(car.stall, 0, halfBody(car), car.parkedReverse) : null;
-      const seatPort = gExit ? (gExit.from as Port) : car.path[car.headIndex].entryPort;
-      const seatT = gExit ? gExit.endT + halfBody(car) : car.headProgress;
-      if (car.dwellLeft <= 0 && slotFree(car, seatPort, seatT)) {
+      // `dwellLeft` keeps counting DOWN past zero, so `-dwellLeft` is already how
+      // long it has been waiting. No second timer.
+      //
+      // THE HALF THAT MAKES IT SURVIVABLE is the courtesy yield below
+      // (`courtesyClaims`). A gap-only rule was measured a no-win dial — 12 cars
+      // parked and 2 ever out on parkinglot — because on a busy street the gap
+      // never comes. Both halves or neither.
+      const slot = exitSlotOf(car);
+      if (
+        car.dwellLeft <= 0 &&
+        slotFree(car, slot.from, slot.t) &&
+        pullOutClear(car, slot)
+      ) {
         car.phase = "leaving";
         // A kerbside bay and a garage are driven out of nose-first; an echelon or
         // 90° bay is backed out of along the curve it came in on.
@@ -751,9 +797,9 @@ export function createParkingPhases(deps: ParkingDeps) {
       return;
     }
 
-    // "leaving". The slot is already claimed (see above); roll only when the road
-    // is actually clear. Holding here rather than at the "parked" gate is what
-    // lets the queue build up behind the waiting car.
+    // "leaving". The car has committed and claimed its slot, and from here the
+    // old rule applies again: a car stopped behind it is stopped BECAUSE of it and
+    // is not an obstacle. Roll as soon as the road is clear.
     if (!pullOutClear(car)) return;
     // Nose-first: drive the exit curve FORWARD. Otherwise replay the entry curve
     // backwards, which is a car reversing out of its space.
@@ -765,6 +811,37 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.manoeuvre = Math.max(0, car.manoeuvre - step);
     if (car.manoeuvre <= 0) resumeFromStall(car);
   }
+  // LETTING SOMEBODY OUT. A car whose dwell ended keeps no road body, so nothing
+  // in the traffic model would ever notice it — and on a street with a steady
+  // stream it would sit there for the whole run. After `courtesySec` of waiting,
+  // the drivers coming up behind start leaving it room: this is the list they
+  // brake for, one entry per leaver, naming the REAR of the slot it will occupy.
+  //
+  // Given out by the phase machine rather than recomputed in road.ts, because the
+  // slot is `exitFor(...).endT + halfBody` for a nose-out and the frozen peel-off
+  // point for a reverse-out — a second answer would leave the gap somewhere the
+  // car never emerges.
+  //
+  // Computed once a tick (road.ts calls it before the movement loop), not per
+  // follower: it is a scan of every vehicle, and `clearAhead` runs per car.
+  function courtesyClaims(): CourtesyClaim[] {
+    const out: CourtesyClaim[] = [];
+    for (const car of cars) {
+      if (car.phase !== "parked" || car.parkOnLane || !car.stall) continue;
+      if (-car.dwellLeft < PARKING.courtesySec) continue;
+      const slot = exitSlotOf(car);
+      out.push({
+        tileId: car.stall.tileId,
+        entry: slot.from,
+        // Stop short of the whole slot, not of its nose: the leaver needs its own
+        // length of road, and a follower that noses up to the middle of it has
+        // yielded nothing.
+        rearT: slot.t - car.length,
+      });
+    }
+    return out;
+  }
+
   // The car has driven out the far side of the car park it was aiming at without
   // finding a space — the "cruising for a space" moment. Try somewhere else, and
   // after a couple of failures give up and drive on, which is what a real driver
@@ -811,6 +888,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     resumeFromStall,
     advanceParking,
     laneOffsetOf,
+    courtesyClaims,
     giveUps: () => parkingGiveUps,
   };
 }
