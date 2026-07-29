@@ -155,6 +155,32 @@ until Tycoon reads it.
   they're palettes, not rules.
 - **Swamp**: generator variety only; after farmland.
 
+**Assessed 2026-07-28, deliberately not built.** Each of these was left where it
+is, for a reason worth writing down rather than rediscovering:
+
+- **Hills — still wait.** The board now carries eight kinds; rock, mountain and
+  the meadow's roughness field already give height the *reading* hills would add,
+  and nothing yet asks the sim about gradient. Build it when `trainDynamics`
+  wants a grade term, not before — it is the one item here that touches the
+  simulation, and a purely cosmetic hill is a ninth kind for nothing.
+- **Snow/desert — bigger than it looks, and the note above is what makes it
+  cheap.** A theme today is CSS only: `THEMES` plus a `.theme-<id>` block in
+  `_themes.scss`, which repaints the BACKDROP and nothing else. Terrain art is
+  SVG generated in `tiles/terrain.ts` from hardcoded HSL, so a winter world would
+  currently be summer fields on a snow backdrop. The work is therefore: take the
+  theme at the `css()`/`green()` boundary as a tint (hue shift + desaturation +
+  lightness lift), thread it into `tileGroundSvg`/`tileScatterSvg`/`tileCanopySvg`
+  from `TileGround`, and — the part that will bite — **add the theme to the memo
+  cache key**, or switching theme mid-session serves the old palette from cache.
+  Do it as ONE tint function, not per-kind palettes: eight kinds times three
+  seasons is a table nobody will keep consistent. Estimate M, mostly mechanical.
+- **Swamp — unblocked now (farmland shipped), and still not worth it.** It would
+  be a ninth kind whose art sits between water and forest and whose rule is
+  "blocks building" — which `water` already provides. Add it when a level *design*
+  wants ground that is passable on foot but not by rail, i.e. when there is a
+  rule for it to carry. Generator variety alone is not a reason to widen the
+  wire-through checklist.
+
 ### 6. Two things that were not on this list and should have been
 
 Found by looking at the board rather than at the roadmap; both are done.
