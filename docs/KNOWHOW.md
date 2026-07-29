@@ -337,6 +337,48 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## SURVEYED VS ORGANIC EDGES (2026-07-28)
+- NOT EVERY GROUND HAS AN ORGANIC EDGE. A lake, a wood, a rock field are shaped
+  by water and weather — bowed shores, rounded corners, which is what all the
+  patch machinery was built for. FIELDS, TOWNS AND WORKS are shaped by people:
+  surveyed, fenced, built to lines. Drawn as blobs, farmland reads as a lake of
+  wheat, which is exactly the complaint that prompted this.
+- `EDGE_STYLE`/`edgeStyleOf`: farmland + urban + industry = "surveyed", the rest
+  "organic". The two styles share EVERYTHING except two decisions:
+  · `corners()` returns the bare jittered lattice point (no mid-shore push, no
+    corner inset) — that inset is what makes a blob a blob.
+  · `patchSegments()` puts both control points ON the chord at the thirds, so
+    the cubic IS a straight line. Still a cubic, so the rim, the outline polygon
+    and the fringe all keep working unchanged — the shape of the DATA didn't.
+- THE JITTER STAYS, and that is the point: lattice offsets are SHARED between the
+  tiles meeting at a point, so a surveyed boundary is a polyline through points
+  both tiles agree on — a straight run with a slight kink every tile. A hedgerow,
+  not a ruler. Pinned: two surveyed tiles' shared corners coincide exactly.
+- Surveyed coverage is ~0.85-0.92 of the tile vs organic ~0.55-0.85. Do NOT
+  expect 1.0 and do not remove the jitter to get it — that is what would draw
+  the grid back on.
+- FIELD BOUNDARIES: `fieldBoundaries` draws a hedge along a tile edge where the
+  NEIGHBOUR's `fieldPlanAt` differs (compared on the drawn properties, so two
+  cells that rolled the same crop count as one field and get no hedge). Seeded
+  CANONICALLY on the edge's two lattice points, so both tiles generate the
+  identical chain of blobs and it does not matter that both draw it — seed it
+  per tile and every hedge in the world doubles up.
+
+## THE SOFT FRINGE (2026-07-28)
+- Every patch used to end at a hard line, so a wood read as a sticker laid on
+  the meadow however good its outline was. `buildGround` now lays TWO
+  translucent strokes of the patch's own colour along `patchRimPath` (the
+  STOPPING edges only) BEFORE the fill: wide+faint (30/0.15) then narrow+stronger
+  (15/0.3), 18/9 for surveyed kinds because a field ends at a hedge.
+- BEFORE the fill and NOT CLIPPED. The opaque fill covers the inward half, so
+  what shows is an outward halo fading into the neighbour. Clip it and the fade
+  lands entirely under the fill, i.e. nothing. Both sides of a boundary lay one,
+  so the blend reads the same whichever tile the DOM draws second.
+- Stopping edges ONLY. Fringing the internal joins draws a dark seam down every
+  shared boundary — the same defect `patchRimPath` exists to avoid. Pinned: an
+  interior tile emits no stroke at all.
+- Two strokes rather than an SVG filter: at ~280 tiles a board a feGaussianBlur
+  per tile is not worth it, and a two-step falloff reads as a gradient anyway.
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

@@ -14,6 +14,7 @@ import {
   terrainBlocksBuilding,
   terrainOf,
   fieldPlanAt,
+  edgeStyleOf,
   FOOT,
   TERRAIN_BUILD_FACTOR,
   URBAN_SMALLEST_REACH,
@@ -635,6 +636,109 @@ describe("terrain", () => {
       const alone = tileGroundSvg("mountain", "2,2", around("grass"), 5);
       const inRange = tileGroundSvg("mountain", "2,2", around("mountain"), 5);
       expect(inRange).not.toBe(alone);
+    });
+  });
+
+  describe("surveyed vs organic boundaries", () => {
+    const all = (v: boolean) => ({ top: v, right: v, bottom: v, left: v });
+
+    it("draws people's ground to lines and nature's to curves", () => {
+      // A lake, a wood and a rock field are shaped by water and weather; a
+      // field, a town and a works are surveyed, fenced and built to lines. Drawn
+      // as blobs the farmland reads as a lake of wheat.
+      expect(edgeStyleOf("farmland")).toBe("surveyed");
+      expect(edgeStyleOf("urban")).toBe("surveyed");
+      expect(edgeStyleOf("industry")).toBe("surveyed");
+      expect(edgeStyleOf("water")).toBe("organic");
+      expect(edgeStyleOf("forest")).toBe("organic");
+      expect(edgeStyleOf("rock")).toBe("organic");
+      expect(edgeStyleOf("mountain")).toBe("organic");
+    });
+
+    it("puts a surveyed edge's control points ON the chord", () => {
+      // Straight, but still a cubic — every consumer (rim, outline polygon,
+      // fringe) keeps working unchanged because the shape of the data didn't.
+      const segs = parsePath(patchPath(all(false), 2, 3, 9, 100, "surveyed"));
+      expect(segs).toHaveLength(4);
+      for (const s of segs) {
+        for (const c of [s.c1, s.c2]) {
+          const chord = { x: s.end.x - s.start.x, y: s.end.y - s.start.y };
+          const off = { x: c.x - s.start.x, y: c.y - s.start.y };
+          // Perpendicular distance to the chord, not the raw cross product: the
+          // path is emitted at one decimal, so on a ~100-unit chord the cross
+          // product carries several units of pure rounding.
+          const perp =
+            Math.abs(chord.x * off.y - chord.y * off.x) / Math.hypot(chord.x, chord.y);
+          expect(perp).toBeLessThan(0.15);
+        }
+      }
+    });
+
+    it("keeps a surveyed patch square-ish where an organic one is a blob", () => {
+      // The organic silhouette cedes its corners on purpose (a pond, not a
+      // puddle). A field must NOT: it is a plot, and its area is nearly its
+      // tile.
+      const coverage = (style: "organic" | "surveyed", seed: number) => {
+        const poly = patchOutlinePolygon(all(false), 2, 3, seed, 100, style);
+        let inside = 0;
+        for (let i = 0; i < 40; i++) {
+          for (let j = 0; j < 40; j++) {
+            const p = { x: ((i + 0.5) * 100) / 40, y: ((j + 0.5) * 100) / 40 };
+            if (pointInPolygon(p, poly)) inside++;
+          }
+        }
+        return inside / 1600;
+      };
+      for (const seed of [1, 5, 42]) {
+        // Not the whole tile — the corners still carry the shared lattice
+        // jitter, which is what keeps a plot from being a drawn rectangle and
+        // lets two tiles agree on where their boundary runs.
+        expect(coverage("surveyed", seed)).toBeGreaterThan(0.82);
+        expect(coverage("surveyed", seed)).toBeGreaterThan(
+          coverage("organic", seed) + 0.1,
+        );
+      }
+    });
+
+    it("still meets its neighbour exactly at a shared lattice point", () => {
+      // The seam argument does not change with the style: corners are the
+      // SHARED jittered lattice points either way, so two surveyed tiles either
+      // side of a boundary start and end their edges in the same place.
+      const left = parsePath(
+        patchPath({ top: false, right: false, bottom: false, left: false }, 2, 3, 9, 100, "surveyed"),
+      );
+      const right = parsePath(
+        patchPath({ top: false, right: false, bottom: false, left: false }, 3, 3, 9, 100, "surveyed"),
+      );
+      // Left tile's top-right corner (segment 1 start) is the right tile's
+      // top-left (segment 0 start), one tile over.
+      expect(left[1].start.x - 100).toBeCloseTo(right[0].start.x, 5);
+      expect(left[1].start.y).toBeCloseTo(right[0].start.y, 5);
+    });
+  });
+
+  describe("the soft fringe", () => {
+    it("fades a patch outward instead of ending it at a line", () => {
+      // Every kind used to stop dead, so a wood read as a sticker laid on the
+      // meadow however good its outline was. Two translucent strokes of the
+      // patch's own colour, before the fill and deliberately unclipped, leave an
+      // outward halo — the fill covers the inward half.
+      const svg = tileGroundSvg("forest", "3,3", around("grass"), 5);
+      const strokes = [...svg.matchAll(/<path [^>]*stroke-width="(\d+)"[^>]*opacity="([\d.]+)"/g)];
+      expect(strokes.length).toBeGreaterThanOrEqual(2);
+      for (const [, , op] of strokes) expect(Number(op)).toBeLessThan(0.5);
+      // It must NOT be clipped — clipping it back to the patch would put the
+      // fade entirely under the fill, which is the whole thing it isn't.
+      const fringe = svg.slice(0, svg.indexOf('fill="hsl'));
+      expect(fringe).not.toContain("clip-path");
+    });
+
+    it("lays none along an internal join", () => {
+      // A tile in the middle of a wood has no edge to fade: fringing the shared
+      // chords would draw a dark seam down every internal boundary — the exact
+      // defect patchRimPath exists to avoid.
+      const inner = tileGroundSvg("forest", "3,3", around("forest"), 5);
+      expect(inner).not.toContain("stroke-width");
     });
   });
 

@@ -589,6 +589,40 @@ export function cornerInset(gx: number, gy: number, seed: number): number {
   return lerp(CORNER_INSET_MIN, CORNER_INSET_MAX, r());
 }
 
+// --- How a boundary is DRAWN --------------------------------------------------
+//
+// Not every ground has an organic edge. A lake, a wood, a rock field are shaped
+// by water and weather, so their boundaries bow and their corners round — that
+// is what all the shore machinery below is for. But FIELDS, TOWNS AND WORKS are
+// shaped by people: they are surveyed, fenced and built to lines, and from above
+// their boundaries are STRAIGHT runs meeting at angles. Drawn as blobs they read
+// as a lake of wheat.
+//
+// The two styles share every bit of machinery except two decisions (see
+// `corners` and `patchSegments`):
+//   organic  — corners pulled inward / pushed outward, shores bowed as cubics.
+//   surveyed — corners left on their jittered lattice point, shores straight.
+// The jitter stays, because it is SHARED between the tiles that meet at a
+// lattice point: a surveyed boundary is therefore a polyline through points both
+// tiles agree on, which is a straight run with a slight kink every tile — a
+// hedgerow, not a ruler, and exactly what a field boundary looks like.
+export type EdgeStyle = "organic" | "surveyed";
+
+const EDGE_STYLE: Record<TerrainKind, EdgeStyle> = {
+  grass: "organic",
+  farmland: "surveyed",
+  forest: "organic",
+  water: "organic",
+  rock: "organic",
+  mountain: "organic",
+  urban: "surveyed",
+  industry: "surveyed",
+};
+
+export function edgeStyleOf(kind: TerrainKind): EdgeStyle {
+  return EDGE_STYLE[kind];
+}
+
 type Pt = { x: number; y: number };
 
 // Each edge in the order the clockwise outline walks it: the direction it runs,
@@ -636,6 +670,7 @@ function corners(
   seed: number,
   size: number,
   roles: CornerRole[],
+  style: EdgeStyle,
 ): Pt[] {
   const local: Pt[] = [
     { x: 0, y: 0 },
@@ -647,6 +682,10 @@ function corners(
     const { dx, dy } = latticeOffset(gx, gy, seed);
     const p = { x: local[i].x + dx, y: local[i].y + dy };
     const role = roles[i];
+    // Surveyed ground keeps every corner ON its shared lattice point: no belly
+    // pushed out mid-shore, no bite taken out of the corner. That is the whole
+    // difference between a field and a pond.
+    if (style === "surveyed") return p;
     if (role.kind === "run") {
       const push = cornerPush(gx, gy, seed);
       const out = EDGE_FRAME[role.edge].out;
@@ -733,13 +772,20 @@ function cornerDiagonals(same: PatchSame): boolean[] {
 }
 
 // Everything the two path builders need to agree on, worked out once.
-function patchFrame(same: PatchSame, x: number, y: number, seed: number, size: number) {
+function patchFrame(
+  same: PatchSame,
+  x: number,
+  y: number,
+  seed: number,
+  size: number,
+  style: EdgeStyle,
+) {
   const stops = edgeStops(same);
   const roles = cornerRoles(stops, cornerDiagonals(same));
   return {
     stops,
     roles,
-    c: corners(x, y, seed, size, roles),
+    c: corners(x, y, seed, size, roles, style),
     g: cornerLattice(x, y),
     reach: size / 3,
   };
@@ -788,8 +834,9 @@ function patchSegments(
   y: number,
   seed: number,
   size: number,
+  style: EdgeStyle = "organic",
 ): ShoreSeg[] {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style);
   const segs: ShoreSeg[] = [];
   for (let i = 0; i < 4; i++) {
     const a = c[i];
@@ -798,6 +845,19 @@ function patchSegments(
     const { dir, out } = EDGE_FRAME[i];
     let leadOut: number;
     let leadIn: number;
+    if (style === "surveyed" && stops[i]) {
+      // A STRAIGHT boundary, still expressed as a cubic so every consumer (the
+      // rim, the outline polygon, the fringe) keeps working unchanged: put both
+      // control points on the chord at the thirds and the curve IS the line.
+      segs.push({
+        a,
+        p1: { x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 },
+        p2: { x: b.x - (b.x - a.x) / 3, y: b.y - (b.y - a.y) / 3 },
+        b,
+        stops: true,
+      });
+      continue;
+    }
     if (!stops[i]) {
       const seam = SEAM_OVERLAP / MID_OF_LEAN;
       leadOut = seam;
@@ -839,8 +899,9 @@ export function patchPath(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): string {
-  const segs = patchSegments(same, x, y, seed, size);
+  const segs = patchSegments(same, x, y, seed, size, style);
   const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
   for (const s of segs) out.push(cubic(s));
   out.push("Z");
@@ -859,8 +920,9 @@ export function patchRimPath(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): string {
-  return patchSegments(same, x, y, seed, size)
+  return patchSegments(same, x, y, seed, size, style)
     .filter(s => s.stops)
     .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
     .join(" ");
@@ -879,9 +941,10 @@ export function patchOutlinePolygon(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): Pt[] {
   const pts: Pt[] = [];
-  for (const s of patchSegments(same, x, y, seed, size)) {
+  for (const s of patchSegments(same, x, y, seed, size, style)) {
     for (let k = 0; k < 6; k++) {
       const t = k / 6;
       const u = 1 - t;
@@ -1660,6 +1723,86 @@ function hedge(rng: Rng, along: number): string {
   return out;
 }
 
+/**
+ * Whether two field plans are the same field. Compared on the drawn properties
+ * rather than on lattice coordinates, so two neighbouring cells that happen to
+ * roll the same crop and bearing count as one field and get no hedge between
+ * them — which is right: you cannot see a boundary that isn't there.
+ */
+function samePlan(a: FieldPlan, b: FieldPlan): boolean {
+  return (
+    a.angle === b.angle &&
+    a.width === b.width &&
+    a.crop[0] === b.crop[0] &&
+    a.crop[2] === b.crop[2]
+  );
+}
+
+/**
+ * The hedgerow along ONE tile edge, where two different fields meet.
+ *
+ * Seeded canonically on the edge's two lattice points, so the tiles either side
+ * generate the IDENTICAL chain of blobs and it does not matter that both draw
+ * it — they land on top of each other. Seed it per tile and the hedge doubles
+ * up, twice as thick and twice as ragged, on every boundary in the world.
+ */
+function hedgeAlong(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  gx: number,
+  gy: number,
+  hx: number,
+  hy: number,
+  seed: number,
+): string {
+  const swap = hx < gx || (hx === gx && hy < gy);
+  const [p, q] = swap ? [[hx, hy], [gx, gy]] : [[gx, gy], [hx, hy]];
+  const rng = makeRng(hashInts(seed, p[0], p[1], q[0], q[1], 0xa7));
+  const len = Math.hypot(bx - ax, by - ay);
+  const n = Math.max(4, Math.round(len / 6));
+  const tone = `hsl(${Math.round(lerp(94, 110, rng()))} ${Math.round(lerp(30, 40, rng()))}% ${Math.round(lerp(27, 34, rng()))}%)`;
+  let out = "";
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    // A small wander across the line, so the hedge is planted rather than ruled.
+    const wob = (rng() * 2 - 1) * 2.2;
+    const nx = -(by - ay) / len;
+    const ny = (bx - ax) / len;
+    const cx = lerp(ax, bx, t) + nx * wob;
+    const cy = lerp(ay, by, t) + ny * wob;
+    const r = lerp(3, 4.6, rng());
+    out += `<ellipse cx="${n1(cx)}" cy="${n1(cy)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="${tone}"/>`;
+  }
+  return out;
+}
+
+/**
+ * Hedges on the sides where the NEIGHBOURING field is a different field. This
+ * is what turns a big farmed area from one striped expanse into a patchwork
+ * with boundaries: the stripe plan already changes every few tiles, and this
+ * draws the hedge that change implies.
+ */
+function fieldBoundaries(x: number, y: number, seed: number, same: PatchSame): string {
+  const mine = fieldPlanAt(x, y, seed);
+  const S = GROUND_UNITS;
+  const sides: [boolean, number, number, number, number, number, number][] = [
+    // [neighbour is farmland, edge from, edge to, the neighbour tile]
+    [!!same.top, 0, 0, S, 0, x, y - 1],
+    [!!same.right, S, 0, S, S, x + 1, y],
+    [!!same.bottom, 0, S, S, S, x, y + 1],
+    [!!same.left, 0, 0, 0, S, x - 1, y],
+  ];
+  let out = "";
+  for (const [isField, ax, ay, bx, by, nx, ny] of sides) {
+    if (!isField) continue; // a shore, not a boundary — the rim draws that
+    if (samePlan(mine, fieldPlanAt(nx, ny, seed))) continue;
+    out += hedgeAlong(ax, ay, bx, by, x, y, nx, ny, seed);
+  }
+  return out;
+}
+
 /** A row of bales left on the stubble — the detail that says "just harvested". */
 function bales(rng: Rng): string {
   const n = 3 + Math.floor(rng() * 3);
@@ -2119,8 +2262,34 @@ function buildGround(
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
 
-  const d = patchPath(same, x, y, seed);
-  const parts = [`<path d="${d}" fill="${css(base)}"/>`];
+  const style = edgeStyleOf(kind);
+  const d = patchPath(same, x, y, seed, GROUND_UNITS, style);
+
+  // A SOFT FRINGE, before the fill and deliberately NOT clipped.
+  //
+  // Every kind used to end at a hard line: the fill stopped, the grass began,
+  // and a wood or a rock field read as a sticker laid on the meadow however good
+  // its outline was. Two translucent strokes of the patch's own colour along the
+  // edges where it STOPS (never the internal joins — those are invisible) give
+  // it a falloff instead: the fill covers the inward half, so what shows is an
+  // outward halo fading into whatever is next door. A wide faint pass plus a
+  // narrower stronger one approximates a gradient without an SVG filter, which
+  // at ~280 tiles a board is worth avoiding.
+  //
+  // Unclipped means it spills onto the neighbour, which is the point — and both
+  // sides of a boundary lay one, so the blend reads the same whichever tile the
+  // DOM happens to draw second. Surveyed ground gets a tighter fringe: a field
+  // ends at a hedge and a town at a fence, so its edge is soft, not vague.
+  const parts: string[] = [];
+  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, style);
+  if (fringeD) {
+    const [wide, tight] = style === "surveyed" ? [18, 9] : [30, 15];
+    parts.push(
+      `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${wide}" stroke-linecap="round" opacity="0.15"/>`,
+      `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${tight}" stroke-linecap="round" opacity="0.3"/>`,
+    );
+  }
+  parts.push(`<path d="${d}" fill="${css(base)}"/>`);
 
   // Everything placed on this tile must STAND ON the patch. The bands keep
   // objects off the tile edges, but a real corner now cedes a deep bite of the
@@ -2130,7 +2299,7 @@ function buildGround(
   // little margin (tested against the polygon inflated about the centroid, so
   // the margin scales with how far out the point sits). Deterministic: no extra
   // rng draws, so positions only move where the geometry demands it.
-  const poly = patchOutlinePolygon(same, x, y, seed);
+  const poly = patchOutlinePolygon(same, x, y, seed, GROUND_UNITS, style);
   const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
   const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
   const insideWithMargin = (px: number, py: number): boolean =>
@@ -2171,11 +2340,15 @@ function buildGround(
   if (kind === "farmland") {
     parts.push(
       `<g clip-path="url(#${needClip()})" opacity="0.92">${fieldStripes(x, y, seed)}</g>`,
+      // …and the hedge wherever the field next door is a different field. Also
+      // clipped: a boundary hedge belongs to the farmland, not to the grass or
+      // the ballast beyond it.
+      `<g clip-path="url(#${needClip()})">${fieldBoundaries(x, y, seed, same)}</g>`,
     );
   }
 
   const rim = RIM[kind];
-  const rimD = rim ? patchRimPath(same, x, y, seed) : "";
+  const rimD = rim ? fringeD : "";
   if (rim && rimD) {
     parts.push(
       `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${needClip()})" opacity="0.75"/>`,
