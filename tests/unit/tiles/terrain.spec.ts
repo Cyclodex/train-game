@@ -13,7 +13,9 @@ import {
   pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
+  fieldPlanAt,
   FOOT,
+  TERRAIN_BUILD_FACTOR,
   URBAN_SMALLEST_REACH,
   tileCanopySvg,
   tileGroundSvg,
@@ -591,6 +593,58 @@ describe("terrain", () => {
       const alone = tileGroundSvg("mountain", "2,2", around("grass"), 5);
       const inRange = tileGroundSvg("mountain", "2,2", around("mountain"), 5);
       expect(inRange).not.toBe(alone);
+    });
+  });
+
+  describe("farmland", () => {
+    it("plans a field by WORLD lattice cell, not by tile", () => {
+      // Neighbouring tiles inside one cell share a bearing, so their furrows run
+      // on across the seam; a few tiles away it changes, which is the patchwork.
+      // Seeded per tile instead, every tile edge would be a field edge — the
+      // grid, redrawn in furrows.
+      const a = fieldPlanAt(3, 3, 9);
+      expect(fieldPlanAt(4, 3, 9)).toEqual(a);
+      expect(fieldPlanAt(3, 4, 9)).toEqual(a);
+      expect(fieldPlanAt(9, 3, 9)).not.toEqual(a);
+      // Deterministic across calls, or a field would redraw itself every frame.
+      expect(fieldPlanAt(3, 3, 9)).toEqual(a);
+    });
+
+    it("gives every field two tones far enough apart to see", () => {
+      // At 6 points of lightness the green crops came out as flat olive tiles
+      // indistinguishable from the grass they replace, while the straw ones
+      // striped boldly — contrast has to belong to the field, not to where its
+      // hue happened to land.
+      for (let cell = 0; cell < 24; cell++) {
+        const plan = fieldPlanAt(cell * 3, 0, 4);
+        expect(Math.abs(plan.crop[2] - plan.fallow[2])).toBeGreaterThan(8);
+      }
+    });
+
+    it("stripes tiles far from the world origin", () => {
+      // Regression: the bands were anchored at the point of each furrow closest
+      // to the world ORIGIN and drawn only 1.5 tiles long, so tiles a few
+      // hundred units away were missed entirely and came out blank green — near
+      // the origin striped, everything to the right of it flat.
+      const near = tileGroundSvg("farmland", "1,1", around("farmland"), 4);
+      const far = tileGroundSvg("farmland", "17,11", around("farmland"), 4);
+      const bands = (svg: string) => (svg.match(/<path d="M/g) ?? []).length;
+      expect(bands(near)).toBeGreaterThan(4);
+      expect(bands(far)).toBeGreaterThan(4);
+    });
+
+    it("stands nothing on a field", () => {
+      // All ground marks, no standing objects — which is what keeps farmland out
+      // of the corridor and canopy rules entirely.
+      expect(tileScatterSvg("farmland", "3,3", around("farmland"), 4)).toBe("");
+      expect(tileCanopySvg("farmland", "3,3", around("farmland"), 4)).toBe("");
+    });
+
+    it("is buildable, and priced between grass and forest", () => {
+      expect(terrainBlocksBuilding("farmland")).toBe(false);
+      expect(canBuildOn({ connections: [], terrain: "farmland" })).toBe(true);
+      expect(TERRAIN_BUILD_FACTOR.farmland).toBeGreaterThan(TERRAIN_BUILD_FACTOR.grass);
+      expect(TERRAIN_BUILD_FACTOR.farmland).toBeLessThan(TERRAIN_BUILD_FACTOR.forest);
     });
   });
 

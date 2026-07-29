@@ -337,6 +337,37 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## FARMLAND (2026-07-28)
+- 7th kind, buildable, `TERRAIN_BUILD_FACTOR` 1.2 (between grass 1 and forest
+  1.5 — you buy the field off the farmer). Wire-through for ANY new kind:
+  `TerrainKind` in model.ts, `TERRAIN_KINDS`, `GROUND`/`RIM`, `SCATTER_COUNT`,
+  `SCATTER_BAND`, `FOOT`, `BLOCKS_BUILDING`, `TERRAIN_BUILD_FACTOR`, the editor
+  palette, `generateTerrain.ts`, a /test scenario. The terrain.spec sweeps
+  iterate `TERRAIN_KINDS` and catch most omissions.
+- ALL GROUND MARKS, NOTHING STANDS ON IT (`SCATTER_COUNT.farmland = [0,0]`) —
+  which keeps farmland out of the corridor and canopy rules entirely. Ballast
+  and tarmac simply draw over the furrows, which is what a railway cut through
+  a field looks like from above.
+- FURROWS ARE SEEDED BY A COARSE WORLD LATTICE (`fieldPlanAt`, FIELD_CELL = 3
+  tiles), never by the tile — same trick as the glades. Per tile, every tile
+  edge becomes a field edge and the ground redraws the grid the jittered patch
+  outlines exist to hide. Per lattice cell, neighbouring tiles share a bearing
+  and their furrows RUN ON across the seam; the patchwork comes from the cells.
+- A BAND IS A FINITE BAR AND MUST BE ANCHORED OVER THE TILE. First version
+  anchored each band at the point closest to the WORLD ORIGIN and drew it 1.5
+  tiles long, so tiles a few hundred units away were missed entirely: striped
+  near the origin, flat green everywhere right of it. Project the tile centre
+  onto the furrow direction and centre the bar there. Pinned by a test that
+  counts bands on a far tile.
+- DRAW BOTH TONES, EVERY BAND — not crop stripes over the base fill. Drawing
+  every other band lets the base show between, so a cell whose crop lands near
+  the base tone comes out blank while its neighbour stripes boldly. And give
+  the two tones 12 points of lightness, not 6: at 6 the green crops were flat
+  olive tiles indistinguishable from the grass they replace. Contrast is a
+  property of the FIELD, not of where its hue landed. Pinned.
+- Hedgerows run ALONG THE FURROWS (or square across them), never at a free
+  angle — a hedge is a field boundary. Free-angled they read as dark
+  caterpillars dropped on the crop. /test scenario: `farmland`.
 ## TOWN SCALE (2026-07-28)
 - THE RULER IS THE CAR. A tile is 100 ground units and a car is 23 of them
   (`DEFAULT_CAR_LENGTH` 0.23 tiles). The first town's houses were 14-20 units

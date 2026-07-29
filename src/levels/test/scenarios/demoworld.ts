@@ -123,6 +123,22 @@ const GROUND: { kind: TerrainKind; cells: string[] }[] = [
   { kind: "rock", cells: [...rect(18, 10, 19, 13), ...rect(15, 13, 17, 13)] },
   // An outcrop inside the ring's south-east: something to build around.
   { kind: "rock", cells: rect(14, 10, 16, 11) },
+  // Fields, LAST and in the biggest blocks — the open country between the woods
+  // and the town. They go over what is left rather than being fitted around it:
+  // every earlier region has already claimed its cells, and `paintGround` skips
+  // anything already painted. Without them the board's whole middle was flat
+  // green, which is what a world looks like when nobody farms it.
+  {
+    kind: "farmland",
+    cells: [
+      ...rect(3, 2, 8, 5), // the west of the ring, either side of the spur
+      ...rect(10, 5, 12, 5), // north of the town
+      ...rect(14, 2, 16, 5), // the east of the ring
+      ...rect(3, 7, 8, 8), // between the avenues, west
+      ...rect(9, 11, 12, 11), // south of the town
+      ...rect(4, 0, 19, 0), // the top margin, outside the ring
+    ],
+  },
 ];
 
 function paintGround(level: Level): void {

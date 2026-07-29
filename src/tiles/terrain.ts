@@ -19,6 +19,7 @@ import { Rng, bush, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
+  "farmland",
   "forest",
   "water",
   "rock",
@@ -208,6 +209,7 @@ export function corridorClearance(p: Pt, corridors: Corridor[]): number {
 // 0.42 tree conversion in buildGround).
 export const FOOT: Record<TerrainKind, number> = {
   grass: 0,
+  farmland: 0,
   forest: 13,
   water: 6,
   rock: 15,
@@ -291,6 +293,7 @@ export function terrainOf(cell: TileCell | null | undefined): TerrainKind {
 // rule — as a tunnel will be for mountain.)
 const BLOCKS_BUILDING: Record<TerrainKind, boolean> = {
   grass: false,
+  farmland: false,
   forest: false,
   water: true,
   rock: true,
@@ -310,6 +313,9 @@ export function terrainBlocksBuilding(kind: TerrainKind): boolean {
 // or tunnel is expected to bring its OWN price, not read this table.
 export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
   grass: 1,
+  // Buying the field off the farmer: cheaper than felling a wood, dearer than
+  // running across open grass nobody was using.
+  farmland: 1.2,
   forest: 1.5,
   water: 1,
   rock: 1,
@@ -364,6 +370,10 @@ const css = ([h, s, l]: Hsl) => `hsl(${h} ${s}% ${l.toFixed(1)}%)`;
 // tellable apart at a glance, and "higher and colder" is the reading we want.
 const GROUND: Record<TerrainKind, Hsl | null> = {
   grass: null,
+  // Warm and pale against the meadow's cooler green, so a field block reads as
+  // worked land at a glance rather than as another shade of lawn. The stripes
+  // (see `fieldStripes`) do most of the work; this is what shows between them.
+  farmland: [64, 32, 52],
   forest: [96, 30, 30],
   water: [196, 44, 47],
   rock: [210, 7, 56],
@@ -376,6 +386,9 @@ const GROUND: Record<TerrainKind, Hsl | null> = {
 // flat sticker; with it the edge reads as a place where two grounds meet.
 const RIM: Record<TerrainKind, Hsl | null> = {
   grass: null,
+  // A hedgerow: the darker green a field is bounded by. Same trick as water's
+  // shallows — it is what stops the block reading as a flat sticker.
+  farmland: [98, 34, 33],
   forest: null,
   water: [190, 46, 62],
   rock: [210, 8, 65],
@@ -814,6 +827,10 @@ export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
 // individual trees at full zoom.
 const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   grass: [0, 0],
+  // Nothing STANDS on a field: it is all ground marks (stripes, hedge blobs,
+  // bale rows), which is what keeps farmland out of the corridor/canopy rules
+  // entirely.
+  farmland: [0, 0],
   forest: [9, 14],
   water: [0, 2],
   rock: [4, 6],
@@ -1330,6 +1347,176 @@ function building(rng: Rng, scale: number, room: number): { svg: string; reach: 
 // tile can see the other's scatter to prevent it.
 const TOWN_OVERHANG = 10;
 
+// --- Farmland ----------------------------------------------------------------
+//
+// The signature top-down landscape: a patchwork of ploughed strips. Everything
+// here is a GROUND MARK, never a standing object — a field has nothing to stand
+// on it, which is also what keeps farmland out of the corridor and canopy rules
+// entirely (the ballast and the tarmac simply draw over the stripes, exactly as
+// a railway cut through a field looks from above).
+//
+// THE STRIPES ARE SEEDED BY A WORLD LATTICE, NOT BY THE TILE. That is the whole
+// trick, and it is the same one the glades use. Seed the direction per tile and
+// every tile boundary becomes a field boundary — the tile grid, drawn back onto
+// the ground in furrows, which is precisely what the jittered patch outlines
+// exist to hide. Seeded by a coarse world lattice instead, neighbouring tiles
+// in the same lattice cell share a direction and their furrows RUN ON across
+// the seam, so a field is as big as the lattice cell (a few tiles) and the
+// patchwork comes from the cells, not from the grid.
+
+// Tiles per field. Big enough that a field spans several tiles; small enough
+// that a large farmed area still reads as a patchwork rather than as one crop.
+const FIELD_CELL = 3;
+
+interface FieldPlan {
+  angle: number; // furrow bearing, radians
+  width: number; // furrow width, ground units
+  crop: Hsl; // the strip tone
+  fallow: Hsl; // the tone between strips
+}
+
+/** The field plan at a WORLD position (in tile units). Deterministic. */
+export function fieldPlanAt(wx: number, wy: number, seed: number): FieldPlan {
+  const gx = Math.floor(wx / FIELD_CELL);
+  const gy = Math.floor(wy / FIELD_CELL);
+  const r = makeRng(hashInts(seed, gx, gy, 0x9a));
+  // Crops, in the tones a field actually comes in from above: young green,
+  // ripe straw, and turned earth. The pair is drawn from one roll so a field is
+  // one crop rather than a stripe of each.
+  const roll = r();
+  const hue = roll < 0.4 ? lerp(78, 96, r()) : roll < 0.75 ? lerp(44, 54, r()) : lerp(28, 38, r());
+  const sat = roll < 0.4 ? lerp(30, 40, r()) : roll < 0.75 ? lerp(36, 48, r()) : lerp(22, 30, r());
+  const light = roll < 0.4 ? lerp(46, 54, r()) : roll < 0.75 ? lerp(60, 68, r()) : lerp(38, 44, r());
+  // The two tones need REAL separation — 12 points of lightness, not the 6 the
+  // first version used. A field is only a field if you can see the furrows: at
+  // 6 points the green crops came out as flat olive tiles indistinguishable
+  // from the grass they were meant to replace, while the straw ones (which
+  // happen to sit far from the base tone) striped boldly. Contrast has to be a
+  // property of the field, not an accident of where its hue landed.
+  return {
+    angle: r() * Math.PI,
+    width: lerp(7, 13, r()),
+    crop: [Math.round(hue), Math.round(sat), light],
+    fallow: [Math.round(hue + 5), Math.round(Math.max(0, sat - 12)), light - 12],
+  };
+}
+
+/**
+ * The furrows across one tile: parallel bands at the field's bearing, drawn
+ * long enough to cover the tile whatever the angle, and clipped to the patch by
+ * the caller. Positions come from the WORLD distance along the field's normal,
+ * so a band starting on one tile continues on the next without a step.
+ */
+function fieldStripes(x: number, y: number, seed: number): string {
+  const plan = fieldPlanAt(x, y, seed);
+  const c = Math.cos(plan.angle);
+  const s = Math.sin(plan.angle);
+  // Unit normal to the furrows; the stripe index is distance along it.
+  const nx = -s;
+  const ny = c;
+  // This tile's four corners in WORLD ground units, so the run of stripe
+  // indices covering the tile can be worked out exactly.
+  const x0 = x * GROUND_UNITS;
+  const y0 = y * GROUND_UNITS;
+  const corners = [
+    [x0, y0],
+    [x0 + GROUND_UNITS, y0],
+    [x0 + GROUND_UNITS, y0 + GROUND_UNITS],
+    [x0, y0 + GROUND_UNITS],
+  ];
+  const ds = corners.map(([px, py]) => px * nx + py * ny);
+  const lo = Math.floor(Math.min(...ds) / plan.width) - 1;
+  const hi = Math.ceil(Math.max(...ds) / plan.width) + 1;
+  const half = GROUND_UNITS * 1.5; // long enough to cross the tile at any angle
+  const out: string[] = [];
+  // EVERY band is drawn, alternating the two tones — not just the crop ones
+  // over the base fill. Drawing only every other band leaves the base showing
+  // between them, so a lattice cell whose crop happens to land near the base
+  // tone comes out as a blank green tile with no furrows at all, while its
+  // neighbour is boldly striped. Two explicit tones per field make the contrast
+  // a property of the FIELD instead of an accident of the palette.
+  // Where the tile sits ALONG the furrows. A band is drawn as a finite bar
+  // (`half` long), and its natural anchor — the point on the band closest to
+  // the world origin — can be hundreds of units away from this tile, so a bar
+  // anchored there simply misses the tile and the field comes out blank. That
+  // is exactly how the first version failed: tiles near the origin were striped
+  // and everything to the right of them was flat green. Anchor over the tile's
+  // own centre instead and a bar one and a half tiles long always covers it.
+  const alongTile = (x0 + GROUND_UNITS / 2) * c + (y0 + GROUND_UNITS / 2) * s;
+  for (let i = lo; i <= hi; i++) {
+    // The band's centre in world units, converted back to tile-local.
+    const d = (i + 0.5) * plan.width;
+    const mx = d * nx + alongTile * c - x0;
+    const my = d * ny + alongTile * s - y0;
+    // A band is a long thin rectangle: centre ± half along the furrow, ± width
+    // across it. Built as an explicit polygon so no nested transform is needed
+    // (the placement tests parse every translate as an object position).
+    const ax = c * half;
+    const ay = s * half;
+    const bx = (nx * plan.width) / 2;
+    const by = (ny * plan.width) / 2;
+    out.push(
+      poly(
+        [
+          { x: mx - ax - bx, y: my - ay - by },
+          { x: mx + ax - bx, y: my + ay - by },
+          { x: mx + ax + bx, y: my + ay + by },
+          { x: mx - ax + bx, y: my - ay + by },
+        ],
+        // Alternate on the WORLD index, not a local counter, so the two tones
+        // stay in step across a tile boundary.
+        css(((i % 2) + 2) % 2 === 0 ? plan.crop : plan.fallow),
+      ),
+    );
+  }
+  return out.join("");
+}
+
+/**
+ * A hedgerow: the dark, ragged green line between two strips.
+ *
+ * It runs ALONG THE FURROWS (or square across them), never at a random bearing
+ * — a hedge is a field boundary, and a field's boundaries are the directions it
+ * was ploughed in. Angled freely they read as dark caterpillars dropped on the
+ * crop, which is exactly how the first version came out.
+ */
+function hedge(rng: Rng, along: number): string {
+  const len = lerp(34, 62, rng());
+  const th = lerp(3.4, 5, rng());
+  const a = along + (rng() < 0.3 ? Math.PI / 2 : 0);
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const tone = `hsl(${Math.round(lerp(94, 112, rng()))} ${Math.round(lerp(30, 42, rng()))}% ${Math.round(lerp(26, 33, rng()))}%)`;
+  // Drawn as a chain of overlapping blobs along the line, so the edge is
+  // ragged like a hedge rather than straight like a fence.
+  let out = "";
+  const n = Math.max(3, Math.round(len / th));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n - 0.5) * len;
+    const r = th * lerp(0.7, 1.15, rng());
+    out += `<ellipse cx="${n1(c * t)}" cy="${n1(s * t)}" rx="${n1(r)}" ry="${n1(r * 0.82)}" fill="${tone}"/>`;
+  }
+  return out;
+}
+
+/** A row of bales left on the stubble — the detail that says "just harvested". */
+function bales(rng: Rng): string {
+  const n = 3 + Math.floor(rng() * 3);
+  const step = lerp(7, 11, rng());
+  const a = rng() * Math.PI;
+  const r = lerp(2.6, 3.6, rng());
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const t = (i - (n - 1) / 2) * step;
+    const px = Math.cos(a) * t;
+    const py = Math.sin(a) * t;
+    out +=
+      `<ellipse cx="${n1(px + 0.9)}" cy="${n1(py + 0.9)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="rgba(60,50,30,0.2)"/>` +
+      `<ellipse cx="${n1(px)}" cy="${n1(py)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="hsl(${Math.round(lerp(44, 52, rng()))} ${Math.round(lerp(38, 50, rng()))}% ${Math.round(lerp(64, 72, rng()))}%)"/>`;
+  }
+  return out;
+}
+
 /** A lily pad with the odd flower — enough to say "this water is shallow here". */
 function lily(rng: Rng, scale: number): string {
   const r = 5.5 * scale;
@@ -1387,6 +1574,9 @@ function groundMarks(
   base: Hsl,
   place: (x: number, y: number) => Pt2,
   clear: (p: Pt2, r: number) => boolean,
+  // The bearing anything aligned to the ground should follow — the field's
+  // furrow direction. Zero for every kind that has no such direction.
+  along = 0,
 ): string {
   // Marks that land on a corridor are simply dropped (no retries): they are
   // filler, and bare ballast beside the line reads better than a garden on it.
@@ -1422,6 +1612,17 @@ function groundMarks(
     return (
       spread(3 + Math.floor(rng() * 3), 10, () => paving(rng)) +
       spread(2 + Math.floor(rng() * 3), 8, () => garden(rng))
+    );
+  }
+  if (kind === "farmland") {
+    // The stripes themselves are laid by the caller (they need the patch clip);
+    // these are what breaks them up. Sparse on purpose: the furrows are the
+    // texture, and a hedge on every tile turns a landscape into a maze. Hedges
+    // get no keep-out radius worth the name — a hedge beside the line is
+    // exactly right.
+    return (
+      (rng() < 0.55 ? spread(1, 3, () => hedge(rng, along)) : "") +
+      (rng() < 0.35 ? spread(1, 8, () => bales(rng)) : "")
     );
   }
   return "";
@@ -1580,13 +1781,30 @@ function buildGround(
   // once the shore itself stopped kinking there. The cap's overhang is harmless:
   // the clip path is the patch, so it can only spill into the SEAM_OVERLAP the
   // neighbour also covers, and at a real corner it is cut off entirely.
+  const clipId = `terrain-clip-${coordId.replace(",", "-")}-${kind}`;
+  let clipped = false;
+  const needClip = (): string => {
+    if (!clipped) {
+      parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+      clipped = true;
+    }
+    return clipId;
+  };
+
+  // The furrows go straight after the base fill and before every other mark, so
+  // hedges and bales lie ON the crop. Clipped to the patch: a stripe is a long
+  // bar crossing the whole tile, and unclipped it would run out onto the grass.
+  if (kind === "farmland") {
+    parts.push(
+      `<g clip-path="url(#${needClip()})" opacity="0.92">${fieldStripes(x, y, seed)}</g>`,
+    );
+  }
+
   const rim = RIM[kind];
   const rimD = rim ? patchRimPath(same, x, y, seed) : "";
   if (rim && rimD) {
-    const clip = `terrain-clip-${coordId.replace(",", "-")}-${kind}`;
-    parts.unshift(`<clipPath id="${clip}"><path d="${d}"/></clipPath>`);
     parts.push(
-      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${clip})" opacity="0.75"/>`,
+      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${needClip()})" opacity="0.75"/>`,
     );
   }
 
@@ -1602,7 +1820,14 @@ function buildGround(
 
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base, place, (p, r) => room(p) >= r);
+  const marks = groundMarks(
+    kind,
+    rng,
+    base,
+    place,
+    (p, r) => room(p) >= r,
+    kind === "farmland" ? fieldPlanAt(x, y, seed).angle : 0,
+  );
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];

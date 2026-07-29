@@ -453,6 +453,7 @@ const DOCK_GROUPS: DockGroup[] = [
     icon: "🏞️",
     label: "Terrain",
     items: [
+      { key: "farmland", icon: "🌾", label: "Fields", tool: "terrain", terrain: "farmland" },
       { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest" },
       { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water" },
       { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },

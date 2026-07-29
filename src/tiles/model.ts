@@ -31,6 +31,7 @@ export type TileKind =
 // one at a time as EXCEPTIONS to that predicate. See tiles/terrain.ts.
 export type TerrainKind =
   | "grass"
+  | "farmland"
   | "forest"
   | "water"
   | "rock"
