@@ -337,6 +337,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## TOWN SCALE (2026-07-28)
+- THE RULER IS THE CAR. A tile is 100 ground units and a car is 23 of them
+  (`DEFAULT_CAR_LENGTH` 0.23 tiles). The first town's houses were 14-20 units
+  wide — NARROWER THAN THE CARS driving past them, so the board read as a model
+  village with full-size traffic in it. Sizes are now pitched against that: a
+  house ~1.5 car lengths on its long side, a terrace 3, a hall 3.5. Pinned by a
+  terrain.spec test that parses roof rects out of the scatter SVG.
+- THE ARCHETYPE IS CHOSEN TO FIT THE ROOM MEASURED AT THE SPOT (`TOWN` +
+  `building(rng, scale, room)`), not fixed per tile. That is what lets buildings
+  be building-sized at all: sheds and houses take the street frontage where the
+  corridor leaves little room, terraces/blocks/halls take the depth of the block.
+  A single fixed footprint could only ever be small enough to fit everywhere.
+- `FOOT.urban` is therefore the SMALLEST archetype's reach, not the largest
+  (`URBAN_SMALLEST_REACH`, pinned). Gate on the biggest and every frontage in the
+  game empties out.
+- A PLACED BUILDING IS PUSHED BACK ONTO THE CORRIDOR LIST as a degenerate
+  one-point corridor (`{pts:[p,p], half: reach}`) — so "don't build on the
+  railway" and "don't build on the house next door" are ONE test. Without it,
+  building-sized buildings simply pile on top of each other (2-4 per tile at the
+  new footprints). `distToPolyline` needs TWO points, hence `[p, p]`.
+- The TILE EDGE counts as room too, plus `TOWN_OVERHANG` (10u): a tile cannot see
+  its neighbour's scatter, so without it a terrace lands on the next tile's block.
+  Some overhang is wanted — it is what makes a town continuous across tiles.
+- Archetypes: shed, house (lean-to + chimney), terrace (3-5 party-walled units —
+  the one that most says TOWN from above), block (parapet + rooftop plant + light
+  well), hall (roof-light strips), church (slate nave + tower, rare, the landmark
+  that gives a town a centre). /test scenario: `townscape` (town + street + cars).
 ## HAND-PAINTED TERRAIN (demoworld, 2026-07-28)
 - The DEMO world's ground is authored, not seeded: `GROUND` in demoworld.ts is a
   list of `{kind, cells}` built from `rect()`/`without()`, painted by

@@ -206,13 +206,17 @@ export function corridorClearance(p: Pt, corridors: Corridor[]): number {
 // The clear radius an object of this kind needs beyond a corridor's edge, per
 // unit of band scale — the drawn art's worst-case reach (forest's includes the
 // 0.42 tree conversion in buildGround).
-const FOOT: Record<TerrainKind, number> = {
+export const FOOT: Record<TerrainKind, number> = {
   grass: 0,
   forest: 13,
   water: 6,
   rock: 15,
   mountain: 30,
-  urban: 16,
+  // The SMALLEST town archetype's reach (`URBAN_SMALLEST_REACH`), not the
+  // largest: a building's footprint is chosen to fit the room actually measured
+  // at its spot (see `building`), so this only has to admit a shed. Gating on
+  // the biggest would empty the street frontage of the whole town.
+  urban: 15,
 };
 // A trunk needs far less room than a canopy: how much clearance a FOREST
 // tree's base needs before it is standing in the ballast.
@@ -814,7 +818,10 @@ const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   water: [0, 2],
   rock: [4, 6],
   mountain: [2, 3],
-  urban: [4, 6],
+  // Two or three, because a building is now the size of a building (see the
+  // TOWN archetypes): six of them at the new footprints would be one solid roof
+  // per tile with no yards, gardens or street between them.
+  urban: [2, 4],
 };
 
 // Where on the tile the standing objects go, and how big they get. Everything
@@ -836,9 +843,11 @@ const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
   // A ridge is the biggest footprint on the board; keep its centre well inside
   // the tile so the massif stays on its own ground.
   mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
-  // Buildings are wider than a tree, so they need a deeper margin to stay clear
-  // of the tile edge.
-  urban: { x: [22, 78], y: [22, 80], scale: [0.78, 1.1] },
+  // Buildings are the biggest footprints on the board after a ridge, so they
+  // keep well off the tile edge — and the scale range is narrow, because a town
+  // whose houses vary by 40% reads as a perspective error rather than as
+  // variety (the archetypes supply the variety instead).
+  urban: { x: [26, 74], y: [26, 76], scale: [0.9, 1.08] },
 };
 
 type Pt2 = { x: number; y: number };
@@ -1079,82 +1088,247 @@ function roofShadow(w: number, d: number, scale: number): string {
   return `<rect x="${n1(-w / 2 + off)}" y="${n1(-d / 2 + off)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${TOWN_SHADOW}"/>`;
 }
 
-/**
- * One building, TOP-DOWN: what you see of a town from above is its roofs. Three
- * archetypes off one RNG — a pitched tile roof split along the ridge (lit half
- * toward the NW sun), a flat block with a parapet and roof boxes, and a long
- * metal hall — each centred on its footprint and rotated a few degrees so the
- * town doesn't grid up.
- */
-function building(rng: Rng, scale: number): string {
-  const roll = rng();
-  const a = lerp(-14, 14, rng());
-  const wrap = (body: string) => `<g transform="rotate(${a.toFixed(1)})">${body}</g>`;
-
-  // Flat-roofed block: a parapet ring around a slab, with rooftop boxes.
-  // Concrete GREY, not the walls' warm render: on the tan urban ground a warm
-  // roof at any lightness either vanishes into it or reads as blank paper —
-  // the roof has to change temperature, not just tone, to read as a roof.
-  if (roll < 0.3) {
-    const w = lerp(18, 25, rng()) * scale;
-    const d = lerp(14, 19, rng()) * scale;
-    const hue = Math.round(lerp(28, 38, rng()));
-    const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
-    const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
-    const inset = 1.8 * scale;
-    const box = (): string => {
-      const bw = lerp(3, 5, rng()) * scale;
-      const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
-      const by = lerp(-d / 2 + inset + bw, d / 2 - inset - bw * 2, rng());
-      return `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bw)}" fill="hsl(210 10% 52%)"/>`;
-    };
-    return wrap(
-      roofShadow(w, d, scale) +
-        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
-        `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
-        box() +
-        box() +
-        box(),
-    );
-  }
-
-  // Long metal hall: a shallow gable along the long axis, in cool sheet grey.
-  if (roll < 0.5) {
-    const w = lerp(24, 32, rng()) * scale;
-    const d = lerp(12, 16, rng()) * scale;
-    const hue = Math.round(lerp(200, 216, rng()));
-    const sat = Math.round(lerp(6, 12, rng()));
-    const litHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(58, 64, rng()))}%)`;
-    const dimHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(42, 48, rng()))}%)`;
-    return wrap(
-      roofShadow(w, d, scale) +
-        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${litHalf}"/>` +
-        `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dimHalf}"/>` +
-        `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="hsl(${hue} ${sat}% 72%)" stroke-width="${n1(0.8 * scale)}"/>`,
-    );
-  }
-
-  // Pitched tile roof: the common case. Split along the ridge — the NW-facing
-  // half catches the sun — with a bright ridge line and the odd chimney.
-  const w = lerp(14, 20, rng()) * scale;
-  const d = lerp(10, 14, rng()) * scale;
-  const tileHue = Math.round(lerp(4, 22, rng()));
-  const tileSat = Math.round(lerp(34, 52, rng()));
-  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(50, 58, rng()))}%)`;
-  const tileDim = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(32, 40, rng()))}%)`;
-  const ridge = `hsl(${tileHue} ${Math.max(0, tileSat - 8)}% ${Math.round(lerp(64, 70, rng()))}%)`;
-  const chimney =
-    rng() < 0.45
-      ? `<rect x="${n1(w * lerp(0.12, 0.3, rng()))}" y="${n1(-2.6 * scale)}" width="${n1(2.4 * scale)}" height="${n1(2.4 * scale)}" fill="hsl(${tileHue} 12% 30%)"/>`
-      : "";
-  return wrap(
-    roofShadow(w, d, scale) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileLit}"/>` +
-      `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileDim}"/>` +
-      `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(0.9 * scale)}"/>` +
-      chimney,
+// A pitched roof, drawn about (0,0): the NW-facing half catches the sun, the
+// SE half is in shade, and a bright ridge line runs between them. `along` picks
+// which axis the ridge runs down, so a row of houses isn't all facing one way.
+function pitched(
+  w: number,
+  d: number,
+  hue: number,
+  sat: number,
+  light: number,
+  scale: number,
+): string {
+  const lit = `hsl(${hue} ${sat}% ${Math.round(light)}%)`;
+  const dim = `hsl(${hue} ${sat}% ${Math.round(light - 18)}%)`;
+  const ridge = `hsl(${Math.max(0, hue)} ${Math.max(0, sat - 8)}% ${Math.round(light + 12)}%)`;
+  return (
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${lit}"/>` +
+    `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dim}"/>` +
+    `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(1.1 * scale)}"/>`
   );
 }
+
+// A chimney stack: a small dark box sitting ON the ridge, which is where a
+// chimney actually comes through a roof and what makes a plain rectangle read
+// as a house rather than as a card.
+function chimney(x: number, hue: number, scale: number): string {
+  const s = 3.2 * scale;
+  return `<rect x="${n1(x - s / 2)}" y="${n1(-s / 2)}" width="${n1(s)}" height="${n1(s)}" fill="hsl(${hue} 14% 28%)"/>`;
+}
+
+/** Roof tile colours: the warm reds and browns a town's roofs actually are. */
+function tileRoof(rng: Rng): { hue: number; sat: number; light: number } {
+  return {
+    hue: Math.round(lerp(4, 24, rng())),
+    sat: Math.round(lerp(34, 54, rng())),
+    light: lerp(48, 58, rng()),
+  };
+}
+
+// --- Town archetypes ---------------------------------------------------------
+//
+// Each takes its footprint (already scaled) and draws about (0,0). The caller
+// picks the size, so placement can know an archetype's reach BEFORE drawing it.
+
+/** A garage or outbuilding: the small thing that fills a corner of a plot. */
+function shed(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(20, 40, rng()));
+  const light = lerp(40, 50, rng());
+  return (
+    roofShadow(w, d, scale) +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="0.8" fill="hsl(${hue} 12% ${Math.round(light)}%)"/>` +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d * 0.45)}" fill="hsl(${hue} 12% ${Math.round(light + 9)}%)"/>`
+  );
+}
+
+/** The common case: one detached house under a pitched tile roof. */
+function house(rng: Rng, scale: number, w: number, d: number): string {
+  const { hue, sat, light } = tileRoof(rng);
+  const stack = rng() < 0.6 ? chimney(w * lerp(-0.28, 0.28, rng()), hue, scale) : "";
+  // A lean-to on one gable end — a porch or a garage — so the outline isn't a
+  // bare rectangle. Drawn under the main roof's tones, half its depth.
+  const lean =
+    rng() < 0.45
+      ? `<rect x="${n1(w / 2 - 1)}" y="${n1(-d / 4)}" width="${n1(w * 0.26)}" height="${n1(d * 0.55)}" rx="0.8" fill="hsl(${hue} ${Math.max(0, sat - 14)}% ${Math.round(light - 8)}%)"/>`
+      : "";
+  return roofShadow(w, d, scale) + lean + pitched(w, d, hue, sat, light, scale) + stack;
+}
+
+/**
+ * A terrace: 3-5 houses sharing party walls under one long roof. This is the
+ * archetype that most says "town" from above — a row reads as a street frontage
+ * where the same floor area as detached houses reads as a hamlet.
+ */
+function terrace(rng: Rng, scale: number, w: number, d: number): string {
+  const { hue, sat, light } = tileRoof(rng);
+  const units = 3 + Math.floor(rng() * 3);
+  const step = w / units;
+  let out = roofShadow(w, d, scale) + pitched(w, d, hue, sat, light, scale);
+  for (let i = 1; i < units; i++) {
+    // The party wall, drawn as a seam across both roof pitches, with the odd
+    // shared chimney stack standing on it.
+    const px = -w / 2 + step * i;
+    out +=
+      `<line x1="${n1(px)}" y1="${n1(-d / 2)}" x2="${n1(px)}" y2="${n1(d / 2)}" stroke="hsl(${hue} ${sat}% ${Math.round(light - 26)}%)" stroke-width="${n1(0.7 * scale)}"/>` +
+      (rng() < 0.55 ? chimney(px, hue, scale) : "");
+  }
+  return out;
+}
+
+/**
+ * A flat-roofed block: parapet ring, slab, rooftop plant. Concrete GREY, not
+ * the warm render of the roofs around it — on the tan town ground a warm flat
+ * roof either vanishes into it or reads as blank paper, so the roof has to
+ * change temperature, not just tone.
+ */
+function block(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(28, 38, rng()));
+  const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
+  const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
+  const inset = 2.6 * scale;
+  const plant = (): string => {
+    const bw = lerp(5, 9, rng()) * scale;
+    const bh = lerp(4, 8, rng()) * scale;
+    const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
+    const by = lerp(-d / 2 + inset + bh, d / 2 - inset - bh * 2, rng());
+    return (
+      `<rect x="${n1(bx + 0.8 * scale)}" y="${n1(by + 0.8 * scale)}" width="${n1(bw)}" height="${n1(bh)}" fill="${TOWN_SHADOW}"/>` +
+      `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bh)}" fill="hsl(210 10% ${Math.round(lerp(48, 58, rng()))}%)"/>`
+    );
+  };
+  // A light well on the bigger blocks: the courtyard a deep floorplate needs.
+  const well =
+    rng() < 0.4
+      ? `<rect x="${n1(-w * 0.16)}" y="${n1(-d * 0.14)}" width="${n1(w * 0.32)}" height="${n1(d * 0.28)}" fill="hsl(${hue} 8% ${Math.round(lerp(36, 42, rng()))}%)"/>`
+      : "";
+  return (
+    roofShadow(w, d, scale) +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
+    `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
+    well +
+    plant() +
+    plant()
+  );
+}
+
+/** A long metal hall — the works, the depot shed, the supermarket. */
+function hall(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(200, 216, rng()));
+  const sat = Math.round(lerp(6, 12, rng()));
+  const light = lerp(56, 64, rng());
+  // Roof lights: the strips of glazing down a shed roof, which is the detail
+  // that tells a hall apart from a plain grey slab at board zoom.
+  let lights = "";
+  const strips = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < strips; i++) {
+    const lx = lerp(-w / 2 + w * 0.08, w / 2 - w * 0.16, i / Math.max(1, strips - 1));
+    lights += `<rect x="${n1(lx)}" y="${n1(-d * 0.34)}" width="${n1(w * 0.07)}" height="${n1(d * 0.68)}" fill="hsl(${hue} ${sat + 6}% ${Math.round(light + 12)}%)" opacity="0.75"/>`;
+  }
+  return (
+    roofShadow(w, d, scale) +
+    pitched(w, d, hue, sat, light, scale) +
+    lights
+  );
+}
+
+/**
+ * A church: a long slate nave with a square tower at the north end. The one
+ * landmark in the set — rare, a different colour temperature from every other
+ * roof, and the thing that gives a town a centre to read it from.
+ */
+function church(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(206, 224, rng()));
+  const sat = Math.round(lerp(8, 16, rng()));
+  const light = lerp(44, 52, rng());
+  const towerW = w * lerp(0.72, 0.9, rng());
+  const ty = -d / 2 - towerW * 0.28;
+  return (
+    roofShadow(w, d, scale) +
+    pitched(w, d, hue, sat, light, scale) +
+    // The tower: its own shadow, a square plan, and a bright cap so it reads as
+    // taller than the nave it stands on.
+    `<rect x="${n1(-towerW / 2 + 1.6 * scale)}" y="${n1(ty - towerW / 2 + 1.6 * scale)}" width="${n1(towerW)}" height="${n1(towerW)}" fill="${TOWN_SHADOW}"/>` +
+    `<rect x="${n1(-towerW / 2)}" y="${n1(ty - towerW / 2)}" width="${n1(towerW)}" height="${n1(towerW)}" fill="hsl(${hue} ${sat}% ${Math.round(light - 8)}%)"/>` +
+    `<rect x="${n1(-towerW / 4)}" y="${n1(ty - towerW / 4)}" width="${n1(towerW / 2)}" height="${n1(towerW / 2)}" fill="hsl(${hue} ${sat}% ${Math.round(light + 16)}%)"/>`
+  );
+}
+
+// --- Which building goes where -----------------------------------------------
+//
+// SCALE, in the units everything else here is measured in: a tile is 100 units
+// and a CAR IS 23 OF THEM long (`DEFAULT_CAR_LENGTH` = 0.23 tiles). The first
+// town shipped with houses 14-20 units wide — narrower than the cars driving
+// past them, which reads as a model village rather than as a town. A modest
+// house is ~1.5 car lengths on its long side, a terrace 3, a hall 3.5. Those
+// are the numbers below, and they are why only two or three buildings now fit
+// on a tile where six used to.
+interface TownArchetype {
+  weight: number;
+  w: [number, number];
+  d: [number, number];
+  draw: (rng: Rng, scale: number, w: number, d: number) => string;
+}
+
+const TOWN: TownArchetype[] = [
+  { weight: 1.1, w: [18, 24], d: [13, 18], draw: shed },
+  { weight: 4, w: [30, 40], d: [22, 28], draw: house },
+  { weight: 2.2, w: [52, 70], d: [22, 28], draw: terrace },
+  { weight: 2, w: [40, 52], d: [32, 42], draw: block },
+  { weight: 1.2, w: [56, 72], d: [26, 34], draw: hall },
+  { weight: 0.4, w: [26, 34], d: [44, 56], draw: church },
+];
+
+// The clear radius an archetype needs: the half-diagonal of its LARGEST
+// footprint, which also covers the ±12° rotation (a rotated rectangle never
+// reaches past its own half-diagonal).
+const reachOf = (a: TownArchetype): number => Math.hypot(a.w[1], a.d[1]) / 2;
+
+// `FOOT.urban` is the gate a spot must clear before a building is attempted at
+// all, and it must match the SMALLEST archetype's reach — set it higher and the
+// street frontage empties out, lower and a shed lands in the ballast. Pinned by
+// a unit test rather than derived here, because FOOT is declared far above.
+export const URBAN_SMALLEST_REACH = reachOf(TOWN[0]);
+
+/**
+ * One building, TOP-DOWN — what you see of a town from above is its roofs.
+ *
+ * `room` is the clear half-extent available at this spot, in UNSCALED units,
+ * and the archetype is chosen from those that FIT it. That is what makes a town
+ * read: modest houses and sheds front the street where the corridor leaves
+ * little room, and the terraces, blocks and halls stand in the depth of the
+ * block where there is space for them. A fixed footprint could only ever be
+ * small enough to fit everywhere.
+ */
+function building(rng: Rng, scale: number, room: number): { svg: string; reach: number } {
+  const fits = TOWN.filter(a => reachOf(a) <= room);
+  const pool = fits.length > 0 ? fits : [TOWN[0]];
+  const total = pool.reduce((s, a) => s + a.weight, 0);
+  let r = rng() * total;
+  let pick = pool[0];
+  for (const a of pool) {
+    r -= a.weight;
+    if (r <= 0) {
+      pick = a;
+      break;
+    }
+  }
+  const w = lerp(pick.w[0], pick.w[1], rng()) * scale;
+  const d = lerp(pick.d[0], pick.d[1], rng()) * scale;
+  const ang = lerp(-12, 12, rng());
+  return {
+    svg: `<g transform="rotate(${ang.toFixed(1)})">${pick.draw(rng, scale, w, d)}</g>`,
+    // The footprint actually drawn, not the archetype's maximum — the caller
+    // turns this into a keep-out so the next building doesn't land on its roof.
+    reach: Math.hypot(w, d) / 2,
+  };
+}
+
+// How far a building may reach past its own tile's edge. Some overhang is what
+// makes a town continuous across tiles instead of a grid of separate estates;
+// unbounded, a terrace on one tile lands on a block on the next, and neither
+// tile can see the other's scatter to prevent it.
+const TOWN_OVERHANG = 10;
 
 /** A lily pad with the odd flower — enough to say "this water is shallow here". */
 function lily(rng: Rng, scale: number): string {
@@ -1181,8 +1355,10 @@ function lily(rng: Rng, scale: number): string {
  * as ground and starts reading as white paper dropped on the town.
  */
 function paving(rng: Rng): string {
-  const w = lerp(14, 26, rng());
-  const d = lerp(8, 15, rng());
+  // Sized against the buildings it serves (see the TOWN archetypes): a forecourt
+  // narrower than a car is a doormat.
+  const w = lerp(24, 42, rng());
+  const d = lerp(14, 26, rng());
   const skew = lerp(-3.5, 3.5, rng());
   const tone = `hsl(${Math.round(lerp(32, 46, rng()))} ${Math.round(lerp(5, 11, rng()))}% ${Math.round(lerp(66, 74, rng()))}%)`;
   return poly(
@@ -1199,8 +1375,8 @@ function paving(rng: Rng): string {
 
 /** A garden plot: the green between the houses, so a town isn't all render. */
 function garden(rng: Rng): string {
-  const w = lerp(11, 20, rng());
-  const d = w * lerp(0.34, 0.5, rng());
+  const w = lerp(20, 34, rng());
+  const d = w * lerp(0.4, 0.6, rng());
   const tone = `hsl(${Math.round(lerp(96, 122, rng()))} ${Math.round(lerp(20, 32, rng()))}% ${Math.round(lerp(46, 55, rng()))}%)`;
   return `<ellipse cx="0" cy="${n1(-d / 2)}" rx="${n1(w / 2)}" ry="${n1(d / 2)}" fill="${tone}" opacity="0.55"/>`;
 }
@@ -1414,10 +1590,15 @@ function buildGround(
     );
   }
 
-  // How much room a point has to the nearest line. Infinity when the tile and
-  // its neighbours carry none, which short-circuits every check below.
+  // How much room a point has to the nearest line — and, once a building has
+  // gone up, to that too. A placed building is pushed on as a degenerate
+  // one-point corridor with its own footprint as the half-width, so "don't
+  // build on the railway" and "don't build on the house next door" are the
+  // same test rather than two. Without it a tile's two or three buildings, now
+  // that they are building-sized, simply pile on top of each other.
+  const blockers = corridors.slice();
   const room = (p: Pt2): number =>
-    corridors.length ? corridorClearance(p, corridors) : Infinity;
+    blockers.length ? corridorClearance(p, blockers) : Infinity;
 
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
@@ -1518,8 +1699,18 @@ function buildGround(
         body = tree(rng, (overhang ? Math.max(scale, 1.05) : scale) * 0.42);
       } else if (kind === "rock") body = boulder(rng, scale);
       else if (kind === "mountain") body = peak(rng, scale);
-      else if (kind === "urban") body = building(rng, scale);
-      else body = lily(rng, scale);
+      // The town picks a building that FITS the room measured here, rather than
+      // one size that has to fit everywhere: a shed or a house on the frontage,
+      // a terrace or a hall in the depth of the block. The tile edge counts as
+      // room too (plus TOWN_OVERHANG), or the big archetypes would land half on
+      // the neighbouring tile, which cannot see them to keep clear.
+      else if (kind === "urban") {
+        const toEdge =
+          Math.min(p.x, p.y, GROUND_UNITS - p.x, GROUND_UNITS - p.y) + TOWN_OVERHANG;
+        const built = building(rng, scale, Math.min(clear, toEdge) / scale);
+        blockers.push({ pts: [p, p], half: built.reach });
+        body = built.svg;
+      } else body = lily(rng, scale);
       (overhang ? overhead : placed).push({
         y: p.y,
         g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,

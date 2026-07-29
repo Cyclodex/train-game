@@ -13,6 +13,8 @@ import {
   pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
+  FOOT,
+  URBAN_SMALLEST_REACH,
   tileCanopySvg,
   tileGroundSvg,
   tileScatterSvg,
@@ -589,6 +591,59 @@ describe("terrain", () => {
       const alone = tileGroundSvg("mountain", "2,2", around("grass"), 5);
       const inRange = tileGroundSvg("mountain", "2,2", around("mountain"), 5);
       expect(inRange).not.toBe(alone);
+    });
+  });
+
+  describe("town", () => {
+    // A tile is GROUND_UNITS across and a car is `DEFAULT_CAR_LENGTH` (0.23) of
+    // a tile — 23 units — long. Buildings shipped at 14-20 units wide, i.e.
+    // NARROWER THAN THE CARS driving past them, which read as a model village.
+    const CAR_UNITS = 23;
+
+    const rectWidths = (svg: string): number[] =>
+      [...svg.matchAll(/<rect[^>]*width="([\d.-]+)"/g)].map(m => Number(m[1]));
+
+    it("builds at street scale — the largest roof outruns a car", () => {
+      // Sampled across tiles because the archetype is a per-object roll: some
+      // tiles are all houses, but a town of several tiles must show something
+      // with a real frontage (a terrace, a block, a hall).
+      const widest = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].map(coord =>
+        Math.max(...rectWidths(tileScatterSvg("urban", coord, around("urban"), 7))),
+      );
+      expect(Math.max(...widest)).toBeGreaterThan(CAR_UNITS * 2);
+      // …and even the modest end of the range is no longer sub-car.
+      const all = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].flatMap(coord =>
+        rectWidths(tileScatterSvg("urban", coord, around("urban"), 7)),
+      );
+      const roofs = all.filter(w => w > 8); // skip chimneys and rooftop plant
+      expect(Math.max(...roofs)).toBeGreaterThan(CAR_UNITS);
+    });
+
+    it("gates placement on the SMALLEST archetype's reach, not the largest", () => {
+      // `building()` picks a footprint that fits the room measured at the spot,
+      // so FOOT.urban only has to admit a shed. Raise it toward the biggest
+      // archetype and every street frontage in the game empties out.
+      expect(FOOT.urban).toBeGreaterThan(URBAN_SMALLEST_REACH - 1.5);
+      expect(FOOT.urban).toBeLessThan(URBAN_SMALLEST_REACH + 1.5);
+    });
+
+    it("puts smaller buildings where a line leaves less room", () => {
+      // The whole point of measuring room first: a tile with a road through it
+      // has only its verges left, so what stands there is modest — while the
+      // same tile with nothing built on it gets the terraces and halls.
+      const road: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      };
+      const open = rectWidths(tileScatterSvg("urban", "4,4", around("urban"), 7));
+      const beside = rectWidths(
+        tileScatterSvg("urban", "4,4", around("urban"), 7, corridorsFor(road)),
+      );
+      const big = (ws: number[]) => (ws.length ? Math.max(...ws) : 0);
+      expect(big(beside)).toBeLessThan(big(open));
     });
   });
 });
