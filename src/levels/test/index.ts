@@ -82,6 +82,8 @@ import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { terrain } from "@/levels/test/scenarios/terrain";
 import { townscape } from "@/levels/test/scenarios/townscape";
 import { farmland } from "@/levels/test/scenarios/farmland";
+import { bridge } from "@/levels/test/scenarios/bridge";
+import { industry } from "@/levels/test/scenarios/industry";
 import { clearing } from "@/levels/test/scenarios/clearing";
 import { forestworld } from "@/levels/test/scenarios/forestworld";
 import { landprices } from "@/levels/test/scenarios/landprices";
@@ -190,7 +192,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, clearing, townscape, forestworld, lakevalley, lakevalleyOpen, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, bridge, clearing, townscape, industry, forestworld, lakevalley, lakevalleyOpen, demoworld] },
     ],
   },
 ];

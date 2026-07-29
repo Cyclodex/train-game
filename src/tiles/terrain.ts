@@ -25,6 +25,7 @@ export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "rock",
   "mountain",
   "urban",
+  "industry",
 ] as const;
 
 // Art is authored in a 100x100 box and scaled to whatever `tileSize` is, so
@@ -219,6 +220,10 @@ export const FOOT: Record<TerrainKind, number> = {
   // at its spot (see `building`), so this only has to admit a shed. Gating on
   // the biggest would empty the street frontage of the whole town.
   urban: 15,
+  // Works buildings are the biggest roofs in the game, but the same rule as the
+  // town applies: the footprint is chosen to fit the room measured at the spot,
+  // so the gate only has to admit the smallest thing on a yard (a silo).
+  industry: 13,
 };
 // A trunk needs far less room than a canopy: how much clearance a FOREST
 // tree's base needs before it is standing in the ballast.
@@ -326,10 +331,41 @@ const BLOCKS_BUILDING: Record<TerrainKind, boolean> = {
   rock: true,
   mountain: true,
   urban: false,
+  industry: false,
 };
 
 export function terrainBlocksBuilding(kind: TerrainKind): boolean {
   return BLOCKS_BUILDING[kind];
+}
+
+// Which blocking ground a STRUCTURE can carry a line over. Water can be
+// bridged; rock and mountain cannot (a tunnel is their answer, and a separate
+// feature). This is deliberately a property of the GROUND rather than a second
+// predicate beside canBuildOn: "may I build here" has exactly one answer, and
+// the bridge is an exception inside it.
+const BRIDGEABLE: Record<TerrainKind, boolean> = {
+  grass: false,
+  farmland: false,
+  forest: false,
+  water: true,
+  rock: false,
+  mountain: false,
+  urban: false,
+  industry: false,
+};
+
+export function terrainBridgeable(kind: TerrainKind): boolean {
+  return BRIDGEABLE[kind];
+}
+
+/**
+ * Whether laying a line on this cell would MEAN building a bridge — i.e. the
+ * ground blocks a plain line but a span can cross it. The build tools use this
+ * to offer a crossing where they would otherwise refuse, and to set
+ * `TileCell.bridge` on what they lay.
+ */
+export function needsBridge(cell: TileCell | null | undefined): boolean {
+  return !cell?.bridge && terrainBridgeable(terrainOf(cell));
 }
 
 // Terrain's SECOND gameplay rule (after canBuildOn): what laying track on this
@@ -348,15 +384,42 @@ export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
   rock: 1,
   mountain: 1,
   urban: 2.5,
+  // Dearer than a field, cheaper than town land: a works site is bought, but
+  // nobody is being rehoused.
+  industry: 2,
 };
 
-/** The build-price factor for a cell. Missing cell = bare grass = 1. */
+// A span is a STRUCTURE, not ground, so it brings its own price rather than
+// reading the table above — and it is the dearest thing in the game to build,
+// which is what makes "go round or cross?" a decision worth taking. High enough
+// to hurt, not so high that a river is a wall.
+export const BRIDGE_BUILD_FACTOR = 4;
+
+/**
+ * The build-price factor for a cell. Missing cell = bare grass = 1.
+ *
+ * A bridge answers for BOTH states of the same tile: the span already standing
+ * (`cell.bridge`), and the water a span is about to be thrown across. The build
+ * verb prices a route BEFORE the edit lands, so a factor that only recognised
+ * the finished bridge would quote every crossing at the price of open water.
+ */
 export function terrainBuildFactor(cell: TileCell | null | undefined): number {
-  return TERRAIN_BUILD_FACTOR[terrainOf(cell)];
+  const kind = terrainOf(cell);
+  if (cell?.bridge || terrainBridgeable(kind)) return BRIDGE_BUILD_FACTOR;
+  return TERRAIN_BUILD_FACTOR[kind];
 }
 
-/** Whether track or road may be laid on this cell. Missing cell = bare grass. */
+/**
+ * Whether track or road may be laid on this cell. Missing cell = bare grass.
+ *
+ * The bridge is the ONE exception, and it lives here rather than in a second
+ * rule beside this one: a cell carrying a span is buildable whatever is under
+ * it. Everything that asks "may I build here" — the validator's
+ * `blocked-terrain`, the editor, the route planner — gets the exception for
+ * free by asking the same question it always did.
+ */
 export function canBuildOn(cell: TileCell | null | undefined): boolean {
+  if (cell?.bridge) return true;
   return !terrainBlocksBuilding(terrainOf(cell));
 }
 
@@ -406,6 +469,10 @@ const GROUND: Record<TerrainKind, Hsl | null> = {
   rock: [210, 7, 56],
   mountain: [214, 13, 42],
   urban: [36, 17, 68],
+  // Hardstanding: a cool, desaturated concrete, deliberately GREYER and darker
+  // than the town's warm tan so the two read apart at a glance — one is where
+  // people live, the other is where things are made.
+  industry: [212, 6, 58],
 };
 
 // A second, lighter tone drawn just inside the patch edge — shallows at a
@@ -424,6 +491,7 @@ const RIM: Record<TerrainKind, Hsl | null> = {
   // capsule drawn round the tile rather than as the foot of a range.
   mountain: [214, 12, 46],
   urban: null,
+  industry: null,
 };
 
 // NO per-tile tone variation. It was tried (±3.5% lightness) to stop a large
@@ -866,6 +934,9 @@ const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   // TOWN archetypes): six of them at the new footprints would be one solid roof
   // per tile with no yards, gardens or street between them.
   urban: [2, 4],
+  // Fewer and bigger than a town's: a works is two or three large objects on a
+  // lot, not a street of houses.
+  industry: [2, 3],
 };
 
 // Where on the tile the standing objects go, and how big they get. Everything
@@ -892,6 +963,7 @@ const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
   // whose houses vary by 40% reads as a perspective error rather than as
   // variety (the archetypes supply the variety instead).
   urban: { x: [26, 74], y: [26, 76], scale: [0.9, 1.08] },
+  industry: { x: [28, 72], y: [28, 74], scale: [0.9, 1.1] },
 };
 
 type Pt2 = { x: number; y: number };
@@ -1423,7 +1495,9 @@ function flowers(rng: Rng, scale: number): string {
  */
 function sward(rng: Rng): string {
   const r = lerp(16, 30, rng());
-  const pts = blobPts(rng, r, 7, lerp(0.6, 0.95, rng()));
+  // Many points, so the blob reads as a soft change in the sward rather than as
+  // a hexagon someone dropped on the grass. At 7 the facets were legible.
+  const pts = blobPts(rng, r, 13, lerp(0.6, 0.95, rng()));
   const dry = rng() < 0.3;
   const tone = dry
     ? `hsl(${Math.round(lerp(56, 72, rng()))} ${Math.round(lerp(24, 34, rng()))}% ${Math.round(lerp(48, 56, rng()))}%)`
@@ -1604,6 +1678,135 @@ function bales(rng: Rng): string {
   return out;
 }
 
+// --- Industry ----------------------------------------------------------------
+//
+// The freight half of the world. Urban is where people are; this is where
+// THINGS are, and it exists so that a depot beside it can one day mean freight
+// the way a depot beside a town means passengers (see the design note in
+// docs/superpowers/specs/2026-07-28-industry-and-demand-design.md — the demand
+// coupling is deliberately NOT built here; this is the ground it will read).
+//
+// Drawn top-down under the same NW sun as everything else, but from a different
+// vocabulary to the town's: circles and grids rather than pitched roofs, cool
+// steel and concrete rather than warm tile, so a works never reads as a suburb.
+
+/** A silo or tank: a cylinder from above — a ring with a lit crown. */
+function silo(rng: Rng, scale: number, w: number): string {
+  const r = w / 2;
+  const hue = Math.round(lerp(196, 216, rng()));
+  const sat = Math.round(lerp(4, 12, rng()));
+  const body = lerp(58, 68, rng());
+  return (
+    `<circle cx="${n1(r * 0.22)}" cy="${n1(r * 0.22)}" r="${n1(r)}" fill="${STONE_SHADOW}"/>` +
+    `<circle cx="0" cy="0" r="${n1(r)}" fill="hsl(${hue} ${sat}% ${Math.round(body - 14)}%)"/>` +
+    `<circle cx="${n1(-r * 0.16)}" cy="${n1(-r * 0.16)}" r="${n1(r * 0.74)}" fill="hsl(${hue} ${sat}% ${Math.round(body)}%)"/>` +
+    // The cap ring, and the ladder that tells you the scale of the thing.
+    `<circle cx="${n1(-r * 0.16)}" cy="${n1(-r * 0.16)}" r="${n1(r * 0.3)}" fill="hsl(${hue} ${sat}% ${Math.round(body + 10)}%)"/>` +
+    `<rect x="${n1(-r * 0.06)}" y="${n1(-r)}" width="${n1(0.12 * r)}" height="${n1(r * 0.5)}" fill="hsl(${hue} ${sat}% ${Math.round(body - 24)}%)"/>`
+  );
+}
+
+/**
+ * A container stack: rows of boxes in shipping colours. The one object on the
+ * board that is unambiguously about FREIGHT, which is the whole point of the
+ * kind — a player should be able to tell what a siding is for by looking.
+ */
+function containers(rng: Rng, scale: number, w: number, d: number): string {
+  const cols = 3 + Math.floor(rng() * 3);
+  const rows = 2 + Math.floor(rng() * 2);
+  const bw = (w / cols) * 0.86;
+  const bd = (d / rows) * 0.8;
+  const HUES = [8, 30, 120, 205, 268, 350];
+  let out = "";
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (rng() < 0.16) continue; // gaps: a yard is never full
+      const px = -w / 2 + (c + 0.5) * (w / cols);
+      const py = -d / 2 + (r + 0.5) * (d / rows);
+      const hue = HUES[Math.floor(rng() * HUES.length)];
+      const light = Math.round(lerp(40, 56, rng()));
+      out +=
+        `<rect x="${n1(px - bw / 2 + 0.8 * scale)}" y="${n1(py - bd / 2 + 0.8 * scale)}" width="${n1(bw)}" height="${n1(bd)}" fill="${STONE_SHADOW}"/>` +
+        `<rect x="${n1(px - bw / 2)}" y="${n1(py - bd / 2)}" width="${n1(bw)}" height="${n1(bd)}" fill="hsl(${hue} ${Math.round(lerp(34, 52, rng()))}% ${light}%)"/>` +
+        `<rect x="${n1(px - bw / 2)}" y="${n1(py - bd / 2)}" width="${n1(bw)}" height="${n1(bd * 0.42)}" fill="hsl(${hue} ${Math.round(lerp(30, 46, rng()))}% ${light + 8}%)"/>`;
+    }
+  }
+  return out;
+}
+
+/** A works shed: the town's hall, longer and in works colours. */
+function works(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(200, 214, rng()));
+  const sat = Math.round(lerp(3, 9, rng()));
+  // Pitched roofs shade their far half 18 points down, so a shed pitched at the
+  // town's lightness came out near-black on the works' own grey ground — a dark
+  // bar rather than a building. Lit from higher up.
+  const light = lerp(58, 66, rng());
+  // Ventilators along the ridge — the detail that says "shed with something
+  // running inside it" rather than "warehouse".
+  let vents = "";
+  const n = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const vx = lerp(-w * 0.36, w * 0.36, n === 1 ? 0.5 : i / (n - 1));
+    vents += `<rect x="${n1(vx - 1.6 * scale)}" y="${n1(-1.6 * scale)}" width="${n1(3.2 * scale)}" height="${n1(3.2 * scale)}" fill="hsl(${hue} ${sat}% ${Math.round(light - 22)}%)"/>`;
+  }
+  return roofShadow(w, d, scale) + pitched(w, d, hue, sat, light, scale) + vents;
+}
+
+interface WorksArchetype {
+  weight: number;
+  w: [number, number];
+  d: [number, number];
+  draw: (rng: Rng, scale: number, w: number, d: number) => string;
+}
+
+const WORKS: WorksArchetype[] = [
+  // A silo is round, so its footprint is its diameter both ways.
+  { weight: 2, w: [22, 32], d: [22, 32], draw: (r, s, w) => silo(r, s, w) },
+  { weight: 2.2, w: [38, 56], d: [30, 44], draw: containers },
+  { weight: 3, w: [54, 76], d: [30, 40], draw: works },
+  { weight: 1.6, w: [42, 56], d: [34, 46], draw: block },
+];
+
+const worksReach = (a: WorksArchetype): number => Math.hypot(a.w[1], a.d[1]) / 2;
+
+/** One works object, sized to the room measured at its spot (as `building`). */
+function worksBuilding(
+  rng: Rng,
+  scale: number,
+  room: number,
+): { svg: string; reach: number } {
+  const fits = WORKS.filter(a => worksReach(a) <= room);
+  const pool = fits.length > 0 ? fits : [WORKS[0]];
+  const total = pool.reduce((s, a) => s + a.weight, 0);
+  let r = rng() * total;
+  let pick = pool[0];
+  for (const a of pool) {
+    r -= a.weight;
+    if (r <= 0) {
+      pick = a;
+      break;
+    }
+  }
+  const w = lerp(pick.w[0], pick.w[1], rng()) * scale;
+  const d = lerp(pick.d[0], pick.d[1], rng()) * scale;
+  // Works buildings sit SQUARE to the yard, unlike the town's jittered roofs:
+  // a plant is laid out, a village grew.
+  const ang = lerp(-4, 4, rng());
+  return {
+    svg: `<g transform="rotate(${ang.toFixed(1)})">${pick.draw(rng, scale, w, d)}</g>`,
+    reach: Math.hypot(w, d) / 2,
+  };
+}
+
+/** Hardstanding: the concrete apron a works stands on, with its joint lines. */
+function apron(rng: Rng): string {
+  const w = lerp(30, 52, rng());
+  const d = lerp(20, 34, rng());
+  const tone = `hsl(${Math.round(lerp(204, 216, rng()))} ${Math.round(lerp(3, 8, rng()))}% ${Math.round(lerp(60, 68, rng()))}%)`;
+  return `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" fill="${tone}" opacity="0.8"/>`;
+}
+
 /** A lily pad with the odd flower — enough to say "this water is shallow here". */
 function lily(rng: Rng, scale: number): string {
   const r = 5.5 * scale;
@@ -1700,6 +1903,9 @@ function groundMarks(
       spread(3 + Math.floor(rng() * 3), 10, () => paving(rng)) +
       spread(2 + Math.floor(rng() * 3), 8, () => garden(rng))
     );
+  }
+  if (kind === "industry") {
+    return spread(2 + Math.floor(rng() * 2), 12, () => apron(rng));
   }
   if (kind === "farmland") {
     // The stripes themselves are laid by the caller (they need the patch clip);
@@ -2097,10 +2303,14 @@ function buildGround(
       // a terrace or a hall in the depth of the block. The tile edge counts as
       // room too (plus TOWN_OVERHANG), or the big archetypes would land half on
       // the neighbouring tile, which cannot see them to keep clear.
-      else if (kind === "urban") {
+      else if (kind === "urban" || kind === "industry") {
         const toEdge =
           Math.min(p.x, p.y, GROUND_UNITS - p.x, GROUND_UNITS - p.y) + TOWN_OVERHANG;
-        const built = building(rng, scale, Math.min(clear, toEdge) / scale);
+        const room = Math.min(clear, toEdge) / scale;
+        const built =
+          kind === "urban"
+            ? building(rng, scale, room)
+            : worksBuilding(rng, scale, room);
         blockers.push({ pts: [p, p], half: built.reach });
         body = built.svg;
       } else body = lily(rng, scale);

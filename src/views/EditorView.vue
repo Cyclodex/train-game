@@ -369,7 +369,7 @@ import {
   setTerrain,
   isBlankCell,
 } from "@/tiles/editOps";
-import { canBuildOn } from "@/tiles/terrain";
+import { canBuildOn, needsBridge } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
@@ -459,6 +459,7 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },
       { key: "mountain", icon: "⛰️", label: "Mountain", tool: "terrain", terrain: "mountain" },
       { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
+      { key: "industry", icon: "🏭", label: "Works", tool: "terrain", terrain: "industry" },
       { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
     ],
   },
@@ -918,6 +919,9 @@ class EditorView extends Vue {
       width: this.gridCols,
       height: this.gridRows,
       passable: (c: Coordinates) => canBuildOn(this.level[getCoordinatesId(c)]),
+      // Water is crossable on a structure: the route may span it, and
+      // `addConnection` marks what it lays as a bridge.
+      bridgeable: (c: Coordinates) => needsBridge(this.level[getCoordinatesId(c)]),
     };
   }
 

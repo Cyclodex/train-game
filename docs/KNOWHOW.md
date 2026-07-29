@@ -337,6 +337,52 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## BRIDGES (2026-07-28)
+- `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
+  `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate
+  beside it. Everything that asks "may I build here" — `validateLevel`'s
+  `blocked-terrain`, the editor, the route planner — gets the exception for free
+  by asking the question it always asked. Pinned by a validator test.
+- ONLY WATER IS BRIDGEABLE (`BRIDGEABLE`/`terrainBridgeable`). Rock and mountain
+  still refuse: a tunnel is their answer and a separate feature.
+- `addConnection` SETS IT. Every build path in the game (editor commit, in-play
+  `buildRoute`, the route-draw lay) funnels through that one reducer, so there is
+  no "place bridge" verb to forget and no way to end up with track standing in a
+  river. `removeConnection` clears it when the last line goes, or a razed
+  crossing leaves a permanently buildable tile mid-river — a free crossing,
+  bought once.
+- `RouteOpts.bridgeable` is a SECOND passability gate priced at `BRIDGE_MOVE`
+  (6x MOVE). That number is the whole design: a 1-wide river is worth crossing
+  from ~6 tiles of detour away, a lake several tiles across never is. Money is
+  separate — `BRIDGE_BUILD_FACTOR` (4), the dearest thing in the game.
+- `terrainBuildFactor` answers BRIDGE for both states of the tile: the span
+  standing, and the water a span is about to cross. `buildRoute` prices before
+  the edit lands, so a factor that only knew the finished bridge would quote
+  every crossing at the price of open water.
+- RENDER: `.bridge-deck` in Tile.vue, z1 (over ground, under rails z2), three
+  strokes along the same segment paths the rails/lanes follow — shadow offset SE
+  to the one sun, deck, parapet. Stroke-based so a bridge on a CURVE bends for
+  free. Rail AND road: nothing about a structure is rail-specific, and a road
+  deck must be WIDER than its carriageway or it vanishes under the opaque road
+  surface (width from the lane count). /test scenario: `bridge`.
+- A RIVER IS NOT A KIND: it is a 1-wide line of `water`, which `patchPath` fuses
+  into a ribbon. What separates it from a lake is that it cannot be gone round.
+
+## INDUSTRY (2026-07-28)
+- 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
+  freight half of the world — the ground a depot will one day read to decide it
+  ships goods rather than people. The DEMAND COUPLING IS NOT BUILT: design in
+  `docs/superpowers/specs/2026-07-28-industry-and-demand-design.md`.
+- It must not read as a darker town. Different VOCABULARY, not tone: circles and
+  grids (silos, tanks, container stacks, vented sheds) in cool steel/concrete,
+  laid SQUARE to the yard (±4°) — the town is pitched roofs in warm tile jittered
+  ±12°, because a village grew and a plant was planned. Check them side by side
+  in `/test/industry`, never alone.
+- Same fit-the-room placement as the town (`worksBuilding`, shared `blockers`
+  list), so the two kinds cannot drift apart in how they pack.
+- A pitched roof shades its far half 18 points down, so a shed pitched at the
+  town's lightness comes out near-BLACK on the works' own grey ground. Works
+  sheds are lit 8 points higher for that reason.
 ## MEADOW — WHAT GROWS ON PLAIN GRASS (2026-07-28)
 - GRASS STILL PAINTS NO FILL. That rule has not moved and must not: a grass
   rect (or a patch outline like every other kind draws) covers the world

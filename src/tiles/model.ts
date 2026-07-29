@@ -36,7 +36,8 @@ export type TerrainKind =
   | "water"
   | "rock"
   | "mountain"
-  | "urban";
+  | "urban"
+  | "industry";
 
 export interface TileCell {
   connections: PortPair[];
@@ -44,6 +45,12 @@ export interface TileCell {
   // The ground under this cell. Absent = grass. See tiles/terrain.ts and
   // docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md.
   terrain?: TerrainKind;
+  // A STRUCTURE carrying the line over what is under it. The designed exception
+  // to `canBuildOn` — not a second rule beside it: a bridge cell is buildable
+  // *because it is a bridge*, and the predicate says so in one place. Set
+  // automatically wherever a line is laid on bridgeable ground (water), so a
+  // river is crossed rather than routed around. See tiles/terrain.ts.
+  bridge?: boolean;
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
   // Road layer: port pairs describing a road crossing this cell, in the SAME
