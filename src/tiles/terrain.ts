@@ -15,7 +15,7 @@
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
 import { segmentPoints } from "@/sim/pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, bush, lerp, tree } from "@/utils/foliage";
+import { Rng, bush, green, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
@@ -237,23 +237,50 @@ const TRUNK_CLEAR = 4;
 // Tiles per noise cell: a glade spans a couple of tiles, not a couple of trees.
 const GLADE_CELL = 3;
 
-function fieldCorner(gx: number, gy: number, seed: number): number {
-  return makeRng(hashInts(seed, gx, gy, 0x6e))();
+function fieldCorner(gx: number, gy: number, seed: number, salt: number): number {
+  return makeRng(hashInts(seed, gx, gy, salt))();
 }
 
 const smoothT = (t: number) => t * t * (3 - 2 * t);
 
+/**
+ * Smooth value noise 0..1 at a WORLD position (in tile units), over a lattice
+ * `cell` tiles across. The one shape of unevenness this codebase is allowed:
+ * it is a function of WORLD position, so whatever it drives varies across the
+ * board without ever changing AT a tile boundary — which is what disqualified
+ * per-tile tone variation (see the note by GROUND).
+ */
+function valueNoiseAt(
+  wx: number,
+  wy: number,
+  seed: number,
+  cell: number,
+  salt: number,
+): number {
+  const cx = Math.floor(wx / cell);
+  const cy = Math.floor(wy / cell);
+  const fx = smoothT(wx / cell - cx);
+  const fy = smoothT(wy / cell - cy);
+  const a = fieldCorner(cx, cy, seed, salt);
+  const b = fieldCorner(cx + 1, cy, seed, salt);
+  const c = fieldCorner(cx, cy + 1, seed, salt);
+  const d = fieldCorner(cx + 1, cy + 1, seed, salt);
+  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+}
+
 /** Forest density 0..1 at a WORLD position (in tile units). Deterministic. */
 export function forestDensityAt(wx: number, wy: number, seed: number): number {
-  const cx = Math.floor(wx / GLADE_CELL);
-  const cy = Math.floor(wy / GLADE_CELL);
-  const fx = smoothT(wx / GLADE_CELL - cx);
-  const fy = smoothT(wy / GLADE_CELL - cy);
-  const a = fieldCorner(cx, cy, seed);
-  const b = fieldCorner(cx + 1, cy, seed);
-  const c = fieldCorner(cx, cy + 1, seed);
-  const d = fieldCorner(cx + 1, cy + 1, seed);
-  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+  return valueNoiseAt(wx, wy, seed, GLADE_CELL, 0x6e);
+}
+
+// Open ground is not a lawn. The same noise, on a coarser lattice and its own
+// salt, decides how ROUGH a stretch of meadow is: close-cropped in places,
+// tussocky and flowering in others, with the odd thicket. See `meadowScatter`.
+const MEADOW_CELL = 4;
+
+/** Meadow roughness 0..1 at a WORLD position (in tile units). Deterministic. */
+export function meadowRoughnessAt(wx: number, wy: number, seed: number): number {
+  return valueNoiseAt(wx, wy, seed, MEADOW_CELL, 0xb3);
 }
 
 // How likely a tree at this density is to stand: full wood above, none below,
@@ -1347,6 +1374,66 @@ function building(rng: Rng, scale: number, room: number): { svg: string; reach: 
 // tile can see the other's scatter to prevent it.
 const TOWN_OVERHANG = 10;
 
+// --- Meadow (what grows on plain grass) --------------------------------------
+//
+// Grass is the one kind that paints NO ground of its own, and that has to stay
+// true: a grass rect would cover the world theme's backdrop on every tile in
+// the game (see terrainOf and the note by GROUND). So the answer to "the open
+// green is boring" cannot be a fill — it has to be things ON the green.
+//
+// Everything here is therefore additive scatter and low-contrast marks, and how
+// MUCH of it a stretch gets comes from `meadowRoughnessAt`: a coarse world noise
+// field, so one part of the board is close-cropped and another is tussocky and
+// flowering, and the change happens across tiles rather than at their edges.
+
+/** A clump of grass: a few blades leaning off one root, a shade off the sward. */
+function tuft(rng: Rng, scale: number): string {
+  const n = 3 + Math.floor(rng() * 3);
+  const h = lerp(3.4, 6.2, rng()) * scale;
+  const tone = green(rng, lerp(30, 42, rng()));
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const a = lerp(-0.9, 0.9, rng());
+    const len = h * lerp(0.65, 1, rng());
+    out += `<path d="M0 0 Q${n1(Math.sin(a) * len * 0.4)} ${n1(-len * 0.6)} ${n1(Math.sin(a) * len)} ${n1(-len)}" stroke="${tone}" stroke-width="${n1(0.9 * scale)}" fill="none" stroke-linecap="round"/>`;
+  }
+  return out;
+}
+
+/** A drift of wildflowers: a low green pad speckled with colour. */
+function flowers(rng: Rng, scale: number): string {
+  const r = lerp(3.4, 6, rng()) * scale;
+  // One hue per drift — a meadow flowers in patches of a species, not in
+  // confetti. Kept pale: saturated dots at this size read as UI, not as plants.
+  const hue = [50, 328, 0, 268][Math.floor(rng() * 4)];
+  const petal = `hsl(${hue} ${Math.round(lerp(30, 55, rng()))}% ${Math.round(lerp(76, 88, rng()))}%)`;
+  let out = `<ellipse cx="0" cy="0" rx="${n1(r)}" ry="${n1(r * 0.8)}" fill="${green(rng, 38)}" opacity="0.5"/>`;
+  const n = 3 + Math.floor(rng() * 4);
+  for (let i = 0; i < n; i++) {
+    out += `<circle cx="${n1(lerp(-r, r, rng()) * 0.8)}" cy="${n1(lerp(-r, r, rng()) * 0.7)}" r="${n1(lerp(0.7, 1.3, rng()) * scale)}" fill="${petal}"/>`;
+  }
+  return out;
+}
+
+/**
+ * A soft patch of sward a shade off the rest — rougher grazing, a damp hollow,
+ * a dry rise. Painted as a low-contrast blob, NEVER as a per-tile tone: the
+ * blob has an outline of its own, so it cannot draw the tile grid the way a
+ * flat per-tile fill does.
+ */
+function sward(rng: Rng): string {
+  const r = lerp(16, 30, rng());
+  const pts = blobPts(rng, r, 7, lerp(0.6, 0.95, rng()));
+  const dry = rng() < 0.3;
+  const tone = dry
+    ? `hsl(${Math.round(lerp(56, 72, rng()))} ${Math.round(lerp(24, 34, rng()))}% ${Math.round(lerp(48, 56, rng()))}%)`
+    : green(rng, lerp(30, 44, rng()));
+  // Low contrast, but not invisible. Under ~0.15 the blobs vanish at board zoom
+  // and the open green is exactly as flat as it was; over ~0.4 they stop being
+  // ground and start being stains.
+  return poly(pts, tone, ` opacity="${(0.2 + rng() * 0.15).toFixed(2)}"`);
+}
+
 // --- Farmland ----------------------------------------------------------------
 //
 // The signature top-down landscape: a patchwork of ploughed strips. Everything
@@ -1732,6 +1819,83 @@ export function tileCanopySvg(
   return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
 }
 
+/**
+ * What grows on plain grass.
+ *
+ * A separate build from `buildGround` because grass is a separate case in every
+ * way that matters: NO PATCH (so no fill, no rim, no outline to keep things
+ * inside — the world theme's backdrop is the ground here and must stay visible),
+ * and density that comes from a world noise field rather than from a per-kind
+ * constant, so open country varies across the board instead of being one flat
+ * green everywhere.
+ *
+ * Corridors still apply: a tuft standing in the ballast is as wrong as a tree
+ * is. Marks and scatter both drop rather than retry — this is filler, and bare
+ * verge beside the line is exactly right.
+ */
+function buildMeadow(
+  coordId: string,
+  seed: number,
+  corridors: Corridor[],
+): { ground: string; scatter: string; canopy: string } {
+  const rng = tileRng(coordId, seed);
+  const { x, y } = parseCoordId(coordId);
+  const room = (p: Pt2): number =>
+    corridors.length ? corridorClearance(p, corridors) : Infinity;
+  // Roughness at the tile's centre. One sample per tile is enough — the field
+  // is smooth over four tiles, so neighbours land close together and a rough
+  // stretch fades into a cropped one over several tiles rather than at a seam.
+  const rough = meadowRoughnessAt(x + 0.5, y + 0.5, seed);
+
+  // Broad, very low-contrast sward blobs first: the tonal variation that stops
+  // a big open expanse reading as one flat colour. They are ground, so they go
+  // under everything and take no part in the depth sort.
+  const marks: string[] = [];
+  const swardCount = 2 + Math.floor(rng() * 2 + rough * 2);
+  for (let i = 0; i < swardCount; i++) {
+    const p = { x: lerp(18, 82, rng()), y: lerp(18, 82, rng()) };
+    if (room(p) < 6) continue;
+    marks.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${sward(rng)}</g>`);
+  }
+
+  // Then what stands in it. Tufts everywhere, flowers and bushes only where the
+  // ground is rough, a lone thorn tree rarer still — so a cropped stretch is
+  // nearly bare and a rough one is properly shaggy.
+  const count = Math.round(lerp(2, 11, rough));
+  const placed: { y: number; g: string }[] = [];
+  for (let i = 0; i < count; i++) {
+    const p = { x: lerp(10, 90, rng()), y: lerp(10, 90, rng()) };
+    const roll = rng();
+    const scale = lerp(0.8, 1.25, rng());
+    let body: string;
+    let foot: number;
+    if (roll < 0.06 + rough * 0.06) {
+      body = tree(rng, scale * 0.34);
+      foot = 11 * scale;
+    } else if (roll < 0.2 + rough * 0.18) {
+      body = bush(rng, scale * 0.4);
+      foot = 7 * scale;
+    } else if (roll < 0.44 + rough * 0.2) {
+      body = flowers(rng, scale);
+      foot = 6 * scale;
+    } else {
+      body = tuft(rng, scale);
+      foot = 4 * scale;
+    }
+    if (room(p) < foot) continue;
+    placed.push({
+      y: p.y,
+      g: `<g transform="translate(${n1(p.x)} ${n1(p.y)})">${body}</g>`,
+    });
+  }
+  placed.sort((a, b) => a.y - b.y);
+  return {
+    ground: marks.join(""),
+    scatter: placed.map(p => p.g).join(""),
+    canopy: "",
+  };
+}
+
 function buildGround(
   kind: TerrainKind,
   coordId: string,
@@ -1740,6 +1904,10 @@ function buildGround(
   corridors: Corridor[],
 ): { ground: string; scatter: string; canopy: string } {
   const base = GROUND[kind];
+  // Grass has no ground of its own to paint, but it does have things growing on
+  // it — a different build entirely, and the only one that must never emit a
+  // fill (see meadowScatter).
+  if (kind === "grass") return buildMeadow(coordId, seed, corridors);
   if (!base) return { ground: "", scatter: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);

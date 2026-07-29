@@ -337,6 +337,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## MEADOW — WHAT GROWS ON PLAIN GRASS (2026-07-28)
+- GRASS STILL PAINTS NO FILL. That rule has not moved and must not: a grass
+  rect (or a patch outline like every other kind draws) covers the world
+  theme's backdrop on EVERY tile in the game. What changed is that grass now
+  grows things — tufts, flower drifts, bushes, the odd thorn tree, plus
+  translucent `sward` blobs — all ADDITIVE. `buildMeadow` is its own build,
+  branched before `buildGround`'s `!base` return; it emits no fill, no rim and
+  no clip, and terrain.spec pins exactly that (every path it lays carries
+  opacity < 0.45).
+- NO PATCH means no containment walk: there is no outline to keep objects
+  inside, so placement is the plain band and the corridors. Corridors DO still
+  apply — a tuft in the ballast is as wrong as a tree.
+- HOW MUCH grows comes from `meadowRoughnessAt` — the same value noise as the
+  glades, on a 4-tile lattice with its own salt. That is the only shape of
+  unevenness allowed here: a function of WORLD position, so it varies across
+  the board and never changes AT a tile boundary (which is what disqualified
+  per-tile tone variation — see the note by GROUND). Close-cropped stretches
+  get ~2 objects, tussocky ones ~11, and flowers/bushes/trees only appear as
+  roughness rises. Pinned: the count varies across a row, and neighbours differ
+  by less than the whole range (a gradient, not noise).
+- `valueNoiseAt(wx, wy, seed, cell, salt)` is the shared generator behind both
+  fields; add a salt rather than a second implementation.
+- THE REAL ANSWER TO "the open green is boring" IS FARMLAND, not the meadow.
+  Fields cover ground; the meadow only stops what is left reading as a lawn.
+  Judge both on a THEMED shot (`npm run shot -- <id> --backdrop --no-debug`) —
+  the flat debug backdrop makes the meadow look far more prominent than it is.
 ## FARMLAND (2026-07-28)
 - 7th kind, buildable, `TERRAIN_BUILD_FACTOR` 1.2 (between grass 1 and forest
   1.5 — you buy the field off the farmer). Wire-through for ANY new kind:

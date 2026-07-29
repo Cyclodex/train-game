@@ -325,8 +325,50 @@ describe("terrain", () => {
   });
 
   describe("tileGroundSvg", () => {
-    it("draws nothing for grass, so an untagged world looks untouched", () => {
-      expect(tileGroundSvg("grass", "1,1", around("grass"))).toBe("");
+    it("lays no opaque ground for grass, so the world theme still shows through", () => {
+      // Grass used to draw NOTHING at all. It now grows a meadow (tufts,
+      // flowers, sward blobs — see buildMeadow), and the rule that made
+      // "nothing" right survives intact and is what actually matters: grass
+      // paints no FILL. A grass rect, or a patch outline like every other kind
+      // draws, would cover the theme's backdrop on every tile in the game.
+      const svg = tileGroundSvg("grass", "1,1", around("grass"));
+      expect(svg).not.toContain("<rect");
+      // Whatever it does lay is a translucent blob, never a solid one.
+      const fills = [...svg.matchAll(/<path [^>]*fill="[^"]*"[^>]*>/g)].map(m => m[0]);
+      for (const f of fills) {
+        const op = f.match(/opacity="([\d.]+)"/);
+        expect(op, `opaque ground on grass: ${f}`).not.toBeNull();
+        expect(Number(op![1])).toBeLessThan(0.45);
+      }
+      // And it stays away from the patch machinery entirely: no rim, no clip.
+      expect(svg).not.toContain("clipPath");
+    });
+
+    it("varies the meadow across the board rather than tile by tile", () => {
+      // The answer to "the open green is boring" that does NOT break the rule
+      // above: how much grows on a stretch comes from a coarse world noise
+      // field, so one part of the board is close-cropped and another is
+      // tussocky — and, because the field is smooth over four tiles, adjacent
+      // tiles land close together instead of the density flipping at a seam.
+      const at = (x: number, y: number) =>
+        (tileScatterSvg("grass", `${x},${y}`, around("grass"), 5).match(/<g /g) ?? [])
+          .length;
+      const counts: number[] = [];
+      for (let x = 0; x < 16; x++) counts.push(at(x, 3));
+      expect(Math.max(...counts)).toBeGreaterThan(Math.min(...counts) + 2);
+      // Neighbours differ by less than the whole range: a gradient, not noise.
+      const jumps = counts.slice(1).map((c, i) => Math.abs(c - counts[i]));
+      expect(Math.max(...jumps)).toBeLessThan(Math.max(...counts));
+    });
+
+    it("keeps the meadow off the line like every other kind", () => {
+      const rail: TileCell = {
+        connections: [[Position.Left, Position.Right]],
+      };
+      const open = tileScatterSvg("grass", "4,4", around("grass"), 5);
+      const beside = tileScatterSvg("grass", "4,4", around("grass"), 5, corridorsFor(rail));
+      const n = (s: string) => (s.match(/<g /g) ?? []).length;
+      expect(n(beside)).toBeLessThan(n(open));
     });
 
     it("draws something for every other kind", () => {
