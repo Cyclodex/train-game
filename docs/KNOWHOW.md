@@ -729,11 +729,42 @@ lean — prune as much as you add. This file only stays useful if every task ten
   refunds — so "TV refunds a misdrag" was wrong; undo is our own answer), and an
   extra train costs ~25% of what it pays (~$1.5k for ~$6k) with a RANDOMISED
   consist.
-- TAX is `max(minimum, annual income × rate)` charged at the Dec→Jan boundary and
-  RISING WITH INFLATION over a level's 50+ in-game years — an INCOME tax, not the
-  per-piece upkeep we built. Keep ours (it opposes the fare clock; an income tax
-  punishes the good run), but the RISING RATE is worth stealing: one field on
-  `CalendarSetup` turns a flat levy into a difficulty curve.
+- TAX is `max(minimal_tax_value, annual_income × tax_rate)` charged at the Dec→Jan
+  boundary — a FLOOR plus a cut of the year's income, the income part resetting
+  each January, the FLOOR rising per CHAPTER of the campaign. Stated by two devs
+  in the Steam thread; NOT "inflation over a level" (that was a forum post its own
+  author retracted, and the first correction pass copied the retracted text —
+  see the trap below). Keep our per-piece levy: of the three possible bases the
+  floor is the flat levy we already rejected, income punishes the good run, and
+  only per-piece answers a decision the player makes. STEAL the rising floor —
+  `taxPerTrackPiecePerYear` climbing board by board in `TycoonTuning` already is
+  TV's "bigger from one season to another", no new field needed.
+- TRAP, and it cost a day: a WEB-SEARCH SUMMARY FLATTENS A FORUM THREAD into one
+  confident answer and drops the argument inside it. The tax thread's top reply is
+  retracted in place by its author after a dev corrected him; the summary quoted
+  the retraction's target, not the retraction. Where a claim comes from a thread,
+  READ THE THREAD.
+- FARES IN TV1 ARE RANDOMLY ROLLED — "no regard for distance to travel, length of
+  train, speed of train, or any other factor", extra trains included (a $1,000
+  summon can roll an $800 train). Reviewers call it the game's worst flaw: fixed
+  track costs against random income makes an early level a restart lottery. Ours
+  prices demand (consist + Manhattan). DO NOT "restore parity" here.
+- TV1 HAS BRIDGES AND TUNNELS, as AUTHORED chokepoints you route through and
+  cannot place ("a bridge or tunnel whose location you don't control"); TV2 made
+  them buildable. So an authored bridge ROLE is the cheap first version — a build
+  tool is TV2's feature, not TV1's.
+- TV NEVER WARNS YOU before insolvency ("nothing warns them they're spending
+  almost all their money"). Our year-ahead `taxUnaffordable` warning is a straight
+  improvement over the source, not a nicety.
+- TV GEOMETRY IS COARSER THAN OURS: track turns 45° a tile and splits only two
+  ways per tile, so a 3-way junction costs a 3x2 area and three switches. Our
+  single-tile T-junction is more expressive — don't copy TV's board sizes.
+- SANDBOX IN TV IS A MODIFIER, not a mode ("can be turned on for both story and
+  random modes"), and the RANDOM levels ARE the 6th level of each chapter. Ours is
+  a separate registry mode; a flag over any board is closer to the source and
+  cheaper.
+- TOOL MODES on hotkeys: Switch Q / Build W / Demolish E / new train R / pause
+  Space / 1x 2x 4x. We have the modes, not the keys, and not R (= M10).
 - WE ALREADY MATCH, unknowingly: a level is won by delivering the quota while
   solvent and LOST by an unpayable levy (`deliveriesRequired` + `fail.onBankruptcy`);
   the three named goals are OPTIONAL stamps on top (so a star may be hard — it
@@ -744,15 +775,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   emergency. TV also runs trains at DIFFERENT SPEEDS; our `physics.ts` mass model
   produces that free and no board exploits it yet.
 - ACCESSIBILITY, free from TV1: its colourblind mode replaces each station's
-  symbol with a LETTER A–H, and puts the target's letter on the train. Cheaper
-  than the typed-cargo model the design doc had queued for the same problem.
+  symbol with a LETTER, and puts the target's letter on the train. Cheaper than
+  the typed-cargo model the design doc had queued for the same problem. COPY THE
+  IDEA, NOT THE EXECUTION — TV's own reviewer calls the letters unreadable in play
+  ("too little contrast", overlapping icons). The bit TV gets right is SHAPE
+  CODING: origin stations are circles, destinations the same colours as smaller
+  squares, so meaning survives when the glyph is too small to read. Check any such
+  badge at our SMALLEST camera zoom, not at 100%.
 - SEASON SHAPE (if a campaign chapter ever needs one): 5 mission levels + 1
   free-play level, 3 optional goals each = 15 stamps a chapter; 5–10 min a level;
   NO MID-LEVEL SAVE, which is why the levels are short.
-- RESEARCH CHANNEL WARNING: in the cloud sandbox `WebFetch` and `curl` are BOTH
-  blocked by egress policy (403 from Wikipedia, Steam, every review host), so
-  WebSearch result summaries are the only channel. Corroborate anything
-  load-bearing across two independent results.
+- RESEARCH CHANNEL: `WebFetch` is 403 for EVERY host in the cloud sandbox, and
+  egress for `curl` varies by session — test it, don't assume. When curl works:
+  `curl -sSL --compressed -A '<a browser UA>'` plus a regex HTML→text pass gets
+  Wikipedia, Steam guides/threads, store pages and review sites; Steam rate-limits
+  (429), so sleep ~4s between requests. WebSearch summaries are the fallback and
+  are NOT equivalent — see the flattening trap above.
 
 ## TERRAIN RULES
 - `canBuildOn(cell)` (`tiles/terrain.ts`) is the ONE predicate: shared by

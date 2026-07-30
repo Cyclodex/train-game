@@ -56,22 +56,25 @@ the first draft; the old claim is quoted so the change is auditable.
 
 | # | Mechanic | Evidence |
 |---|---|---|
-| M1 | **Money is the master resource.** Start capital shown top-left (100 000$), with an **annual tax** readout next to it. The tax is charged at the December→January boundary and **rises with inflation** across a level's 50+ in-game years; the best player-derived formula is `max(minimum, annual income × rate)` — i.e. **a cut of what you earned, not upkeep on your rails**, though reviewers loosely call it "a tax on your rails". Failing to cover it loses the mission on the spot. | HUD screenshot; Before I Play; Steam discussion (formula); wccftech |
+| M1 | **Money is the master resource.** Start capital shown top-left (100 000$), with an **annual tax** readout next to it. Charged at the December→January boundary; failing to cover it loses the mission on the spot. **The formula is `max(minimal_tax_value, annual_income × tax_rate)`, stated by the developers in their own forum** — so it is a **floor plus a cut of what you earned that year**, and the income part resets each January. Reviewers all call it "a tax on your rails"; it is not one. The floor "becomes bigger from one season to another" (flazm), i.e. it rises *per chapter of the campaign*, not within a level. | HUD screenshot; Steam thread with two dev replies; wccftech; TheSixthAxis |
 | M2 | **Track costs money, priced per tile, previewed live.** A two-tile spur previews at `-2000$`; a long route round the lake previews at `-10 000$`. So ~1000$/tile, and the tag shows the *whole* pending route before you commit. **Confirmed independently: a flat $1,000 a piece, plus $5,000–$20,000 to displace a building.** Removing track costs money too — TV has no refund. | build screenshots ×2; wccftech; Geeky Hobbies |
 | M3 | **[corrected]** ~~"You build from an existing open end into marked buildable land. Green translucent plots mark where building is allowed."~~ The green plots and the dashed white line are **the tutorial coaching one specific gap** (*"Vollende das Schienennetz, indem du Schienen von einem grünen Feld aus verlegst."*), not a standing buildable mask. No source describes a general green-plot overlay in TV1: you drag track across the grid, and what constrains you is terrain, the surcharge for displacing scenery, and on some levels a cap on how many objects you may demolish at all. (*Train Valley Origins*, 2025, does highlight valid placements — in blue.) | tutorial screenshot; Geeky Hobbies; Steam store copy |
 | M4 | **Terrain blocks and shapes routes.** The long route bends around the lake because water is not buildable. Rocks, trees, farm plots, buildings are all in the way, and clearing scenery costs money — the store copy is explicit: railways are "cheap when laid across bare fields, but can be expensive when demolishing forests, villages and other existing structures". | lake build screenshot; Steam store copy |
-| M5 | **[corrected]** ~~"Trains wait until dispatched — the train sits in the station until the player clicks it."~~ Trains **spawn on a timer** (the gauge bottom-right counts down to the next one) into whatever station is free, and *"Zug wartet. Per Klick losschicken."* means **send it now**, not *nothing happens until you click*. A train left standing departs on its own; the precise trigger players report is station capacity — when the timer fires with every station occupied, the game kicks a waiting train out after ~5 seconds to make room. You dispatch by clicking the **station**, not the train. | station screenshots; Steam discussions ×2; Before I Play; Steam store copy (DE) |
-| M6 | **Each train has one explicit destination**, shown as a small coloured station icon under the price badge (red station → blue destination). *"Schicke den Zug zur blauen Stadt."* Confirmed: every station carries a colour-coded symbol and a spawning train shows its target's icon. TV1 also ships a **colourblind mode that replaces the symbols with letters A–H** — see §5, where we proposed typed cargo to solve the same problem. | station + wide screenshots; Nintendo World Report; Save or Quit |
-| M7 | **The fare decays with time.** The same waiting train reads 2000$, then 1700$, then 1600$. Tutorial: *"Je eher der Zug sein Ziel erreicht, desto mehr Geld verdienst du."* Decay starts while it *waits*, so dispatching promptly matters as much as routing well. Confirmed as a **staircase** — it drops "every couple of seconds", and it has already ticked once before a promptly-sent train clears its own station. | 2000$ → 1700$ → 1600$ sequence; Geeky Hobbies; Save or Quit |
+| M5 | **[corrected]** ~~"Trains wait until dispatched — the train sits in the station until the player clicks it."~~ Trains **spawn on a timer** into whatever station is free — the dev calls the bottom-right dial the *"train-soon-meter"* — and *"Zug wartet. Per Klick losschicken."* means **send it now**, not *nothing happens until you click*. A train left standing gets a **5-second countdown and then departs by itself**. The usual community explanation is capacity (the timer fires, every station is occupied, so one waiting train is pushed out to make room), but the same thread carries credible reports of it firing with stations free, so **treat the exact trigger as unsettled** — what is certain is the countdown and that the player does not own the decision. You dispatch by clicking the **station**, not the train. | station screenshots; Steam threads ×2 (one with a dev reply); TheSixthAxis; Steam store copy (DE) |
+| M6 | **Each train has one explicit destination**, shown as a small coloured station icon under the price badge (red station → blue destination). *"Schicke den Zug zur blauen Stadt."* Confirmed, and the **shape coding matters**: origin stations are the eight colours as **circles**, destinations the same eight as **slightly smaller squares**. TV1 also ships a **colourblind mode that replaces the symbols with letters** — but read the warning with it: *"it just replaces the pictures with letters that still have too little contrast to be clearly legible in a timely manner, which is pretty crucial in a time management game"*, and overlapping icons make it worse. So the idea is right and TV's execution is not; see §5. | station + wide screenshots; Save or Quit; Nintendo World Report |
+| M7 | **The fare decays with time.** The same waiting train reads 2000$, then 1700$, then 1600$. Tutorial: *"Je eher der Zug sein Ziel erreicht, desto mehr Geld verdienst du."* Decay starts while it *waits*, so dispatching promptly matters as much as routing well. Confirmed as a **staircase** — it drops "every couple of seconds", and it has already ticked once before a promptly-sent train clears its own station: *"getting a train to even a close-by destination without at least three drops in value is basically impossible, so the nominal reward offered upon spawning a train is a pipe dream."* Payment lands only once **every car** has arrived. | 2000$ → 1700$ → 1600$ sequence; Save or Quit; Geeky Hobbies |
+| M7b | **[new 2026-07-27] The base fare is RANDOM.** Not a modifier on M7 — a separate finding, and the single biggest divergence between TV and what we built. *"The actual rewards you get from making trains reach their destinations is blindly random, with no regard for distance to travel, length of train, speed of train, or any other factor."* Extra trains are rolled the same way, so a $1,000 summon can produce an $800 train. Reviewers name this as the game's worst flaw — it makes early levels a restart lottery ("the Random Number God"). **Our fare prices demand by consist and Manhattan distance, deliberately; keep it.** | Save or Quit; Steam thread (dev + players) |
 | M8 | **Switches are the moment-to-moment verb.** A junction draws black arrows showing the currently-set path; clicking retargets it. | junction close-ups |
-| M9 | **[corrected]** ~~"Three named objectives per level."~~ The level is **won by routing its quota of trains while staying solvent**; the three named goals are **optional** "Advanced Objectives" (DE *Experten-Ziele*), and each earns a cancellation stamp on a postage-stamp-themed level select. They are shown before the level and scored after it. Not every level has them: a season is **5 mission levels (15 stamps) + 1 free-play level** that simply runs until its timer expires. Level 1's three: dispatch ≥1 extra train, buy ≥46 more track pieces, earn ≥5000$. | start + end screenshots; Steam achievement guide; Save or Quit |
-| M10 | **Extra trains are player-called and cost money** — goal 1 is *"Setze mindestens 1 zusätzlichen Zug ein"*. Confirmed and quantified: **~$1.5k buys a train worth ~$6k**, but the consist is randomised at spawn, so length and value vary and a bought train can occasionally be worth less than it cost. Extra trains do **not** shift the spawn timer. Players report they are only ever *needed* for the optional objectives. | end screen; Steam discussion (180k points); Before I Play |
+| M9 | **[corrected]** ~~"Three named objectives per level."~~ The level is **won by routing its quota of trains while staying solvent**; the three named goals are **optional** "Advanced Objectives" (DE *Experten-Ziele*), story-mode only, and each earns a cancellation stamp on a postage-stamp-themed level select. Not every level has them: a season is **5 mission levels (15 stamps) + 1 free-play level** — the dev's own term is *"the random levels (last levels on each page)"* — which is a score-attack map that runs until its timer expires. There are roughly **20 standard goals reused in combinations**, and the catalogue is worth reading as a menu: avoid crashes · no wrong-station arrivals · earn ≥ X · spend ≤ X · **destroy at most N trees/houses** · **never stop or reverse a train** · **never demolish track you laid** · run 5–10 extra trains. Level 1's three: dispatch ≥1 extra train, buy ≥46 more track pieces, earn ≥5000$. | start + end screenshots; Steam achievement guide; dev reply in the tax thread; Save or Quit; TheSixthAxis; tagn |
+| M10 | **Extra trains are player-called and cost money** — goal 1 is *"Setze mindestens 1 zusätzlichen Zug ein"*, hotkey `R`. Quantified **by a developer**: *"train that will give you $6k can be scheduled for about $1.5k"*, so roughly a quarter of the payout — but the consist and value are **rolled at spawn** (M7b), so a $1,000 summon can produce an $800 train. Extra trains do **not** shift the spawn timer. Only ever *needed* for the optional objectives. | end screen; dev replies in the Steam tax thread; Save or Quit; Magic Game World |
 | M11 | **[corrected — this is the row the owner flagged]** ~~"A briefing screen shows a greyscale map of the level with a coloured line from each origin to its destination and each fare. It is a plan of the demand, not a tutorial."~~ **It is exactly a tutorial.** That map is a teaching device in the tutorial world, shown to explain what a demand *is*; TV1 does not open every level with a plan of its demand. What every level does show before Start is its **Advanced Objectives** (M9), and the demand is read off the board itself — station symbols plus each train's destination badge. | owner correction, 2026-07-27 |
 | M12 | **End screen offers three exits:** ∞ (keep playing freely), Abschließen (finish/next), ↻ (retry). | end screenshot |
 | M13 | **A calendar clock, not a stopwatch.** "Feb 1832", with pause and a speed multiplier. Levels span decades — 50+ in-game years is normal — and taxes hit annually. Speeds are **1× / 2× / 4×** with pause on space, and **pause is fully actionable**: you can lay track and schedule trains while the world is stopped. There is no mid-level save. | HUD screenshot; Magic Game World (controls); Save or Quit |
-| M14 | **Crashes.** Not in these screenshots (level 1 can barely crash) but core to the game: bad routing derails trains, and the bill is threefold — **the lost train, clearing the wreck, and rebuilding the track under it**. Bankruptcy ends the run. | write-ups; Geeky Hobbies |
-| M15 | **[new 2026-07-27] The level grows while you play.** A level opens with about two stations and **more open as it runs**, each demanding to be connected to what you have already built. This is why building continues all the way through a TV level instead of being a one-off at the start — and it is the mechanic that makes M1's rising tax bite. | TheSixthAxis; LadiesGamers |
-| M16 | **[new 2026-07-27] Per-train manual control.** Click a running train to **stop** it, and you can **reverse** it; combined with actionable pause, that is the collision-avoidance toolkit. Trains also run at **different speeds** and are slow to stop, so a bullet train behind a freight is a real problem. | Save or Quit; Steam store copy (DE); Before I Play |
+| M14 | **Crashes.** Not in these screenshots (level 1 can barely crash) but core to the game: bad routing derails trains, and the bill is threefold — **the lost train, clearing the wreck, and rebuilding the track under it**. Bankruptcy ends the run, and it typically arrives as a *spiral*: a crash, then the repair bill, then the tax you can no longer cover. Note what TV does **not** do: *"nothing warns them they're spending almost all their money"* — our year-ahead `taxUnaffordable` warning is a straight improvement, not a nicety. | write-ups; Save or Quit; wccftech; tagn |
+| M15 | **[new 2026-07-27] The level grows while you play.** *"Each one starts with **two stations** that need to be connected"*, and more open as it runs — *"extra cities pop up, extra routes via bridges or tunnels"* — each demanding to be joined to what you already built. tagn's player account is the clearest: *"Levels start out with just one train and a station or three, but then things heat up and soon you have trains waiting to go and more stations to hook up."* This is why building continues all the way through a TV level instead of being a one-off at the start. | TheSixthAxis; wccftech; tagn; Save or Quit |
+| M16 | **[new 2026-07-27] Per-train manual control.** Click a running train to **stop** it, and you can **turn it around** — the implementation is a cheat worth knowing: *"engines teleport to the other side of the train"*. Combined with actionable pause, that is the whole collision-avoidance toolkit. Trains run at **different speeds** and are slow to stop, so a bullet train behind a freight is a real problem, and *"even trains you ordered stop may still ram each other if there isn't enough space"*. Two Advanced Objectives forbid using it. | Save or Quit; TheSixthAxis; Steam store copy |
+| M17 | **[new 2026-07-27] Bridges and tunnels exist in TV1 — as terrain, not as a build tool.** Maps carry them as fixed chokepoints: *"many missions make you work around having to use a bridge or tunnel whose location you don't control"*, and a reviewer's wish-list asks for the ability *"to dig tunnels through mountains or bridge across water"*, which TV1 does not grant. TV2 made them buildable. Relevant because our own bridge item assumed a build tool; **an authored bridge is the cheaper first version and is what TV1 actually shipped.** | Save or Quit; TheSixthAxis; Steam store copy |
+| M18 | **[new 2026-07-27] Three tool modes and a train button, on hotkeys.** Switch `Q` · Build `W` · Demolish `E` · **Schedule an additional train `R`** · pause `Space` · 1× / 2× / 4×. Our Build/Bulldoze toggles are the same shape; the missing verb is `R`. | Magic Game World controls |
 
 ### 1.3 Why it works (the design lesson worth stealing)
 
@@ -115,6 +118,19 @@ mechanic is a tutorial frame, write down what the tutorial is teaching, not what
 the mechanic is** — and go find a second source before building on it. The two
 mechanics we missed entirely (M15, M16) were missed the same way: neither can
 appear in level 1, so neither was in the screenshots.
+
+**A second pass, 2026-07-27 (later the same day), with full network access.** The
+first correction pass ran on web-search summaries only — `WebFetch` and `curl`
+were both blocked — and one of its own claims did not survive being read at
+source. It said the tax *"rises with inflation across a level's 50+ years"*. That
+sentence came from a forum post whose author **retracted it in place** once a
+developer replied; the summary had quoted the retracted paragraph and not the
+retraction. The real formula, from the developers themselves, is in M1. Two
+lessons, and the second is the sharper one: a search summary flattens a thread
+into consensus and **loses the argument that thread was having**, so a forum claim
+is worth exactly the amount of surrounding conversation you have read. And a
+correction pass is not automatically more reliable than what it corrects — this
+one shipped an error of its own within a day.
 
 **The uncomfortable part: the answer was already in the repo.** Seven weeks
 earlier, `specs/2026-06-06-game-modes-framework-and-puzzle-design.md` had a
@@ -399,19 +415,22 @@ a station to send a train, click switches to steer. Everything around them chang
 | Coloured stations | **Typed cargo** with icons and demand counters (`0/4`, `7/10`) |
 | "Call an extra train", bankruptcy, the spawn-timer gauge | **All removed**; replaced by a small owned **fleet** you buy and repair |
 | Money as the master pressure | **Time limits** as the master pressure |
-| Flat valley | **Bridges and tunnels**, limited in scope |
+| Bridges and tunnels as **authored chokepoints** you must route through (M17) | The same, plus you can **build** them, at expense |
+| Fares are **randomly rolled** per train (M7b) | A **fixed value** per delivery; the DLC drops decay too |
 | Stations open mid-level, trains spawn on a timer (M15/M5) | **A fixed set of stations**; the player schedules departures from each |
 | Per-train control: **stop and reverse** (M16) | The same, plus explicit orders |
 
-**[corrected 2026-07-27]** Two rows above were wrong. The last one previously read
-*"A dispatched train runs until it arrives or crashes | Per-train control: stop,
-resume, reverse"* — but **TV1 already had stop and reverse**; the store copy even
-sells it (*"Vermeide Unglücke, indem du in kritischen Situationen selbst die
-Kontrolle über die Züge übernimmst"*). And what TV2 removed was the **spawn-timer
-gauge** (reviewers call it the "train pressure gauge"), not a boiler readout — it
-is almost certainly the same bottom-right dial M5 describes, and it went away
-because TV2 stopped spawning trains at you. The consequence for §5.2 is spelled
-out there.
+**[corrected 2026-07-27]** Three rows above were wrong. The train-control row
+previously read *"A dispatched train runs until it arrives or crashes | Per-train
+control: stop, resume, reverse"* — but **TV1 already had stop and reverse**; the
+store copy sells it (*"Vermeide Unglücke, indem du in kritischen Situationen selbst
+die Kontrolle über die Züge übernimmst"*). The terrain row read *"Flat valley"* —
+but **TV1 has bridges and tunnels** as authored chokepoints (M17); what TV2 added
+was the ability to *build* them. And what TV2 removed was the **spawn-timer gauge**
+(reviewers call it the "train pressure gauge"; the developer calls it the
+"train-soon-meter"), not a boiler readout — same bottom-right dial, and it went
+away because TV2 stopped spawning trains at you. The consequence for §5.2 is
+spelled out there.
 
 Scoring also changed: five stars per level (three time tiers + two task goals,
 one of which is typically avoid-crashes), and the player *builds* industries (a
@@ -445,6 +464,16 @@ bearing pause is in this genre.
    reverse, and author loops and through-stations so the need never arises. What
    changed is the honesty of the sentence — we skip reversing because interlocking
    makes it redundant, not because TV only needed it for spurs.
+
+   **One more thing worth knowing, in case the decision is ever revisited: TV
+   cheats.** Reversing there does not reverse anything — *"engines teleport to the
+   other side of the train"*. That is a legitimate trick and it is why the feature
+   was affordable in a game with no reservation model. It would not be affordable
+   here for the same trick: teleporting a loco past its own consist invalidates
+   every reservation the train holds and every cached `exitPort` in its path, which
+   is the expensive part regardless of how the sprite gets there. **The "weeks"
+   estimate is about the interlocking, not about the animation** — so a cheap-looking
+   demo of reversing is not evidence the estimate was wrong.
 3. **Five-star scoring with three time tiers.** Makes every level a stopwatch and
    rewards grinding one level. Our three stars already reward *playing differently*
    (speedrun / hands-off / perfect match). Keep three, keep them orthogonal.
@@ -465,10 +494,16 @@ bearing pause is in this genre.
   and crucially it **does not require chains**. Fixes the colour-accessibility
   problem in `brainstorm/06` too. Folded into phase 1. **[amended 2026-07-27]**
   There is a *much* cheaper version of the same fix, and TV1 shipped it: a
-  **colourblind mode that replaces each station's symbol with a letter A–H** (M6).
+  **colourblind mode that replaces each station's symbol with a letter** (M6).
   A letter on the depot and the same letter on the fare pin is an afternoon and
   needs no cargo model; typed cargo is then a design choice about *flavour*, not
-  the only route to an accessible board. Take the letters first.
+  the only route to an accessible board. Take the letters first — **and take TV's
+  mistake as the spec**: its own reviewer calls the letters unreadable in play
+  ("too little contrast … pretty crucial in a time management game"), with
+  overlapping icons compounding it. A glyph that is not legible at a glance, on a
+  moving board, has not solved the accessibility problem — it has moved it. Pair
+  the letter with the shape coding TV already gets right (origins circles,
+  destinations squares) and check it at our smallest zoom.
 - **Demand counters on buildings** (`0/4 logs`): all the readability of a supply
   chain with none of the simulation. A station wants four loads; deliver four.
 - **Bridges and tunnels** — already backlog item 6, and what makes terrain pay off.
@@ -720,7 +755,7 @@ can offer.
 | M2 | Track costs money, per tile, previewed live | **Done** (2026-07-26) | In-play build tool in Tycoon: `TRACK_COST_PER_TILE` ($1,000), live cost tag on the ghost route, refusal preview when unaffordable, spend-after-lay ordering. See "Phase 2, as built". |
 | M3 | Build into land you are allowed to build on | **Half+** | The authored opening gap now exists (`lakevalley-open`, `buildgap`): the level opens with dangling ends the player grows track from, and terrain gates the route. Still absent: a *rendered* buildable mask and a "close this gap" hint — the gap is only visible as missing rails. **[re-scoped 2026-07-27]** M3 was corrected (§1.2): TV1's green plots are tutorial coaching, not a standing mask, so **there is no parity item here to chase** — a green mask is *our* idea and should be judged as one. What TV actually has that we do not is the surcharge for building over scenery (M4) and, on some levels, a hard cap on how much scenery you may demolish. That cap is a genuinely good level-design dial and is cheaper than the mask. |
 | M4 | Terrain blocks and shapes routes | **Done for blocking** | Water/rock/mountain block, one predicate, enforced in the validator and the planner. Missing: **clearing SCENERY for money** — forest and town are free to build over. (Clearing your own TRACK is priced as of 2026-07-27, `CLEARING_COST_PER_TILE`; the reason is reserved and the pattern is set.) |
-| M5 | Trains wait until dispatched | **Half — was marked Done** | The *pull* half is done: `waitForDispatch`, `TrainState "waiting"`, `sim.dispatch(id)`, the fare pin as the button. **[re-marked 2026-07-27]** M5 was misread (§1.2) and this row inherited the mistake. TV's *push* half is missing entirely: a **spawn timer** that keeps handing you trains, a **station-capacity rule** that ejects one you sat on, and stations that **open mid-level** (M15). We have the `Spawner` contract (Time Attack) and `injectTrain`, so the timer is not far — but this is a **fork, not a chore**: see the new item in "What remains". |
+| M5 | Trains wait until dispatched | **Half — was marked Done** | The *pull* half is done: `waitForDispatch`, `TrainState "waiting"`, `sim.dispatch(id)`, the fare pin as the button. **[re-marked 2026-07-27]** M5 was misread (§1.2) and this row inherited the mistake. TV's *push* half is missing entirely: a **spawn timer** that keeps handing you trains, a **5-second countdown** that takes a waiting train out of your hands, and stations that **open mid-level** (M15). We have the `Spawner` contract (Time Attack) and `injectTrain`, so the timer is not far — but this is a **fork, not a chore**: see the new item in "What remains". |
 | M6 | Each train has one explicit destination | **Partial → load-bearing** | Colour matching guarantees a solvable, reachable pairing, and the authored destination now **prices the fare** (`TrainDef.destinations` → `demandTilesOf`), so it is real data rather than debug decoration. Still missing: the sim parks in *any* colour-matching depot, and there is no destination badge under the fare pin. That badge is G4, still S. |
 | M7 | The fare decays with time, including while waiting | **Done** | — |
 | M8 | Switches are the moment-to-moment verb | **Done**, and past TV | Interlocking, default arms, `switchLockMode`. |
@@ -728,10 +763,13 @@ can offer.
 | M10 | Extra trains are player-called and cost money | **Missing** | The `Spawner` contract exists (Time Attack uses it); Tycoon declares none, and there is no call-train button. Constrained by G6 (see below). **[amended 2026-07-27]** Now with numbers to copy: TV charges ~$1.5k for a train worth ~$6k, randomises the consist at spawn so the buy is a small gamble, and does **not** let it shift the spawn timer. Players report it is only ever *needed* for the optional goals — so it is a **star mechanic**, which is exactly how our `lakevalley-open` goal set already treats its outliers. |
 | M11 | A briefing screen | **Not a parity item — was marked Missing** | **[corrected 2026-07-27]** TV1 has no per-level briefing; the greyscale demand map is a *tutorial* illustration (§1.2 M11). What every level shows before Start is its goals — and **we ship that already** (goals on the Ready card, 2026-07-27). So M11 is done in the only sense TV means it. A demand-plan screen is still a good idea *of ours*, and it survives in the backlog on its own merits, but it is no longer "the thing TV has that we lack". `levels/test/thumb.ts` + `ScenarioThumb.vue` remain the renderer if we build it. |
 | M12 | End screen offers three exits | **Mostly done** | Retry ✓ and ∞ "Keep playing" ✓. The third exit is *Finish / next level*, which needs a campaign that does not exist (G8). "Change game mode" stands in for it. |
-| M13 | A calendar clock, not a stopwatch; annual tax | **Done** (2026-07-26) | `sim/calendar.ts` renders `elapsedSec` as "Apr 1832" and schedules the annual levy; the calendar *replaces* the stopwatch where a board has one, as M13 literally asks. The levy is per piece of **player-laid** track, which is what makes §1.3's two clocks oppose each other rather than both shouting "hurry". Per-board, like every other Tycoon dial. See "The second clock, as built". **[amended 2026-07-27]** We now know TV's own formula and it is *not* ours: `max(minimum, annual income × rate)`, charged at the Dec→Jan boundary and rising with inflation over a level's 50+ years. Keep ours — an income tax punishes the good run and is invisible to the decision the build tool makes, which is precisely the "steeper decay wearing a hat" the design rejected. But TV's **inflation** is worth stealing: a levy whose *rate* climbs year on year is a difficulty curve that emerges from the clock instead of a number a designer typed. One field on `CalendarSetup`. Two things we do already match: the annual charge point, and losing the mission when it cannot be paid. |
+| M13 | A calendar clock, not a stopwatch; annual tax | **Done** (2026-07-26) | `sim/calendar.ts` renders `elapsedSec` as "Apr 1832" and schedules the annual levy; the calendar *replaces* the stopwatch where a board has one, as M13 literally asks. The levy is per piece of **player-laid** track, which is what makes §1.3's two clocks oppose each other rather than both shouting "hurry". Per-board, like every other Tycoon dial. See "The second clock, as built". **[amended 2026-07-27, corrected the same day]** TV's formula is now known from the developers' own forum replies, and it is **three different things from ours**: `max(minimal_tax_value, annual_income × tax_rate)`, charged at the Dec→Jan boundary, with the floor rising **per chapter of the campaign** (not per year — an earlier version of this note said "with inflation", which came from a forum post the poster retracted after a dev corrected him). **Keep ours, and now we can say exactly why**: of the three possible bases, the *floor* is the flat levy this design already rejected as "a steeper fare decay wearing a hat", the *income* term punishes the good run, and only **per-piece-you-laid** responds to a decision the player actually makes. The steal is the **rising floor**, and it maps onto our campaign more neatly than onto our clock: `taxPerTrackPiecePerYear` climbing board by board through `TycoonTuning` *is* TV's "bigger from one season to another", and it needs no new field. Two things we already match: the annual charge point, and losing the mission when it cannot be paid. |
 | M14 | Crashes | **Not planned** | §2.2 G7, reaffirmed. Now with the bill TV charges, for the record: the lost train, clearing the wreck, **and** rebuilding the track under it. |
 | M15 | The level grows while you play | **Missing** | **[new 2026-07-27]** TV levels open with ~two stations and open more as they run. Our boards are fixed at setup: `PlayView` renders `<Train v-for>` over a fixed list and `createGame` resolves depot colours once, so a *new depot* mid-run is the same class of problem as G6's dynamic sprites. This is the mechanic behind M15/M5's pressure and the reason TV's build tool stays useful for a whole level instead of only its first minute. |
 | M16 | Per-train stop / reverse | **Stop: done. Reverse: not planned** | **[new 2026-07-27]** Holding a train is `toggleHold()` plus the `waiting` state. Reversing is declined with a better reason than before (§5.2): reservations mean trains cannot converge, so the emergency reverse has no emergency. Note TV's other half of this row — **trains at different speeds**, so a fast train catches a slow one — which our `physics.ts` mass model produces naturally and no board yet exploits. |
+| M7b | The base fare is randomly rolled | **Deliberately not done** | **[new 2026-07-27]** Our fare prices the *demand* (handling + consist + Manhattan between the paired depots); TV rolls a die. This is the one place we should be loudest about diverging, because TV's own reviewers identify it as the game's worst flaw: with track costs fixed and rewards random, an early level becomes a restart lottery. Recorded so nobody "restores parity" here by mistake. |
+| M17 | Bridges and tunnels | **Missing, and cheaper than we thought** | **[new 2026-07-27]** TV1 does not let the player *build* them — they are authored chokepoints you route through. Our backlog item assumed a build tool. **An authored bridge role is the shippable first version** and is all level 7 of the arc ("The Bypass") actually needs, if the choice is *route over vs route round* rather than *buy a bridge*. |
+| M18 | Tool modes on hotkeys | **Mostly done** | **[new 2026-07-27]** TV: Switch `Q` / Build `W` / Demolish `E` / **new train `R`** / pause / 1×–4×. We have the same modes on toggles; missing are the keyboard bindings and `R` (which is M10). Cheap parity, and hotkeys matter here because TV's own reviewers complain that clicking small moving targets is the real difficulty. |
 
 ### What remains, ordered, with sizes
 
@@ -758,7 +796,7 @@ what separates *the loop works* from *a finished mode*.
    and §A4 row 3.
 9. **Phase 5 — player-called extra trains** — *M* with a pre-declared pool, *L* if it needs true dynamic sprites (M10, G6). Copy TV's shape: ~25% of the fare as the price, a randomised consist so the buy is a small gamble, and no effect on any spawn timer.
 10. **Phase 6 — the road layer joins the economy** — *M–L.* Level crossing vs bridge, congestion costing money. The differentiator (§4.1).
-11. **[new 2026-07-27] The push half of the loop — a spawn timer and stations that open mid-level (M5/M15)** — *M–L, and a fork before it is a task.* Today a Tycoon board hands the player a fixed cast at setup and waits. TV keeps handing you work: a gauge counts down to the next train, sitting on one gets it ejected when the stations fill, and new stations open as the level runs, so the build tool matters for the whole level rather than its first minute. **Decide before building**, because it changes the genre: with it, a level is a shift you work and lateness is the enemy; without it, a level is a board you solve and the fare decay is the only clock. The `Spawner` contract and `injectTrain` already cover the trains; a *new depot* mid-run is G6-shaped work (colours and sprites resolve once at setup). A cheap first probe: one board where a second wave of trains arrives on a timer, no new stations, and see whether it reads as pressure or as noise.
+11. **[new 2026-07-27] The push half of the loop — a spawn timer and stations that open mid-level (M5/M15)** — *M–L, and a fork before it is a task.* Today a Tycoon board hands the player a fixed cast at setup and waits. TV keeps handing you work: a "train-soon-meter" counts down to the next train, a train you sit on runs a 5-second countdown and then leaves without you, and new stations open as the level runs, so the build tool matters for the whole level rather than its first minute. **Decide before building**, because it changes the genre: with it, a level is a shift you work and lateness is the enemy; without it, a level is a board you solve and the fare decay is the only clock. The `Spawner` contract and `injectTrain` already cover the trains; a *new depot* mid-run is G6-shaped work (colours and sprites resolve once at setup). A cheap first probe: one board where a second wave of trains arrives on a timer, no new stations, and see whether it reads as pressure or as noise.
 
 Not planned: crashes (M14 / G7), production chains (§5.1), reversing (§5.2 — reasoning rebuilt 2026-07-27, decision unchanged).
 
@@ -874,6 +912,18 @@ where players started having to make multiple attempts."
 
 Three modes, three session shapes: **story** (5–10 min levels), **random**
 (15–20 min, procedurally different each launch), **sandbox** (no time or money).
+
+**[refined 2026-07-27]** Two details from the store copy and a dev reply that
+change how this maps onto `src/modes/`. **Sandbox is not a third mode — it is a
+regime "turned on for both story and random modes"**, i.e. a *modifier* (no time,
+no money limits) over any board, where ours is a separate mode with its own entry
+in the registry. And **"random mode" is not a separate screen either**: the random
+levels *are* the sixth level of each chapter (the dev: *"the random levels (last
+levels on each page)"*), so the procedural content sits **inside** the campaign as
+its chapter finale rather than beside it. Both are cheaper than what we built:
+a flag on the objective spec, and a generated board seeded into the campaign list
+— which is exactly the "procedural Tycoon board" item that is currently one
+`TycoonTuning` entry away.
 
 **TV2** — 50 levels over five ages (Steam, Industrial, Electrical, Globalization,
 Space), each age adding a mechanic: cargo types, then workers, then electricity.
@@ -1010,15 +1060,17 @@ sim that makes dailies comparable are all already here.
 Each is cited inline in the row it corrects.
 
 - [Before I Play — Train Valley](https://beforeiplay.com/index.php?title=Train_Valley)
-  — tax failure at January, auto-departure, per-train stop/turn, the colourblind
-  letters mode, "extra trains are only for the optional objectives" (M1, M5, M6,
-  M10, M16)
+  — **search summary only; the page would not load on the second pass**, so nothing
+  rests on it alone: every claim it supported (tax failure at January,
+  auto-departure, per-train stop/turn, the colourblind letters, "extra trains are
+  only for the optional objectives") is carried first-hand by a source below
 - [Train Valley review — wccftech](https://wccftech.com/review/train-valley-review-aboard/)
   — **$1,000 flat a piece, $5,000–$20,000 to displace a building**, end-of-year
   tax, bankruptcy (M2)
 - [Steam discussion — "Getting 180000 points on stage 2-4"](https://steamcommunity.com/app/353640/discussions/0/412446292775819311/)
-  — the tax formula `max(minimum, income × rate)` and inflation, the bottom-right
-  spawn-timer needle, extra-train pricing ~$1.5k for ~$6k (M1, M5, M10, M13)
+  — **superseded by the full-thread read above**; the summary of this page is what
+  produced the retracted "inflation" claim. Cited here only so the trail is
+  complete (M1, M5, M10, M13)
 - [Steam discussion — "Trains which leave 'automatically'"](https://steamcommunity.com/app/353640/discussions/0/527274088401171757/)
   and [— "trains allways start on their own?"](https://steamcommunity.com/app/353640/discussions/0/2592234299566462400/)
   — the station-capacity ejection rule and its ~5s warning (M5)
@@ -1044,9 +1096,31 @@ Each is cited inline in the row it corrects.
   and the [signals-not-working](https://steamcommunity.com/app/2244470/discussions/0/603018753649697388/)
   threads — the series' own attempt at block signalling, and how it went (§5)
 
-**Method note for whoever researches next.** This pass ran entirely through web
-*search* — `WebFetch` and direct `curl` are both blocked by this environment's
-egress policy (Wikipedia, Steam and every review host return 403), so nothing here
-was read as a full page. Claims are therefore corroborated across two or more
-independent results wherever they carry weight, and the ones that rest on a single
-player's analysis (the tax formula, the 5-second ejection warning) say so in place.
+**The primary source, added on the second pass — read this one before the others:**
+
+- [Steam thread "Getting 180000 points on stage 2-4"](https://steamcommunity.com/app/353640/discussions/0/412446292775819311/)
+  — **two developers answer in it** (`flazm`, `sdvoynikov`). It is where the tax
+  formula, the per-season rising floor, the "train-soon-meter", the randomised
+  extra trains and the ~$1.5k-for-$6k figure all come from *first-hand*. It is also
+  where the first correction pass went wrong: the top reply's tax paragraph is
+  **retracted in place** by its own author after the devs answered, and a search
+  summary reported the retracted text.
+- [Wikipedia — Train Valley](https://en.wikipedia.org/wiki/Train_Valley) — the win
+  condition and the chapter/level counts, verbatim: *"The main objective of each
+  level is to deliver each train to its destination without going bankrupt, but
+  every level also has three advanced objectives."* (On "every level" it is looser
+  than the achievement guide, which counts 15 stamps per 6-level season; the guide
+  and the dev's "random levels" remark agree with each other, so the sixth level
+  of a chapter is treated here as having none.)
+- [Train Valley on Steam — feature list](https://store.steampowered.com/app/353640/Train_Valley/)
+  — the official phrasing of building costs, pause ("you can build railways and
+  schedule trains while on pause"), the four seasons, and the mode/session shapes.
+
+**Method note for whoever researches next.** The first pass (earlier the same day)
+ran entirely on web-*search* summaries because `WebFetch` and `curl` were both
+blocked; the second pass had direct network access and read the pages. `WebFetch`
+is still blocked in this environment — the working recipe is `curl` with a browser
+User-Agent plus a small HTML-to-text script, and Steam rate-limits, so space the
+requests. **What the second pass proved is worth more than the recipe:** a search
+summary flattens a forum thread into a single confident answer and silently drops
+the disagreement inside it. Where a claim comes from a thread, read the thread.

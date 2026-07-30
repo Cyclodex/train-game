@@ -101,10 +101,33 @@ marked in place there, and the two that change this worklist are:
 | Trains wait in the station until clicked | **Half true.** Trains *spawn on a timer*, and one left standing is ejected when the stations fill. The click means "send it now". This is the **new §3.6**, and it is a fork worth deciding early. |
 | A TV level's cast is fixed at the start | **New stations open while you play** — which is why building matters for a whole TV level, not just its first minute. Also §3.6. |
 
-Two mechanics were missing entirely (stations opening mid-level; per-train
-stop/reverse) and are now M15/M16 in the design doc. **The lesson, in one line:
-when the only evidence for a mechanic is a tutorial frame, write down what the
-tutorial is teaching — not what the mechanic is.**
+Four mechanics were missing entirely — stations opening mid-level, per-train
+stop/reverse, **authored bridges and tunnels**, and **randomly-rolled fares** —
+and are now M15–M18 plus M7b in the design doc. **The lesson, in one line: when
+the only evidence for a mechanic is a tutorial frame, write down what the tutorial
+is teaching — not what the mechanic is.**
+
+Three of those change items below, and one changes a number we shipped:
+
+- **§3.5 bridges get cheaper.** TV1 does not let the player *build* bridges or
+  tunnels — they are authored chokepoints you route through. A `bridge` role
+  authored into a board is the shippable first version, and it is all "The Bypass"
+  needs if the choice is *over vs round* rather than *buy one*.
+- **TV1's fares are random** — *"no regard for distance to travel, length of train,
+  speed of train, or any other factor"* — and its own reviewers call that the
+  worst thing about it. Our demand-priced fare is better. Nobody should "restore
+  parity" here.
+- **The annual tax formula is `max(minimal_tax_value, annual_income × tax_rate)`**,
+  from the developers themselves, with the floor rising **per chapter**. Our
+  per-piece levy stays (it is the only one of the three that answers a player
+  decision), but the rising floor is worth copying and needs no new code: let
+  `taxPerTrackPiecePerYear` climb board by board through `TycoonTuning`.
+
+> **A caution about this table itself.** Its first version, written the same day
+> from web-search summaries, got the tax wrong — it said "rises with inflation",
+> which came from a forum post that its own author retracted after a developer
+> replied. The summary quoted the retracted paragraph and not the retraction. If
+> you are checking a claim that came from a forum, **open the thread**.
 
 ---
 
@@ -212,9 +235,11 @@ and the verbs:
   but should cost to clear). TV charges **$5,000–$20,000 to displace a building**
   against $1,000 for a plain piece, so the surcharge is not a rounding error —
   it is the thing that makes the long way round the cheap way;
-- a **per-level cap on how much scenery may be demolished** — TV does this and we
-  have no equivalent. It is a level-design dial that shapes the *route* rather
-  than the budget, and it is cheaper than any rendering work here;
+- a **per-level cap on how much scenery may be demolished** — TV does this as an
+  *Advanced Objective* ("destroy at most N trees/houses"), not as a hard rule, so
+  the cheap version here is a **star predicate over a counter**, not a build-time
+  refusal. We have no equivalent either way. It shapes the *route* rather than the
+  budget, and it is cheaper than any rendering work here;
 - a **hint that names the gap** — today a gap is visible only as absent rails.
 
 **Corrected 2026-07-27:** this item used to lead with *"a green buildable mask —
@@ -224,7 +249,7 @@ Train Valley does no such thing. The green plots in the screenshots are the
 TV1. Build a mask if we decide we want one, but budget it as our own idea — the
 parity items in this area are the two above.
 
-### 3.5 Bridges · **M–L** · the only engine work the level arc needs
+### 3.5 Bridges · **M–L**, or **S–M** for the authored version · the only engine work the level arc needs
 
 A `bridge` role carrying **two independent port pairs** on one cell, so road can
 cross rail (or rail cross water) without a level crossing. The connection model
@@ -234,19 +259,36 @@ already supports two non-interacting pairs; design it as an *exception inside
 This is what level 7 of the designed arc ("The Bypass" — cross the road, or fly
 over it) needs, and nothing else in the arc does.
 
+**Split it in two, 2026-07-27.** This item silently assumed a *build tool*, because
+the design doc had TV1 down as a flat valley with no bridges. It is not: **TV1 has
+bridges and tunnels as authored chokepoints** you must route through and cannot
+place (*"a bridge or tunnel whose location you don't control"*) — building them is
+a TV2 feature. So:
+
+- **The authored role** (*S–M*) — a `bridge` cell a level designer places, with the
+  two-pair connection behaviour. Ships the mechanic, ships "The Bypass" if the
+  level's choice is *route over vs route round*, and needs no pricing, no preview
+  and no new gesture.
+- **The build tool** (*M–L*) — placing one in play for money. That is the version
+  that makes it a *money decision*, and it is the one to defer until the authored
+  role has been played.
+
 ### 3.6 The push half of the loop (M5/M15) · **M–L** · *a fork — decide before you build*
 
 **New 2026-07-27, and by weight it belongs second in this list.** Re-researching
 Train Valley turned up a whole half of its loop that our teardown missed, because
 it cannot appear in the tutorial level the teardown was read from:
 
-- trains **spawn on a timer** (a gauge counts down to the next one) rather than
-  being placed once at setup;
-- a train you sit on **leaves without you** — the reported trigger is capacity:
-  when the timer fires with every station occupied, one waiting train is ejected
-  after ~5 seconds;
+- trains **spawn on a timer** rather than being placed once at setup — the
+  developer's own name for the bottom-right dial is the *"train-soon-meter"*;
+- a train you sit on **leaves without you**, on a visible 5-second countdown. The
+  usual player explanation is capacity (the meter fires, every station is full, so
+  one gets pushed out), but the same thread has reports of it firing with stations
+  free — so treat the *trigger* as unsettled and the *countdown* as certain;
 - **new stations open mid-level**, each demanding to be connected to what you
-  already built.
+  already built: *"levels start out with just one train and a station or three,
+  but then things heat up and soon you have trains waiting to go and more stations
+  to hook up."*
 
 Our boards do none of this. A Tycoon level hands the player a fixed cast and then
 waits for them, so the fare decay is the only thing that ever pushes.
@@ -278,12 +320,16 @@ list resolved at setup, so genuinely dynamic sprites are an *L*. A **pre-declare
 pool** — say twenty trains, hidden until called — is the cheap path and is enough
 for a campaign level. Take that first.
 
-**Numbers to copy** (TV1, verified 2026-07-27): the buy costs roughly a **quarter**
-of what the train pays — ~$1,500 for a train worth ~$6,000 — and the consist is
-**randomised at spawn**, so it is a small gamble rather than a vending machine.
-It does not shift any spawn timer. Players report extra trains are only ever
-*needed* for a level's optional goals, which is the role to give ours too: a star
-mechanic, never a requirement.
+**Numbers to copy** (TV1, from a developer's own forum reply, 2026-07-27): the buy
+costs roughly a **quarter** of what the train pays — *"train that will give you
+$6k can be scheduled for about $1.5k"* — and it does not shift the spawn timer.
+Players report extra trains are only ever *needed* for a level's optional goals,
+which is the role to give ours too: a star mechanic, never a requirement.
+
+**The one thing not to copy:** in TV the bought train's value is *rolled*, so a
+$1,000 summon can produce an $800 train and reviewers hate it — the early game
+becomes a restart lottery. Price ours off the demand, like every other fare.
+`R` is TV's hotkey for this, if we want the parity.
 
 ### 3.8 The road layer joins the economy · **M–L** · the differentiator
 
@@ -329,13 +375,22 @@ mismatched depot forever.
   own flat rate per piece, confirmed 2026-07-27. TV's *other* price is the one we
   lack: $5,000–$20,000 to displace a building. See §3.4.)
 - **Letters on the depots** (*S*) — TV1's colourblind mode replaces each station's
-  symbol with a letter A–H, and puts the target's letter on the train. Ours is a
-  pure colour match today, which is the one accessibility hole in the board. This
-  is an afternoon and it also makes §3.2's badge legible.
-- **A levy rate that rises year on year** (*S*) — TV's tax climbs with inflation
-  across a level's decades. One field on `CalendarSetup`, and it turns a flat
-  upkeep into a difficulty curve that comes from the clock instead of from a
-  designer's number.
+  symbol with a letter, and puts the target's letter on the train. Ours is a pure
+  colour match today, which is the one accessibility hole in the board. An
+  afternoon, and it makes §3.2's badge legible. **Do it better than TV**: its own
+  reviewer calls the letters unreadable mid-run ("too little contrast"), with
+  overlapping icons making it worse. Copy instead the bit TV gets right — origins
+  are **circles**, destinations **squares** — so shape carries the meaning even
+  when the glyph is too small, and check it at our smallest camera zoom.
+- **A levy floor that rises across the campaign** (*S*) — TV's minimum tax "becomes
+  bigger from one season to another". Ours can do the same with **no new code**:
+  raise `taxPerTrackPiecePerYear` board by board in `TycoonTuning` as the campaign
+  progresses, so the squeeze arrives on schedule without a new mechanic.
+- **Hotkeys for the tool modes** (*S*) — TV binds Switch `Q` / Build `W` /
+  Demolish `E` / new train `R` / pause `Space` / 1×–4×. We have the modes on
+  toggles and no keys. Worth more than it sounds: TV's own reviewers say the real
+  difficulty late on is clicking small moving targets, and a keyboard mode switch
+  is how you avoid building that same problem.
 
 ---
 
