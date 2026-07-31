@@ -337,6 +337,199 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Bounds grow: a generated board now renders its full width x height, because
   terrain-only cells count toward `levelBounds`. Intended.
 
+## SURVEYED VS ORGANIC EDGES (2026-07-28)
+- NOT EVERY GROUND HAS AN ORGANIC EDGE. A lake, a wood, a rock field are shaped
+  by water and weather — bowed shores, rounded corners, which is what all the
+  patch machinery was built for. FIELDS, TOWNS AND WORKS are shaped by people:
+  surveyed, fenced, built to lines. Drawn as blobs, farmland reads as a lake of
+  wheat, which is exactly the complaint that prompted this.
+- `EDGE_STYLE`/`edgeStyleOf`: farmland + urban + industry = "surveyed", the rest
+  "organic". The two styles share EVERYTHING except two decisions:
+  · `corners()` returns the bare jittered lattice point (no mid-shore push, no
+    corner inset) — that inset is what makes a blob a blob.
+  · `patchSegments()` puts both control points ON the chord at the thirds, so
+    the cubic IS a straight line. Still a cubic, so the rim, the outline polygon
+    and the fringe all keep working unchanged — the shape of the DATA didn't.
+- THE JITTER STAYS, and that is the point: lattice offsets are SHARED between the
+  tiles meeting at a point, so a surveyed boundary is a polyline through points
+  both tiles agree on — a straight run with a slight kink every tile. A hedgerow,
+  not a ruler. Pinned: two surveyed tiles' shared corners coincide exactly.
+- Surveyed coverage is ~0.85-0.92 of the tile vs organic ~0.55-0.85. Do NOT
+  expect 1.0 and do not remove the jitter to get it — that is what would draw
+  the grid back on.
+- FIELD BOUNDARIES: `fieldBoundaries` draws a hedge along a tile edge where the
+  NEIGHBOUR's `fieldPlanAt` differs (compared on the drawn properties, so two
+  cells that rolled the same crop count as one field and get no hedge). Seeded
+  CANONICALLY on the edge's two lattice points, so both tiles generate the
+  identical chain of blobs and it does not matter that both draw it — seed it
+  per tile and every hedge in the world doubles up.
+
+## THE SOFT FRINGE (2026-07-28)
+- Every patch used to end at a hard line, so a wood read as a sticker laid on
+  the meadow however good its outline was. `buildGround` now lays TWO
+  translucent strokes of the patch's own colour along `patchRimPath` (the
+  STOPPING edges only) BEFORE the fill: wide+faint (30/0.15) then narrow+stronger
+  (15/0.3), 18/9 for surveyed kinds because a field ends at a hedge.
+- BEFORE the fill and NOT CLIPPED. The opaque fill covers the inward half, so
+  what shows is an outward halo fading into the neighbour. Clip it and the fade
+  lands entirely under the fill, i.e. nothing. Both sides of a boundary lay one,
+  so the blend reads the same whichever tile the DOM draws second.
+- Stopping edges ONLY. Fringing the internal joins draws a dark seam down every
+  shared boundary — the same defect `patchRimPath` exists to avoid. Pinned: an
+  interior tile emits no stroke at all.
+- Two strokes rather than an SVG filter: at ~280 tiles a board a feGaussianBlur
+  per tile is not worth it, and a two-step falloff reads as a gradient anyway.
+## BRIDGES (2026-07-28)
+- `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
+  `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate
+  beside it. Everything that asks "may I build here" — `validateLevel`'s
+  `blocked-terrain`, the editor, the route planner — gets the exception for free
+  by asking the question it always asked. Pinned by a validator test.
+- ONLY WATER IS BRIDGEABLE (`BRIDGEABLE`/`terrainBridgeable`). Rock and mountain
+  still refuse: a tunnel is their answer and a separate feature.
+- `addConnection` SETS IT. Every build path in the game (editor commit, in-play
+  `buildRoute`, the route-draw lay) funnels through that one reducer, so there is
+  no "place bridge" verb to forget and no way to end up with track standing in a
+  river. `removeConnection` clears it when the last line goes, or a razed
+  crossing leaves a permanently buildable tile mid-river — a free crossing,
+  bought once.
+- `RouteOpts.bridgeable` is a SECOND passability gate priced at `BRIDGE_MOVE`
+  (6x MOVE). That number is the whole design: a 1-wide river is worth crossing
+  from ~6 tiles of detour away, a lake several tiles across never is. Money is
+  separate — `BRIDGE_BUILD_FACTOR` (4), the dearest thing in the game.
+- `terrainBuildFactor` answers BRIDGE for both states of the tile: the span
+  standing, and the water a span is about to cross. `buildRoute` prices before
+  the edit lands, so a factor that only knew the finished bridge would quote
+  every crossing at the price of open water.
+- RENDER: `.bridge-deck` in Tile.vue, z1 (over ground, under rails z2), three
+  strokes along the same segment paths the rails/lanes follow — shadow offset SE
+  to the one sun, deck, parapet. Stroke-based so a bridge on a CURVE bends for
+  free. Rail AND road: nothing about a structure is rail-specific, and a road
+  deck must be WIDER than its carriageway or it vanishes under the opaque road
+  surface (width from the lane count). /test scenario: `bridge`.
+- A RIVER IS NOT A KIND: it is a 1-wide line of `water`, which `patchPath` fuses
+  into a ribbon. What separates it from a lake is that it cannot be gone round.
+
+## INDUSTRY (2026-07-28)
+- 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
+  freight half of the world — the ground a depot will one day read to decide it
+  ships goods rather than people. The DEMAND COUPLING IS NOT BUILT: design in
+  `docs/superpowers/specs/2026-07-28-industry-and-demand-design.md`.
+- It must not read as a darker town. Different VOCABULARY, not tone: circles and
+  grids (silos, tanks, container stacks, vented sheds) in cool steel/concrete,
+  laid SQUARE to the yard (±4°) — the town is pitched roofs in warm tile jittered
+  ±12°, because a village grew and a plant was planned. Check them side by side
+  in `/test/industry`, never alone.
+- Same fit-the-room placement as the town (`worksBuilding`, shared `blockers`
+  list), so the two kinds cannot drift apart in how they pack.
+- A pitched roof shades its far half 18 points down, so a shed pitched at the
+  town's lightness comes out near-BLACK on the works' own grey ground. Works
+  sheds are lit 8 points higher for that reason.
+## MEADOW — WHAT GROWS ON PLAIN GRASS (2026-07-28)
+- GRASS STILL PAINTS NO FILL. That rule has not moved and must not: a grass
+  rect (or a patch outline like every other kind draws) covers the world
+  theme's backdrop on EVERY tile in the game. What changed is that grass now
+  grows things — tufts, flower drifts, bushes, the odd thorn tree, plus
+  translucent `sward` blobs — all ADDITIVE. `buildMeadow` is its own build,
+  branched before `buildGround`'s `!base` return; it emits no fill, no rim and
+  no clip, and terrain.spec pins exactly that (every path it lays carries
+  opacity < 0.45).
+- NO PATCH means no containment walk: there is no outline to keep objects
+  inside, so placement is the plain band and the corridors. Corridors DO still
+  apply — a tuft in the ballast is as wrong as a tree.
+- HOW MUCH grows comes from `meadowRoughnessAt` — the same value noise as the
+  glades, on a 4-tile lattice with its own salt. That is the only shape of
+  unevenness allowed here: a function of WORLD position, so it varies across
+  the board and never changes AT a tile boundary (which is what disqualified
+  per-tile tone variation — see the note by GROUND). Close-cropped stretches
+  get ~2 objects, tussocky ones ~11, and flowers/bushes/trees only appear as
+  roughness rises. Pinned: the count varies across a row, and neighbours differ
+  by less than the whole range (a gradient, not noise).
+- `valueNoiseAt(wx, wy, seed, cell, salt)` is the shared generator behind both
+  fields; add a salt rather than a second implementation.
+- THE REAL ANSWER TO "the open green is boring" IS FARMLAND, not the meadow.
+  Fields cover ground; the meadow only stops what is left reading as a lawn.
+  Judge both on a THEMED shot (`npm run shot -- <id> --backdrop --no-debug`) —
+  the flat debug backdrop makes the meadow look far more prominent than it is.
+## FARMLAND (2026-07-28)
+- 7th kind, buildable, `TERRAIN_BUILD_FACTOR` 1.2 (between grass 1 and forest
+  1.5 — you buy the field off the farmer). Wire-through for ANY new kind:
+  `TerrainKind` in model.ts, `TERRAIN_KINDS`, `GROUND`/`RIM`, `SCATTER_COUNT`,
+  `SCATTER_BAND`, `FOOT`, `BLOCKS_BUILDING`, `TERRAIN_BUILD_FACTOR`, the editor
+  palette, `generateTerrain.ts`, a /test scenario. The terrain.spec sweeps
+  iterate `TERRAIN_KINDS` and catch most omissions.
+- ALL GROUND MARKS, NOTHING STANDS ON IT (`SCATTER_COUNT.farmland = [0,0]`) —
+  which keeps farmland out of the corridor and canopy rules entirely. Ballast
+  and tarmac simply draw over the furrows, which is what a railway cut through
+  a field looks like from above.
+- FURROWS ARE SEEDED BY A COARSE WORLD LATTICE (`fieldPlanAt`, FIELD_CELL = 3
+  tiles), never by the tile — same trick as the glades. Per tile, every tile
+  edge becomes a field edge and the ground redraws the grid the jittered patch
+  outlines exist to hide. Per lattice cell, neighbouring tiles share a bearing
+  and their furrows RUN ON across the seam; the patchwork comes from the cells.
+- A BAND IS A FINITE BAR AND MUST BE ANCHORED OVER THE TILE. First version
+  anchored each band at the point closest to the WORLD ORIGIN and drew it 1.5
+  tiles long, so tiles a few hundred units away were missed entirely: striped
+  near the origin, flat green everywhere right of it. Project the tile centre
+  onto the furrow direction and centre the bar there. Pinned by a test that
+  counts bands on a far tile.
+- DRAW BOTH TONES, EVERY BAND — not crop stripes over the base fill. Drawing
+  every other band lets the base show between, so a cell whose crop lands near
+  the base tone comes out blank while its neighbour stripes boldly. And give
+  the two tones 12 points of lightness, not 6: at 6 the green crops were flat
+  olive tiles indistinguishable from the grass they replace. Contrast is a
+  property of the FIELD, not of where its hue landed. Pinned.
+- Hedgerows run ALONG THE FURROWS (or square across them), never at a free
+  angle — a hedge is a field boundary. Free-angled they read as dark
+  caterpillars dropped on the crop. /test scenario: `farmland`.
+## TOWN SCALE (2026-07-28)
+- THE RULER IS THE CAR. A tile is 100 ground units and a car is 23 of them
+  (`DEFAULT_CAR_LENGTH` 0.23 tiles). The first town's houses were 14-20 units
+  wide — NARROWER THAN THE CARS driving past them, so the board read as a model
+  village with full-size traffic in it. Sizes are now pitched against that: a
+  house ~1.5 car lengths on its long side, a terrace 3, a hall 3.5. Pinned by a
+  terrain.spec test that parses roof rects out of the scatter SVG.
+- THE ARCHETYPE IS CHOSEN TO FIT THE ROOM MEASURED AT THE SPOT (`TOWN` +
+  `building(rng, scale, room)`), not fixed per tile. That is what lets buildings
+  be building-sized at all: sheds and houses take the street frontage where the
+  corridor leaves little room, terraces/blocks/halls take the depth of the block.
+  A single fixed footprint could only ever be small enough to fit everywhere.
+- `FOOT.urban` is therefore the SMALLEST archetype's reach, not the largest
+  (`URBAN_SMALLEST_REACH`, pinned). Gate on the biggest and every frontage in the
+  game empties out.
+- A PLACED BUILDING IS PUSHED BACK ONTO THE CORRIDOR LIST as a degenerate
+  one-point corridor (`{pts:[p,p], half: reach}`) — so "don't build on the
+  railway" and "don't build on the house next door" are ONE test. Without it,
+  building-sized buildings simply pile on top of each other (2-4 per tile at the
+  new footprints). `distToPolyline` needs TWO points, hence `[p, p]`.
+- The TILE EDGE counts as room too, plus `TOWN_OVERHANG` (10u): a tile cannot see
+  its neighbour's scatter, so without it a terrace lands on the next tile's block.
+  Some overhang is wanted — it is what makes a town continuous across tiles.
+- Archetypes: shed, house (lean-to + chimney), terrace (3-5 party-walled units —
+  the one that most says TOWN from above), block (parapet + rooftop plant + light
+  well), hall (roof-light strips), church (slate nave + tower, rare, the landmark
+  that gives a town a centre). /test scenario: `townscape` (town + street + cars).
+## HAND-PAINTED TERRAIN (demoworld, 2026-07-28)
+- The DEMO world's ground is authored, not seeded: `GROUND` in demoworld.ts is a
+  list of `{kind, cells}` built from `rect()`/`without()`, painted by
+  `paintGround` as the LAST step of `build()` so it sees everything already laid.
+  Composition beats a seed for the one board that is the shop window; procgen
+  (`generateTerrain.ts`) still owns generated + Daily boards.
+- ENFORCE THE BLOCKER RULE, DON'T DODGE IT: `paintGround` SKIPS a blocking kind
+  (water/rock/mountain) on any cell carrying `connections` or `road`. That is what
+  lets a region be a plain rectangle — the railway simply interrupts the lake
+  instead of the board failing `validateLevel` — and it means a later change to
+  the ring or the streets cannot invalidate the ground.
+- PAINT FOREST/URBAN STRAIGHT OVER RAIL AND ROAD, deliberately. Since corridors +
+  canopy (see KEEP-OUT CORRIDORS), a line through a wood clears its own
+  right-of-way and gets crowns over it, and a street through town steps the houses
+  back. Ground kept OFF the built cells instead stops dead at every line and reads
+  as track laid on scenery. Leave the DEPOT cell bare inside a wood, though — the
+  depot building wants its own clearing.
+- demoworld is ~16% unbuildable (SW lake, tarn, SE rock, NW range), inside the 22%
+  `generateTerrain` allows itself — the same reason applies to an authored board:
+  the build tool has to have somewhere to go.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.

@@ -1,8 +1,9 @@
 import { Position } from "@/types";
-import { Level } from "@/tiles/model";
+import { Level, TerrainKind } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
 import { twoWay, type Lane } from "@/tiles/lanes";
+import { terrainBlocksBuilding } from "@/tiles/terrain";
 
 const { Top, Right, Bottom, Left } = Position;
 
@@ -67,6 +68,91 @@ const SPURS = [
 function fourWayCross(): Lane[] {
   const arms = [Top, Right, Bottom, Left];
   return arms.map(from => ({ from, to: arms.filter(p => p !== from), index: 0 }));
+}
+
+// --- Ground ------------------------------------------------------------------
+//
+// Hand-authored, unlike the generated boards (`tiles/generateTerrain.ts`): this
+// is the demo, so where the wood, the water and the town go is a composition
+// rather than a seed. It is painted from AREAS — every region below is a
+// rectangle or two — because `patchPath` fuses orthogonally adjacent same-kind
+// cells into one outline, so a body of ground reads as a lake or a wood while
+// scattered cells read as confetti.
+//
+// The one rule that matters: BLOCKING ground (water/rock/mountain) is skipped on
+// any cell that already carries rail or road, so `validateLevel` can never see a
+// line over a lake — the level's topology is untouched by anything here, and the
+// board plays exactly as it did. Forest and town DON'T block, so they are
+// deliberately painted straight over the ring and the streets: the north line
+// runs through a wood and the avenues run through the town, with the corridor
+// rules keeping trunks and houses off the right-of-way (see /test/clearing).
+
+const rect = (x0: number, y0: number, x1: number, y1: number): string[] => {
+  const cells: string[] = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) cells.push(`${x},${y}`);
+  return cells;
+};
+
+const without = (cells: string[], ...drop: string[]): string[] =>
+  cells.filter(id => !drop.includes(id));
+
+// Painted in order; a later region wins where two overlap (none do today).
+const GROUND: { kind: TerrainKind; cells: string[] }[] = [
+  // A range pinning the north-west corner, outside the ring.
+  { kind: "mountain", cells: rect(0, 0, 1, 3) },
+  // The big north wood. The ring's top straight and the spur to the 6,3 depot
+  // run right through it; the depot itself is left on open ground so its
+  // building reads.
+  { kind: "forest", cells: without(rect(4, 0, 8, 3), "6,3") },
+  // A second wood wrapping the north-east corner, ring and all.
+  { kind: "forest", cells: rect(15, 0, 19, 3) },
+  // A tarn inside the ring, between the two streets — the water a line has to
+  // be routed around rather than over.
+  { kind: "water", cells: rect(10, 2, 12, 4) },
+  // The town the street grid exists for: four blocks around the 9/13 x 6/9
+  // crossroads, streets and all.
+  { kind: "urban", cells: rect(9, 6, 13, 9) },
+  // A hamlet on the avenues west of it.
+  { kind: "urban", cells: rect(4, 7, 6, 8) },
+  // The south-west wood, which the ring's bottom straight runs through.
+  { kind: "forest", cells: rect(4, 10, 8, 12) },
+  // A lake wrapping the south-west corner, outside the ring and along the
+  // bottom edge.
+  { kind: "water", cells: [...rect(0, 10, 1, 13), ...rect(2, 13, 4, 13)] },
+  // Rock pinning the south-east corner and the bottom edge beside it.
+  { kind: "rock", cells: [...rect(18, 10, 19, 13), ...rect(15, 13, 17, 13)] },
+  // An outcrop inside the ring's south-east: something to build around.
+  { kind: "rock", cells: rect(14, 10, 16, 11) },
+  // Fields, LAST and in the biggest blocks — the open country between the woods
+  // and the town. They go over what is left rather than being fitted around it:
+  // every earlier region has already claimed its cells, and `paintGround` skips
+  // anything already painted. Without them the board's whole middle was flat
+  // green, which is what a world looks like when nobody farms it.
+  {
+    kind: "farmland",
+    cells: [
+      ...rect(3, 2, 8, 5), // the west of the ring, either side of the spur
+      ...rect(10, 5, 12, 5), // north of the town
+      ...rect(14, 2, 16, 5), // the east of the ring
+      ...rect(3, 7, 8, 8), // between the avenues, west
+      ...rect(9, 11, 12, 11), // south of the town
+      ...rect(4, 0, 19, 0), // the top margin, outside the ring
+    ],
+  },
+];
+
+function paintGround(level: Level): void {
+  for (const { kind, cells } of GROUND) {
+    for (const id of cells) {
+      const cell = level[id];
+      const built = !!cell && (cell.connections.length > 0 || (cell.road?.length ?? 0) > 0);
+      // Blocking ground yields to whatever is already built here. Authoring an
+      // area and letting the railway interrupt it is the point: the lake simply
+      // stops at the line instead of the level failing validation.
+      if (built && terrainBlocksBuilding(kind)) continue;
+      level[id] = cell ? { ...cell, terrain: kind } : { connections: [], terrain: kind };
+    }
+  }
 }
 
 function build(): Level {
@@ -153,6 +239,10 @@ function build(): Level {
       roadCell(`${x},${y}`, twoWay(Top, Bottom));
     }
   }
+
+  // --- Ground ----------------------------------------------------------------
+  // Last, so it can see everything that was built and yield to it.
+  paintGround(level);
 
   return level;
 }

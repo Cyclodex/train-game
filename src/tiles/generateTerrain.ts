@@ -207,5 +207,31 @@ export function paintTerrain(level: Level, opts: PaintTerrainOptions): number {
     put(grow(seed, softPool, 2 + Math.floor(rand() * 2), rand), "urban");
   }
 
+  // 5. A works, on the far side of the board from the town where there is room
+  //    — the freight half of the world, and the ground a depot beside it will
+  //    one day read to decide what it ships (see the industry design note).
+  if (rand() < 0.65) {
+    const worksPool = [...softPool];
+    if (worksPool.length > 0) {
+      const seed = worksPool[Math.floor(rand() * worksPool.length)];
+      put(grow(seed, softPool, 2 + Math.floor(rand() * 2), rand), "industry");
+    }
+  }
+
+  // 6. Fields, LAST and in the biggest blocks — they are what open country
+  //    between the woods and the town actually looks like, and the one kind
+  //    whose job is to cover ground rather than to punctuate it. Buildable and
+  //    cheap (1.2x), so covering the leftovers costs the player almost nothing;
+  //    what it buys is a board with no bare green quarters left on it.
+  const fieldCount = 2 + Math.floor(rand() * 3);
+  for (let i = 0; i < fieldCount; i++) {
+    const remaining = [...softPool];
+    if (remaining.length === 0) break;
+    const seed = remaining[Math.floor(rand() * remaining.length)];
+    // Deliberately larger than a wood: a two-cell field is a sticker, and the
+    // furrows only read as a field once the block is several tiles across.
+    put(grow(seed, softPool, 4 + Math.floor(rand() * 5), rand), "farmland");
+  }
+
   return painted;
 }

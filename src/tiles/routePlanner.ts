@@ -16,6 +16,12 @@ export interface RouteOpts {
   width: number;
   height: number;
   passable?: (c: Coordinates) => boolean;
+  // Cells a line may cross only ON A STRUCTURE — water, which a bridge spans.
+  // Passable, but at BRIDGE_MOVE per tile instead of MOVE, so a route takes the
+  // dry way round whenever one is remotely comparable and crosses only where
+  // crossing is genuinely the shorter answer. That trade-off IS the feature: a
+  // lake gets routed around, a river gets bridged.
+  bridgeable?: (c: Coordinates) => boolean;
 }
 
 const DIRS: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
@@ -25,6 +31,11 @@ const idOf = (c: Coordinates) => `${c.x},${c.y}`;
 // length routes so previews bend cleanly with as few curves as possible.
 const MOVE = 1000;
 const TURN = 1;
+// A span costs about six tiles of plain track to route through. Tuned against
+// the shape of the problem rather than the price list: a 1-wide river is worth
+// crossing from anywhere within ~6 tiles of a detour, a lake several tiles
+// across never is. (The MONEY price is separate — BRIDGE_BUILD_FACTOR.)
+const BRIDGE_MOVE = MOVE * 6;
 
 export function planRoute(
   from: OpenEnd,
@@ -32,8 +43,14 @@ export function planRoute(
   o: RouteOpts
 ): RouteStep[] | null {
   const passable = o.passable ?? (() => true);
+  const bridgeable = o.bridgeable ?? (() => false);
+  const inGrid = (c: Coordinates) =>
+    c.x >= 0 && c.y >= 0 && c.x < o.width && c.y < o.height;
   const ok = (c: Coordinates) =>
-    c.x >= 0 && c.y >= 0 && c.x < o.width && c.y < o.height && passable(c);
+    inGrid(c) && (passable(c) || bridgeable(c));
+  // What entering this cell costs: a plain move, or a span.
+  const moveCost = (c: Coordinates) =>
+    passable(c) ? MOVE : BRIDGE_MOVE;
 
   // Degenerate: both ends in the same tile -> one intra-tile connection.
   if (from.id === to.id) {
@@ -88,7 +105,7 @@ export function planRoute(
       if (!nc || !ok(nc)) continue;
       if (nc.x === A.x && nc.y === A.y) continue; // don't loop back through the anchor
       const k = skey(nc, nd);
-      const cost = bd + MOVE + (nd !== dir ? TURN : 0);
+      const cost = bd + moveCost(nc) + (nd !== dir ? TURN : 0);
       if (cost < (dist.get(k) ?? Infinity)) {
         dist.set(k, cost);
         prev.set(k, bk!);
