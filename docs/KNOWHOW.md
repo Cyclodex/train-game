@@ -499,6 +499,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
 
+## EDITOR: heights & flyover tools (2026-07-31)
+- The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —
+  `heightStroke` remembers where the drag has been, because re-applying ±1 on
+  every mouseenter staircases a wobbling drag (the terrain brush never had this
+  problem: setting a kind is idempotent, shifting a height is not). Clamped
+  0..MAX_HEIGHT (3). Lowering the last content deletes the cell (isBlankCell).
+- The FLYOVER verb (Rail drawer → 🌉) cycles flat → pair A over → pair B over →
+  flat, and ONLY on a diamond crossing (`flyoverEligible`: exactly two
+  connections over four distinct edge ports). Every connection reducer funnels
+  through `pruneFlyover`, so deleting or switching a line can never leave a
+  stale deck naming a connection that is gone.
+- The editor's `stubGame` MUST carry `levelVersion: ref(0)`: Tile.vue's
+  neighbour-aware getters (tunnel portals, grade chevrons) read it, and the
+  stub is `as unknown as Game` so the type system will not catch the omission —
+  the first tunnel or hillside rendered in the editor throws instead.
+
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
   freight half of the world — the ground a depot will one day read to decide it

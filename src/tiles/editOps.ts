@@ -83,6 +83,57 @@ export function isBlankCell(cell: TileCell): boolean {
   );
 }
 
+// --- Heights -----------------------------------------------------------------
+// The editor's raise/lower brush. Capped: three steps is as much relief as the
+// hypsometric tints (and the eye) can tell apart, and an uncapped brush would
+// let a stuck drag paint an unclimbable spike.
+export const MAX_HEIGHT = 3;
+
+export function setHeight(cell: TileCell, h: number): TileCell {
+  const clamped = Math.max(0, Math.min(MAX_HEIGHT, Math.round(h)));
+  const { height: _drop, ...rest } = cell;
+  return clamped === 0 ? rest : { ...rest, height: clamped };
+}
+
+export function shiftHeight(cell: TileCell, delta: 1 | -1): TileCell {
+  return setHeight(cell, (cell.height ?? 0) + delta);
+}
+
+// --- Flyover -----------------------------------------------------------------
+// A cell can be grade-separated when its rail forms a DIAMOND CROSSING: exactly
+// two connections over four distinct edge ports (no Center, no shared port), so
+// neither line can switch into the other. Anything else — a junction, a lone
+// line — has nothing to separate.
+export function flyoverEligible(cell: TileCell): boolean {
+  if (cell.connections.length !== 2) return false;
+  const ports = cell.connections.flat();
+  if (ports.includes(Position.Center)) return false;
+  return new Set(ports).size === 4;
+}
+
+// The editor's flyover verb: cycle which line rides the deck — flat crossing →
+// first pair over → second pair over → flat again. A no-op on any cell that is
+// not a diamond crossing, so the tool can be clicked anywhere safely.
+export function cycleFlyover(cell: TileCell): TileCell {
+  if (!flyoverEligible(cell)) return cell;
+  const [a, b] = cell.connections;
+  const { flyover: _drop, ...rest } = cell;
+  if (cell.flyover === undefined) return { ...rest, flyover: a };
+  if (samePair(cell.flyover, a)) return { ...rest, flyover: b };
+  return rest;
+}
+
+// Editing the rail can invalidate an authored flyover (its pair removed, or a
+// third line turning the crossing into a junction). Every connection reducer
+// funnels its result through this, so stale grade separation can never linger.
+function pruneFlyover(cell: TileCell): TileCell {
+  if (cell.flyover === undefined) return cell;
+  const named = cell.connections.some(c => samePair(c, cell.flyover!));
+  if (named && flyoverEligible(cell)) return cell;
+  const { flyover: _drop, ...rest } = cell;
+  return rest;
+}
+
 // Add the connection if absent, remove it if already present (order-independent).
 export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
   const pair: PortPair = [a, b];
@@ -90,7 +141,7 @@ export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
   const connections = exists
     ? cell.connections.filter(c => !samePair(c, pair))
     : [...cell.connections, pair];
-  return { ...cell, connections };
+  return pruneFlyover({ ...cell, connections });
 }
 
 // Ensure a connection is present without ever removing one (unlike
@@ -108,7 +159,7 @@ export function addConnection(cell: TileCell, a: Port, b: Port): TileCell {
   // …and on tunnelable ground it MEANS boring a tunnel, by the same argument.
   // The two can never both fire: no ground is bridgeable AND tunnelable.
   if (needsTunnel(next)) next.tunnel = true;
-  return next;
+  return pruneFlyover(next);
 }
 
 export function removeConnection(cell: TileCell, a: Port, b: Port): TileCell {
@@ -121,7 +172,7 @@ export function removeConnection(cell: TileCell, a: Port, b: Port): TileCell {
     delete next.bridge;
     delete next.tunnel;
   }
-  return next;
+  return pruneFlyover(next);
 }
 
 // Make the cell a depot facing `facing` (a single border<->Center connection).
