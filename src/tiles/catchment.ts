@@ -41,6 +41,32 @@ export function stationCatchment(
   return { urban, industry };
 }
 
+// Park & ride: which station (if any) serves each tile — the nearest station
+// within walking reach, ties broken by Chebyshev distance then id so the map
+// is deterministic. game.ts consults this when a car takes a parking stall:
+// its occupant walks to that station and joins the platform queue. Computed
+// once per level (stations are level data).
+export function parkAndRideTargets(level: Level): Record<string, string> {
+  const best: Record<string, { station: string; dist: number }> = {};
+  for (const [id, cell] of Object.entries(level)) {
+    if (cell.role !== "station") continue;
+    const { x, y } = parseCoordId(id);
+    for (let dy = -WALK_RADIUS_TILES; dy <= WALK_RADIUS_TILES; dy++) {
+      for (let dx = -WALK_RADIUS_TILES; dx <= WALK_RADIUS_TILES; dx++) {
+        const tid = `${x + dx},${y + dy}`;
+        const dist = Math.max(Math.abs(dx), Math.abs(dy));
+        const cur = best[tid];
+        if (!cur || dist < cur.dist || (dist === cur.dist && id < cur.station)) {
+          best[tid] = { station: id, dist };
+        }
+      }
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(best).map(([tid, b]) => [tid, b.station])
+  );
+}
+
 // The passenger demand schedule a station earns from its surroundings. A
 // station beside nothing still sees a trickle (somebody always turns up); a
 // town within walking reach means faster arrivals, a larger waiting crowd,

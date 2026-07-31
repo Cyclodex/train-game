@@ -144,14 +144,23 @@ walking radius (freight weight from `industry`, for later) — headless, unit
 tested, feeding phase 2's spawn schedule in the mode layer. Debug overlay draws
 the radius so authors can see a station's reach.
 
-### Phase 4 — intermodal edges (M–L, builds on the parking layer)
+### Phase 4 — intermodal edges (builds on the parking layer) — **transfer edges SHIPPED 2026-08-01**
 
-Bus stops and car parking come from the parking branch (see §1): buses already
-serve lay-bys and in-lane halts there, and a P+R becomes a parking facility
-beside the station whose arriving cars add passengers to the station queue
-(D5). The work left for this phase is the *transfer* wiring — queues meeting at
-adjacent tiles — not the road-side mechanics. Each edge is its own `/test`
-scenario (bus stop feeding a station; P+R feeding a station).
+Bus stops and car parking come from the parking branch (see §1); the transfer
+wiring is in: whenever a vehicle takes a stall within a station's walking
+reach (`parkAndRideTargets`, same radius as the catchment), its occupants join
+that platform's queue via `sim.addStationPassengers` — one driver from an
+ordinary bay, a busload from a bus stop (in-lane halt or bus-reserved lay-by).
+The transfer runs in `game.advance()` (the headless world step, NOT the render
+mirror), which is what makes it provable: `tests/unit/parkAndRide.spec.ts`
+drives 60 headless seconds and shows more passengers than the schedule alone
+could produce. `/test/parkandride` (kerb bays by the station) and
+`/test/busfeeder` (a halt feeding the platform) are the demos.
+
+Still open in this phase: buses as real passenger CARRIERS (today a stopping
+bus *produces* a busload; riding a bus somewhere is not modelled) and people
+riding rail→bus onward journeys — both want the destination-typed passengers
+of phase 5.
 
 ### Phase 5 — the mode ("Verkehrsnetz" / Transport-Fever-like) (L)
 

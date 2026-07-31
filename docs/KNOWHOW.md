@@ -451,6 +451,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## PARK & RIDE (phase 4 — road feeds rail, 2026-08-01)
+- `parkAndRideTargets(level)` (tiles/catchment.ts): tile id → nearest station
+  within the walk radius, ties by distance then id — deterministic, computed
+  once. When a stall goes free→taken, game.ts injects passengers at that
+  station via `sim.addStationPassengers` (capped by the schedule `max`, else
+  `STATION_QUEUE_HARD_CAP`; a full platform turns walkers away, returns 0).
+- Transfer size comes from the ROW the stall belongs to (`rowFor` on the
+  parsed stall id — stall ids lead with their tile id): a bus stop (kind
+  "busstop" or `reserved: "bus"`) turns out a busload (4), anything else 1.
+- The diff runs in `game.advance()` — the headless world step — NEVER in
+  `updateParking` (the render mirror): model logic in a rAF callback is the
+  hidden-tab trap, and `tests/unit/parkAndRide.spec.ts` (60 headless seconds,
+  more passengers than the schedule can make) exists to keep it that way.
+  `prevStalls` resets with the game or a retry double-transfers.
+- `/test/parkandride` (kerb bays by the station) and `/test/busfeeder` (an
+  in-lane halt: crowd jumps by busloads, cars queue behind the bus).
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

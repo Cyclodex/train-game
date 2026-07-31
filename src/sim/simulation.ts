@@ -77,6 +77,11 @@ export interface StationDemand {
   initial?: number;
 }
 
+// The most a platform holds when passengers are INJECTED (park & ride) at a
+// station with no demand schedule of its own — the schedule's `max` caps a
+// scheduled station the same way.
+export const STATION_QUEUE_HARD_CAP = 16;
+
 export interface SimTrain {
   id: string;
   color: string;
@@ -292,6 +297,12 @@ export interface Simulation {
   trainBlock(id: string): Readonly<BlockInfo> | undefined;
   // Passengers waiting on the platform at a station tile (0 for any other id).
   stationQueue(tileId: string): number;
+  // Inject passengers ONTO a station's platform outside the schedule — the
+  // park-and-ride edge (game.ts adds one per car that parks within walking
+  // reach). Capped at the station's schedule `max` (or STATION_QUEUE_HARD_CAP
+  // without a schedule); returns how many were actually accepted. A no-op 0
+  // for any tile that is not a station.
+  addStationPassengers(tileId: string, count: number): number;
   // Passengers currently riding this train.
   trainPassengers(id: string): number;
   // Total passengers whose ride ended (at a station call or a matched depot
@@ -1052,6 +1063,14 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     stationQueue(tileId: string) {
       return queues.get(tileId) ?? 0;
+    },
+    addStationPassengers(tileId: string, count: number) {
+      if (!isStationTile(tileId) || count <= 0) return 0;
+      const cap = stationDemand[tileId]?.max ?? STATION_QUEUE_HARD_CAP;
+      const cur = queues.get(tileId) ?? 0;
+      const accepted = Math.max(0, Math.min(count, cap - cur));
+      if (accepted > 0) queues.set(tileId, cur + accepted);
+      return accepted;
     },
     trainPassengers(id: string) {
       return trains[id]?.passengers ?? 0;

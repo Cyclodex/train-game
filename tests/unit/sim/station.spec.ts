@@ -4,6 +4,7 @@ import {
   SimEvent,
   STATION_DWELL_SEC,
   STATION_STOP_PROGRESS,
+  STATION_QUEUE_HARD_CAP,
 } from "@/sim/simulation";
 import { Position } from "@/types";
 import type { Level } from "@/tiles/model";
@@ -265,5 +266,36 @@ describe("station passengers (phase 2)", () => {
     );
     expect(dwellA?.boarded).toBe(0);
     expect(sim.stationQueue("2,0")).toBe(5);
+  });
+});
+
+describe("addStationPassengers (park & ride injection)", () => {
+  it("adds to a station's queue up to its cap and refuses non-stations", () => {
+    const sim = createSimulation({
+      level: {
+        "0,0": expandKind("depot", 1),
+        "1,0": expandKind("station", 1),
+        "2,0": expandKind("depot", 3),
+      },
+      trains: [],
+      stationDemand: { "1,0": { intervalSec: 1000, max: 3, initial: 0 } },
+    });
+    expect(sim.addStationPassengers("1,0", 2)).toBe(2);
+    expect(sim.stationQueue("1,0")).toBe(2);
+    // The platform cap turns the rest away.
+    expect(sim.addStationPassengers("1,0", 5)).toBe(1);
+    expect(sim.stationQueue("1,0")).toBe(3);
+    // Not a station → nobody joins anything.
+    expect(sim.addStationPassengers("0,0", 3)).toBe(0);
+    expect(sim.addStationPassengers("9,9", 3)).toBe(0);
+  });
+
+  it("uses the hard cap for a station with no schedule of its own", () => {
+    const sim = createSimulation({
+      level: { "1,0": expandKind("station", 1) },
+      trains: [],
+    });
+    expect(sim.addStationPassengers("1,0", 99)).toBe(STATION_QUEUE_HARD_CAP);
+    expect(sim.stationQueue("1,0")).toBe(STATION_QUEUE_HARD_CAP);
   });
 });

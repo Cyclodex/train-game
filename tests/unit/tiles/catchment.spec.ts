@@ -4,6 +4,7 @@ import { expandKind } from "@/tiles/kinds";
 import {
   stationCatchment,
   stationDemandOf,
+  parkAndRideTargets,
   WALK_RADIUS_TILES,
 } from "@/tiles/catchment";
 
@@ -68,5 +69,29 @@ describe("stationDemandOf", () => {
       const d = stationDemandOf(withUrban(Math.min(n, 5)), "5,5");
       expect(d.initial ?? 0).toBeLessThanOrEqual(d.max);
     }
+  });
+});
+
+describe("parkAndRideTargets", () => {
+  it("maps every tile in walking reach to its nearest station, deterministically", () => {
+    const level: Level = {
+      "2,0": expandKind("station", 1),
+      "8,0": expandKind("station", 1),
+    };
+    const t = parkAndRideTargets(level);
+    expect(t["2,2"]).toBe("2,0"); // straight down, distance 2
+    expect(t["4,0"]).toBe("2,0"); // between the two, nearer the left
+    expect(t["6,0"]).toBe("8,0"); // nearer the right
+    expect(t["5,0"]).toBeUndefined(); // distance 3 from both — out of reach
+    expect(t["2,0"]).toBe("2,0"); // the station serves its own tile
+  });
+
+  it("breaks exact ties by station id, so the map never flickers", () => {
+    const level: Level = {
+      "0,0": expandKind("station", 1),
+      "4,0": expandKind("station", 1),
+    };
+    // "2,0" is distance 2 from both; the lexicographically smaller id wins.
+    expect(parkAndRideTargets(level)["2,0"]).toBe("0,0");
   });
 });
