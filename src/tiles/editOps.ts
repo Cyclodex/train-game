@@ -70,6 +70,10 @@ export function isBlankCell(cell: TileCell): boolean {
     (cell.road?.length ?? 0) === 0 &&
     cell.role === undefined &&
     cell.terrain === undefined &&
+    // Height counts as real content too: a height-only cell is how a hillside
+    // exists beside the line, and dropping it would flatten the hill it is
+    // part of. Same bug terrain hit before it was added here.
+    (cell.height ?? 0) === 0 &&
     (cell.signals?.length ?? 0) === 0 &&
     // Parking counts as real content, exactly as terrain does. A cell can carry
     // ONLY `parking` — `{ facility: "P1" }` with no bays is how an aisle tile

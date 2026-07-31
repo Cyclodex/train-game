@@ -10,17 +10,19 @@
 
 <script lang="ts">
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
-import { Level } from "@/tiles/model";
+import { Level, heightOf } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
   GROUND_UNITS,
+  PatchSame,
   TerrainNeighbours,
   corridorsFor,
   terrainOf,
   tileCanopySvg,
   tileGroundSvg,
+  tileHeightSvg,
   tileScatterSvg,
 } from "@/tiles/terrain";
 
@@ -89,6 +91,29 @@ class TileGround extends Vue {
     });
   }
 
+  // The hypsometric terrace an elevated cell lays UNDER its terrain patch:
+  // "same" here compares HEIGHT, not kind — a neighbour at or above this
+  // height continues the terrace (the higher one lays its own, lighter body),
+  // a lower one is where the slope face paints. See tileHeightSvg.
+  get heightHtml(): string {
+    const h = heightOf(this.level[this.coordId]);
+    if (h === 0) return "";
+    const { x, y } = parseCoordId(this.coordId);
+    const at = (dx: number, dy: number) =>
+      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]) >= h;
+    const same: PatchSame = {
+      top: at(0, -1),
+      right: at(1, 0),
+      bottom: at(0, 1),
+      left: at(-1, 0),
+      topLeft: at(-1, -1),
+      topRight: at(1, -1),
+      bottomRight: at(1, 1),
+      bottomLeft: at(-1, 1),
+    };
+    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED);
+  }
+
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
@@ -97,7 +122,9 @@ class TileGround extends Vue {
         : this.layer === "scatter"
           ? tileScatterSvg
           : tileGroundSvg;
-    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    const base = build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    // The terrace renders below the terrain patch, on the ground layer only.
+    return this.layer === "ground" ? this.heightHtml + base : base;
   }
 }
 export default toNative(TileGround);

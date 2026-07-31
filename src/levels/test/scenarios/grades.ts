@@ -20,6 +20,7 @@ const level: Record<string, TileCell> = {};
 
 // The hill both lines cross: heights per column, one step per boundary.
 const PROFILE = [0, 0, 1, 2, 2, 2, 1, 0, 0];
+const ROWS = 5;
 
 for (const row of [1, 3]) {
   for (let x = 0; x < PROFILE.length; x++) {
@@ -31,6 +32,17 @@ for (const row of [1, 3]) {
   }
   level[`0,${row}`] = expandKind("depot", 1);
   level[`${PROFILE.length - 1},${row}`] = expandKind("depot", 3);
+}
+
+// The hill is a BODY, not two embankments: every row carries the column's
+// height, so the terraces fuse into one broad ridge (hypsometric tinting,
+// see tileHeightSvg) that both lines visibly climb over.
+for (let y = 0; y < ROWS; y++) {
+  for (let x = 0; x < PROFILE.length; x++) {
+    const h = PROFILE[x];
+    if (h === 0 || level[`${x},${y}`]) continue;
+    level[`${x},${y}`] = { connections: [], height: h };
+  }
 }
 
 export const grades: TestScenario = {

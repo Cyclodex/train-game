@@ -2163,6 +2163,96 @@ function buildCached(
   return built;
 }
 
+// --- Heights: hypsometric terraces -------------------------------------------
+//
+// A cell with `height > 0` lays a TERRACE under whatever else it carries: a
+// fused patch fill in a lighter, sunnier green per step (classic hypsometric
+// tinting), so higher ground visibly IS higher ground. Neighbours AT OR ABOVE
+// this height CONTINUE the terrace (the higher neighbour lays its own, lighter
+// body on the shared reading), so a plateau fuses into one organic shape
+// exactly the way a lake does — and the edge toward LOWER ground becomes the
+// slope face, painted under the one NW sun everything else obeys: the north
+// and west faces catch light, the south and east faces fall into shade.
+// The terrace deliberately reuses the patch machinery (patchPath /
+// patchSegments), so its outline jitters off the grid and its shared edges
+// fuse invisibly, like every other body of ground in the game.
+
+// One tint per height step; the last entry serves everything above it. Kept
+// close to the meadow's green — a terrace is still grass, just sunnier — and
+// stepping toward yellow-green so two adjacent steps are tellable apart.
+const HEIGHT_TINT: Hsl[] = [
+  [99, 30, 41], // h1
+  [90, 33, 47], // h2
+  [81, 36, 53], // h3+
+];
+
+export function heightTint(height: number): Hsl {
+  return HEIGHT_TINT[Math.min(Math.max(height, 1), HEIGHT_TINT.length) - 1];
+}
+
+// Memo, for the same reason as `cache` below: a terrace only changes with its
+// height, its neighbour comparison, its coord or the seed.
+const heightCache = new Map<string, string>();
+
+/**
+ * The terrace one elevated tile lays, as an SVG fragment in the 0..100 box.
+ * `same` compares NEIGHBOUR HEIGHT >= this height (fuse) — lower neighbours
+ * are where the slope faces paint. "" at ground level.
+ */
+export function tileHeightSvg(
+  height: number,
+  coordId: string,
+  same: PatchSame,
+  seed = 1,
+): string {
+  if (height <= 0) return "";
+  const key =
+    `h${height}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
+    `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
+    `|${coordId}|${seed}`;
+  const hit = heightCache.get(key);
+  if (hit !== undefined) return hit;
+
+  const { x, y } = parseCoordId(coordId);
+  const [hh, hs, hl] = heightTint(height);
+  const d = patchPath(same, x, y, seed, GROUND_UNITS);
+  const parts: string[] = [];
+
+  // Soft fringe outside the body (unclipped, like every kind's), so the
+  // terrace blends into the ground below instead of ending at a hard line.
+  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS);
+  if (fringeD) {
+    parts.push(
+      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
+      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
+    );
+  }
+  parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+
+  // The slope faces: each DOWNHILL edge stroked inside the body — lit where it
+  // faces the sun (top/left), shaded where it faces away (right/bottom). Edge
+  // order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom, 3 left.
+  const slopes = patchSegments(same, x, y, seed, GROUND_UNITS)
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.stops);
+  if (slopes.length > 0) {
+    const clipId = `height-clip-${coordId.replace(",", "-")}-${height}`;
+    parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+    for (const { s, i } of slopes) {
+      const lit = i === 0 || i === 3;
+      const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
+      const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+      parts.push(
+        `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+      );
+    }
+  }
+
+  const built = parts.join("");
+  heightCache.set(key, built);
+  return built;
+}
+
 /**
  * The FLAT ground for one tile as an SVG fragment, in a 0..100 box: the terrain
  * patch, its rim and its ground marks (paving, scree, gardens). Returns "" for

@@ -481,10 +481,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
   tile. Bit immediately in grades.spec.ts.
 - Render: climb CHEVRONS on the ballast (Tile.vue `gradeMarks`, same port
   transform table as tunnel portals; z2 over the rails), pointing uphill —
-  drawn on the cell whose neighbour is exactly one step HIGHER. Painted
-  hillsides/embankments are the acknowledged follow-up; debug label shows
-  " h<N>". /test scenario: `grades` (light shuttle vs heavy freight racing the
-  same hill — the gap on the ramps is the mechanic).
+  drawn on the cell whose neighbour is exactly one step HIGHER; debug label
+  shows " h<N>". /test scenario: `grades` (light shuttle vs heavy freight
+  racing the same hill — the gap on the ramps is the mechanic).
+- HYPSOMETRIC TERRACES (`tileHeightSvg`, 2026-07-31): a cell with height > 0
+  lays a fused patch fill UNDER its terrain patch on the ground layer, lighter
+  and warmer per step (`HEIGHT_TINT`, last entry serves h3+). "Same" for the
+  patch machinery compares NEIGHBOUR HEIGHT >= OWN — a higher neighbour
+  continues the terrace and lays its own lighter body on top of the shared
+  reading, so a plateau fuses like a lake and the step edge always belongs to
+  the UPPER terrace. Downhill edges get slope faces clipped inside the body:
+  LIT on top/left, SHADED on right/bottom (patchSegments' clockwise edge order
+  is 0 top, 1 right, 2 bottom, 3 left — the one NW sun again). Own memo cache
+  (`heightCache`). Author a hill as a BODY (heights on the whole footprint),
+  not just on the track cells, or it reads as two embankments.
+- `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
+  otherwise silently drop a height-only cell and flatten the hill it was part
+  of.
 
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
