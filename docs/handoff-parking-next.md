@@ -5,8 +5,8 @@ built, what it measured, and the two things it turned up that are still open.
 The dense canon lives in `docs/KNOWHOW.md` → PARKING; read that first, this is
 the story of one session.
 
-**Branch:** `claude/cloud-session-clone-start-3jjyg7` (continues
-`claude/auto-parking-system-b7d52c`, which it contains).
+**Branch:** `claude/auto-parking-system-b7d52c` (rebased onto the terrain
+roadmap 2026-08-01; the parking commits are the tip).
 
 **Maps**
 

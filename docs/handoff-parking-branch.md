@@ -7,8 +7,17 @@ brought up to date 2026-07-28 when the outstanding work was finished.
 
 ## 0. Before anything else
 
-**Branch:** `claude/cloud-session-clone-start-3jjyg7`. It contains
-`claude/auto-parking-system-b7d52c` in full, so that branch is history now.
+**Branch:** `claude/auto-parking-system-b7d52c` — the parking work was rebased
+back onto it on 2026-08-01, on top of the terrain roadmap that landed there in
+the meantime. The eight parking commits sit at the tip, in order, unchanged.
+(They were written on `claude/cloud-session-clone-start-3jjyg7`, which is now
+superseded; `backup/cloud-parking-preraebase` pins their pre-rebase form.)
+
+**That rebase was clean, and `.gitattributes` is why.** Both sides had touched
+`Tile.vue`, `IMPROVEMENTS.md`, `docs/KNOWHOW.md` and the scenario registry, and
+git lined every one of them up without a single conflict — the exact merge that
+cost an hour of hand-resolution before the LF rule landed. If a future merge on
+this branch DOES come out wholly conflicted, suspect line endings first.
 
 Work on this line has repeatedly finished with commits that were **not yet on the
 remote** — a cloud session clones from the remote and would silently redo them.
