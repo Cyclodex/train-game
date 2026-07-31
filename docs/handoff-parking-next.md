@@ -74,16 +74,22 @@ Measured at shipped density, 12 runs: worst wait 1.4–9.6s, average 0.7–2.4s,
 all-stop, throughput unchanged (606 cycles against 610). At 2.5× traffic the
 courtesy halves the average wait (10–13s → 2.9–5.8s) at a throughput cost.
 
-## 3. Reversing is much too fast — DONE
+## 3. Reversing is much too fast — DONE, twice
 
-`REVERSE_PACE` 0.55, per LEG. "Is this leg reversed" is the leg's own flag XOR the
-direction `m` is driven, so a car backing OUT of a 90° bay (forward legs replayed
-backwards) is slowed too.
+The first ship (2026-07-27) multiplied `REVERSE_PACE` onto the pace-scaled
+speed, and the two cancelled: `pace` speeds a path up in proportion to its
+length, the pivot-reverse path is long (pace ≈ 3–4), so cars still backed into
+bays at up to twice the crawl. The user reported it verbatim the next day.
 
-0.55 is a floor, not a taste. Swept 6 seeds × 4 maps: 1.0 → 275/348/207/290
-cycles, 0.55 → 257/357/213/299, 0.4 → 235/343/208/284, 0.3 → 206/349/209/281.
-Everything at or below 0.4 deadlocks parkinglot (37s of all-stop at 0.4, 117s at
-0.3). 0.55 costs nothing overall.
+Now (2026-07-28) a backing leg is an ABSOLUTE speed: `REVERSE_PACE` 0.75 × the
+0.16 t/s base crawl = 0.12 t/s, with `clampToDirectionChange` stopping the step
+at a leg join so the straddling tick cannot run at the old leg's speed. Slowing
+the reverse made several leavers ready at once, which exposed two liveness bugs
+in item 2's courtesy machinery (a float knife-edge on the stop line, and the
+phantom-claim ordering disagreeing with the courtesy ordering) — both wedged
+whole maps permanently and both are fixed; see KNOWHOW → PARKING. The guard test
+measures the rendered body's MIDPOINT (the nose legitimately sweeps faster on a
+curved leg) and asserts median = cap.
 
 ## 4. The echelon apron — DONE
 

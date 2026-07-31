@@ -95,6 +95,7 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
       // Stuck detection: a tick where EVERY vehicle is stationary. A few are
       // normal (a red signal, a train on a crossing); hundreds in a row are not.
       let allStopped = 0;
+      let prevManoeuvre = new Map<string, number>();
       let longestAllStopped = 0;
 
       for (let i = 0; i < STEPS; i++) {
@@ -122,9 +123,24 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
         // it has existed. It let a total standstill of /test/parkingkerb (every
         // live vehicle at v=0, every seed) ship green.
         //
+        // ...AND `manoeuvre` PROGRESS COUNTS AS MOTION. `advanceParking` pins
+        // `velocity` at 0 for a whole parking manoeuvre — the curve moves the
+        // car, not the follower model — so with reversing at a real-world crawl
+        // (3–4s per manoeuvre) a busy car park reads as "everything stopped"
+        // while cars are visibly swinging into bays. The velocity-only predicate
+        // lies in BOTH directions: `speed` made it blind to true gridlock,
+        // velocity-alone makes it cry wolf on healthy parking.
+        //
         // Parked cars are excluded: a car sitting in a bay is behaving correctly.
+        const mNow = new Map(cars.map(c => [c.id, c.manoeuvre]));
         const rolling = cars.filter(c => !c.parked);
-        if (rolling.length > 0 && rolling.every(c => c.velocity <= 0.001)) {
+        const anyMoving = rolling.some(
+          c =>
+            c.velocity > 0.001 ||
+            Math.abs((mNow.get(c.id) ?? 0) - (prevManoeuvre.get(c.id) ?? mNow.get(c.id) ?? 0)) > 1e-9,
+        );
+        prevManoeuvre = mNow;
+        if (rolling.length > 0 && !anyMoving) {
           allStopped++;
           longestAllStopped = Math.max(longestAllStopped, allStopped);
         } else {

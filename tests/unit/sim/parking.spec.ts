@@ -1079,54 +1079,70 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   }
 
   it("reverses at a careful crawl, not at the speed it drove in", () => {
-    // ONE PACE FOR THE WHOLE PATH meant a car backed into a space exactly as fast
-    // as it drove past it, which is the thing that was reported. A manoeuvre has
-    // legs and each has its own direction, so the speed is per leg now.
+    // A BACKING LEG IS DRIVEN AT AN ABSOLUTE SPEED: REVERSE_PACE × the base
+    // parking crawl (0.16 tiles/s), never scaled by `pace`. That last clause is
+    // the actual regression this test pins. The first ship of REVERSE_PACE was a
+    // multiplier ON the pace-scaled speed, and the two cancelled: `pace` speeds a
+    // path up in proportion to its length, the pivot-reverse path is long
+    // (pace ≈ 3–4), so cars backed into bays at up to TWICE the crawl they nose
+    // in at — "way too fast", verbatim from the report.
     //
-    // Measured on `manoeuvre` itself — its per-tick change IS the speed, in arc
-    // length, and it is constant within a leg. So a reverse manoeuvre shows
-    // exactly TWO speeds and a forward one shows a single speed: the cleanest
-    // possible signature of the rule, and one no amount of geometry can fake.
+    // Measured on the RENDERED body's MIDPOINT. The midpoint rides the curve, so
+    // its displacement over dt is exactly the arc-length rate the sim drives —
+    // the NOSE is the wrong point to watch, because on a curved leg the tangent
+    // rotates and the nose sweeps sideways at sqrt(v² + (halfLen·ω)²), well above
+    // the crawl while the car itself is crawling. (First draft of this test
+    // watched the nose and "failed" on physically correct motion.) A tick where
+    // the midpoint moves against the heading is a backing tick.
+    const CRAWL = 0.16; // PARKING.speed in road.ts — the base manoeuvre crawl
     for (const map of ["parkingkerb", "parkinglot"]) {
       const sim = simFor(map, 1);
-      const dm = new Map<string, number[]>();
-      const rev = new Map<string, boolean>();
-      let prev = new Map<string, number>();
-      const done: { rev: boolean; ratio: number }[] = [];
+      const backSpeeds: number[] = [];
+      let prev = new Map<string, { x: number; y: number; hx: number; hy: number; phase: string }>();
       for (let i = 0; i < 3000; i++) {
         sim.step(0.05, () => false);
-        const now = new Map<string, number>();
-        for (const c of sim.cars()) {
-          if (c.phase === "entering") {
-            now.set(c.id, c.manoeuvre);
-            rev.set(c.id, c.parkedReverse);
-            const p = prev.get(c.id);
-            if (p !== undefined) dm.set(c.id, [...(dm.get(c.id) ?? []), c.manoeuvre - p]);
-          } else if (dm.has(c.id)) {
-            const s = dm.get(c.id)!.filter(v => v > 1e-9).sort((a, b) => a - b);
-            dm.delete(c.id);
-            // Percentiles, not min/max: a tick that straddles the join between two
-            // legs is a blend of both speeds and belongs to neither.
-            if (s.length > 8) {
-              done.push({
-                rev: rev.get(c.id)!,
-                ratio: s[Math.floor(0.15 * s.length)]! / s[Math.floor(0.85 * s.length)]!,
-              });
-            }
-          }
+        const phase = new Map(sim.cars().map(c => [c.id, c.phase]));
+        const now = new Map<string, { x: number; y: number; hx: number; hy: number; phase: string }>();
+        for (const c of sim.sample()) {
+          const u = c.units[0];
+          if (!u?.front.pose || !u.rear.pose) continue;
+          const fx = u.front.coord.x + u.front.pose.tx;
+          const fy = u.front.coord.y + u.front.pose.ty;
+          const rx = u.rear.coord.x + u.rear.pose.tx;
+          const ry = u.rear.coord.y + u.rear.pose.ty;
+          const l = Math.hypot(fx - rx, fy - ry) || 1;
+          const ph = phase.get(c.id) ?? "driving";
+          now.set(c.id, {
+            x: (fx + rx) / 2,
+            y: (fy + ry) / 2,
+            hx: (fx - rx) / l,
+            hy: (fy - ry) / l,
+            phase: ph,
+          });
+          const b = prev.get(c.id);
+          // Same manoeuvre both ticks, so phase-transition re-seats (which are
+          // deliberate jumps, not driving) never pollute the sample.
+          if (!b || b.phase !== ph || (ph !== "entering" && ph !== "leaving")) continue;
+          const cur = now.get(c.id)!;
+          const dx = cur.x - b.x;
+          const dy = cur.y - b.y;
+          if (dx * b.hx + dy * b.hy < -1e-5) backSpeeds.push(Math.hypot(dx, dy) / 0.05);
         }
         prev = now;
       }
-      const backed = done.filter(x => x.rev);
-      const nosed = done.filter(x => !x.rev);
-      expect(backed.length, `${map}: no car backed into a bay`).toBeGreaterThan(3);
-      expect(nosed.length, `${map}: no car nosed into a bay`).toBeGreaterThan(3);
-      for (const c of backed) {
-        expect(c.ratio, `${map}: a reverse manoeuvre ran at one speed`).toBeCloseTo(REVERSE_PACE, 2);
-      }
-      for (const c of nosed) {
-        expect(c.ratio, `${map}: a forward manoeuvre changed speed`).toBeCloseTo(1, 2);
-      }
+      expect(backSpeeds.length, `${map}: nothing ever reversed`).toBeGreaterThan(50);
+      backSpeeds.sort((a, b) => a - b);
+      const p95 = backSpeeds[Math.floor(0.95 * backSpeeds.length)]!;
+      const median = backSpeeds[Math.floor(0.5 * backSpeeds.length)]!;
+      // Every ordinary backing tick at the one absolute speed; the median proves
+      // the cap is the speed actually driven, not just an unreached ceiling.
+      expect(p95, `${map}: reversing faster than the careful crawl`).toBeLessThan(
+        REVERSE_PACE * CRAWL * 1.1,
+      );
+      expect(median, `${map}: reverse speed is not the absolute crawl`).toBeCloseTo(
+        REVERSE_PACE * CRAWL,
+        2,
+      );
     }
   }, 120_000);
 
@@ -1251,6 +1267,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
         let worstStreak = 0;
         let streak = 0;
         const parkedOnce = new Set<string>();
+        let prevM = new Map<string, number>();
         for (let i = 0; i < 4000; i++) {
           sim.step(0.05, () => false);
           const cars = sim.cars();
@@ -1261,8 +1278,20 @@ describe("parking in the simulation — a cycle, not a sink", () => {
               cycles++;
             }
           }
+          // Manoeuvre progress counts as MOTION: `advanceParking` pins velocity
+          // at 0 while the curve moves the car, so with reversing at a realistic
+          // crawl a healthy car park would read as a dead map. The predicate has
+          // now been blind in both directions once each — `speed` could never
+          // fire, velocity-alone fires on cars that are visibly parking.
+          const mNow = new Map(cars.map(c => [c.id, c.manoeuvre]));
           const rolling = cars.filter(c => !c.parked);
-          streak = rolling.length > 0 && rolling.every(c => c.velocity <= 0.001) ? streak + 1 : 0;
+          const anyMoving = rolling.some(
+            c =>
+              c.velocity > 0.001 ||
+              Math.abs((mNow.get(c.id) ?? 0) - (prevM.get(c.id) ?? mNow.get(c.id) ?? 0)) > 1e-9,
+          );
+          prevM = mNow;
+          streak = rolling.length > 0 && !anyMoving ? streak + 1 : 0;
           worstStreak = Math.max(worstStreak, streak);
         }
         const where = `${id} seed ${seed}`;
