@@ -50,6 +50,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   cross: "✖️",
   flyover: "🌉",
   grades: "⛰️",
+  mountainpass: "🚞",
   tunnel: "🚇",
   crossing: "🚧",
   keepcrossingclear: "🚧",
