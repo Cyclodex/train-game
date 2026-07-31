@@ -563,7 +563,7 @@ class Tile extends Vue {
   // the climb starts here. Oriented like the portals: authored pointing "up"
   // (outward through the port), so the same transform table serves both.
   get gradeMarks(): { port: Position; transform: string }[] {
-    this.game.levelVersion.value;
+    void this.game.levelVersion.value;
     const size = this.config.tileSize;
     const coord = parseCoordId(this.coordId);
     const here = heightOf(this.tile);
@@ -592,7 +592,7 @@ class Tile extends Vue {
     // Register the edit counter: a bore EXTENDED next door must retire this
     // tile's portal at the now-internal seam, but `level` is the raw object in
     // play (see Game.levelVersion) so the neighbour read alone cannot notify.
-    this.game.levelVersion.value;
+    void this.game.levelVersion.value;
     const size = this.config.tileSize;
     const coord = parseCoordId(this.coordId);
     const at: Record<number, string> = {
