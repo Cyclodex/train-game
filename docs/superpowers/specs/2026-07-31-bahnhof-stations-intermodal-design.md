@@ -41,23 +41,21 @@ What the engine already gives us, feature by feature:
 - **Roads, buses, bus lanes** exist (`src/sim/road.ts`, `tiles/lanes.ts` with
   per-class lane access). On **master** there are no stops — road vehicles
   spawn at edges, drive, and despawn at edges.
-- **The unmerged parking branch changes that picture entirely.**
-  `claude/auto-parking-system-b7d52c` (no PR yet; see
-  `docs/handoff-parking-branch.md` on that branch) ships a complete parking
-  layer: kerbside/90°/echelon bays, garages with in/out ramps, **bus lay-bys
-  and in-lane bus halts**, lorry bays, reserved bay classes, a facility-level
-  capacity model the router reads, an editor tool and eight `/test` scenarios.
-  That is most of the phase-4 substrate already built: a P+R is "a parking
-  facility whose arrivals feed the adjacent station's queue", and bus stops
-  exist rather than needing invention. **Merge that branch before phase 4 —
-  and preferably before phase 1's render work**, since both threads edit
-  `Tile.vue`/`EditorView.vue` and the branch's handoff already plans a
-  `TileParking.vue` extraction. (A trial merge on 2026-07-31 conflicts in 8
-  files, dominated by the documented CRLF-vs-LF whole-file class; the
-  resolution technique is recorded in that branch's merge commits. The
-  line-ending policy split — branch is LF-everywhere via `.gitattributes`,
-  master deliberately restored CRLF on `terrain.ts` and the scenario registry
-  — needs deciding once, before the merge.)
+- **The parking branch changes that picture entirely.**
+  `claude/auto-parking-system-b7d52c` (no PR yet; `docs/handoff-parking-branch.md`
+  is its handover) ships a complete parking layer: kerbside/90°/echelon bays,
+  garages with in/out ramps, **bus lay-bys and in-lane bus halts**, lorry bays,
+  reserved bay classes, a facility-level capacity model the router reads, an
+  editor tool and nine `/test` scenarios — the four follow-up pieces (pivot-arc
+  reverse, no right of way when leaving, crawl-speed reversing, the echelon
+  apron) are done too. That is most of the phase-4 substrate already built: a
+  P+R is "a parking facility whose arrivals feed the adjacent station's
+  queue", and bus stops exist rather than needing invention. As of 2026-08-01
+  the branch is rebased on top of master (master is an ancestor), so bringing
+  it to master is conflict-free — **this plan is based on that branch**, and
+  phase 1's render work should happen on top of it, since both threads edit
+  `Tile.vue`/`EditorView.vue` and the handoff plans a `TileParking.vue`
+  extraction.
 - **Objectives/modes/economy** are ready to score all of it: counters live in
   `src/sim/objectives.ts`, fares priced by cargo × distance in the Tycoon
   economy (`src/sim/economy.ts`), and a new mode is one file in `src/modes/`.
@@ -146,7 +144,7 @@ walking radius (freight weight from `industry`, for later) — headless, unit
 tested, feeding phase 2's spawn schedule in the mode layer. Debug overlay draws
 the radius so authors can see a station's reach.
 
-### Phase 4 — intermodal edges (M–L, **wants the parking branch merged first**)
+### Phase 4 — intermodal edges (M–L, builds on the parking layer)
 
 Bus stops and car parking come from the parking branch (see §1): buses already
 serve lay-bys and in-lane halts there, and a P+R becomes a parking facility
