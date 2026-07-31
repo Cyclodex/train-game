@@ -39,14 +39,25 @@ What the engine already gives us, feature by feature:
   braking model (`clearDistanceAhead`, look-ahead braking) already stops a train
   precisely at a target.
 - **Roads, buses, bus lanes** exist (`src/sim/road.ts`, `tiles/lanes.ts` with
-  per-class lane access) — buses are a vehicle class with priority at signals,
-  but there are **no stops**: road vehicles today only spawn at edges, drive,
-  and despawn at edges.
-- **"Parking"** currently means only the train-depot docking glide. Cars do
-  not park anywhere — a P+R is new mechanic, but the depot-dock pattern
-  (drive to a marked cell, disappear from traffic, count as arrived) is the
-  template to copy, and despawn-at-a-tile is far cheaper than simulated
-  parking-lot physics.
+  per-class lane access). On **master** there are no stops — road vehicles
+  spawn at edges, drive, and despawn at edges.
+- **The unmerged parking branch changes that picture entirely.**
+  `claude/auto-parking-system-b7d52c` (no PR yet; see
+  `docs/handoff-parking-branch.md` on that branch) ships a complete parking
+  layer: kerbside/90°/echelon bays, garages with in/out ramps, **bus lay-bys
+  and in-lane bus halts**, lorry bays, reserved bay classes, a facility-level
+  capacity model the router reads, an editor tool and eight `/test` scenarios.
+  That is most of the phase-4 substrate already built: a P+R is "a parking
+  facility whose arrivals feed the adjacent station's queue", and bus stops
+  exist rather than needing invention. **Merge that branch before phase 4 —
+  and preferably before phase 1's render work**, since both threads edit
+  `Tile.vue`/`EditorView.vue` and the branch's handoff already plans a
+  `TileParking.vue` extraction. (A trial merge on 2026-07-31 conflicts in 8
+  files, dominated by the documented CRLF-vs-LF whole-file class; the
+  resolution technique is recorded in that branch's merge commits. The
+  line-ending policy split — branch is LF-everywhere via `.gitattributes`,
+  master deliberately restored CRLF on `terrain.ts` and the scenario registry
+  — needs deciding once, before the merge.)
 - **Objectives/modes/economy** are ready to score all of it: counters live in
   `src/sim/objectives.ts`, fares priced by cargo × distance in the Tycoon
   economy (`src/sim/economy.ts`), and a new mode is one file in `src/modes/`.
@@ -110,7 +121,9 @@ in one reviewable slice.
 3. `src/sim/simulation.ts` — arriving at a station-tile centre on through-track
    enters `dwelling` with `dwellRemaining = DWELL_SEC`; ticks down; resumes.
    Emits `{ type: "dwell" }` / departure events for the log. Reservation: the
-   train keeps its tile (occupancy already handles the rest).
+   station tile counts as a block boundary in the `isBoundary` predicate
+   (`routeToNextSignal`), so an approaching train reserves only up to the
+   platform and a dwelling train holds only its own tile — see §4.
 4. `src/components/Tile.vue` — platform render beside the track (theme-aware,
    modest: platform slab + small shelter; the crowd comes in phase 2).
 5. `/test` scenario `scenarios/station.ts` (one line, one station, one train —
@@ -133,12 +146,14 @@ walking radius (freight weight from `industry`, for later) — headless, unit
 tested, feeding phase 2's spawn schedule in the mode layer. Debug overlay draws
 the radius so authors can see a station's reach.
 
-### Phase 4 — intermodal edges (M–L)
+### Phase 4 — intermodal edges (M–L, **wants the parking branch merged first**)
 
-Bus stops (a lane `kind` or road-side role; buses dwell, cars pass), transfer
-into adjacent station queues (D5); the **P+R tile**: a road-network cell that
-"parks" (despawns) cars and adds passengers to the adjacent station. Each is
-its own `/test` scenario (bus stop alone; P+R feeding a station).
+Bus stops and car parking come from the parking branch (see §1): buses already
+serve lay-bys and in-lane halts there, and a P+R becomes a parking facility
+beside the station whose arriving cars add passengers to the station queue
+(D5). The work left for this phase is the *transfer* wiring — queues meeting at
+adjacent tiles — not the road-side mechanics. Each edge is its own `/test`
+scenario (bus stop feeding a station; P+R feeding a station).
 
 ### Phase 5 — the mode ("Verkehrsnetz" / Transport-Fever-like) (L)
 
@@ -157,10 +172,15 @@ demand — the Endless/management loop the brainstorm calls the genre fork. Good
 - **Don't reuse depot's Center connection** for stations: a depot's
   edge↔Center pair is what makes `traverse` end there. A station is
   through-track; the stop point is a *progress* on the segment, not a port.
-- **Dwell + interlocking**: a train dwelling just past a signal still holds its
-  reserved route. Phase 1 should release the route beyond the station tile on
-  entering `dwelling` (mirror the `waiting` rule: hold only what you occupy),
-  or a dwelling train freezes half the network.
+- **Dwell + interlocking — solved by the existing signal machinery.** A train
+  reserves its route only up to the next block boundary
+  (`routeToNextSignal`'s `isBoundary`, inclusive). Make the station tile an
+  implicit block boundary (one line in the boundary predicate — exactly what a
+  signal is), and a train approaching a station reserves only *up to* the
+  platform; while dwelling it holds nothing beyond it. No new release logic,
+  no special dwell rule — and level authors can still add real signals at the
+  platform ends for finer control. (Earlier draft proposed a bespoke
+  release-on-dwell rule; the boundary reuse is strictly simpler.)
 - **Feature-test rule**: every phase above ships its `/test` scenario in the
   same commit; the registry sweep validates it in CI.
 
