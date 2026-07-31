@@ -1788,6 +1788,34 @@ lean — prune as much as you add. This file only stays useful if every task ten
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
 ## VERIFY
+- THE SUITE CAN EXIT 1 WITH EVERY TEST PASSING, and the message names nothing:
+  `Tests 2173 passed` followed by `Unhandled Error: [vitest-worker]: Timeout
+  calling "onTaskUpdate"`, `Errors 1 error`. Not flaky infrastructure, not our
+  assertions — it reproduced on `master` too, and the parking work made it
+  reliable rather than occasional by roughly doubling the runtime.
+  · MECHANISM: the worker reports each finished test over birpc, whose timeout is
+    a HARDCODED 60s (`DEFAULT_TIMEOUT = 6e4` in vitest's bundle — no config knob,
+    which is why the fix is a setup file). The reply arrives on a MessagePort =
+    a MACROTASK, and vitest chains synchronous test bodies through MICROtasks, so
+    a worker running long tight sim loops never yields to the macrotask queue.
+    The reply sits unread, the timer fires, the run is poisoned by a test that
+    passed.
+  · It survives `--pool=forks` AND `--no-file-parallelism`. That rules out
+    cross-worker contention and points at one worker starving its own loop —
+    which is the diagnosis that matters, because "reduce parallelism" is the
+    natural wrong guess.
+  · FIX: `tests/unit/setup.ts` awaits a `setImmediate` in a global `beforeEach`.
+    Microseconds per test, scales with the suite instead of with any one file.
+    Verified green over five runs in all three pool configurations.
+  · That covers BETWEEN tests. A single test that blocks 60s on its own is still
+    its own problem: keep long-run sim cases PER MAP (not a loop over all three)
+    and yield inside multi-thousand-tick loops — see `parking.spec.ts`, where one
+    case over three maps ran 70s and tripped this on its own.
+  · While you are there: don't run the SAME sims twice to measure two different
+    things. The liveness and leaver-wait checks each walked 3 maps x 3 seeds x
+    4000 ticks until they were merged into one pass — a third of the suite's
+    runtime spent simulating identical traffic to look at a different field.
+    207s -> 138s, no coverage lost.
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
 - `npm run probe` = RENDER-level audit of every registry scenario (90 today) in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
