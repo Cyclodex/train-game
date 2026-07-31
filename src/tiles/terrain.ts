@@ -15,15 +15,17 @@
 import { TerrainKind, TileCell, parseCoordId } from "@/tiles/model";
 import { segmentPoints } from "@/sim/pathGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { Rng, bush, lerp, tree } from "@/utils/foliage";
+import { Rng, bush, green, lerp, tree } from "@/utils/foliage";
 
 export const TERRAIN_KINDS: readonly TerrainKind[] = [
   "grass",
+  "farmland",
   "forest",
   "water",
   "rock",
   "mountain",
   "urban",
+  "industry",
 ] as const;
 
 // Art is authored in a 100x100 box and scaled to whatever `tileSize` is, so
@@ -206,13 +208,22 @@ export function corridorClearance(p: Pt, corridors: Corridor[]): number {
 // The clear radius an object of this kind needs beyond a corridor's edge, per
 // unit of band scale — the drawn art's worst-case reach (forest's includes the
 // 0.42 tree conversion in buildGround).
-const FOOT: Record<TerrainKind, number> = {
+export const FOOT: Record<TerrainKind, number> = {
   grass: 0,
+  farmland: 0,
   forest: 13,
   water: 6,
   rock: 15,
   mountain: 30,
-  urban: 16,
+  // The SMALLEST town archetype's reach (`URBAN_SMALLEST_REACH`), not the
+  // largest: a building's footprint is chosen to fit the room actually measured
+  // at its spot (see `building`), so this only has to admit a shed. Gating on
+  // the biggest would empty the street frontage of the whole town.
+  urban: 15,
+  // Works buildings are the biggest roofs in the game, but the same rule as the
+  // town applies: the footprint is chosen to fit the room measured at the spot,
+  // so the gate only has to admit the smallest thing on a yard (a silo).
+  industry: 13,
 };
 // A trunk needs far less room than a canopy: how much clearance a FOREST
 // tree's base needs before it is standing in the ballast.
@@ -231,23 +242,50 @@ const TRUNK_CLEAR = 4;
 // Tiles per noise cell: a glade spans a couple of tiles, not a couple of trees.
 const GLADE_CELL = 3;
 
-function fieldCorner(gx: number, gy: number, seed: number): number {
-  return makeRng(hashInts(seed, gx, gy, 0x6e))();
+function fieldCorner(gx: number, gy: number, seed: number, salt: number): number {
+  return makeRng(hashInts(seed, gx, gy, salt))();
 }
 
 const smoothT = (t: number) => t * t * (3 - 2 * t);
 
+/**
+ * Smooth value noise 0..1 at a WORLD position (in tile units), over a lattice
+ * `cell` tiles across. The one shape of unevenness this codebase is allowed:
+ * it is a function of WORLD position, so whatever it drives varies across the
+ * board without ever changing AT a tile boundary — which is what disqualified
+ * per-tile tone variation (see the note by GROUND).
+ */
+function valueNoiseAt(
+  wx: number,
+  wy: number,
+  seed: number,
+  cell: number,
+  salt: number,
+): number {
+  const cx = Math.floor(wx / cell);
+  const cy = Math.floor(wy / cell);
+  const fx = smoothT(wx / cell - cx);
+  const fy = smoothT(wy / cell - cy);
+  const a = fieldCorner(cx, cy, seed, salt);
+  const b = fieldCorner(cx + 1, cy, seed, salt);
+  const c = fieldCorner(cx, cy + 1, seed, salt);
+  const d = fieldCorner(cx + 1, cy + 1, seed, salt);
+  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+}
+
 /** Forest density 0..1 at a WORLD position (in tile units). Deterministic. */
 export function forestDensityAt(wx: number, wy: number, seed: number): number {
-  const cx = Math.floor(wx / GLADE_CELL);
-  const cy = Math.floor(wy / GLADE_CELL);
-  const fx = smoothT(wx / GLADE_CELL - cx);
-  const fy = smoothT(wy / GLADE_CELL - cy);
-  const a = fieldCorner(cx, cy, seed);
-  const b = fieldCorner(cx + 1, cy, seed);
-  const c = fieldCorner(cx, cy + 1, seed);
-  const d = fieldCorner(cx + 1, cy + 1, seed);
-  return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
+  return valueNoiseAt(wx, wy, seed, GLADE_CELL, 0x6e);
+}
+
+// Open ground is not a lawn. The same noise, on a coarser lattice and its own
+// salt, decides how ROUGH a stretch of meadow is: close-cropped in places,
+// tussocky and flowering in others, with the odd thicket. See `meadowScatter`.
+const MEADOW_CELL = 4;
+
+/** Meadow roughness 0..1 at a WORLD position (in tile units). Deterministic. */
+export function meadowRoughnessAt(wx: number, wy: number, seed: number): number {
+  return valueNoiseAt(wx, wy, seed, MEADOW_CELL, 0xb3);
 }
 
 // How likely a tree at this density is to stand: full wood above, none below,
@@ -287,15 +325,47 @@ export function terrainOf(cell: TileCell | null | undefined): TerrainKind {
 // rule — as a tunnel will be for mountain.)
 const BLOCKS_BUILDING: Record<TerrainKind, boolean> = {
   grass: false,
+  farmland: false,
   forest: false,
   water: true,
   rock: true,
   mountain: true,
   urban: false,
+  industry: false,
 };
 
 export function terrainBlocksBuilding(kind: TerrainKind): boolean {
   return BLOCKS_BUILDING[kind];
+}
+
+// Which blocking ground a STRUCTURE can carry a line over. Water can be
+// bridged; rock and mountain cannot (a tunnel is their answer, and a separate
+// feature). This is deliberately a property of the GROUND rather than a second
+// predicate beside canBuildOn: "may I build here" has exactly one answer, and
+// the bridge is an exception inside it.
+const BRIDGEABLE: Record<TerrainKind, boolean> = {
+  grass: false,
+  farmland: false,
+  forest: false,
+  water: true,
+  rock: false,
+  mountain: false,
+  urban: false,
+  industry: false,
+};
+
+export function terrainBridgeable(kind: TerrainKind): boolean {
+  return BRIDGEABLE[kind];
+}
+
+/**
+ * Whether laying a line on this cell would MEAN building a bridge — i.e. the
+ * ground blocks a plain line but a span can cross it. The build tools use this
+ * to offer a crossing where they would otherwise refuse, and to set
+ * `TileCell.bridge` on what they lay.
+ */
+export function needsBridge(cell: TileCell | null | undefined): boolean {
+  return !cell?.bridge && terrainBridgeable(terrainOf(cell));
 }
 
 // Terrain's SECOND gameplay rule (after canBuildOn): what laying track on this
@@ -306,20 +376,50 @@ export function terrainBlocksBuilding(kind: TerrainKind): boolean {
 // or tunnel is expected to bring its OWN price, not read this table.
 export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
   grass: 1,
+  // Buying the field off the farmer: cheaper than felling a wood, dearer than
+  // running across open grass nobody was using.
+  farmland: 1.2,
   forest: 1.5,
   water: 1,
   rock: 1,
   mountain: 1,
   urban: 2.5,
+  // Dearer than a field, cheaper than town land: a works site is bought, but
+  // nobody is being rehoused.
+  industry: 2,
 };
 
-/** The build-price factor for a cell. Missing cell = bare grass = 1. */
+// A span is a STRUCTURE, not ground, so it brings its own price rather than
+// reading the table above — and it is the dearest thing in the game to build,
+// which is what makes "go round or cross?" a decision worth taking. High enough
+// to hurt, not so high that a river is a wall.
+export const BRIDGE_BUILD_FACTOR = 4;
+
+/**
+ * The build-price factor for a cell. Missing cell = bare grass = 1.
+ *
+ * A bridge answers for BOTH states of the same tile: the span already standing
+ * (`cell.bridge`), and the water a span is about to be thrown across. The build
+ * verb prices a route BEFORE the edit lands, so a factor that only recognised
+ * the finished bridge would quote every crossing at the price of open water.
+ */
 export function terrainBuildFactor(cell: TileCell | null | undefined): number {
-  return TERRAIN_BUILD_FACTOR[terrainOf(cell)];
+  const kind = terrainOf(cell);
+  if (cell?.bridge || terrainBridgeable(kind)) return BRIDGE_BUILD_FACTOR;
+  return TERRAIN_BUILD_FACTOR[kind];
 }
 
-/** Whether track or road may be laid on this cell. Missing cell = bare grass. */
+/**
+ * Whether track or road may be laid on this cell. Missing cell = bare grass.
+ *
+ * The bridge is the ONE exception, and it lives here rather than in a second
+ * rule beside this one: a cell carrying a span is buildable whatever is under
+ * it. Everything that asks "may I build here" — the validator's
+ * `blocked-terrain`, the editor, the route planner — gets the exception for
+ * free by asking the same question it always did.
+ */
 export function canBuildOn(cell: TileCell | null | undefined): boolean {
+  if (cell?.bridge) return true;
   return !terrainBlocksBuilding(terrainOf(cell));
 }
 
@@ -360,11 +460,19 @@ const css = ([h, s, l]: Hsl) => `hsl(${h} ${s}% ${l.toFixed(1)}%)`;
 // tellable apart at a glance, and "higher and colder" is the reading we want.
 const GROUND: Record<TerrainKind, Hsl | null> = {
   grass: null,
+  // Warm and pale against the meadow's cooler green, so a field block reads as
+  // worked land at a glance rather than as another shade of lawn. The stripes
+  // (see `fieldStripes`) do most of the work; this is what shows between them.
+  farmland: [64, 32, 52],
   forest: [96, 30, 30],
   water: [196, 44, 47],
   rock: [210, 7, 56],
   mountain: [214, 13, 42],
   urban: [36, 17, 68],
+  // Hardstanding: a cool, desaturated concrete, deliberately GREYER and darker
+  // than the town's warm tan so the two read apart at a glance — one is where
+  // people live, the other is where things are made.
+  industry: [212, 6, 58],
 };
 
 // A second, lighter tone drawn just inside the patch edge — shallows at a
@@ -372,6 +480,9 @@ const GROUND: Record<TerrainKind, Hsl | null> = {
 // flat sticker; with it the edge reads as a place where two grounds meet.
 const RIM: Record<TerrainKind, Hsl | null> = {
   grass: null,
+  // A hedgerow: the darker green a field is bounded by. Same trick as water's
+  // shallows — it is what stops the block reading as a flat sticker.
+  farmland: [98, 34, 33],
   forest: null,
   water: [190, 46, 62],
   rock: [210, 8, 65],
@@ -380,6 +491,7 @@ const RIM: Record<TerrainKind, Hsl | null> = {
   // capsule drawn round the tile rather than as the foot of a range.
   mountain: [214, 12, 46],
   urban: null,
+  industry: null,
 };
 
 // NO per-tile tone variation. It was tried (±3.5% lightness) to stop a large
@@ -477,6 +589,40 @@ export function cornerInset(gx: number, gy: number, seed: number): number {
   return lerp(CORNER_INSET_MIN, CORNER_INSET_MAX, r());
 }
 
+// --- How a boundary is DRAWN --------------------------------------------------
+//
+// Not every ground has an organic edge. A lake, a wood, a rock field are shaped
+// by water and weather, so their boundaries bow and their corners round — that
+// is what all the shore machinery below is for. But FIELDS, TOWNS AND WORKS are
+// shaped by people: they are surveyed, fenced and built to lines, and from above
+// their boundaries are STRAIGHT runs meeting at angles. Drawn as blobs they read
+// as a lake of wheat.
+//
+// The two styles share every bit of machinery except two decisions (see
+// `corners` and `patchSegments`):
+//   organic  — corners pulled inward / pushed outward, shores bowed as cubics.
+//   surveyed — corners left on their jittered lattice point, shores straight.
+// The jitter stays, because it is SHARED between the tiles that meet at a
+// lattice point: a surveyed boundary is therefore a polyline through points both
+// tiles agree on, which is a straight run with a slight kink every tile — a
+// hedgerow, not a ruler, and exactly what a field boundary looks like.
+export type EdgeStyle = "organic" | "surveyed";
+
+const EDGE_STYLE: Record<TerrainKind, EdgeStyle> = {
+  grass: "organic",
+  farmland: "surveyed",
+  forest: "organic",
+  water: "organic",
+  rock: "organic",
+  mountain: "organic",
+  urban: "surveyed",
+  industry: "surveyed",
+};
+
+export function edgeStyleOf(kind: TerrainKind): EdgeStyle {
+  return EDGE_STYLE[kind];
+}
+
 type Pt = { x: number; y: number };
 
 // Each edge in the order the clockwise outline walks it: the direction it runs,
@@ -524,6 +670,7 @@ function corners(
   seed: number,
   size: number,
   roles: CornerRole[],
+  style: EdgeStyle,
 ): Pt[] {
   const local: Pt[] = [
     { x: 0, y: 0 },
@@ -535,6 +682,10 @@ function corners(
     const { dx, dy } = latticeOffset(gx, gy, seed);
     const p = { x: local[i].x + dx, y: local[i].y + dy };
     const role = roles[i];
+    // Surveyed ground keeps every corner ON its shared lattice point: no belly
+    // pushed out mid-shore, no bite taken out of the corner. That is the whole
+    // difference between a field and a pond.
+    if (style === "surveyed") return p;
     if (role.kind === "run") {
       const push = cornerPush(gx, gy, seed);
       const out = EDGE_FRAME[role.edge].out;
@@ -621,13 +772,20 @@ function cornerDiagonals(same: PatchSame): boolean[] {
 }
 
 // Everything the two path builders need to agree on, worked out once.
-function patchFrame(same: PatchSame, x: number, y: number, seed: number, size: number) {
+function patchFrame(
+  same: PatchSame,
+  x: number,
+  y: number,
+  seed: number,
+  size: number,
+  style: EdgeStyle,
+) {
   const stops = edgeStops(same);
   const roles = cornerRoles(stops, cornerDiagonals(same));
   return {
     stops,
     roles,
-    c: corners(x, y, seed, size, roles),
+    c: corners(x, y, seed, size, roles, style),
     g: cornerLattice(x, y),
     reach: size / 3,
   };
@@ -676,8 +834,9 @@ function patchSegments(
   y: number,
   seed: number,
   size: number,
+  style: EdgeStyle = "organic",
 ): ShoreSeg[] {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style);
   const segs: ShoreSeg[] = [];
   for (let i = 0; i < 4; i++) {
     const a = c[i];
@@ -686,6 +845,19 @@ function patchSegments(
     const { dir, out } = EDGE_FRAME[i];
     let leadOut: number;
     let leadIn: number;
+    if (style === "surveyed" && stops[i]) {
+      // A STRAIGHT boundary, still expressed as a cubic so every consumer (the
+      // rim, the outline polygon, the fringe) keeps working unchanged: put both
+      // control points on the chord at the thirds and the curve IS the line.
+      segs.push({
+        a,
+        p1: { x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 },
+        p2: { x: b.x - (b.x - a.x) / 3, y: b.y - (b.y - a.y) / 3 },
+        b,
+        stops: true,
+      });
+      continue;
+    }
     if (!stops[i]) {
       const seam = SEAM_OVERLAP / MID_OF_LEAN;
       leadOut = seam;
@@ -727,8 +899,9 @@ export function patchPath(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): string {
-  const segs = patchSegments(same, x, y, seed, size);
+  const segs = patchSegments(same, x, y, seed, size, style);
   const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
   for (const s of segs) out.push(cubic(s));
   out.push("Z");
@@ -747,8 +920,9 @@ export function patchRimPath(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): string {
-  return patchSegments(same, x, y, seed, size)
+  return patchSegments(same, x, y, seed, size, style)
     .filter(s => s.stops)
     .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
     .join(" ");
@@ -767,9 +941,10 @@ export function patchOutlinePolygon(
   y = 0,
   seed = 1,
   size = GROUND_UNITS,
+  style: EdgeStyle = "organic",
 ): Pt[] {
   const pts: Pt[] = [];
-  for (const s of patchSegments(same, x, y, seed, size)) {
+  for (const s of patchSegments(same, x, y, seed, size, style)) {
     for (let k = 0; k < 6; k++) {
       const t = k / 6;
       const u = 1 - t;
@@ -810,11 +985,21 @@ export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
 // individual trees at full zoom.
 const SCATTER_COUNT: Record<TerrainKind, [min: number, max: number]> = {
   grass: [0, 0],
+  // Nothing STANDS on a field: it is all ground marks (stripes, hedge blobs,
+  // bale rows), which is what keeps farmland out of the corridor/canopy rules
+  // entirely.
+  farmland: [0, 0],
   forest: [9, 14],
   water: [0, 2],
   rock: [4, 6],
   mountain: [2, 3],
-  urban: [4, 6],
+  // Two or three, because a building is now the size of a building (see the
+  // TOWN archetypes): six of them at the new footprints would be one solid roof
+  // per tile with no yards, gardens or street between them.
+  urban: [2, 4],
+  // Fewer and bigger than a town's: a works is two or three large objects on a
+  // lot, not a street of houses.
+  industry: [2, 3],
 };
 
 // Where on the tile the standing objects go, and how big they get. Everything
@@ -836,9 +1021,12 @@ const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
   // A ridge is the biggest footprint on the board; keep its centre well inside
   // the tile so the massif stays on its own ground.
   mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
-  // Buildings are wider than a tree, so they need a deeper margin to stay clear
-  // of the tile edge.
-  urban: { x: [22, 78], y: [22, 80], scale: [0.78, 1.1] },
+  // Buildings are the biggest footprints on the board after a ridge, so they
+  // keep well off the tile edge — and the scale range is narrow, because a town
+  // whose houses vary by 40% reads as a perspective error rather than as
+  // variety (the archetypes supply the variety instead).
+  urban: { x: [26, 74], y: [26, 76], scale: [0.9, 1.08] },
+  industry: { x: [28, 72], y: [28, 74], scale: [0.9, 1.1] },
 };
 
 type Pt2 = { x: number; y: number };
@@ -1079,81 +1267,687 @@ function roofShadow(w: number, d: number, scale: number): string {
   return `<rect x="${n1(-w / 2 + off)}" y="${n1(-d / 2 + off)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${TOWN_SHADOW}"/>`;
 }
 
-/**
- * One building, TOP-DOWN: what you see of a town from above is its roofs. Three
- * archetypes off one RNG — a pitched tile roof split along the ridge (lit half
- * toward the NW sun), a flat block with a parapet and roof boxes, and a long
- * metal hall — each centred on its footprint and rotated a few degrees so the
- * town doesn't grid up.
- */
-function building(rng: Rng, scale: number): string {
-  const roll = rng();
-  const a = lerp(-14, 14, rng());
-  const wrap = (body: string) => `<g transform="rotate(${a.toFixed(1)})">${body}</g>`;
-
-  // Flat-roofed block: a parapet ring around a slab, with rooftop boxes.
-  // Concrete GREY, not the walls' warm render: on the tan urban ground a warm
-  // roof at any lightness either vanishes into it or reads as blank paper —
-  // the roof has to change temperature, not just tone, to read as a roof.
-  if (roll < 0.3) {
-    const w = lerp(18, 25, rng()) * scale;
-    const d = lerp(14, 19, rng()) * scale;
-    const hue = Math.round(lerp(28, 38, rng()));
-    const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
-    const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
-    const inset = 1.8 * scale;
-    const box = (): string => {
-      const bw = lerp(3, 5, rng()) * scale;
-      const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
-      const by = lerp(-d / 2 + inset + bw, d / 2 - inset - bw * 2, rng());
-      return `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bw)}" fill="hsl(210 10% 52%)"/>`;
-    };
-    return wrap(
-      roofShadow(w, d, scale) +
-        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
-        `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
-        box() +
-        box() +
-        box(),
-    );
-  }
-
-  // Long metal hall: a shallow gable along the long axis, in cool sheet grey.
-  if (roll < 0.5) {
-    const w = lerp(24, 32, rng()) * scale;
-    const d = lerp(12, 16, rng()) * scale;
-    const hue = Math.round(lerp(200, 216, rng()));
-    const sat = Math.round(lerp(6, 12, rng()));
-    const litHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(58, 64, rng()))}%)`;
-    const dimHalf = `hsl(${hue} ${sat}% ${Math.round(lerp(42, 48, rng()))}%)`;
-    return wrap(
-      roofShadow(w, d, scale) +
-        `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${litHalf}"/>` +
-        `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dimHalf}"/>` +
-        `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="hsl(${hue} ${sat}% 72%)" stroke-width="${n1(0.8 * scale)}"/>`,
-    );
-  }
-
-  // Pitched tile roof: the common case. Split along the ridge — the NW-facing
-  // half catches the sun — with a bright ridge line and the odd chimney.
-  const w = lerp(14, 20, rng()) * scale;
-  const d = lerp(10, 14, rng()) * scale;
-  const tileHue = Math.round(lerp(4, 22, rng()));
-  const tileSat = Math.round(lerp(34, 52, rng()));
-  const tileLit = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(50, 58, rng()))}%)`;
-  const tileDim = `hsl(${tileHue} ${tileSat}% ${Math.round(lerp(32, 40, rng()))}%)`;
-  const ridge = `hsl(${tileHue} ${Math.max(0, tileSat - 8)}% ${Math.round(lerp(64, 70, rng()))}%)`;
-  const chimney =
-    rng() < 0.45
-      ? `<rect x="${n1(w * lerp(0.12, 0.3, rng()))}" y="${n1(-2.6 * scale)}" width="${n1(2.4 * scale)}" height="${n1(2.4 * scale)}" fill="hsl(${tileHue} 12% 30%)"/>`
-      : "";
-  return wrap(
-    roofShadow(w, d, scale) +
-      `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileLit}"/>` +
-      `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${tileDim}"/>` +
-      `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(0.9 * scale)}"/>` +
-      chimney,
+// A pitched roof, drawn about (0,0): the NW-facing half catches the sun, the
+// SE half is in shade, and a bright ridge line runs between them. `along` picks
+// which axis the ridge runs down, so a row of houses isn't all facing one way.
+function pitched(
+  w: number,
+  d: number,
+  hue: number,
+  sat: number,
+  light: number,
+  scale: number,
+): string {
+  const lit = `hsl(${hue} ${sat}% ${Math.round(light)}%)`;
+  const dim = `hsl(${hue} ${sat}% ${Math.round(light - 18)}%)`;
+  const ridge = `hsl(${Math.max(0, hue)} ${Math.max(0, sat - 8)}% ${Math.round(light + 12)}%)`;
+  return (
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d / 2)}" fill="${lit}"/>` +
+    `<rect x="${n1(-w / 2)}" y="0" width="${n1(w)}" height="${n1(d / 2)}" fill="${dim}"/>` +
+    `<line x1="${n1(-w / 2)}" y1="0" x2="${n1(w / 2)}" y2="0" stroke="${ridge}" stroke-width="${n1(1.1 * scale)}"/>`
   );
+}
+
+// A chimney stack: a small dark box sitting ON the ridge, which is where a
+// chimney actually comes through a roof and what makes a plain rectangle read
+// as a house rather than as a card.
+function chimney(x: number, hue: number, scale: number): string {
+  const s = 3.2 * scale;
+  return `<rect x="${n1(x - s / 2)}" y="${n1(-s / 2)}" width="${n1(s)}" height="${n1(s)}" fill="hsl(${hue} 14% 28%)"/>`;
+}
+
+/** Roof tile colours: the warm reds and browns a town's roofs actually are. */
+function tileRoof(rng: Rng): { hue: number; sat: number; light: number } {
+  return {
+    hue: Math.round(lerp(4, 24, rng())),
+    sat: Math.round(lerp(34, 54, rng())),
+    light: lerp(48, 58, rng()),
+  };
+}
+
+// --- Town archetypes ---------------------------------------------------------
+//
+// Each takes its footprint (already scaled) and draws about (0,0). The caller
+// picks the size, so placement can know an archetype's reach BEFORE drawing it.
+
+/** A garage or outbuilding: the small thing that fills a corner of a plot. */
+function shed(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(20, 40, rng()));
+  const light = lerp(40, 50, rng());
+  return (
+    roofShadow(w, d, scale) +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="0.8" fill="hsl(${hue} 12% ${Math.round(light)}%)"/>` +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d * 0.45)}" fill="hsl(${hue} 12% ${Math.round(light + 9)}%)"/>`
+  );
+}
+
+/** The common case: one detached house under a pitched tile roof. */
+function house(rng: Rng, scale: number, w: number, d: number): string {
+  const { hue, sat, light } = tileRoof(rng);
+  const stack = rng() < 0.6 ? chimney(w * lerp(-0.28, 0.28, rng()), hue, scale) : "";
+  // A lean-to on one gable end — a porch or a garage — so the outline isn't a
+  // bare rectangle. Drawn under the main roof's tones, half its depth.
+  const lean =
+    rng() < 0.45
+      ? `<rect x="${n1(w / 2 - 1)}" y="${n1(-d / 4)}" width="${n1(w * 0.26)}" height="${n1(d * 0.55)}" rx="0.8" fill="hsl(${hue} ${Math.max(0, sat - 14)}% ${Math.round(light - 8)}%)"/>`
+      : "";
+  return roofShadow(w, d, scale) + lean + pitched(w, d, hue, sat, light, scale) + stack;
+}
+
+/**
+ * A terrace: 3-5 houses sharing party walls under one long roof. This is the
+ * archetype that most says "town" from above — a row reads as a street frontage
+ * where the same floor area as detached houses reads as a hamlet.
+ */
+function terrace(rng: Rng, scale: number, w: number, d: number): string {
+  const { hue, sat, light } = tileRoof(rng);
+  const units = 3 + Math.floor(rng() * 3);
+  const step = w / units;
+  let out = roofShadow(w, d, scale) + pitched(w, d, hue, sat, light, scale);
+  for (let i = 1; i < units; i++) {
+    // The party wall, drawn as a seam across both roof pitches, with the odd
+    // shared chimney stack standing on it.
+    const px = -w / 2 + step * i;
+    out +=
+      `<line x1="${n1(px)}" y1="${n1(-d / 2)}" x2="${n1(px)}" y2="${n1(d / 2)}" stroke="hsl(${hue} ${sat}% ${Math.round(light - 26)}%)" stroke-width="${n1(0.7 * scale)}"/>` +
+      (rng() < 0.55 ? chimney(px, hue, scale) : "");
+  }
+  return out;
+}
+
+/**
+ * A flat-roofed block: parapet ring, slab, rooftop plant. Concrete GREY, not
+ * the warm render of the roofs around it — on the tan town ground a warm flat
+ * roof either vanishes into it or reads as blank paper, so the roof has to
+ * change temperature, not just tone.
+ */
+function block(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(28, 38, rng()));
+  const parapet = `hsl(${hue} 10% ${Math.round(lerp(42, 48, rng()))}%)`;
+  const slab = `hsl(${hue} 8% ${Math.round(lerp(56, 62, rng()))}%)`;
+  const inset = 2.6 * scale;
+  const plant = (): string => {
+    const bw = lerp(5, 9, rng()) * scale;
+    const bh = lerp(4, 8, rng()) * scale;
+    const bx = lerp(-w / 2 + inset + bw, w / 2 - inset - bw * 2, rng());
+    const by = lerp(-d / 2 + inset + bh, d / 2 - inset - bh * 2, rng());
+    return (
+      `<rect x="${n1(bx + 0.8 * scale)}" y="${n1(by + 0.8 * scale)}" width="${n1(bw)}" height="${n1(bh)}" fill="${TOWN_SHADOW}"/>` +
+      `<rect x="${n1(bx)}" y="${n1(by)}" width="${n1(bw)}" height="${n1(bh)}" fill="hsl(210 10% ${Math.round(lerp(48, 58, rng()))}%)"/>`
+    );
+  };
+  // A light well on the bigger blocks: the courtyard a deep floorplate needs.
+  const well =
+    rng() < 0.4
+      ? `<rect x="${n1(-w * 0.16)}" y="${n1(-d * 0.14)}" width="${n1(w * 0.32)}" height="${n1(d * 0.28)}" fill="hsl(${hue} 8% ${Math.round(lerp(36, 42, rng()))}%)"/>`
+      : "";
+  return (
+    roofShadow(w, d, scale) +
+    `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" rx="1" fill="${parapet}"/>` +
+    `<rect x="${n1(-w / 2 + inset)}" y="${n1(-d / 2 + inset)}" width="${n1(w - inset * 2)}" height="${n1(d - inset * 2)}" fill="${slab}"/>` +
+    well +
+    plant() +
+    plant()
+  );
+}
+
+/** A long metal hall — the works, the depot shed, the supermarket. */
+function hall(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(200, 216, rng()));
+  const sat = Math.round(lerp(6, 12, rng()));
+  const light = lerp(56, 64, rng());
+  // Roof lights: the strips of glazing down a shed roof, which is the detail
+  // that tells a hall apart from a plain grey slab at board zoom.
+  let lights = "";
+  const strips = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < strips; i++) {
+    const lx = lerp(-w / 2 + w * 0.08, w / 2 - w * 0.16, i / Math.max(1, strips - 1));
+    lights += `<rect x="${n1(lx)}" y="${n1(-d * 0.34)}" width="${n1(w * 0.07)}" height="${n1(d * 0.68)}" fill="hsl(${hue} ${sat + 6}% ${Math.round(light + 12)}%)" opacity="0.75"/>`;
+  }
+  return (
+    roofShadow(w, d, scale) +
+    pitched(w, d, hue, sat, light, scale) +
+    lights
+  );
+}
+
+/**
+ * A church: a long slate nave with a square tower at the north end. The one
+ * landmark in the set — rare, a different colour temperature from every other
+ * roof, and the thing that gives a town a centre to read it from.
+ */
+function church(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(206, 224, rng()));
+  const sat = Math.round(lerp(8, 16, rng()));
+  const light = lerp(44, 52, rng());
+  const towerW = w * lerp(0.72, 0.9, rng());
+  const ty = -d / 2 - towerW * 0.28;
+  return (
+    roofShadow(w, d, scale) +
+    pitched(w, d, hue, sat, light, scale) +
+    // The tower: its own shadow, a square plan, and a bright cap so it reads as
+    // taller than the nave it stands on.
+    `<rect x="${n1(-towerW / 2 + 1.6 * scale)}" y="${n1(ty - towerW / 2 + 1.6 * scale)}" width="${n1(towerW)}" height="${n1(towerW)}" fill="${TOWN_SHADOW}"/>` +
+    `<rect x="${n1(-towerW / 2)}" y="${n1(ty - towerW / 2)}" width="${n1(towerW)}" height="${n1(towerW)}" fill="hsl(${hue} ${sat}% ${Math.round(light - 8)}%)"/>` +
+    `<rect x="${n1(-towerW / 4)}" y="${n1(ty - towerW / 4)}" width="${n1(towerW / 2)}" height="${n1(towerW / 2)}" fill="hsl(${hue} ${sat}% ${Math.round(light + 16)}%)"/>`
+  );
+}
+
+// --- Which building goes where -----------------------------------------------
+//
+// SCALE, in the units everything else here is measured in: a tile is 100 units
+// and a CAR IS 23 OF THEM long (`DEFAULT_CAR_LENGTH` = 0.23 tiles). The first
+// town shipped with houses 14-20 units wide — narrower than the cars driving
+// past them, which reads as a model village rather than as a town. A modest
+// house is ~1.5 car lengths on its long side, a terrace 3, a hall 3.5. Those
+// are the numbers below, and they are why only two or three buildings now fit
+// on a tile where six used to.
+interface TownArchetype {
+  weight: number;
+  w: [number, number];
+  d: [number, number];
+  draw: (rng: Rng, scale: number, w: number, d: number) => string;
+}
+
+const TOWN: TownArchetype[] = [
+  { weight: 1.1, w: [18, 24], d: [13, 18], draw: shed },
+  { weight: 4, w: [30, 40], d: [22, 28], draw: house },
+  { weight: 2.2, w: [52, 70], d: [22, 28], draw: terrace },
+  { weight: 2, w: [40, 52], d: [32, 42], draw: block },
+  { weight: 1.2, w: [56, 72], d: [26, 34], draw: hall },
+  { weight: 0.4, w: [26, 34], d: [44, 56], draw: church },
+];
+
+// The clear radius an archetype needs: the half-diagonal of its LARGEST
+// footprint, which also covers the ±12° rotation (a rotated rectangle never
+// reaches past its own half-diagonal).
+const reachOf = (a: TownArchetype): number => Math.hypot(a.w[1], a.d[1]) / 2;
+
+// `FOOT.urban` is the gate a spot must clear before a building is attempted at
+// all, and it must match the SMALLEST archetype's reach — set it higher and the
+// street frontage empties out, lower and a shed lands in the ballast. Pinned by
+// a unit test rather than derived here, because FOOT is declared far above.
+export const URBAN_SMALLEST_REACH = reachOf(TOWN[0]);
+
+/**
+ * One building, TOP-DOWN — what you see of a town from above is its roofs.
+ *
+ * `room` is the clear half-extent available at this spot, in UNSCALED units,
+ * and the archetype is chosen from those that FIT it. That is what makes a town
+ * read: modest houses and sheds front the street where the corridor leaves
+ * little room, and the terraces, blocks and halls stand in the depth of the
+ * block where there is space for them. A fixed footprint could only ever be
+ * small enough to fit everywhere.
+ */
+function building(rng: Rng, scale: number, room: number): { svg: string; reach: number } {
+  const fits = TOWN.filter(a => reachOf(a) <= room);
+  const pool = fits.length > 0 ? fits : [TOWN[0]];
+  const total = pool.reduce((s, a) => s + a.weight, 0);
+  let r = rng() * total;
+  let pick = pool[0];
+  for (const a of pool) {
+    r -= a.weight;
+    if (r <= 0) {
+      pick = a;
+      break;
+    }
+  }
+  const w = lerp(pick.w[0], pick.w[1], rng()) * scale;
+  const d = lerp(pick.d[0], pick.d[1], rng()) * scale;
+  const ang = lerp(-12, 12, rng());
+  return {
+    svg: `<g transform="rotate(${ang.toFixed(1)})">${pick.draw(rng, scale, w, d)}</g>`,
+    // The footprint actually drawn, not the archetype's maximum — the caller
+    // turns this into a keep-out so the next building doesn't land on its roof.
+    reach: Math.hypot(w, d) / 2,
+  };
+}
+
+// How far a building may reach past its own tile's edge. Some overhang is what
+// makes a town continuous across tiles instead of a grid of separate estates;
+// unbounded, a terrace on one tile lands on a block on the next, and neither
+// tile can see the other's scatter to prevent it.
+const TOWN_OVERHANG = 10;
+
+// --- Meadow (what grows on plain grass) --------------------------------------
+//
+// Grass is the one kind that paints NO ground of its own, and that has to stay
+// true: a grass rect would cover the world theme's backdrop on every tile in
+// the game (see terrainOf and the note by GROUND). So the answer to "the open
+// green is boring" cannot be a fill — it has to be things ON the green.
+//
+// Everything here is therefore additive scatter and low-contrast marks, and how
+// MUCH of it a stretch gets comes from `meadowRoughnessAt`: a coarse world noise
+// field, so one part of the board is close-cropped and another is tussocky and
+// flowering, and the change happens across tiles rather than at their edges.
+
+/** A clump of grass: a few blades leaning off one root, a shade off the sward. */
+function tuft(rng: Rng, scale: number): string {
+  const n = 3 + Math.floor(rng() * 3);
+  const h = lerp(3.4, 6.2, rng()) * scale;
+  const tone = green(rng, lerp(30, 42, rng()));
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const a = lerp(-0.9, 0.9, rng());
+    const len = h * lerp(0.65, 1, rng());
+    out += `<path d="M0 0 Q${n1(Math.sin(a) * len * 0.4)} ${n1(-len * 0.6)} ${n1(Math.sin(a) * len)} ${n1(-len)}" stroke="${tone}" stroke-width="${n1(0.9 * scale)}" fill="none" stroke-linecap="round"/>`;
+  }
+  return out;
+}
+
+/** A drift of wildflowers: a low green pad speckled with colour. */
+function flowers(rng: Rng, scale: number): string {
+  const r = lerp(3.4, 6, rng()) * scale;
+  // One hue per drift — a meadow flowers in patches of a species, not in
+  // confetti. Kept pale: saturated dots at this size read as UI, not as plants.
+  const hue = [50, 328, 0, 268][Math.floor(rng() * 4)];
+  const petal = `hsl(${hue} ${Math.round(lerp(30, 55, rng()))}% ${Math.round(lerp(76, 88, rng()))}%)`;
+  let out = `<ellipse cx="0" cy="0" rx="${n1(r)}" ry="${n1(r * 0.8)}" fill="${green(rng, 38)}" opacity="0.5"/>`;
+  const n = 3 + Math.floor(rng() * 4);
+  for (let i = 0; i < n; i++) {
+    out += `<circle cx="${n1(lerp(-r, r, rng()) * 0.8)}" cy="${n1(lerp(-r, r, rng()) * 0.7)}" r="${n1(lerp(0.7, 1.3, rng()) * scale)}" fill="${petal}"/>`;
+  }
+  return out;
+}
+
+/**
+ * A soft patch of sward a shade off the rest — rougher grazing, a damp hollow,
+ * a dry rise. Painted as a low-contrast blob, NEVER as a per-tile tone: the
+ * blob has an outline of its own, so it cannot draw the tile grid the way a
+ * flat per-tile fill does.
+ */
+function sward(rng: Rng): string {
+  const r = lerp(16, 30, rng());
+  // Many points, so the blob reads as a soft change in the sward rather than as
+  // a hexagon someone dropped on the grass. At 7 the facets were legible.
+  const pts = blobPts(rng, r, 13, lerp(0.6, 0.95, rng()));
+  const dry = rng() < 0.3;
+  const tone = dry
+    ? `hsl(${Math.round(lerp(56, 72, rng()))} ${Math.round(lerp(24, 34, rng()))}% ${Math.round(lerp(48, 56, rng()))}%)`
+    : green(rng, lerp(30, 44, rng()));
+  // Low contrast, but not invisible. Under ~0.15 the blobs vanish at board zoom
+  // and the open green is exactly as flat as it was; over ~0.4 they stop being
+  // ground and start being stains.
+  return poly(pts, tone, ` opacity="${(0.2 + rng() * 0.15).toFixed(2)}"`);
+}
+
+// --- Farmland ----------------------------------------------------------------
+//
+// The signature top-down landscape: a patchwork of ploughed strips. Everything
+// here is a GROUND MARK, never a standing object — a field has nothing to stand
+// on it, which is also what keeps farmland out of the corridor and canopy rules
+// entirely (the ballast and the tarmac simply draw over the stripes, exactly as
+// a railway cut through a field looks from above).
+//
+// THE STRIPES ARE SEEDED BY A WORLD LATTICE, NOT BY THE TILE. That is the whole
+// trick, and it is the same one the glades use. Seed the direction per tile and
+// every tile boundary becomes a field boundary — the tile grid, drawn back onto
+// the ground in furrows, which is precisely what the jittered patch outlines
+// exist to hide. Seeded by a coarse world lattice instead, neighbouring tiles
+// in the same lattice cell share a direction and their furrows RUN ON across
+// the seam, so a field is as big as the lattice cell (a few tiles) and the
+// patchwork comes from the cells, not from the grid.
+
+// Tiles per field. Big enough that a field spans several tiles; small enough
+// that a large farmed area still reads as a patchwork rather than as one crop.
+const FIELD_CELL = 3;
+
+interface FieldPlan {
+  angle: number; // furrow bearing, radians
+  width: number; // furrow width, ground units
+  crop: Hsl; // the strip tone
+  fallow: Hsl; // the tone between strips
+}
+
+/** The field plan at a WORLD position (in tile units). Deterministic. */
+export function fieldPlanAt(wx: number, wy: number, seed: number): FieldPlan {
+  const gx = Math.floor(wx / FIELD_CELL);
+  const gy = Math.floor(wy / FIELD_CELL);
+  const r = makeRng(hashInts(seed, gx, gy, 0x9a));
+  // Crops, in the tones a field actually comes in from above: young green,
+  // ripe straw, and turned earth. The pair is drawn from one roll so a field is
+  // one crop rather than a stripe of each.
+  const roll = r();
+  const hue = roll < 0.4 ? lerp(78, 96, r()) : roll < 0.75 ? lerp(44, 54, r()) : lerp(28, 38, r());
+  const sat = roll < 0.4 ? lerp(30, 40, r()) : roll < 0.75 ? lerp(36, 48, r()) : lerp(22, 30, r());
+  const light = roll < 0.4 ? lerp(46, 54, r()) : roll < 0.75 ? lerp(60, 68, r()) : lerp(38, 44, r());
+  // The two tones need REAL separation — 12 points of lightness, not the 6 the
+  // first version used. A field is only a field if you can see the furrows: at
+  // 6 points the green crops came out as flat olive tiles indistinguishable
+  // from the grass they were meant to replace, while the straw ones (which
+  // happen to sit far from the base tone) striped boldly. Contrast has to be a
+  // property of the field, not an accident of where its hue landed.
+  return {
+    angle: r() * Math.PI,
+    width: lerp(7, 13, r()),
+    crop: [Math.round(hue), Math.round(sat), light],
+    fallow: [Math.round(hue + 5), Math.round(Math.max(0, sat - 12)), light - 12],
+  };
+}
+
+/**
+ * The furrows across one tile: parallel bands at the field's bearing, drawn
+ * long enough to cover the tile whatever the angle, and clipped to the patch by
+ * the caller. Positions come from the WORLD distance along the field's normal,
+ * so a band starting on one tile continues on the next without a step.
+ */
+function fieldStripes(x: number, y: number, seed: number): string {
+  const plan = fieldPlanAt(x, y, seed);
+  const c = Math.cos(plan.angle);
+  const s = Math.sin(plan.angle);
+  // Unit normal to the furrows; the stripe index is distance along it.
+  const nx = -s;
+  const ny = c;
+  // This tile's four corners in WORLD ground units, so the run of stripe
+  // indices covering the tile can be worked out exactly.
+  const x0 = x * GROUND_UNITS;
+  const y0 = y * GROUND_UNITS;
+  const corners = [
+    [x0, y0],
+    [x0 + GROUND_UNITS, y0],
+    [x0 + GROUND_UNITS, y0 + GROUND_UNITS],
+    [x0, y0 + GROUND_UNITS],
+  ];
+  const ds = corners.map(([px, py]) => px * nx + py * ny);
+  const lo = Math.floor(Math.min(...ds) / plan.width) - 1;
+  const hi = Math.ceil(Math.max(...ds) / plan.width) + 1;
+  const half = GROUND_UNITS * 1.5; // long enough to cross the tile at any angle
+  const out: string[] = [];
+  // EVERY band is drawn, alternating the two tones — not just the crop ones
+  // over the base fill. Drawing only every other band leaves the base showing
+  // between them, so a lattice cell whose crop happens to land near the base
+  // tone comes out as a blank green tile with no furrows at all, while its
+  // neighbour is boldly striped. Two explicit tones per field make the contrast
+  // a property of the FIELD instead of an accident of the palette.
+  // Where the tile sits ALONG the furrows. A band is drawn as a finite bar
+  // (`half` long), and its natural anchor — the point on the band closest to
+  // the world origin — can be hundreds of units away from this tile, so a bar
+  // anchored there simply misses the tile and the field comes out blank. That
+  // is exactly how the first version failed: tiles near the origin were striped
+  // and everything to the right of them was flat green. Anchor over the tile's
+  // own centre instead and a bar one and a half tiles long always covers it.
+  const alongTile = (x0 + GROUND_UNITS / 2) * c + (y0 + GROUND_UNITS / 2) * s;
+  for (let i = lo; i <= hi; i++) {
+    // The band's centre in world units, converted back to tile-local.
+    const d = (i + 0.5) * plan.width;
+    const mx = d * nx + alongTile * c - x0;
+    const my = d * ny + alongTile * s - y0;
+    // A band is a long thin rectangle: centre ± half along the furrow, ± width
+    // across it. Built as an explicit polygon so no nested transform is needed
+    // (the placement tests parse every translate as an object position).
+    const ax = c * half;
+    const ay = s * half;
+    const bx = (nx * plan.width) / 2;
+    const by = (ny * plan.width) / 2;
+    out.push(
+      poly(
+        [
+          { x: mx - ax - bx, y: my - ay - by },
+          { x: mx + ax - bx, y: my + ay - by },
+          { x: mx + ax + bx, y: my + ay + by },
+          { x: mx - ax + bx, y: my - ay + by },
+        ],
+        // Alternate on the WORLD index, not a local counter, so the two tones
+        // stay in step across a tile boundary.
+        css(((i % 2) + 2) % 2 === 0 ? plan.crop : plan.fallow),
+      ),
+    );
+  }
+  return out.join("");
+}
+
+/**
+ * A hedgerow: the dark, ragged green line between two strips.
+ *
+ * It runs ALONG THE FURROWS (or square across them), never at a random bearing
+ * — a hedge is a field boundary, and a field's boundaries are the directions it
+ * was ploughed in. Angled freely they read as dark caterpillars dropped on the
+ * crop, which is exactly how the first version came out.
+ */
+function hedge(rng: Rng, along: number): string {
+  const len = lerp(34, 62, rng());
+  const th = lerp(3.4, 5, rng());
+  const a = along + (rng() < 0.3 ? Math.PI / 2 : 0);
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const tone = `hsl(${Math.round(lerp(94, 112, rng()))} ${Math.round(lerp(30, 42, rng()))}% ${Math.round(lerp(26, 33, rng()))}%)`;
+  // Drawn as a chain of overlapping blobs along the line, so the edge is
+  // ragged like a hedge rather than straight like a fence.
+  let out = "";
+  const n = Math.max(3, Math.round(len / th));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n - 0.5) * len;
+    const r = th * lerp(0.7, 1.15, rng());
+    out += `<ellipse cx="${n1(c * t)}" cy="${n1(s * t)}" rx="${n1(r)}" ry="${n1(r * 0.82)}" fill="${tone}"/>`;
+  }
+  return out;
+}
+
+/**
+ * Whether two field plans are the same field. Compared on the drawn properties
+ * rather than on lattice coordinates, so two neighbouring cells that happen to
+ * roll the same crop and bearing count as one field and get no hedge between
+ * them — which is right: you cannot see a boundary that isn't there.
+ */
+function samePlan(a: FieldPlan, b: FieldPlan): boolean {
+  return (
+    a.angle === b.angle &&
+    a.width === b.width &&
+    a.crop[0] === b.crop[0] &&
+    a.crop[2] === b.crop[2]
+  );
+}
+
+/**
+ * The hedgerow along ONE tile edge, where two different fields meet.
+ *
+ * Seeded canonically on the edge's two lattice points, so the tiles either side
+ * generate the IDENTICAL chain of blobs and it does not matter that both draw
+ * it — they land on top of each other. Seed it per tile and the hedge doubles
+ * up, twice as thick and twice as ragged, on every boundary in the world.
+ */
+function hedgeAlong(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  gx: number,
+  gy: number,
+  hx: number,
+  hy: number,
+  seed: number,
+): string {
+  const swap = hx < gx || (hx === gx && hy < gy);
+  const [p, q] = swap ? [[hx, hy], [gx, gy]] : [[gx, gy], [hx, hy]];
+  const rng = makeRng(hashInts(seed, p[0], p[1], q[0], q[1], 0xa7));
+  const len = Math.hypot(bx - ax, by - ay);
+  const n = Math.max(4, Math.round(len / 6));
+  const tone = `hsl(${Math.round(lerp(94, 110, rng()))} ${Math.round(lerp(30, 40, rng()))}% ${Math.round(lerp(27, 34, rng()))}%)`;
+  let out = "";
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    // A small wander across the line, so the hedge is planted rather than ruled.
+    const wob = (rng() * 2 - 1) * 2.2;
+    const nx = -(by - ay) / len;
+    const ny = (bx - ax) / len;
+    const cx = lerp(ax, bx, t) + nx * wob;
+    const cy = lerp(ay, by, t) + ny * wob;
+    const r = lerp(3, 4.6, rng());
+    out += `<ellipse cx="${n1(cx)}" cy="${n1(cy)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="${tone}"/>`;
+  }
+  return out;
+}
+
+/**
+ * Hedges on the sides where the NEIGHBOURING field is a different field. This
+ * is what turns a big farmed area from one striped expanse into a patchwork
+ * with boundaries: the stripe plan already changes every few tiles, and this
+ * draws the hedge that change implies.
+ */
+function fieldBoundaries(x: number, y: number, seed: number, same: PatchSame): string {
+  const mine = fieldPlanAt(x, y, seed);
+  const S = GROUND_UNITS;
+  const sides: [boolean, number, number, number, number, number, number][] = [
+    // [neighbour is farmland, edge from, edge to, the neighbour tile]
+    [!!same.top, 0, 0, S, 0, x, y - 1],
+    [!!same.right, S, 0, S, S, x + 1, y],
+    [!!same.bottom, 0, S, S, S, x, y + 1],
+    [!!same.left, 0, 0, 0, S, x - 1, y],
+  ];
+  let out = "";
+  for (const [isField, ax, ay, bx, by, nx, ny] of sides) {
+    if (!isField) continue; // a shore, not a boundary — the rim draws that
+    if (samePlan(mine, fieldPlanAt(nx, ny, seed))) continue;
+    out += hedgeAlong(ax, ay, bx, by, x, y, nx, ny, seed);
+  }
+  return out;
+}
+
+/** A row of bales left on the stubble — the detail that says "just harvested". */
+function bales(rng: Rng): string {
+  const n = 3 + Math.floor(rng() * 3);
+  const step = lerp(7, 11, rng());
+  const a = rng() * Math.PI;
+  const r = lerp(2.6, 3.6, rng());
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const t = (i - (n - 1) / 2) * step;
+    const px = Math.cos(a) * t;
+    const py = Math.sin(a) * t;
+    out +=
+      `<ellipse cx="${n1(px + 0.9)}" cy="${n1(py + 0.9)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="rgba(60,50,30,0.2)"/>` +
+      `<ellipse cx="${n1(px)}" cy="${n1(py)}" rx="${n1(r)}" ry="${n1(r * 0.85)}" fill="hsl(${Math.round(lerp(44, 52, rng()))} ${Math.round(lerp(38, 50, rng()))}% ${Math.round(lerp(64, 72, rng()))}%)"/>`;
+  }
+  return out;
+}
+
+// --- Industry ----------------------------------------------------------------
+//
+// The freight half of the world. Urban is where people are; this is where
+// THINGS are, and it exists so that a depot beside it can one day mean freight
+// the way a depot beside a town means passengers (see the design note in
+// docs/superpowers/specs/2026-07-28-industry-and-demand-design.md — the demand
+// coupling is deliberately NOT built here; this is the ground it will read).
+//
+// Drawn top-down under the same NW sun as everything else, but from a different
+// vocabulary to the town's: circles and grids rather than pitched roofs, cool
+// steel and concrete rather than warm tile, so a works never reads as a suburb.
+
+/** A silo or tank: a cylinder from above — a ring with a lit crown. */
+function silo(rng: Rng, scale: number, w: number): string {
+  const r = w / 2;
+  const hue = Math.round(lerp(196, 216, rng()));
+  const sat = Math.round(lerp(4, 12, rng()));
+  const body = lerp(58, 68, rng());
+  return (
+    `<circle cx="${n1(r * 0.22)}" cy="${n1(r * 0.22)}" r="${n1(r)}" fill="${STONE_SHADOW}"/>` +
+    `<circle cx="0" cy="0" r="${n1(r)}" fill="hsl(${hue} ${sat}% ${Math.round(body - 14)}%)"/>` +
+    `<circle cx="${n1(-r * 0.16)}" cy="${n1(-r * 0.16)}" r="${n1(r * 0.74)}" fill="hsl(${hue} ${sat}% ${Math.round(body)}%)"/>` +
+    // The cap ring, and the ladder that tells you the scale of the thing.
+    `<circle cx="${n1(-r * 0.16)}" cy="${n1(-r * 0.16)}" r="${n1(r * 0.3)}" fill="hsl(${hue} ${sat}% ${Math.round(body + 10)}%)"/>` +
+    `<rect x="${n1(-r * 0.06)}" y="${n1(-r)}" width="${n1(0.12 * r)}" height="${n1(r * 0.5)}" fill="hsl(${hue} ${sat}% ${Math.round(body - 24)}%)"/>`
+  );
+}
+
+/**
+ * A container stack: rows of boxes in shipping colours. The one object on the
+ * board that is unambiguously about FREIGHT, which is the whole point of the
+ * kind — a player should be able to tell what a siding is for by looking.
+ */
+function containers(rng: Rng, scale: number, w: number, d: number): string {
+  const cols = 3 + Math.floor(rng() * 3);
+  const rows = 2 + Math.floor(rng() * 2);
+  const bw = (w / cols) * 0.86;
+  const bd = (d / rows) * 0.8;
+  const HUES = [8, 30, 120, 205, 268, 350];
+  let out = "";
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (rng() < 0.16) continue; // gaps: a yard is never full
+      const px = -w / 2 + (c + 0.5) * (w / cols);
+      const py = -d / 2 + (r + 0.5) * (d / rows);
+      const hue = HUES[Math.floor(rng() * HUES.length)];
+      const light = Math.round(lerp(40, 56, rng()));
+      out +=
+        `<rect x="${n1(px - bw / 2 + 0.8 * scale)}" y="${n1(py - bd / 2 + 0.8 * scale)}" width="${n1(bw)}" height="${n1(bd)}" fill="${STONE_SHADOW}"/>` +
+        `<rect x="${n1(px - bw / 2)}" y="${n1(py - bd / 2)}" width="${n1(bw)}" height="${n1(bd)}" fill="hsl(${hue} ${Math.round(lerp(34, 52, rng()))}% ${light}%)"/>` +
+        `<rect x="${n1(px - bw / 2)}" y="${n1(py - bd / 2)}" width="${n1(bw)}" height="${n1(bd * 0.42)}" fill="hsl(${hue} ${Math.round(lerp(30, 46, rng()))}% ${light + 8}%)"/>`;
+    }
+  }
+  return out;
+}
+
+/** A works shed: the town's hall, longer and in works colours. */
+function works(rng: Rng, scale: number, w: number, d: number): string {
+  const hue = Math.round(lerp(200, 214, rng()));
+  const sat = Math.round(lerp(3, 9, rng()));
+  // Pitched roofs shade their far half 18 points down, so a shed pitched at the
+  // town's lightness came out near-black on the works' own grey ground — a dark
+  // bar rather than a building. Lit from higher up.
+  const light = lerp(58, 66, rng());
+  // Ventilators along the ridge — the detail that says "shed with something
+  // running inside it" rather than "warehouse".
+  let vents = "";
+  const n = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const vx = lerp(-w * 0.36, w * 0.36, n === 1 ? 0.5 : i / (n - 1));
+    vents += `<rect x="${n1(vx - 1.6 * scale)}" y="${n1(-1.6 * scale)}" width="${n1(3.2 * scale)}" height="${n1(3.2 * scale)}" fill="hsl(${hue} ${sat}% ${Math.round(light - 22)}%)"/>`;
+  }
+  return roofShadow(w, d, scale) + pitched(w, d, hue, sat, light, scale) + vents;
+}
+
+interface WorksArchetype {
+  weight: number;
+  w: [number, number];
+  d: [number, number];
+  draw: (rng: Rng, scale: number, w: number, d: number) => string;
+}
+
+const WORKS: WorksArchetype[] = [
+  // A silo is round, so its footprint is its diameter both ways.
+  { weight: 2, w: [22, 32], d: [22, 32], draw: (r, s, w) => silo(r, s, w) },
+  { weight: 2.2, w: [38, 56], d: [30, 44], draw: containers },
+  { weight: 3, w: [54, 76], d: [30, 40], draw: works },
+  { weight: 1.6, w: [42, 56], d: [34, 46], draw: block },
+];
+
+const worksReach = (a: WorksArchetype): number => Math.hypot(a.w[1], a.d[1]) / 2;
+
+/** One works object, sized to the room measured at its spot (as `building`). */
+function worksBuilding(
+  rng: Rng,
+  scale: number,
+  room: number,
+): { svg: string; reach: number } {
+  const fits = WORKS.filter(a => worksReach(a) <= room);
+  const pool = fits.length > 0 ? fits : [WORKS[0]];
+  const total = pool.reduce((s, a) => s + a.weight, 0);
+  let r = rng() * total;
+  let pick = pool[0];
+  for (const a of pool) {
+    r -= a.weight;
+    if (r <= 0) {
+      pick = a;
+      break;
+    }
+  }
+  const w = lerp(pick.w[0], pick.w[1], rng()) * scale;
+  const d = lerp(pick.d[0], pick.d[1], rng()) * scale;
+  // Works buildings sit SQUARE to the yard, unlike the town's jittered roofs:
+  // a plant is laid out, a village grew.
+  const ang = lerp(-4, 4, rng());
+  return {
+    svg: `<g transform="rotate(${ang.toFixed(1)})">${pick.draw(rng, scale, w, d)}</g>`,
+    reach: Math.hypot(w, d) / 2,
+  };
+}
+
+/** Hardstanding: the concrete apron a works stands on, with its joint lines. */
+function apron(rng: Rng): string {
+  const w = lerp(30, 52, rng());
+  const d = lerp(20, 34, rng());
+  const tone = `hsl(${Math.round(lerp(204, 216, rng()))} ${Math.round(lerp(3, 8, rng()))}% ${Math.round(lerp(60, 68, rng()))}%)`;
+  return `<rect x="${n1(-w / 2)}" y="${n1(-d / 2)}" width="${n1(w)}" height="${n1(d)}" fill="${tone}" opacity="0.8"/>`;
 }
 
 /** A lily pad with the odd flower — enough to say "this water is shallow here". */
@@ -1181,8 +1975,10 @@ function lily(rng: Rng, scale: number): string {
  * as ground and starts reading as white paper dropped on the town.
  */
 function paving(rng: Rng): string {
-  const w = lerp(14, 26, rng());
-  const d = lerp(8, 15, rng());
+  // Sized against the buildings it serves (see the TOWN archetypes): a forecourt
+  // narrower than a car is a doormat.
+  const w = lerp(24, 42, rng());
+  const d = lerp(14, 26, rng());
   const skew = lerp(-3.5, 3.5, rng());
   const tone = `hsl(${Math.round(lerp(32, 46, rng()))} ${Math.round(lerp(5, 11, rng()))}% ${Math.round(lerp(66, 74, rng()))}%)`;
   return poly(
@@ -1199,8 +1995,8 @@ function paving(rng: Rng): string {
 
 /** A garden plot: the green between the houses, so a town isn't all render. */
 function garden(rng: Rng): string {
-  const w = lerp(11, 20, rng());
-  const d = w * lerp(0.34, 0.5, rng());
+  const w = lerp(20, 34, rng());
+  const d = w * lerp(0.4, 0.6, rng());
   const tone = `hsl(${Math.round(lerp(96, 122, rng()))} ${Math.round(lerp(20, 32, rng()))}% ${Math.round(lerp(46, 55, rng()))}%)`;
   return `<ellipse cx="0" cy="${n1(-d / 2)}" rx="${n1(w / 2)}" ry="${n1(d / 2)}" fill="${tone}" opacity="0.55"/>`;
 }
@@ -1211,6 +2007,9 @@ function groundMarks(
   base: Hsl,
   place: (x: number, y: number) => Pt2,
   clear: (p: Pt2, r: number) => boolean,
+  // The bearing anything aligned to the ground should follow — the field's
+  // furrow direction. Zero for every kind that has no such direction.
+  along = 0,
 ): string {
   // Marks that land on a corridor are simply dropped (no retries): they are
   // filler, and bare ballast beside the line reads better than a garden on it.
@@ -1246,6 +2045,20 @@ function groundMarks(
     return (
       spread(3 + Math.floor(rng() * 3), 10, () => paving(rng)) +
       spread(2 + Math.floor(rng() * 3), 8, () => garden(rng))
+    );
+  }
+  if (kind === "industry") {
+    return spread(2 + Math.floor(rng() * 2), 12, () => apron(rng));
+  }
+  if (kind === "farmland") {
+    // The stripes themselves are laid by the caller (they need the patch clip);
+    // these are what breaks them up. Sparse on purpose: the furrows are the
+    // texture, and a hedge on every tile turns a landscape into a maze. Hedges
+    // get no keep-out radius worth the name — a hedge beside the line is
+    // exactly right.
+    return (
+      (rng() < 0.55 ? spread(1, 3, () => hedge(rng, along)) : "") +
+      (rng() < 0.35 ? spread(1, 8, () => bales(rng)) : "")
     );
   }
   return "";
@@ -1355,6 +2168,83 @@ export function tileCanopySvg(
   return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
 }
 
+/**
+ * What grows on plain grass.
+ *
+ * A separate build from `buildGround` because grass is a separate case in every
+ * way that matters: NO PATCH (so no fill, no rim, no outline to keep things
+ * inside — the world theme's backdrop is the ground here and must stay visible),
+ * and density that comes from a world noise field rather than from a per-kind
+ * constant, so open country varies across the board instead of being one flat
+ * green everywhere.
+ *
+ * Corridors still apply: a tuft standing in the ballast is as wrong as a tree
+ * is. Marks and scatter both drop rather than retry — this is filler, and bare
+ * verge beside the line is exactly right.
+ */
+function buildMeadow(
+  coordId: string,
+  seed: number,
+  corridors: Corridor[],
+): { ground: string; scatter: string; canopy: string } {
+  const rng = tileRng(coordId, seed);
+  const { x, y } = parseCoordId(coordId);
+  const room = (p: Pt2): number =>
+    corridors.length ? corridorClearance(p, corridors) : Infinity;
+  // Roughness at the tile's centre. One sample per tile is enough — the field
+  // is smooth over four tiles, so neighbours land close together and a rough
+  // stretch fades into a cropped one over several tiles rather than at a seam.
+  const rough = meadowRoughnessAt(x + 0.5, y + 0.5, seed);
+
+  // Broad, very low-contrast sward blobs first: the tonal variation that stops
+  // a big open expanse reading as one flat colour. They are ground, so they go
+  // under everything and take no part in the depth sort.
+  const marks: string[] = [];
+  const swardCount = 2 + Math.floor(rng() * 2 + rough * 2);
+  for (let i = 0; i < swardCount; i++) {
+    const p = { x: lerp(18, 82, rng()), y: lerp(18, 82, rng()) };
+    if (room(p) < 6) continue;
+    marks.push(`<g transform="translate(${n1(p.x)} ${n1(p.y)})">${sward(rng)}</g>`);
+  }
+
+  // Then what stands in it. Tufts everywhere, flowers and bushes only where the
+  // ground is rough, a lone thorn tree rarer still — so a cropped stretch is
+  // nearly bare and a rough one is properly shaggy.
+  const count = Math.round(lerp(2, 11, rough));
+  const placed: { y: number; g: string }[] = [];
+  for (let i = 0; i < count; i++) {
+    const p = { x: lerp(10, 90, rng()), y: lerp(10, 90, rng()) };
+    const roll = rng();
+    const scale = lerp(0.8, 1.25, rng());
+    let body: string;
+    let foot: number;
+    if (roll < 0.06 + rough * 0.06) {
+      body = tree(rng, scale * 0.34);
+      foot = 11 * scale;
+    } else if (roll < 0.2 + rough * 0.18) {
+      body = bush(rng, scale * 0.4);
+      foot = 7 * scale;
+    } else if (roll < 0.44 + rough * 0.2) {
+      body = flowers(rng, scale);
+      foot = 6 * scale;
+    } else {
+      body = tuft(rng, scale);
+      foot = 4 * scale;
+    }
+    if (room(p) < foot) continue;
+    placed.push({
+      y: p.y,
+      g: `<g transform="translate(${n1(p.x)} ${n1(p.y)})">${body}</g>`,
+    });
+  }
+  placed.sort((a, b) => a.y - b.y);
+  return {
+    ground: marks.join(""),
+    scatter: placed.map(p => p.g).join(""),
+    canopy: "",
+  };
+}
+
 function buildGround(
   kind: TerrainKind,
   coordId: string,
@@ -1363,13 +2253,43 @@ function buildGround(
   corridors: Corridor[],
 ): { ground: string; scatter: string; canopy: string } {
   const base = GROUND[kind];
+  // Grass has no ground of its own to paint, but it does have things growing on
+  // it — a different build entirely, and the only one that must never emit a
+  // fill (see meadowScatter).
+  if (kind === "grass") return buildMeadow(coordId, seed, corridors);
   if (!base) return { ground: "", scatter: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
 
-  const d = patchPath(same, x, y, seed);
-  const parts = [`<path d="${d}" fill="${css(base)}"/>`];
+  const style = edgeStyleOf(kind);
+  const d = patchPath(same, x, y, seed, GROUND_UNITS, style);
+
+  // A SOFT FRINGE, before the fill and deliberately NOT clipped.
+  //
+  // Every kind used to end at a hard line: the fill stopped, the grass began,
+  // and a wood or a rock field read as a sticker laid on the meadow however good
+  // its outline was. Two translucent strokes of the patch's own colour along the
+  // edges where it STOPS (never the internal joins — those are invisible) give
+  // it a falloff instead: the fill covers the inward half, so what shows is an
+  // outward halo fading into whatever is next door. A wide faint pass plus a
+  // narrower stronger one approximates a gradient without an SVG filter, which
+  // at ~280 tiles a board is worth avoiding.
+  //
+  // Unclipped means it spills onto the neighbour, which is the point — and both
+  // sides of a boundary lay one, so the blend reads the same whichever tile the
+  // DOM happens to draw second. Surveyed ground gets a tighter fringe: a field
+  // ends at a hedge and a town at a fence, so its edge is soft, not vague.
+  const parts: string[] = [];
+  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, style);
+  if (fringeD) {
+    const [wide, tight] = style === "surveyed" ? [18, 9] : [30, 15];
+    parts.push(
+      `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${wide}" stroke-linecap="round" opacity="0.15"/>`,
+      `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${tight}" stroke-linecap="round" opacity="0.3"/>`,
+    );
+  }
+  parts.push(`<path d="${d}" fill="${css(base)}"/>`);
 
   // Everything placed on this tile must STAND ON the patch. The bands keep
   // objects off the tile edges, but a real corner now cedes a deep bite of the
@@ -1379,7 +2299,7 @@ function buildGround(
   // little margin (tested against the polygon inflated about the centroid, so
   // the margin scales with how far out the point sits). Deterministic: no extra
   // rng draws, so positions only move where the geometry demands it.
-  const poly = patchOutlinePolygon(same, x, y, seed);
+  const poly = patchOutlinePolygon(same, x, y, seed, GROUND_UNITS, style);
   const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
   const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
   const insideWithMargin = (px: number, py: number): boolean =>
@@ -1404,24 +2324,57 @@ function buildGround(
   // once the shore itself stopped kinking there. The cap's overhang is harmless:
   // the clip path is the patch, so it can only spill into the SEAM_OVERLAP the
   // neighbour also covers, and at a real corner it is cut off entirely.
-  const rim = RIM[kind];
-  const rimD = rim ? patchRimPath(same, x, y, seed) : "";
-  if (rim && rimD) {
-    const clip = `terrain-clip-${coordId.replace(",", "-")}-${kind}`;
-    parts.unshift(`<clipPath id="${clip}"><path d="${d}"/></clipPath>`);
+  const clipId = `terrain-clip-${coordId.replace(",", "-")}-${kind}`;
+  let clipped = false;
+  const needClip = (): string => {
+    if (!clipped) {
+      parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+      clipped = true;
+    }
+    return clipId;
+  };
+
+  // The furrows go straight after the base fill and before every other mark, so
+  // hedges and bales lie ON the crop. Clipped to the patch: a stripe is a long
+  // bar crossing the whole tile, and unclipped it would run out onto the grass.
+  if (kind === "farmland") {
     parts.push(
-      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${clip})" opacity="0.75"/>`,
+      `<g clip-path="url(#${needClip()})" opacity="0.92">${fieldStripes(x, y, seed)}</g>`,
+      // …and the hedge wherever the field next door is a different field. Also
+      // clipped: a boundary hedge belongs to the farmland, not to the grass or
+      // the ballast beyond it.
+      `<g clip-path="url(#${needClip()})">${fieldBoundaries(x, y, seed, same)}</g>`,
     );
   }
 
-  // How much room a point has to the nearest line. Infinity when the tile and
-  // its neighbours carry none, which short-circuits every check below.
+  const rim = RIM[kind];
+  const rimD = rim ? fringeD : "";
+  if (rim && rimD) {
+    parts.push(
+      `<path d="${rimD}" fill="none" stroke="${css(rim)}" stroke-width="9" stroke-linecap="round" clip-path="url(#${needClip()})" opacity="0.75"/>`,
+    );
+  }
+
+  // How much room a point has to the nearest line — and, once a building has
+  // gone up, to that too. A placed building is pushed on as a degenerate
+  // one-point corridor with its own footprint as the half-width, so "don't
+  // build on the railway" and "don't build on the house next door" are the
+  // same test rather than two. Without it a tile's two or three buildings, now
+  // that they are building-sized, simply pile on top of each other.
+  const blockers = corridors.slice();
   const room = (p: Pt2): number =>
-    corridors.length ? corridorClearance(p, corridors) : Infinity;
+    blockers.length ? corridorClearance(p, blockers) : Infinity;
 
   // Flat marks first: scree, paving, gardens. They belong to the ground, so they
   // go under everything that stands on it and take no part in the depth sort.
-  const marks = groundMarks(kind, rng, base, place, (p, r) => room(p) >= r);
+  const marks = groundMarks(
+    kind,
+    rng,
+    base,
+    place,
+    (p, r) => room(p) >= r,
+    kind === "farmland" ? fieldPlanAt(x, y, seed).angle : 0,
+  );
   if (marks) parts.push(marks);
 
   const [lo, hi] = SCATTER_COUNT[kind];
@@ -1518,8 +2471,22 @@ function buildGround(
         body = tree(rng, (overhang ? Math.max(scale, 1.05) : scale) * 0.42);
       } else if (kind === "rock") body = boulder(rng, scale);
       else if (kind === "mountain") body = peak(rng, scale);
-      else if (kind === "urban") body = building(rng, scale);
-      else body = lily(rng, scale);
+      // The town picks a building that FITS the room measured here, rather than
+      // one size that has to fit everywhere: a shed or a house on the frontage,
+      // a terrace or a hall in the depth of the block. The tile edge counts as
+      // room too (plus TOWN_OVERHANG), or the big archetypes would land half on
+      // the neighbouring tile, which cannot see them to keep clear.
+      else if (kind === "urban" || kind === "industry") {
+        const toEdge =
+          Math.min(p.x, p.y, GROUND_UNITS - p.x, GROUND_UNITS - p.y) + TOWN_OVERHANG;
+        const room = Math.min(clear, toEdge) / scale;
+        const built =
+          kind === "urban"
+            ? building(rng, scale, room)
+            : worksBuilding(rng, scale, room);
+        blockers.push({ pts: [p, p], half: built.reach });
+        body = built.svg;
+      } else body = lily(rng, scale);
       (overhang ? overhead : placed).push({
         y: p.y,
         g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,

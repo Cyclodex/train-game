@@ -13,6 +13,11 @@ import {
   pointInPolygon,
   terrainBlocksBuilding,
   terrainOf,
+  fieldPlanAt,
+  edgeStyleOf,
+  FOOT,
+  TERRAIN_BUILD_FACTOR,
+  URBAN_SMALLEST_REACH,
   tileCanopySvg,
   tileGroundSvg,
   tileScatterSvg,
@@ -321,8 +326,50 @@ describe("terrain", () => {
   });
 
   describe("tileGroundSvg", () => {
-    it("draws nothing for grass, so an untagged world looks untouched", () => {
-      expect(tileGroundSvg("grass", "1,1", around("grass"))).toBe("");
+    it("lays no opaque ground for grass, so the world theme still shows through", () => {
+      // Grass used to draw NOTHING at all. It now grows a meadow (tufts,
+      // flowers, sward blobs — see buildMeadow), and the rule that made
+      // "nothing" right survives intact and is what actually matters: grass
+      // paints no FILL. A grass rect, or a patch outline like every other kind
+      // draws, would cover the theme's backdrop on every tile in the game.
+      const svg = tileGroundSvg("grass", "1,1", around("grass"));
+      expect(svg).not.toContain("<rect");
+      // Whatever it does lay is a translucent blob, never a solid one.
+      const fills = [...svg.matchAll(/<path [^>]*fill="[^"]*"[^>]*>/g)].map(m => m[0]);
+      for (const f of fills) {
+        const op = f.match(/opacity="([\d.]+)"/);
+        expect(op, `opaque ground on grass: ${f}`).not.toBeNull();
+        expect(Number(op![1])).toBeLessThan(0.45);
+      }
+      // And it stays away from the patch machinery entirely: no rim, no clip.
+      expect(svg).not.toContain("clipPath");
+    });
+
+    it("varies the meadow across the board rather than tile by tile", () => {
+      // The answer to "the open green is boring" that does NOT break the rule
+      // above: how much grows on a stretch comes from a coarse world noise
+      // field, so one part of the board is close-cropped and another is
+      // tussocky — and, because the field is smooth over four tiles, adjacent
+      // tiles land close together instead of the density flipping at a seam.
+      const at = (x: number, y: number) =>
+        (tileScatterSvg("grass", `${x},${y}`, around("grass"), 5).match(/<g /g) ?? [])
+          .length;
+      const counts: number[] = [];
+      for (let x = 0; x < 16; x++) counts.push(at(x, 3));
+      expect(Math.max(...counts)).toBeGreaterThan(Math.min(...counts) + 2);
+      // Neighbours differ by less than the whole range: a gradient, not noise.
+      const jumps = counts.slice(1).map((c, i) => Math.abs(c - counts[i]));
+      expect(Math.max(...jumps)).toBeLessThan(Math.max(...counts));
+    });
+
+    it("keeps the meadow off the line like every other kind", () => {
+      const rail: TileCell = {
+        connections: [[Position.Left, Position.Right]],
+      };
+      const open = tileScatterSvg("grass", "4,4", around("grass"), 5);
+      const beside = tileScatterSvg("grass", "4,4", around("grass"), 5, corridorsFor(rail));
+      const n = (s: string) => (s.match(/<g /g) ?? []).length;
+      expect(n(beside)).toBeLessThan(n(open));
     });
 
     it("draws something for every other kind", () => {
@@ -589,6 +636,214 @@ describe("terrain", () => {
       const alone = tileGroundSvg("mountain", "2,2", around("grass"), 5);
       const inRange = tileGroundSvg("mountain", "2,2", around("mountain"), 5);
       expect(inRange).not.toBe(alone);
+    });
+  });
+
+  describe("surveyed vs organic boundaries", () => {
+    const all = (v: boolean) => ({ top: v, right: v, bottom: v, left: v });
+
+    it("draws people's ground to lines and nature's to curves", () => {
+      // A lake, a wood and a rock field are shaped by water and weather; a
+      // field, a town and a works are surveyed, fenced and built to lines. Drawn
+      // as blobs the farmland reads as a lake of wheat.
+      expect(edgeStyleOf("farmland")).toBe("surveyed");
+      expect(edgeStyleOf("urban")).toBe("surveyed");
+      expect(edgeStyleOf("industry")).toBe("surveyed");
+      expect(edgeStyleOf("water")).toBe("organic");
+      expect(edgeStyleOf("forest")).toBe("organic");
+      expect(edgeStyleOf("rock")).toBe("organic");
+      expect(edgeStyleOf("mountain")).toBe("organic");
+    });
+
+    it("puts a surveyed edge's control points ON the chord", () => {
+      // Straight, but still a cubic — every consumer (rim, outline polygon,
+      // fringe) keeps working unchanged because the shape of the data didn't.
+      const segs = parsePath(patchPath(all(false), 2, 3, 9, 100, "surveyed"));
+      expect(segs).toHaveLength(4);
+      for (const s of segs) {
+        for (const c of [s.c1, s.c2]) {
+          const chord = { x: s.end.x - s.start.x, y: s.end.y - s.start.y };
+          const off = { x: c.x - s.start.x, y: c.y - s.start.y };
+          // Perpendicular distance to the chord, not the raw cross product: the
+          // path is emitted at one decimal, so on a ~100-unit chord the cross
+          // product carries several units of pure rounding.
+          const perp =
+            Math.abs(chord.x * off.y - chord.y * off.x) / Math.hypot(chord.x, chord.y);
+          expect(perp).toBeLessThan(0.15);
+        }
+      }
+    });
+
+    it("keeps a surveyed patch square-ish where an organic one is a blob", () => {
+      // The organic silhouette cedes its corners on purpose (a pond, not a
+      // puddle). A field must NOT: it is a plot, and its area is nearly its
+      // tile.
+      const coverage = (style: "organic" | "surveyed", seed: number) => {
+        const poly = patchOutlinePolygon(all(false), 2, 3, seed, 100, style);
+        let inside = 0;
+        for (let i = 0; i < 40; i++) {
+          for (let j = 0; j < 40; j++) {
+            const p = { x: ((i + 0.5) * 100) / 40, y: ((j + 0.5) * 100) / 40 };
+            if (pointInPolygon(p, poly)) inside++;
+          }
+        }
+        return inside / 1600;
+      };
+      for (const seed of [1, 5, 42]) {
+        // Not the whole tile — the corners still carry the shared lattice
+        // jitter, which is what keeps a plot from being a drawn rectangle and
+        // lets two tiles agree on where their boundary runs.
+        expect(coverage("surveyed", seed)).toBeGreaterThan(0.82);
+        expect(coverage("surveyed", seed)).toBeGreaterThan(
+          coverage("organic", seed) + 0.1,
+        );
+      }
+    });
+
+    it("still meets its neighbour exactly at a shared lattice point", () => {
+      // The seam argument does not change with the style: corners are the
+      // SHARED jittered lattice points either way, so two surveyed tiles either
+      // side of a boundary start and end their edges in the same place.
+      const left = parsePath(
+        patchPath({ top: false, right: false, bottom: false, left: false }, 2, 3, 9, 100, "surveyed"),
+      );
+      const right = parsePath(
+        patchPath({ top: false, right: false, bottom: false, left: false }, 3, 3, 9, 100, "surveyed"),
+      );
+      // Left tile's top-right corner (segment 1 start) is the right tile's
+      // top-left (segment 0 start), one tile over.
+      expect(left[1].start.x - 100).toBeCloseTo(right[0].start.x, 5);
+      expect(left[1].start.y).toBeCloseTo(right[0].start.y, 5);
+    });
+  });
+
+  describe("the soft fringe", () => {
+    it("fades a patch outward instead of ending it at a line", () => {
+      // Every kind used to stop dead, so a wood read as a sticker laid on the
+      // meadow however good its outline was. Two translucent strokes of the
+      // patch's own colour, before the fill and deliberately unclipped, leave an
+      // outward halo — the fill covers the inward half.
+      const svg = tileGroundSvg("forest", "3,3", around("grass"), 5);
+      const strokes = [...svg.matchAll(/<path [^>]*stroke-width="(\d+)"[^>]*opacity="([\d.]+)"/g)];
+      expect(strokes.length).toBeGreaterThanOrEqual(2);
+      for (const [, , op] of strokes) expect(Number(op)).toBeLessThan(0.5);
+      // It must NOT be clipped — clipping it back to the patch would put the
+      // fade entirely under the fill, which is the whole thing it isn't.
+      const fringe = svg.slice(0, svg.indexOf('fill="hsl'));
+      expect(fringe).not.toContain("clip-path");
+    });
+
+    it("lays none along an internal join", () => {
+      // A tile in the middle of a wood has no edge to fade: fringing the shared
+      // chords would draw a dark seam down every internal boundary — the exact
+      // defect patchRimPath exists to avoid.
+      const inner = tileGroundSvg("forest", "3,3", around("forest"), 5);
+      expect(inner).not.toContain("stroke-width");
+    });
+  });
+
+  describe("farmland", () => {
+    it("plans a field by WORLD lattice cell, not by tile", () => {
+      // Neighbouring tiles inside one cell share a bearing, so their furrows run
+      // on across the seam; a few tiles away it changes, which is the patchwork.
+      // Seeded per tile instead, every tile edge would be a field edge — the
+      // grid, redrawn in furrows.
+      const a = fieldPlanAt(3, 3, 9);
+      expect(fieldPlanAt(4, 3, 9)).toEqual(a);
+      expect(fieldPlanAt(3, 4, 9)).toEqual(a);
+      expect(fieldPlanAt(9, 3, 9)).not.toEqual(a);
+      // Deterministic across calls, or a field would redraw itself every frame.
+      expect(fieldPlanAt(3, 3, 9)).toEqual(a);
+    });
+
+    it("gives every field two tones far enough apart to see", () => {
+      // At 6 points of lightness the green crops came out as flat olive tiles
+      // indistinguishable from the grass they replace, while the straw ones
+      // striped boldly — contrast has to belong to the field, not to where its
+      // hue happened to land.
+      for (let cell = 0; cell < 24; cell++) {
+        const plan = fieldPlanAt(cell * 3, 0, 4);
+        expect(Math.abs(plan.crop[2] - plan.fallow[2])).toBeGreaterThan(8);
+      }
+    });
+
+    it("stripes tiles far from the world origin", () => {
+      // Regression: the bands were anchored at the point of each furrow closest
+      // to the world ORIGIN and drawn only 1.5 tiles long, so tiles a few
+      // hundred units away were missed entirely and came out blank green — near
+      // the origin striped, everything to the right of it flat.
+      const near = tileGroundSvg("farmland", "1,1", around("farmland"), 4);
+      const far = tileGroundSvg("farmland", "17,11", around("farmland"), 4);
+      const bands = (svg: string) => (svg.match(/<path d="M/g) ?? []).length;
+      expect(bands(near)).toBeGreaterThan(4);
+      expect(bands(far)).toBeGreaterThan(4);
+    });
+
+    it("stands nothing on a field", () => {
+      // All ground marks, no standing objects — which is what keeps farmland out
+      // of the corridor and canopy rules entirely.
+      expect(tileScatterSvg("farmland", "3,3", around("farmland"), 4)).toBe("");
+      expect(tileCanopySvg("farmland", "3,3", around("farmland"), 4)).toBe("");
+    });
+
+    it("is buildable, and priced between grass and forest", () => {
+      expect(terrainBlocksBuilding("farmland")).toBe(false);
+      expect(canBuildOn({ connections: [], terrain: "farmland" })).toBe(true);
+      expect(TERRAIN_BUILD_FACTOR.farmland).toBeGreaterThan(TERRAIN_BUILD_FACTOR.grass);
+      expect(TERRAIN_BUILD_FACTOR.farmland).toBeLessThan(TERRAIN_BUILD_FACTOR.forest);
+    });
+  });
+
+  describe("town", () => {
+    // A tile is GROUND_UNITS across and a car is `DEFAULT_CAR_LENGTH` (0.23) of
+    // a tile — 23 units — long. Buildings shipped at 14-20 units wide, i.e.
+    // NARROWER THAN THE CARS driving past them, which read as a model village.
+    const CAR_UNITS = 23;
+
+    const rectWidths = (svg: string): number[] =>
+      [...svg.matchAll(/<rect[^>]*width="([\d.-]+)"/g)].map(m => Number(m[1]));
+
+    it("builds at street scale — the largest roof outruns a car", () => {
+      // Sampled across tiles because the archetype is a per-object roll: some
+      // tiles are all houses, but a town of several tiles must show something
+      // with a real frontage (a terrace, a block, a hall).
+      const widest = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].map(coord =>
+        Math.max(...rectWidths(tileScatterSvg("urban", coord, around("urban"), 7))),
+      );
+      expect(Math.max(...widest)).toBeGreaterThan(CAR_UNITS * 2);
+      // …and even the modest end of the range is no longer sub-car.
+      const all = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].flatMap(coord =>
+        rectWidths(tileScatterSvg("urban", coord, around("urban"), 7)),
+      );
+      const roofs = all.filter(w => w > 8); // skip chimneys and rooftop plant
+      expect(Math.max(...roofs)).toBeGreaterThan(CAR_UNITS);
+    });
+
+    it("gates placement on the SMALLEST archetype's reach, not the largest", () => {
+      // `building()` picks a footprint that fits the room measured at the spot,
+      // so FOOT.urban only has to admit a shed. Raise it toward the biggest
+      // archetype and every street frontage in the game empties out.
+      expect(FOOT.urban).toBeGreaterThan(URBAN_SMALLEST_REACH - 1.5);
+      expect(FOOT.urban).toBeLessThan(URBAN_SMALLEST_REACH + 1.5);
+    });
+
+    it("puts smaller buildings where a line leaves less room", () => {
+      // The whole point of measuring room first: a tile with a road through it
+      // has only its verges left, so what stands there is modest — while the
+      // same tile with nothing built on it gets the terraces and halls.
+      const road: TileCell = {
+        connections: [],
+        road: [
+          { from: Position.Left, to: [Position.Right], index: 0 },
+          { from: Position.Right, to: [Position.Left], index: 0 },
+        ],
+      };
+      const open = rectWidths(tileScatterSvg("urban", "4,4", around("urban"), 7));
+      const beside = rectWidths(
+        tileScatterSvg("urban", "4,4", around("urban"), 7, corridorsFor(road)),
+      );
+      const big = (ws: number[]) => (ws.length ? Math.max(...ws) : 0);
+      expect(big(beside)).toBeLessThan(big(open));
     });
   });
 });

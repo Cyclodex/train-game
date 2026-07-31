@@ -174,6 +174,23 @@
       </template>
     </svg>
 
+    <!-- Bridge deck: the STRUCTURE carrying the line over what is under it.
+         Drawn between the ground and the rails, so the water shows either side
+         of the span and the sleepers sit on the deck rather than in the river.
+         Derived from the same segment paths the rails follow, so a bridge on a
+         curve bends with it and nothing has to be authored per shape. -->
+    <svg
+      v-if="isBridge"
+      class="bridge-deck"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="(s, i) in bridgeSpans" :key="'bd' + i">
+        <path :d="s.d" class="bridge-shadow" :stroke-width="s.width" />
+        <path :d="s.d" class="bridge-span" :stroke-width="s.width" />
+        <path :d="s.d" class="bridge-parapet" :stroke-width="s.width * 0.78" />
+      </g>
+    </svg>
+
     <TileRail :possible-routes="railRoutes" />
 
     <!-- Signals (straights only) -->
@@ -497,6 +514,36 @@ class Tile extends Vue {
   }
   get isDepot() {
     return this.tile.role === "depot";
+  }
+  get isBridge() {
+    return this.tile.bridge === true;
+  }
+
+  // The spans this cell carries: one per line crossing it, rail or road, as the
+  // path a vehicle actually drives plus the deck width that line needs. Derived
+  // from the same segment paths the rails and lanes follow, so a bridge on a
+  // curve bends with it and nothing is authored per shape.
+  //
+  // Road AND rail, because nothing about a structure is rail-specific — a road
+  // bridge over a river is the same object. The road deck has to be wider than
+  // the carriageway or it vanishes under the (opaque) road surface, so it is
+  // sized from the lane count rather than fixed.
+  get bridgeSpans(): { d: string; width: number }[] {
+    if (!this.isBridge) return [];
+    const size = this.config.tileSize;
+    const spans = this.tile.connections.map(([a, b]) => ({
+      d: segmentPathD(a, b, size),
+      width: size * 0.23,
+    }));
+    const road = this.tile.road;
+    if (road?.length) {
+      const laneW = size * LANE_WIDTH_PX_FRAC;
+      for (const [a, b] of roadEdges(road)) {
+        const lanes = Math.max(laneCount(road, a) + laneCount(road, b), 2);
+        spans.push({ d: segmentPathD(a, b, size), width: lanes * laneW + size * 0.09 });
+      }
+    }
+    return spans;
   }
 
   // Rail/sleeper paths for every connection, in the shape TileRail expects.
@@ -1722,6 +1769,40 @@ export default toNative(Tile);
   position: relative;
   width: 100%;
   height: 100%;
+}
+
+/* --- bridge deck (under the rails, over the ground) ---
+   Three strokes along the same curve the train drives: a shadow cast on
+   whatever is beneath, the deck itself, and a lighter parapet line down the
+   middle. Stroke-based rather than a shaped polygon so it follows a curve for
+   free — the same reason the rails are strokes. */
+.bridge-deck {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1; // above the ground/scatter (z0/z1 in their own cells), below TileRail (z2)
+  pointer-events: none;
+  overflow: visible;
+}
+.bridge-shadow {
+  fill: none;
+  // Offset toward the SE, matching the one sun every other object is lit by
+  // (see tiles/terrain.ts). On water this is what makes the deck read as
+  // standing ABOVE the surface rather than painted on it.
+  transform: translate(5px, 5px);
+  stroke: rgba(12, 30, 44, 0.35);
+  stroke-linecap: butt;
+}
+.bridge-span {
+  fill: none;
+  stroke: #8d7d6b; // weathered timber/concrete, warm against the cool water
+  stroke-linecap: butt;
+}
+.bridge-parapet {
+  fill: none;
+  stroke: #b7a992;
+  stroke-linecap: butt;
 }
 
 /* --- road layer (under the rails) --- */

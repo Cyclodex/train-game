@@ -23,6 +23,7 @@ import {
 import type { Lane, LaneKind } from "@/tiles/lanes";
 import { isRoadJunction, isOneWayStraight, lanesFrom, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
+import { needsBridge } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -93,14 +94,24 @@ export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
 // tile forms a junction instead of deleting the rail.
 export function addConnection(cell: TileCell, a: Port, b: Port): TileCell {
   if (cell.connections.some(c => samePair(c, [a, b]))) return cell;
-  return { ...cell, connections: [...cell.connections, [a, b]] };
+  const next: TileCell = { ...cell, connections: [...cell.connections, [a, b]] };
+  // Laying a line on bridgeable ground MEANS building a bridge — there is no
+  // separate "place bridge" verb to forget, and no way to end up with track
+  // standing in a river. Every build path in the game (the editor's commit, the
+  // in-play `buildRoute`, the route planner's lay) funnels through here, which
+  // is why the rule belongs here rather than in each of them.
+  if (needsBridge(next)) next.bridge = true;
+  return next;
 }
 
 export function removeConnection(cell: TileCell, a: Port, b: Port): TileCell {
-  return {
-    ...cell,
-    connections: cell.connections.filter(c => !samePair(c, [a, b])),
-  };
+  const connections = cell.connections.filter(c => !samePair(c, [a, b]));
+  const next: TileCell = { ...cell, connections };
+  // The span goes with the last line it carried. Leaving `bridge` behind would
+  // leave a permanently buildable tile in the middle of a river — free crossing
+  // for whoever comes next, bought once.
+  if (connections.length === 0 && !next.road?.length) delete next.bridge;
+  return next;
 }
 
 // Make the cell a depot facing `facing` (a single border<->Center connection).

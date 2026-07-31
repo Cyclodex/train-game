@@ -531,7 +531,7 @@ import {
   isRoadOnlyLevel,
   parseCoordId,
 } from "@/tiles/model";
-import { canBuildOn } from "@/tiles/terrain";
+import { canBuildOn, needsBridge } from "@/tiles/terrain";
 import { railPathsFor } from "@/tiles/geometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { TRACK_COST_PER_TILE } from "@/sim/economy";
@@ -1208,6 +1208,14 @@ class PlayView extends Vue {
       passable: (c: Coordinates) => {
         const id = getCoordinatesId(c);
         return canBuildOn(this.level[id]) && this.game.canEdit([id]);
+      },
+      // Water is crossable — on a bridge, at six tiles' worth of routing cost
+      // and BRIDGE_BUILD_FACTOR of money. The occupancy gate still applies:
+      // you cannot throw a span under a train any more than you can lay track
+      // under one.
+      bridgeable: (c: Coordinates) => {
+        const id = getCoordinatesId(c);
+        return needsBridge(this.level[id]) && this.game.canEdit([id]);
       },
     };
   }
