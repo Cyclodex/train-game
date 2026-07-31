@@ -148,7 +148,36 @@
       </g>
     </svg>
 
-    <TileRail :possible-routes="railRoutes" />
+    <!-- Tunnel: the line is UNDERGROUND. No rails are drawn and the mountain's
+         scatter stays unbroken over the bore (see cellCorridors) — only a faint
+         dashed guide so the player can still read where the tunnel runs. -->
+    <svg
+      v-if="isTunnel"
+      class="tunnel-guide"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path v-for="(d, i) in tunnelGuides" :key="'tg' + i" :d="d" />
+    </svg>
+
+    <!-- Tunnel portals, one per end of the bore that meets open ground (an
+         internal seam between two tunnel tiles gets none). Drawn ABOVE the
+         trains, same layer story as the forest canopy: a unit is hidden the
+         moment its centre crosses onto the tunnel tile, and the arch masks
+         that pop so the train reads as driving INTO the mountain. -->
+    <svg
+      v-if="isTunnel"
+      class="tunnel-portals"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
+        <rect class="portal-shadow" :x="-21 * u" :y="-4 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
+        <rect class="portal-band" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
+        <rect class="portal-lintel" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
+        <rect class="portal-mouth" :x="-9 * u" :y="1 * u" :width="18 * u" :height="8 * u" :rx="3 * u" />
+      </g>
+    </svg>
+
+    <TileRail v-if="!isTunnel" :possible-routes="railRoutes" />
 
     <!-- Signals (straights only) -->
     <svg
@@ -325,6 +354,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { fanArms } from "@/tiles/switchFan";
 import { Position, ActiveIntersection, Route } from "@/types";
 import {
+  Level,
   TileCell,
   kindOf,
   partnersOf,
@@ -393,6 +423,10 @@ const LANE_WIDTH_PX_FRAC = 0.14;
 class Tile extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Inject({ from: "game" }) game!: Game;
+  // The whole level, for the one derivation that needs NEIGHBOURS: a tunnel
+  // portal exists only where the bore meets open ground, which the cell alone
+  // cannot know. Same inject TileGround uses for patch fusing.
+  @Inject() level!: Level;
   @Prop({ type: Object, required: true }) tile!: TileCell;
   @Prop({ type: String, required: true }) coordId!: string;
   // The editor paints its own switch hit-zones on top of the tile (they cycle
@@ -456,6 +490,50 @@ class Tile extends Vue {
   }
   get isBridge() {
     return this.tile.bridge === true;
+  }
+  get isTunnel() {
+    return this.tile.tunnel === true;
+  }
+  // Ground units (the 100-unit art box) in px, for authoring the portal.
+  get u() {
+    return this.config.tileSize / 100;
+  }
+
+  // The dashed guide along each bored connection — the same centreline the
+  // train drives, so a curved bore reads correctly.
+  get tunnelGuides(): string[] {
+    if (!this.isTunnel) return [];
+    const size = this.config.tileSize;
+    return this.tile.connections.map(([a, b]) => segmentPathD(a, b, size));
+  }
+
+  // One portal per port of the bore that faces NON-tunnel ground. An internal
+  // seam (tunnel beside tunnel) gets none, so a ridge two tiles deep reads as
+  // one mountain with one hole in each side. Oriented per port; every segment
+  // path meets its edge at the midpoint, so the arch sits on the centreline.
+  get tunnelPortals(): { port: Position; transform: string }[] {
+    if (!this.isTunnel) return [];
+    // Register the edit counter: a bore EXTENDED next door must retire this
+    // tile's portal at the now-internal seam, but `level` is the raw object in
+    // play (see Game.levelVersion) so the neighbour read alone cannot notify.
+    this.game.levelVersion.value;
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const at: Record<number, string> = {
+      [Position.Top]: `translate(${size / 2}, 0)`,
+      [Position.Right]: `translate(${size}, ${size / 2}) rotate(90)`,
+      [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
+      [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
+    };
+    const out: { port: Position; transform: string }[] = [];
+    for (const p of portsOf(this.tile.connections)) {
+      if (p === Position.Center) continue;
+      const nc = neighborCoord(coord, p);
+      const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
+      if (n?.tunnel) continue;
+      out.push({ port: p, transform: at[p] });
+    }
+    return out;
   }
 
   // The spans this cell carries: one per line crossing it, rail or road, as the
@@ -1628,7 +1706,54 @@ export default toNative(Tile);
   stroke-linecap: butt;
 }
 
-/* --- road layer (under the rails) --- */
+/* --- tunnel (the line is underground) ---
+   The guide is where the rails would be (z2, over the mountain scatter at z1
+   in its own cell): a faint dashed centreline, the map notation for a tunnel.
+   The portals sit ABOVE the trains (loco z4 / wagons z3), like the forest
+   canopy (z7): game.ts hides a unit once its centre is on the tunnel tile,
+   and the arch straddling the seam masks that pop. */
+.tunnel-guide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  path {
+    fill: none;
+    stroke: rgba(18, 16, 13, 0.4);
+    stroke-width: 3px;
+    stroke-dasharray: 7 9;
+    stroke-linecap: round;
+  }
+}
+.tunnel-portals {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 7;
+  pointer-events: none;
+  overflow: visible;
+}
+.portal-shadow {
+  // SE offset baked into the rect coords, matching the one NW sun.
+  fill: rgba(12, 20, 30, 0.3);
+}
+.portal-band {
+  // Dressed stone against the slate mountain: close tones, per the terrain
+  // rule that scatter sits near its ground rather than paper-cutout bright.
+  fill: #857c6d;
+  stroke: #5c5546;
+  stroke-width: 1.5px;
+}
+.portal-lintel {
+  // The up-left(-ish) lit facet of the gallery roof.
+  fill: #9c9280;
+}
+.portal-mouth {
+  fill: #17140f;
+}
 .road-layer {
   position: absolute;
   inset: 0;

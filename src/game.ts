@@ -1018,8 +1018,15 @@ export function createGame(
           docked &&
           unit.rear.exitPort === Position.Center &&
           unit.rear.t >= 0.999;
-        el.style.visibility = inShed ? "hidden" : "visible";
         const { x, y, angle } = positionUnit(unit);
+        // A unit whose centre is on a TUNNEL tile is underground: the portal
+        // swallowed it. Per-unit rather than per-train, so a long consist
+        // threads into the mountain wagon by wagon — the portal arch (drawn
+        // above the trains, like the canopy) masks the moment each one pops.
+        const tileUnder =
+          level[`${Math.floor(x / tileSize)},${Math.floor(y / tileSize)}`];
+        const inTunnel = tileUnder?.tunnel === true;
+        el.style.visibility = inShed || inTunnel ? "hidden" : "visible";
         if (i === 0) locoPos[def.id] = { x, y };
         el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${angle}deg)`;
         // Publish the angle so the debug label inside can cancel it out. A train

@@ -398,7 +398,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `blocked-terrain`, the editor, the route planner — gets the exception for free
   by asking the question it always asked. Pinned by a validator test.
 - ONLY WATER IS BRIDGEABLE (`BRIDGEABLE`/`terrainBridgeable`). Rock and mountain
-  still refuse: a tunnel is their answer and a separate feature.
+  are TUNNELLED instead (see TUNNELS, 2026-07-31) — no ground is ever both.
 - `addConnection` SETS IT. Every build path in the game (editor commit, in-play
   `buildRoute`, the route-draw lay) funnels through that one reducer, so there is
   no "place bridge" verb to forget and no way to end up with track standing in a
@@ -421,6 +421,26 @@ lean — prune as much as you add. This file only stays useful if every task ten
   surface (width from the lane count). /test scenario: `bridge`.
 - A RIVER IS NOT A KIND: it is a 1-wide line of `water`, which `patchPath` fuses
   into a ribbon. What separates it from a lake is that it cannot be gone round.
+
+## TUNNELS (2026-07-31)
+- `TileCell.tunnel` is the bridge's twin: the SAME exception inside `canBuildOn`
+  (`bridge || tunnel`), set by `addConnection` on TUNNELABLE ground (rock +
+  mountain), cleared by `removeConnection` with the last line. Planner gate
+  `RouteOpts.tunnelable` at TUNNEL_MOVE (9x) vs BRIDGE_MOVE (6x); money
+  `TUNNEL_BUILD_FACTOR` 6 beats the bridge's 4 as the dearest build.
+- THE GROUND STAYS UNBROKEN OVER THE BORE: a tunnel cell lays NO rail keep-out
+  corridor (`cellCorridors` skips `connections` when `cell.tunnel`), so the
+  mountain scatter closes over the line. Clearing the right-of-way would draw
+  the route onto the ridge as a bald stripe — the one thing a tunnel is not.
+  TileRail is suppressed on the cell; a dashed guide (z2) is the map notation.
+- PORTALS only where the bore meets NON-tunnel ground — an internal seam
+  between two tunnel cells gets none. Tile.vue injects `level` for that
+  neighbour check and reads `game.levelVersion` in the getter, or an extended
+  bore would not retire the now-internal portal (cached-computed trap).
+- The portal svg is z7, ABOVE trains — same layer story as the forest canopy:
+  `game.ts renderTrains` hides a unit once its CENTRE is on a tunnel tile, and
+  the arch straddling the seam masks the per-unit pop, so a consist threads in
+  wagon by wagon. /test scenario: `tunnel`.
 
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The

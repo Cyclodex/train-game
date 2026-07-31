@@ -52,6 +52,13 @@ export interface TileCell {
   // automatically wherever a line is laid on bridgeable ground (water), so a
   // river is crossed rather than routed around. See tiles/terrain.ts.
   bridge?: boolean;
+  // A STRUCTURE carrying the line UNDER what is over it — the bridge's twin for
+  // rock and mountain. The same designed exception to `canBuildOn`, set
+  // automatically wherever a line is laid on tunnelable ground, so a ridge is
+  // bored through rather than being a wall. The line is underground: the ground
+  // art stays unbroken over it (no cleared right-of-way) and the renderer hides
+  // a train between the portals. See tiles/terrain.ts.
+  tunnel?: boolean;
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
   // Road layer: port pairs describing a road crossing this cell, in the SAME

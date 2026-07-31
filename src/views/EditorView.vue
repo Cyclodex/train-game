@@ -460,7 +460,7 @@ import {
   type StallReservation,
 } from "@/tiles/parking";
 import { stallOutlinePath, garageGeometry, rowFrame } from "@/tiles/parkingGeometry";
-import { canBuildOn, needsBridge } from "@/tiles/terrain";
+import { canBuildOn, needsBridge, needsTunnel } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
@@ -1065,6 +1065,9 @@ class EditorView extends Vue {
       // Water is crossable on a structure: the route may span it, and
       // `addConnection` marks what it lays as a bridge.
       bridgeable: (c: Coordinates) => needsBridge(this.level[getCoordinatesId(c)]),
+      // Rock and mountain are borable: the route may pass under them, and
+      // `addConnection` marks what it lays as a tunnel.
+      tunnelable: (c: Coordinates) => needsTunnel(this.level[getCoordinatesId(c)]),
     };
   }
 

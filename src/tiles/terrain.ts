@@ -120,8 +120,14 @@ const ROAD_MARGIN = 2;
 export function cellCorridors(cell: TileCell | null | undefined): Corridor[] {
   if (!cell) return [];
   const out: Corridor[] = [];
-  for (const [a, b] of cell.connections) {
-    out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+  // A tunnelled line is UNDERGROUND: the mountain over it stays unbroken, so
+  // its rail lays no keep-out corridor and the scatter closes over the bore.
+  // (Clearing the right-of-way here would draw the tunnel's route onto the
+  // ridge as a bald stripe — the one thing a tunnel visibly is not.)
+  if (!cell.tunnel) {
+    for (const [a, b] of cell.connections) {
+      out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+    }
   }
   if (cell.road?.length) {
     // One corridor per (from → to) movement, as wide as its deepest lane stack.
@@ -358,6 +364,36 @@ export function terrainBridgeable(kind: TerrainKind): boolean {
   return BRIDGEABLE[kind];
 }
 
+// Which blocking ground a bore can carry a line UNDER. Rock and mountain are
+// tunnelled; water is bridged, never tunnelled (one answer per ground, so the
+// two structures can never both claim a cell). Same shape as BRIDGEABLE and for
+// the same reason: a property of the GROUND, feeding the one canBuildOn
+// exception rather than a second predicate beside it.
+const TUNNELABLE: Record<TerrainKind, boolean> = {
+  grass: false,
+  farmland: false,
+  forest: false,
+  water: false,
+  rock: true,
+  mountain: true,
+  urban: false,
+  industry: false,
+};
+
+export function terrainTunnelable(kind: TerrainKind): boolean {
+  return TUNNELABLE[kind];
+}
+
+/**
+ * Whether laying a line on this cell would MEAN boring a tunnel — the exact
+ * twin of `needsBridge`, for the grounds a span cannot cross. The build tools
+ * use it to offer a bore where they would otherwise refuse, and to set
+ * `TileCell.tunnel` on what they lay.
+ */
+export function needsTunnel(cell: TileCell | null | undefined): boolean {
+  return !cell?.tunnel && terrainTunnelable(terrainOf(cell));
+}
+
 /**
  * Whether laying a line on this cell would MEAN building a bridge — i.e. the
  * ground blocks a plain line but a span can cross it. The build tools use this
@@ -395,6 +431,13 @@ export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
 // to hurt, not so high that a river is a wall.
 export const BRIDGE_BUILD_FACTOR = 4;
 
+// Boring through rock is dearer still than spanning water — the new dearest
+// thing in the game. The gap between the two matters: a river is a line you
+// cross once, a ridge is usually several tiles of bore, so the per-tile price
+// alone already stacks; this factor keeps a single-tile bore from undercutting
+// a single-tile span.
+export const TUNNEL_BUILD_FACTOR = 6;
+
 /**
  * The build-price factor for a cell. Missing cell = bare grass = 1.
  *
@@ -406,6 +449,7 @@ export const BRIDGE_BUILD_FACTOR = 4;
 export function terrainBuildFactor(cell: TileCell | null | undefined): number {
   const kind = terrainOf(cell);
   if (cell?.bridge || terrainBridgeable(kind)) return BRIDGE_BUILD_FACTOR;
+  if (cell?.tunnel || terrainTunnelable(kind)) return TUNNEL_BUILD_FACTOR;
   return TERRAIN_BUILD_FACTOR[kind];
 }
 
@@ -419,7 +463,7 @@ export function terrainBuildFactor(cell: TileCell | null | undefined): number {
  * free by asking the same question it always did.
  */
 export function canBuildOn(cell: TileCell | null | undefined): boolean {
-  if (cell?.bridge) return true;
+  if (cell?.bridge || cell?.tunnel) return true;
   return !terrainBlocksBuilding(terrainOf(cell));
 }
 
