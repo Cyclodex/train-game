@@ -30,6 +30,7 @@ import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter"
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
 import {
+  clampToDirectionChange,
   manoeuvreLength,
   reverseAt,
   REVERSE_PACE,
@@ -505,8 +506,19 @@ export function createParkingPhases(deps: ParkingDeps) {
       // parked and both commit, so ties go to the lower id — the same
       // deterministic tie-break the junction gates use.
       const committed = other.phase === "leaving" || other.phase === "entering";
+      // A ready-but-still-parked neighbour phantom-claims its slot only if it is
+      // SENIOR — and seniority is the courtesy ordering (longest wait, ties by
+      // id), not the plain id order this shipped with. The two orderings must be
+      // the same one: traffic yields to the longest-waiting leaver, so a phantom
+      // from a junior car is a veto by a car that cannot itself move — the queue
+      // stands for A, A is vetoed by B's phantom, B is blocked by the queue.
+      // Measured as a permanent wedge on parkinglot seed 5 the moment reversing
+      // got slow enough for three leavers to be ready at once.
       const readyToo =
-        other.phase === "parked" && other.dwellLeft <= 0 && other.id < car.id;
+        other.phase === "parked" &&
+        other.dwellLeft <= 0 &&
+        (other.dwellLeft < car.dwellLeft ||
+          (other.dwellLeft === car.dwellLeft && other.id < car.id));
       if (!committed && !readyToo && other.phase !== "driving") continue;
       // How much road the car behind needs to stop. Claiming a slot is putting a
       // stationary obstacle in a live lane, so it may only be done where the
@@ -742,8 +754,17 @@ export function createParkingPhases(deps: ParkingDeps) {
     // GENTLE the curve is (`pace`), because a long shallow swing into a lay-by is
     // not driven at the speed of a tight turn into a 90° bay.
     const pace = car.parkPath?.pace ?? 1;
-    // ...and by WHICH WAY the car is pointing on this leg. One pace for the whole
-    // path meant a car reversed into a space at the speed it drove past it.
+    // ...unless the car is going BACKWARDS on this leg, in which case the pace
+    // scale-up must not apply at all. `pace` exists to keep a manoeuvre's TIME
+    // roughly constant — a longer curve is gentler, so it is driven faster. A
+    // reverse is the opposite kind of motion: the driver is craning over their
+    // shoulder, and being longer makes it SLOWER to drive, never faster. Shipping
+    // REVERSE_PACE as a multiplier ON the pace cancelled itself out: the pivot
+    // reverse is a long path (approach + arc + straight, pace ≈ 3–4), so its
+    // backing legs ran at up to twice the base crawl — faster than a forward
+    // nose-in — and the echelon back-out at pace ≈ 2 was quicker than its own
+    // pull-in. That is the "way too fast" that was reported. A backing leg is
+    // now driven at an ABSOLUTE speed: REVERSE_PACE × the base crawl, full stop.
     //
     // A manoeuvre has a direction of its own — `entering` and a nose-first exit
     // drive `m` UP, while a bay that is reversed out of replays its entry curve
@@ -751,17 +772,23 @@ export function createParkingPhases(deps: ParkingDeps) {
     // XOR the direction the path is being driven. Read it off the leg rather than
     // the phase, or a car backing out of a 90° bay (forward legs, played
     // backwards) would be the one case that stayed fast.
-    const legStep = (playedBackwards: boolean): number => {
-      if (len <= 1e-6) return 1;
-      const backing = car.parkPath
-        ? reverseAt(car.parkPath, car.manoeuvre) !== playedBackwards
-        : false;
-      const factor = backing ? REVERSE_PACE : 1;
-      return (PARKING.speed * pace * factor * dt) / len;
+    // One tick's advance of `m`, speed-correct PER LEG. The flag is probed a
+    // hair past the current `m` on the side being traversed, and the step stops
+    // AT a leg boundary where the direction flips — otherwise the one tick that
+    // straddles the join is driven at the old leg's speed, which for a
+    // pull-past-then-reverse manoeuvre is one tick of backing at forward pace.
+    const stepTo = (playedBackwards: boolean): number => {
+      if (!car.parkPath || len <= 1e-6) return playedBackwards ? 0 : 1;
+      const dir = playedBackwards ? -1 : 1;
+      const probe = Math.max(0, Math.min(1, car.manoeuvre + dir * 1e-6));
+      const backing = reverseAt(car.parkPath, probe) !== playedBackwards;
+      const frac = (PARKING.speed * (backing ? REVERSE_PACE : pace) * dt) / len;
+      const target = Math.max(0, Math.min(1, car.manoeuvre + dir * frac));
+      return clampToDirectionChange(car.parkPath, car.manoeuvre, target);
     };
 
     if (car.phase === "entering") {
-      car.manoeuvre = Math.min(1, car.manoeuvre + legStep(false));
+      car.manoeuvre = stepTo(false);
       if (car.manoeuvre >= 1) {
         car.phase = "parked";
         car.dwellLeft = drawDwell(car);
@@ -822,11 +849,11 @@ export function createParkingPhases(deps: ParkingDeps) {
     // Nose-first: drive the exit curve FORWARD. Otherwise replay the entry curve
     // backwards, which is a car reversing out of its space.
     if (car.parkExiting) {
-      car.manoeuvre = Math.min(1, car.manoeuvre + legStep(false));
+      car.manoeuvre = stepTo(false);
       if (car.manoeuvre >= 1) resumeFromStall(car);
       return;
     }
-    car.manoeuvre = Math.max(0, car.manoeuvre - legStep(true));
+    car.manoeuvre = stepTo(true);
     if (car.manoeuvre <= 0) resumeFromStall(car);
   }
   // LETTING SOMEBODY OUT. A car whose dwell ended keeps no road body, so nothing

@@ -1829,7 +1829,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // the one behind it yields instead. Binding at 0 there would park the
       // yielder INSIDE the space it is trying to leave open, which is the same
       // car-blocks-the-car-it-is-helping deadlock the margin rule above avoids.
-      const stop = proj.d - CAR_GAP;
+      //
+      // 1.5 GAPS, NOT ONE — the extra half is daylight, and it is load-bearing.
+      // At exactly one CAR_GAP the yielder's nose lands on the SAME number
+      // `slotFree` uses as its window's rear bound, computed by different
+      // arithmetic (rearT − gap here, slot − len − gap there), and the last ulp
+      // decides whether the leaver reads the yielder as inside its window.
+      // Measured: car21 parked its nose at [.., 0.0300] against rear = 0.0300
+      // and blocked the very car it had stopped for — for 3045 straight ticks.
+      const stop = proj.d - CAR_GAP * 1.5;
       if (stop >= 0) bind(stop, 0);
     }
     // A claimed parking bay is a stop line: never roll past the point where the

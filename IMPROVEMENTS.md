@@ -112,15 +112,30 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 
 ## Road traffic
 
-0. **PARKING — start here**: `docs/handoff-parking-branch.md` is the branch
-   handover (what this branch is, what state it is in, and the modularisation to
-   do first). The four outstanding pieces are written up with the
-   measurements that are their acceptance criteria in
-   `docs/handoff-parking-next.md`. The pivot-arc
-   reverse (which unblocks reverse-parking for 90°/echelon bays), right of way
-   when leaving a bay, a slower reversing speed, and the echelon apron that
-   overhangs its tile. Take them in that order — the first two are the ones the
-   feature is actually waiting on.
+0. **PARKING**: shipped, including the four follow-up pieces (pivot-arc reverse,
+   no right of way when leaving, reversing at an absolute crawl, the squared
+   echelon apron). `docs/handoff-parking-branch.md` is the branch handover;
+   `docs/handoff-parking-next.md` records what each piece measured and the two
+   things still open (an echelon nose-in clip of −2.1px, and single-lane aisles
+   deadlocking under 2.5× traffic — which they did before too).
+
+7. **Reroute out of a standing jam** (user request, 2026-07-28). A driver whose
+   planned turn feeds a queue that has not moved for a long time — ten seconds
+   or more, so nobody reroutes over a normal red phase — should give up on that
+   turn and replan via another exit it is allowed to take, like a real driver
+   bailing out of a blocked left turn. The screenshot that motivated it
+   (`/test/parkechelon` under load): a car fresh out of the car park wants to
+   turn LEFT into a solid jam while the RIGHT arm is clear — and it is the only
+   vehicle whose choice could dissolve the jam, because everything else is
+   committed. Sketch: the trigger is per-car patience bound to an UNMOVING
+   queue on the planned arm (`waitSeconds` is close but resets; it needs to
+   survive a crawl of a few px), the action is `planRoute` from the current
+   `(tile, entry)` with the jammed arm excluded, and it must be rare —
+   deterministic threshold, no RNG draw on the traffic streams, or every seeded
+   run in the repo shifts. Files: `src/sim/road.ts` (`clearAhead`/junction
+   gate), `src/sim/roadRouter.ts` (exclude-arm variant of `planRoute`). A
+   `/test` scenario needs a T-junction with one jammed and one clear arm, and
+   the guard is "the bailer reaches an exit while the jam stands".
 
 8. **Oncoming-lane overtaking** on 1-lane-each-way roads — the distance/speed
    feasibility math plus abort. Same-direction overtaking is done. Spec:

@@ -1230,15 +1230,43 @@ export function reverseAt(path: ManoeuvrePath, m: number): boolean {
   return locate(path, m).leg.reverse;
 }
 
-// How much slower a car goes BACKWARDS than it crawls forwards into a space.
-// Reversing is the careful part of the manoeuvre and it did not read as one: the
-// whole path ran at a single `pace`, so a car reversed into a kerbside space at
-// exactly the speed it drove past it.
+// Clamp a step `mFrom → mTo` at the first leg boundary where the driving
+// DIRECTION flips. Without this, the one tick that straddles the join is driven
+// at the speed of the leg it started in — which for a pull-past-then-reverse
+// manoeuvre means one tick of BACKING at the forward pace, 1.5× the base crawl
+// on a kerbside bay. Rare (one tick per manoeuvre) but exactly what a p95 over
+// the rendered backing speeds catches. Landing exactly ON the boundary also
+// means the caller's flag probe (taken a hair past the current `m`) always
+// reads the leg actually being traversed.
+export function clampToDirectionChange(
+  path: ManoeuvrePath,
+  mFrom: number,
+  mTo: number,
+): number {
+  const total = manoeuvreLength(path);
+  if (total <= 0 || path.legs.length < 2) return mTo;
+  const lo = Math.min(mFrom, mTo);
+  const hi = Math.max(mFrom, mTo);
+  for (let i = 0; i < path.legs.length - 1; i++) {
+    if (path.legs[i]!.reverse === path.legs[i + 1]!.reverse) continue;
+    const b = path.arc[(i + 1) * MANOEUVRE_SAMPLES]! / total;
+    if (b > lo + 1e-9 && b < hi - 1e-9) return b;
+  }
+  return mTo;
+}
+
+// The speed a car drives BACKWARDS at, as a fraction of the base parking crawl —
+// ABSOLUTE, never scaled by `pace`. That distinction is the whole lesson here:
+// `pace` speeds a manoeuvre up in proportion to its length so gentler curves take
+// the same TIME, and a reverse is the one motion that must not inherit that — a
+// longer reverse is harder, not gentler. The first ship of this constant was a
+// multiplier on the pace-scaled speed, and the two cancelled: the pivot-reverse
+// path is long (pace ≈ 3–4), so cars backed into 90° bays at up to TWICE the
+// crawl they nose in at, and the echelon back-out overtook its own pull-in.
 //
-// Two fifths. The trade is real and it is with THROUGHPUT — a slower reverse
-// holds the lane longer — so it was measured rather than picked: see KNOWHOW
-// → PARKING for the sweep.
-export const REVERSE_PACE = 0.55;
+// The trade is with THROUGHPUT — a slower reverse holds the aisle longer — so
+// the value was measured, not picked: see KNOWHOW → PARKING for the sweep.
+export const REVERSE_PACE = 0.75;
 
 // Which leg, and how far along it, a fraction `m` of the TOTAL arc length lands
 // on. This is what makes `m` mean distance rather than curve parameter.
