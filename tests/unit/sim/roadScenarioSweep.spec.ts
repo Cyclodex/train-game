@@ -20,27 +20,11 @@ import { simFor, worstSweptOverlap, hasRoad, canSpawn, frontTiles } from "../sup
 
 const ROAD_SCENARIOS = SCENARIOS.filter(hasRoad);
 
-// KNOWN, MEASURED body-overlap on a few bus maps. These are not "tolerated
-// noise" — they are a real defect, recorded with the number they currently
-// produce so they cannot quietly get worse while the fix is designed.
-//
-// The mechanism: lane-change gap acceptance is evaluated on the vehicle's
-// CURRENT tile at the moment it commits. A long vehicle that crosses a tile seam
-// mid-change never re-checks against the traffic on the tile it arrives at, so a
-// bus that set off into a clear gap can finish the merge on the next tile with a
-// stopped bus already lying in it, and its tail sweeps through that bus's nose
-// for a few ticks. Bus maps show it because a bus is 1.45x a car's length and
-// bus lanes force frequent merges; car-only maps stay clean.
-//
-// Fixing it properly means re-checking a committed change across a seam without
-// leaving vehicles stranded astride the line (pausing mid-change makes a vehicle
-// overlap BOTH lanes and measured worse). Tracked in the road backlog.
-const KNOWN_OVERLAP: Record<string, number> = {
-  busarterial: 0.09,
-  buscross: 0.05,
-  busonewaycross: 0.05,
-  busmegacross: 0.04,
-};
+// No known body overlaps remain. laneClearForChange now checks the next tile as
+// well as the current tile, so a bus committed to a lane change is blocked if
+// the target lane on the tile it is about to cross onto is occupied — fixing the
+// seam-crossing tail-sweep that bus maps exposed (issue #56).
+const KNOWN_OVERLAP: Record<string, number> = {};
 const CLEAN_OVERLAP = 0.02;
 
 // Steps at 0.05s = 40s of simulated time. Long enough for a car to cross even the

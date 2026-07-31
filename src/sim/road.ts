@@ -1021,6 +1021,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // tile (gap acceptance for a lane change)? Considers only cars on our head tile
   // travelling the same way; a car is "alongside" (blocking) unless it sits a full
   // LANE_CHANGE_GAP ahead of our nose or behind our tail.
+  //
+  // Also checks the immediately next tile: a long vehicle (bus) crosses the tile
+  // seam mid-change, arriving on the next tile while still laterally shifting. If
+  // that tile's target lane is occupied within LANE_CHANGE_GAP of its entry edge,
+  // committing now would sweep the tail through that vehicle — block until clear.
   function laneClearForChange(car: Car, lane: number): boolean {
     const head = car.path[car.headIndex];
     const headId = getCoordinatesId(head.coord);
@@ -1037,6 +1042,30 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const clearAheadOfMe = oRear > myFront + LANE_CHANGE_GAP;
       const clearBehindMe = oFront < myRear - LANE_CHANGE_GAP;
       if (!clearAheadOfMe && !clearBehindMe) return false;
+    }
+    // Next-tile seam check: also verify the target lane is clear at the entry edge
+    // of the tile we are heading into, so a committed change never lands mid-body on
+    // a stopped vehicle that was already there when we decided to go.
+    const exitPort = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, clsOf(car));
+    if (exitPort !== null) {
+      const nextCoord = neighborCoord(head.coord, exitPort);
+      if (nextCoord) {
+        const nextId = getCoordinatesId(nextCoord);
+        const nextEntry = oppositePort(exitPort);
+        for (const o of cars) {
+          if (o === car) continue;
+          const oh = o.path[o.headIndex];
+          if (getCoordinatesId(oh.coord) !== nextId) continue;
+          if (oh.entryPort !== nextEntry) continue; // same travel direction on next tile
+          if (laneOf(o) !== lane) continue;
+          // Block if the obstacle's rear is within LANE_CHANGE_GAP of the seam entry:
+          // our nose will enter at t=0, so anything whose tail is that close would be
+          // overlapped before the change finishes. Includes a tail that hangs back
+          // past the seam (oRear < 0) — the current-tile loop misses those because
+          // it keys on the HEAD tile.
+          if (o.headProgress - o.length < LANE_CHANGE_GAP) return false;
+        }
+      }
     }
     return true;
   }

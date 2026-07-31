@@ -1166,12 +1166,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   rear flicking across the road). `Car.lanePivot` + `CarSample.pathIndex` pin the
   far-side lane for body points behind the seam; `lanePosAt` honours it.
   NOT yet applied to the integer lane identity the following/conflict gates read —
-  doing so is more truthful and fixes more, but un-hides collisions those gates
-  never handled (overtakeloop clean → 0.09 overlap). See issue #56.
-- Lane-change gap acceptance is evaluated on the CURRENT tile at commit time only.
-  A long vehicle crossing a seam mid-change never re-checks against the traffic it
-  arrives beside — the open half of #56. Pausing mid-change is NOT the fix: a
-  vehicle astride the line overlaps BOTH lanes and measures worse.
+  doing so is more truthful, but un-hides collisions those gates never handled
+  (overtakeloop clean → 0.09 overlap). Issue #56 was fixed differently: by
+  extending gap acceptance to check the next tile at commit time.
+- Lane-change gap acceptance checks BOTH the current tile AND the next tile
+  (issue #56 fix). `laneClearForChange` blocks a commit when the target lane on the
+  next tile has a vehicle whose rear is within `LANE_CHANGE_GAP` of the seam — this
+  prevents a bus's tail sweeping through a stopped bus it will cross onto.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
@@ -1319,10 +1320,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `claude/build-in-play` is ahead of it with the route-draw extraction, build
   in play (phase 2), `lakevalley-open` and the terrain blob relaxation. Check
   `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
-- OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
-  (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
-  `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
-  MEASURED WORSE — read the issue before attempting a third.
+- Issue #56 (bus bodies clip at tile seam mid-lane-change) FIXED. Gap acceptance
+  now checks the next tile too; `KNOWN_OVERLAP` in `roadScenarioSweep.spec.ts`
+  is empty and all bus maps pass the clean 0.02 bound.
 - Train Valley phase 2 (build in play) is BUILT (2026-07-26) — see BUILD IN
   PLAY above. The route-draw gesture lives headless in `routeDrawController.ts`
   (`createRouteDrawController({drawing, planOpts, lay})`, pinned by
