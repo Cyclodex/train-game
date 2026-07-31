@@ -67,6 +67,14 @@ export interface TileCell {
   // deliberately no auto-flyover: crossing an existing line in the editor still
   // builds a flat junction); must name one of the cell's connections.
   flyover?: PortPair;
+  // ELEVATION: the height step this cell sits on (absent = 0, the valley
+  // floor). A rail may join two neighbours whose heights differ by AT MOST one
+  // step — that one-step joint IS the ramp (validateLevel raises "grade-step"
+  // beyond it). The simulation reads the step ahead as a grade and slows a
+  // climbing train by its mass (physics.ts `gradeSpeedFactor`); descending
+  // changes nothing — the brakes hold. Rendering marks a climb with chevrons
+  // pointing uphill; painted hillsides/embankments are a follow-up.
+  height?: number;
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
   // Road layer: port pairs describing a road crossing this cell, in the SAME
@@ -306,6 +314,11 @@ export function claimKeysOf(tileId: string): string[] {
 export function tileIdOfClaim(key: string): string {
   const i = key.indexOf("#");
   return i === -1 ? key : key.slice(0, i);
+}
+
+/** The height step a cell sits on. Missing cell (or field) = 0, the floor. */
+export function heightOf(cell: TileCell | null | undefined): number {
+  return cell?.height ?? 0;
 }
 
 // --- Road layer helpers ------------------------------------------------------

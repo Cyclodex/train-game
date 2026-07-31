@@ -179,6 +179,20 @@
 
     <TileRail v-if="!isTunnel" :possible-routes="railRoutes" />
 
+    <!-- Grade chevrons: where the line climbs into a HIGHER neighbour, two
+         chevrons on the ballast point uphill — the classic map notation for a
+         ramp, until painted hillsides arrive. -->
+    <svg
+      v-if="gradeMarks.length"
+      class="grade-marks"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="m in gradeMarks" :key="'gm' + m.port" :transform="m.transform">
+        <path :d="`M ${-7 * u} ${22 * u} L 0 ${14 * u} L ${7 * u} ${22 * u}`" />
+        <path :d="`M ${-7 * u} ${31 * u} L 0 ${23 * u} L ${7 * u} ${31 * u}`" />
+      </g>
+    </svg>
+
     <!-- Flyover: one line rides a deck OVER the other. The deck (z5) covers
          the at-grade copy of its own rails (z2) and carries fresh track on
          top; game.ts lifts a train's units to z6 while they ride the named
@@ -357,7 +371,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ displayKind }}{{ roadLaneLabel }}</div>
+      <div class="debug-kind">{{ displayKind }}{{ roadLaneLabel }}{{ heightLabel }}</div>
     </div>
   </div>
 </template>
@@ -373,6 +387,7 @@ import { Position, ActiveIntersection, Route } from "@/types";
 import {
   Level,
   TileCell,
+  heightOf,
   kindOf,
   partnersOf,
   portsOf,
@@ -505,6 +520,10 @@ class Tile extends Vue {
   get isDepot() {
     return this.tile.role === "depot";
   }
+  // Debug: the cell's height step, when it has one (" h2").
+  get heightLabel() {
+    return this.tile.height ? ` h${this.tile.height}` : "";
+  }
   get isBridge() {
     return this.tile.bridge === true;
   }
@@ -538,6 +557,30 @@ class Tile extends Vue {
     if (!this.isTunnel) return [];
     const size = this.config.tileSize;
     return this.tile.connections.map(([a, b]) => segmentPathD(a, b, size));
+  }
+
+  // A chevron pair per connection end whose neighbour sits one step HIGHER —
+  // the climb starts here. Oriented like the portals: authored pointing "up"
+  // (outward through the port), so the same transform table serves both.
+  get gradeMarks(): { port: Position; transform: string }[] {
+    this.game.levelVersion.value;
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const here = heightOf(this.tile);
+    const at: Record<number, string> = {
+      [Position.Top]: `translate(${size / 2}, 0)`,
+      [Position.Right]: `translate(${size}, ${size / 2}) rotate(90)`,
+      [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
+      [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
+    };
+    const out: { port: Position; transform: string }[] = [];
+    for (const p of portsOf(this.tile.connections)) {
+      if (p === Position.Center) continue;
+      const nc = neighborCoord(coord, p);
+      const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
+      if (heightOf(n) === here + 1) out.push({ port: p, transform: at[p] });
+    }
+    return out;
   }
 
   // One portal per port of the bore that faces NON-tunnel ground. An internal
@@ -1737,6 +1780,24 @@ export default toNative(Tile);
   fill: none;
   stroke: #b7a992;
   stroke-linecap: butt;
+}
+
+/* --- grade chevrons (a climb starts here) ---
+   On the ballast, above the rails (same z, later DOM), below the trains. */
+.grade-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  path {
+    fill: none;
+    stroke: rgba(255, 244, 214, 0.85);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
 }
 
 /* --- flyover deck (over the at-grade rails, under its own train) ---

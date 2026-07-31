@@ -85,6 +85,7 @@ import { farmland } from "@/levels/test/scenarios/farmland";
 import { bridge } from "@/levels/test/scenarios/bridge";
 import { tunnel } from "@/levels/test/scenarios/tunnel";
 import { flyover } from "@/levels/test/scenarios/flyover";
+import { grades } from "@/levels/test/scenarios/grades";
 import { industry } from "@/levels/test/scenarios/industry";
 import { clearing } from "@/levels/test/scenarios/clearing";
 import { forestworld } from "@/levels/test/scenarios/forestworld";
@@ -139,6 +140,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
+      { id: "grades", label: "Grades", scenarios: [grades] },
       {
         id: "crossings",
         label: "Crossings",

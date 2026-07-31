@@ -3,10 +3,11 @@ import {
   Level,
   claimKey,
   claimKeysOf,
+  heightOf,
   parseCoordId,
   tileIdOfClaim,
 } from "@/tiles/model";
-import { Port, oppositePort } from "./topology";
+import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   SwitchResolver,
   resolveExitPort,
@@ -15,7 +16,7 @@ import {
 } from "./network";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
-import { trainDynamics } from "./physics";
+import { gradeSpeedFactor, trainDynamics } from "./physics";
 
 export interface Segment {
   coord: Coordinates;
@@ -613,6 +614,21 @@ export function createSimulation(config: SimConfig): Simulation {
     return Math.min(dist, train.lookAhead);
   }
 
+  // The height step the head segment is climbing: height of the tile its exit
+  // points at minus the height of the tile under the head. 0 on a dead end, a
+  // depot mouth (Center) or the map edge — nothing to climb into.
+  function segmentGrade(train: SimTrain): number {
+    const seg = train.path[train.headIndex];
+    if (!seg || seg.exitPort === null || seg.exitPort === Position.Center) {
+      return 0;
+    }
+    const nc = neighborCoord(seg.coord, seg.exitPort);
+    if (!nc) return 0;
+    const here = level[getCoordinatesId(seg.coord)];
+    const ahead = level[getCoordinatesId(nc)];
+    return heightOf(ahead) - heightOf(here);
+  }
+
   function advance(train: SimTrain, dt: number, events: SimEvent[]): void {
     if (train.state === "parked") return;
     // Waiting for the player. It sits on its depot tile (so it still blocks that
@@ -660,7 +676,14 @@ export function createSimulation(config: SimConfig): Simulation {
     // travelling now to still brake to rest within it.
     const clear = clearDistanceAhead(train);
     const vSafe = Math.sqrt(2 * train.brake * clear);
-    const vCap = Math.min(train.speed, vSafe);
+    // A grade caps the cruise, by mass: while the head segment climbs into a
+    // higher tile, a heavy train crawls where a light one keeps most of its
+    // pace. Descending changes nothing (gradeSpeedFactor is exactly 1 there),
+    // so the braking maths above stays honest.
+    const gradeCap =
+      train.speed *
+      gradeSpeedFactor(train.type, train.wagonCount, segmentGrade(train));
+    const vCap = Math.min(train.speed, vSafe, gradeCap);
 
     // Ramp the velocity toward the cap: accelerate below it, brake above it.
     if (train.velocity < vCap) {

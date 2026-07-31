@@ -467,6 +467,25 @@ lean — prune as much as you add. This file only stays useful if every task ten
   an empty map. /test scenario: `flyover`; sim contract `flyover.spec.ts` — the
   FLAT clone of the same board must serialise (that contrast IS the test).
 
+## HEIGHTS + GRADES (2026-07-31)
+- `TileCell.height?` (absent = 0, `heightOf`) is the FIFTH tile axis. A joined
+  boundary may climb AT MOST ONE step — that joint IS the ramp; `validateLevel`
+  flags steeper as "grade-step" (once per joint, lexically smaller id reports).
+- THE GRADE IS A CRUISE CAP, not a force: `gradeSpeedFactor(kind, wagons,
+  grade)` (physics.ts, GRADE_DRAG/GRADE_MASS) caps vCap while the HEAD SEGMENT's
+  exit points into a higher tile (`segmentGrade` in simulation.ts). DOWNHILL IS
+  EXACTLY 1 — a descent bonus would poison the braking-distance maths (vSafe).
+- TEST TRAP: the cap is a BRAKING TARGET. A train enters the first ramp tile
+  still at cruise and decelerates THROUGH it — assert the MINIMUM velocity on a
+  mid-climb tile (settles onto the cap), never the maximum on the first ramp
+  tile. Bit immediately in grades.spec.ts.
+- Render: climb CHEVRONS on the ballast (Tile.vue `gradeMarks`, same port
+  transform table as tunnel portals; z2 over the rails), pointing uphill —
+  drawn on the cell whose neighbour is exactly one step HIGHER. Painted
+  hillsides/embankments are the acknowledged follow-up; debug label shows
+  " h<N>". /test scenario: `grades` (light shuttle vs heavy freight racing the
+  same hill — the gap on the ramps is the mechanic).
+
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
   freight half of the world — the ground a depot will one day read to decide it
