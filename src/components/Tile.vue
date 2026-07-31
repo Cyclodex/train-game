@@ -172,6 +172,17 @@
         <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
         <text x="0" y="4.5" text-anchor="middle">S</text>
       </g>
+      <!-- The waiting crowd: one dot per passenger in the platform queue, lined
+           up from the platform end so the queue visibly grows and drains. -->
+      <circle
+        v-for="(p, ci) in stationCrowd"
+        :key="'crowd' + ci"
+        :cx="p.cx"
+        :cy="p.cy"
+        r="4.5"
+        class="station-passenger"
+        :class="{ 'station-passenger--alt': ci % 2 === 1 }"
+      />
     </svg>
 
     <!-- Signals (straights only) -->
@@ -539,6 +550,29 @@ class Tile extends Vue {
   get stationSignPos(): { x: number; y: number } {
     const size = this.config.tileSize;
     return { x: size * 0.1, y: size * 0.1 };
+  }
+  // One dot per waiting passenger, on the first platform slab at a fixed pitch
+  // (the queue grows along the platform) with a small deterministic scatter
+  // across its depth so it reads as people, not beads. The live count comes
+  // from the game's reactive per-frame mirror of the sim queue.
+  get stationCrowd(): { cx: number; cy: number }[] {
+    if (!this.isStation) return [];
+    const slabs = this.stationPlatforms;
+    if (!slabs.length) return [];
+    const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
+    const s = slabs[0];
+    const horizontal = s.w >= s.h;
+    const out: { cx: number; cy: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.75) / 13; // fixed pitch from the platform end
+      const scatter = (((i * 37) % 7) - 3) * (s.w >= s.h ? s.h : s.w) * 0.055;
+      if (horizontal) {
+        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter });
+      } else {
+        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h });
+      }
+    }
+    return out;
   }
   get isBridge() {
     return this.tile.bridge === true;
@@ -1745,6 +1779,14 @@ export default toNative(Tile);
   font-family: sans-serif;
   font-size: 13px;
   font-weight: 700;
+}
+.station-passenger {
+  fill: #8a5a3b; // warm coats against the pale paving
+  stroke: #fff;
+  stroke-width: 1.2;
+}
+.station-passenger--alt {
+  fill: #4a6d8c; // a second coat colour so the crowd isn't a uniform string
 }
 
 /* --- road layer (under the rails) --- */

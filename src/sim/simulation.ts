@@ -36,6 +36,10 @@ export interface TrainInit {
   unitLengths?: number[];
   // Gap between coupled units, in tiles. Defaults to DEFAULT_COUPLING.
   coupling?: number;
+  // Passenger seats. Defaults to PASSENGERS_PER_WAGON per wagon for "people"
+  // trains and 0 for "fraight" — a goods train calls at stations but boards
+  // nobody (typed cargo is a later phase).
+  capacity?: number;
 }
 
 // "waiting" is a train sitting in its depot with the brake on, waiting for the
@@ -56,6 +60,22 @@ export type TrainState = "waiting" | "running" | "parking" | "parked" | "dwellin
 // Exported so tests and the renderer agree with the sim on both.
 export const STATION_DWELL_SEC = 3;
 export const STATION_STOP_PROGRESS = 0.5;
+// Passenger model (phase 2, typeless): seats per PEOPLE wagon (the loco carries
+// none), and the extra stop time each boarding passenger adds to the dwell.
+export const PASSENGERS_PER_WAGON = 6;
+export const BOARDING_SEC_PER_PASSENGER = 0.4;
+
+// Deterministic per-station passenger demand: every `intervalSec` of sim time
+// one passenger joins the queue, holding at `max` waiting (a full platform
+// pauses the schedule rather than banking a backlog); `initial` seeds the
+// queue at t=0. A pure schedule — no randomness — so replays and tests are
+// exact. WHAT the rates should be is the mode layer's business (and later the
+// terrain catchment's); the sim only executes the schedule it is handed.
+export interface StationDemand {
+  intervalSec: number;
+  max: number;
+  initial?: number;
+}
 
 export interface SimTrain {
   id: string;
@@ -85,6 +105,10 @@ export interface SimTrain {
   // (a revisit is a new, higher path index).
   dwellRemaining: number;
   dwelledAtIndex: number;
+  // Passengers: seats on this train and the count currently riding. One-hop
+  // model — whoever is aboard alights at the next call.
+  capacity: number;
+  passengers: number;
 }
 
 export interface ArrivedEvent {
@@ -92,6 +116,10 @@ export interface ArrivedEvent {
   trainId: string;
   tileId: string;
   matched: boolean;
+  // Passengers who ended their ride here (matched arrivals only — a bounced
+  // train keeps its riders aboard). Absent when nobody was riding, so every
+  // fixture written before passengers existed still compares equal.
+  alighted?: number;
 }
 
 // A train claimed a block (the route up to the next signal). `tiles` are the
@@ -126,11 +154,15 @@ export interface ProceedingEvent {
   tileId: string;
 }
 
-// A train came to rest at a station platform and began its dwell.
+// A train came to rest at a station platform and began its dwell. `alighted`
+// riders got off (they ride one hop), then `boarded` joined from the queue —
+// each boarding passenger stretches the dwell a little.
 export interface DwellEvent {
   type: "dwell";
   trainId: string;
   tileId: string;
+  boarded: number;
+  alighted: number;
 }
 
 // A dwelling train's stop time elapsed and it pulled away from the platform.
@@ -198,6 +230,9 @@ export interface SimConfig {
   // Tile ids that carry a signal — block boundaries. Depots are boundaries too.
   signalTiles?: string[];
   depotColors?: Record<string, string>;
+  // Per-station passenger demand, keyed by tile id. Only station tiles are
+  // meaningful; omitted stations spawn nobody (trains still call and dwell).
+  stationDemand?: Record<string, StationDemand>;
   // Opt-in dispatch: trains are created in state "waiting" and stay put — no
   // movement, no reservations — until `dispatch(id)` sends them.
   //
@@ -255,6 +290,14 @@ export interface Simulation {
   // from the player deliberately holding a signal, which look identical from
   // outside — both are trains standing still.
   trainBlock(id: string): Readonly<BlockInfo> | undefined;
+  // Passengers waiting on the platform at a station tile (0 for any other id).
+  stationQueue(tileId: string): number;
+  // Passengers currently riding this train.
+  trainPassengers(id: string): number;
+  // Total passengers whose ride ended (at a station call or a matched depot
+  // arrival) since the sim was created. The mode layer scores off the event
+  // deltas; this absolute exists for tests and debugging.
+  passengersDelivered(): number;
   // The signal aspect for leaving `tileId` through `exitPort` (for rendering).
   signalAspect(tileId: string, exitPort: Port): SignalAspect;
   // The train (if any) that has reserved `tileId` — for the debug overlay.
@@ -326,6 +369,32 @@ export function createSimulation(config: SimConfig): Simulation {
 
   const isStationTile = (tileId: string) => level[tileId]?.role === "station";
 
+  // Platform queues + the spawn schedule cursors, per station tile id. Pure
+  // counters advanced by step(dt) — deterministic, no randomness.
+  const stationDemand: Record<string, StationDemand> = {
+    ...(config.stationDemand ?? {}),
+  };
+  const queues = new Map<string, number>();
+  const spawnClocks = new Map<string, number>();
+  for (const [tid, d] of Object.entries(stationDemand)) {
+    queues.set(tid, Math.min(d.initial ?? 0, d.max));
+    spawnClocks.set(tid, 0);
+  }
+  let passengersDeliveredTotal = 0;
+
+  function advanceDemand(dt: number): void {
+    for (const [tid, d] of Object.entries(stationDemand)) {
+      let clock = (spawnClocks.get(tid) ?? 0) + dt;
+      let q = queues.get(tid) ?? 0;
+      while (clock >= d.intervalSec) {
+        clock -= d.intervalSec;
+        if (q < d.max) q += 1;
+      }
+      spawnClocks.set(tid, clock);
+      queues.set(tid, q);
+    }
+  }
+
   // True when this train still owes a stop at its current (station) segment:
   // the head is on a station tile it has not yet dwelled at this pass.
   function stationStopPending(train: SimTrain): boolean {
@@ -357,6 +426,9 @@ export function createSimulation(config: SimConfig): Simulation {
     // train never brakes for something beyond where it could matter, and never
     // brakes spuriously on open track), plus a one-tile margin.
     const lookAhead = brake > 0 ? maxSpeed ** 2 / (2 * brake) + 1 : 1;
+    const capacity =
+      init.capacity ??
+      (init.type === "people" ? init.wagonCount * PASSENGERS_PER_WAGON : 0);
     return {
       id: init.id,
       color: init.color,
@@ -377,6 +449,8 @@ export function createSimulation(config: SimConfig): Simulation {
       headProgress: 0,
       dwellRemaining: 0,
       dwelledAtIndex: -1,
+      capacity,
+      passengers: 0,
     };
   }
 
@@ -757,14 +831,25 @@ export function createSimulation(config: SimConfig): Simulation {
     ) {
       train.headProgress = Math.min(train.headProgress, STATION_STOP_PROGRESS);
       train.state = "dwelling";
-      train.dwellRemaining = STATION_DWELL_SEC;
       train.dwelledAtIndex = train.headIndex;
       train.velocity = 0;
-      events.push({
-        type: "dwell",
-        trainId: train.id,
-        tileId: getCoordinatesId(train.path[train.headIndex].coord),
-      });
+      const tileId = getCoordinatesId(train.path[train.headIndex].coord);
+      // Alight first (one-hop model: whoever is aboard ends their ride at the
+      // next call), then board from the platform queue into the free seats.
+      // Each boarding passenger stretches the stop a little, so a crowded
+      // platform visibly costs time.
+      const alighted = train.passengers;
+      train.passengers = 0;
+      passengersDeliveredTotal += alighted;
+      const queue = queues.get(tileId) ?? 0;
+      const boarded = Math.min(queue, train.capacity);
+      if (boarded > 0) {
+        queues.set(tileId, queue - boarded);
+        train.passengers = boarded;
+      }
+      train.dwellRemaining =
+        STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
+      events.push({ type: "dwell", trainId: train.id, tileId, boarded, alighted });
       return;
     }
 
@@ -776,10 +861,22 @@ export function createSimulation(config: SimConfig): Simulation {
       const t = traverse(level, getSwitch, head.coord, head.entryPort);
       if (!t.next) {
         if (t.exitPort === Position.Center) {
-          // Arrived inside a depot.
+          // Arrived inside a depot. A matched arrival ends every rider's trip;
+          // a bounce keeps them aboard for the ride back.
           const tileId = getCoordinatesId(head.coord);
           const matched = depotColors[tileId] === train.color;
-          events.push({ type: "arrived", trainId: train.id, tileId, matched });
+          const alighted = matched ? train.passengers : 0;
+          if (alighted > 0) {
+            train.passengers = 0;
+            passengersDeliveredTotal += alighted;
+          }
+          events.push({
+            type: "arrived",
+            trainId: train.id,
+            tileId,
+            matched,
+            ...(alighted > 0 && { alighted }),
+          });
           if (matched) {
             // Loco at the depot centre; glide the rest of the body in (see the
             // "parking" branch above) instead of stopping dead at the entrance.
@@ -860,6 +957,9 @@ export function createSimulation(config: SimConfig): Simulation {
     trains,
     step(dt: number) {
       const events: SimEvent[] = [];
+      // Passengers arrive on the platforms first, so a train opening its doors
+      // this very tick sees everyone due by now.
+      advanceDemand(dt);
       // Deterministic order so tile reservation between trains is stable.
       for (const id of Object.keys(trains).sort()) {
         advance(trains[id], dt, events);
@@ -949,6 +1049,15 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     trainBlock(id: string) {
       return blockStates.get(id);
+    },
+    stationQueue(tileId: string) {
+      return queues.get(tileId) ?? 0;
+    },
+    trainPassengers(id: string) {
+      return trains[id]?.passengers ?? 0;
+    },
+    passengersDelivered() {
+      return passengersDeliveredTotal;
     },
     signalAspect(tileId: string, exitPort: Port) {
       return aspect(tileId, exitPort);

@@ -129,7 +129,7 @@ in one reviewable slice.
    timing (`tests/unit/sim/…`).
 6. Screenshot per the visual-verification rule.
 
-### Phase 2 — queues, boarding, counters (M)
+### Phase 2 — queues, boarding, counters (M) — **SHIPPED 2026-08-01**
 
 Deterministic spawner fills per-station queues (sim-side, schedule passed in);
 trains have passenger capacity, board on dwell (dwell extends with boarding),

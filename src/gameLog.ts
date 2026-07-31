@@ -33,8 +33,13 @@ function describe(e: SimEvent): string {
       return e.matched
         ? `delivered at ${e.tileId} ✓`
         : `bounced off ${e.tileId}`;
-    case "dwell":
-      return `calling at ${e.tileId}`;
+    case "dwell": {
+      const moves = [
+        ...(e.alighted > 0 ? [`${e.alighted} off`] : []),
+        ...(e.boarded > 0 ? [`${e.boarded} on`] : []),
+      ];
+      return `calling at ${e.tileId}${moves.length ? ` (${moves.join(", ")})` : ""}`;
+    }
     case "departed":
       return `departed ${e.tileId}`;
   }

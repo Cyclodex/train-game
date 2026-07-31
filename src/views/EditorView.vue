@@ -644,6 +644,9 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
     switches: reactive({}),
     reservations: empty,
     occupied: empty,
+    // No sim in the editor, so no crowd: a station renders its platforms with
+    // an empty queue (Tile.vue optional-chains the lookup).
+    stationQueues: empty,
     signalAspects: empty,
     signalOverrides: empty,
     roadSignalAspects: empty,

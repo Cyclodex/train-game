@@ -415,6 +415,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/station` is the isolation scenario; sim behaviour in
   `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
 
+## STATION PASSENGERS (phase 2 — queues & boarding, 2026-08-01)
+- Demand is a SCHEDULE handed to the sim (`SimConfig.stationDemand`: interval /
+  max / initial per tile id), never derived inside it — the sim executes, the
+  mode layer (later the terrain catchment) decides rates. No RNG anywhere.
+- The schedule is SNAPSHOTTED at sim creation: a station built mid-run dwells
+  trains but queues nobody until reset. game.ts currently hands every station
+  a default (1 pax / 5 s, max 10, 2 initial).
+- A full platform PAUSES the spawn clock (holds at max) — it does not bank a
+  backlog that floods the next train.
+- One-hop model (typeless): whoever is aboard alights at the NEXT call, then
+  the queue boards into the free seats. Matched depot arrivals end rides too
+  (`ArrivedEvent.alighted?`, absent when 0 so old fixtures compare equal); a
+  BOUNCE keeps riders aboard.
+- Capacity default: `PASSENGERS_PER_WAGON` (6) × wagons for "people", 0 for
+  "fraight" — a goods train calls but boards nobody. Boarding stretches the
+  dwell by `BOARDING_SEC_PER_PASSENGER` each.
+- Scoring: `Counters.passengersDelivered` fed by per-tick deltas assembled from
+  dwell/arrived events in game.ts `handleEvents` — same pattern as deliveries.
+- Crowd render: `game.stationQueues` is a reactive per-frame mirror (like
+  `occupied`); Tile.vue draws ≤12 dots at fixed pitch along the first slab.
+  The editor's stubGame must carry the field (empty), like parkingOccupancy.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

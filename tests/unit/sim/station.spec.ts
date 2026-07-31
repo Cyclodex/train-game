@@ -158,3 +158,112 @@ describe("station dwell", () => {
     expect(sim.trainTileId("t1")).toBe("0,0");
   });
 });
+
+describe("station passengers (phase 2)", () => {
+  // depot → straight → station A → straight → station B → straight → depot.
+  function twoStationLine(): Level {
+    return {
+      "0,0": expandKind("depot", 1),
+      "1,0": expandKind("straight", 1),
+      "2,0": expandKind("station", 1),
+      "3,0": expandKind("straight", 1),
+      "4,0": expandKind("station", 1),
+      "5,0": expandKind("straight", 1),
+      "6,0": expandKind("depot", 3),
+    };
+  }
+
+  it("spawns passengers on the schedule and caps the queue at max", () => {
+    const sim = createSimulation({
+      level: twoStationLine(),
+      trains: [],
+      stationDemand: { "2,0": { intervalSec: 1, max: 4, initial: 0 } },
+    });
+    for (let i = 0; i < 5; i++) sim.step(0.5); // 2.5 s → 2 spawns
+    expect(sim.stationQueue("2,0")).toBe(2);
+    for (let i = 0; i < 40; i++) sim.step(0.5); // far past max
+    expect(sim.stationQueue("2,0")).toBe(4);
+    expect(sim.stationQueue("4,0")).toBe(0); // no schedule → nobody
+  });
+
+  it("boards up to capacity, extends the dwell, and alights one hop later", () => {
+    const sim = createSimulation({
+      level: twoStationLine(),
+      trains: [{ ...TRAIN, wagonCount: 1, capacity: 2 }],
+      depotColors: { "0,0": "blue", "6,0": "green" },
+      stationDemand: { "2,0": { intervalSec: 100, max: 8, initial: 5 } },
+    });
+    const events: SimEvent[] = [];
+    const dt = 0.05;
+    for (let t = 0; t < 60; t += dt) events.push(...sim.step(dt));
+
+    const dwells = events.filter((e): e is Extract<SimEvent, { type: "dwell" }> => e.type === "dwell");
+    expect(dwells.length).toBe(2);
+    // First call: 2 of the 5 waiting board (capacity), nobody alights.
+    expect(dwells[0]).toMatchObject({ tileId: "2,0", boarded: 2, alighted: 0 });
+    // Second call: the 2 riders end their hop; the empty platform boards none.
+    expect(dwells[1]).toMatchObject({ tileId: "4,0", boarded: 0, alighted: 2 });
+    expect(sim.stationQueue("2,0")).toBe(3);
+    expect(sim.passengersDelivered()).toBe(2);
+
+    // Boarding stretched the first stop: departure from A came later than the
+    // base dwell after the doors opened.
+    const times: number[] = [];
+    {
+      const sim2 = createSimulation({
+        level: twoStationLine(),
+        trains: [{ ...TRAIN, wagonCount: 1, capacity: 2 }],
+        depotColors: { "0,0": "blue", "6,0": "green" },
+        stationDemand: { "2,0": { intervalSec: 100, max: 8, initial: 5 } },
+      });
+      let clock = 0;
+      let dwellAt: number | null = null;
+      for (let t = 0; t < 60 && times.length === 0; t += dt) {
+        for (const e of sim2.step(dt)) {
+          if (e.type === "dwell" && e.tileId === "2,0") dwellAt = clock;
+          if (e.type === "departed" && e.tileId === "2,0" && dwellAt !== null) {
+            times.push(clock - dwellAt);
+          }
+        }
+        clock += dt;
+      }
+      expect(times[0]).toBeGreaterThan(STATION_DWELL_SEC);
+    }
+  });
+
+  it("delivers the riders at a matched depot and reports them on the arrival", () => {
+    const sim = createSimulation({
+      level: twoStationLine(),
+      trains: [{ ...TRAIN, wagonCount: 1, capacity: 3 }],
+      depotColors: { "0,0": "blue", "6,0": "green" },
+      // Only station B has demand, so the riders' next stop is the depot.
+      stationDemand: { "4,0": { intervalSec: 100, max: 8, initial: 3 } },
+    });
+    const events: SimEvent[] = [];
+    for (let t = 0; t < 60; t += 0.05) events.push(...sim.step(0.05));
+    const arrived = events.find(
+      (e): e is Extract<SimEvent, { type: "arrived" }> =>
+        e.type === "arrived" && e.tileId === "6,0"
+    );
+    expect(arrived?.matched).toBe(true);
+    expect(arrived?.alighted).toBe(3);
+    expect(sim.passengersDelivered()).toBe(3);
+  });
+
+  it("gives a fraight train no seats: it calls but boards nobody", () => {
+    const sim = createSimulation({
+      level: twoStationLine(),
+      trains: [{ ...TRAIN, type: "fraight", wagonCount: 2 }],
+      depotColors: { "0,0": "blue", "6,0": "green" },
+      stationDemand: { "2,0": { intervalSec: 100, max: 8, initial: 5 } },
+    });
+    const events: SimEvent[] = [];
+    for (let t = 0; t < 60; t += 0.05) events.push(...sim.step(0.05));
+    const dwellA = events.find(
+      (e): e is Extract<SimEvent, { type: "dwell" }> =>
+        e.type === "dwell" && e.tileId === "2,0"
+    );
+    expect(dwellA?.boarded).toBe(0);
+    expect(sim.stationQueue("2,0")).toBe(5);
+  });
+});

@@ -383,6 +383,8 @@ export interface Game {
   reservations: Record<string, string>;
   // tileId -> trainId physically on it right now (switch lock).
   occupied: Record<string, string>;
+  // tileId -> passengers waiting at that station (the platform crowd).
+  stationQueues: Record<string, number>;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -612,6 +614,9 @@ export function createGame(
   // Reactive occupancy map (train physically on a tile) for the switch lock,
   // refreshed each frame alongside the reservations.
   const occupied = reactive({}) as Record<string, string>;
+  // tileId -> passengers waiting on that station's platform, mirrored from the
+  // sim each frame so Tile.vue can draw the crowd reactively.
+  const stationQueues = reactive({}) as Record<string, number>;
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree. A seeded RNG keeps the
@@ -678,6 +683,19 @@ export function createGame(
       trains: trainDefs.filter(def => !isScheduled(def)).map(trainInit),
       getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
       signalTiles,
+      // Every station spawns a steady default demand for now: one passenger
+      // per interval, a small platform cap, a couple already waiting at t=0.
+      // The rates become terrain-derived (the catchment) in a later phase; the
+      // sim itself only ever executes the schedule it is handed. Snapshotted
+      // at sim creation — a station built mid-run queues nobody until reset.
+      stationDemand: Object.fromEntries(
+        Object.entries(level)
+          .filter(([, cell]) => cell.role === "station")
+          .map(([id]) => [
+            id,
+            { intervalSec: 5, max: 10, initial: 2 },
+          ])
+      ),
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.
       waitForDispatch: mode.controls.dispatch,
@@ -1063,6 +1081,18 @@ export function createGame(
     }
   }
 
+  // Mirror each station's live platform queue for the crowd render. Vue's
+  // reactive set is a no-op while the count is unchanged, so this is cheap.
+  function updateStationQueues() {
+    for (const id of Object.keys(level)) {
+      if (level[id]?.role !== "station") {
+        if (id in stationQueues) delete stationQueues[id];
+        continue;
+      }
+      stationQueues[id] = sim.stationQueue(id);
+    }
+  }
+
   // Sample each live car to world positions (reusing the train chord placement)
   // and reconcile the reactive list by id so Vue reuses the car DOM nodes. A
   // vehicle contributes one render box per body segment (a semi → cab + trailer),
@@ -1345,7 +1375,11 @@ export function createGame(
   function handleEvents(events: SimEvent[]): Observation {
     let deliveredDelta = 0;
     let mismatchedDelta = 0;
+    let passengersDeliveredDelta = 0;
     for (const e of events) {
+      // Passenger rides end at station calls and at matched depot arrivals.
+      if (e.type === "dwell") passengersDeliveredDelta += e.alighted;
+      if (e.type === "arrived") passengersDeliveredDelta += e.alighted ?? 0;
       if (e.type === "arrived") {
         if (e.matched) {
           deliveredDelta += 1;
@@ -1373,6 +1407,7 @@ export function createGame(
       manualHoldDelta,
       manualGreenDelta,
       tilesBuiltDelta,
+      passengersDeliveredDelta,
       // Absolutes off the ledger, so the counters can never drift from it. Left
       // out entirely when there is no economy, which keeps the money counters at
       // their zero defaults for every other mode.
@@ -1460,6 +1495,7 @@ export function createGame(
     updateSignalAspects();
     updateRoadSignals();
     updateReservations();
+    updateStationQueues();
     raf = requestAnimationFrame(frame);
   }
 
@@ -1857,6 +1893,7 @@ export function createGame(
     signalOverrides,
     reservations,
     occupied,
+    stationQueues,
     roadCars,
     carJunctions,
     carDestinations,
@@ -1942,6 +1979,7 @@ export function createGame(
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];
       for (const id of Object.keys(occupied)) delete occupied[id];
+      for (const id of Object.keys(stationQueues)) delete stationQueues[id];
       roadCars.splice(0, roadCars.length);
       roadFrame.maxCarWaitSec = 0;
       roadFrame.carWaitTotalSec = 0;
