@@ -1,0 +1,57 @@
+import type { Level } from "@/tiles/model";
+import type { StationDemand } from "@/sim/simulation";
+import { parseCoordId } from "@/tiles/model";
+
+// The walking catchment of a station: how far people walk to a platform, and
+// what the ground within that reach says about who is coming.
+//
+// DERIVED, NEVER STORED — the same rule the industry/demand design fixed for
+// depots: the map is the single source of truth, so an author cannot put a
+// metropolis fare on a platform in an empty meadow, and repainting the town
+// re-prices the station on the next reset with no second field to update.
+// This module is pure map-reading (tiles/), used by the GAME layer to build
+// the sim's demand schedule; the sim itself stays terrain-blind and just
+// executes whatever schedule it is handed.
+
+// People walk this many tiles to a station (Chebyshev distance — the square
+// ring, matching how neighbourhoods read on a grid).
+export const WALK_RADIUS_TILES = 2;
+
+// What the ground within walking reach contains.
+export interface StationCatchment {
+  urban: number; // town tiles in reach — the passenger driver
+  industry: number; // works tiles in reach — the freight driver (later phase)
+}
+
+export function stationCatchment(
+  level: Level,
+  coordId: string
+): StationCatchment {
+  const { x, y } = parseCoordId(coordId);
+  let urban = 0;
+  let industry = 0;
+  for (let dy = -WALK_RADIUS_TILES; dy <= WALK_RADIUS_TILES; dy++) {
+    for (let dx = -WALK_RADIUS_TILES; dx <= WALK_RADIUS_TILES; dx++) {
+      const cell = level[`${x + dx},${y + dy}`];
+      if (!cell) continue;
+      if (cell.terrain === "urban") urban += 1;
+      else if (cell.terrain === "industry") industry += 1;
+    }
+  }
+  return { urban, industry };
+}
+
+// The passenger demand schedule a station earns from its surroundings. A
+// station beside nothing still sees a trickle (somebody always turns up); a
+// town within walking reach means faster arrivals, a larger waiting crowd,
+// and a platform that is not empty when the level opens. All values are
+// simple monotone functions of the urban count, so "build the station nearer
+// the houses" is always the right move and never a cliff.
+export function stationDemandOf(level: Level, coordId: string): StationDemand {
+  const { urban } = stationCatchment(level, coordId);
+  return {
+    intervalSec: urban > 0 ? Math.max(1.5, 10 / urban) : 15,
+    max: Math.min(4 + 2 * urban, 16),
+    initial: Math.min(2 + Math.floor(urban / 2), 8),
+  };
+}

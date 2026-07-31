@@ -137,7 +137,7 @@ alight at depots/next station; `objectives.ts` gains `passengersDelivered`;
 waiting-crowd render (queue length = crowd size). `/test`: two stations, one
 shuttle.
 
-### Phase 3 — catchment from terrain (S, pure derivation)
+### Phase 3 — catchment from terrain (S, pure derivation) — **SHIPPED 2026-08-01**
 
 `stationProfile(level, coordId)` — passenger weight from `urban` tiles within
 walking radius (freight weight from `industry`, for later) — headless, unit

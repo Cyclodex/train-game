@@ -172,6 +172,15 @@
         <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
         <text x="0" y="4.5" text-anchor="middle">S</text>
       </g>
+      <!-- Debug: the walking catchment — the reach whose town tiles set this
+           station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
+      <circle
+        v-if="config.debug"
+        :cx="config.tileSize / 2"
+        :cy="config.tileSize / 2"
+        :r="(config.tileSize / 2) * (2 * catchmentRadiusTiles + 1)"
+        class="station-catchment"
+      />
       <!-- The waiting crowd: one dot per passenger in the platform queue, lined
            up from the platform end so the queue visibly grows and drains. -->
       <circle
@@ -418,6 +427,7 @@ import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
+import { WALK_RADIUS_TILES } from "@/tiles/catchment";
 
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
@@ -551,6 +561,7 @@ class Tile extends Vue {
     const size = this.config.tileSize;
     return { x: size * 0.1, y: size * 0.1 };
   }
+  catchmentRadiusTiles = WALK_RADIUS_TILES;
   // One dot per waiting passenger, on the first platform slab at a fixed pitch
   // (the queue grows along the platform) with a small deterministic scatter
   // across its depth so it reads as people, not beads. The live count comes
@@ -1758,6 +1769,13 @@ export default toNative(Tile);
   height: 100%;
   z-index: 3;
   pointer-events: none;
+  overflow: visible; // the debug catchment ring reaches into the neighbours
+}
+.station-catchment {
+  fill: rgba(28, 91, 216, 0.05);
+  stroke: rgba(28, 91, 216, 0.55);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
 }
 .station-platform {
   fill: #c3bcae; // paving, warm against the meadow, cooler than the town roofs

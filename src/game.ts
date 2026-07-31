@@ -1,6 +1,7 @@
 import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
+import { stationDemandOf } from "@/tiles/catchment";
 import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
 import type { RouteStep } from "@/tiles/routePlanner";
 import {
@@ -683,18 +684,15 @@ export function createGame(
       trains: trainDefs.filter(def => !isScheduled(def)).map(trainInit),
       getSwitch: (coordId, entryPort) => switches[coordId]?.[entryPort],
       signalTiles,
-      // Every station spawns a steady default demand for now: one passenger
-      // per interval, a small platform cap, a couple already waiting at t=0.
-      // The rates become terrain-derived (the catchment) in a later phase; the
-      // sim itself only ever executes the schedule it is handed. Snapshotted
-      // at sim creation — a station built mid-run queues nobody until reset.
+      // Each station's demand is DERIVED from the ground within walking reach
+      // (tiles/catchment.ts): a town nearby means faster arrivals and a fuller
+      // platform; a lonely halt sees a trickle. The sim only executes the
+      // schedule it is handed — it stays terrain-blind. Snapshotted at sim
+      // creation, so a station built mid-run queues nobody until reset.
       stationDemand: Object.fromEntries(
         Object.entries(level)
           .filter(([, cell]) => cell.role === "station")
-          .map(([id]) => [
-            id,
-            { intervalSec: 5, max: 10, initial: 2 },
-          ])
+          .map(([id]) => [id, stationDemandOf(level, id)])
       ),
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.

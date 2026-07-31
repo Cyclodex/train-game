@@ -437,6 +437,20 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `occupied`); Tile.vue draws ≤12 dots at fixed pitch along the first slab.
   The editor's stubGame must carry the field (empty), like parkingOccupancy.
 
+## STATION CATCHMENT (phase 3 — terrain sets the demand, 2026-08-01)
+- `tiles/catchment.ts`: `stationCatchment` counts urban/industry tiles within
+  `WALK_RADIUS_TILES` (2, Chebyshev); `stationDemandOf` maps the urban count
+  to the sim's demand schedule — monotone in every field, so "build nearer
+  the houses" is always right and never a cliff. Lonely halt still trickles.
+- DERIVED, NEVER STORED (the industry-doc rule): repainting the town re-prices
+  the station on next reset; no editable demand field exists to drift.
+- It lives in tiles/ (map reading), game.ts calls it when building the sim's
+  `stationDemand` — the sim stays terrain-blind and just executes.
+- Debug overlay: a dashed catchment ring per station (`.station-catchment`,
+  radius (2R+1)/2 tiles); needs `overflow: visible` on `.station-layer`.
+- `/test/catchment`: town station vs lonely halt on one line — the one
+  side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate
