@@ -1760,13 +1760,54 @@ lean — prune as much as you add. This file only stays useful if every task ten
   on the tile being left; `sample()` feeds the renderer, so it was VISIBLE as the
   rear flicking across the road). `Car.lanePivot` + `CarSample.pathIndex` pin the
   far-side lane for body points behind the seam; `lanePosAt` honours it.
-  NOT yet applied to the integer lane identity the following/conflict gates read —
-  doing so is more truthful and fixes more, but un-hides collisions those gates
-  never handled (overtakeloop clean → 0.09 overlap). See issue #56.
-- Lane-change gap acceptance is evaluated on the CURRENT tile at commit time only.
-  A long vehicle crossing a seam mid-change never re-checks against the traffic it
-  arrives beside — the open half of #56. Pausing mid-change is NOT the fix: a
-  vehicle astride the line overlaps BOTH lanes and measures worse.
+  The following/conflict gates no longer read an INTEGER lane identity at all —
+  #56 replaced it with the lateral BAND test below, which is what made the seam
+  model safe to lean on. The seam's own lane REASSIGNMENT is still a teleport that
+  gap acceptance cannot refuse (it is not a lane change), and it is the last
+  measured clip on the board: `/test/parkcity` seed 7, 0.035, a car whose exit lane
+  lands it on the tail of a car already in that lane. Whoever picks that up wants
+  the junction merge clamp, not the lane-change model.
+- LANE-CHANGE GAP ACCEPTANCE (#56, `reachableLane` + `laneClearForChange`): asked
+  every tick, lane by lane, along the car's ROUTE — not once, per tile, at commit.
+  Four facts, each one a bug that was actually measured:
+  1. A 2→0 change is TWO decisions. Checking only the first lane crossed let a car
+     sweep through a lane it never looked at (worst measured: 0.20 tiles, a whole
+     body, `roadstraightlanes` seed 7).
+  2. The check follows `forwardRoute`, so a merge finishing on the NEXT tile sees
+     what is already lying there.
+  3. Refusal picks a TARGET, never a brake: the car holds a lane short or eases back
+     the way it came. Braking to a halt mid-change (the 2026-06 attempt) parks the
+     body astride the line where it sweeps BOTH lanes — worse, and measured worse.
+  4. Gap size is ASYMMETRIC: `CAR_GAP` ahead (slot in and follow), full
+     `LANE_CHANGE_GAP` behind (cutting in makes someone else brake). Demanding the
+     full gap both ways means a car can only merge into an empty street.
+- "SAME LANE" for following is LATERAL, not integer (`inMyLaneBand` in `clearAhead`,
+  threshold `CLIP_LANES`). A vehicle mid-change is physically in two lanes; gating
+  on `round(laneIndex)` skipped the car it was merging behind until they touched.
+- A body's span along another car's route is `bodySpanOnRoute`, and its REAR is the
+  rear-most projected point MINUS whatever length was never projected. Body points
+  only land on tiles that are on the observer's route, so a long vehicle trailing
+  back over the tile behind reads as a short car with a comfortable gap behind it —
+  and a merge into that phantom gap lands in the middle of a trailer. Measure the
+  unseen part against `roadBodyLength` (the fraction actually on the carriageway),
+  never `car.length`, or a car half-tucked into a bay gates traffic it isn't in.
+- A vehicle STEERS, it cannot CRAB: `laneVel` is capped at
+  `LANE_CHANGE_LEAN·velocity/length`, so lateral speed falls with forward speed and
+  a stopped car has none. One lane of lean over one body length is what
+  `LANE_CHANGE_RATE` already gave a car at cruise, so cruising behaviour is
+  unchanged — the cap only bites on a slow, long or braking vehicle, which is
+  exactly where the old model skidded sideways across a lane.
+- `Car.laneAnchor` = where the current lateral manoeuvre began; the lean in
+  `lanePosAt` is clamped to [anchor, laneIndex]. The lag term extrapolates the
+  CURRENT lateral speed backwards over the body, which overshoots while the S-curve
+  is still ramping up and hangs the tail in a lane the vehicle was never in — a
+  phantom body that reads to every gate (and the swept-overlap test) as a clip.
+- A STOPPED car straddling a lane line shuffles onto one of them (`parkingLane`,
+  `LANE_PARK_RATE`), body rigid (`laneVel` 0 ⇒ no lean). Traffic can stop a car
+  exactly mid-merge, and a straddler blocks two lanes for as long as the queue
+  lasts. It does not START a change at a standstill — only finishes one. Parking
+  vehicles never reach any of this: `advance` hands `phase !== "driving"` to
+  `advanceParking` and returns before `updateLateral`.
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
@@ -1817,8 +1858,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
   never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed
   circuit (`carcircle`, `overtakeloop`) gridlocked when its cars are lapping fine.
-  `KNOWN_OVERLAP` there pins known defects to their measured number: read it before
-  assuming a bus overlap is new.
+  `KNOWN_OVERLAP` there is EMPTY since #56 and stays empty — every scenario is held
+  to the clean 0.02 bound, so a re-appearing entry is a regression, not a fact of
+  life. Sweeping at several seeds is worth it and the sweep itself does not: the
+  four bus maps #56 named were merely the ones that clipped at SEED 5, while
+  `roadstraightlanes` / `overtakeloop` / `signalturnlanes` were just as broken one
+  seed over, and `parkcity`'s worst seed is 1 at baseline and 7 after.
 - LIVE-MODEL PROBE (fastest visual-bug loop, no screenshot needed): `preview_start`
   the `traingame` config in `.claude/launch.json` (dev server :5173), navigate to
   `#/test/<id>`, then run JS against `window.__game`. Works with the browser pane
@@ -1942,10 +1987,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `claude/build-in-play` is ahead of it with the route-draw extraction, build
   in play (phase 2), `lakevalley-open` and the terrain blob relaxation. Check
   `git log --oneline origin/master..HEAD` before assuming a remote knows anything.
-- OPEN BUG #56: bus bodies clip when a lane change crosses a tile seam mid-merge
-  (4 bus maps, 0.037-0.085 tiles). Pinned in `KNOWN_OVERLAP` in
-  `roadScenarioSweep.spec.ts` so it cannot worsen. TWO fixes were tried and
-  MEASURED WORSE — read the issue before attempting a third.
+- #56 (bodies clip mid-lane-change) is FIXED — see LANE-CHANGE GAP ACCEPTANCE
+  above. `KNOWN_OVERLAP` is empty; 72 road scenarios x 5 seeds measure 0.000 but
+  for `/test/parkcity` seed 7 (0.035, a junction-seam lane reassignment, not a lane
+  change — noted under JUNCTION SEAM). The two earlier attempts failed because they
+  treated it as ONE bug; it was five (multi-lane commit, seam blindness,
+  straddle-stall, integer-lane following, an over-extrapolated lean).
+  `/test/lanechangegap` is the mechanic in isolation.
 - Train Valley phase 2 (build in play) is BUILT (2026-07-26) — see BUILD IN
   PLAY above. The route-draw gesture lives headless in `routeDrawController.ts`
   (`createRouteDrawController({drawing, planOpts, lay})`, pinned by

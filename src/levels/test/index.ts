@@ -19,6 +19,7 @@ import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
+import { lanechangegap } from "@/levels/test/scenarios/lanechangegap";
 import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
 import {
@@ -157,7 +158,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "lanes",
         label: "One-way & lanes",
-        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes, crosslanes],
+        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes, lanechangegap, crosslanes],
       },
       {
         id: "crosses",

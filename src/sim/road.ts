@@ -346,6 +346,14 @@ export interface Car {
   // was a moment ago, so its lateral position lags by `laneVel · (arc / speed)`,
   // angling the body into the change instead of sliding flat.
   laneVel: number;
+  // The lane position the CURRENT lateral manoeuvre started from — reset every
+  // time the lateral motion stops or reverses. It bounds the lean: the body may
+  // trail anywhere between here and the head, and nowhere else. Without it the
+  // lag extrapolates the CURRENT lateral speed backwards over the body's length,
+  // which during the S-curve's ramp-up overstates how far the head has actually
+  // come and hangs the tail in a lane the vehicle was never in — a phantom body
+  // in the next lane over, which reads to every gate as a clip.
+  laneAnchor: number;
   // Lane HISTORY across a junction seam. `laneIndex` is a single value for the
   // whole vehicle, but crossing out of a junction REASSIGNS it in one step (the
   // exit arm numbers its lanes independently), while the vehicle's tail is still
@@ -788,7 +796,20 @@ const LANE_CHANGE_RATE = 2.2;
 // enough to read as an eased glide but short enough that a one-lane change still
 // finishes briskly.
 const LANE_CHANGE_ACCEL = 5.5;
+// Maximum LEAN of a body mid-change: the lateral offset (in lanes) between its
+// nose and its tail. It bounds lateral speed by forward speed
+// (laneVel <= LEAN*velocity/length), which is the difference between steering and
+// crabbing — a stopped car cannot slide sideways at all. One lane over one body
+// length is what LANE_CHANGE_RATE already produces for a car at cruise, so this
+// leaves normal lane changes exactly as they were and only bites when a vehicle
+// is slow or long (a bus, or anything braking mid-merge).
+const LANE_CHANGE_LEAN = 1;
 const LANE_CHANGE_GAP = 0.18;
+// Lanes/sec a STOPPED vehicle shuffles sideways to get itself out of a straddle
+// (see parkingLane). Slow — this is a manoeuvre, not a lane change — but quick
+// enough that a car stopped mid-merge is inside one lane within about half a
+// second rather than blocking two for the length of a queue.
+const LANE_PARK_RATE = 1.2;
 const LANE_SETTLE = 1e-3;
 // Lateral separation (in lanes) below which two same-direction bodies physically
 // CLIP — a car's rendered width (~20px) over the lane width (~28px) is ~0.71 lane,
@@ -1287,34 +1308,152 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return allow[0];
   }
 
-  // Is the integer lane `lane` clear of same-direction cars next to us on the same
-  // tile (gap acceptance for a lane change)? Considers only cars on our head tile
-  // travelling the same way; a car is "alongside" (blocking) unless it sits a full
-  // LANE_CHANGE_GAP ahead of our nose or behind our tail.
-  function laneClearForChange(car: Car, lane: number): boolean {
-    const head = car.path[car.headIndex];
-    const headId = getCoordinatesId(head.coord);
-    const myFront = car.headProgress;
-    const myRear = car.headProgress - car.length;
+  // Where another vehicle's body lies along `route`: the longitudinal interval
+  // [rear, front] measured from OUR head (negative = behind us) and the lateral
+  // band of lane positions it sweeps. Null when no part of it is on our route.
+  //
+  // The rear is extended by however much of the body we could NOT see: points only
+  // project onto tiles that are on OUR route, so a long vehicle trailing back over
+  // the tile behind us shows just its front half and reads as a short car with a
+  // comfortable gap behind it. Merging into that phantom gap drives straight into
+  // the middle of a trailer. `arcSeen` is how far back along the body the last
+  // projected point sat, so the unseen remainder is exactly `length - arcSeen` —
+  // measured against `roadBodyLength`, the same fraction of itself a vehicle
+  // actually has out on the carriageway.
+  function bodySpanOnRoute(
+    other: Car,
+    route: Map<string, { lead: number; entry: Port }>,
+  ): { rear: number; front: number; latLo: number; latHi: number } | null {
+    let rear = Number.POSITIVE_INFINITY;
+    let front = Number.NEGATIVE_INFINITY;
+    let latLo = Number.POSITIVE_INFINITY;
+    let latHi = Number.NEGATIVE_INFINITY;
+    let arcSeen = 0;
+    for (const p of bodyPoints(other)) {
+      // Junction tiles are the arbiter's business (and renumber lanes across the
+      // box), so they never take part in lane-keeping geometry.
+      if (isRoadJunction(level[p.tileId]?.road)) continue;
+      const proj = projectPoint(route, p);
+      if (!proj || proj.opposing || proj.perpendicular) continue;
+      rear = Math.min(rear, proj.d);
+      front = Math.max(front, proj.d);
+      latLo = Math.min(latLo, p.lanePos);
+      latHi = Math.max(latHi, p.lanePos);
+      arcSeen = Math.max(arcSeen, p.arc);
+    }
+    if (!Number.isFinite(front)) return null;
+    // NB the remainder is an ARC length subtracted from a TILE-INDEX distance, so
+    // on a bend it under-corrects slightly. Converting it through the tail
+    // segment's driven length was tried and moved no measurement at all, so the
+    // cheap form stays — this runs for every pair of vehicles, every tick.
+    return { rear: rear - Math.max(0, roadBodyLength(other) - arcSeen), front, latLo, latHi };
+  }
+
+  // Is the integer lane `lane` clear enough to move into (gap acceptance for a
+  // lane change)? Measured along the car's ROUTE, not just its current tile: a
+  // merge that will FINISH on the next tile has to see the traffic already lying
+  // there, or a vehicle sets off into a gap it can only reach by driving through
+  // a stopped car past the seam (#56). Distances are from our head, so our own
+  // body spans [-length, 0].
+  //
+  // Laterally it asks whether another body's SWEPT lane band comes within a body
+  // width (CLIP_LANES) of the lane centre we want — not whether its rounded lane
+  // index equals ours. That is what makes two cars converging on one lane from
+  // either side see each other: mid-change, neither is "in" the target lane by
+  // integer identity, but both are physically in it.
+  function laneClearForChange(
+    car: Car,
+    lane: number,
+    route: Map<string, { lead: number; entry: Port }> = forwardRoute(car),
+  ): boolean {
     for (const o of cars) {
       if (o === car) continue;
-      // A vehicle in a bay is off the carriageway, but this gate reads
-      // `headProgress` and `laneOf` straight off it rather than its body points —
-      // and both are FROZEN at the peel-off point for the whole stay. Left in, one
-      // parked car would veto every lane change on its tile until it drove away. A
-      // halted bus is a real obstacle in the lane and stays in.
+      // A vehicle in a bay is off the carriageway and vetoes nothing; a halted bus
+      // is a real obstacle in the lane and stays in. (`bodyPoints` already reports
+      // no body for a bay, so this is the cheap way out of the loop rather than a
+      // difference in outcome — but it is still the rule being stated.)
       if (!blocksLane(o)) continue;
-      const oh = o.path[o.headIndex];
-      if (getCoordinatesId(oh.coord) !== headId) continue;
-      if (oh.entryPort !== head.entryPort) continue; // same travel direction only
-      if (laneOf(o) !== lane) continue;
-      const oFront = o.headProgress;
-      const oRear = o.headProgress - o.length;
-      const clearAheadOfMe = oRear > myFront + LANE_CHANGE_GAP;
-      const clearBehindMe = oFront < myRear - LANE_CHANGE_GAP;
+      const span = bodySpanOnRoute(o, route);
+      if (!span) continue; // not on our route at all
+      const latSep = Math.max(0, Math.max(lane, span.latLo) - Math.min(lane, span.latHi));
+      if (latSep >= CLIP_LANES) continue; // clear of the lane we want, sideways
+      // Asymmetric, because the two sides are different manoeuvres. AHEAD of us we
+      // only need room to slot in behind and then follow, so a following gap is
+      // enough — demanding a full LANE_CHANGE_GAP there means a car can never merge
+      // into moving traffic, only into an empty street. BEHIND us it is the other
+      // driver who pays for our decision, so cutting in wants the full gap.
+      const clearAheadOfMe = span.rear > CAR_GAP;
+      const clearBehindMe = span.front < -car.length - LANE_CHANGE_GAP;
       if (!clearAheadOfMe && !clearBehindMe) return false;
     }
     return true;
+  }
+
+  // The furthest lane toward `want` the car may legally occupy RIGHT NOW, walking
+  // one integer lane at a time and stopping at the first that fails gap
+  // acceptance. This is the whole of the lane-change safety model: a change is
+  // steered by picking a reachable TARGET, never by braking to a halt part-way
+  // across. That matters twice over —
+  //  • a 2->0 change is two separate decisions, so the second lane is checked on
+  //    its own merits instead of being carried by the first one's gap (the crash
+  //    behind #56: a car sweeping across a lane it never looked at);
+  //  • the result is always an integer lane, so a refused change parks the body
+  //    inside one lane rather than astride the line, where it would sweep BOTH.
+  // When the way forward is blocked mid-change the fallback is the lane we came
+  // from, i.e. the car aborts back — the same graceful retreat an overtake makes.
+  function reachableLane(
+    car: Car,
+    want: number,
+    route: Map<string, { lead: number; entry: Port }>,
+  ): number {
+    const head = car.path[car.headIndex];
+    const road = level[getCoordinatesId(head.coord)]?.road;
+    const cls = clsOf(car);
+    const count = laneCount(road, head.entryPort);
+    const cur = car.laneIndex;
+    const dir = Math.sign(want - cur);
+    if (dir === 0) return want;
+    // The side we came from: the integer lane behind our lateral motion. A car
+    // sitting exactly on a lane line keeps that lane (the LANE_SETTLE nudge).
+    // Clamped, because a car can drift a hair outside the road's lanes while a
+    // residual lateral velocity bleeds off, and the fallback must stay a real lane.
+    const from = nearestUsableLaneIndex(
+      road,
+      head.entryPort,
+      clampLane(dir > 0 ? Math.floor(cur + LANE_SETTLE) : Math.ceil(cur - LANE_SETTLE), count),
+      cls,
+    );
+    let best = from;
+    for (let lane = from + dir; (lane - want) * dir <= 0; lane += dir) {
+      if (!laneClearForChange(car, lane, route)) break;
+      // A lane this class may not ride on can be CROSSED on the way to `want` but
+      // never stopped in — a car cutting over a kerb bus lane to reach the kerb
+      // must not decide to give up half-way and sit on the bus lane.
+      if (usableLaneIndices(road, head.entryPort, cls).includes(lane)) best = lane;
+    }
+    return best;
+  }
+
+  // Which single lane a STOPPED straddling car should settle into: the nearer of
+  // the two lanes it lies across, unless that one is occupied and the other is
+  // free, in which case it backs out instead. Never a straddle, always a lane.
+  function parkingLane(
+    car: Car,
+    route: Map<string, { lead: number; entry: Port }>,
+  ): number {
+    const head = car.path[car.headIndex];
+    const road = level[getCoordinatesId(head.coord)]?.road;
+    const cls = clsOf(car);
+    const count = laneCount(road, head.entryPort);
+    const entry = head.entryPort;
+    const lo = nearestUsableLaneIndex(road, entry, clampLane(Math.floor(car.laneIndex), count), cls);
+    const hi = nearestUsableLaneIndex(road, entry, clampLane(Math.ceil(car.laneIndex), count), cls);
+    if (lo === hi) return lo;
+    const near = car.laneIndex - lo <= hi - car.laneIndex ? lo : hi;
+    const far = near === lo ? hi : lo;
+    if (laneClearForChange(car, near, route)) return near;
+    if (laneClearForChange(car, far, route)) return far;
+    return near;
   }
 
   // Ease the car sideways toward its target lane (G). Only crosses into the next
@@ -1330,49 +1469,83 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // the nearest usable lane so a car's merge/overtake/turn target never lands it
     // on a bus lane (a bus may land on either). A no-op on roads with no bus lanes.
     const head = car.path[car.headIndex];
-    car.targetLane = nearestUsableLaneIndex(
+    const want = nearestUsableLaneIndex(
       level[getCoordinatesId(head.coord)]?.road,
       head.entryPort,
       desiredLane(car),
       clsOf(car),
     );
-    const diff = car.targetLane - car.laneIndex;
-    if (Math.abs(diff) <= LANE_SETTLE && Math.abs(car.laneVel) <= LANE_SETTLE) {
-      // Settled in the target lane and no residual lateral motion — pin it.
-      car.laneIndex = car.targetLane;
+    const route = forwardRoute(car);
+    car.targetLane = want;
+    // `targetLane` stays the lane the driver WANTS (what the debug overlay and the
+    // lane-discipline tests read). What it may reach this instant is a separate
+    // question, re-asked every tick: gap acceptance can hold it a lane short, or
+    // send it back the way it came, without ever changing its mind about where it
+    // is going.
+    const permitted = reachableLane(car, want, route);
+    const diff = permitted - car.laneIndex;
+    if (Math.abs(diff) <= LANE_SETTLE) {
+      // Arrived: pin to the lane and drop any residual lateral motion. Pinning on
+      // the POSITION alone matters — a car left with a lateral velocity it can no
+      // longer aim anywhere (diff 0 ⇒ no direction) used to keep drifting, off the
+      // end of the road's lanes on a kerb-lane target.
+      car.laneIndex = permitted;
       car.laneVel = 0;
+      car.laneAnchor = car.laneIndex;
     } else if (car.velocity <= 0.001) {
-      // Stopped: don't change lanes at a standstill (you change lanes while
-      // driving, not while stopped at a queue/junction). Hold the lateral position
-      // and kill any residual drift; the change resumes once the car rolls again.
+      // Stopped: a driver doesn't START a lane change at a standstill (you change
+      // lanes while driving, not while queueing). But a body left ASTRIDE a lane
+      // line occupies BOTH lanes, and traffic ahead can stop a car exactly there —
+      // mid-merge — where it then blocks the lane it is only half in for as long
+      // as the queue lasts. So a stopped car finishes the manoeuvre at a crawl
+      // onto whichever of the two lanes it straddles is nearer and clear, and
+      // parks inside one lane. `laneVel` stays 0 throughout, which is also what
+      // keeps the body rigid (lanePosAt's lean is proportional to it) — a halted
+      // vehicle shuffling over moves all of a piece, it doesn't pivot about its
+      // nose.
       car.laneVel = 0;
+      const settle = parkingLane(car, route);
+      const step = Math.sign(settle - car.laneIndex) * LANE_PARK_RATE * dt;
+      car.laneIndex =
+        Math.abs(settle - car.laneIndex) <= Math.abs(step) ? settle : car.laneIndex + step;
+      car.laneAnchor = car.laneIndex;
     } else {
       const dir = Math.sign(diff);
-      // Starting from a settled lane, only begin the change once the lane we'd
-      // cross into is clear (gap acceptance). Once mid-crossing (fractional
-      // position) we are committed and finish — the gap was checked when we set
-      // off, and the longitudinal overlap-recovery clamp in clearAhead is the
-      // backstop that drops us behind any body we would otherwise slide level with.
-      const atInteger = Math.abs(car.laneIndex - Math.round(car.laneIndex)) <= LANE_SETTLE;
-      const blocked = atInteger && !laneClearForChange(car, Math.round(car.laneIndex) + dir);
       // Desired lateral velocity follows an S-curve motion profile: cruise at
       // LANE_CHANGE_RATE but slow down approaching the target so we arrive with
       // zero speed (the decel cap √(2·a·d) is the fastest speed from which we can
       // still brake to a stop in the remaining distance `d` under LANE_CHANGE_ACCEL).
-      // If the next lane is blocked, the target velocity is 0 — we brake to a hold
-      // and wait for a gap. Either way the actual velocity ramps toward the target
-      // under the acceleration cap, so the lean eases in and out instead of snapping.
+      // The actual velocity ramps toward that target under the acceleration cap,
+      // so the lean eases in and out instead of snapping — and when gap acceptance
+      // pulls the target back a lane (reachableLane), the very same ramp turns the
+      // refused change into an eased abort rather than a sideways stall.
       const decelCap = Math.sqrt(2 * LANE_CHANGE_ACCEL * Math.abs(diff));
-      const vTarget = blocked ? 0 : dir * Math.min(LANE_CHANGE_RATE, decelCap);
+      // A vehicle steers, it does not crab: how fast it can move sideways is set
+      // by how fast it is going forward. The cap is written as a maximum LEAN —
+      // the lateral offset between nose and tail — so the body never angles more
+      // than LANE_CHANGE_LEAN lanes across its own length. At cruise this is
+      // slacker than LANE_CHANGE_RATE and changes nothing; for a crawling car it
+      // is what stops the old model sweeping a whole extra lane's width of road
+      // with a body that has barely moved forward (the sideways-skid clip).
+      const leanCap = (LANE_CHANGE_LEAN * car.velocity) / Math.max(car.length, 1e-6);
+      const vTarget = dir * Math.min(LANE_CHANGE_RATE, decelCap, leanCap);
       const dv = vTarget - car.laneVel;
       const maxDv = LANE_CHANGE_ACCEL * dt;
+      const prevVel = car.laneVel;
       car.laneVel += Math.max(-maxDv, Math.min(maxDv, dv));
+      // A manoeuvre begins wherever the lateral motion starts or turns around, and
+      // the body may only trail back to there (see `laneAnchor`).
+      if (prevVel * car.laneVel <= 0) car.laneAnchor = car.laneIndex;
+      // The ramp is bounded too, so a car braking hard mid-change stops leaning
+      // further instead of carrying its old lateral speed into a near standstill.
+      car.laneVel = Math.max(-leanCap, Math.min(leanCap, car.laneVel));
       car.laneIndex += car.laneVel * dt;
       // Discrete-step guard: never coast past the target (would oscillate). If we
       // crossed it this tick, snap onto it and kill the lateral velocity.
-      if ((car.targetLane - car.laneIndex) * dir < 0) {
-        car.laneIndex = car.targetLane;
+      if ((permitted - car.laneIndex) * dir < 0) {
+        car.laneIndex = permitted;
         car.laneVel = 0;
+        car.laneAnchor = car.laneIndex;
       }
     }
   }
@@ -1389,7 +1562,13 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const pinned = pivotLaneFor(car, sample);
     if (pinned !== null) return Math.max(0, Math.min(count - 1, pinned));
     const lag = car.laneVel * (arc / Math.max(car.velocity, 1e-3));
-    const pos = car.laneIndex - lag;
+    // Bounded by where the manoeuvre actually began: extrapolating the current
+    // lateral speed back over the body's length overshoots while that speed is
+    // still ramping up, and would hang the tail out in a lane the vehicle has
+    // never occupied (see `laneAnchor`). It may lag; it may not invent.
+    const lo = Math.min(car.laneIndex, car.laneAnchor);
+    const hi = Math.max(car.laneIndex, car.laneAnchor);
+    const pos = Math.max(lo, Math.min(hi, car.laneIndex - lag));
     return Math.max(0, Math.min(count - 1, pos));
   }
 
@@ -1663,6 +1842,41 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return route;
   }
 
+  // How much ROAD this car still occupies — always the fraction of itself that
+  // is actually out on the carriageway. The car's own path/headProgress are
+  // frozen at the peel-off point through the whole manoeuvre, so the body is
+  // simply measured back from there.
+  //
+  //   parked   — nothing. It is in a bay off the carriageway, so it gates no
+  //              traffic and the swept-body overlap check never compares it
+  //              against a moving car (which would read as a clip).
+  //   entering — shrinks to nothing as the car tucks in, so the queue behind it
+  //              is released progressively instead of all at once. It DOES block
+  //              while the swing starts, which is correct: you wait behind
+  //              someone parking.
+  //   leaving  — the FULL slot from the first tick, deliberately. Growing it in
+  //              as the car emerges was tried and measured WORSE (0.077 vs 0.028
+  //              overlap on /test/parkingkerb): a follower brakes against the
+  //              obstacle it can see, so a body that starts at nothing gives it
+  //              nothing to brake against and it arrives on top of the car. The
+  //              clearance has to be bought BEFORE the manoeuvre starts —
+  //              PARKING.pullOutGap — not during it.
+  function roadBodyLength(car: Car): number {
+    return (
+      car.phase === "parked"
+        ? // A bus at a STOP has not left the road: it is standing in its lane with
+          // its doors open, and the queue behind it is the entire point. Only a
+          // vehicle in a BAY is off the carriageway.
+          car.parkOnLane
+          ? car.length
+          : 0
+        : car.phase === "entering"
+          ? car.length * (1 - car.manoeuvre)
+          : car.length
+    );
+  }
+
+
   // The anchor points along a car's whole body as { tileId, entry, t }, used as
   // obstacles other cars must not roll into. Sampling the entire body (head back
   // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
@@ -1670,8 +1884,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // on it, so a crossing car sees it occupied and holds off the tile.
   function bodyPoints(
     car: Car
-  ): { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number; lanePos: number }[] {
-    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; laneIndex: number; lanePos: number }[] = [];
+  ): { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] {
+    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] = [];
     // Lane identity for following/conflict is the integer lane the car occupies
     // (its continuous position rounded) — a mid-change car counts as in the lane
     // it is closest to. Deliberately still ONE value for the whole vehicle: making
@@ -1687,39 +1901,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         entry: s.entryPort,
         exit: s.exitPort,
         t: s.t,
+        arc: a,
         laneIndex: lane,
         lanePos: lanePosAt(car, a, s),
       });
-    // How much ROAD this car still occupies — always the fraction of itself that
-    // is actually out on the carriageway. The car's own path/headProgress are
-    // frozen at the peel-off point through the whole manoeuvre, so the body is
-    // simply measured back from there.
-    //
-    //   parked   — nothing. It is in a bay off the carriageway, so it gates no
-    //              traffic and the swept-body overlap check never compares it
-    //              against a moving car (which would read as a clip).
-    //   entering — shrinks to nothing as the car tucks in, so the queue behind it
-    //              is released progressively instead of all at once. It DOES block
-    //              while the swing starts, which is correct: you wait behind
-    //              someone parking.
-    //   leaving  — the FULL slot from the first tick, deliberately. Growing it in
-    //              as the car emerges was tried and measured WORSE (0.077 vs 0.028
-    //              overlap on /test/parkingkerb): a follower brakes against the
-    //              obstacle it can see, so a body that starts at nothing gives it
-    //              nothing to brake against and it arrives on top of the car. The
-    //              clearance has to be bought BEFORE the manoeuvre starts —
-    //              PARKING.pullOutGap — not during it.
-    const occupied =
-      car.phase === "parked"
-        ? // A bus at a STOP has not left the road: it is standing in its lane with
-          // its doors open, and the queue behind it is the entire point. Only a
-          // vehicle in a BAY is off the carriageway.
-          car.parkOnLane
-          ? car.length
-          : 0
-        : car.phase === "entering"
-          ? car.length * (1 - car.manoeuvre)
-          : car.length;
+    const occupied = roadBodyLength(car);
     if (occupied <= 1e-6) return pts;
     for (let a = 0; a < occupied; a += BODY_SAMPLE_STEP) add(a, sampleAtArc(car, a));
     add(occupied, sampleAtArc(car, occupied)); // always include the exact tail
@@ -1919,6 +2105,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const myTailLanePos = lanePosAt(car, car.length, sampleAtArc(car, car.length));
     const myLatLo = Math.min(car.laneIndex, myTailLanePos);
     const myLatHi = Math.max(car.laneIndex, myTailLanePos);
+    // "In my lane" for FOLLOWING is a lateral question, not an integer-lane one:
+    // a vehicle part-way through a change is physically in both lanes, so the car
+    // it is merging in behind must gate it from the moment it starts encroaching —
+    // not from the moment its rounded lane index flips. Integer identity is what
+    // let a merging body slide clean through the car it was merging behind (#56):
+    // the follow gate skipped it as "another lane" right up until they touched,
+    // and only the overlap-recovery clamp below caught it, a body-width too late.
+    const inMyLaneBand = (lanePos: number): boolean =>
+      Math.max(0, Math.max(myLatLo, lanePos) - Math.min(myLatHi, lanePos)) < CLIP_LANES;
 
     // Car-following: stop a gap behind other cars' bodies.
     for (const other of cars) {
@@ -1941,27 +2136,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // an overlap can never persist or deepen. Skips opposing/perpendicular and
       // junction-tile points (handled by their own gates).
       {
-        let dRear = Number.POSITIVE_INFINITY;
-        let dFront = Number.NEGATIVE_INFINITY;
-        let otherLatLo = Number.POSITIVE_INFINITY;
-        let otherLatHi = Number.NEGATIVE_INFINITY;
-        for (const p of otherPts) {
-          if (isRoadJunction(level[p.tileId]?.road)) continue;
-          const proj = projectPoint(route, p);
-          if (!proj || proj.opposing || proj.perpendicular) continue;
-          dRear = Math.min(dRear, proj.d);
-          dFront = Math.max(dFront, proj.d);
-          otherLatLo = Math.min(otherLatLo, p.lanePos);
-          otherLatHi = Math.max(otherLatHi, p.lanePos);
-        }
+        const span = bodySpanOnRoute(other, route);
         // Fire only when the other body actually ABUTS or overlaps us (its rear is
         // within a gap of our nose, or behind it) — a genuine clip to recover from.
-        // A leader comfortably ahead (dRear ≥ CAR_GAP) is left to the ordinary
+        // A leader comfortably ahead (rear ≥ CAR_GAP) is left to the ordinary
         // per-point follow gate below, so this never adds caution to a normal
         // merge/follow (which would, e.g., keep a bus off its preferred lane).
-        if (dFront >= 0 && dRear < CAR_GAP) {
-          const latSep = Math.max(0, Math.max(myLatLo, otherLatLo) - Math.min(myLatHi, otherLatHi));
-          if (latSep < CLIP_LANES) bind(Math.max(0, dRear - CAR_GAP), other.velocity);
+        if (span && span.front >= 0 && span.rear < CAR_GAP) {
+          const latSep = Math.max(
+            0,
+            Math.max(myLatLo, span.latLo) - Math.min(myLatHi, span.latHi),
+          );
+          if (latSep < CLIP_LANES) bind(Math.max(0, span.rear - CAR_GAP), other.velocity);
         }
       }
       // Progress range of the other car's body per tile (min = tail-most point,
@@ -2007,7 +2193,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             { entryArm: route.get(p.tileId)!.entry, exitArm: myExit, lane: laneOf(car), cls: clsOf(car) },
             { entryArm: p.entry, exitArm: p.exit, lane: p.laneIndex, cls: clsOf(other) },
           );
-        if (!proj.perpendicular && p.laneIndex !== laneOf(car)) {
+        if (!proj.perpendicular && !inMyLaneBand(p.lanePos)) {
           // Same travel direction, different lane: side-by-side traffic must not
           // gate each other — EXCEPT on a junction we are still approaching, where
           // a same-arm pair can CROSS (an inner lane turning over a kerb-ward
@@ -2348,6 +2534,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         car.laneIndex = start;
         car.targetLane = want;
         car.laneVel = 0;
+        car.laneAnchor = start;
         car.pendingExitLane = want;
         // Just left a junction — restart the keep-right clock so the exit arm is
         // left untouched until the car has settled a few tiles past the seam.
@@ -2453,6 +2640,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: 0,
       targetLane: 0,
       laneVel: 0,
+      laneAnchor: 0,
       lanePivot: null,
       overtaker: false,
       reverseParker: false,
@@ -2564,6 +2752,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       laneIndex: chosenLane,
       targetLane: chosenLane,
       laneVel: 0,
+      laneAnchor: chosenLane,
       lanePivot: null,
       overtaker,
       reverseParker,
