@@ -237,7 +237,13 @@ describe("createRoadSim — spawning + movement", () => {
       seen.add(key);
     }
     expect(stacked).toBe(0);
-  });
+    // 600 ticks of a SATURATED multi-lane road — the heaviest single sim run in
+    // this file. It takes ~2s of a 5s default alone and blows it under the
+    // parallel suite, where a dozen workers share the cores: measured 5.4-5.6s
+    // in a full run and 1.9-2.4s on its own, on an unchanged tree. A timeout
+    // here is the machine, never the code — what this test guards (cars stacked
+    // at a spawn edge) shows up as `stacked`, which is a count, not a clock.
+  }, 30_000);
 
   it("merges cars out of a dropping lane before it ends (G)", () => {
     // A two-lane road (tiles x=0,1) that drops to one lane (tiles x=2,3). A car

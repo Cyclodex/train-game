@@ -9,7 +9,19 @@ export default defineConfigWithVueTs(
   },
   {
     name: "app/files-to-ignore",
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "playwright-report/**"],
+    // `.claude/worktrees/**` is not tidiness — without it `npm run lint` is
+    // UNUSABLE on any machine that has ever used a Claude Code worktree. Each one
+    // is a full checkout of this repo, `dist/` bundles included, and eslint walks
+    // into all of them: measured here, 2723 errors and 540 warnings from
+    // eighteen stale copies against 0 errors in the repo's own sources. Nothing
+    // in there is ours to lint — each worktree lints itself.
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "playwright-report/**",
+      ".claude/worktrees/**",
+    ],
   },
   pluginVue.configs["flat/essential"],
   vueTsConfigs.recommended,
