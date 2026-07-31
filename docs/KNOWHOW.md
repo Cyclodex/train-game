@@ -486,7 +486,14 @@ lean — prune as much as you add. This file only stays useful if every task ten
   racing the same hill — the gap on the ramps is the mechanic).
 - HYPSOMETRIC TERRACES (`tileHeightSvg`, 2026-07-31): a cell with height > 0
   lays a fused patch fill UNDER its terrain patch on the ground layer, lighter
-  and warmer per step (`HEIGHT_TINT`, last entry serves h3+). "Same" for the
+  and warmer per step. THE TINT IS THEME-ANCHORED (`heightTint(h, theme)`,
+  `TERRACE_BASE`): "higher" only exists relative to the ground the theme
+  paints — a fixed table read as a hollow on the bright meadow board and as a
+  glowing patch on the dark debug flat. One base per theme + one step formula
+  (hue toward yellow-green, lightness up), never per-step tables; the debug
+  flat ground ("plain", #3a6b4f) is its own anchor so `npm run shot` pictures
+  stay comparable. THE THEME IS PART OF THE MEMO KEY — the cache trap the
+  terrain roadmap wrote down before anyone hit it. "Same" for the
   patch machinery compares NEIGHBOUR HEIGHT >= OWN — a higher neighbour
   continues the terrace and lays its own lighter body on top of the shared
   reading, so a plateau fuses like a lake and the step edge always belongs to

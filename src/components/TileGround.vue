@@ -10,6 +10,7 @@
 
 <script lang="ts">
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
+import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import { Level, heightOf } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -50,6 +51,9 @@ const TERRAIN_SEED = 20260726;
 @Component({})
 class TileGround extends Vue {
   @Inject() level!: Level;
+  // For the terrace tints: a hill is only "higher" relative to the ground the
+  // THEME paints, so the height layer needs to know which world it stands in.
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ type: String, required: true }) coordId!: string;
   @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy";
 
@@ -111,7 +115,11 @@ class TileGround extends Vue {
       bottomRight: at(1, 1),
       bottomLeft: at(-1, 1),
     };
-    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED);
+    // The debug flat ground is its own (much darker) anchor — a terrace tinted
+    // for the meadow board would glare on it, and the shot pipeline runs with
+    // plainBackdrop on by default.
+    const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
+    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
   }
 
   get html(): string {

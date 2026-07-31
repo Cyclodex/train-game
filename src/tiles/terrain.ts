@@ -2177,17 +2177,28 @@ function buildCached(
 // patchSegments), so its outline jitters off the grid and its shared edges
 // fuse invisibly, like every other body of ground in the game.
 
-// One tint per height step; the last entry serves everything above it. Kept
-// close to the meadow's green — a terrace is still grass, just sunnier — and
-// stepping toward yellow-green so two adjacent steps are tellable apart.
-const HEIGHT_TINT: Hsl[] = [
-  [99, 30, 41], // h1
-  [90, 33, 47], // h2
-  [81, 36, 53], // h3+
-];
+// A terrace is grass-family ground, so its tint is ANCHORED TO THE THEME's
+// board green and climbs from there — a fixed table read as a hollow on the
+// bright meadow board and as a glowing patch on the dark debug backdrop,
+// because "higher" is only ever higher RELATIVE to the ground it stands on.
+// One base per theme, one formula for the steps (per the terrain roadmap's
+// theming note: a tint function at the Hsl boundary, never per-kind tables):
+// each step turns toward sunny yellow-green and lifts the lightness, so two
+// adjacent steps stay tellable apart on any backdrop.
+const TERRACE_BASE: Record<string, Hsl> = {
+  // Just above the meadow board's green (#6aac6a ≈ hsl(120 28% 55%)).
+  meadow: [112, 30, 60],
+  // A drier grass-mat green, the way a model-railway baseboard paints hills.
+  table: [92, 24, 62],
+  // The debug flat ground (#3a6b4f, TestStage) is much darker than any theme
+  // board — anchored separately so `npm run shot` pictures stay comparable.
+  plain: [104, 30, 44],
+};
 
-export function heightTint(height: number): Hsl {
-  return HEIGHT_TINT[Math.min(Math.max(height, 1), HEIGHT_TINT.length) - 1];
+export function heightTint(height: number, theme = "meadow"): Hsl {
+  const step = Math.max(1, height) - 1;
+  const [bh, bs, bl] = TERRACE_BASE[theme] ?? TERRACE_BASE.meadow;
+  return [bh - 9 * step, bs + 2 * step, Math.min(bl + 6 * step, 82)];
 }
 
 // Memo, for the same reason as `cache` below: a terrace only changes with its
@@ -2204,17 +2215,21 @@ export function tileHeightSvg(
   coordId: string,
   same: PatchSame,
   seed = 1,
+  theme = "meadow",
 ): string {
   if (height <= 0) return "";
+  // THE THEME IS PART OF THE KEY — the memo trap the terrain roadmap wrote
+  // down before anyone hit it: switch theme mid-session and a key without it
+  // serves every terrace from the old palette.
   const key =
     `h${height}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
     `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}`;
+    `|${coordId}|${seed}|${theme}`;
   const hit = heightCache.get(key);
   if (hit !== undefined) return hit;
 
   const { x, y } = parseCoordId(coordId);
-  const [hh, hs, hl] = heightTint(height);
+  const [hh, hs, hl] = heightTint(height, theme);
   const d = patchPath(same, x, y, seed, GROUND_UNITS);
   const parts: string[] = [];
 
