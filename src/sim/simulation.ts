@@ -45,7 +45,17 @@ export interface TrainInit {
 // "parking" is the transient glide where a train that has matched a depot keeps
 // moving forward so its whole body slides into the depot (clearing the approach
 // tiles) before it freezes as "parked".
-export type TrainState = "waiting" | "running" | "parking" | "parked";
+// "dwelling" is a timed stop at a station platform (role: "station"): the train
+// halts mid-tile at STATION_STOP_PROGRESS, waits STATION_DWELL_SEC, then runs
+// on. It keeps occupying its tiles (trains behind wait) but, because a station
+// is a block BOUNDARY (see isBoundary), it holds no reservation beyond itself.
+export type TrainState = "waiting" | "running" | "parking" | "parked" | "dwelling";
+
+// How long a train stands at a station platform, in sim seconds, and where on
+// the station tile's segment it stops (0..1 progress — the platform middle).
+// Exported so tests and the renderer agree with the sim on both.
+export const STATION_DWELL_SEC = 3;
+export const STATION_STOP_PROGRESS = 0.5;
 
 export interface SimTrain {
   id: string;
@@ -69,6 +79,12 @@ export interface SimTrain {
   path: Segment[];
   headIndex: number;
   headProgress: number; // 0..1 within path[headIndex]
+  // Station dwell: seconds left standing at the platform (only meaningful in
+  // state "dwelling"), and the path index of the last station segment this
+  // train dwelled at — so it stops once per pass, but again on a later visit
+  // (a revisit is a new, higher path index).
+  dwellRemaining: number;
+  dwelledAtIndex: number;
 }
 
 export interface ArrivedEvent {
@@ -110,11 +126,27 @@ export interface ProceedingEvent {
   tileId: string;
 }
 
+// A train came to rest at a station platform and began its dwell.
+export interface DwellEvent {
+  type: "dwell";
+  trainId: string;
+  tileId: string;
+}
+
+// A dwelling train's stop time elapsed and it pulled away from the platform.
+export interface DepartedEvent {
+  type: "departed";
+  trainId: string;
+  tileId: string;
+}
+
 export type SimEvent =
   | ArrivedEvent
   | ReservedEvent
   | BlockedEvent
-  | ProceedingEvent;
+  | ProceedingEvent
+  | DwellEvent
+  | DepartedEvent;
 
 // Internal record of why a train is currently held, used to edge-trigger the
 // blocked/proceeding events (only emit on a change of state).
@@ -281,10 +313,27 @@ export function createSimulation(config: SimConfig): Simulation {
 
   const isSignalTile = (tileId: string) =>
     explicitSignalTiles.has(tileId) || (level[tileId]?.signals?.length ?? 0) > 0;
+  // Block boundaries: signals, depots — and stations. A station bounds the
+  // block exactly the way a signal does, so an approaching train reserves only
+  // UP TO the platform, and a train standing there in its dwell holds nothing
+  // beyond its own tiles. Without this, a dwelling train would pin the whole
+  // route to the next real signal for the length of its stop.
   function isBoundary(tileId: string): boolean {
     if (isSignalTile(tileId)) return true;
     const tile = level[tileId];
-    return !!tile && tile.role === "depot";
+    return !!tile && (tile.role === "depot" || tile.role === "station");
+  }
+
+  const isStationTile = (tileId: string) => level[tileId]?.role === "station";
+
+  // True when this train still owes a stop at its current (station) segment:
+  // the head is on a station tile it has not yet dwelled at this pass.
+  function stationStopPending(train: SimTrain): boolean {
+    const head = train.path[train.headIndex];
+    return (
+      isStationTile(getCoordinatesId(head.coord)) &&
+      train.dwelledAtIndex !== train.headIndex
+    );
   }
 
   // Build the SimTrain for an init descriptor. The single source of truth for a
@@ -326,6 +375,8 @@ export function createSimulation(config: SimConfig): Simulation {
       path: [{ coord: init.coord, entryPort: init.entryPort, exitPort }],
       headIndex: 0,
       headProgress: 0,
+      dwellRemaining: 0,
+      dwelledAtIndex: -1,
     };
   }
 
@@ -435,6 +486,9 @@ export function createSimulation(config: SimConfig): Simulation {
     train.headProgress = 0;
     train.velocity = 0; // it stopped in the depot; accelerate away from rest
     train.state = "running";
+    // The path restarted at index 0, so a stale dwell index must not alias a
+    // future station segment that happens to land on the same number.
+    train.dwelledAtIndex = -1;
   }
 
   // The other train responsible for a tile not being free for `selfId`: its
@@ -584,6 +638,11 @@ export function createSimulation(config: SimConfig): Simulation {
   // scan accumulates the rest of the current tile plus one tile per crossable
   // boundary, stopping at the first boundary mayCross() refuses.
   function clearDistanceAhead(train: SimTrain): number {
+    // An unserved station under the head puts the stop line INSIDE the current
+    // tile: the platform at STATION_STOP_PROGRESS, not the tile boundary.
+    if (stationStopPending(train)) {
+      return Math.max(0, STATION_STOP_PROGRESS - train.headProgress);
+    }
     let dist = 1 - train.headProgress;
     let head: { coord: Coordinates; entryPort: Port } = train.path[
       train.headIndex
@@ -593,6 +652,13 @@ export function createSimulation(config: SimConfig): Simulation {
       const t = traverse(level, getSwitch, head.coord, head.entryPort);
       if (!t.next) break; // defensive: mayCross already returns false here
       head = { coord: t.next.coord, entryPort: t.next.entryPort };
+      // A station ahead ends the clear run at its platform, part-way into that
+      // tile (tiles ahead of the head are always unserved — the dwell marker
+      // only ever points at a segment the head has reached).
+      if (isStationTile(getCoordinatesId(head.coord))) {
+        dist += STATION_STOP_PROGRESS;
+        return Math.min(dist, train.lookAhead);
+      }
       dist += 1;
     }
     return Math.min(dist, train.lookAhead);
@@ -604,6 +670,22 @@ export function createSimulation(config: SimConfig): Simulation {
     // tile, exactly like a train that has not pulled out yet) but claims no
     // block ahead — a waiting train must not hold a route it isn't using.
     if (train.state === "waiting") return;
+    // Standing at a station platform. The body keeps occupying its tiles (a
+    // train behind waits on the occupancy gate) while the stop time runs out;
+    // then it pulls away from rest like any departure.
+    if (train.state === "dwelling") {
+      train.dwellRemaining -= dt;
+      if (train.dwellRemaining <= 0) {
+        train.dwellRemaining = 0;
+        train.state = "running";
+        events.push({
+          type: "departed",
+          trainId: train.id,
+          tileId: getCoordinatesId(train.path[train.headIndex].coord),
+        });
+      }
+      return;
+    }
     if (train.state === "parking") {
       // The loco is already at the depot centre. Keep driving the whole consist
       // forward — sampling clamps every unit to the centre as it catches up, and
@@ -664,6 +746,27 @@ export function createSimulation(config: SimConfig): Simulation {
     if (move > clear) move = clear;
 
     train.headProgress += move;
+
+    // Station stop: the braking cap above (clear collapses onto the platform
+    // stop line) walks the head exactly onto STATION_STOP_PROGRESS in finite
+    // time — the final tick's move is clamped to the remaining clear distance.
+    // Once it lands, begin the dwell.
+    if (
+      stationStopPending(train) &&
+      STATION_STOP_PROGRESS - train.headProgress <= 1e-9
+    ) {
+      train.headProgress = Math.min(train.headProgress, STATION_STOP_PROGRESS);
+      train.state = "dwelling";
+      train.dwellRemaining = STATION_DWELL_SEC;
+      train.dwelledAtIndex = train.headIndex;
+      train.velocity = 0;
+      events.push({
+        type: "dwell",
+        trainId: train.id,
+        tileId: getCoordinatesId(train.path[train.headIndex].coord),
+      });
+      return;
+    }
 
     // Why the train is held at the end of this tick, if it is. Stays null while
     // the train keeps moving; set just before a traffic break below.

@@ -33,6 +33,10 @@ function describe(e: SimEvent): string {
       return e.matched
         ? `delivered at ${e.tileId} ✓`
         : `bounced off ${e.tileId}`;
+    case "dwell":
+      return `calling at ${e.tileId}`;
+    case "departed":
+      return `departed ${e.tileId}`;
   }
 }
 

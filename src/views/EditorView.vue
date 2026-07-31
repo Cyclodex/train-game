@@ -433,6 +433,7 @@ import {
   removeRoad,
   setDepot,
   rotateDepot,
+  toggleStation,
   toggleSignalPort,
   cycleDefaultArm,
   cycleJunctionSignalMode,
@@ -489,6 +490,7 @@ import { takeEditorSeed } from "@/editorSeed";
 type Tool =
   | "connect"
   | "depot"
+  | "station"
   | "signal"
   | "erase"
   | "road"
@@ -531,6 +533,7 @@ const DOCK_GROUPS: DockGroup[] = [
     items: [
       { key: "connect", icon: "🛤️", label: "Track", tool: "connect" },
       { key: "depot", icon: "🏠", label: "Depot", tool: "depot" },
+      { key: "station", icon: "🚉", label: "Station", tool: "station" },
       { key: "signal", icon: "🚦", label: "Signal", tool: "signal" },
     ],
   },
@@ -611,6 +614,8 @@ const HINTS: Record<Tool, string> = {
   connect:
     "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail. Click a junction's switch to set its starting direction.",
   depot: "Click a cell to place a depot. Click it again to rotate its facing.",
+  station:
+    "Click a tile with through-track (edge-to-edge rails) to make it a station — every train calls there briefly. Click it again to remove the station.",
   signal: "Click an edge to toggle a signal for that direction.",
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
@@ -1566,6 +1571,15 @@ class EditorView extends Vue {
     if (this.tool === "depot") {
       const cur = this.level[id];
       this.commit(id, cur?.role === "depot" ? rotateDepot(cur) : setDepot(emptyCell(), this.autoFacing(id)));
+    } else if (this.tool === "station") {
+      // Toggle the station role on through-track. toggleStation hands back the
+      // SAME cell when it can't apply (no track, or a depot), so nothing is
+      // committed for a click that changed nothing.
+      const cur = this.level[id];
+      if (cur) {
+        const next = toggleStation(cur);
+        if (next !== cur) this.commit(id, next);
+      }
     } else if (this.tool === "erase") {
       delete this.level[id];
       this.syncBusGates([id]); // an erased bus street un-gates its junctions

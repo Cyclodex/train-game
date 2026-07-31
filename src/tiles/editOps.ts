@@ -141,6 +141,26 @@ export function rotateDepot(cell: TileCell): TileCell {
   return setDepot(cell, next);
 }
 
+// True when the cell carries at least one edge↔edge rail pair — the track shape
+// a station can sit on (a depot's edge↔Center stub is not through-track).
+export function hasThroughTrack(cell: TileCell): boolean {
+  return cell.connections.some(
+    ([a, b]) => a !== Position.Center && b !== Position.Center
+  );
+}
+
+// Toggle the station role on a cell. Only through-track can be a station, and a
+// depot stays a depot — on any cell this can't apply to, the SAME cell comes
+// back (reference-equal), so callers can tell a refusal from a change.
+export function toggleStation(cell: TileCell): TileCell {
+  if (cell.role === "station") {
+    const { role: _drop, ...rest } = cell;
+    return rest;
+  }
+  if (cell.role !== undefined || !hasThroughTrack(cell)) return cell;
+  return { ...cell, role: "station" };
+}
+
 // Add/remove a per-direction signal on `port`.
 export function toggleSignalPort(cell: TileCell, port: Port): TileCell {
   const cur = cell.signals ?? [];

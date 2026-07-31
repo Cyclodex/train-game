@@ -298,7 +298,10 @@ export function assessGridlock(samples: GridlockSample[]): {
   let stuck = 0;
   let waitingOnEachOther = 0;
   for (const s of samples) {
-    if (s.state === "parked" || s.state === "waiting") continue;
+    // Dwelling counts as deliberately stopped, like parked/waiting: a station
+    // stop is scheduled rest, not a jam (and it clears itself in seconds).
+    if (s.state === "parked" || s.state === "waiting" || s.state === "dwelling")
+      continue;
     if (s.block?.reason === "signal-hold") continue;
     active += 1;
     if (s.velocity > 1e-3) continue;

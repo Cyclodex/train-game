@@ -150,6 +150,30 @@
 
     <TileRail :possible-routes="railRoutes" />
 
+    <!-- Station: platform slabs flanking the through-track, each with a bright
+         edge line on the track side, plus a halt sign. Geometry only exists for
+         a straight station (the standard); any other shape gets the sign alone. -->
+    <svg
+      v-if="isStation"
+      class="station-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="(p, pi) in stationPlatforms" :key="'stp' + pi">
+        <rect :x="p.x" :y="p.y" :width="p.w" :height="p.h" rx="3" class="station-platform" />
+        <line
+          :x1="p.edge.x1"
+          :y1="p.edge.y1"
+          :x2="p.edge.x2"
+          :y2="p.edge.y2"
+          class="station-platform-edge"
+        />
+      </g>
+      <g class="station-sign" :transform="`translate(${stationSignPos.x} ${stationSignPos.y})`">
+        <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
+        <text x="0" y="4.5" text-anchor="middle">S</text>
+      </g>
+    </svg>
+
     <!-- Signals (straights only) -->
     <svg
       v-for="light in signalLights"
@@ -453,6 +477,68 @@ class Tile extends Vue {
   }
   get isDepot() {
     return this.tile.role === "depot";
+  }
+  get isStation() {
+    return this.tile.role === "station";
+  }
+  // Platform slabs beside the through-track: one each side, set clear of the
+  // rails, with the track-facing long edge marked. Only a straight pair (the
+  // standard station shape) gets slabs — a station on any other shape renders
+  // just the halt sign, so an unusual author choice degrades, not breaks.
+  get stationPlatforms(): {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    edge: { x1: number; y1: number; x2: number; y2: number };
+  }[] {
+    if (!this.isStation) return [];
+    const size = this.config.tileSize;
+    const c = size / 2;
+    const inner = size * 0.13; // centreline → platform edge (clear of the rails)
+    const depth = size * 0.15; // slab depth
+    const margin = size * 0.05; // inset from the tile ends
+    const len = size - margin * 2;
+    const has = (p: Position, q: Position) =>
+      this.tile.connections.some(
+        ([a, b]) => (a === p && b === q) || (a === q && b === p)
+      );
+    const out: {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      edge: { x1: number; y1: number; x2: number; y2: number };
+    }[] = [];
+    if (has(Position.Top, Position.Bottom)) {
+      for (const side of [-1, 1]) {
+        const ex = c + side * inner;
+        out.push({
+          x: side < 0 ? ex - depth : ex,
+          y: margin,
+          w: depth,
+          h: len,
+          edge: { x1: ex, y1: margin, x2: ex, y2: margin + len },
+        });
+      }
+    } else if (has(Position.Left, Position.Right)) {
+      for (const side of [-1, 1]) {
+        const ey = c + side * inner;
+        out.push({
+          x: margin,
+          y: side < 0 ? ey - depth : ey,
+          w: len,
+          h: depth,
+          edge: { x1: margin, y1: ey, x2: margin + len, y2: ey },
+        });
+      }
+    }
+    return out;
+  }
+  // The halt sign sits in the tile corner, out of the way of track and slabs.
+  get stationSignPos(): { x: number; y: number } {
+    const size = this.config.tileSize;
+    return { x: size * 0.1, y: size * 0.1 };
   }
   get isBridge() {
     return this.tile.bridge === true;
@@ -1626,6 +1712,39 @@ export default toNative(Tile);
   fill: none;
   stroke: #b7a992;
   stroke-linecap: butt;
+}
+
+/* --- station (platforms beside the rails + halt sign) ---
+   Above TileRail so the slabs sit ON the ballast shoulder, laterally clear of
+   the rails themselves; below the trains, which render in their own layer. */
+.station-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+}
+.station-platform {
+  fill: #c3bcae; // paving, warm against the meadow, cooler than the town roofs
+  stroke: #948b7a;
+  stroke-width: 1;
+}
+.station-platform-edge {
+  stroke: #f6f2e8; // the bright safety line along the track side
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.station-sign rect {
+  fill: #1c5bd8; // the classic blue station shield
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.station-sign text {
+  fill: #fff;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* --- road layer (under the rails) --- */

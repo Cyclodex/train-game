@@ -105,7 +105,7 @@ the game doesn't have yet.
 
 ## 3. The phases
 
-### Phase 1 — the station tile + dwell (S–M, **start here**)
+### Phase 1 — the station tile + dwell (S–M) — **SHIPPED 2026-08-01**
 
 Every train that passes a station stops for a fixed dwell, then continues. No
 passengers yet — this lands the tile, the sim state, the render and the editor

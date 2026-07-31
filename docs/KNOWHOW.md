@@ -391,6 +391,30 @@ lean — prune as much as you add. This file only stays useful if every task ten
   interior tile emits no stroke at all.
 - Two strokes rather than an SVG filter: at ~280 tiles a board a feGaussianBlur
   per tile is not worth it, and a two-step falloff reads as a gradient anyway.
+## STATIONS (phase 1 — the dwell, 2026-08-01)
+- A station is `role: "station"` on THROUGH-track (≥1 edge↔edge pair, no Center
+  stub — `validateLevel` flags the rest as `invalid-station`). Same connections
+  as a straight; `expandKind("station", rot)` authors one; `toggleStation`
+  (editOps) is the editor verb and hands back the SAME cell reference on a
+  refusal, so callers can tell "no-op" from "changed".
+- The stop line is INSIDE the tile: `STATION_STOP_PROGRESS` (0.5) of the head
+  segment, not a tile boundary. `clearDistanceAhead` early-returns the in-tile
+  remainder for a pending stop and cuts its look-ahead run mid-tile at a
+  station ahead; the braking cap then lands the head exactly on the line (same
+  finite-time clamp argument as signal stop lines).
+- A station IS a block boundary (`isBoundary`), exactly like a signal: the
+  approach reserves only up to the platform, and a dwelling train holds nothing
+  beyond its own tiles. Without this a 3 s dwell pins the route to the next
+  real signal for the whole stop.
+- Dwell-once-per-pass is tracked by PATH INDEX (`dwelledAtIndex`), never tile
+  id — a revisit is a higher index, so the train stops again (the bounce test
+  proves 2 dwells). `bounceOutOfDepot` resets the path to index 0 and must
+  reset the marker with it.
+- `assessGridlock` skips `"dwelling"` like parked/waiting, or scheduled stops
+  read as a dead board.
+- `/test/station` is the isolation scenario; sim behaviour in
+  `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

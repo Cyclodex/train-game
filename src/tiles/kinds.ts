@@ -24,6 +24,9 @@ const BASE: Record<string, PortPair[]> = {
   straight: [[Top, Bottom]],
   curve: [[Top, Right]],
   depot: [[Top, Center]],
+  // A station is through-track with the role on top: same connections as a
+  // straight, but every train pauses at the platform. See sim/simulation.ts.
+  station: [[Top, Bottom]],
   cross: ALL_CROSS,
   // A T-junction at rot 0 has the trunk along Left-Right with a branch to Top.
   tjunction: [
@@ -62,6 +65,7 @@ export function expandKind(
   }
   const cell: TileCell = { connections };
   if (kind === "depot") cell.role = "depot";
+  if (kind === "station") cell.role = "station";
   if (opts.signals === true) {
     cell.signals = portsOf(connections).filter(p => p !== Center);
   } else if (Array.isArray(opts.signals)) {
