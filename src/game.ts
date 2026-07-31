@@ -987,6 +987,15 @@ export function createGame(
     }
   }
 
+  // Whether a sampled anchor rides a flyover DECK: its tile names a flyover
+  // pair and the anchor travels that pair. The at-grade line of the same cell
+  // fails the pair test and stays at its normal z.
+  function anchorOnDeck(p: SampledUnit): boolean {
+    const cell = level[getCoordinatesId(p.coord)];
+    if (!cell?.flyover || p.exitPort === null) return false;
+    return samePair([p.entryPort, p.exitPort], cell.flyover);
+  }
+
   function renderTrains() {
     const locoPos: Record<string, { x: number; y: number }> = {};
     for (const def of trainDefs) {
@@ -1027,6 +1036,12 @@ export function createGame(
           level[`${Math.floor(x / tileSize)},${Math.floor(y / tileSize)}`];
         const inTunnel = tileUnder?.tunnel === true;
         el.style.visibility = inShed || inTunnel ? "hidden" : "visible";
+        // Riding a flyover deck lifts the unit above the deck (z5): either
+        // anchor on it keeps the sprite raised while it straddles the seams,
+        // so it never flickers under the parapet mid-crossing. Clearing the
+        // inline z restores the class default (loco z4 / wagon z3).
+        const onDeck = anchorOnDeck(unit.front) || anchorOnDeck(unit.rear);
+        el.style.zIndex = onDeck ? "6" : "";
         if (i === 0) locoPos[def.id] = { x, y };
         el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) rotate(${angle}deg)`;
         // Publish the angle so the debug label inside can cancel it out. A train

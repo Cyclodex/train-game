@@ -1,5 +1,11 @@
 import { Coordinates, Position } from "@/types";
-import { Level, parseCoordId } from "@/tiles/model";
+import {
+  Level,
+  claimKey,
+  claimKeysOf,
+  parseCoordId,
+  tileIdOfClaim,
+} from "@/tiles/model";
 import { Port, oppositePort } from "./topology";
 import {
   SwitchResolver,
@@ -334,8 +340,11 @@ export function createSimulation(config: SimConfig): Simulation {
     trains[init.id] = buildTrain(init);
   }
 
-  // The set of tile ids a train's body currently covers (head back to tail).
-  function bodyTileIds(train: SimTrain): Set<string> {
+  // The set of CLAIM KEYS a train's body currently covers (head back to tail).
+  // A claim key is the tile id on every ordinary cell; on a flyover each level
+  // claims separately, so a body on the deck never "occupies" the line running
+  // underneath (tiles/model.ts).
+  function bodyClaimKeys(train: SimTrain): Set<string> {
     // While parking, headProgress runs past 1 so the tail advances into the
     // depot and the approach tiles it used to cover are freed for other trains.
     // The dock glide pushes headProgress well past the body length (the depot
@@ -350,42 +359,44 @@ export function createSimulation(config: SimConfig): Simulation {
     const ids = new Set<string>();
     for (let i = tailIndex; i <= train.headIndex; i++) {
       const seg = train.path[i];
-      if (seg) ids.add(getCoordinatesId(seg.coord));
+      if (!seg) continue;
+      const id = getCoordinatesId(seg.coord);
+      ids.add(claimKey(level[id], id, seg.entryPort));
     }
     return ids;
   }
 
-  function isTileOccupiedByOther(tileId: string, selfId: string): boolean {
+  function isTileOccupiedByOther(key: string, selfId: string): boolean {
     for (const id of Object.keys(trains)) {
       if (id === selfId) continue;
-      if (bodyTileIds(trains[id]).has(tileId)) return true;
+      if (bodyClaimKeys(trains[id]).has(key)) return true;
     }
     return false;
   }
 
-  // The train (if any) whose body physically covers a tile right now.
-  function occupantOf(tileId: string): string | undefined {
+  // The train (if any) whose body physically covers a claim right now.
+  function occupantOf(key: string): string | undefined {
     for (const id of Object.keys(trains)) {
-      if (bodyTileIds(trains[id]).has(tileId)) return id;
+      if (bodyClaimKeys(trains[id]).has(key)) return id;
     }
     return undefined;
   }
 
-  function isTileOccupied(tileId: string): boolean {
-    return occupantOf(tileId) !== undefined;
+  function isTileOccupied(key: string): boolean {
+    return occupantOf(key) !== undefined;
   }
 
-  // A tile is enterable by a train if no other train has reserved or occupies it.
-  function tileFreeForTrain(tileId: string, selfId: string): boolean {
-    const owner = reservations.get(tileId);
+  // A claim is enterable by a train if no other train has reserved or occupies it.
+  function tileFreeForTrain(key: string, selfId: string): boolean {
+    const owner = reservations.get(key);
     if (owner !== undefined && owner !== selfId) return false;
-    return !isTileOccupiedByOther(tileId, selfId);
+    return !isTileOccupiedByOther(key, selfId);
   }
 
   // Release reservations the train no longer needs: anything it has reserved that
   // is neither under its body nor in the block still ahead of it.
   function releaseStaleReservations(train: SimTrain): void {
-    const keep = bodyTileIds(train);
+    const keep = bodyClaimKeys(train);
     if (train.state === "running") {
       const head = train.path[train.headIndex];
       for (const tid of routeToNextSignal(
@@ -437,12 +448,12 @@ export function createSimulation(config: SimConfig): Simulation {
     train.state = "running";
   }
 
-  // The other train responsible for a tile not being free for `selfId`: its
+  // The other train responsible for a claim not being free for `selfId`: its
   // reserver if reserved by someone else, otherwise whoever occupies it.
-  function blockerOf(tileId: string, selfId: string): string | undefined {
-    const owner = reservations.get(tileId);
+  function blockerOf(key: string, selfId: string): string | undefined {
+    const owner = reservations.get(key);
     if (owner !== undefined && owner !== selfId) return owner;
-    return occupantOf(tileId);
+    return occupantOf(key);
   }
 
   // Record that a train is held this tick. Edge-triggered: emits a `blocked`
@@ -498,6 +509,7 @@ export function createSimulation(config: SimConfig): Simulation {
     if (!t.next) return false; // dead end, map edge, or depot arrival
     const headTileId = getCoordinatesId(head.coord);
     const nextTileId = getCoordinatesId(t.next.coord);
+    const nextKey = claimKey(level[nextTileId], nextTileId, t.next.entryPort);
 
     if (
       t.exitPort !== null &&
@@ -511,7 +523,7 @@ export function createSimulation(config: SimConfig): Simulation {
       isSignalTile(headTileId) &&
       manualProceed.has(`${headTileId}:${t.exitPort}`);
 
-    if (reservations.get(nextTileId) !== train.id) {
+    if (reservations.get(nextKey) !== train.id) {
       const block = routeToNextSignal(
         level,
         getSwitch,
@@ -523,7 +535,7 @@ export function createSimulation(config: SimConfig): Simulation {
         block.length > 0 && block.every(tid => tileFreeForTrain(tid, train.id));
       if (!reservable && !forcedGreen) return false;
     }
-    if (isTileOccupiedByOther(nextTileId, train.id)) return false;
+    if (isTileOccupiedByOther(nextKey, train.id)) return false;
     return true;
   }
 
@@ -538,6 +550,9 @@ export function createSimulation(config: SimConfig): Simulation {
   ): BlockInfo {
     const headTileId = getCoordinatesId(head.coord);
     const nextTileId = t.next ? getCoordinatesId(t.next.coord) : headTileId;
+    const nextKey = t.next
+      ? claimKey(level[nextTileId], nextTileId, t.next.entryPort)
+      : headTileId;
 
     if (
       t.exitPort !== null &&
@@ -551,7 +566,7 @@ export function createSimulation(config: SimConfig): Simulation {
       isSignalTile(headTileId) &&
       manualProceed.has(`${headTileId}:${t.exitPort}`);
 
-    if (reservations.get(nextTileId) !== train.id) {
+    if (reservations.get(nextKey) !== train.id) {
       const block = routeToNextSignal(
         level,
         getSwitch,
@@ -570,11 +585,11 @@ export function createSimulation(config: SimConfig): Simulation {
         };
       }
     }
-    // Otherwise the next tile is physically occupied by another train.
+    // Otherwise the next claim is physically occupied by another train.
     return {
       reason: "occupancy",
       tileId: headTileId,
-      blockedBy: occupantOf(nextTileId),
+      blockedBy: occupantOf(nextKey),
     };
   }
 
@@ -709,7 +724,8 @@ export function createSimulation(config: SimConfig): Simulation {
       // a forced green some tiles may belong to another train — we take only the
       // ones free for us; the occupancy check in mayCross guards each step.
       const nextTileId = getCoordinatesId(t.next.coord);
-      if (reservations.get(nextTileId) !== train.id) {
+      const nextKey = claimKey(level[nextTileId], nextTileId, t.next.entryPort);
+      if (reservations.get(nextKey) !== train.id) {
         const block = routeToNextSignal(
           level,
           getSwitch,
@@ -729,7 +745,12 @@ export function createSimulation(config: SimConfig): Simulation {
           }
         }
         if (claimed.length > 0) {
-          events.push({ type: "reserved", trainId: train.id, tiles: claimed });
+          // The activity log speaks in tiles, not claim keys.
+          events.push({
+            type: "reserved",
+            trainId: train.id,
+            tiles: claimed.map(tileIdOfClaim),
+          });
         }
       }
 
@@ -851,10 +872,20 @@ export function createSimulation(config: SimConfig): Simulation {
       return aspect(tileId, exitPort);
     },
     reservedBy(tileId: string) {
-      return reservations.get(tileId);
+      // A by-tile query answers for EITHER level of a flyover: the edit gate
+      // and the debug overlay ask about the tile, not a deck.
+      for (const key of claimKeysOf(tileId)) {
+        const owner = reservations.get(key);
+        if (owner !== undefined) return owner;
+      }
+      return undefined;
     },
     occupiedBy(tileId: string) {
-      return occupantOf(tileId);
+      for (const key of claimKeysOf(tileId)) {
+        const on = occupantOf(key);
+        if (on !== undefined) return on;
+      }
+      return undefined;
     },
     strandedOn(tileId: string) {
       const out: string[] = [];

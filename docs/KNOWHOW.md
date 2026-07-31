@@ -442,6 +442,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the arch straddling the seam masks the per-unit pop, so a consist threads in
   wagon by wagon. /test scenario: `tunnel`.
 
+## GRADE SEPARATION — flyover (2026-07-31)
+- `TileCell.flyover: PortPair` names the connection riding a deck OVER the
+  other line; `kindOf` → "flyover". AUTHORED data only, deliberately: crossing
+  an existing line with the route tool still builds a flat junction (an editor
+  verb for the flyover is a follow-up).
+- THE SIM CONTENDS BY CLAIM KEY (`claimKey`, tiles/model.ts): the plain tile id
+  on every ordinary cell, `id#over`/`id#under` per level on a flyover. Body
+  occupancy (`bodyClaimKeys`), the reservation map, `routeToNextSignal` (it
+  RETURNS claim keys now), mayCross/blockReason and the signal aspect all speak
+  keys — one derivation, so they can never disagree which level a train is on.
+  A multi-partner (switchable) entry falls back to the whole-tile key: a
+  junction's lines DO interact, a flyover flag must not split one.
+- `reservedBy`/`occupiedBy(tileId)` answer for EITHER level (`claimKeysOf`) —
+  the edit gate and the debug overlay ask by tile and must keep working.
+  "reserved" events strip keys back to tile ids (`tileIdOfClaim`) for the log.
+- RENDER: deck z5 — over the rails (z2) and over the LOWER train (z3/4), so
+  passing under the strip reads as passing under a bridge; fresh sleepers+rails
+  are drawn ON the deck (the pair's z2 copy sits hidden beneath). `game.ts`
+  lifts a unit to z6 while EITHER anchor rides the flyover pair, so a sprite
+  straddling the seam never flickers under the parapet.
+- TEST TRAP that took a run to see: routes are claimed at the first BOUNDARY
+  CROSSING, not at departure — a reservation assertion 0.5s into a run reads
+  an empty map. /test scenario: `flyover`; sim contract `flyover.spec.ts` — the
+  FLAT clone of the same board must serialise (that contrast IS the test).
+
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The
   freight half of the world — the ground a depot will one day read to decide it

@@ -12,6 +12,7 @@ export type TileKind =
   | "curve"
   | "tjunction"
   | "cross"
+  | "flyover"
   | "depot"
   | "dead-end"
   | "road-straight"
@@ -59,6 +60,13 @@ export interface TileCell {
   // art stays unbroken over it (no cleared right-of-way) and the renderer hides
   // a train between the portals. See tiles/terrain.ts.
   tunnel?: boolean;
+  // GRADE SEPARATION: this cell's lines cross at two LEVELS, and the named port
+  // pair rides a deck OVER the other. The two lines never interact — no switch,
+  // no reservation conflict, no collision — which the sim expresses by giving
+  // each level its own conflict key (see `claimKey`). Authored data (there is
+  // deliberately no auto-flyover: crossing an existing line in the editor still
+  // builds a flat junction); must name one of the cell's connections.
+  flyover?: PortPair;
   // Exit ports that carry a signal (per-direction). Empty/undefined = none.
   signals?: Port[];
   // Road layer: port pairs describing a road crossing this cell, in the SAME
@@ -214,6 +222,10 @@ export function defaultArmFor(
 // for routing.
 export function kindOf(cell: TileCell): TileKind {
   if (cell.role === "depot") return "depot";
+  // A flyover LOOKS like a crossing but routes like two independent lines —
+  // its own kind, so the debug label never claims a junction where no switch
+  // exists.
+  if (cell.flyover) return "flyover";
   const conns = cell.connections;
   const hasRoadLayer = (cell.road?.length ?? 0) > 0;
 
@@ -257,6 +269,43 @@ export function kindOf(cell: TileCell): TileKind {
     return a === oppositePort(b) ? "straight" : "curve";
   }
   return "tjunction";
+}
+
+// --- Grade separation (flyover) ----------------------------------------------
+// Everywhere the simulation keys occupancy/reservation, it keys by CLAIM KEY:
+// the plain tile id on every ordinary cell, and a per-level key on a flyover —
+// so the deck and the ground line contend for different "tiles" and two trains
+// cross simultaneously without ever seeing each other. One derivation, used by
+// the reserver, the occupancy scan, the block scan and the signal aspect, so
+// they can never disagree about which level a train is on.
+
+/** The conflict key a train entering this tile via `entry` claims. */
+export function claimKey(
+  cell: TileCell | null | undefined,
+  tileId: string,
+  entry: Port
+): string {
+  if (!cell?.flyover) return tileId;
+  const partners = partnersOf(cell.connections, entry);
+  // A switchable flyover is not a thing: with more than one partner the cell
+  // is a junction and its lines DO interact — fall back to whole-tile conflict.
+  if (partners.length !== 1) return tileId;
+  const pair: PortPair = [entry, partners[0]];
+  return samePair(pair, cell.flyover) ? `${tileId}#over` : `${tileId}#under`;
+}
+
+/**
+ * Every key a claim on this tile could be stored under — for by-tile queries
+ * (debug overlays, the edit gate) that don't know which level they ask about.
+ */
+export function claimKeysOf(tileId: string): string[] {
+  return [tileId, `${tileId}#over`, `${tileId}#under`];
+}
+
+/** The tile id a claim key refers to. */
+export function tileIdOfClaim(key: string): string {
+  const i = key.indexOf("#");
+  return i === -1 ? key : key.slice(0, i);
 }
 
 // --- Road layer helpers ------------------------------------------------------

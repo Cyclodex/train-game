@@ -179,6 +179,23 @@
 
     <TileRail v-if="!isTunnel" :possible-routes="railRoutes" />
 
+    <!-- Flyover: one line rides a deck OVER the other. The deck (z5) covers
+         the at-grade copy of its own rails (z2) and carries fresh track on
+         top; game.ts lifts a train's units to z6 while they ride the named
+         pair, so the upper train visibly crosses the lower one — which stays
+         an ordinary train at z3/z4, briefly passing under the deck strip. -->
+    <svg
+      v-if="isFlyover"
+      class="flyover-deck"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path :d="flyoverSpan.d" class="bridge-shadow" :stroke-width="flyoverSpan.width" />
+      <path :d="flyoverSpan.d" class="bridge-span" :stroke-width="flyoverSpan.width" />
+      <path :d="flyoverSpan.d" class="bridge-parapet" :stroke-width="flyoverSpan.width * 0.86" />
+      <path :d="flyoverSpan.d" class="deck-sleepers" />
+      <path v-for="(r, i) in flyoverRails" :key="'fr' + i" :d="r" class="deck-rail" />
+    </svg>
+
     <!-- Signals (straights only) -->
     <svg
       v-for="light in signalLights"
@@ -493,6 +510,22 @@ class Tile extends Vue {
   }
   get isTunnel() {
     return this.tile.tunnel === true;
+  }
+  get isFlyover() {
+    return this.tile.flyover !== undefined;
+  }
+  // The deck along the flyover pair — the same stroke-based structure as the
+  // bridge, so a curved flyover bends for free. A touch wider than the river
+  // span: it has to cover the pair's at-grade rails underneath it.
+  get flyoverSpan(): { d: string; width: number } {
+    const [a, b] = this.tile.flyover!;
+    const size = this.config.tileSize;
+    return { d: segmentPathD(a, b, size), width: size * 0.26 };
+  }
+  // Fresh track ON the deck (the z2 copy is covered by it).
+  get flyoverRails(): string[] {
+    const [a, b] = this.tile.flyover!;
+    return railPathsFor(a, b, this.config.tileSize, this.config.railDistanceFromPath);
   }
   // Ground units (the 100-unit art box) in px, for authoring the portal.
   get u() {
@@ -1704,6 +1737,35 @@ export default toNative(Tile);
   fill: none;
   stroke: #b7a992;
   stroke-linecap: butt;
+}
+
+/* --- flyover deck (over the at-grade rails, under its own train) ---
+   Reuses the bridge stroke classes for shadow/deck/parapet. z5 sits above
+   TileRail (z2) — hiding the pair's at-grade rail copy and briefly hiding the
+   LOWER train (z3/z4) as it passes underneath, which is exactly what passing
+   under a bridge looks like from above. The upper train is lifted to z6 by
+   game.ts while it rides the pair. */
+.flyover-deck {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  pointer-events: none;
+  overflow: visible;
+}
+.deck-sleepers {
+  fill: none;
+  stroke: #693b3b;
+  stroke-width: 20px;
+  stroke-dasharray: 4 5;
+  stroke-dashoffset: 2;
+  stroke-linecap: butt;
+}
+.deck-rail {
+  fill: none;
+  stroke: gray;
+  stroke-width: 1px;
 }
 
 /* --- tunnel (the line is underground) ---
