@@ -183,20 +183,27 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `src/tiles/*`) — catches real bugs as the sim grows.
 15. **Fix the "fraight" typo** in one sweep (type strings + asset names), or leave
     it — but do it all at once, never piecemeal.
-16. **Split `tests/unit/sim/road.spec.ts` (3k lines, 27 top-level describes).**
-    After the 2026-08-01 hot-path work the unit suite runs in ~1m (full) / ~28s
-    (fast lane), and this one file is now the fast lane's critical path: 18.5s of
-    it, and one file is one worker, so it alone sets the wall-clock floor.
-    Splitting it along its existing describes (junctions / bus lanes / lane
-    discipline / following+overtaking) parallelises both lanes for roughly no
-    risk — it is a move, not a rewrite. Kept out of that change deliberately so
-    the perf diff stayed reviewable. See `docs/KNOWHOW.md` → TEST TIERS.
+16. **Make the long-run sim cases cheaper** — the only remaining lever that moves
+    CI. `sim/parking.spec.ts` is 63s of the full lane's ~210s CPU on its own,
+    nearly all of it three multi-thousand-tick long-run cases (3 maps x 3 seeds x
+    4000 ticks). Fewer seeds, shorter runs, or a cheaper tick would pay directly;
+    re-filing tests would not. See `docs/KNOWHOW.md` → TEST TIERS for why: the
+    suite is CPU-bound (`wall ≈ max(cpu/cores, slowest_file)`), and on CI's 4
+    cores it is the first term that binds.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
 
 ## Recently landed (kept for context)
 
+- **Test-suite performance (2026-08-01)**: memoising the road sim's hot path
+  (`bodyPoints`, `roadPortsOf`) took the unit suite from 4m22s to ~1m07s and the
+  game loop with it; two lanes (`test:unit:fast` / `:changed` / `:profile`) keep a
+  small change off the full suite. `sim/road.spec.ts` was then split into five
+  focused files — a pure move, worth 1.5x on the road tests where cores are free,
+  but honestly worth **nothing** to whole-suite wall time on a 4-core box, which is
+  the measurement that killed the "split the big file" idea as a CI lever.
+  `docs/KNOWHOW.md` → SIM HOT PATH / TEST TIERS.
 - The **model/view refactor**: an authoritative deterministic simulation with
   headless unit tests; collisions are impossible (a train never enters an occupied
   tile) and trains never move on a red signal.
