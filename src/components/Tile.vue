@@ -1532,7 +1532,11 @@ class Tile extends Vue {
           (isBus || busOnly) && this.tileIsRoadJunction
             ? this.game.roadTurnExitIsBusLane(coord, lane.from, to, lane.index, cls)
             : isBus || busOnly;
-        if (oppositePort(lane.from) === to) {
+        // A JUNCTION's straight-through is the zero-degree case of a turn, NOT a
+        // road taper: its arms may differ in width, so the movement glides to the
+        // lane `junctionExitLane` lands the vehicle in on the exit arm (the branch
+        // below). Only a real straight/one-way ROAD tile tapers.
+        if (oppositePort(lane.from) === to && !this.tileIsRoadJunction) {
           if (oneWay) {
             const R = this.game.roadOneWayRunMax(coord, lane.from);
             // Seam-taper: at a lane-count change the dropping lane's arrow angles
@@ -1569,12 +1573,8 @@ class Tile extends Vue {
           // positions on each adjoining road's real band.
           const bandEntry = this.positioningBandAt(coord, lane.from);
           const bandExit = this.positioningBandAt(coord, to);
-          // On a junction tile, laneCountAt/2 under-counts the seam when some lanes
-          // turn off — use the arm's road-positioning band as selfBand so inner
-          // straight-through lanes don't collapse to the centreline (the 3L+2L bug).
-          const bandSelf = this.tileIsRoadJunction ? bandEntry : selfBand;
-          const offA = laneSeamOffsetPx(lane.index, bandSelf, bandEntry, size);
-          const offB = laneSeamOffsetPx(lane.index, bandSelf, bandExit, size);
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the

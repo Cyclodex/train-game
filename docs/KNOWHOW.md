@@ -1947,6 +1947,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
   iterates every scenario). Don't reintroduce the floor — it pinches nothing real.
 - Box crossing gated by conflict-matrix arbiter (`roadArbiter.ts`, `roadJunction.ts`);
   `conflictKey` lane-indexed ⇒ parallel lanes cross independently.
+- A JUNCTION'S STRAIGHT-THROUGH IS A TURN OF 0°, NOT A ROAD. It is the same
+  `junctionExitLane` + exit-arm band as a left/right turn — never the road seam-taper
+  (`laneSeamOffsetPx`), which anchors the lane index on the TILE'S OWN band. A
+  junction's `laneCountAt` is a movement tally, not the arm's width (a 3-lane side
+  arm inflates the count on EVERY other arm), so the taper branch put every inner
+  through-lane half a lane off the road it came from: the car snapped entering the
+  box and snapped back leaving it. This is the "car changes lane on the cross for no
+  reason" report, and it needs the SAME fork in all three places that draw a lane —
+  `laneGeometry.couplerOffsets`, `Tile.vue laneArrows`, and the sim's exit-lane
+  assignment (`road.ts`: a straight out of a junction now starts on `want`, exactly
+  like a turn, because the box now glides it there). Fixed 2026-08-02; `crosslanes`,
+  `mixedtee`, `mixedcross`, `turngallery`, `busmegacross`, `parkcity` all carried it.
+- THE INVARIANT THAT CATCHES ALL OF THIS: `tests/unit/sim/laneContinuity.spec.ts`
+  reconstructs the point `game.ts` actually draws (couplerOffsets + `laneSegmentPointAt`)
+  for every vehicle of every road scenario and asserts the step PERPENDICULAR to its
+  heading stays < 0.02 tiles/tick. Lateral only — longitudinal travel is the vehicle
+  doing its job, and folding it in turns the check into an arbitrary speed test.
+  Half a lane is 0.07, a whole lane 0.14, a real lane change ~0.006/tick, so the
+  band between "driving" and "teleporting" is wide and unambiguous. Reach for it
+  first whenever a car "swerves for no reason": it names the scenario, tile, ports
+  and lane.
 - STACKED junctions (a junction directly above another, no road tile between —
   `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
   min. A junction's exit-port `laneCountAt` counts only the straight-through
@@ -1992,8 +2013,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
   ANCHOR forks; the geometry never does.
 - `laneSeamOffsetPx` is BIDIRECTIONAL-ONLY (min-seam clamp). Its `centred`
   band-substitution branch was one-way's old model — dead since the run-max kerb
-  anchor, removed 2026-07-25 with its 4 tests. One-way never seam-adjusts:
-  `oneWayLaneOffsetPx` is run-constant.
+  anchor, removed 2026-07-25 with its 4 tests. One-way is run-constant
+  (`oneWayLaneOffsetPx`) for every SURVIVING lane; only the DROPPING (centre-side)
+  lane is seam-adjusted, by clamping its index to the lanes that cross the seam
+  (`laneGeometry.oneWaySeamCount`) so a car that never finished its merge GLIDES
+  into the survivor over the closing tile instead of being teleported a full lane by
+  the index clamp on the far side. Same clamp the painted gore and `Tile.vue`'s
+  one-way arrow already used — this only brought the CAR into line with them.
+- A LANE INDEX IS NOT PORTABLE ACROSS A WIDTH CHANGE (bidirectional). Lanes anchor
+  at the CENTRELINE but are numbered from the KERB, so when the band changes the
+  same index is a different physical lane: 3L→2L, index 1 is the middle lane on one
+  side of the seam and the centre lane on the other. Carrying it across with a plain
+  `min(idx, count-1)` slid the car a WHOLE lane sideways in one tick (`roadlanemerge`,
+  measured 0.14 tiles). `road.ts seamLaneShift` adds `Δband` (rounded) so the car
+  keeps its physical lane; the widening's new kerb lane simply starts empty, which is
+  also the "spread outward into a new lane" behaviour the scenario's comment wanted.
+  One-way is kerb-anchored, so its shift is 0 — the two conventions are opposites and
+  the function forks on `isOneWayStraight`, not on lane counts.
 - One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
   widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
   (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i

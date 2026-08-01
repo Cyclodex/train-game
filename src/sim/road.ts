@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneCountAt, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type Lane, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -178,6 +178,32 @@ export function roadTraverse(
     return { exitPort, next: null };
 
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
+}
+
+// How a lane INDEX changes when a vehicle drives straight across the seam between
+// two roads of different width — the number to add to keep the vehicle in the same
+// PHYSICAL lane.
+//
+// A bidirectional road's lanes are anchored at the CENTRELINE and grow outward to
+// the kerb (sim/laneOffset.ts), so a widening adds its new lane at the KERB and a
+// narrowing drops the kerb lane: every other lane keeps its distance from the
+// centre while its index — counted FROM the kerb — shifts by the band difference.
+// Carrying the index across unchanged (a plain clamp) therefore slid the vehicle a
+// whole lane sideways in a single tick at every lane-count change, and the clamped
+// seam offsets on the two tiles disagreed by exactly that much.
+//
+// A ONE-WAY road is the opposite convention — kerb-anchored to its run's widest
+// count, so a surviving lane keeps its index and only the centre-side lane ends —
+// and shifts by nothing. Same for anything that isn't a plain straight either side.
+function seamLaneShift(
+  fromRoad: Lane[] | undefined,
+  fromEntry: Port,
+  toRoad: Lane[] | undefined,
+  toEntry: Port,
+): number {
+  if (isOneWayStraight(fromRoad, fromEntry) || isOneWayStraight(toRoad, toEntry)) return 0;
+  if (isRoadJunction(fromRoad) || isRoadJunction(toRoad)) return 0;
+  return Math.round((laneCountAt(toRoad, toEntry) - laneCountAt(fromRoad, fromEntry)) / 2);
 }
 
 // --- Spawn points -------------------------------------------------------------
@@ -2512,21 +2538,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const want = junctionExitLane(
           prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
         );
-        // A TURN's lateral glide (couplerOffset's turn branch) physically carries
-        // the vehicle to `want` ACROSS the junction tile, so it must START there —
-        // resetting to the carried approach index made it land on its lane, snap
-        // back, then drift across again (an on-ramp car visibly dipping to the
-        // kerb before returning to its inner landing lane). Straight-through
-        // movements have no such glide (they keep the seam-taper branch), so they
-        // start at the nearest usable carried lane and ease over (pendingExitLane).
-        const turned = exitPort !== oppositePort(head.entryPort);
-        const start = turned
-          ? want
-          : nearestUsableLaneIndex(
-              nextTile.road, nextEntry,
-              nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
-              cls,
-            );
+        // The junction tile's lateral glide (laneGeometry's junction branch)
+        // physically carries the vehicle to `want` ACROSS the box, so it must START
+        // there — resetting to the carried approach index made it land on its lane,
+        // snap back, then drift across again (an on-ramp car visibly dipping to the
+        // kerb before returning to its inner landing lane). This holds for a
+        // STRAIGHT-through too: a junction whose arms differ in width glides the
+        // through-lane to the exit arm's matching lane exactly like a turn, so the
+        // straight must not start on the carried index either or it snaps at the
+        // seam by the difference between the two arms' bands.
+        const start = want;
         // Pin the lane the body behind this seam is really in before overwriting
         // it — `car.headIndex` still points at the junction segment here (the
         // increment is below), so it is exactly the last index on the old side.
@@ -2540,10 +2561,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // left untouched until the car has settled a few tiles past the seam.
         car.tilesSinceJunction = 0;
       } else if (nextLaneCount > 0) {
-        // Straight / curve: keep the lane, only clamping down when the road narrows
-        // (a backstop for a car that hadn't finished merging before the drop).
-        car.laneIndex = Math.min(car.laneIndex, nextLaneCount - 1);
-        car.targetLane = Math.min(car.targetLane, nextLaneCount - 1);
+        // Straight / curve: keep the PHYSICAL lane. Which index that is on the far
+        // side of the seam is not always the same number (seamLaneShift), and on a
+        // CURVE it is the lane the movement lands in — the same mapping the tile's
+        // geometry glides the vehicle along, so the two can't drift apart.
+        const shift =
+          exitPort === oppositePort(head.entryPort)
+            ? seamLaneShift(prevRoad, head.entryPort, nextTile.road, nextEntry)
+            : junctionExitLane(
+                prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
+              ) - laneOf(car);
+        const fit = (l: number) => Math.max(0, Math.min(l + shift, nextLaneCount - 1));
+        car.laneIndex = fit(car.laneIndex);
+        car.targetLane = fit(car.targetLane);
+        car.laneAnchor = fit(car.laneAnchor);
         car.tilesSinceJunction += 1; // one more tile of open road since the junction
       }
       car.headIndex += 1;
