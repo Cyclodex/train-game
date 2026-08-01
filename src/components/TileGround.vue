@@ -29,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
   GROUND_UNITS,
-  PatchSame,
+  HeightNeighbours,
   TerrainNeighbours,
   corridorsFor,
   terrainOf,
@@ -107,17 +107,19 @@ class TileGround extends Vue {
     });
   }
 
-  // The hypsometric terrace an elevated cell lays UNDER its terrain patch:
-  // "same" here compares HEIGHT, not kind — a neighbour at or above this
-  // height continues the terrace (the higher one lays its own, lighter body),
-  // a lower one is where the slope face paints. See tileHeightSvg.
+  // The hypsometric terraces an elevated cell lays UNDER its terrain patch.
+  // The neighbours are handed over as HEIGHTS, not as "same" booleans: a cell
+  // draws one contour per level it stands above its lowest neighbour, so a
+  // summit dropping two or three steps at once draws the intermediate contours
+  // inside its own tile instead of showing a single sheer wall. See
+  // tileHeightSvg.
   get heightHtml(): string {
     const h = heightOf(this.level[this.coordId]);
     if (h === 0) return "";
     const { x, y } = parseCoordId(this.coordId);
     const at = (dx: number, dy: number) =>
-      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]) >= h;
-    const same: PatchSame = {
+      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]);
+    const around: HeightNeighbours = {
       top: at(0, -1),
       right: at(1, 0),
       bottom: at(0, 1),
@@ -131,7 +133,7 @@ class TileGround extends Vue {
     // for the meadow board would glare on it, and the shot pipeline runs with
     // plainBackdrop on by default.
     const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
-    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
+    return tileHeightSvg(h, this.coordId, around, TERRAIN_SEED, theme);
   }
 
   // A BORED cell gets its ground and scatter a SECOND time, above the trains:

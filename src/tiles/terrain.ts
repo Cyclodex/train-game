@@ -778,6 +778,7 @@ function corners(
   roles: CornerRole[],
   style: EdgeStyle,
   stops: boolean[],
+  inset: number[],
 ): Pt[] {
   // How deep this tile's real corners are cut: the further the body extends,
   // the longer the shore has to turn, and the deeper the cut has to be for the
@@ -805,11 +806,22 @@ function corners(
     } else if (role.kind === "corner") {
       // The inward diagonal is opposite the two adjacent edges' outward
       // normals; their sum has length sqrt(2), so divide to get a unit pull.
-      const inset = cornerInset(gx, gy, seed) * insetScale;
+      const cut = cornerInset(gx, gy, seed) * insetScale;
       const oBefore = EDGE_FRAME[(i + 3) % 4].out;
       const oAfter = EDGE_FRAME[i].out;
-      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * inset;
-      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * inset;
+      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * cut;
+      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * cut;
+    }
+    // A body that has to stop INSIDE its own tile (a terrace band whose fall to
+    // that neighbour is more than one step — see `bandInsets`) is pushed off the
+    // boundary by its share of the drop. Both edges meeting at this corner get a
+    // say and their normals are perpendicular, so the two pushes just compose.
+    for (const e of [(i + 3) % 4, i]) {
+      const push = inset[e];
+      if (!push) continue;
+      const out = EDGE_FRAME[e].out;
+      p.x -= out.x * push;
+      p.y -= out.y * push;
     }
     return p;
   });
@@ -882,6 +894,13 @@ function cornerDiagonals(same: PatchSame): boolean[] {
   return [!!same.topLeft, !!same.topRight, !!same.bottomRight, !!same.bottomLeft];
 }
 
+// How far each edge of a body is pushed INSIDE its own tile, in edge order
+// (top, right, bottom, left). Zero for every ordinary patch: a lake's boundary
+// is the tile boundary. Non-zero only for a terrace band that has to fit more
+// than one step of fall between the summit and the neighbour it drops to.
+export type EdgeInset = [number, number, number, number];
+const NO_INSET: EdgeInset = [0, 0, 0, 0];
+
 // Everything the two path builders need to agree on, worked out once.
 function patchFrame(
   same: PatchSame,
@@ -890,13 +909,14 @@ function patchFrame(
   seed: number,
   size: number,
   style: EdgeStyle,
+  inset: EdgeInset,
 ) {
   const stops = edgeStops(same);
   const roles = cornerRoles(stops, cornerDiagonals(same));
   return {
     stops,
     roles,
-    c: corners(x, y, seed, size, roles, style, stops),
+    c: corners(x, y, seed, size, roles, style, stops, inset),
     g: cornerLattice(x, y),
     reach: size / 3,
   };
@@ -928,8 +948,13 @@ function edgeLean(
  * tile — the shore reaches the boundary and stops there instead of spilling a
  * quarter of a tile onto the ground next door.
  */
-function outwardRoom(p: Pt, out: Pt, size: number): number {
-  const room = out.x !== 0 ? (out.x > 0 ? size - p.x : p.x) : out.y > 0 ? size - p.y : p.y;
+function outwardRoom(p: Pt, out: Pt, size: number, inset = 0): number {
+  const edge = out.x !== 0 ? (out.x > 0 ? size - p.x : p.x) : out.y > 0 ? size - p.y : p.y;
+  // An INSET edge (a terrace band above the tile boundary) has to stay inside
+  // its own contour line, not merely inside the tile: spend the whole room and
+  // the sweep bulges back out over the band below and eats the ring it is
+  // supposed to sit in.
+  const room = edge - inset;
   // Divided by MID_OF_LEAN, because the CURVE is what has to stay on the tile,
   // not its control points. A cubic whose two ends sit `d` inside the boundary
   // and whose controls both lean `L` outward reaches `d - 0.75L` at its
@@ -975,8 +1000,9 @@ function patchSegments(
   seed: number,
   size: number,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): ShoreSeg[] {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style, inset);
   const segs: ShoreSeg[] = [];
   for (let i = 0; i < 4; i++) {
     const a = c[i];
@@ -1006,8 +1032,10 @@ function patchSegments(
       // A real corner leans out by the edge's own amount, but never past the
       // tile edge: the patch has to stay on its own cell (see outwardRoom).
       const lean = edgeLean(g, i, seed, reach);
-      leadOut = edgeLead(roles[i], g[i], seed, Math.min(lean, outwardRoom(a, out, size)), 1);
-      leadIn = edgeLead(roles[j], g[j], seed, Math.min(lean, outwardRoom(b, out, size)), -1);
+      const room = outwardRoom(a, out, size, inset[i]);
+      const roomB = outwardRoom(b, out, size, inset[i]);
+      leadOut = edgeLead(roles[i], g[i], seed, Math.min(lean, room), 1);
+      leadIn = edgeLead(roles[j], g[j], seed, Math.min(lean, roomB), -1);
     }
     segs.push({
       a,
@@ -1042,8 +1070,9 @@ export function patchPath(
   seed = 1,
   size = GROUND_UNITS,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): string {
-  const segs = patchSegments(same, x, y, seed, size, style);
+  const segs = patchSegments(same, x, y, seed, size, style, inset);
   const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
   for (const s of segs) out.push(cubic(s));
   out.push("Z");
@@ -1063,8 +1092,9 @@ export function patchRimPath(
   seed = 1,
   size = GROUND_UNITS,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): string {
-  return patchSegments(same, x, y, seed, size, style)
+  return patchSegments(same, x, y, seed, size, style, inset)
     .filter(s => s.stops)
     .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
     .join(" ");
@@ -2284,6 +2314,20 @@ function buildCached(
 // The terrace deliberately reuses the patch machinery (patchPath /
 // patchSegments), so its outline jitters off the grid and its shared edges
 // fuse invisibly, like every other body of ground in the game.
+//
+// EVERY STEP OF THE FALL IS DRAWN, not just the top one (2026-08-01). A cell
+// used to lay ONE body, for its own height, so a summit that dropped straight
+// to the ground next door — h2 against h0 at the end of a ridge, or an authored
+// h3 beside an h1 — showed a single contour where the hill either side showed
+// two or three. The hill then read as terraced along the axis someone happened
+// to author a ramp on and as a sheer wall everywhere else, which is the glitch
+// this section now exists to prevent. So a cell of height h lays a BAND PER
+// LEVEL, 1..h: band k fuses with every neighbour standing at k or above, and
+// where it has to stop it is pushed INSIDE the tile by its share of the fall
+// (see `bandInsets`). The tile that jumps 1 -> 3 draws the missing level-2
+// contour inside its own cell — the steps are closer together, which is what a
+// steeper slope looks like on a contour map — and 1 -> 2 -> 3 authored over
+// three cells still draws exactly what it did before, one contour per boundary.
 
 // A terrace is grass-family ground, so its tint is ANCHORED TO THE THEME's
 // board green and climbs from there — a fixed table read as a hollow on the
@@ -2309,19 +2353,78 @@ export function heightTint(height: number, theme = "meadow"): Hsl {
   return [bh - 9 * step, bs + 2 * step, Math.min(bl + 6 * step, 82)];
 }
 
+/**
+ * The eight neighbours' HEIGHTS (absent cells read as 0), in the same order as
+ * TerrainNeighbours. Heights, not booleans: a cell has to know how FAR the
+ * ground falls on each side, because that is how many contours it owes.
+ */
+export interface HeightNeighbours {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+  topLeft: number;
+  topRight: number;
+  bottomRight: number;
+  bottomLeft: number;
+}
+
+// How far apart two contours drawn INSIDE one tile sit, in ground units. Only a
+// multi-step fall spends this: the first step off the summit always lands on the
+// tile boundary, so an ordinary one-step ramp is drawn exactly where it always
+// was and every board authored before this reads identically.
+const TERRACE_BAND_INSET = 17;
+
+// The neighbour heights in edge order (top, right, bottom, left) — the same
+// clockwise walk `corners`/`patchSegments` use.
+function edgeHeights(n: HeightNeighbours): number[] {
+  return [n.top, n.right, n.bottom, n.left];
+}
+
+/**
+ * Where band `k` of a tile standing at `height` has to stop, per edge. An edge
+ * whose neighbour already stands at `k` or higher does not stop at all (0). An
+ * edge that drops to `n < k` owes `k - n` contours between the summit and the
+ * boundary; this band is the (k - n)th of them counting down, so the LOWEST one
+ * sits on the boundary and each one above steps a fixed distance further in.
+ */
+export function bandInsets(k: number, neighbours: HeightNeighbours): EdgeInset {
+  return edgeHeights(neighbours).map(n => {
+    if (n >= k) return 0;
+    // Capped so that even a 3-step wall (h3 against bare ground on every side)
+    // leaves the summit an actual patch to be rather than a crossing of four
+    // contours: opposite edges can never claim more than the tile between them.
+    return Math.min((k - n - 1) * TERRACE_BAND_INSET, GROUND_UNITS * 0.35);
+  }) as EdgeInset;
+}
+
+// The `same` flags for band k: a neighbour AT OR ABOVE k continues this contour.
+function bandSame(k: number, n: HeightNeighbours): PatchSame {
+  return {
+    top: n.top >= k,
+    right: n.right >= k,
+    bottom: n.bottom >= k,
+    left: n.left >= k,
+    topLeft: n.topLeft >= k,
+    topRight: n.topRight >= k,
+    bottomRight: n.bottomRight >= k,
+    bottomLeft: n.bottomLeft >= k,
+  };
+}
+
 // Memo, for the same reason as `cache` below: a terrace only changes with its
-// height, its neighbour comparison, its coord or the seed.
+// height, its neighbours' heights, its coord or the seed.
 const heightCache = new Map<string, string>();
 
 /**
- * The terrace one elevated tile lays, as an SVG fragment in the 0..100 box.
- * `same` compares NEIGHBOUR HEIGHT >= this height (fuse) — lower neighbours
- * are where the slope faces paint. "" at ground level.
+ * The terraces one elevated tile lays, as an SVG fragment in the 0..100 box:
+ * one band per level from 1 up to `height`, lowest first, so the bands nest.
+ * "" at ground level.
  */
 export function tileHeightSvg(
   height: number,
   coordId: string,
-  same: PatchSame,
+  neighbours: HeightNeighbours,
   seed = 1,
   theme = "meadow",
 ): string {
@@ -2329,45 +2432,65 @@ export function tileHeightSvg(
   // THE THEME IS PART OF THE KEY — the memo trap the terrain roadmap wrote
   // down before anyone hit it: switch theme mid-session and a key without it
   // serves every terrace from the old palette.
-  const key =
-    `h${height}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
-    `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}|${theme}`;
+  const around = [
+    neighbours.top,
+    neighbours.right,
+    neighbours.bottom,
+    neighbours.left,
+    neighbours.topLeft,
+    neighbours.topRight,
+    neighbours.bottomRight,
+    neighbours.bottomLeft,
+  ];
+  const key = `h${height}|${around.join(",")}|${coordId}|${seed}|${theme}`;
   const hit = heightCache.get(key);
   if (hit !== undefined) return hit;
 
   const { x, y } = parseCoordId(coordId);
-  const [hh, hs, hl] = heightTint(height, theme);
-  const d = patchPath(same, x, y, seed, GROUND_UNITS);
   const parts: string[] = [];
+  const lowest = Math.min(...around);
 
-  // Soft fringe outside the body (unclipped, like every kind's), so the
-  // terrace blends into the ground below instead of ending at a hard line.
-  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS);
-  if (fringeD) {
-    parts.push(
-      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
-      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
-    );
-  }
-  parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+  for (let k = 1; k <= height; k++) {
+    // A band the NEXT one up covers exactly (every neighbour is already above
+    // it, so both bodies are the same full-bleed square) would be painted over
+    // entirely — skip it rather than emit a shape nobody can see. This is the
+    // plateau interior, i.e. most of a big hill's cells.
+    if (k < height && lowest >= k + 1) continue;
 
-  // The slope faces: each DOWNHILL edge stroked inside the body — lit where it
-  // faces the sun (top/left), shaded where it faces away (right/bottom). Edge
-  // order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom, 3 left.
-  const slopes = patchSegments(same, x, y, seed, GROUND_UNITS)
-    .map((s, i) => ({ s, i }))
-    .filter(({ s }) => s.stops);
-  if (slopes.length > 0) {
-    const clipId = `height-clip-${coordId.replace(",", "-")}-${height}`;
-    parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
-    for (const { s, i } of slopes) {
-      const lit = i === 0 || i === 3;
-      const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
-      const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+    const same = bandSame(k, neighbours);
+    const inset = bandInsets(k, neighbours);
+    const [hh, hs, hl] = heightTint(k, theme);
+    const d = patchPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+
+    // Soft fringe outside the body (unclipped, like every kind's), so each
+    // contour blends into the step below instead of ending at a hard line.
+    const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+    if (fringeD) {
       parts.push(
-        `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+        `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
+        `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
       );
+    }
+    parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+
+    // The slope faces: each DOWNHILL edge stroked inside the body — lit where
+    // it faces the sun (top/left), shaded where it faces away (right/bottom).
+    // Edge order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom,
+    // 3 left.
+    const slopes = patchSegments(same, x, y, seed, GROUND_UNITS, "organic", inset)
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.stops);
+    if (slopes.length > 0) {
+      const clipId = `height-clip-${coordId.replace(",", "-")}-${k}`;
+      parts.push(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+      for (const { s, i } of slopes) {
+        const lit = i === 0 || i === 3;
+        const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
+        const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+        parts.push(
+          `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+        );
+      }
     }
   }
 
@@ -2771,4 +2894,5 @@ function buildGround(
 // against a changed implementation.
 export function _clearTerrainCache(): void {
   cache.clear();
+  heightCache.clear();
 }
