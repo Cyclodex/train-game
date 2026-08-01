@@ -116,14 +116,26 @@ const SHORE_EDGE_KEEP = 2;
 // makes the outline sweep from outside the lattice line down into the tile and
 // back — an effective corner radius of most of a tile, which is what reads as a
 // rounded blob. The two amounts vary per corner so the blob is never a circle.
-// Cutting these deeper was tried when containment capped the outward sweep at
-// the tile edge (see outwardRoom), to buy back some of the roundness the cap
-// takes away. It is not worth it: at 20..32 a lone pond's outline drops under
-// the 55% coverage floor — a puddle, not a pond — and the extra bite buys
-// almost no visible curve on a big body, whose sides are governed by the
-// mid-shore pull instead.
-const CORNER_INSET_MIN = 14;
+// The base amounts are pitched at a LONE tile, where a circle inscribed in the
+// square cuts each corner by ~14.6 units on each axis, i.e. ~21 along the
+// diagonal.
+const CORNER_INSET_MIN = 18;
 const CORNER_INSET_MAX = 26;
+
+// …but a corner of a BIGGER body has to be cut deeper, and this is why a 2x2
+// lake used to read as a rounded rectangle instead of as an oval. An ellipse
+// inscribed in a 2x2 block passes ~29 units inside each corner of the block ON
+// EACH AXIS — twice a lone tile's cut — because the shore has two tiles to
+// travel while it turns, not one. Cutting every corner by the lone-tile amount
+// therefore rounds a small pond correctly and leaves a big lake square.
+//
+// How big the body is, is READABLE LOCALLY: it is how many of this tile's edges
+// stop. Four = the body is this tile alone. Three = the end of a one-wide
+// ribbon. Two = a corner tile of something at least 2x2 — the case that needs
+// the deep cut. No cross-tile agreement is needed for this (unlike every shared
+// lattice value): a corner-role point is only ever drawn through by ONE tile,
+// because a same-kind side neighbour would have made it a run instead.
+const CORNER_INSET_BY_STOPS: Record<number, number> = { 4: 1, 3: 1.3, 2: 1.75 };
 
 // How much a real corner's end tangents lean outward, as a multiple of the old
 // bow-derived lean. At ~1 the outline turned ~78° at the corner point — a
@@ -765,7 +777,12 @@ function corners(
   size: number,
   roles: CornerRole[],
   style: EdgeStyle,
+  stops: boolean[],
 ): Pt[] {
+  // How deep this tile's real corners are cut: the further the body extends,
+  // the longer the shore has to turn, and the deeper the cut has to be for the
+  // silhouette to read as one curve (see CORNER_INSET_BY_STOPS).
+  const insetScale = CORNER_INSET_BY_STOPS[stops.filter(Boolean).length] ?? 1;
   const local: Pt[] = [
     { x: 0, y: 0 },
     { x: size, y: 0 },
@@ -788,7 +805,7 @@ function corners(
     } else if (role.kind === "corner") {
       // The inward diagonal is opposite the two adjacent edges' outward
       // normals; their sum has length sqrt(2), so divide to get a unit pull.
-      const inset = cornerInset(gx, gy, seed);
+      const inset = cornerInset(gx, gy, seed) * insetScale;
       const oBefore = EDGE_FRAME[(i + 3) % 4].out;
       const oAfter = EDGE_FRAME[i].out;
       p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * inset;
@@ -879,7 +896,7 @@ function patchFrame(
   return {
     stops,
     roles,
-    c: corners(x, y, seed, size, roles, style),
+    c: corners(x, y, seed, size, roles, style, stops),
     g: cornerLattice(x, y),
     reach: size / 3,
   };
@@ -913,11 +930,23 @@ function edgeLean(
  */
 function outwardRoom(p: Pt, out: Pt, size: number): number {
   const room = out.x !== 0 ? (out.x > 0 ? size - p.x : p.x) : out.y > 0 ? size - p.y : p.y;
-  // Stop SHORT of the boundary, never on it. A control point landing exactly on
-  // 0 or `size` would put the shore's steepest part on the grid line itself —
-  // the tile edge drawn back onto the water, which is the defect all the jitter
-  // exists to avoid. Two units is enough to keep every number off the grid.
-  return Math.max(0, room - SHORE_EDGE_KEEP);
+  // Divided by MID_OF_LEAN, because the CURVE is what has to stay on the tile,
+  // not its control points. A cubic whose two ends sit `d` inside the boundary
+  // and whose controls both lean `L` outward reaches `d - 0.75L` at its
+  // midpoint, so the exact condition is L <= d / 0.75 — the control point may
+  // legitimately sit outside the tile while the shore it draws does not.
+  //
+  // Capping at the hull instead (L <= d) was the first attempt and it is what
+  // made a lake look BOXY: the sweep died 5-7 units short of the boundary all
+  // the way round, so every side read as a straight run with a small turn at
+  // each end instead of as one arc. Rounding a corner needs the lean, and the
+  // lean has to be worth a third more than the room to spend it.
+  //
+  // The keep-off is subtracted first so the curve stops just SHORT of the grid
+  // line rather than on it: landing exactly on 0 or `size` would put the
+  // shore's steepest part on the tile edge, which is the thing the jitter is
+  // there to avoid.
+  return Math.max(0, room - SHORE_EDGE_KEEP) / MID_OF_LEAN;
 }
 
 /**

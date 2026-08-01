@@ -225,6 +225,56 @@ describe("terrain", () => {
       }
     });
 
+    it("reaches the tile edge mid-shore and cedes the tile's corners — round, not square", () => {
+      // The shape statement, from both sides at once. A patch that covered the
+      // corners would be a square; one that never reached an edge would be a
+      // shrunken square. Its FULLEST shore has to come right up to the boundary
+      // (how full varies per edge — see the bow), and every corner of the tile
+      // square has to be outside it.
+      for (const seed of [1, 2, 3, 5, 8, 13, 42, 99]) {
+        const poly = patchOutlinePolygon(all(false), 2, 3, seed);
+        const midEdges = [
+          { x: 50, y: 4 },
+          { x: 96, y: 50 },
+          { x: 50, y: 96 },
+          { x: 4, y: 50 },
+        ];
+        expect(midEdges.some(p => pointInPolygon(p, poly))).toBe(true);
+        for (const c of [
+          { x: 8, y: 8 },
+          { x: 92, y: 8 },
+          { x: 92, y: 92 },
+          { x: 8, y: 92 },
+        ]) {
+          expect(pointInPolygon(c, poly)).toBe(false);
+        }
+      }
+    });
+
+    it("cuts a bigger body's corner deeper than a lone pond's", () => {
+      // Why a 2x2 lake used to be a rounded rectangle: every corner was cut by
+      // the same amount, but a body that spans two tiles has twice as far to
+      // travel while it turns. An ellipse inscribed in a 2x2 block passes ~29
+      // units inside the block's corner on each axis, against ~15 for a circle
+      // in a single tile — so the cut scales with how many of the tile's edges
+      // stop (4 = alone, 2 = a corner of something bigger).
+      const bigCorner = {
+        top: false,
+        right: true,
+        bottom: true,
+        left: false,
+        bottomRight: true,
+      };
+      for (const seed of [1, 3, 7, 9, 42]) {
+        const lone = parsePath(patchPath(all(false), 2, 3, seed));
+        const big = parsePath(patchPath(bigCorner, 2, 3, seed));
+        // Corner 0 (the M point) is a real corner on both boards, at the same
+        // lattice point and from the same draw — so only the scale differs.
+        const depth = (s: ReturnType<typeof parsePath>) => s[0].start.x + s[0].start.y;
+        expect(depth(big)).toBeGreaterThan(depth(lone) * 1.5);
+      }
+    });
+
     it("keeps every shore ON its own tile", () => {
       // THE containment rule. A cell's terrain is what that cell IS, so what
       // answers for the cell — a bridge deck, a tunnel portal — spans exactly

@@ -161,7 +161,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   DIAGONAL neighbours, not just the four sides (`TerrainNeighbours` carries all
   eight; the diagonals are in the memo key too):
   · both edges stop → real CORNER: the point is pulled INWARD along the tile
-    diagonal (`cornerInset`, 14-26u) and the end tangents lean out ~`reach`
+    diagonal (`cornerInset`, 18-26u × `CORNER_INSET_BY_STOPS`) and the end
+    tangents lean out ~`reach`
     (`CORNER_ROUNDING`), so the turn is a deep sweep, not a softened right
     angle. Needs no cross-tile agreement: only ONE tile ever draws through a
     corner-role point (a same-kind side neighbour would change the role);
@@ -197,11 +198,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
     tile and a 2x2 lake comes out a cushion with a pinch in the middle of each
     side. That is the same star-shaped defect as the old symmetric bow, arriving
     from the other direction. Seen and reverted during this change.
-  · Cutting `CORNER_INSET` deeper (20-32) to buy back the roundness the cap takes
-    away was tried and reverted: a lone pond drops under the 55% coverage floor
-    and a big body barely changes. Containment costs some blobbiness on a MULTI-
-    tile body — a 2x2 lake now reads as a rounded rectangle. That is the trade,
-    not a defect.
+  · CONTAINMENT MADE IT BOXY BEFORE IT MADE IT ROUND, and the two fixes for that
+    are worth knowing:
+    (a) THE CAP IS ON THE CURVE, NOT ON THE HULL. `outwardRoom` divides by
+        `MID_OF_LEAN`: a cubic whose ends sit `d` inside and whose controls lean
+        `L` out reaches `d - 0.75L`, so the exact condition is `L <= d/0.75` — a
+        control point may sit OUTSIDE the tile while the shore it draws does
+        not. Capping at the hull (`L <= d`) is the obvious thing and it is what
+        left every sweep dying 5-7 units short: each side read as a straight run
+        with a small turn at each end.
+    (b) A CORNER'S CUT SCALES WITH THE SIZE OF THE BODY
+        (`CORNER_INSET_BY_STOPS`, 4 stops = 1, 3 = 1.3, 2 = 1.75). An ellipse in
+        a 2x2 block passes ~29 units inside the block corner per axis against
+        ~15 for a circle in one tile: the shore has two tiles to turn in, not
+        one. One cut for all sizes rounds a pond and leaves a lake square. Body
+        size is READABLE LOCALLY as "how many of my edges stop", and needs no
+        cross-tile agreement — a corner-role point is drawn by one tile only.
+    Pinned by "reaches the tile edge mid-shore and cedes the tile's corners" and
+    "cuts a bigger body's corner deeper than a lone pond's".
   · Scatter obeys the same rule: `peak`'s crest (34-48u) / apron widths, `boulder`'s
     radius and the mountain/rock BANDS are pitched together so a ridge or a
     boulder lands inside its cell. Before, a massif overhung the tunnel portal
