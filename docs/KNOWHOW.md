@@ -2005,6 +2005,64 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
+## SIM HOT PATH — why the suite was slow (2026-08-01)
+- 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
+  and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled
+  body — is what every following / gap-acceptance / junction-conflict scan asks
+  for, so it is O(cars²) CALLS per tick, each re-walking the path (`segLen`) and
+  re-deriving the lateral lag (`lanePosAt`) for a dozen-odd points. Profiled on
+  /test/parkcity (37 vehicles): 60% of the entire tick, nearly all of it rebuilding
+  bodies that nothing had touched since the last call.
+  · FIX: memoise against an EXACT SIGNATURE of the car state it reads (path ref +
+    length, headIndex/headProgress, laneIndex/laneVel/laneAnchor, velocity,
+    lanePivot, phase/parkOnLane/manoeuvre/length) — NOT against the tick. `step`
+    advances cars one at a time and a later car MUST see an earlier one where it
+    now IS: a tick-scoped cache silently changes what the gates see, a
+    signature-scoped one cannot. Grow the signature when `computeBodyPoints` grows.
+  · The returned array is now SHARED. Every caller already treated it read-only.
+- `roadPortsOf` (and `isRoadJunction`, which is it plus a length test) was another
+  13%: rebuilding a Set from STATIC tile lanes inside the per-pair inner loops.
+  Memoised on the `Lane[]` ARRAY IDENTITY (a WeakMap).
+  · Safe only because every reducer in `tiles/editOps.ts` is PURELY FUNCTIONAL — an
+    edit hands back `{ ...cell, road: next }` with a NEW array, so an edited tile
+    misses the cache by construction and live editing still works. A reducer that
+    mutated a `Lane[]` in place would serve a stale answer HERE AND NOWHERE ELSE.
+    Keep them pure.
+- Result: parkcity 6178ms -> 1275ms per 1000 ticks (4.8x), unit suite 4m22s -> 1m07s.
+  The GAME LOOP got the same speedup — this was never a test-only cost.
+- HOW TO PROVE A SIM OPTIMISATION CHANGED NOTHING (do this; don't just eyeball a
+  green suite): hash a state trace and diff it across the change. 75 road scenarios
+  x 3 seeds x 400 ticks, hashing `sim.cars()` kinematics AND every `sim.bodies()`
+  point (tileId/lane/entry/t/lanePos at 12dp) — this memo came out BIT-IDENTICAL.
+  A throwaway spec under `tests/unit/` is the cheapest host (it needs the `@` alias).
+- The suite was RED on a slow machine BEFORE this, and not from an assertion:
+  `parking.spec.ts`'s two biggest cases blew their own timeouts. Green tests, red
+  CI — same family as the `onTaskUpdate` trap below, and the same cure: make it
+  faster, don't raise the limit.
+
+## TEST TIERS — fast lane vs full suite (2026-08-01)
+- `npm run test:unit` = FULL (~1m07s). What CI and the implement pipeline run; its
+  meaning is deliberately UNCHANGED, so nothing silently loses coverage.
+- `npm run test:unit:fast` = fast lane (~28s): everything except the long-run sim cases.
+- `npm run test:unit:changed` = only what your diff touches (vs `origin/master`) —
+  the sharpest tool while iterating. Needs `origin/master` fetched; edit a core file
+  like `sim/road.ts` and it correctly selects everything.
+- `npm run test:unit:profile` = ranked file + test costs and slow-tier candidates.
+  USE IT rather than guessing what to tag: the line moves whenever the hot path does.
+- Tag with `itSlow` / `describeSlow` from `tests/unit/support/tier.ts`, at roughly
+  >=900ms — in practice, anything stepping a sim more than a few hundred ticks.
+- SPLIT BY TEST, NOT BY FILE. `sim/parking.spec.ts` is the slowest file in the suite
+  AND holds ~60 millisecond-fast geometry/registry cases; tiering by file would
+  leave anyone working on parking with no quick signal at all.
+- The tier arrives via `test.env` in `vitest.fast.config.ts`, NOT a `VAR=x` prefix in
+  package.json — that shell form does not work on Windows, which this project is
+  developed on.
+- The fast lane SKIPS rather than EXCLUDES, so a run still prints "112 skipped" —
+  the standing reminder that a full run is owed before pushing.
+- NEXT LEVER if ~28s is still too slow: `sim/road.spec.ts` is the fast lane's
+  critical path (18.5s alone — one file is one worker, so it sets the wall-clock
+  floor). It has 27 top-level describes and splitting it would parallelise both lanes.
+
 ## VERIFY
 - THE SUITE CAN EXIT 1 WITH EVERY TEST PASSING, and the message names nothing:
   `Tests 2173 passed` followed by `Unhandled Error: [vitest-worker]: Timeout
@@ -2034,7 +2092,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
     4000 ticks until they were merged into one pass — a third of the suite's
     runtime spent simulating identical traffic to look at a different field.
     207s -> 138s, no coverage lost.
+  · 2026-08-01: the hot-path memo above cut the suite 4m22s -> 1m07s, which makes
+    this far less likely to fire — but the setup file STAYS. It is the cheap
+    insurance, and the next long-run case re-arms the trap.
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+  While iterating use `test:unit:changed` or `test:unit:fast`; run the FULL lane
+  before you push (see TEST TIERS above).
 - `npm run probe` = RENDER-level audit of every registry scenario (90 today) in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the

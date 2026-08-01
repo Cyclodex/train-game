@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { createRoadSim } from "@/sim/road";
 import { busshortcut } from "@/levels/test/scenarios/busshortcut";
 
@@ -6,7 +7,7 @@ import { busshortcut } from "@/levels/test/scenarios/busshortcut";
 const MIDDLE = new Set(["2,1", "2,2", "2,3"]);
 
 describe("busshortcut scenario — traffic flows, the bus shortcut is bus-only", () => {
-  it("spawns both classes, keeps cars out of the middle, and routes buses through it", () => {
+  itSlow("spawns both classes, keeps cars out of the middle, and routes buses through it", () => {
     const sim = createRoadSim({
       level: busshortcut.level,
       width: busshortcut.size!.cols,

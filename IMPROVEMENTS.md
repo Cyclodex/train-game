@@ -183,7 +183,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `src/tiles/*`) — catches real bugs as the sim grows.
 15. **Fix the "fraight" typo** in one sweep (type strings + asset names), or leave
     it — but do it all at once, never piecemeal.
-16. **Longer term**: migrate the class components to `<script setup>` +
+16. **Split `tests/unit/sim/road.spec.ts` (3k lines, 27 top-level describes).**
+    After the 2026-08-01 hot-path work the unit suite runs in ~1m (full) / ~28s
+    (fast lane), and this one file is now the fast lane's critical path: 18.5s of
+    it, and one file is one worker, so it alone sets the wall-clock floor.
+    Splitting it along its existing describes (junctions / bus lanes / lane
+    discipline / following+overtaking) parallelises both lanes for roughly no
+    risk — it is a move, not a rewrite. Kept out of that change deliberately so
+    the perf diff stayed reviewable. See `docs/KNOWHOW.md` → TEST TIERS.
+17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
 

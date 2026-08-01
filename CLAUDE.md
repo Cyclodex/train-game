@@ -49,7 +49,10 @@ npm install            # or: npm ci  (.npmrc sets ignore-scripts + save-exact)
 npm run dev            # Vite dev server at http://localhost:5173
 npm run build          # vue-tsc type-check + vite build -> dist/
 npm run preview        # serve the production build
-npm run test:unit      # vitest run
+npm run test:unit      # vitest run — THE FULL SUITE (~1m). What CI runs.
+npm run test:unit:fast # ~28s: skips the long-run sim cases. While iterating.
+npm run test:unit:changed # only tests your diff touches (vs origin/master).
+npm run test:unit:profile # where the suite's time goes + slow-tier candidates
 npm run browsers       # install the Playwright browser builds (once per machine)
 npm run test:e2e       # playwright e2e (needs `npm run browsers` first)
 npm run lint           # eslint --fix
@@ -327,7 +330,19 @@ See `IMPROVEMENTS.md` for the prioritised backlog.
 ## Verifying changes
 
 `npm run build` (vue-tsc + vite) is the fastest correctness check, and
-`npm run test:unit` covers the coordinate math. For behaviour, `npm run test:e2e`
+`npm run test:unit` covers the coordinate math.
+
+**The unit suite has two lanes.** While you iterate, run `npm run test:unit:changed`
+(only what your diff touches) or `npm run test:unit:fast` (~28s — the whole suite
+minus the long-running simulation cases, which are tagged `itSlow`; see
+`tests/unit/support/tier.ts`). Run the FULL `npm run test:unit` (~1m) before you
+push — the fast lane prints how many cases it skipped, so it never pretends to be
+the whole story. `npm run test:unit:profile` shows where the time actually goes and
+which cases are candidates for the slow tier; check it rather than guessing, and
+re-check after touching the simulation's hot path. Do NOT tag a test slow to get a
+red suite green — a slow test that fails still fails in the full lane.
+
+For behaviour, `npm run test:e2e`
 boots a real browser and asserts the level renders 41 tiles + 2 trains, the
 trains physically leave their depots, no two trains share a tile, a puzzle-mode
 run reaches its win overlay, and there are no console errors. For visual
