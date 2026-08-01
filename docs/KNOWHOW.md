@@ -468,6 +468,54 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/parkandride` (kerb bays by the station) and `/test/busfeeder` (an
   in-lane halt: crowd jumps by busloads, cars queue behind the bus).
 
+## CITIZENS & CITIES (the Transport-Fever mode, 2026-08-01)
+- Split on the terrain-blindness line: `tiles/cities.ts` READS the map (plots,
+  city clustering, road components, station reach) and hands the sim a
+  `CitizenWorld`; `sim/citizens.ts` owns the people and never sees a TileCell.
+  Enabled per MODE via `ModeSetup.citizens` — absent for every other mode, so
+  nothing else on the board changes.
+- **The map says WHERE, the sim says HOW MANY.** `terrain: urban|industry` is
+  the zoning (level data); `density` + residents are live sim state. Growth
+  fills plots, then upgrades density, then raises `wantsRoom` — there is no
+  auto-sprawl onto grass.
+- A city is a flood fill (8-neighbour) over plot ground; `TileCell.city` tags
+  override it for towns that touch. A tile carrying rail/road/parking is NOT a
+  plot — a street is not a house.
+- **Driving needs one road NETWORK, not two roads.** `roadComponents()` gives
+  each plot a component id and a car trip needs both ends to match. This is the
+  lever the whole mode turns on: two towns with their own streets and nothing
+  between them can only be linked by rail.
+- **THREE NUMBERS DECIDE WHETHER A BOARD IS ABOUT TRANSPORT AT ALL**, and all
+  three fail silently — the board just quietly becomes a walking simulator:
+    1. `walkMaxTiles`. At 6 the reference board's nearest factory was EXACTLY 6
+       tiles from the nearest house: rail carried 1% of journeys. The mode sets 4.
+    2. Shop capacity [2,4,8,16] vs works [12,24,48,96]. Shops as big as factories
+       meant everyone worked on their own street.
+    3. Town spacing must EXCEED `walkMaxTiles`. The gaps on `threecities` are
+       level design, not scenery.
+  Check the mode-share bar first when a citizen board feels inert.
+- **A citizen stays in their seat until their station comes up.** The rail sim's
+  passengers ride one hop and are set down at the next call; mirroring that
+  literally made a shuttle take 16 people aboard, run to the depot, bounce, and
+  put all 16 back on the SAME platform as a 'transfer' — 83% of rail attempts
+  abandoned on a working railway. Cost of the fix: a through-rider holds a seat
+  the sim already freed (boarding is still capacity-gated, which is the part
+  that must be true).
+- **A bounce is not an arrival.** A colour-mismatched train emits
+  `arrived{matched:false}` and reverses out WITH its riders. Only act on
+  `matched` arrivals, or every passenger fails twice a lap.
+- **The platform cap is not a difficulty dial.** With no `stationDemand` entry a
+  station falls back to `STATION_QUEUE_HARD_CAP` (16), which a morning peak
+  exceeds — and someone who cannot JOIN the queue waits until they give up. The
+  citizen layer supplies an entry with `intervalSec: Infinity` (spawns nobody)
+  and a generous `max` (a cap and nothing else).
+- Citizens tick in `game.advance()` on the SAME `SimEvent[]` the railway just
+  emitted — never in the render mirror. `tests/unit/citizenCommute.spec.ts`
+  drives 1500 headless seconds and asserts the pair that IS the mode: trains
+  running → 56% of journeys by rail, population 111→153; no trains → the two
+  commuter towns halve while the walkable works town holds.
+- `/test/threecities` (mode `citizens`), city cards in `CityPanel.vue`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

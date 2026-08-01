@@ -65,6 +65,7 @@
       @pointercancel="onViewportPointerUp"
       @wheel.prevent="onViewportWheel"
     >
+    <CityPanel />
     <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
@@ -186,6 +187,7 @@ import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import CityPanel from "@/components/CityPanel.vue";
 import { type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
@@ -205,7 +207,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { Crossing, FarePin } })
+@Component({ components: { Crossing, FarePin, CityPanel } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;

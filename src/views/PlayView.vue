@@ -199,6 +199,7 @@
       @pointercancel="onViewportPointerUp"
       @wheel.prevent="onViewportWheel"
     >
+    <CityPanel />
     <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
@@ -553,6 +554,7 @@ import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import CityPanel from "@/components/CityPanel.vue";
 import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
@@ -631,7 +633,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer } })
+@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];

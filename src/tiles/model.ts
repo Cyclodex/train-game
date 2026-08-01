@@ -96,6 +96,13 @@ export interface TileCell {
   // park's AISLES are ordinary `road` lanes, so the router drives its rows for
   // free; `parking` only ever adds the stalls beside them.
   parking?: ParkingCell;
+  // Which CITY this ground belongs to. Optional, and normally absent: cities are
+  // derived by clustering connected urban/industry ground (`tiles/cities.ts`),
+  // so every board written before cities existed has them for free. The tag is
+  // the escape hatch for two towns that happen to touch — a flood fill would
+  // read those as one place — and for naming a town explicitly. Ignored on any
+  // cell that is not plot ground.
+  city?: string;
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
   // Street-junction traffic signals (ROAD / cars only). When present and not
