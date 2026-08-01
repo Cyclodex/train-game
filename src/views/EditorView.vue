@@ -199,8 +199,8 @@
           height: config.tileSize + 'px',
         }"
         @click="onCellClick(cell.key)"
-        @mousedown="onTerrainDown($event, cell.key); onFacilityDown($event, cell.key)"
-        @mouseenter="onTerrainEnter($event, cell.key); onFacilityEnter($event, cell.key)"
+        @mousedown="onTerrainDown($event, cell.key); onFacilityDown($event, cell.key); onHeightDown($event, cell.key)"
+        @mouseenter="onTerrainEnter($event, cell.key); onFacilityEnter($event, cell.key); onHeightEnter($event, cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <!-- Which car park this tile belongs to. Read straight off the cell, not
@@ -402,7 +402,7 @@
 </template>
 
 <script lang="ts">
-import { markRaw, reactive } from "vue";
+import { markRaw, reactive, ref } from "vue";
 import { Component, Inject, Provide, Vue, Watch, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY, gameConfig, setWorldTheme } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
@@ -440,6 +440,8 @@ import {
   setLaneKindRun,
   syncJunctionLanesAround,
   setTerrain,
+  shiftHeight,
+  cycleFlyover,
   isBlankCell,
   canParkOn,
   parkingRowAt,
@@ -460,7 +462,7 @@ import {
   type StallReservation,
 } from "@/tiles/parking";
 import { stallOutlinePath, garageGeometry, rowFrame } from "@/tiles/parkingGeometry";
-import { canBuildOn, needsBridge } from "@/tiles/terrain";
+import { canBuildOn, needsBridge, needsTunnel } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
 import { railPathsFor } from "@/tiles/geometry";
@@ -490,11 +492,13 @@ type Tool =
   | "connect"
   | "depot"
   | "signal"
+  | "flyover"
   | "erase"
   | "road"
   | "buslane"
   | "signalise"
   | "terrain"
+  | "height"
   | "parking"
   | "facility";
 
@@ -514,6 +518,8 @@ interface DockItem {
   // Parking's "tools" are stall KINDS, the same way terrain's are brushes:
   // selecting one arms the parking tool AND picks what it lays.
   stall?: StallKind;
+  // The height tool's two brushes (raise / lower), same pattern again.
+  heightDelta?: 1 | -1;
 }
 
 interface DockGroup {
@@ -532,6 +538,7 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "connect", icon: "🛤️", label: "Track", tool: "connect" },
       { key: "depot", icon: "🏠", label: "Depot", tool: "depot" },
       { key: "signal", icon: "🚦", label: "Signal", tool: "signal" },
+      { key: "flyover", icon: "🌉", label: "Flyover", tool: "flyover" },
     ],
   },
   {
@@ -570,6 +577,8 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
       { key: "industry", icon: "🏭", label: "Works", tool: "terrain", terrain: "industry" },
       { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
+      { key: "raise", icon: "🔼", label: "Raise", tool: "height", heightDelta: 1 },
+      { key: "lower", icon: "🔽", label: "Lower", tool: "height", heightDelta: -1 },
     ],
   },
   {
@@ -623,7 +632,11 @@ const HINTS: Record<Tool, string> = {
   facility:
     "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
   terrain:
-    "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them).",
+    "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them). Routing across water builds a bridge, across rock/mountain a tunnel — both priced accordingly.",
+  height:
+    "Drag to raise (🔼) or lower (🔽) the ground one step per stroke — paint a hill as an AREA, not just along the line. Track may climb ONE step per tile boundary (that joint is the ramp); anything steeper is flagged as a cliff. Climbs slow heavy trains, so a pass costs freight real time.",
+  flyover:
+    "Click a diamond crossing (two rails crossing without switches) to cycle which line rides the bridge deck: flat → first line over → other line over → flat. Grade-separated lines never wait for each other — no junction, no conflict.",
 };
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
@@ -636,6 +649,11 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
   return {
     depotColors: {},
     trainColors: {},
+    // Tile.vue's neighbour-aware getters (tunnel portals, grade chevrons) read
+    // this to register the play-mode edit counter; the editor's level is fully
+    // reactive so the counter never needs to tick here — but it must EXIST, or
+    // the first tunnel or hillside drawn in the editor throws.
+    levelVersion: ref(0),
     switches: reactive({}),
     reservations: empty,
     occupied: empty,
@@ -741,6 +759,13 @@ class EditorView extends Vue {
   // The kind the terrain brush paints. "grass" is the eraser: it clears the
   // field rather than storing a value, since absent means grass everywhere else.
   terrainBrush: TerrainKind = "forest";
+  // The height tool's armed direction (raise or lower), and its drag state. A
+  // stroke must touch each cell ONCE — unlike the terrain brush (idempotent
+  // repaint), re-applying ±1 on every mouseenter would staircase a wobbling
+  // drag — so the stroke remembers where it has been.
+  heightBrush: 1 | -1 = 1;
+  heightPainting = false;
+  heightStroke = new Set<string>();
   // Terrain is the one tool where drag-to-paint is the natural verb (you paint
   // an AREA of wood, not a tile of it), so it tracks its own press state instead
   // of going through the edge-based gesture the connect tool uses.
@@ -777,6 +802,10 @@ class EditorView extends Vue {
     if (item.stall !== undefined) {
       return this.tool === "parking" && this.stallKind === item.stall;
     }
+    // Raise and lower share the height tool the same way.
+    if (item.heightDelta !== undefined) {
+      return this.tool === "height" && this.heightBrush === item.heightDelta;
+    }
     return this.tool === item.tool;
   }
 
@@ -792,6 +821,7 @@ class EditorView extends Vue {
   selectItem(item: DockItem) {
     if (item.terrain !== undefined) this.terrainBrush = item.terrain;
     if (item.stall !== undefined) this.stallKind = item.stall;
+    if (item.heightDelta !== undefined) this.heightBrush = item.heightDelta;
     this.setTool(item.tool);
   }
   // Provided so tile-level children (TileGround) can read their neighbours'
@@ -1065,6 +1095,9 @@ class EditorView extends Vue {
       // Water is crossable on a structure: the route may span it, and
       // `addConnection` marks what it lays as a bridge.
       bridgeable: (c: Coordinates) => needsBridge(this.level[getCoordinatesId(c)]),
+      // Rock and mountain are borable: the route may pass under them, and
+      // `addConnection` marks what it lays as a tunnel.
+      tunnelable: (c: Coordinates) => needsTunnel(this.level[getCoordinatesId(c)]),
     };
   }
 
@@ -1540,6 +1573,43 @@ class EditorView extends Vue {
   stopTerrainPainting = () => {
     this.terrainPainting = false;
   };
+  stopHeightPainting = () => {
+    this.heightPainting = false;
+    this.heightStroke.clear();
+  };
+
+  // --- height brush (cell-level drag-to-paint, once per cell per stroke) ---
+  onHeightDown(ev: MouseEvent, id: string) {
+    if (this.tool !== "height" || ev.button !== 0 || this.spaceHeld) return;
+    this.heightPainting = true;
+    this.heightStroke.clear();
+    this.paintHeight(id);
+  }
+  onHeightEnter(ev: MouseEvent, id: string) {
+    if (this.tool !== "height" || !this.heightPainting) return;
+    // Same live-buttons guard as the terrain brush: a swallowed mouseup must
+    // not leave the brush stuck on.
+    if ((ev.buttons & 1) === 0) {
+      this.stopHeightPainting();
+      return;
+    }
+    this.paintHeight(id);
+  }
+  paintHeight(id: string) {
+    if (this.heightStroke.has(id)) return;
+    this.heightStroke.add(id);
+    const cur = this.level[id] ?? emptyCell();
+    const next = shiftHeight(cur, this.heightBrush);
+    if (next === cur || next.height === cur.height) return; // clamped: no-op
+    // Lowering the last thing a cell carried removes it entirely, exactly like
+    // painting grass over bare terrain.
+    if (isBlankCell(next)) {
+      delete this.level[id];
+      this.persist();
+      return;
+    }
+    this.commit(id, next);
+  }
   paintTerrain(id: string) {
     const cur = this.level[id] ?? emptyCell();
     if ((cur.terrain ?? "grass") === this.terrainBrush) return; // no-op repaint
@@ -1574,6 +1644,10 @@ class EditorView extends Vue {
       // Cycle the road junction's traffic-signal mode (no-op off a junction).
       const cur = this.level[id];
       if (cur) this.commit(id, cycleJunctionSignalMode(cur));
+    } else if (this.tool === "flyover") {
+      // Cycle which line rides the deck (no-op off a diamond crossing).
+      const cur = this.level[id];
+      if (cur) this.commit(id, cycleFlyover(cur));
     }
   }
   // Face the first neighbour that already has track on the shared border.
@@ -1613,6 +1687,7 @@ class EditorView extends Vue {
     // the app) must still release the brush, or the next hover keeps painting.
     window.addEventListener("mouseup", this.stopTerrainPainting);
     window.addEventListener("mouseup", this.stopFacilityPainting);
+    window.addEventListener("mouseup", this.stopHeightPainting);
     // Frame the board before the first paint: a big level would otherwise open
     // on its top-left corner.
     this.$nextTick(() => this.fitWorld());
@@ -1627,6 +1702,7 @@ class EditorView extends Vue {
     window.removeEventListener("keyup", this.onEditorKeyUp);
     window.removeEventListener("resize", this.onWindowResize);
     window.removeEventListener("mouseup", this.stopTerrainPainting);
+    window.removeEventListener("mouseup", this.stopHeightPainting);
   }
   clearAll() {
     for (const k of Object.keys(this.level)) delete this.level[k];

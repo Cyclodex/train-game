@@ -398,7 +398,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `blocked-terrain`, the editor, the route planner — gets the exception for free
   by asking the question it always asked. Pinned by a validator test.
 - ONLY WATER IS BRIDGEABLE (`BRIDGEABLE`/`terrainBridgeable`). Rock and mountain
-  still refuse: a tunnel is their answer and a separate feature.
+  are TUNNELLED instead (see TUNNELS, 2026-07-31) — no ground is ever both.
 - `addConnection` SETS IT. Every build path in the game (editor commit, in-play
   `buildRoute`, the route-draw lay) funnels through that one reducer, so there is
   no "place bridge" verb to forget and no way to end up with track standing in a
@@ -421,6 +421,106 @@ lean — prune as much as you add. This file only stays useful if every task ten
   surface (width from the lane count). /test scenario: `bridge`.
 - A RIVER IS NOT A KIND: it is a 1-wide line of `water`, which `patchPath` fuses
   into a ribbon. What separates it from a lake is that it cannot be gone round.
+
+## TUNNELS (2026-07-31)
+- `TileCell.tunnel` is the bridge's twin: the SAME exception inside `canBuildOn`
+  (`bridge || tunnel`), set by `addConnection` on TUNNELABLE ground (rock +
+  mountain), cleared by `removeConnection` with the last line. Planner gate
+  `RouteOpts.tunnelable` at TUNNEL_MOVE (9x) vs BRIDGE_MOVE (6x); money
+  `TUNNEL_BUILD_FACTOR` 6 beats the bridge's 4 as the dearest build.
+- THE GROUND STAYS UNBROKEN OVER THE BORE: a tunnel cell lays NO rail keep-out
+  corridor (`cellCorridors` skips `connections` when `cell.tunnel`), so the
+  mountain scatter closes over the line. Clearing the right-of-way would draw
+  the route onto the ridge as a bald stripe — the one thing a tunnel is not.
+  TileRail is suppressed on the cell; a dashed guide (z2) is the map notation.
+- PORTALS only where the bore meets NON-tunnel ground — an internal seam
+  between two tunnel cells gets none. Tile.vue injects `level` for that
+  neighbour check and reads `game.levelVersion` in the getter, or an extended
+  bore would not retire the now-internal portal (cached-computed trap).
+- The portal svg is z7, ABOVE trains — same layer story as the forest canopy:
+  `game.ts renderTrains` hides a unit once its CENTRE is on a tunnel tile, and
+  the arch straddling the seam masks the per-unit pop, so a consist threads in
+  wagon by wagon. /test scenario: `tunnel`.
+
+## GRADE SEPARATION — flyover (2026-07-31)
+- `TileCell.flyover: PortPair` names the connection riding a deck OVER the
+  other line; `kindOf` → "flyover". AUTHORED data only, deliberately: crossing
+  an existing line with the route tool still builds a flat junction (an editor
+  verb for the flyover is a follow-up).
+- THE SIM CONTENDS BY CLAIM KEY (`claimKey`, tiles/model.ts): the plain tile id
+  on every ordinary cell, `id#over`/`id#under` per level on a flyover. Body
+  occupancy (`bodyClaimKeys`), the reservation map, `routeToNextSignal` (it
+  RETURNS claim keys now), mayCross/blockReason and the signal aspect all speak
+  keys — one derivation, so they can never disagree which level a train is on.
+  A multi-partner (switchable) entry falls back to the whole-tile key: a
+  junction's lines DO interact, a flyover flag must not split one.
+- `reservedBy`/`occupiedBy(tileId)` answer for EITHER level (`claimKeysOf`) —
+  the edit gate and the debug overlay ask by tile and must keep working.
+  "reserved" events strip keys back to tile ids (`tileIdOfClaim`) for the log.
+- RENDER: deck z5 — over the rails (z2) and over the LOWER train (z3/4), so
+  passing under the strip reads as passing under a bridge; fresh sleepers+rails
+  are drawn ON the deck (the pair's z2 copy sits hidden beneath). `game.ts`
+  lifts a unit to z6 while EITHER anchor rides the flyover pair, so a sprite
+  straddling the seam never flickers under the parapet.
+- TEST TRAP that took a run to see: routes are claimed at the first BOUNDARY
+  CROSSING, not at departure — a reservation assertion 0.5s into a run reads
+  an empty map. /test scenario: `flyover`; sim contract `flyover.spec.ts` — the
+  FLAT clone of the same board must serialise (that contrast IS the test).
+
+## HEIGHTS + GRADES (2026-07-31)
+- `TileCell.height?` (absent = 0, `heightOf`) is the FIFTH tile axis. A joined
+  boundary may climb AT MOST ONE step — that joint IS the ramp; `validateLevel`
+  flags steeper as "grade-step" (once per joint, lexically smaller id reports).
+- THE GRADE IS A CRUISE CAP, not a force: `gradeSpeedFactor(kind, wagons,
+  grade)` (physics.ts, GRADE_DRAG/GRADE_MASS) caps vCap while the HEAD SEGMENT's
+  exit points into a higher tile (`segmentGrade` in simulation.ts). DOWNHILL IS
+  EXACTLY 1 — a descent bonus would poison the braking-distance maths (vSafe).
+- TEST TRAP: the cap is a BRAKING TARGET. A train enters the first ramp tile
+  still at cruise and decelerates THROUGH it — assert the MINIMUM velocity on a
+  mid-climb tile (settles onto the cap), never the maximum on the first ramp
+  tile. Bit immediately in grades.spec.ts.
+- Render: climb CHEVRONS on the ballast (Tile.vue `gradeMarks`, same port
+  transform table as tunnel portals; z2 over the rails), pointing uphill —
+  drawn on the cell whose neighbour is exactly one step HIGHER; debug label
+  shows " h<N>". /test scenario: `grades` (light shuttle vs heavy freight
+  racing the same hill — the gap on the ramps is the mechanic).
+- HYPSOMETRIC TERRACES (`tileHeightSvg`, 2026-07-31): a cell with height > 0
+  lays a fused patch fill UNDER its terrain patch on the ground layer, lighter
+  and warmer per step. THE TINT IS THEME-ANCHORED (`heightTint(h, theme)`,
+  `TERRACE_BASE`): "higher" only exists relative to the ground the theme
+  paints — a fixed table read as a hollow on the bright meadow board and as a
+  glowing patch on the dark debug flat. One base per theme + one step formula
+  (hue toward yellow-green, lightness up), never per-step tables; the debug
+  flat ground ("plain", #3a6b4f) is its own anchor so `npm run shot` pictures
+  stay comparable. THE THEME IS PART OF THE MEMO KEY — the cache trap the
+  terrain roadmap wrote down before anyone hit it. "Same" for the
+  patch machinery compares NEIGHBOUR HEIGHT >= OWN — a higher neighbour
+  continues the terrace and lays its own lighter body on top of the shared
+  reading, so a plateau fuses like a lake and the step edge always belongs to
+  the UPPER terrace. Downhill edges get slope faces clipped inside the body:
+  LIT on top/left, SHADED on right/bottom (patchSegments' clockwise edge order
+  is 0 top, 1 right, 2 bottom, 3 left — the one NW sun again). Own memo cache
+  (`heightCache`). Author a hill as a BODY (heights on the whole footprint),
+  not just on the track cells, or it reads as two embankments.
+- `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
+  otherwise silently drop a height-only cell and flatten the hill it was part
+  of.
+
+## EDITOR: heights & flyover tools (2026-07-31)
+- The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —
+  `heightStroke` remembers where the drag has been, because re-applying ±1 on
+  every mouseenter staircases a wobbling drag (the terrain brush never had this
+  problem: setting a kind is idempotent, shifting a height is not). Clamped
+  0..MAX_HEIGHT (3). Lowering the last content deletes the cell (isBlankCell).
+- The FLYOVER verb (Rail drawer → 🌉) cycles flat → pair A over → pair B over →
+  flat, and ONLY on a diamond crossing (`flyoverEligible`: exactly two
+  connections over four distinct edge ports). Every connection reducer funnels
+  through `pruneFlyover`, so deleting or switching a line can never leave a
+  stale deck naming a connection that is gone.
+- The editor's `stubGame` MUST carry `levelVersion: ref(0)`: Tile.vue's
+  neighbour-aware getters (tunnel portals, grade chevrons) read it, and the
+  stub is `as unknown as Game` so the type system will not catch the omission —
+  the first tunnel or hillside rendered in the editor throws instead.
 
 ## INDUSTRY (2026-07-28)
 - 8th kind, buildable, factor 2 (between farmland 1.2 and urban 2.5). The

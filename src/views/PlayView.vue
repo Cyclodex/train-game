@@ -531,7 +531,7 @@ import {
   isRoadOnlyLevel,
   parseCoordId,
 } from "@/tiles/model";
-import { canBuildOn, needsBridge } from "@/tiles/terrain";
+import { canBuildOn, needsBridge, needsTunnel } from "@/tiles/terrain";
 import { railPathsFor } from "@/tiles/geometry";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { TRACK_COST_PER_TILE } from "@/sim/economy";
@@ -1216,6 +1216,13 @@ class PlayView extends Vue {
       bridgeable: (c: Coordinates) => {
         const id = getCoordinatesId(c);
         return needsBridge(this.level[id]) && this.game.canEdit([id]);
+      },
+      // Rock/mountain is borable — through a tunnel, at nine tiles' worth of
+      // routing cost per tile of ridge and TUNNEL_BUILD_FACTOR of money. Same
+      // occupancy gate as the span.
+      tunnelable: (c: Coordinates) => {
+        const id = getCoordinatesId(c);
+        return needsTunnel(this.level[id]) && this.game.canEdit([id]);
       },
     };
   }
