@@ -2137,3 +2137,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   during Vue component hot-reload. Full reload required."): the page reported
   `edgeBandPath is not a function` for a method that was plainly in the file.
   Check the console and hard-reload before believing a live probe.
+
+## DEPLOY (GitHub Pages, 2026-08-01)
+- Static hosting works because the router uses HASH history and vite base is
+  RELATIVE ("./" in vite.config.ts) - the same dist/ runs at any URL depth. Do
+  not switch to createWebHistory or an absolute base without rethinking Pages.
+- `.github/workflows/deploy.yml`: master push -> gh-pages root
+  (cyclodex.github.io/train-game/); PRs -> pr-preview/pr-<N>/ via
+  rossjrw/pr-preview-action (link commented on the PR, removed on close). The
+  master deploy uses clean-exclude: pr-preview/ so it must NOT wipe previews;
+  both jobs share one concurrency group because both push to gh-pages.
+- One-time repo setting: Settings -> Pages -> Deploy from a branch -> gh-pages
+  / root. Fork PRs are skipped (read-only token cannot push gh-pages).
