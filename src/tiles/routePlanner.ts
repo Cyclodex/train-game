@@ -22,6 +22,11 @@ export interface RouteOpts {
   // crossing is genuinely the shorter answer. That trade-off IS the feature: a
   // lake gets routed around, a river gets bridged.
   bridgeable?: (c: Coordinates) => boolean;
+  // Cells a line may cross only UNDERGROUND — rock/mountain, which a tunnel
+  // bores. Same gate as `bridgeable`, priced at TUNNEL_MOVE: dearer per tile
+  // than a span because a ridge is usually several tiles deep, so a bore only
+  // wins where the way round is genuinely far.
+  tunnelable?: (c: Coordinates) => boolean;
 }
 
 const DIRS: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
@@ -36,6 +41,11 @@ const TURN = 1;
 // crossing from anywhere within ~6 tiles of a detour, a lake several tiles
 // across never is. (The MONEY price is separate — BRIDGE_BUILD_FACTOR.)
 const BRIDGE_MOVE = MOVE * 6;
+// A bore costs about nine tiles of plain track to route through, per tile of
+// ridge. Dearer than a span: a river is one tile of structure, a ridge stacks
+// this per tile — a 2-wide ridge is only worth boring when the way round is
+// ~18 tiles of detour.
+const TUNNEL_MOVE = MOVE * 9;
 
 export function planRoute(
   from: OpenEnd,
@@ -44,13 +54,14 @@ export function planRoute(
 ): RouteStep[] | null {
   const passable = o.passable ?? (() => true);
   const bridgeable = o.bridgeable ?? (() => false);
+  const tunnelable = o.tunnelable ?? (() => false);
   const inGrid = (c: Coordinates) =>
     c.x >= 0 && c.y >= 0 && c.x < o.width && c.y < o.height;
   const ok = (c: Coordinates) =>
-    inGrid(c) && (passable(c) || bridgeable(c));
-  // What entering this cell costs: a plain move, or a span.
+    inGrid(c) && (passable(c) || bridgeable(c) || tunnelable(c));
+  // What entering this cell costs: a plain move, a span, or a bore.
   const moveCost = (c: Coordinates) =>
-    passable(c) ? MOVE : BRIDGE_MOVE;
+    passable(c) ? MOVE : bridgeable(c) ? BRIDGE_MOVE : TUNNEL_MOVE;
 
   // Degenerate: both ends in the same tile -> one intra-tile connection.
   if (from.id === to.id) {

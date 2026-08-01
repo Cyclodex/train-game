@@ -1,5 +1,5 @@
 import { Position } from "@/types";
-import { Level, Port, portsOf, parseCoordId } from "@/tiles/model";
+import { Level, Port, heightOf, portsOf, parseCoordId } from "@/tiles/model";
 import { roadPortsOf } from "@/tiles/lanes";
 import { canBuildOn } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -8,7 +8,9 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 export type IssueType =
   | "dangling-track" // a rail points at a neighbour that doesn't connect back
   | "isolated-depot" // a depot connects to nothing
+  | "invalid-station" // a station off through-track (no edge↔edge pair, or a Center stub)
   | "blocked-terrain" // track or road laid on ground that can't carry it
+  | "grade-step" // a joined boundary climbs more than one height step
   | "route-disconnected"; // a train can't reach its destination depot
 
 export interface Issue {
@@ -93,6 +95,26 @@ export function validateLevel(
         detail: `${id} carries a line over ${tile.terrain} — build round it, or bridge it`,
       });
     }
+    // Station legality: a station is a stop on THROUGH-track. It needs at least
+    // one edge↔edge pair (so trains pass it) and must not carry a Center stub
+    // (that is depot topology — traverse would end inside it). Checked before
+    // the empty-connections skip so a bare station cell is caught too.
+    if (tile.role === "station") {
+      const hasThrough = tile.connections.some(
+        ([a, b]) => a !== Position.Center && b !== Position.Center
+      );
+      const hasCenter = tile.connections.some(
+        ([a, b]) => a === Position.Center || b === Position.Center
+      );
+      if (!hasThrough || hasCenter) {
+        issues.push({
+          type: "invalid-station",
+          tileId: id,
+          detail: `station ${id} must sit on through-track (edge-to-edge rails, no Center stub)`,
+        });
+      }
+    }
+
     if (tile.connections.length === 0) continue;
     const edges = portsOf(tile.connections).filter(p => p !== Position.Center);
 
@@ -103,6 +125,22 @@ export function validateLevel(
           type: "dangling-track",
           tileId: id,
           detail: `port ${Position[e]} of ${id} has no connecting neighbour`,
+        });
+      }
+    }
+
+    // Grade rule: a joined boundary may climb at most ONE height step — that
+    // one-step joint IS the ramp. Two or more is a cliff no track can climb.
+    // Emitted once per joint (the lexically smaller id reports it).
+    for (const e of edges) {
+      const nid = joins(level, id, e);
+      if (!nid || nid < id) continue;
+      const dh = Math.abs(heightOf(level[nid]) - heightOf(tile));
+      if (dh > 1) {
+        issues.push({
+          type: "grade-step",
+          tileId: id,
+          detail: `${id} and ${nid} join across ${dh} height steps — a ramp climbs one`,
         });
       }
     }

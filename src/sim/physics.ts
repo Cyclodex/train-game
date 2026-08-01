@@ -42,3 +42,29 @@ export function trainDynamics(
   const massK = 1 + (trainWeight(kind, wagonCount) - 1) * MASS_SENSITIVITY;
   return { accel: BASE_ACCEL / massK, brake: BASE_BRAKE / massK };
 }
+
+// --- Grades ------------------------------------------------------------------
+// How hard one height step fights a CLIMBING train. The speed on a grade is
+// maxSpeed / (1 + GRADE_DRAG * grade * weightK): a light passenger shuttle
+// keeps most of its pace up a single step, a loaded freight crawls — which is
+// what finally makes train weight a routing decision (the flat detour vs the
+// short pass), not just a feel. GRADE_MASS spreads the trains: it scales how
+// much each unit of weight beyond the lone loco adds to the drag.
+export const GRADE_DRAG = 0.35;
+export const GRADE_MASS = 0.5;
+
+/**
+ * The cruise-speed multiplier on a grade. `grade` is the height step of the
+ * tile ahead minus the tile under the head: positive = climbing. Flat and
+ * DOWNHILL return exactly 1 — descending earns no bonus (the brakes hold, and
+ * a speed bonus would poison the braking-distance maths in the sim).
+ */
+export function gradeSpeedFactor(
+  kind: TrainKind,
+  wagonCount: number,
+  grade: number
+): number {
+  if (grade <= 0) return 1;
+  const weightK = 1 + (trainWeight(kind, wagonCount) - 1) * GRADE_MASS;
+  return 1 / (1 + GRADE_DRAG * grade * weightK);
+}

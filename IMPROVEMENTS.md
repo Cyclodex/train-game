@@ -100,20 +100,25 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    with a queue, `TrainStatus.Dwelling`, boarding logic and a platform render.
    Unlocks typed cargo (replacing colour matching), endless/management mode, and
    lets road traffic feed rail. `docs/road-future-improvements.md` §2.1.
+   **Planned (2026-07-31):** the phased Bahnhof/intermodal plan — station tile →
+   queues → terrain catchment → bus stops + P+R → Transport-Fever-like mode —
+   is `docs/superpowers/specs/2026-07-31-bahnhof-stations-intermodal-design.md`;
+   its phase 1 is buildable now.
 4. **Deadlock resolution.** Interlocking prevents collisions, but two trains can
    still reserve into a mutual wait. Needs cycle detection over the reservation
    graph plus a backout rule. `src/sim/simulation.ts`, `src/sim/network.ts`.
 5. **Signaling phase 2/3**: pre-signals / yellow aspects and speed signals (the
    momentum prerequisite is done), then path-based signaling.
    `docs/signaling-design.md` lists what was deferred.
-6. **Tunnels** (bridges shipped 2026-07-28). `TileCell.bridge` is the exception
-   INSIDE `canBuildOn`, water only: laying a line on water builds the span
-   (`addConnection`), the route planner may cross at 6x routing cost and
-   `BRIDGE_BUILD_FACTOR` 4x money, and the deck renders for road as well as rail
-   (`/test/bridge`). What remains is the same exception for MOUNTAIN — a tunnel
-   — plus grade separation, where two non-interacting port-pairs on one cell let
-   road cross rail without a level crossing. `docs/road-future-improvements.md`
-   §3.1; terrain roadmap item 3.
+6. **Tunnels & rail grade separation** — SHIPPED 2026-07-31 (bridges 2026-07-28).
+   `TileCell.tunnel` is the mountain/rock twin of the bridge exception inside
+   `canBuildOn` (`/test/tunnel`: the ground stays unbroken over the bore, the
+   train vanishes between portals), and `TileCell.flyover` grade-separates two
+   RAIL lines on one cell via per-level claim keys (`/test/flyover`). What
+   remains: an editor verb to author a flyover (today it is scenario data
+   only), and ROAD-over-rail grade separation — deliberately deferred until the
+   parking branch lands, since it touches the road layer that branch rewrites.
+   `docs/road-future-improvements.md` §3.1/3.2.
 7. **Polish.** Sound effects (depart, brake, deliver, crash), richer arrival
    feedback, and pixel-uniform wagon coupling (spacing is measured in tile
    fractions, so couplings read slightly tighter on curves than on straights).

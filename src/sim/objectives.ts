@@ -58,6 +58,10 @@ export interface Counters {
   // worth knowing. Only the TAX can produce it: an unaffordable build is
   // refused up front, and a refusal is a choice, not insolvency.
   unpaidTax?: number;
+  // Passengers whose ride ended (at a station call or a matched depot arrival)
+  // — the station layer's throughput. Optional like the other late counters so
+  // hand-built Counters fixtures stay valid.
+  passengersDelivered?: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -164,6 +168,9 @@ export interface Observation {
   // absolutes above: a purchase is an event, not a running total the game
   // already owns elsewhere.
   tilesBuiltDelta?: number;
+  // Passengers whose ride ended this tick (station calls + matched arrivals).
+  // A DELTA — assembled from the sim's dwell/arrived events like deliveries.
+  passengersDeliveredDelta?: number;
 }
 
 export const emptyObservation: Observation = {
@@ -214,6 +221,7 @@ function zeroCounters(): Counters {
     trackSpent: 0,
     unpaidTax: 0,
     tilesBuilt: 0,
+    passengersDelivered: 0,
   };
 }
 
@@ -267,6 +275,8 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       if (obs.unpaidTax !== undefined) counters.unpaidTax = obs.unpaidTax;
       counters.tilesBuilt =
         (counters.tilesBuilt ?? 0) + (obs.tilesBuiltDelta ?? 0);
+      counters.passengersDelivered =
+        (counters.passengersDelivered ?? 0) + (obs.passengersDeliveredDelta ?? 0);
 
       // Win takes priority over any same-tick fail.
       if (counters.delivered >= spec.deliveriesRequired) {

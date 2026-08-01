@@ -23,7 +23,7 @@ import {
 import type { Lane, LaneKind } from "@/tiles/lanes";
 import { isRoadJunction, isOneWayStraight, lanesFrom, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
-import { needsBridge } from "@/tiles/terrain";
+import { needsBridge, needsTunnel } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -70,6 +70,10 @@ export function isBlankCell(cell: TileCell): boolean {
     (cell.road?.length ?? 0) === 0 &&
     cell.role === undefined &&
     cell.terrain === undefined &&
+    // Height counts as real content too: a height-only cell is how a hillside
+    // exists beside the line, and dropping it would flatten the hill it is
+    // part of. Same bug terrain hit before it was added here.
+    (cell.height ?? 0) === 0 &&
     (cell.signals?.length ?? 0) === 0 &&
     // Parking counts as real content, exactly as terrain does. A cell can carry
     // ONLY `parking` — `{ facility: "P1" }` with no bays is how an aisle tile
@@ -79,6 +83,57 @@ export function isBlankCell(cell: TileCell): boolean {
   );
 }
 
+// --- Heights -----------------------------------------------------------------
+// The editor's raise/lower brush. Capped: three steps is as much relief as the
+// hypsometric tints (and the eye) can tell apart, and an uncapped brush would
+// let a stuck drag paint an unclimbable spike.
+export const MAX_HEIGHT = 3;
+
+export function setHeight(cell: TileCell, h: number): TileCell {
+  const clamped = Math.max(0, Math.min(MAX_HEIGHT, Math.round(h)));
+  const { height: _drop, ...rest } = cell;
+  return clamped === 0 ? rest : { ...rest, height: clamped };
+}
+
+export function shiftHeight(cell: TileCell, delta: 1 | -1): TileCell {
+  return setHeight(cell, (cell.height ?? 0) + delta);
+}
+
+// --- Flyover -----------------------------------------------------------------
+// A cell can be grade-separated when its rail forms a DIAMOND CROSSING: exactly
+// two connections over four distinct edge ports (no Center, no shared port), so
+// neither line can switch into the other. Anything else — a junction, a lone
+// line — has nothing to separate.
+export function flyoverEligible(cell: TileCell): boolean {
+  if (cell.connections.length !== 2) return false;
+  const ports = cell.connections.flat();
+  if (ports.includes(Position.Center)) return false;
+  return new Set(ports).size === 4;
+}
+
+// The editor's flyover verb: cycle which line rides the deck — flat crossing →
+// first pair over → second pair over → flat again. A no-op on any cell that is
+// not a diamond crossing, so the tool can be clicked anywhere safely.
+export function cycleFlyover(cell: TileCell): TileCell {
+  if (!flyoverEligible(cell)) return cell;
+  const [a, b] = cell.connections;
+  const { flyover: _drop, ...rest } = cell;
+  if (cell.flyover === undefined) return { ...rest, flyover: a };
+  if (samePair(cell.flyover, a)) return { ...rest, flyover: b };
+  return rest;
+}
+
+// Editing the rail can invalidate an authored flyover (its pair removed, or a
+// third line turning the crossing into a junction). Every connection reducer
+// funnels its result through this, so stale grade separation can never linger.
+function pruneFlyover(cell: TileCell): TileCell {
+  if (cell.flyover === undefined) return cell;
+  const named = cell.connections.some(c => samePair(c, cell.flyover!));
+  if (named && flyoverEligible(cell)) return cell;
+  const { flyover: _drop, ...rest } = cell;
+  return rest;
+}
+
 // Add the connection if absent, remove it if already present (order-independent).
 export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
   const pair: PortPair = [a, b];
@@ -86,7 +141,7 @@ export function toggleConnection(cell: TileCell, a: Port, b: Port): TileCell {
   const connections = exists
     ? cell.connections.filter(c => !samePair(c, pair))
     : [...cell.connections, pair];
-  return { ...cell, connections };
+  return pruneFlyover({ ...cell, connections });
 }
 
 // Ensure a connection is present without ever removing one (unlike
@@ -101,17 +156,23 @@ export function addConnection(cell: TileCell, a: Port, b: Port): TileCell {
   // in-play `buildRoute`, the route planner's lay) funnels through here, which
   // is why the rule belongs here rather than in each of them.
   if (needsBridge(next)) next.bridge = true;
-  return next;
+  // …and on tunnelable ground it MEANS boring a tunnel, by the same argument.
+  // The two can never both fire: no ground is bridgeable AND tunnelable.
+  if (needsTunnel(next)) next.tunnel = true;
+  return pruneFlyover(next);
 }
 
 export function removeConnection(cell: TileCell, a: Port, b: Port): TileCell {
   const connections = cell.connections.filter(c => !samePair(c, [a, b]));
   const next: TileCell = { ...cell, connections };
-  // The span goes with the last line it carried. Leaving `bridge` behind would
-  // leave a permanently buildable tile in the middle of a river — free crossing
-  // for whoever comes next, bought once.
-  if (connections.length === 0 && !next.road?.length) delete next.bridge;
-  return next;
+  // The structure goes with the last line it carried. Leaving `bridge` (or
+  // `tunnel`) behind would leave a permanently buildable tile in the middle of
+  // a river or a ridge — a free crossing for whoever comes next, bought once.
+  if (connections.length === 0 && !next.road?.length) {
+    delete next.bridge;
+    delete next.tunnel;
+  }
+  return pruneFlyover(next);
 }
 
 // Make the cell a depot facing `facing` (a single border<->Center connection).
@@ -139,6 +200,26 @@ export function rotateDepot(cell: TileCell): TileCell {
   const cur = depotFacing(cell) ?? Position.Top;
   const next = FACING_CYCLE[(FACING_CYCLE.indexOf(cur) + 1) % 4];
   return setDepot(cell, next);
+}
+
+// True when the cell carries at least one edge↔edge rail pair — the track shape
+// a station can sit on (a depot's edge↔Center stub is not through-track).
+export function hasThroughTrack(cell: TileCell): boolean {
+  return cell.connections.some(
+    ([a, b]) => a !== Position.Center && b !== Position.Center
+  );
+}
+
+// Toggle the station role on a cell. Only through-track can be a station, and a
+// depot stays a depot — on any cell this can't apply to, the SAME cell comes
+// back (reference-equal), so callers can tell a refusal from a change.
+export function toggleStation(cell: TileCell): TileCell {
+  if (cell.role === "station") {
+    const { role: _drop, ...rest } = cell;
+    return rest;
+  }
+  if (cell.role !== undefined || !hasThroughTrack(cell)) return cell;
+  return { ...cell, role: "station" };
 }
 
 // Add/remove a per-direction signal on `port`.

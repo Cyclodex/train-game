@@ -1,5 +1,5 @@
 import { ActiveIntersection, Coordinates } from "@/types";
-import { Level, connectionsToExitPort } from "@/tiles/model";
+import { Level, claimKey, connectionsToExitPort } from "@/tiles/model";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 
@@ -56,10 +56,13 @@ export function traverse(
 
 export type BoundaryCheck = (tileId: string) => boolean;
 
-// Walk forward from a tile (following the train's switches), collecting the tile
-// ids of the block ahead: every tile up to and including the next signal
-// boundary. Stops at a depot / map edge / dead end, and is loop- and
-// length-capped so a signal-less loop can never run forever.
+// Walk forward from a tile (following the train's switches), collecting the
+// CLAIM KEYS of the block ahead: every tile up to and including the next signal
+// boundary. A claim key is the tile id everywhere except on a flyover, where
+// each level of the crossing claims separately (see tiles/model.ts) — so a
+// route over the deck never reserves the line running underneath. Stops at a
+// depot / map edge / dead end, and is loop- and length-capped so a signal-less
+// loop can never run forever.
 export function routeToNextSignal(
   level: Level,
   getSwitch: SwitchResolver,
@@ -76,7 +79,7 @@ export function routeToNextSignal(
     const t = traverse(level, getSwitch, coord, entry);
     if (!t.next) break; // depot interior / map edge / dead end
     const nextId = getCoordinatesId(t.next.coord);
-    out.push(nextId);
+    out.push(claimKey(level[nextId], nextId, t.next.entryPort));
     if (isBoundary(nextId)) break; // reached the next signal (inclusive)
     const key = `${nextId}:${t.next.entryPort}`;
     if (visited.has(key)) break; // loop with no signal
