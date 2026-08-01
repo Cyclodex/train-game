@@ -15,8 +15,9 @@ labels: ["bug", "status: triage"]
 <!--
 REQUIRED if the bug is visible on the board (rendering, lanes, the debug
 driving-line overlay, junctions, vehicles, signals, depots, trains).
-Reproduce it on a /test scenario and attach the picture — debug overlay on if
-it's about lanes/overlay/routing:
+Reproduce it on a /test scenario and attach the picture. The debug overlay is off
+by default (it paints over the board); add --debug only if the bug is about
+lanes/overlay/routing:
 
     npm run shot -- <scenarioId>     # writes screenshots/<scenarioId>.png
 

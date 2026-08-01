@@ -347,11 +347,21 @@ npm run shot -- <scenarioId> --label before     # baseline, before your change
 npm run shot -- <scenarioId> --label after       # after — same scenario
 ```
 
-It loads `/test/<scenarioId>` in a real browser with the **Debug overlay on**
-(cyan car / amber bus driving-lines) and a flat backdrop, then writes a tight PNG
+It loads `/test/<scenarioId>` in a real browser with the **Debug overlay off**
+(what a player actually sees) and a flat backdrop, then writes a tight PNG
 (default `screenshots/`). A visual **issue** carries a screenshot of the wrong
 state; a visual **fix PR** carries a **before/after** pair (the implementer
 provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.
+
+**PR screenshots are debug-free.** The overlay paints *over* the board — the
+reservation tint and the cyan/amber driving-lines cover lane paint, terrain and
+depot art, so a debug shot can make a real change look like it did nothing. The
+helper therefore reads the stage's toggle and turns it **off** before shooting,
+whatever the app's state; `gameConfig.debug` itself is already `false` by default
+and is not persisted, so `/#/play?…` route shots are debug-free anyway. Add
+`--debug` only when the overlay *is* the subject (routing, lane centrelines,
+where a vehicle actually drives) — and say so in the PR, so the reviewer knows
+why the picture is painted over. Before/after must use the **same** flags.
 
 **Finish by handing back the links.** The last thing every task says is WHERE to
 look, so the reader never has to hunt for the right page. List every page the

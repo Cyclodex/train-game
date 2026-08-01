@@ -98,7 +98,11 @@ jobs:
                  c. Commit the PNGs and embed both in the PR body with raw URLs:
                     https://github.com/${{ github.repository }}/raw/<branch>/docs/verify/issue-${{ github.event.issue.number }}/<scenarioId>-after.png
                Pick the `/test` scenarioId(s) from src/levels/test/index.ts that show
-               the issue. If the change is NOT visual, skip this and note
+               the issue. THE DEBUG OVERLAY MUST BE OFF: the helper turns it off for
+               you (that is the default) — do NOT pass --debug unless the overlay
+               itself is what the issue is about (routing / driving-lines), and if you
+               do, use the same flags for before AND after and say so in the PR body.
+               If the change is NOT visual, skip this and note
                "N/A — not visible on the board" in the PR.
             4. Run `npm run lint` and `npm run test:unit` and fix any failures.
             5. Before opening the PR, rebase onto latest master so the branch
