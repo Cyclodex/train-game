@@ -2145,9 +2145,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
   developed on.
 - The fast lane SKIPS rather than EXCLUDES, so a run still prints "112 skipped" —
   the standing reminder that a full run is owed before pushing.
-- NEXT LEVER if ~28s is still too slow: `sim/road.spec.ts` is the fast lane's
-  critical path (18.5s alone — one file is one worker, so it sets the wall-clock
-  floor). It has 27 top-level describes and splitting it would parallelise both lanes.
+- THE SUITE IS CPU-BOUND, NOT CRITICAL-PATH-BOUND — measure before you optimise the
+  SHAPE of it. The obvious next lever looked like `sim/road.spec.ts`: 3k lines, 27
+  describes, 18.5s of the fast lane, and one spec file is one vitest worker, so it
+  "obviously" set the wall-clock floor. It did not. Splitting it into five files
+  (2026-08-01) moved the whole-suite wall by NOTHING on a 4-core box: fast lane
+  ~29.5s before and after, full lane ~70s before and after, both within run-to-run
+  noise. Total CPU is ~87s (fast) / ~210s (full) against 4 cores, so wall ≈ cpu/cores
+  and redistributing files cannot reduce total work.
+  · The split IS worth it where cores are free: the same 98 road tests run 18.0s as
+    one file vs 11.9s as five (1.5x), so it pays on an 8–16 core dev machine, where
+    the largest single file DOES become the floor. It just is not what fixes CI.
+  · GENERAL RULE: `wall ≈ max(total_cpu / cores, slowest_single_file)`. Work out
+    which term binds on the machine you care about BEFORE moving files around. The
+    2026-08-01 hot-path memo cut the first term 4x and was worth 4m22s -> 1m07s; the
+    file split cut the second term and was worth nothing on CI.
+- NEXT LEVER if the suite is still too slow: attack CPU, not layout. `sim/parking.spec.ts`
+  is 63s of the full lane's ~210s CPU on its own, most of it three multi-thousand-tick
+  long-run cases. Cheaper ticks or fewer seeds there beat any amount of re-filing.
 
 ## VERIFY
 - THE SUITE CAN EXIT 1 WITH EVERY TEST PASSING, and the message names nothing:
