@@ -165,21 +165,63 @@
       <path v-for="(d, i) in tunnelGuides" :key="'tg' + i" :d="d" />
     </svg>
 
+    <!-- The portal's OPENING, drawn UNDER the trains (z1) — the one layer of the
+         structure that is not above them. A train therefore runs INTO the dark
+         instead of being cut off by it, which is the whole reason the opening is
+         a separate element from the masonry above.
+         It also has to sit above the mountain's own ground patch, which bows out
+         of the tile far enough to reach in here: at z1 it covers that overhang,
+         so what shows inside a portal is always the bore and never the hillside.
+         The tile's rails stop at the bore, but the NEIGHBOUR's run on over this
+         and into it, which is exactly right. -->
+    <svg
+      v-if="isTunnel"
+      class="tunnel-mouths"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path
+        v-for="p in tunnelPortals"
+        :key="'tm' + p.port"
+        class="portal-mouth"
+        :d="portalArt.mouth"
+        :transform="p.transform"
+      />
+    </svg>
+
     <!-- Tunnel portals, one per end of the bore that meets open ground (an
-         internal seam between two tunnel tiles gets none). Drawn ABOVE the
-         trains, same layer story as the forest canopy: a unit is hidden the
-         moment its centre crosses onto the tunnel tile, and the arch masks
-         that pop so the train reads as driving INTO the mountain. -->
+         internal seam between two tunnel tiles gets none). The MASONRY, above
+         the trains and above the bore's own mountain roof (TileGround's
+         .tile-over-bore).
+         Shape: a slab with a U cut out of it — an open approach between two
+         retaining walls, then the arch where the covered stretch begins. That
+         covered stretch is what swallows a train, and it runs from the arch all
+         the way to the tile edge, where the roof takes over. It has to: a
+         terrain patch bows OUT of its tile (corner push + edge bow, terrain.ts),
+         so the hillside would otherwise eat the train short of the tunnel. -->
     <svg
       v-if="isTunnel"
       class="tunnel-portals"
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
       <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
-        <rect class="portal-shadow" :x="-21 * u" :y="-4 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
-        <rect class="portal-band" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
-        <rect class="portal-lintel" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
-        <rect class="portal-mouth" :x="-9 * u" :y="1 * u" :width="18 * u" :height="8 * u" :rx="3 * u" />
+        <!-- The shadow is shifted in its own nested group, by the ROTATION'S
+             INVERSE of one SE step: the portal group is turned per port, so an
+             offset baked into these coords would turn with it and three of the
+             four orientations would throw their shadow at a different sun than
+             the boulders beside them. See `tunnelPortals`. -->
+        <g :transform="p.shadowShift">
+          <path class="portal-shadow" :d="portalArt.wall" />
+        </g>
+        <path class="portal-wall" :d="portalArt.wall" />
+        <!-- The outer face, lit or shaded by which way this portal points
+             (`outerLit`) — the same one NW sun the shadow answers to. -->
+        <polygon :class="p.outerLit ? 'portal-lit' : 'portal-shade'" :points="portalArt.faceA" />
+        <polygon :class="p.outerLit ? 'portal-lit' : 'portal-shade'" :points="portalArt.faceB" />
+        <!-- One flank in shade, the sun-facing one left in the body tone: a
+             darker L down the away-from-sun corner is how the boulders next to
+             it read as solid, and it stops four facets turning the block into a
+             picture frame. -->
+        <polygon class="portal-shade" :points="p.flankALit ? portalArt.flankB : portalArt.flankA" />
       </g>
     </svg>
 
@@ -724,13 +766,20 @@ class Tile extends Vue {
   // seam (tunnel beside tunnel) gets none, so a ridge two tiles deep reads as
   // one mountain with one hole in each side. Oriented per port; every segment
   // path meets its edge at the midpoint, so the arch sits on the centreline.
-  get tunnelPortals(): { port: Position; transform: string }[] {
+  get tunnelPortals(): {
+    port: Position;
+    transform: string;
+    shadowShift: string;
+    outerLit: boolean;
+    flankALit: boolean;
+  }[] {
     if (!this.isTunnel) return [];
     // Register the edit counter: a bore EXTENDED next door must retire this
     // tile's portal at the now-internal seam, but `level` is the raw object in
     // play (see Game.levelVersion) so the neighbour read alone cannot notify.
     void this.game.levelVersion.value;
     const size = this.config.tileSize;
+    const u = this.u;
     const coord = parseCoordId(this.coordId);
     const at: Record<number, string> = {
       [Position.Top]: `translate(${size / 2}, 0)`,
@@ -738,15 +787,132 @@ class Tile extends Vue {
       [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
       [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
     };
-    const out: { port: Position; transform: string }[] = [];
+    // One NW sun lights the whole board, so every shadow falls SE in TILE
+    // space. These transforms turn the portal per port, and a child inherits
+    // that turn — so the SE step has to be pre-rotated by the inverse here,
+    // or the west portal throws its shadow north-east while the boulder next
+    // to it throws one south-east.
+    const shadowAt: Record<number, string> = {
+      [Position.Top]: `translate(${3 * u}, ${3 * u})`,
+      [Position.Right]: `translate(${3 * u}, ${-3 * u})`,
+      [Position.Bottom]: `translate(${-3 * u}, ${-3 * u})`,
+      [Position.Left]: `translate(${-3 * u}, ${3 * u})`,
+    };
+    // Which of the two long faces the sun reaches, for the same reason: a west-
+    // or north-facing wall is lit, the east/south one is in shade. The art is
+    // authored with the FRONT face outward, so this is just "does outward point
+    // at the sun".
+    const outerLit: Record<number, boolean> = {
+      [Position.Top]: true,
+      [Position.Left]: true,
+      [Position.Right]: false,
+      [Position.Bottom]: false,
+    };
+    // The same question for the other axis: does the art's -x flank end up
+    // facing north/west once the group is turned?
+    const flankALit: Record<number, boolean> = {
+      [Position.Top]: true,
+      [Position.Right]: true,
+      [Position.Bottom]: false,
+      [Position.Left]: false,
+    };
+    const out: {
+      port: Position;
+      transform: string;
+      shadowShift: string;
+      outerLit: boolean;
+      flankALit: boolean;
+    }[] = [];
     for (const p of portsOf(this.tile.connections)) {
       if (p === Position.Center) continue;
       const nc = neighborCoord(coord, p);
       const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
       if (n?.tunnel) continue;
-      out.push({ port: p, transform: at[p] });
+      out.push({
+        port: p,
+        transform: at[p],
+        shadowShift: shadowAt[p],
+        outerLit: outerLit[p],
+        flankALit: flankALit[p],
+      });
     }
     return out;
+  }
+
+  // The portal, authored once in the 100-unit art box and reused by every portal
+  // on the tile (the per-port group supplies the turn). +y runs INTO the bore,
+  // so the whole thing is authored at negative y — out over the open ground the
+  // line arrives on.
+  //
+  // ONE SLAB WITH A U CUT OUT OF IT. The U is the open approach between two
+  // retaining walls; where it rounds off is the arch, and from there inward the
+  // line is covered all the way to the tile edge. That covered stretch is not
+  // decoration: it is the occluder, and it has to reach the tile edge because
+  // the mountain's roof is clipped to the tile (a terrain patch bows out of its
+  // tile by up to ~15u, and an unclipped roof would swallow the train out there
+  // in the open, short of the tunnel).
+  //
+  // The rest follows the terrain art's rules: flat facets rather than gradients,
+  // a lit face and a shaded flank for volume, no line work (nothing else in the
+  // terrain art is stroked, and parallel lines on a block read as planking).
+  get portalArt(): {
+    wall: string;
+    faceA: string;
+    faceB: string;
+    flankA: string;
+    flankB: string;
+    mouth: string;
+  } {
+    const u = this.u;
+    const pts = (list: [number, number][]) => list.map(([x, y]) => `${x * u},${y * u}`).join(" ");
+    const n = (v: number) => v * u;
+    // FACE at y=-34, back edge at y=6 (inside the tile, under the roof).
+    // The U: jambs at x=±11 running back from the face to y=-22, then the arch.
+    const face = -30;
+    const back = 5;
+    const halfOut = 16; // half-width of the slab
+    const jamb = 9.5; // half-width of the opening
+    const spring = -20; // where the arch springs from
+    return {
+      // Outline traced anticlockwise around the U so the opening is a hole.
+      wall:
+        `M ${n(-halfOut)} ${n(face)} L ${n(-jamb)} ${n(face)} L ${n(-jamb)} ${n(spring)} ` +
+        `A ${n(jamb)} ${n(jamb)} 0 0 0 ${n(jamb)} ${n(spring)} ` +
+        `L ${n(jamb)} ${n(face)} L ${n(halfOut)} ${n(face)} L ${n(halfOut)} ${n(back)} ` +
+        `L ${n(-halfOut)} ${n(back)} Z`,
+      // The outer face is split by the opening, so it takes two strips.
+      faceA: pts([
+        [-halfOut, face],
+        [-jamb, face],
+        [-jamb, face + 4],
+        [-halfOut, face + 4],
+      ]),
+      faceB: pts([
+        [halfOut, face],
+        [jamb, face],
+        [jamb, face + 4],
+        [halfOut, face + 4],
+      ]),
+      flankA: pts([
+        [-halfOut, face],
+        [-halfOut + 3.5, face],
+        [-halfOut + 3.5, back],
+        [-halfOut, back],
+      ]),
+      flankB: pts([
+        [halfOut, face],
+        [halfOut - 3.5, face],
+        [halfOut - 3.5, back],
+        [halfOut, back],
+      ]),
+      // The opening itself — the piece that goes UNDER the trains. Reaches a
+      // little past the arch (the masonry covers the overlap) so no sliver of
+      // ground can show between the two layers.
+      mouth:
+        `M ${n(-jamb)} ${n(face)} L ${n(-jamb)} ${n(spring)} ` +
+        `A ${n(jamb)} ${n(jamb)} 0 0 0 ${n(jamb)} ${n(spring)} ` +
+        `L ${n(jamb)} ${n(face)} Z`,
+    };
   }
 
   // The spans this cell carries: one per line crossing it, rail or road, as the
@@ -1971,17 +2137,18 @@ export default toNative(Tile);
 }
 
 /* --- tunnel (the line is underground) ---
-   The guide is where the rails would be (z2, over the mountain scatter at z1
-   in its own cell): a faint dashed centreline, the map notation for a tunnel.
-   The portals sit ABOVE the trains (loco z4 / wagons z3), like the forest
-   canopy (z7): game.ts hides a unit once its centre is on the tunnel tile,
-   and the arch straddling the seam masks that pop. */
+   A bore's own mountain is a ROOF: TileGround lifts this cell's ground (z7) and
+   scatter (z8) above the trains (loco z4 / wagons z3), so the rock OCCLUDES a
+   consist rather than anything switching it off. Everything that must stay
+   readable ON that roof therefore has to clear it: the dashed guide (the map
+   notation for where the bore runs) at z9. The portal is the exception — it
+   goes UNDER the roof (z6), so the mountain closes over the masonry. */
 .tunnel-guide {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 2;
+  z-index: 9;
   pointer-events: none;
   path {
     fill: none;
@@ -1991,29 +2158,52 @@ export default toNative(Tile);
     stroke-linecap: round;
   }
 }
+.tunnel-mouths {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  // UNDER the trains (wagons z3 / loco z4) and under the rails (z2), over every
+  // tile's ground patch (z0) — including the mountain's own overhang, which is
+  // the point: no hillside is ever visible inside a portal. See the template.
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+}
 .tunnel-portals {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 7;
+  // Between the trains (loco z4) and the mountain roof (z7): the masonry covers
+  // a consist, and the rock covers the masonry — so the structure disappears
+  // INTO the hillside instead of being laid on top of it.
+  z-index: 6;
   pointer-events: none;
+  // The structure stands proud of the tile edge, out over the open ground the
+  // line arrives on — that overhang is the whole point (see the template).
   overflow: visible;
 }
 .portal-shadow {
-  // SE offset baked into the rect coords, matching the one NW sun.
+  // Offset SE in TILE space by the nested group in the template (the portal's
+  // own group is rotated per port), matching the one NW sun.
   fill: rgba(12, 20, 30, 0.3);
 }
-.portal-band {
+.portal-wall {
   // Dressed stone against the slate mountain: close tones, per the terrain
   // rule that scatter sits near its ground rather than paper-cutout bright.
-  fill: #857c6d;
-  stroke: #5c5546;
+  // Warm GREY, not tan — at this size a saturated tan block reads as timber.
+  fill: #8a857c;
+  stroke: #5c5850;
   stroke-width: 1.5px;
 }
-.portal-lintel {
-  // The up-left(-ish) lit facet of the gallery roof.
-  fill: #9c9280;
+.portal-lit {
+  // The facet the NW sun reaches; its opposite number is .portal-shade. Flat
+  // fills, no gradient — the boulders next to it are built the same way.
+  fill: #a49f95;
+}
+.portal-shade {
+  fill: #6d6961;
 }
 .portal-mouth {
   fill: #17140f;
