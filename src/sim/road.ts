@@ -1877,15 +1877,106 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
 
+  // THE HOTTEST DATA IN THE TICK, so it is memoised. Every following, gap-
+  // acceptance and junction-conflict scan walks every OTHER car's body, which
+  // makes `bodyPoints` O(cars²) calls per tick — and each call re-walks the path
+  // (`segLen`) and re-derives the lateral lag (`lanePosAt`) for a dozen-odd sample
+  // points. Profiled on /test/parkcity (37 vehicles) it was 60% of the entire
+  // tick, and the same work over and over: within one tick most of those calls
+  // are for a car nothing has touched since the last one.
+  //
+  // Keyed on an EXACT signature of the car state the points are derived from —
+  // NOT on the tick. That distinction is the whole correctness argument: `step`
+  // advances cars one at a time and a later car must see an earlier one where it
+  // now IS, so a tick-scoped cache would silently change what the gates see. A
+  // signature-scoped one cannot — any field that could move a body point misses
+  // the memo. When you add a field that `computeBodyPoints` reads, add it here
+  // too, or you have cached a stale body.
+  //
+  // `kind` is absent deliberately: the memo is per-car (a WeakMap keyed by the
+  // car), and a car never changes kind. The returned array is SHARED — callers
+  // treat it as read-only, and all of them already do.
+  interface BodyPoint {
+    tileId: string;
+    entry: Port;
+    exit: Port | null;
+    t: number;
+    arc: number;
+    laneIndex: number;
+    lanePos: number;
+  }
+  interface BodyMemo {
+    path: RoadSegment[];
+    pathLen: number;
+    headIndex: number;
+    headProgress: number;
+    laneIndex: number;
+    laneVel: number;
+    laneAnchor: number;
+    velocity: number;
+    pivotIndex: number;
+    pivotLane: number;
+    phase: CarPhase;
+    parkOnLane: boolean;
+    manoeuvre: number;
+    length: number;
+    pts: BodyPoint[];
+  }
+  const bodyMemo = new WeakMap<Car, BodyMemo>();
+
   // The anchor points along a car's whole body as { tileId, entry, t }, used as
   // obstacles other cars must not roll into. Sampling the entire body (head back
   // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
   // means a long trailer that spans a junction tile mid-body still puts a point
   // on it, so a crossing car sees it occupied and holds off the tile.
-  function bodyPoints(
-    car: Car
-  ): { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] {
-    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] = [];
+  function bodyPoints(car: Car): BodyPoint[] {
+    // MEMOISED — see `bodyMemo`. Everything below is the cold path.
+    const pivot = car.lanePivot;
+    const pivotIndex = pivot ? pivot.pathIndex : -1;
+    const pivotLane = pivot ? pivot.lane : -1;
+    const memo = bodyMemo.get(car);
+    if (
+      memo !== undefined &&
+      memo.path === car.path &&
+      memo.pathLen === car.path.length &&
+      memo.headIndex === car.headIndex &&
+      memo.headProgress === car.headProgress &&
+      memo.laneIndex === car.laneIndex &&
+      memo.laneVel === car.laneVel &&
+      memo.laneAnchor === car.laneAnchor &&
+      memo.velocity === car.velocity &&
+      memo.pivotIndex === pivotIndex &&
+      memo.pivotLane === pivotLane &&
+      memo.phase === car.phase &&
+      memo.parkOnLane === car.parkOnLane &&
+      memo.manoeuvre === car.manoeuvre &&
+      memo.length === car.length
+    ) {
+      return memo.pts;
+    }
+    const pts = computeBodyPoints(car);
+    bodyMemo.set(car, {
+      path: car.path,
+      pathLen: car.path.length,
+      headIndex: car.headIndex,
+      headProgress: car.headProgress,
+      laneIndex: car.laneIndex,
+      laneVel: car.laneVel,
+      laneAnchor: car.laneAnchor,
+      velocity: car.velocity,
+      pivotIndex,
+      pivotLane,
+      phase: car.phase,
+      parkOnLane: car.parkOnLane,
+      manoeuvre: car.manoeuvre,
+      length: car.length,
+      pts,
+    });
+    return pts;
+  }
+
+  function computeBodyPoints(car: Car): BodyPoint[] {
+    const pts: BodyPoint[] = [];
     // Lane identity for following/conflict is the integer lane the car occupies
     // (its continuous position rounded) — a mid-change car counts as in the lane
     // it is closest to. Deliberately still ONE value for the whole vehicle: making

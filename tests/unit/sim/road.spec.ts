@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { fromPairs, oneWay, turns, nWayLanes, junctionExitLane } from "@/tiles/lanes";
@@ -245,7 +246,7 @@ describe("createRoadSim — spawning + movement", () => {
     // at a spawn edge) shows up as `stacked`, which is a count, not a clock.
   }, 30_000);
 
-  it("merges cars out of a dropping lane before it ends (G)", () => {
+  itSlow("merges cars out of a dropping lane before it ends (G)", () => {
     // A two-lane road (tiles x=0,1) that drops to one lane (tiles x=2,3). A car
     // in lane 1 has nowhere to go past x=1, so it must change into lane 0 BEFORE
     // the drop — and the road must keep flowing (no permanent queue at the taper).
@@ -547,7 +548,7 @@ describe("createRoadSim — spawning + movement", () => {
     expect(busOnBusLane).toBeGreaterThan(50); // buses were present and used the bus lane
   });
 
-  it("feeds the cross from permitted lanes and turns both ways (F)", () => {
+  itSlow("feeds the cross from permitted lanes and turns both ways (F)", () => {
     // The turnlanes scenario: a one-way road widens 1→2→3 lanes from the south
     // edge into an all-turns crossroads at "3,3" (every approach lane may go
     // straight / left / right). Every car that reaches the junction must be in a
@@ -922,7 +923,7 @@ describe("createRoadSim — multi-lane crosses keep flowing", () => {
   // arms continuously — adding lanes must not introduce a gridlock the 1-lane
   // case avoids. Drives the real scenario levels so the test guards what ships.
   for (const scn of [roadcross1lane, roadcross2lane, roadcross3lane]) {
-    it(`${scn.id}: sustained throughput from every arm, no gridlock`, () => {
+    itSlow(`${scn.id}: sustained throughput from every arm, no gridlock`, () => {
       const spawnInterval = scn.traffic?.spawnInterval ?? 0.5;
       const cap = scn.traffic?.maxCars ?? 12;
       const sim = createRoadSim({
@@ -1332,7 +1333,7 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(busesOnSideRoad).toBeGreaterThan(0);
   });
 
-  it("same-arm crossing movements never share the junction (car right-turn vs bus straight)", () => {
+  itSlow("same-arm crossing movements never share the junction (car right-turn vs bus straight)", () => {
     // User-reported on buscrossboth: a bus on the kerb bus lane (index 0) goes
     // STRAIGHT while a car from the inner lane (index 1) of the SAME arm turns
     // RIGHT — the right turn sweeps across the bus lane, and the two drove over
@@ -1386,7 +1387,7 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(overlaps).toBe(0);
   }, 30000);
 
-  it("merging movements landing on the SAME exit lane never overlap (yield-and-slot)", () => {
+  itSlow("merging movements landing on the SAME exit lane never overlap (yield-and-slot)", () => {
     // User-reported: vehicles from DIFFERENT arms exiting onto the same arm can
     // overlap when they land on the same lane (e.g. a westbound straight car and
     // a south left-turner both landing the west arm's car lane). Merging is
@@ -1583,7 +1584,7 @@ describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
     expect(worst).toBeLessThanOrEqual(30);
   });
 
-  it("a bus turning where the bus lane can't does not oscillate between lanes", () => {
+  itSlow("a bus turning where the bus lane can't does not oscillate between lanes", () => {
     // In buscross the kerb bus lane permits straight + right only; a LEFT turn must
     // come from the inner car lane. A bus turning left therefore has to leave the
     // bus lane — and must STAY left, not get yanked back onto the bus lane every
@@ -1689,7 +1690,7 @@ describe("bus-lane crosses flow and keep cars off the bus lane", () => {
   ];
 
   for (const [name, scenario] of cases) {
-    it(`${name}: cars never use a bus lane, buses do, and traffic flows`, () => {
+    itSlow(`${name}: cars never use a bus lane, buses do, and traffic flows`, () => {
       const r = drive(scenario, { x: 2, y: 2 }, 7);
       expect(r.badPos).toBe(0); // no broken/non-finite positions
       expect(r.completed).toBeGreaterThan(5); // sustained flow through the cross
@@ -2806,7 +2807,7 @@ describe("mixed-lane junctions route end-to-end", () => {
     return { completed: completed.size, throughCentre, badPos, allStuckTicks };
   };
 
-  it("mixedcross (1/2/3/2 arms): cars cross the centre and exit, no gridlock", () => {
+  itSlow("mixedcross (1/2/3/2 arms): cars cross the centre and exit, no gridlock", () => {
     const r = drive(mixedcross, { x: 3, y: 3 }, 7);
     expect(r.badPos).toBe(0); // no broken positions
     expect(r.throughCentre).toBeGreaterThan(0); // cars actually traverse the junction
@@ -2814,7 +2815,7 @@ describe("mixed-lane junctions route end-to-end", () => {
     expect(r.allStuckTicks).toBeLessThan(80); // no permanent deadlock
   });
 
-  it("mixedtee (3-lane road, 2-lane spur): cars cross the centre and exit, no gridlock", () => {
+  itSlow("mixedtee (3-lane road, 2-lane spur): cars cross the centre and exit, no gridlock", () => {
     const r = drive(mixedtee, { x: 3, y: 2 }, 4);
     expect(r.badPos).toBe(0);
     expect(r.throughCentre).toBeGreaterThan(0);
@@ -2826,7 +2827,7 @@ describe("mixed-lane junctions route end-to-end", () => {
     // (gridlock) shows up as `allStuckTicks`, which is a count, not a clock.
   }, 30_000);
 
-  it("bigjunction (4-way × 3-lane dedicated turn lanes): cars cross the centre and exit, no gridlock", () => {
+  itSlow("bigjunction (4-way × 3-lane dedicated turn lanes): cars cross the centre and exit, no gridlock", () => {
     // The largest unequal-movement junction in the epic (#16 acceptance criterion):
     // 12 directed lanes, each wired to exactly one exit (kerb→right, middle→straight,
     // inner→left) on all four 3-lane arms. Drive it under load (maxCars 16, the

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { scenarioById } from "@/levels/test";
 import { simFor, worstSweptOverlap } from "../support/roadSim";
 
@@ -34,7 +35,7 @@ describe("lane-change gap acceptance (#56)", () => {
     }, 30000);
   }
 
-  it("never leaves a stopped vehicle parked astride a lane line", () => {
+  itSlow("never leaves a stopped vehicle parked astride a lane line", () => {
     // A car halted mid-merge blocks BOTH lanes for as long as the queue lasts, and
     // is what made "brake when the gap closes" measure worse than doing nothing.
     // A stopped straddler must resolve onto one lane within a beat.
@@ -58,7 +59,7 @@ describe("lane-change gap acceptance (#56)", () => {
     expect(worstStraddle, "a stopped car sat astride a lane line").toBeLessThan(20);
   }, 30000);
 
-  it("keeps the road flowing — gap acceptance must not gridlock the merge", () => {
+  itSlow("keeps the road flowing — gap acceptance must not gridlock the merge", () => {
     // The cheap way to never clip is to never move. Every seed must still deliver
     // cars off the far edge of the map.
     for (const seed of SEEDS) {
