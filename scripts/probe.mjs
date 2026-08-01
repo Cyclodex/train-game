@@ -24,9 +24,9 @@
 //
 // Exits non-zero on any failure, so it can gate a change the way the unit tests do.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { chromium } from "@playwright/test";
+import { launchChromium } from "./browser.mjs";
 
 const TILE = 200;
 
@@ -223,11 +223,16 @@ async function main() {
   const server = spawn(
     onWin ? "npm.cmd" : "npm",
     ["run", "dev", "--", "--port", String(opt.port), "--strictPort"],
-    { stdio: "ignore", shell: onWin },
+    // Own process group, so the vite the npm launcher spawns dies with it — see
+    // `shutdown`, and the same note in shoot.mjs.
+    { stdio: "ignore", shell: onWin, detached: !onWin },
   );
   const shutdown = () => {
     try {
-      server.kill("SIGTERM");
+      // `npm run dev` LAUNCHES vite; signalling the launcher alone orphans the
+      // server, which then holds the port against the next run.
+      if (onWin) spawnSync("taskkill", ["/pid", String(server.pid), "/T", "/F"], { stdio: "ignore" });
+      else process.kill(-server.pid, "SIGTERM");
     } catch {
       /* ignore */
     }
@@ -242,7 +247,7 @@ async function main() {
   let failures = 0;
   try {
     await waitForServer(base, 60000);
-    browser = await chromium.launch();
+    browser = await launchChromium();
     const page = await browser.newPage({ viewport: { width: 1600, height: 1200 } });
 
     const consoleErrors = [];

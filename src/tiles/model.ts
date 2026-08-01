@@ -1,6 +1,7 @@
 import { Position, Coordinates, ActiveIntersection } from "@/types";
 import { oppositePort } from "@/sim/topology";
 import type { Lane } from "./lanes";
+import type { ParkingCell } from "./parking";
 import type { JunctionSignal } from "@/sim/junctionSignal";
 
 export type Port = Position;
@@ -60,6 +61,12 @@ export interface TileCell {
   // interact at a crossing via the gate (derived from rail reservation). See
   // docs/superpowers/specs/2026-06-05-roads-and-level-crossings-design.md.
   road?: Lane[];
+  // Parking layer: where a road vehicle may STOP on this cell — kerbside bays, a
+  // car-park row beside an aisle, or the ramp mouth of a garage. The fourth axis
+  // of the tile model, derived exactly like `road` (see tiles/parking.ts). A car
+  // park's AISLES are ordinary `road` lanes, so the router drives its rows for
+  // free; `parking` only ever adds the stalls beside them.
+  parking?: ParkingCell;
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
   // Street-junction traffic signals (ROAD / cars only). When present and not

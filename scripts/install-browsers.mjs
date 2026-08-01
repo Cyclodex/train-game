@@ -40,13 +40,30 @@ function browsersRoot() {
   return join(process.env.HOME, ".cache", "ms-playwright");
 }
 
+// Which of the CDN's per-platform archive suffixes this machine wants. Playwright
+// resolves this from a table of distro ids; we only need the coarse answer,
+// because every modern glibc Linux is served the one `linux` build.
+function platformSuffix() {
+  if (process.platform === "win32") return "win64";
+  if (process.platform === "darwin") return process.arch === "arm64" ? "mac-arm64" : "mac";
+  if (process.platform === "linux") return process.arch === "arm64" ? "linux-arm64" : "linux";
+  throw new Error(`unsupported platform ${process.platform}/${process.arch}`);
+}
+
 // The CDN path differs per browser family; only the ones we actually need.
+//
+// This started Windows-only, because the hang it exists to route around is a
+// Windows one. That made `npm run browsers` — the command CLAUDE.md tells you to
+// run — throw on any Linux box, which is every cloud session: the fallback advice
+// was "run npx playwright install", i.e. the installer this script replaces. The
+// mapping is one string per platform, so all of them are here.
 function archiveFor(name, revision) {
-  const win = process.platform === "win32";
-  if (!win) throw new Error(`${name}: only win64 archives are mapped; run "npx playwright install" on this platform`);
-  if (name === "chromium") return `${CDN}/chromium/${revision}/chromium-win64.zip`;
-  if (name === "chromium-headless-shell") return `${CDN}/chromium/${revision}/chromium-headless-shell-win64.zip`;
-  if (name === "winldd") return `${CDN}/winldd/${revision}/winldd-win64.zip`;
+  const p = platformSuffix();
+  if (name === "chromium") return `${CDN}/chromium/${revision}/chromium-${p}.zip`;
+  if (name === "chromium-headless-shell") {
+    return `${CDN}/chromium/${revision}/chromium-headless-shell-${p}.zip`;
+  }
+  if (name === "winldd") return `${CDN}/winldd/${revision}/winldd-${p}.zip`;
   throw new Error(`no archive mapping for ${name}`);
 }
 

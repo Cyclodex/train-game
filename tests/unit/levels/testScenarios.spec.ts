@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SCENARIOS } from "@/levels/test";
 import { scenarioRoutes, scenarioGrid } from "@/levels/test/scenario";
 import { validateLevel, validateRoads } from "@/tiles/validate";
+import { validateParking } from "@/tiles/parking";
 import { roadEntries } from "@/sim/road";
 
 describe("feature test world", () => {
@@ -40,6 +41,17 @@ describe("feature test world", () => {
       it("has a valid road layer", () => {
         const res = validateRoads(scenario.level);
         expect(res.issues).toEqual([]);
+      });
+
+
+      // Parking is authored by hand, and its mistakes are the quiet kind: bays
+      // floating in a field, a rank too deep for the street it hugs, an aisle
+      // that traps a car with no way back to the road. None of them break a
+      // render, so without this they ship green.
+      it("has a valid parking layer", () => {
+        // The grid matters: it is what tells a dead-end aisle (a car trap) from a
+        // street that simply runs off the edge of the world.
+        expect(validateParking(scenario.level, 200, scenarioGrid(scenario))).toEqual([]);
       });
 
       it("every train starts in a depot tile", () => {

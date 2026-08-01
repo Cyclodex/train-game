@@ -1,5 +1,14 @@
 import { Position, ActiveIntersection } from "@/types";
 import {
+  bankFor,
+  bankOf,
+  DEFAULT_GARAGE_CAPACITY,
+  maxStallsPerTile,
+  needsBigBay,
+  type ParkingCell,
+  type ParkingRow,
+} from "@/tiles/parking";
+import {
   Port,
   PortPair,
   TileCell,
@@ -12,7 +21,7 @@ import {
   parseCoordId,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
-import { isRoadJunction, lanesFrom, turnKind } from "@/tiles/lanes";
+import { isRoadJunction, isOneWayStraight, lanesFrom, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
 import { needsBridge } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -61,7 +70,12 @@ export function isBlankCell(cell: TileCell): boolean {
     (cell.road?.length ?? 0) === 0 &&
     cell.role === undefined &&
     cell.terrain === undefined &&
-    (cell.signals?.length ?? 0) === 0
+    (cell.signals?.length ?? 0) === 0 &&
+    // Parking counts as real content, exactly as terrain does. A cell can carry
+    // ONLY `parking` — `{ facility: "P1" }` with no bays is how an aisle tile
+    // joins a car park — and treating that as blank would delete it the instant
+    // it was touched. Same bug terrain hit before it was added here.
+    cell.parking === undefined
   );
 }
 
@@ -787,4 +801,193 @@ export function syncJunctionLanesAround(
     }
   }
   return out;
+}
+
+// --- Parking layer -----------------------------------------------------------
+// The editor's write path for `TileCell.parking`. Same house style as the rest of
+// this file: pure, cell in / cell out, rest-spread so unknown fields survive, and
+// the SAME REFERENCE back when nothing changed (the commit path keys on identity).
+
+// The row served from `from` on `side`, or null. What the editor renders from and
+// what every write below reads first.
+export function parkingRowAt(
+  cell: TileCell | undefined,
+  from: Port,
+  side: "right" | "left" = "right",
+): ParkingRow | null {
+  const rows = cell?.parking?.rows ?? [];
+  return rows.find(r => r.from === from && (r.side ?? "right") === side) ?? null;
+}
+
+// May a row live on this (approach, side)? The CELL-LOCAL half of
+// `validateParking`: no road, a junction box, an approach that does not run
+// straight through, a far-bank row on a two-way street, or a second row hugging a
+// kerb another row already owns. The checks that need NEIGHBOURS — a tapering
+// tile, bays that overhang — stay in the validator; the editor greys those
+// separately, because it has the whole level to hand and the validator does not
+// get to reach into a single cell.
+export function canParkOn(
+  cell: TileCell | undefined,
+  from: Port,
+  side: "right" | "left" = "right",
+): boolean {
+  const road = cell?.road;
+  if (!road?.length || isRoadJunction(road)) return false;
+  // Nobody parks in a bend: a row's geometry is measured along `from` → opposite,
+  // so the approach has to actually go that way.
+  if (!road.some(l => l.from === from && l.to.includes(oppositePort(from)))) return false;
+  // The far bank means crossing to the other side of the street, which is only
+  // legal where there is no oncoming stream to cross.
+  if (side === "left" && !isOneWayStraight(road, from)) return false;
+  // One row per physical kerb. `(from, side)` is not that key on its own — on a
+  // two-way street the far bank of one direction IS the near bank of the other,
+  // so two rows could name one strip of tarmac and count every space twice.
+  const bank = bankFor(from, side);
+  for (const r of cell?.parking?.rows ?? []) {
+    if (r.from === from && (r.side ?? "right") === side) continue; // this very row
+    if (bankOf(r) === bank) return false;
+  }
+  return true;
+}
+
+// Write `parking` back, DROPPING the key when nothing is left on it. A leftover
+// `{}` or `{ rows: [] }` would keep `isBlankCell` reporting content for ever:
+// erase the road under it and you are left with a cell that draws nothing, can
+// never be pruned, and still counts toward the world's extents. The same trap
+// `setTerrain` avoids by omitting `terrain` rather than storing undefined.
+function writeParking(cell: TileCell, next: ParkingCell): TileCell {
+  const rows = (next.rows ?? []).filter(r => r.count > 0);
+  const bare =
+    rows.length === 0 &&
+    next.facility === undefined &&
+    next.label === undefined &&
+    next.dwellSec === undefined;
+  const { parking: _drop, ...rest } = cell;
+  if (bare) return rest;
+  const parking: ParkingCell = { ...next };
+  if (rows.length) parking.rows = rows;
+  else delete parking.rows;
+  return { ...rest, parking };
+}
+
+// Everything about a row except which kerb it sits on. `count` is optional
+// because the tool fills the kerb for you.
+export type RowSpec = Omit<ParkingRow, "from" | "side" | "count"> & { count?: number };
+
+// Set the row at (from, side) to `spec`, or REMOVE it with `undefined`. An
+// explicit target state rather than a toggle, so a whole street can be painted
+// uniform in one pass.
+//
+// `count` defaults to as many bays as fit and is ALWAYS clamped to that: an
+// over-long row is the one mistake the validator cannot forgive, and a tool that
+// fits rows automatically would otherwise make it on every narrow tile.
+export function setParkingRow(
+  cell: TileCell,
+  from: Port,
+  side: "right" | "left",
+  spec: RowSpec | undefined,
+  tileSize = 200,
+): TileCell {
+  const existing = parkingRowAt(cell, from, side);
+  if (!spec && !existing) return cell;
+  const rows = [...(cell.parking?.rows ?? [])];
+  const at = rows.findIndex(r => r.from === from && (r.side ?? "right") === side);
+  if (!spec) {
+    rows.splice(at, 1);
+    return writeParking(cell, { ...cell.parking, rows });
+  }
+  const max = maxStallsPerTile(spec.kind, tileSize, needsBigBay(spec.reserved));
+  // A rank of bays fills its kerb; a GARAGE gets a building-sized capacity rather
+  // than the 400-slot ceiling `maxStallsPerTile` reports for it (its slots are not
+  // on the map, so "how many fit" is the wrong question).
+  const fallback = spec.kind === "garage" ? DEFAULT_GARAGE_CAPACITY : max;
+  const row: ParkingRow = {
+    ...spec,
+    from,
+    // A whole building is not a disabled bay or a loading bay: a reservation is a
+    // property of a painted rank, so it is dropped here rather than relied on not
+    // to be armed.
+    ...(spec.kind === "garage" ? { reserved: undefined } : {}),
+    // Stored only when it is the FAR bank — the `setTerrain`/"grass" rule applied
+    // to a row's default, so a level round-trips minimal and there is never a
+    // second spelling of the same row.
+    ...(side === "left" ? { side } : {}),
+    count: Math.max(1, Math.min(spec.count ?? fallback, max)),
+  };
+  if (at >= 0) rows[at] = row;
+  else rows.push(row);
+  return writeParking(cell, { ...cell.parking, rows });
+}
+
+// Lay `spec` when the kerb is bare or carries a DIFFERENT kind; clear it when it
+// already carries this one. Repeat-clicking a kerb is "off", never a hidden cycle
+// through the stall kinds — the dock item is the kind picker.
+export function toggleParkingRow(
+  cell: TileCell,
+  from: Port,
+  side: "right" | "left",
+  spec: RowSpec,
+  tileSize = 200,
+): TileCell {
+  const existing = parkingRowAt(cell, from, side);
+  const same = existing?.kind === spec.kind && existing?.reserved === spec.reserved;
+  return setParkingRow(cell, from, side, same ? undefined : spec, tileSize);
+}
+
+// Paint the whole STREET RUN of one kerb. The clicked tile decides the target
+// state, then every tile of the run is SET to it — so a half-painted street
+// becomes uniform in one click instead of inverting tile by tile.
+//
+// The run is the kerb lane's own street run, so it follows bends and stops at
+// junctions, road ends and forks for free. A tile no row may sit on drops out of
+// the patch and the run carries on past it.
+export function setParkingRowRun(
+  level: Level,
+  id: string,
+  from: Port,
+  side: "right" | "left",
+  spec: RowSpec,
+  tileSize = 200,
+): Record<string, TileCell> {
+  const seed = level[id];
+  const existing = parkingRowAt(seed, from, side);
+  const same = existing?.kind === spec.kind && existing?.reserved === spec.reserved;
+  const target = same ? undefined : spec;
+  const out: Record<string, TileCell> = {};
+  for (const ref of streetRunLanes(level, id, from, 0)) {
+    const cell = level[ref.id];
+    if (!cell) continue;
+    // Legality is per tile: a run may cross a stretch no row can sit on.
+    if (target && !canParkOn(cell, ref.from, side)) continue;
+    const next = setParkingRow(cell, ref.from, side, target, tileSize);
+    if (next !== cell) out[ref.id] = next;
+  }
+  return out;
+}
+
+// Join the tile to a car-park FACILITY, or leave one with `undefined`. Tiles
+// sharing an id are ONE car park. A cell may carry ONLY this — `{facility:"lot"}`
+// with no rows is how an AISLE tile joins, and it is why `isBlankCell` counts a
+// bare `parking` as content.
+export function setFacility(cell: TileCell, facility: string | undefined): TileCell {
+  if (cell.parking?.facility === facility) return cell;
+  const rest: ParkingCell = { ...cell.parking };
+  delete rest.facility;
+  return writeParking(cell, {
+    ...rest,
+    ...(facility !== undefined ? { facility } : {}),
+  });
+}
+
+// Drop rows the road under them no longer supports — an approach that stopped
+// running straight through, or a far-bank row whose street stopped being one-way.
+// Called when the ROAD changes, not by the parking tool: redrawing a two-way
+// street as one-way otherwise orphans a row on a tile the author never touched
+// with the parking tool, and the validator then fires on it.
+export function pruneParkingRows(cell: TileCell): TileCell {
+  const rows = cell.parking?.rows;
+  if (!rows?.length) return cell;
+  const kept = rows.filter(r => canParkOn(cell, r.from, r.side ?? "right"));
+  if (kept.length === rows.length) return cell;
+  return writeParking(cell, { ...cell.parking, rows: kept });
 }

@@ -8,20 +8,31 @@ import {
   cameraTransform,
   MIN_ZOOM,
   MAX_ZOOM,
+  WORLD_MARGIN,
 } from "@/camera";
 
 const world = { width: 4000, height: 3000 }; // a 20x15 board at 200px tiles
 const viewport = { width: 1200, height: 800 };
 
 describe("camera clamping", () => {
-  it("never lets the world be panned off screen", () => {
+  it("never lets the world be panned off screen, but leaves a margin to push it off the edge", () => {
     const far = clampCamera({ x: 99999, y: 99999, zoom: 1 }, world, viewport);
-    // The furthest you may scroll is where the world's far edge meets the
-    // viewport's far edge — panning into empty space loses the board.
-    expect(far.x).toBe(world.width - viewport.width);
-    expect(far.y).toBe(world.height - viewport.height);
-    const near = clampCamera({ x: -500, y: -500, zoom: 1 }, world, viewport);
-    expect(near).toMatchObject({ x: 0, y: 0 });
+    // The furthest you may scroll is a MARGIN past where the world's far edge
+    // meets the viewport's — enough to lift the outermost row of tiles off the
+    // frame, and no more. Panning further is panning into empty space, which
+    // loses the board.
+    expect(far.x).toBe(world.width - viewport.width + WORLD_MARGIN);
+    expect(far.y).toBe(world.height - viewport.height + WORLD_MARGIN);
+    const near = clampCamera({ x: -99999, y: -99999, zoom: 1 }, world, viewport);
+    expect(near).toMatchObject({ x: -WORLD_MARGIN, y: -WORLD_MARGIN });
+  });
+
+  it("keeps the margin a SCREEN distance, not a world one", () => {
+    // Zoomed out, the same gap on screen is a bigger slice of the world — so the
+    // camera offset (world px) doubles at zoom 0.5. A margin measured in world px
+    // instead would shrink to nothing exactly when a big map needs it most.
+    const out = clampCamera({ x: -99999, y: 0, zoom: 0.5 }, world, viewport);
+    expect(out.x).toBe(-WORLD_MARGIN / 0.5);
   });
 
   it("centres a world smaller than the viewport instead of pinning it", () => {

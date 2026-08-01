@@ -81,6 +81,46 @@
           title="One-way road (lanes only in the drawn direction)"
         >➡️</button>
         </div>
+        <!-- Reservation modifier: which bays the parking tool lays. Reserved
+             ones stay empty in play — nothing issues a permit — which is what
+             makes a car park read as a real one, never 100% usable. -->
+        <div v-if="tool === 'parking'" class="lane-picker">
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: !parkReserved }"
+            @click="parkReserved = undefined"
+            title="Ordinary bays"
+          >—</button>
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: parkReserved === 'disabled' }"
+            @click="parkReserved = parkReserved === 'disabled' ? undefined : 'disabled'"
+            title="Disabled bays (stay empty — no permit system yet)"
+          >♿</button>
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: parkReserved === 'delivery' }"
+            @click="parkReserved = parkReserved === 'delivery' ? undefined : 'delivery'"
+            title="Delivery bay (stays empty)"
+          >📦</button>
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: parkReserved === 'long' }"
+            @click="parkReserved = parkReserved === 'long' ? undefined : 'long'"
+            title="Lorry lay-by — lorries and coaches; cars may not use it"
+          >🚛</button>
+          <button
+            class="dock-btn lane-btn"
+            :class="{ on: parkReserved === 'bus' }"
+            @click="parkReserved = parkReserved === 'bus' ? undefined : 'bus'"
+            title="Bus stop — coaches only. Give it a short dwell: a halt is not parking."
+          >🚌</button>
+        </div>
+        <!-- Which car park the facility brush sweeps tiles into. -->
+        <div v-if="tool === 'facility'" class="lane-picker">
+          <input v-model="facilityId" class="facility-input" maxlength="12" />
+          <button class="dock-btn lane-btn" @click="nextFacilityId()" title="Next car park">＋</button>
+        </div>
         <!-- The world grows right and down simply by drawing into the empty
              margin. These add room on the other two sides, by shifting what is
              already there — the engine anchors the world at 0,0. Right-aligned:
@@ -159,10 +199,18 @@
           height: config.tileSize + 'px',
         }"
         @click="onCellClick(cell.key)"
-        @mousedown="onTerrainDown($event, cell.key)"
-        @mouseenter="onTerrainEnter($event, cell.key)"
+        @mousedown="onTerrainDown($event, cell.key); onFacilityDown($event, cell.key)"
+        @mouseenter="onTerrainEnter($event, cell.key); onFacilityEnter($event, cell.key)"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Which car park this tile belongs to. Read straight off the cell, not
+             through facilitiesOf: while a stroke is in progress the level is
+             mid-edit and a derived grouping would lag a tile behind the cursor. -->
+        <div
+          v-if="tool === 'facility' && cell.tile && cell.tile.parking && cell.tile.parking.facility"
+          class="facility-tint"
+          :style="{ background: facilityTint(cell.tile.parking.facility) }"
+        >{{ cell.tile.parking.facility }}</div>
         <!-- Standing scenery on its own layer above every patch fill, so a
              canopy overhanging the seam isn't cut by the next tile. -->
         <TileGround :coord-id="cell.key" layer="scatter" />
@@ -224,6 +272,31 @@
               class="lane-hit"
               :class="{ 'lane-hit--bus': hl.isBus }"
               @click.stop="onLaneClick($event, cell.key, hl.from, hl.index)"
+            />
+          </template>
+
+          <!-- Parking mode: one invisible hit strip per physical KERB — literally
+               the pixels the bays will cover, so you click where the parking
+               goes. A greyed strip cannot take the armed kind (a bend, a
+               junction, a street too wide for 90 degree bays). Hovering shows the
+               bays that would be laid, drawn by the same function that paints the
+               real ones. -->
+          <template v-if="tool === 'parking' && cell.tile">
+            <path
+              v-for="(k, i) in kerbHits(cell.key)"
+              :key="'kh' + i"
+              :d="k.d"
+              class="kerb-hit"
+              :class="{ 'kerb-hit--has': k.has, 'kerb-hit--bad': !k.ok }"
+              @click.stop="onKerbClick($event, cell.key, k)"
+              @mouseenter="hoverKerb = { id: cell.key, bank: k.bank }"
+              @mouseleave="hoverKerb = null"
+            />
+            <path
+              v-for="(d, i) in ghostBays(cell.key)"
+              :key="'gb' + i"
+              :d="d"
+              class="preview-parking"
             />
           </template>
 
@@ -368,7 +441,25 @@ import {
   syncJunctionLanesAround,
   setTerrain,
   isBlankCell,
+  canParkOn,
+  parkingRowAt,
+  toggleParkingRow,
+  setParkingRowRun,
+  setFacility,
+  pruneParkingRows,
+  type RowSpec,
 } from "@/tiles/editOps";
+import {
+  bankFor,
+  kerbOffsetAt,
+  kerbOffsetEnds,
+  maxStallsPerTile,
+  needsBigBay,
+  stallDepthPx,
+  type StallKind,
+  type StallReservation,
+} from "@/tiles/parking";
+import { stallOutlinePath, garageGeometry, rowFrame } from "@/tiles/parkingGeometry";
 import { canBuildOn, needsBridge } from "@/tiles/terrain";
 import { validateLevel, ValidationResult, TrainRoute } from "@/tiles/validate";
 import { generateLevel } from "@/tiles/generate";
@@ -403,14 +494,16 @@ type Tool =
   | "road"
   | "buslane"
   | "signalise"
-  | "terrain";
+  | "terrain"
+  | "parking"
+  | "facility";
 
 // The dock is two levels: pick the LAYER you are working on, then the tool
 // within it. Terrain's "tools" are brush kinds rather than separate Tools, so an
 // item carries an optional `terrain` — selecting it arms the terrain tool AND
 // sets the brush, which is what makes the ground buttons live inside the Terrain
 // group instead of in a second picker beside it.
-type ToolGroupId = "rail" | "road" | "terrain" | "erase";
+type ToolGroupId = "rail" | "road" | "parking" | "terrain" | "erase";
 
 interface DockItem {
   key: string;
@@ -418,6 +511,9 @@ interface DockItem {
   label: string;
   tool: Tool;
   terrain?: TerrainKind;
+  // Parking's "tools" are stall KINDS, the same way terrain's are brushes:
+  // selecting one arms the parking tool AND picks what it lays.
+  stall?: StallKind;
 }
 
 interface DockGroup {
@@ -446,6 +542,19 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "road", icon: "🛣️", label: "Road", tool: "road" },
       { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
       { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
+    ],
+  },
+  {
+    id: "parking",
+    icon: "🅿️",
+    label: "Parking",
+    items: [
+      { key: "park-parallel", icon: "🚗", label: "Kerb", tool: "parking", stall: "parallel" },
+      { key: "park-angled", icon: "↗️", label: "Angled", tool: "parking", stall: "angled" },
+      { key: "park-perp", icon: "🅿️", label: "90°", tool: "parking", stall: "perpendicular" },
+      { key: "park-garage", icon: "🏢", label: "Garage", tool: "parking", stall: "garage" },
+      { key: "park-busstop", icon: "🚏", label: "Halt", tool: "parking", stall: "busstop" },
+      { key: "park-facility", icon: "#️⃣", label: "Car park", tool: "facility" },
     ],
   },
   {
@@ -481,6 +590,9 @@ const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
 const ROAD_BUS_KEY = "train-game:editor-road-is-bus";
 const ROAD_ONEWAY_KEY = "train-game:editor-road-one-way";
+const PARK_KIND_KEY = "train-game:editor-park-kind";
+const PARK_RESERVED_KEY = "train-game:editor-park-reserved";
+const PARK_FACILITY_KEY = "train-game:editor-park-facility";
 const EDGES: Port[] = [
   Position.Top,
   Position.Right,
@@ -506,6 +618,10 @@ const HINTS: Record<Tool, string> = {
     "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
+  parking:
+    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage and 🚏 a bus stop IN the running lane — the bus never leaves it, so the traffic behind has to wait (for a lay-by that traffic flows past, use 🚗 with 🚌). A bay serves ONE class of vehicle and nothing else that merely fits: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody (no permits yet, so they stay empty — which is what makes a car park look real). Everything unmarked takes cars, and a garage has a height barrier so no lorries go down the ramp.",
+  facility:
+    "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
   terrain:
     "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them).",
 };
@@ -527,6 +643,13 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
     signalOverrides: empty,
     roadSignalAspects: empty,
     roadSignals: empty,
+    // Parking is level DATA, so the editor draws the bays; only the live
+    // occupancy and the "P n/total" sign belong to a running game. Empty here
+    // means every bay renders free and no sign is drawn — which is exactly right
+    // for a level that is not being played. (Omitting them would make Tile.vue's
+    // parkingPaths read `undefined[key]` the moment a bay was drawn.)
+    parkingOccupancy: empty,
+    parkingStatus: empty,
     cycleSignal: () => {},
     cycleRoadSignal: () => {},
     // roadLaneCount / roadLaneCountAt are both called by Tile.vue's roadPaths
@@ -622,6 +745,20 @@ class EditorView extends Vue {
   // an AREA of wood, not a tile of it), so it tracks its own press state instead
   // of going through the edge-based gesture the connect tool uses.
   terrainPainting = false;
+  // --- Parking -------------------------------------------------------------
+  // The kind of bay the parking tool lays, and an optional reservation on it.
+  // Armed by the dock item, exactly as terrain's brush is.
+  stallKind: StallKind = (localStorage.getItem(PARK_KIND_KEY) as StallKind) || "parallel";
+  parkReserved: StallReservation | undefined =
+    (localStorage.getItem(PARK_RESERVED_KEY) as StallReservation) || undefined;
+  // The car park the facility tool sweeps tiles into.
+  facilityId = localStorage.getItem(PARK_FACILITY_KEY) || "P1";
+  facilityPainting = false;
+  // What the current drag decided on its FIRST tile, applied to the whole stroke —
+  // so dragging across a mixed row makes it uniform instead of inverting each tile.
+  facilityTarget: string | undefined = undefined;
+  // The kerb under the cursor, so only that one draws its ghost bays.
+  hoverKerb: { id: string; bank: Port } | null = null;
 
   dockGroups: DockGroup[] = DOCK_GROUPS;
 
@@ -634,6 +771,11 @@ class EditorView extends Vue {
   isActiveItem(item: DockItem): boolean {
     if (item.terrain !== undefined) {
       return this.tool === "terrain" && this.terrainBrush === item.terrain;
+    }
+    // Parking's items are stall KINDS, so several share one tool — without this
+    // branch every one of them lights up at once, and picking a kind does nothing.
+    if (item.stall !== undefined) {
+      return this.tool === "parking" && this.stallKind === item.stall;
     }
     return this.tool === item.tool;
   }
@@ -649,6 +791,7 @@ class EditorView extends Vue {
 
   selectItem(item: DockItem) {
     if (item.terrain !== undefined) this.terrainBrush = item.terrain;
+    if (item.stall !== undefined) this.stallKind = item.stall;
     this.setTool(item.tool);
   }
   // Provided so tile-level children (TileGround) can read their neighbours'
@@ -935,13 +1078,18 @@ class EditorView extends Vue {
   // Lay a port pair on the active layer, returning the new cell.
   layPair(cell: Level[string], a: Port, b: Port): Level[string] {
     if (this.drawing === "road") {
-      return addRoad(
-        cell,
-        a,
-        b,
-        this.roadLaneCount,
-        this.roadIsBus ? 1 : 0,
-        this.roadOneWay,
+      // Same reason as deleteRoad: redrawing a two-way street as one-way (or over
+      // a straight to make it a bend) can leave a row on an approach that no
+      // longer supports it.
+      return pruneParkingRows(
+        addRoad(
+          cell,
+          a,
+          b,
+          this.roadLaneCount,
+          this.roadIsBus ? 1 : 0,
+          this.roadOneWay,
+        ),
       );
     }
     return addConnection(cell, a, b);
@@ -1109,7 +1257,11 @@ class EditorView extends Vue {
     return laneEdges(tile.road);
   }
   deleteRoad(id: string, road: PortPair) {
-    this.commit(id, removeRoad(this.cellOf(id), road[0], road[1]));
+    // Prune any parking row the removed road no longer supports. A row is keyed
+    // to an approach, so ripping out the street under it would otherwise orphan
+    // it — and the validator would then fire on a tile the author never touched
+    // with the parking tool.
+    this.commit(id, pruneParkingRows(removeRoad(this.cellOf(id), road[0], road[1])));
   }
 
   // --- bus-lane tool: per-lane hit paths -------------------------------------
@@ -1151,6 +1303,191 @@ class EditorView extends Vue {
   }
   // Click a lane: Ctrl/Meta toggles only this tile's lane; a plain click paints
   // the whole street run to one uniform kind, committed as one level update.
+
+  // --- Parking tool ----------------------------------------------------------
+
+  // What the parking tool lays: the armed stall kind plus any reservation.
+  get rowSpec(): RowSpec {
+    return {
+      kind: this.stallKind,
+      ...(this.parkReserved ? { reserved: this.parkReserved } : {}),
+    };
+  }
+
+  // One invisible hit strip per physical KERB of a straight road tile — literally
+  // the pixels the bays will cover, so you click where the parking goes.
+  //
+  // Not a tile edge and not a lane: a kerb. An edge wedge names a DIRECTION and
+  // covers the carriageway too, and on a two-way street the two kerbs are reached
+  // from different approaches — so `(approach, side)` is the natural key, and
+  // deduplicating by `bankFor` is what stops a two-way street offering four hits
+  // for its two kerbs (and with them, two rows painted into one strip of tarmac).
+  kerbHits(id: string): {
+    d: string;
+    from: Port;
+    side: "right" | "left";
+    bank: Port;
+    ok: boolean;
+    has: boolean;
+  }[] {
+    const tile = this.level[id];
+    if (!tile?.road?.length || isRoadJunction(tile.road)) return [];
+    const size = this.config.tileSize;
+    const coord = parseCoordId(id);
+    const out: {
+      d: string;
+      from: Port;
+      side: "right" | "left";
+      bank: Port;
+      ok: boolean;
+      has: boolean;
+    }[] = [];
+    const byBank = new Map<Port, number>();
+    for (const from of EDGES) {
+      if (!tile.road.some(l => l.from === from)) continue;
+      for (const side of ["right", "left"] as const) {
+        if (!canParkOn(tile, from, side) && !parkingRowAt(tile, from, side)) continue;
+        const bank = bankFor(from, side);
+        const ok = canParkOn(tile, from, side) && this.kerbFits(id, from);
+        const has = !!parkingRowAt(tile, from, side);
+        const kerb = kerbOffsetAt(this.level, coord, from, size);
+        const depth = stallDepthPx(this.stallKind, size, needsBigBay(this.parkReserved));
+        const f = rowFrame({ from, side, kind: this.stallKind, count: 1 }, size);
+        const d =
+          "M " +
+          [
+            f.at(0, kerb),
+            f.at(size, kerb),
+            f.at(size, kerb + Math.max(depth, size * 0.11)),
+            f.at(0, kerb + Math.max(depth, size * 0.11)),
+          ]
+            .map(p => `${Math.round(p.x * 100) / 100} ${Math.round(p.y * 100) / 100}`)
+            .join(" L ") +
+          " Z";
+        // One hit per physical kerb, preferring the legal spelling of it.
+        const prev = byBank.get(bank);
+        if (prev !== undefined) {
+          if (ok && !out[prev].ok) out[prev] = { d, from, side, bank, ok, has };
+          continue;
+        }
+        byBank.set(bank, out.length);
+        out.push({ d, from, side, bank, ok, has });
+      }
+    }
+    return out;
+  }
+
+  // The half of legality that needs the NEIGHBOURS, mirroring validateParking's
+  // own arithmetic so the editor can never author a level it would then flag.
+  kerbFits(id: string, from: Port): boolean {
+    const coord = parseCoordId(id);
+    const size = this.config.tileSize;
+    // A tapering tile moves its kerb across its own length, so a row sized against
+    // one end sits under the running lane at the other.
+    const [a, b] = kerbOffsetEnds(this.level, coord, from, size);
+    if (Math.abs(a - b) > 0.5) return false;
+    // And the bays have to land on the tile rather than in the neighbour's garden.
+    // This is what greys both kerbs of a wide street when 90° bays are armed —
+    // the honest teaching moment: kerb parking caps at a 2+2 arterial.
+    const kerb = kerbOffsetAt(this.level, coord, from, size);
+    return kerb + stallDepthPx(this.stallKind, size, needsBigBay(this.parkReserved))
+      <= size / 2 + 0.5;
+  }
+
+  onKerbClick(
+    ev: MouseEvent,
+    id: string,
+    k: { from: Port; side: "right" | "left"; ok: boolean; has: boolean },
+  ) {
+    // A greyed kerb refuses rather than silently doing nothing — except to CLEAR
+    // a row that is already there, which must always be possible.
+    if (!k.ok && !k.has) return;
+    const size = this.config.tileSize;
+    // Ctrl/Cmd narrows the edit to this one tile. `toggleParkingRow` rather than a
+    // bare set, so it behaves like the run does: a DIFFERENT kind replaces what is
+    // there, and only clicking the kind already on the kerb takes it off. Clearing
+    // on any repeat click would mean two clicks to change a single tile's kind.
+    const changed =
+      ev.ctrlKey || ev.metaKey
+        ? { [id]: toggleParkingRow(this.cellOf(id), k.from, k.side, this.rowSpec, size) }
+        : setParkingRowRun(this.level, id, k.from, k.side, this.rowSpec, size);
+    for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
+  }
+
+  // The bays the armed kind WOULD lay on the hovered kerb, drawn with the very
+  // function that paints the real thing — so the ghost can never promise a shape
+  // the tile would not actually get.
+  ghostBays(id: string): string[] {
+    if (this.tool !== "parking" || this.hoverKerb?.id !== id) return [];
+    const hit = this.kerbHits(id).find(k => k.bank === this.hoverKerb!.bank);
+    if (!hit || !hit.ok || hit.has) return [];
+    const size = this.config.tileSize;
+    const kerb = kerbOffsetAt(this.level, parseCoordId(id), hit.from, size);
+    const row = {
+      from: hit.from,
+      side: hit.side,
+      kind: this.stallKind,
+      count: maxStallsPerTile(this.stallKind, size, needsBigBay(this.parkReserved)),
+      ...(this.parkReserved ? { reserved: this.parkReserved } : {}),
+    } as const;
+    if (this.stallKind === "garage") {
+      const g = garageGeometry(row, size, kerb, "in");
+      const o = garageGeometry(row, size, kerb, "out");
+      return [g.apron, o.apron];
+    }
+    return Array.from({ length: row.count }, (_, i) =>
+      stallOutlinePath(row, i, size, kerb),
+    );
+  }
+
+  // --- Facility tool ---------------------------------------------------------
+
+  onFacilityDown(ev: MouseEvent, id: string) {
+    if (this.tool !== "facility") return;
+    this.facilityPainting = true;
+    const cur = this.level[id]?.parking?.facility;
+    // The first tile decides the whole stroke: already this car park → remove,
+    // otherwise add. Dragging over a mixed row then makes it uniform rather than
+    // inverting each tile under the cursor.
+    this.facilityTarget = cur === this.facilityId ? undefined : this.facilityId;
+    this.paintFacility(id);
+  }
+
+  onFacilityEnter(ev: MouseEvent, id: string) {
+    if (this.tool !== "facility" || !this.facilityPainting) return;
+    // Live re-check of the button: a mouseup swallowed by another element (the
+    // kerb hits stop propagation) would otherwise leave the brush stuck down.
+    if (!(ev.buttons & 1)) {
+      this.facilityPainting = false;
+      return;
+    }
+    this.paintFacility(id);
+  }
+
+  stopFacilityPainting = () => {
+    this.facilityPainting = false;
+  };
+
+  paintFacility(id: string) {
+    const cell = this.level[id];
+    if (!cell) return;
+    const next = setFacility(cell, this.facilityTarget);
+    if (next !== cell) this.commit(id, next);
+  }
+
+  // A stable colour per car park, so two adjacent ones read as different.
+  facilityTint(name: string): string {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return `hsla(${h % 360}, 70%, 55%, 0.32)`;
+  }
+
+  // Bump P1 → P2 → … so a second car park is one click away.
+  nextFacilityId() {
+    const m = /^(.*?)(\d+)$/.exec(this.facilityId);
+    this.facilityId = m ? `${m[1]}${Number(m[2]) + 1}` : `${this.facilityId}2`;
+  }
+
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
     const changed =
       ev.ctrlKey || ev.metaKey
@@ -1186,6 +1523,20 @@ class EditorView extends Vue {
   // where a prototype method would be invoked with `this` bound to the window.
   // Same pattern as `onKeydown` below, and it keeps the reference stable so
   // removeEventListener actually matches.
+  @Watch("stallKind")
+  onStallKindChange(v: StallKind) {
+    localStorage.setItem(PARK_KIND_KEY, v);
+  }
+  @Watch("parkReserved")
+  onParkReservedChange(v: StallReservation | undefined) {
+    if (v) localStorage.setItem(PARK_RESERVED_KEY, v);
+    else localStorage.removeItem(PARK_RESERVED_KEY);
+  }
+  @Watch("facilityId")
+  onFacilityIdChange(v: string) {
+    localStorage.setItem(PARK_FACILITY_KEY, v);
+  }
+
   stopTerrainPainting = () => {
     this.terrainPainting = false;
   };
@@ -1261,6 +1612,7 @@ class EditorView extends Vue {
     // On WINDOW, not the board: a paint drag that ends off the grid (or outside
     // the app) must still release the brush, or the next hover keeps painting.
     window.addEventListener("mouseup", this.stopTerrainPainting);
+    window.addEventListener("mouseup", this.stopFacilityPainting);
     // Frame the board before the first paint: a big level would otherwise open
     // on its top-left corner.
     this.$nextTick(() => this.fitWorld());
@@ -1491,6 +1843,68 @@ export default toNative(EditorView);
 .lane-hit:hover {
   stroke: rgba(255, 179, 0, 0.55);
 }
+// The parking tool's kerb strips. Invisible at rest, because the tile already
+// shows what is there; the point of the affordance is that the hit target IS the
+// tarmac the bays will cover.
+.kerb-hit {
+  fill: rgba(120, 190, 255, 0.06);
+  stroke: none;
+  cursor: pointer;
+  transition: fill 0.08s;
+}
+// A kerb that already carries bays reads as "on" at rest, so a half-painted
+// street is visible before you hover it.
+.kerb-hit--has {
+  fill: rgba(120, 190, 255, 0.2);
+}
+.kerb-hit:hover {
+  fill: rgba(120, 190, 255, 0.4);
+}
+// The armed kind cannot go here — a bend, a junction, or a street too wide for
+// it. Refused rather than silently ignored.
+.kerb-hit--bad {
+  cursor: not-allowed;
+}
+.kerb-hit--bad:hover {
+  fill: rgba(255, 90, 90, 0.34);
+}
+// Ghost of the bays the click would lay, drawn by the same function that paints
+// the real ones.
+.preview-parking {
+  fill: rgba(255, 255, 255, 0.1);
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+// The facility tool: a wash over every tile of the car park being swept, tinted
+// per car-park id so two adjacent ones are visibly different.
+.facility-input {
+  width: 64px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.facility-tint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
 // Junction switch zone: an invisible-but-clickable spot over the switch widget
 // (a transparent fill still receives pointer events). A soft amber wash on hover
 // signals it cycles the junction's starting direction.

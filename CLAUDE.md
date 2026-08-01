@@ -102,6 +102,11 @@ renderer import this module, so topology is defined exactly once. See
 - `roadGeometry.ts` — SVG road rendering: lane-marking paths (centre/inner
   dividers, kerbs, merge/lane-drop arrows). Complements `sim/pathGeometry.ts`,
   which produces the car centreline a vehicle actually drives.
+- `parking.ts` — the PARKING layer (`TileCell.parking`), the fourth axis of the
+  tile model: rows of stalls on a road approach, their derived geometry (bay
+  boxes, the arc-length-parameterised pull-in curve), facility grouping and
+  `validateParking`. A car park's aisles are ordinary `road` lanes, so the router
+  drives its rows for free; `parkingGeometry.ts` paints the bays and garage ramps.
 - `routePlanner.ts` — the editor's track route builder (pure/headless):
   `planRoute()` runs Dijkstra over `(tile, entry direction)` for the shortest,
   turn-minimised path, returning the per-cell connections to lay (or `null`).
@@ -152,6 +157,10 @@ lane-change state machine).
   priority) for signalised junctions.
 - `laneOffset.ts` — lateral pixel-offset math for lanes, handling road tapering
   at tile seams (min-seam rule) so merges read smoothly.
+- `parking.ts` — the parking REGISTRY: which stall is taken, which car park is
+  full, plan-time "aim" tokens so a facility that is spoken for is avoided like a
+  full one, and the vehicle-fits-the-bay gate. `road.ts` runs the car phase
+  machine (driving/entering/parked/leaving) on top of it.
 
 ### World size + camera
 

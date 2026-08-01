@@ -120,6 +120,31 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 
 ## Road traffic
 
+0. **PARKING**: shipped, including the four follow-up pieces (pivot-arc reverse,
+   no right of way when leaving, reversing at an absolute crawl, the squared
+   echelon apron). `docs/handoff-parking-branch.md` is the branch handover;
+   `docs/handoff-parking-next.md` records what each piece measured and the two
+   things still open (an echelon nose-in clip of −2.1px, and single-lane aisles
+   deadlocking under 2.5× traffic — which they did before too).
+
+7. **Reroute out of a standing jam** (user request, 2026-07-28). A driver whose
+   planned turn feeds a queue that has not moved for a long time — ten seconds
+   or more, so nobody reroutes over a normal red phase — should give up on that
+   turn and replan via another exit it is allowed to take, like a real driver
+   bailing out of a blocked left turn. The screenshot that motivated it
+   (`/test/parkechelon` under load): a car fresh out of the car park wants to
+   turn LEFT into a solid jam while the RIGHT arm is clear — and it is the only
+   vehicle whose choice could dissolve the jam, because everything else is
+   committed. Sketch: the trigger is per-car patience bound to an UNMOVING
+   queue on the planned arm (`waitSeconds` is close but resets; it needs to
+   survive a crawl of a few px), the action is `planRoute` from the current
+   `(tile, entry)` with the jammed arm excluded, and it must be rare —
+   deterministic threshold, no RNG draw on the traffic streams, or every seeded
+   run in the repo shifts. Files: `src/sim/road.ts` (`clearAhead`/junction
+   gate), `src/sim/roadRouter.ts` (exclude-arm variant of `planRoute`). A
+   `/test` scenario needs a T-junction with one jammed and one clear arm, and
+   the guard is "the bailer reaches an exit while the jam stands".
+
 8. **Oncoming-lane overtaking** on 1-lane-each-way roads — the distance/speed
    feasibility math plus abort. Same-direction overtaking is done. Spec:
    `docs/superpowers/specs/2026-06-07-overtaking-driver-behaviour-design.md` §3b.
@@ -131,6 +156,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 11. **Per-`(tile, lane)` route planner.** Routes are tile sequences with lane
     sorting on approach; a true lane-cost planner would handle dense turn-lane
     networks more robustly. Optimisation, not a blocker.
+12. **Paid / time-limited parking.** Parked out until the Tycoon ledger existed —
+    "there is no money in this game and nothing to spend it on" — which stopped
+    being true when `sim/economy.ts` landed. Now a real option: a per-facility
+    tariff, a fee charged on `resumeFromStall` (the one place a stay ends), and a
+    time limit that makes a driver leave early or overstay. The parking side needs
+    almost nothing: `ParkingCell` already carries a per-facility `dwellSec`, and a
+    `tariff` sits beside it. The work is deciding what the player DOES with the
+    money — a fee nobody chooses to set is a number on a sign, not a mechanic.
+    Files: `src/tiles/parking.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
 
 ## Architecture / code health
 

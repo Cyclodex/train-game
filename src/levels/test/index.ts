@@ -89,6 +89,14 @@ import { forestworld } from "@/levels/test/scenarios/forestworld";
 import { landprices } from "@/levels/test/scenarios/landprices";
 import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
+import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
+import { parkinglot } from "@/levels/test/scenarios/parkinglot";
+import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
+import { busstops } from "@/levels/test/scenarios/busstops";
+import { buslayby } from "@/levels/test/scenarios/buslayby";
+import { parkvariants } from "@/levels/test/scenarios/parkvariants";
+import { parkechelon } from "@/levels/test/scenarios/parkechelon";
+import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -181,6 +189,11 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Destinations & routing",
         scenarios: [cardestination, carroute],
       },
+      {
+        id: "parking",
+        label: "Parking",
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, busstops, buslayby],
+      },
     ],
   },
   {
@@ -192,7 +205,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, bridge, clearing, townscape, industry, forestworld, lakevalley, lakevalleyOpen, demoworld] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, bridge, clearing, townscape, industry, forestworld, lakevalley, lakevalleyOpen, demoworld, parkcity] },
     ],
   },
 ];

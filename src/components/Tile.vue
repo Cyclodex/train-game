@@ -20,6 +20,9 @@
           :class="{ 'road-surface--mismatch': r.mismatch }"
         />
       </g>
+      <!-- Parking APRON: under the road's own kerb line and markings, so the two
+           read as one surface. See TileParking.vue for all three layers. -->
+      <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="apron" />
       <!-- Bus-lane tint: a gold strip over just the bus lane(s), not the whole
            ribbon, laterally aligned with the lane's cars/arrows. -->
       <path
@@ -101,6 +104,9 @@
           :class="{ 'road-lane-arrow--bus': arr.bus }"
         />
       </template>
+      <!-- Parking BAY LINES + kerb + garage ramps + bus-stop markings, over the
+           road's own markings. -->
+      <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="paint" />
       <!-- Signalised-junction STOP LINES live in the road layer (on the street,
            UNDER the cars and debug arrows). The signal heads + gantry are a
            separate overlay above the cars (see below). -->
@@ -288,6 +294,10 @@
       <div class="depot-interaction" :style="depotColorStyle" />
     </template>
 
+    <!-- Car-park sign ("P 3/12" / "P VOLL"): an HTML chip above everything, so it
+         is the one parking layer that lives outside the road SVG. -->
+    <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="sign" />
+
     <!-- Car destination marker (debug): a car is currently heading to this tile. -->
     <div v-if="config.debug && carDestinationId" class="car-destination-marker">
       <span class="car-destination-label">→{{ carDestinationId }}</span>
@@ -367,6 +377,8 @@ import {
   laneAllExits,
   approachPortsOf,
 } from "@/tiles/lanes";
+import { rowsOf } from "@/tiles/parking";
+import TileParking from "./TileParking.vue";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
@@ -377,7 +389,7 @@ import { depotSvg, depotViewBox } from "@/utils/trainArt";
 // markings stay in agreement.
 const LANE_WIDTH_PX_FRAC = 0.14;
 
-@Component
+@Component({ components: { TileParking } })
 class Tile extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Inject({ from: "game" }) game!: Game;
@@ -637,24 +649,32 @@ class Tile extends Vue {
           }
         }
         // Width PER END, each seam-matched to its own arm (seamPaintTotal against
-        // the neighbour crossing that seam, min 2 so a one-way still reads as a
-        // road) — the ribbon tapers across the bend so EACH end meets ITS arm
-        // flush. A junction's own laneCountAt deliberately over-counts an arm
-        // (every approach lane that can fan onto it counts), so the old constant
-        // max-of-both-ends width painted a narrow arm as wide as the widest one:
-        // a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of tarmac at the
-        // entrance seam, twice the road it meets.
+        // the neighbour crossing that seam) — the ribbon tapers across the bend so
+        // EACH end meets ITS arm flush. A junction's own laneCountAt deliberately
+        // over-counts an arm (every approach lane that can fan onto it counts), so
+        // the old constant max-of-both-ends width painted a narrow arm as wide as
+        // the widest one: a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of
+        // tarmac at the entrance seam, twice the road it meets.
         // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
         // so the arm mouth — straight or turning — meets the road flush, no taper
         // at the seam (#30). A simple curve (not a junction) keeps the per-end
         // seam taper between unequal straights, but a junction neighbour never
         // pinches it (roadSeamPaintTotal) — the junction adopts the curve.
+        //
+        // NO min-2 FLOOR. It dates from when a 1-lane one-way road was itself drawn
+        // 2 lanes wide; since the run-max kerb anchor (2026-07-25) a one-way
+        // STRAIGHT is drawn its true 1 lane, and leaving the floor on curves made a
+        // one-way single-lane BEND twice the width of the straights either side of
+        // it — a visible bulge at every corner of a car-park aisle. `laneCountAt`
+        // counts both directions, so anything two-way is already >= 2 and this
+        // changes nothing for it; the only tiles affected are genuine one-way
+        // single-lane bends. Guarded by `roadPaintWidth.spec.ts`.
         const widthEndA = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
-          : roadSeamPaintTotal(Math.max(selfAtA, 2), nTotalA, aJunction);
+          : roadSeamPaintTotal(selfAtA, nTotalA, aJunction);
         const widthEndB = this.tileIsRoadJunction
           ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
-          : roadSeamPaintTotal(Math.max(selfAtB, 2), nTotalB, bJunction);
+          : roadSeamPaintTotal(selfAtB, nTotalB, bJunction);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -826,6 +846,13 @@ class Tile extends Vue {
         mismatchTip: "",
       };
     });
+  }
+
+  // Does this tile carry any parking at all? The gate on the three
+  // <TileParking> layers, so a board of ordinary road tiles instantiates no
+  // parking components at all rather than three empty ones per tile.
+  get hasParking(): boolean {
+    return this.config.roads && rowsOf(this.tile).length > 0;
   }
 
   // Tinted strips for bus lanes: one filled band per bus lane, laterally aligned

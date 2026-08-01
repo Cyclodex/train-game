@@ -13,6 +13,7 @@ import {
   BlockReason,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
+import { facilityOf } from "@/tiles/parking";
 import { JunctionSignal } from "@/sim/junctionSignal";
 import {
   laneCount,
@@ -118,7 +119,23 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 // Rendered width of a road car in px — must match the `.road-car` CSS width in
 // PlayView/TestStage. The road sim's car body length is set from this so the
 // simulated body matches the visible sprite (keeps queues packing tight).
+// What a car park's roadside sign shows. Derived per frame from the road sim's
+// live occupancy, so "P 3/12" and "P VOLL" are the same numbers the router reads
+// when it decides whether to send a car there.
+export interface ParkingSignState {
+  // The one tile of the facility that draws the sign — its lowest-sorted tile
+  // that actually carries bays. A ten-tile car park must not carry ten signs.
+  signTileId: string;
+  label: string;
+  capacity: number;
+  free: number;
+}
+
 const CAR_SPRITE_PX = 38;
+// The lane offsets of a coupler that has an absolute pose instead of a lane
+// position (a parked / manoeuvring car). Shared frozen object — it is read on the
+// hot per-frame path and never mutated.
+const ZERO_LANE_OFFSET = Object.freeze({ offEntry: 0, offExit: 0 });
 
 // Jam spacing between car centres when a road is packed bumper-to-bumper, in px:
 // the sprite body plus a small standing gap. Used only to estimate how many cars
@@ -370,6 +387,13 @@ export interface Game {
   carJunctions: Record<string, string>;
   // In debug mode: destination tile id -> car id for cars heading there.
   carDestinations: Record<string, string>;
+  // Live parking occupancy: stall id -> the car sitting in it. The renderer paints
+  // a taken bay differently; refreshed each frame in place so Vue only notifies on
+  // a real change.
+  parkingOccupancy: Record<string, string>;
+  // Per car park, what its sign says: which tile carries the sign, its name, and
+  // how full it is. Keyed by facility id.
+  parkingStatus: Record<string, ParkingSignState>;
   // Street-junction traffic signals (#38). Per-arm aspect of each signalised road
   // junction, keyed `${tileId}:${arm}` → green/amber/red, refreshed each frame.
   roadSignalAspects: Record<string, "green" | "amber" | "red">;
@@ -713,6 +737,37 @@ export function createGame(
   // is derived live; the renderer reads it to highlight a held junction in debug.
   const carJunctions = reactive({}) as Record<string, string>;
   const carDestinations = reactive({}) as Record<string, string>;
+  // Parking, refreshed each frame in place (Vue notifies only on real changes).
+  const parkingOccupancy = reactive({}) as Record<string, string>;
+  const parkingStatus = reactive({}) as Record<string, ParkingSignState>;
+  // Which tile of each car park draws its sign: the lowest-sorted tile that
+  // actually carries bays. Computed once — the facilities are level data.
+  const parkingSignTiles = new Map<string, string>();
+  for (const [tileId, cell] of Object.entries(level).sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const fid = facilityOf(cell, tileId);
+    if (fid && !parkingSignTiles.has(fid)) parkingSignTiles.set(fid, tileId);
+  }
+
+  function updateParking() {
+    const held = roadSim.parkingOccupancy();
+    for (const id of Object.keys(held)) parkingOccupancy[id] = held[id];
+    for (const id of Object.keys(parkingOccupancy)) {
+      if (!(id in held)) delete parkingOccupancy[id];
+    }
+    for (const s of roadSim.parkingStatus()) {
+      const signTileId = parkingSignTiles.get(s.id);
+      if (!signTileId) continue;
+      const cur = parkingStatus[s.id];
+      if (cur && cur.free === s.free && cur.capacity === s.capacity && cur.label === s.label)
+        continue;
+      parkingStatus[s.id] = {
+        signTileId,
+        label: s.label,
+        capacity: s.capacity,
+        free: s.free,
+      };
+    }
+  }
   // Street-junction traffic signals (#38). The road junction tile ids (computed
   // once), and the reactive per-arm aspect + live-signal maps the renderer reads.
   const roadJunctionTiles = Object.entries(level)
@@ -837,6 +892,19 @@ export function createGame(
   // — including the tangent-continuous fillet through a turn between arms of
   // different widths. A dead-end (no exit) holds the entry seam point.
   function sampleRoadWorld(s: CarSample, off: { offEntry: number; offExit: number }) {
+    // A PARKED or MANOEUVRING vehicle carries an absolute tile-local pose instead
+    // of a place on a lane. The lane model can express exactly one shape — a
+    // port-to-port path pushed sideways — which is every position a driving car
+    // can hold and nothing else; a car standing square in a 90° bay simply is not
+    // in its vocabulary. The pose arrives in TILE units (the sim builds its lane
+    // geometry at size 1, the renderer at `tileSize`), so it scales here.
+    if (s.pose) {
+      return {
+        x: (s.coord.x + s.pose.tx) * tileSize,
+        y: (s.coord.y + s.pose.ty) * tileSize,
+        tangent: s.pose.headingDeg,
+      };
+    }
     const exit = s.exitPort !== null && s.exitPort !== s.entryPort ? s.exitPort : null;
     const p =
       exit === null
@@ -1051,8 +1119,16 @@ export function createGame(
         // angles into the new lane (the lean) instead of sliding flat. The sim eases
         // the lane positions for merges/turns; off-change they're equal.
         const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
-        const offsetFront = couplerOffsets(unit.front, curIndex, cls);
-        const offsetRear = couplerOffsets(unit.rear, curIndex, cls);
+        // A posed coupler ignores lane offsets entirely, and asking for them is
+        // not merely wasted work: `couplerOffsets` returns 0/0 for a tile whose
+        // road has no lanes from that entry, which would read as a meaningful
+        // offset rather than as "not applicable".
+        const offsetFront = unit.front.pose
+          ? ZERO_LANE_OFFSET
+          : couplerOffsets(unit.front, curIndex, cls);
+        const offsetRear = unit.rear.pose
+          ? ZERO_LANE_OFFSET
+          : couplerOffsets(unit.rear, curIndex, cls);
 
         const { x, y, angle } = positionRoadUnit(unit, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;
@@ -1377,6 +1453,7 @@ export function createGame(
     }
     renderTrains();
     updateRoadCars();
+    updateParking();
     updateSignalAspects();
     updateRoadSignals();
     updateReservations();
@@ -1780,6 +1857,8 @@ export function createGame(
     roadCars,
     carJunctions,
     carDestinations,
+    parkingOccupancy,
+    parkingStatus,
     roadSignalAspects,
     roadSignals,
     carRoute,
