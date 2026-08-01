@@ -173,7 +173,14 @@
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
       <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
-        <rect class="portal-shadow" :x="-21 * u" :y="-19 * u" :width="48 * u" :height="29 * u" :rx="2 * u" />
+        <!-- The shadow is shifted in its own nested group, by the ROTATION'S
+             INVERSE of one SE step: the portal group is turned per port, so an
+             offset baked into these coords would turn with it and three of the
+             four orientations would throw their shadow at a different sun than
+             the boulders beside them. See `tunnelPortals`. -->
+        <g :transform="p.shadowShift">
+          <rect class="portal-shadow" :x="-24 * u" :y="-22 * u" :width="48 * u" :height="29 * u" :rx="2 * u" />
+        </g>
         <rect class="portal-band" :x="-24 * u" :y="-22 * u" :width="48 * u" :height="29 * u" :rx="2 * u" />
         <rect class="portal-lintel" :x="-24 * u" :y="-22 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
         <!-- The mouth is cut through the FULL depth of the band, flush with its
@@ -729,13 +736,14 @@ class Tile extends Vue {
   // seam (tunnel beside tunnel) gets none, so a ridge two tiles deep reads as
   // one mountain with one hole in each side. Oriented per port; every segment
   // path meets its edge at the midpoint, so the arch sits on the centreline.
-  get tunnelPortals(): { port: Position; transform: string }[] {
+  get tunnelPortals(): { port: Position; transform: string; shadowShift: string }[] {
     if (!this.isTunnel) return [];
     // Register the edit counter: a bore EXTENDED next door must retire this
     // tile's portal at the now-internal seam, but `level` is the raw object in
     // play (see Game.levelVersion) so the neighbour read alone cannot notify.
     void this.game.levelVersion.value;
     const size = this.config.tileSize;
+    const u = this.u;
     const coord = parseCoordId(this.coordId);
     const at: Record<number, string> = {
       [Position.Top]: `translate(${size / 2}, 0)`,
@@ -743,13 +751,24 @@ class Tile extends Vue {
       [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
       [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
     };
-    const out: { port: Position; transform: string }[] = [];
+    // One NW sun lights the whole board, so every shadow falls SE in TILE
+    // space. These transforms turn the portal per port, and a child inherits
+    // that turn — so the SE step has to be pre-rotated by the inverse here,
+    // or the west portal throws its shadow north-east while the boulder next
+    // to it throws one south-east.
+    const shadowAt: Record<number, string> = {
+      [Position.Top]: `translate(${3 * u}, ${3 * u})`,
+      [Position.Right]: `translate(${3 * u}, ${-3 * u})`,
+      [Position.Bottom]: `translate(${-3 * u}, ${-3 * u})`,
+      [Position.Left]: `translate(${-3 * u}, ${3 * u})`,
+    };
+    const out: { port: Position; transform: string; shadowShift: string }[] = [];
     for (const p of portsOf(this.tile.connections)) {
       if (p === Position.Center) continue;
       const nc = neighborCoord(coord, p);
       const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
       if (n?.tunnel) continue;
-      out.push({ port: p, transform: at[p] });
+      out.push({ port: p, transform: at[p], shadowShift: shadowAt[p] });
     }
     return out;
   }
@@ -2004,7 +2023,8 @@ export default toNative(Tile);
   overflow: visible;
 }
 .portal-shadow {
-  // SE offset baked into the rect coords, matching the one NW sun.
+  // Offset SE in TILE space by the nested group in the template (the portal's
+  // own group is rotated per port), matching the one NW sun.
   fill: rgba(12, 20, 30, 0.3);
 }
 .portal-band {
