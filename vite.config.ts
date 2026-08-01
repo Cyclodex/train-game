@@ -12,6 +12,11 @@ import vue from "@vitejs/plugin-vue";
 const assignedPort = Number(process.env.PORT) || undefined;
 
 export default defineConfig({
+  // Relative asset paths so the same build works at any URL depth — the GitHub
+  // Pages project root (/train-game/) and PR previews (/train-game/pr-preview/
+  // pr-N/) alike. Safe here because the router uses hash history, so the page
+  // itself is always index.html.
+  base: "./",
   plugins: [vue()],
   server: {
     port: assignedPort,
