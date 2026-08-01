@@ -1,0 +1,75 @@
+name: Deploy
+
+# GitHub Pages deployment, two flavours in one workflow:
+#   - push to master  -> build + deploy to the gh-pages branch root
+#                        -> https://cyclodex.github.io/train-game/
+#   - pull requests   -> build + deploy to gh-pages/pr-preview/pr-<N>/
+#                        -> https://cyclodex.github.io/train-game/pr-preview/pr-<N>/
+#                        (the action comments the link on the PR and removes the
+#                        preview again when the PR closes)
+#
+# Both jobs push commits to the same gh-pages branch, so they share one
+# concurrency group to avoid racing pushes. The master deploy cleans everything
+# EXCEPT pr-preview/, so previews survive master deploys and vice versa.
+#
+# One-time setup: repo Settings -> Pages -> Source "Deploy from a branch",
+# branch "gh-pages", folder "/ (root)". The branch is created by the first run.
+#
+# The Vite build uses base "./" (relative asset paths, see vite.config.ts), so
+# the identical build output works at both URL depths.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-master:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
+          clean-exclude: pr-preview/
+          force: false
+
+  deploy-pr-preview:
+    # Fork PRs get a read-only token and cannot push to gh-pages; skip them.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: github.event.action != 'closed'
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        if: github.event.action != 'closed'
+      - run: npm run build
+        if: github.event.action != 'closed'
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: dist
