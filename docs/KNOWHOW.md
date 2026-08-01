@@ -2326,3 +2326,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   both jobs share one concurrency group because both push to gh-pages.
 - One-time repo setting: Settings -> Pages -> Deploy from a branch -> gh-pages
   / root. Fork PRs are skipped (read-only token cannot push gh-pages).
+- Cleanup-on-close does NOT run for a PR closed with a merge conflict: GitHub
+  creates no pull_request workflow runs for conflicted PRs at all (same reason
+  CI never verdicts them), so its pr-preview/pr-<N>/ lingers on gh-pages --
+  delete the directory by hand (seen with #62, 2026-08-01).
