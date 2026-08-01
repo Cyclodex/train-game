@@ -1,10 +1,22 @@
 <template>
   <svg
     v-if="html"
-    :class="[`tile-${layer}`, { 'tile-over-bore': overBore }]"
+    :class="`tile-${layer}`"
     :viewBox="`0 0 ${units} ${units}`"
     preserveAspectRatio="none"
     v-html="html"
+  />
+  <!-- A bore's ROOF: the same art a SECOND time, clipped to the tile and lifted
+       above the trains. A copy rather than a lift, because the layer below still
+       has to draw the mountain's real, bowed-out silhouette — clip THAT and the
+       ridge grows a flat spot per bored tile and the tile grid is back. See
+       .tile-roof. -->
+  <svg
+    v-if="overBore && baseHtml"
+    :class="[`tile-${layer}`, 'tile-roof']"
+    :viewBox="`0 0 ${units} ${units}`"
+    preserveAspectRatio="none"
+    v-html="baseHtml"
   />
 </template>
 
@@ -122,10 +134,10 @@ class TileGround extends Vue {
     return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
   }
 
-  // A BORED cell's ground is a ROOF, not a floor: the mountain over a tunnel
-  // renders ABOVE the trains instead of under them (see the .tile-over-bore
-  // rule), so a consist slides behind the rock pixel by pixel as it reaches the
-  // portal. The canopy layer is already above the trains and stays where it is.
+  // A BORED cell gets its ground and scatter a SECOND time, above the trains:
+  // the mountain over a tunnel is a ROOF, so a consist is covered by the rock
+  // rather than switched off (see the .tile-roof rule). The canopy layer is
+  // already above the trains and stays where it is.
   //
   // Safe because a bore only ever exists on tunnelable ground (`addConnection`
   // sets `TileCell.tunnel` exactly where `needsTunnel` holds — rock/mountain),
@@ -136,7 +148,10 @@ class TileGround extends Vue {
     return this.layer !== "canopy" && this.level[this.coordId]?.tunnel === true;
   }
 
-  get html(): string {
+  // The tile's own art for this layer, WITHOUT the height terrace: the terrace
+  // renders under an opaque patch, so the roof copy has no use for it — and
+  // duplicating it would duplicate the clipPath id it defines.
+  get baseHtml(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
       this.layer === "canopy"
@@ -144,9 +159,12 @@ class TileGround extends Vue {
         : this.layer === "scatter"
           ? tileScatterSvg
           : tileGroundSvg;
-    const base = build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+  }
+
+  get html(): string {
     // The terrace renders below the terrain patch, on the ground layer only.
-    return this.layer === "ground" ? this.heightHtml + base : base;
+    return this.layer === "ground" ? this.heightHtml + this.baseHtml : this.baseHtml;
   }
 }
 export default toNative(TileGround);
@@ -197,10 +215,20 @@ export default toNative(TileGround);
 // (which popped half a locomotive — the sprite is 100px of a 200px tile — into
 // and out of existence in the middle of the ridge). The portal arch and the
 // dashed guide are lifted over the roof in Tile.vue.
-.tile-ground.tile-over-bore {
+.tile-roof {
+  // CLIPPED TO THE TILE, unlike every other ground layer. A patch bows out of
+  // its box on purpose (that overlap is how two patches interlock), and a ROOF
+  // that bows would occlude a train out in the open — swallowing it short of
+  // the tunnel, at a wobbly rock edge, before it ever reached the portal. The
+  // unclipped original underneath still draws the silhouette; this copy only
+  // has to cover the tile it belongs to, and the portal's covered stretch
+  // reaches the tile edge to meet it.
+  clip-path: inset(0);
+}
+.tile-ground.tile-roof {
   z-index: 7;
 }
-.tile-scatter.tile-over-bore {
+.tile-scatter.tile-roof {
   // Above its own roof, as scatter always is above its own patch.
   z-index: 8;
 }

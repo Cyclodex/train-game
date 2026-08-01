@@ -256,8 +256,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
-  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell's
-  ground/scatter are lifted over the trains as the bore's roof (see TUNNELS).
+  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
+  renders its ground/scatter a SECOND time above the trains, clipped to the
+  tile, as the bore's roof (see TUNNELS).
 
 ## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
 - THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`
@@ -515,28 +516,34 @@ lean — prune as much as you add. This file only stays useful if every task ten
   between two tunnel cells gets none. Tile.vue injects `level` for that
   neighbour check and reads `game.levelVersion` in the getter, or an extended
   bore would not retire the now-internal portal (cached-computed trap).
-- GOING UNDERGROUND IS OCCLUSION, NOT VISIBILITY. A bore's own mountain is a
-  ROOF: `TileGround`'s `.tile-over-bore` lifts that cell's ground to z7 and its
-  scatter to z8, above the trains (wagons z3 / loco z4) — the canopy trick
-  applied to the whole cell. The train is simply covered, so it slides out of
-  sight along the rock face and back out again continuously. Guide z9 and
-  portals z10 clear the roof. Rests on the invariant that a bore only exists on
-  tunnelable ground, whose patch is opaque and covers the tile.
+- GOING UNDERGROUND IS OCCLUSION, NOT VISIBILITY. Four layers, and the ORDER is
+  the whole design (bottom to top): the portal's black OPENING at z1 → rails z2
+  → trains (wagons z3 / loco z4) → the portal's MASONRY at z6 → the bore's
+  mountain ROOF at z7/z8. So a train runs INTO the dark (the opening is under
+  it), is covered by the masonry at the arch, and is covered by the rock from
+  the tile edge on; and the masonry itself disappears under the rock, instead of
+  being laid on top of it. Nothing is switched off anywhere. The dashed guide
+  (z9) clears everything so the bore stays readable on the ridge.
 - WHAT THIS REPLACED, and why it is not worth going back to: `renderTrains`
   used to set `visibility: hidden` once a unit's CENTRE was on the tunnel tile.
   A locomotive is 100px of a 200px tile, so half a loco blinked out on the rock
   face and a whole one blinked back in mid-ridge — with a visible gap opening
   between it and the wagons still on the grass. No portal big enough to mask
   that is a portal you want on the board.
-- WHAT SETS THE PORTAL'S DEPTH: a terrain patch BOWS OUT OF ITS TILE (corner
-  push + edge bow), so at the seam the rock face stands ~15 ground units proud
-  of the tile edge — and the roof bows with it. A short portal therefore has the
-  hillside swallowing the train BEFORE the tunnel. The gallery reaches 22u
-  outward (-y in the authored 100-box) to clear that, and the black mouth is cut
-  through its FULL depth, flush with the outer face: the first thing the line
-  meets must be the hole, not the stonework and not the rock. Making the patches
-  stay inside their tiles instead is not the trade — that bow is what keeps the
-  tile grid off every shore in the game.
+- THE ROOF IS A SECOND COPY, CLIPPED (`TileGround`, `.tile-roof`): the same
+  ground/scatter art rendered again above the trains, `clip-path: inset(0)`.
+  Both halves of that matter. A patch BOWS OUT OF ITS TILE (corner push + edge
+  bow) by up to ~15 units, so an unclipped roof occludes a train out in the
+  open, at a wobbly rock edge, short of the tunnel — which is why the portal's
+  covered stretch runs all the way to the tile edge to meet the clip. And it has
+  to be a COPY, not a lift: clip the only copy and the ridge grows a flat spot
+  per bored tile, which is the tile grid the terrain art spends its whole budget
+  hiding. (The roof copy drops the height terrace — it renders under an opaque
+  patch, and duplicating it would duplicate its clipPath id.)
+- The opening being UNDER the trains is also what keeps the hillside out of the
+  portal: at z1 it covers the mountain's own bowed-out ground patch, so what
+  shows inside a portal is always the bore. The neighbour's rails (z2) run over
+  it and into the dark, which is exactly right.
   /test scenarios: `tunnel`, `mountainpass` (a 5-unit consist).
 
 ## GRADE SEPARATION — flyover (2026-07-31)
