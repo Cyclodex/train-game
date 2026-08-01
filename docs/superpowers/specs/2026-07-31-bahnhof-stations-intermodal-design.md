@@ -162,7 +162,28 @@ bus *produces* a busload; riding a bus somewhere is not modelled) and people
 riding rail→bus onward journeys — both want the destination-typed passengers
 of phase 5.
 
-### Phase 5 — the mode ("Verkehrsnetz" / Transport-Fever-like) (L)
+### Phase 5 — the mode ("Network" / Transport-Fever-like) — **SHIPPED 2026-08-01**
+
+`src/modes/network.ts`. The win is **passengers carried** (`ObjectiveSpec.
+passengersRequired`, scaled per station), the loss is a **platform
+overflowing** (`fail.maxStationQueue` over the new `peakStationQueue`
+high-water counter), and the HUD swaps the delivery card for a passenger one
+plus a live "n/12 waiting" readout that warms amber then red. Deliveries are
+deliberately NOT required: a shuttle that keeps running forever is a good
+service, not an unfinished level — so the board's two depots both MISMATCH the
+train and it turns round by bouncing, which is what makes the service endless.
+
+The mode immediately paid for itself as a consumer: phase 3's demand rates had
+never been measured against what a train can actually carry, and the first
+board was unwinnable in 19 seconds. `stationDemandOf` is now tuned against a
+shuttle's round trip (a busy station turns out one passenger every 4s), and
+`tests/unit/modes/network.spec.ts` drives the real board headlessly to prove it
+stays winnable — the balance is a test, not a hope.
+
+Still open: destination-typed passengers (ride A→B rather than one hop),
+buses as carriers rather than feeders, and rising demand over time.
+
+#### The original sketch (for reference)
 
 A `src/modes/` file layering objectives + economy over the above: keep queues
 under overflow, score journeys (fare by distance already exists), rising

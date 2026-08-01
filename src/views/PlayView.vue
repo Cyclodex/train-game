@@ -55,8 +55,47 @@
         <span>🧪</span><span>Test world</span>
       </router-link>
     </MenuDrawer>
+    <!-- NETWORK mode's score card: people carried, and how full the busiest
+         platform is right now. It REPLACES the delivery card (one progress
+         number per mode — HUD density, design doc §5.5). -->
+    <div v-if="hud.passengers" class="score-card">
+      <div class="score-head">
+        <span class="score-icon">🧍</span>
+        <span class="score-label">Passengers</span>
+        <span class="score-count">
+          <span class="score-now">{{ passengersCarried }}</span>
+          <span class="score-sep">/</span>
+          <span class="score-total">{{ passengerTarget }}</span>
+          <span v-if="passengersCarried >= passengerTarget" class="score-check">✓</span>
+        </span>
+      </div>
+      <div class="score-bar">
+        <div class="score-bar-fill" :style="{ width: passengersPct + '%' }"></div>
+        <span class="score-pct">{{ passengersPct }}%</span>
+      </div>
+      <div v-if="hud.timer && !dateLabel" class="score-timer">
+        ⏱ {{ elapsedLabel }}
+      </div>
+      <div
+        class="score-platform"
+        :class="platformClass"
+        title="Busiest platform — the run ends if one overflows"
+      >
+        🚉 {{ worstPlatform }}/{{ overcrowdLimit }} waiting
+      </div>
+      <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
+        <span
+          v-for="s in stars"
+          :key="s.id"
+          class="star-pip"
+          :class="{ 'star-pip--on': s.earned }"
+          :title="s.label"
+          >★</span
+        >
+      </div>
+    </div>
     <div
-      v-if="!roadOnly"
+      v-if="!roadOnly && !hud.passengers"
       class="score-card"
       :class="{
         'score-card--pulse': pulsing,
@@ -547,6 +586,7 @@ import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default"
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
 import { GameMode, ModeSetup } from "@/modes/types";
+import { passengerTargetOf, OVERCROWD_LIMIT } from "@/modes/network";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
@@ -1553,6 +1593,37 @@ class PlayView extends Vue {
     return this.totalTrains > 0 && this.delivered >= this.totalTrains;
   }
 
+  // --- passengers (network mode) ---------------------------------------------
+  // What the network mode steers by: people carried against the board's target,
+  // plus the fullest platform right now — the crowd IS the pressure, so it is
+  // shown live rather than only in the stars.
+  overcrowdLimit = OVERCROWD_LIMIT;
+  get passengersCarried(): number {
+    return this.game.objective.counters.passengersDelivered ?? 0;
+  }
+  get passengerTarget(): number {
+    return passengerTargetOf(this.level);
+  }
+  get passengersPct(): number {
+    return this.passengerTarget
+      ? Math.min(100, Math.round((this.passengersCarried / this.passengerTarget) * 100))
+      : 0;
+  }
+  get worstPlatform(): number {
+    let worst = 0;
+    for (const q of Object.values(this.game.stationQueues)) {
+      if (q > worst) worst = q;
+    }
+    return worst;
+  }
+  // Amber as the platform fills, red as it nears the overflow that ends the run.
+  get platformClass(): string {
+    const ratio = this.worstPlatform / OVERCROWD_LIMIT;
+    if (ratio >= 0.75) return "score-platform--critical";
+    if (ratio >= 0.5) return "score-platform--busy";
+    return "";
+  }
+
   // Pop/glow the score card briefly whenever a new delivery lands.
   pulsing = false;
   private pulseTimer = 0;
@@ -2177,6 +2248,22 @@ export default toNative(PlayView);
 }
 .score-crossing--bad {
   color: #e2574c; // red when a car is stuck dangerously long
+}
+/* The busiest platform (network mode): the same three-step temperature the
+   crossing readout uses, because it is the same kind of pressure — something
+   is piling up and the player has a little time to act. */
+.score-platform {
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #8fd19e;
+  transition: color 0.3s ease;
+}
+.score-platform--busy {
+  color: #e6c34a;
+}
+.score-platform--critical {
+  color: #e2574c;
 }
 .score-stars {
   margin-top: 6px;

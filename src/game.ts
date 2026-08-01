@@ -1144,6 +1144,12 @@ export function createGame(
     }
   }
 
+  // The station tiles, computed once — the crowd mirror and the overcrowding
+  // observation both walk them every tick, and a level's roles are data.
+  const stationTiles = Object.keys(level).filter(
+    id => level[id]?.role === "station"
+  );
+
   // Mirror each station's live platform queue for the crowd render. Vue's
   // reactive set is a no-op while the count is unchanged, so this is cheap.
   function updateStationQueues() {
@@ -1154,6 +1160,19 @@ export function createGame(
       }
       stationQueues[id] = sim.stationQueue(id);
     }
+  }
+
+  // The fullest platform right now — the absolute the objective tracker folds
+  // into its peak. Read from the SIM, not the render mirror: the mirror only
+  // refreshes inside the rAF frame, so a headless run (or a hidden tab) would
+  // score a permanently empty station.
+  function worstStationQueue(): number {
+    let worst = 0;
+    for (const id of stationTiles) {
+      const q = sim.stationQueue(id);
+      if (q > worst) worst = q;
+    }
+    return worst;
   }
 
   // Sample each live car to world positions (reusing the train chord placement)
@@ -1471,6 +1490,10 @@ export function createGame(
       manualGreenDelta,
       tilesBuiltDelta,
       passengersDeliveredDelta,
+      // The fullest platform right now (absolute; the tracker keeps the peak).
+      // Only reported on a board that HAS stations, so every other mode leaves
+      // the counter at its zero default.
+      ...(stationTiles.length > 0 && { maxStationQueue: worstStationQueue() }),
       // Absolutes off the ledger, so the counters can never drift from it. Left
       // out entirely when there is no economy, which keeps the money counters at
       // their zero defaults for every other mode.

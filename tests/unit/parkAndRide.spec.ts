@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createGame, TrainDef } from "@/game";
 import { sandboxMode } from "@/modes/sandbox";
 import { parkandride } from "@/levels/test/scenarios/parkandride";
+import { stationDemandOf } from "@/tiles/catchment";
 
 // The park & ride transfer runs in game.advance() — the headless world step —
 // which is what makes THIS test possible: drive the world without a browser
@@ -35,9 +36,13 @@ describe("park & ride: parked cars feed the station queue", () => {
       game.sim.trainPassengers("train1") +
       game.sim.passengersDelivered();
 
-    // The lonely-halt schedule alone manages `initial` (2) plus one walker per
-    // 15 s. Anything beyond that bound arrived BY CAR.
-    const scheduleOnly = 2 + Math.floor(seconds / 15);
+    // What the station's OWN schedule could produce in the window — derived,
+    // not hardcoded, so retuning the demand rates can never quietly turn this
+    // into a test that passes on the schedule alone. Anything beyond it
+    // arrived BY CAR.
+    const schedule = stationDemandOf(parkandride.level, "2,0");
+    const scheduleOnly =
+      (schedule.initial ?? 0) + Math.floor(seconds / schedule.intervalSec);
     expect(appeared).toBeGreaterThan(scheduleOnly);
   });
 });

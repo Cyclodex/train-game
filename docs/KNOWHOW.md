@@ -500,6 +500,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## NETWORK MODE (phase 5 — the passenger loop, 2026-08-01)
+- Win = people carried (`ObjectiveSpec.passengersRequired`), loss = a platform
+  over `fail.maxStationQueue` (against the `peakStationQueue` high-water
+  counter). The win rule is "EVERY stated target met", so `deliveriesRequired:
+  0` + a passenger target does not win at t=0 — and a board that never mentions
+  passengers behaves exactly as before.
+- The board's two depots deliberately MISMATCH the shuttle: a matched depot
+  PARKS the train and the service dies after one trip, a mismatch bounces it
+  back out. So the network mode's "mismatched arrivals" are turn-backs, not
+  errors — which is why its third star is briskness, never `mismatchedArrivals
+  === 0` (that star would punish the mechanic the mode runs on).
+- Single track = ONE train. A second shuttle meets the first head-on and
+  deadlocks; capacity is raised with WAGONS (seats), not with more trains,
+  until a board authors a passing loop.
+- `game.ts` reports `maxStationQueue` from the SIM each tick, never from the
+  reactive render mirror — the mirror only updates inside the rAF frame, so a
+  headless run would score an empty station forever.
+- `npm run shot -- '#/play?mode=…' --start` clicks the Ready card so a mode can
+  be photographed RUNNING instead of showing its briefing.
+
+## STATION DEMAND IS TUNED AGAINST A TRAIN (2026-08-01)
+- `stationDemandOf`'s rates only mean something next to what a shuttle can
+  carry: at DEFAULT_SPEED a round trip is ~30-40s and a people wagon seats 6,
+  so a busy station (6 town tiles) turns out one passenger every 4s. The
+  phase-3 numbers were ~2.5x hotter and made the first network board
+  unwinnable in 19 seconds — nothing revealed it until a mode consumed them.
+- The no-town fallback (30s) must stay SLOWER than the one-house case (24s),
+  or the middle of nowhere out-generates a hamlet and the "build nearer the
+  houses" rule inverts at its first step. The monotonicity spec catches this —
+  it caught exactly this during the retune.
+- A platform's `max` exceeds the network mode's OVERCROWD_LIMIT only for a real
+  town (5+ tiles in reach), so a quiet halt can never lose you a level by
+  itself. Retuning either number without the other silently makes the overflow
+  fail decorative (max ≤ limit) or unavoidable.
+
 ## PARK & RIDE (phase 4 — road feeds rail, 2026-08-01)
 - `parkAndRideTargets(level)` (tiles/catchment.ts): tile id → nearest station
   within the walk radius, ties by distance then id — deterministic, computed
