@@ -107,7 +107,9 @@ function longOpenRoad(): Level {
 }
 
 describe("createRoadSim — keep-right on an open stretch", () => {
-  it("drifts cars back to the kerb lane on a long junctionless road", () => {
+  // Sample the lane of every car whose head is well onto the far end of the road
+  // (x >= 6, past enough tiles for keep-right to have settled them).
+  function kerbTally(maxCars: number): { onKerb: number; offKerb: number } {
     const sim = createRoadSim({
       level: longOpenRoad(),
       width: 8,
@@ -116,13 +118,10 @@ describe("createRoadSim — keep-right on an open stretch", () => {
       spawnInterval: 0.6,
       carSpeed: 0.5,
       carLength: 0.2,
-      maxCars: 8,
+      maxCars,
       overtakeFraction: 0, // no overtaking — the only lateral motion is keep-right
       spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: L }],
     });
-
-    // Sample the lane of every car whose head is well onto the far end of the road
-    // (x >= 6, past enough tiles for keep-right to have settled them).
     let onKerb = 0;
     let offKerb = 0;
     for (let i = 0; i < 3000; i++) {
@@ -134,7 +133,25 @@ describe("createRoadSim — keep-right on an open stretch", () => {
         else offKerb++;
       }
     }
+    return { onKerb, offKerb };
+  }
+
+  it("drifts every car back to the kerb lane when the kerb lane has room", () => {
+    // Light traffic, so a gap is always available: keep-right is then absolute.
+    const { onKerb, offKerb } = kerbTally(2);
     expect(onKerb).toBeGreaterThan(50); // cars actually reached the far end…
     expect(offKerb).toBe(0); // …and every one of them had drifted to the kerb lane
+  });
+
+  it("holds cars out of the kerb lane when there is no gap to take (busy road)", () => {
+    // The same road packed with four times the traffic. Keep-right is a wish, not a
+    // teleport: a car crossing toward the kerb has to accept a real gap (#56), and
+    // on a busy road it sometimes runs out of road before one opens. So the drift
+    // must still DOMINATE the far end without being absolute — a car that cannot
+    // merge holds its lane rather than sweeping through the kerb-lane traffic,
+    // which is the behaviour that stops bodies overlapping in the first place.
+    const { onKerb, offKerb } = kerbTally(8);
+    expect(onKerb).toBeGreaterThan(50);
+    expect(offKerb / (onKerb + offKerb)).toBeLessThan(0.15);
   });
 });

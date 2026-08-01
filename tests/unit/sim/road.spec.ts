@@ -2820,7 +2820,11 @@ describe("mixed-lane junctions route end-to-end", () => {
     expect(r.throughCentre).toBeGreaterThan(0);
     expect(r.completed).toBeGreaterThan(10);
     expect(r.allStuckTicks).toBeLessThan(80);
-  });
+    // ~3.3s on its own on a fast machine — the 5s default has no headroom left
+    // on a shared CI runner under the parallel suite (timed out there at 5s).
+    // A timeout here is the machine, never the code — what this test guards
+    // (gridlock) shows up as `allStuckTicks`, which is a count, not a clock.
+  }, 30_000);
 
   it("bigjunction (4-way × 3-lane dedicated turn lanes): cars cross the centre and exit, no gridlock", () => {
     // The largest unequal-movement junction in the epic (#16 acceptance criterion):
