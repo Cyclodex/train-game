@@ -256,7 +256,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
-  and rails (2), so scenery never covers track.
+  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell's
+  ground/scatter are lifted over the trains as the bore's roof (see TUNNELS).
 
 ## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
 - THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`
@@ -509,15 +510,29 @@ lean — prune as much as you add. This file only stays useful if every task ten
   corridor (`cellCorridors` skips `connections` when `cell.tunnel`), so the
   mountain scatter closes over the line. Clearing the right-of-way would draw
   the route onto the ridge as a bald stripe — the one thing a tunnel is not.
-  TileRail is suppressed on the cell; a dashed guide (z2) is the map notation.
+  TileRail is suppressed on the cell; a dashed guide (z9) is the map notation.
 - PORTALS only where the bore meets NON-tunnel ground — an internal seam
   between two tunnel cells gets none. Tile.vue injects `level` for that
   neighbour check and reads `game.levelVersion` in the getter, or an extended
   bore would not retire the now-internal portal (cached-computed trap).
-- The portal svg is z7, ABOVE trains — same layer story as the forest canopy:
-  `game.ts renderTrains` hides a unit once its CENTRE is on a tunnel tile, and
-  the arch straddling the seam masks the per-unit pop, so a consist threads in
-  wagon by wagon. /test scenario: `tunnel`.
+- GOING UNDERGROUND IS OCCLUSION, NOT VISIBILITY. A bore's own mountain is a
+  ROOF: `TileGround`'s `.tile-over-bore` lifts that cell's ground to z7 and its
+  scatter to z8, above the trains (wagons z3 / loco z4) — the canopy trick
+  applied to the whole cell. The train is simply covered, so it slides out of
+  sight along the rock face and back out again continuously. Guide z9 and
+  portals z10 clear the roof. Rests on the invariant that a bore only exists on
+  tunnelable ground, whose patch is opaque and covers the tile.
+- WHAT THIS REPLACED, and why it is not worth going back to: `renderTrains`
+  used to set `visibility: hidden` once a unit's CENTRE was on the tunnel tile.
+  A locomotive is 100px of a 200px tile, so half a loco blinked out on the rock
+  face and a whole one blinked back in mid-ridge — with a visible gap opening
+  between it and the wagons still on the grass. No portal big enough to mask
+  that is a portal you want on the board.
+- The portal therefore stands OUTWARD of the tile edge (-y in the authored
+  100-box), and the black mouth is cut through the FULL depth of the band,
+  flush with its outer face: the first thing the line meets must be the hole,
+  not the stonework, or a unit slides under a slab instead of into a tunnel.
+  /test scenarios: `tunnel`, `mountainpass` (a 5-unit consist).
 
 ## GRADE SEPARATION — flyover (2026-07-31)
 - `TileCell.flyover: PortPair` names the connection riding a deck OVER the

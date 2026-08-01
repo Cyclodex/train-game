@@ -1,7 +1,7 @@
 <template>
   <svg
     v-if="html"
-    :class="`tile-${layer}`"
+    :class="[`tile-${layer}`, { 'tile-over-bore': overBore }]"
     :viewBox="`0 0 ${units} ${units}`"
     preserveAspectRatio="none"
     v-html="html"
@@ -122,6 +122,20 @@ class TileGround extends Vue {
     return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
   }
 
+  // A BORED cell's ground is a ROOF, not a floor: the mountain over a tunnel
+  // renders ABOVE the trains instead of under them (see the .tile-over-bore
+  // rule), so a consist slides behind the rock pixel by pixel as it reaches the
+  // portal. The canopy layer is already above the trains and stays where it is.
+  //
+  // Safe because a bore only ever exists on tunnelable ground (`addConnection`
+  // sets `TileCell.tunnel` exactly where `needsTunnel` holds — rock/mountain),
+  // and those kinds paint an opaque patch that covers the whole tile. A bore
+  // hand-authored onto grass would have no roof, and its train would drive over
+  // the top in plain sight — which is the right way for invalid data to read.
+  get overBore(): boolean {
+    return this.layer !== "canopy" && this.level[this.coordId]?.tunnel === true;
+  }
+
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
@@ -175,5 +189,19 @@ export default toNative(TileGround);
   // cars' debug id labels can't leak through — each .road-car is its own
   // stacking context. Fare pins (z9) and switches (z14+) also stay above.
   z-index: 7;
+}
+// The mountain over a BORE, lifted above the trains — the same trick as the
+// canopy, applied to the whole cell instead of a few crowns. This is what makes
+// a tunnel work: the rock OCCLUDES the consist, so each unit slides out of
+// sight along the tile edge instead of being switched off at the tile centre
+// (which popped half a locomotive — the sprite is 100px of a 200px tile — into
+// and out of existence in the middle of the ridge). The portal arch and the
+// dashed guide are lifted over the roof in Tile.vue.
+.tile-ground.tile-over-bore {
+  z-index: 7;
+}
+.tile-scatter.tile-over-bore {
+  // Above its own roof, as scatter always is above its own patch.
+  z-index: 8;
 }
 </style>

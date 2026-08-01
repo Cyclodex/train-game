@@ -161,19 +161,27 @@
 
     <!-- Tunnel portals, one per end of the bore that meets open ground (an
          internal seam between two tunnel tiles gets none). Drawn ABOVE the
-         trains, same layer story as the forest canopy: a unit is hidden the
-         moment its centre crosses onto the tunnel tile, and the arch masks
-         that pop so the train reads as driving INTO the mountain. -->
+         trains and above the bore's own mountain roof (TileGround's
+         .tile-over-bore), so the structure reads as the hole IN the rock face.
+         The whole portal stands OUTWARD of the tile edge (-y is open ground):
+         the mouth is the outermost opaque thing on the line, so a unit slides
+         into black at the rock face and the roof carries the occlusion on from
+         there. Nothing is switched off — the mountain simply covers it. -->
     <svg
       v-if="isTunnel"
       class="tunnel-portals"
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
       <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
-        <rect class="portal-shadow" :x="-21 * u" :y="-4 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
-        <rect class="portal-band" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
-        <rect class="portal-lintel" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
-        <rect class="portal-mouth" :x="-9 * u" :y="1 * u" :width="18 * u" :height="8 * u" :rx="3 * u" />
+        <rect class="portal-shadow" :x="-21 * u" :y="-10 * u" :width="48 * u" :height="20 * u" :rx="2 * u" />
+        <rect class="portal-band" :x="-24 * u" :y="-13 * u" :width="48 * u" :height="20 * u" :rx="2 * u" />
+        <rect class="portal-lintel" :x="-24 * u" :y="-13 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
+        <!-- The mouth is cut through the FULL depth of the band, flush with its
+             outer face: the black — not the stonework — has to be the first
+             thing the line meets, or a unit slides under the slab instead of
+             into the hole. Wider than the widest sprite (22u = 44px vs a 30px
+             wagon), so nothing peeks out either side of the opening. -->
+        <rect class="portal-mouth" :x="-11 * u" :y="-13 * u" :width="22 * u" :height="20 * u" :rx="3 * u" />
       </g>
     </svg>
 
@@ -1961,17 +1969,17 @@ export default toNative(Tile);
 }
 
 /* --- tunnel (the line is underground) ---
-   The guide is where the rails would be (z2, over the mountain scatter at z1
-   in its own cell): a faint dashed centreline, the map notation for a tunnel.
-   The portals sit ABOVE the trains (loco z4 / wagons z3), like the forest
-   canopy (z7): game.ts hides a unit once its centre is on the tunnel tile,
-   and the arch straddling the seam masks that pop. */
+   A bore's own mountain is a ROOF: TileGround lifts this cell's ground (z7) and
+   scatter (z8) above the trains (loco z4 / wagons z3), so the rock OCCLUDES a
+   consist rather than anything switching it off. Everything that must stay
+   readable ON that roof therefore has to clear it: the dashed guide (the map
+   notation for where the bore runs) at z9, the portals at z10. */
 .tunnel-guide {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 2;
+  z-index: 9;
   pointer-events: none;
   path {
     fill: none;
@@ -1986,8 +1994,10 @@ export default toNative(Tile);
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 7;
+  z-index: 10;
   pointer-events: none;
+  // The structure stands proud of the tile edge, out over the open ground the
+  // line arrives on — that overhang is the whole point (see the template).
   overflow: visible;
 }
 .portal-shadow {
