@@ -697,7 +697,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   fields; add a salt rather than a second implementation.
 - THE REAL ANSWER TO "the open green is boring" IS FARMLAND, not the meadow.
   Fields cover ground; the meadow only stops what is left reading as a lawn.
-  Judge both on a THEMED shot (`npm run shot -- <id> --backdrop --no-debug`) —
+  Judge both on a THEMED shot (`npm run shot -- <id> --backdrop`) —
   the flat debug backdrop makes the meadow look far more prominent than it is.
 ## FARMLAND (2026-07-28)
 - 7th kind, buildable, `TERRAIN_BUILD_FACTOR` 1.2 (between grass 1 and forest
@@ -2114,10 +2114,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   that only exist once trains roll (a pin held by another train's block) need it,
   plus a `--wait` long enough to reach them (~3s on a 3×3 board) and short enough
   that the runs have not finished.
-- `npm run shot` runs with DEBUG ON, and the debug reservation tint
-  (`.tile-status--free`, an OPAQUE green) covers everything under it — ground art,
-  terrain, depot art. A terrain change verified with a default shot looks like it
-  did nothing. Use `--no-debug` to judge anything painted below the rails.
+- `npm run shot` runs with DEBUG **OFF** since 2026-08-02 — the default flipped
+  exactly because the debug reservation tint (`.tile-status--free`, an OPAQUE
+  green) covers everything under it (ground art, terrain, depot art), so a
+  terrain change verified with the old default looked like it did nothing. PR
+  screenshots are debug-free; `--debug` opts back in when the driving-lines ARE
+  the subject (use it for BOTH halves of a before/after, and say so in the PR).
+  `--no-debug` still parses (it is now the default, kept for old commands).
+- SHOT DEBUG STATE IS ASSERTED, NOT ASSUMED: the script reads the stage's toggle
+  (`.test-stage.debug`) and clicks until it matches the requested state, so it is
+  immune to the app's default drifting. Nothing else needs configuring —
+  `gameConfig.debug` is `false` and NOT persisted (no localStorage key, unlike
+  `worldTheme`), so a `/#/play?…` route shot, which has no stage toggle at all,
+  is debug-free by construction.
 - `tests/unit/sim/roadScenarioSweep.spec.ts` = BEHAVIOURAL sweep of every road
   scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
   never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed

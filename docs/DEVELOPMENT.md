@@ -99,7 +99,8 @@ The whole architecture is built for this and you should preserve it:
   colour assignment (`colorSeed`) and road routing take explicit seeds, so a
   scenario can pin a determined outcome (e.g. a depot-mismatch bounce).
 - **Visual checks are intentional, not flaky.** `npm run shot -- <id>` produces
-  a tight, reproducible PNG with the debug overlay on. A visual *fix* PR carries
+  a tight, reproducible PNG with the debug overlay off (`--debug` opts back in
+  when the driving-lines are the point). A visual *fix* PR carries
   a before/after pair (see `docs/TICKET_WORKFLOW.md` → Visual verification). We
   deliberately do **not** pixel-diff in CI: cross-machine font/antialiasing
   differences make that flaky, and a flaky gate trains people to ignore red. The

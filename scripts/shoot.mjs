@@ -3,11 +3,19 @@
 //
 //   npm run shot -- <scenarioId|#route> [more ...] [options]
 //
-// Loads a /test scenario in a real browser with the Debug overlay on (the cyan
-// car / amber bus driving-lines) and the flat backdrop, lets traffic populate,
-// and writes a tight PNG of just the road/rail tiles. Use it to attach a
-// screenshot to a visual issue, and a before/after pair to a fix PR
+// Loads a /test scenario in a real browser with the Debug overlay OFF (what a
+// player actually sees) and the flat backdrop, lets traffic populate, and writes
+// a tight PNG of just the road/rail tiles. Use it to attach a screenshot to a
+// visual issue, and a before/after pair to a fix PR
 // (see docs/TICKET_WORKFLOW.md → "Visual verification").
+//
+// The overlay is OFF BY DEFAULT because it paints OVER the thing most changes
+// are about: the debug reservation tint and the cyan/amber driving-lines hide
+// lane paint, terrain and depot art, so a shot taken with debug on can make a
+// real change look like it did nothing. Pass `--debug` when the overlay itself
+// is the subject (routing, lane centrelines, where a vehicle actually drives).
+// The script does not merely assume the app's default — it READS the stage's
+// current state and toggles the button until it matches what was asked for.
 //
 // An argument beginning with `#` is taken as a RAW HASH ROUTE rather than a
 // scenario id, so anything the app can show can be photographed — the Ready
@@ -25,7 +33,8 @@
 // Options:
 //   --out <dir>       output directory (default: screenshots/)
 //   --label <name>    filename suffix, e.g. --label before  → roadoneway-before.png
-//   --no-debug        hide the debug overlay (paint/markings only)
+//   --debug           show the debug overlay (driving-lines, reservation tint)
+//   --no-debug        hide it — the default, accepted for compatibility
 //   --backdrop        keep the themed backdrop (default: flat for clarity)
 //   --send            click every fare pin before settling (Tycoon boards start
 //                     with every train WAITING, so nothing on them moves — and
@@ -50,7 +59,7 @@ function parseArgs(argv) {
   const opt = {
     out: "screenshots",
     label: "",
-    debug: true,
+    debug: false,
     backdrop: false,
     send: false,
     density: 60,
@@ -60,7 +69,8 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--no-debug") opt.debug = false;
+    if (a === "--debug") opt.debug = true;
+    else if (a === "--no-debug") opt.debug = false;
     else if (a === "--backdrop") opt.backdrop = true;
     else if (a === "--send") opt.send = true;
     else if (a === "--out") opt.out = argv[++i];
@@ -74,7 +84,7 @@ function parseArgs(argv) {
   }
   if (!ids.length) {
     throw new Error(
-      "usage: npm run shot -- <scenarioId> [more ids] [--out dir] [--label before] [--no-debug]",
+      "usage: npm run shot -- <scenarioId> [more ids] [--out dir] [--label before] [--debug]",
     );
   }
   return { ids, opt };
@@ -218,8 +228,10 @@ async function main() {
         await bg.click();
       }
       // Debug overlay (the driving-lines): read the current state and toggle
-      // the button so it ends up in the requested state (on unless --no-debug),
-      // independent of the app's default. Absent outside /test, hence the count.
+      // the button so it ends up in the requested state (off unless --debug),
+      // independent of the app's default. Absent outside /test, hence the count
+      // — on a /play route there is no stage toggle, and `gameConfig.debug` is
+      // false and NOT persisted, so those shots are debug-free by construction.
       const debugBtn = page.getByRole("button", { name: "Debug", exact: true });
       if (await debugBtn.count()) {
         const debugOn = await page.evaluate(
