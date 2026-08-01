@@ -528,10 +528,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
   face and a whole one blinked back in mid-ridge — with a visible gap opening
   between it and the wagons still on the grass. No portal big enough to mask
   that is a portal you want on the board.
-- The portal therefore stands OUTWARD of the tile edge (-y in the authored
-  100-box), and the black mouth is cut through the FULL depth of the band,
-  flush with its outer face: the first thing the line meets must be the hole,
-  not the stonework, or a unit slides under a slab instead of into a tunnel.
+- WHAT SETS THE PORTAL'S DEPTH: a terrain patch BOWS OUT OF ITS TILE (corner
+  push + edge bow), so at the seam the rock face stands ~15 ground units proud
+  of the tile edge — and the roof bows with it. A short portal therefore has the
+  hillside swallowing the train BEFORE the tunnel. The gallery reaches 22u
+  outward (-y in the authored 100-box) to clear that, and the black mouth is cut
+  through its FULL depth, flush with the outer face: the first thing the line
+  meets must be the hole, not the stonework and not the rock. Making the patches
+  stay inside their tiles instead is not the trade — that bow is what keeps the
+  tile grid off every shore in the game.
   /test scenarios: `tunnel`, `mountainpass` (a 5-unit consist).
 
 ## GRADE SEPARATION — flyover (2026-07-31)

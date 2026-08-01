@@ -173,15 +173,18 @@
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
       <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
-        <rect class="portal-shadow" :x="-21 * u" :y="-10 * u" :width="48 * u" :height="20 * u" :rx="2 * u" />
-        <rect class="portal-band" :x="-24 * u" :y="-13 * u" :width="48 * u" :height="20 * u" :rx="2 * u" />
-        <rect class="portal-lintel" :x="-24 * u" :y="-13 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
+        <rect class="portal-shadow" :x="-21 * u" :y="-19 * u" :width="48 * u" :height="29 * u" :rx="2 * u" />
+        <rect class="portal-band" :x="-24 * u" :y="-22 * u" :width="48 * u" :height="29 * u" :rx="2 * u" />
+        <rect class="portal-lintel" :x="-24 * u" :y="-22 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
         <!-- The mouth is cut through the FULL depth of the band, flush with its
-             outer face: the black — not the stonework — has to be the first
-             thing the line meets, or a unit slides under the slab instead of
-             into the hole. Wider than the widest sprite (22u = 44px vs a 30px
-             wagon), so nothing peeks out either side of the opening. -->
-        <rect class="portal-mouth" :x="-11 * u" :y="-13 * u" :width="22 * u" :height="20 * u" :rx="3 * u" />
+             outer face: the black — not the stonework, and not the rock — has to
+             be the first thing the line meets, or a unit is swallowed by the
+             hillside short of the tunnel. That is what sets the depth: a terrain
+             patch bows OUT of its tile (corner push + edge bow, terrain.ts), so
+             the rock face at the seam can stand ~15 ground units proud of the
+             tile edge, and the gallery has to reach past it. Wider than the
+             widest sprite too (22u = 44px vs a 30px wagon). -->
+        <rect class="portal-mouth" :x="-11 * u" :y="-22 * u" :width="22 * u" :height="29 * u" :rx="3 * u" />
       </g>
     </svg>
 
