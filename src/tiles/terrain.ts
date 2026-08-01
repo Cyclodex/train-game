@@ -120,8 +120,14 @@ const ROAD_MARGIN = 2;
 export function cellCorridors(cell: TileCell | null | undefined): Corridor[] {
   if (!cell) return [];
   const out: Corridor[] = [];
-  for (const [a, b] of cell.connections) {
-    out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+  // A tunnelled line is UNDERGROUND: the mountain over it stays unbroken, so
+  // its rail lays no keep-out corridor and the scatter closes over the bore.
+  // (Clearing the right-of-way here would draw the tunnel's route onto the
+  // ridge as a bald stripe — the one thing a tunnel visibly is not.)
+  if (!cell.tunnel) {
+    for (const [a, b] of cell.connections) {
+      out.push({ pts: segmentPoints(a, b, GROUND_UNITS), half: RAIL_HALF });
+    }
   }
   if (cell.road?.length) {
     // One corridor per (from → to) movement, as wide as its deepest lane stack.
@@ -358,6 +364,36 @@ export function terrainBridgeable(kind: TerrainKind): boolean {
   return BRIDGEABLE[kind];
 }
 
+// Which blocking ground a bore can carry a line UNDER. Rock and mountain are
+// tunnelled; water is bridged, never tunnelled (one answer per ground, so the
+// two structures can never both claim a cell). Same shape as BRIDGEABLE and for
+// the same reason: a property of the GROUND, feeding the one canBuildOn
+// exception rather than a second predicate beside it.
+const TUNNELABLE: Record<TerrainKind, boolean> = {
+  grass: false,
+  farmland: false,
+  forest: false,
+  water: false,
+  rock: true,
+  mountain: true,
+  urban: false,
+  industry: false,
+};
+
+export function terrainTunnelable(kind: TerrainKind): boolean {
+  return TUNNELABLE[kind];
+}
+
+/**
+ * Whether laying a line on this cell would MEAN boring a tunnel — the exact
+ * twin of `needsBridge`, for the grounds a span cannot cross. The build tools
+ * use it to offer a bore where they would otherwise refuse, and to set
+ * `TileCell.tunnel` on what they lay.
+ */
+export function needsTunnel(cell: TileCell | null | undefined): boolean {
+  return !cell?.tunnel && terrainTunnelable(terrainOf(cell));
+}
+
 /**
  * Whether laying a line on this cell would MEAN building a bridge — i.e. the
  * ground blocks a plain line but a span can cross it. The build tools use this
@@ -395,6 +431,13 @@ export const TERRAIN_BUILD_FACTOR: Record<TerrainKind, number> = {
 // to hurt, not so high that a river is a wall.
 export const BRIDGE_BUILD_FACTOR = 4;
 
+// Boring through rock is dearer still than spanning water — the new dearest
+// thing in the game. The gap between the two matters: a river is a line you
+// cross once, a ridge is usually several tiles of bore, so the per-tile price
+// alone already stacks; this factor keeps a single-tile bore from undercutting
+// a single-tile span.
+export const TUNNEL_BUILD_FACTOR = 6;
+
 /**
  * The build-price factor for a cell. Missing cell = bare grass = 1.
  *
@@ -406,6 +449,7 @@ export const BRIDGE_BUILD_FACTOR = 4;
 export function terrainBuildFactor(cell: TileCell | null | undefined): number {
   const kind = terrainOf(cell);
   if (cell?.bridge || terrainBridgeable(kind)) return BRIDGE_BUILD_FACTOR;
+  if (cell?.tunnel || terrainTunnelable(kind)) return TUNNEL_BUILD_FACTOR;
   return TERRAIN_BUILD_FACTOR[kind];
 }
 
@@ -419,7 +463,7 @@ export function terrainBuildFactor(cell: TileCell | null | undefined): number {
  * free by asking the same question it always did.
  */
 export function canBuildOn(cell: TileCell | null | undefined): boolean {
-  if (cell?.bridge) return true;
+  if (cell?.bridge || cell?.tunnel) return true;
   return !terrainBlocksBuilding(terrainOf(cell));
 }
 
@@ -2116,6 +2160,111 @@ function buildCached(
 
   const built = buildGround(kind, coordId, same, seed, corridors);
   cache.set(key, built);
+  return built;
+}
+
+// --- Heights: hypsometric terraces -------------------------------------------
+//
+// A cell with `height > 0` lays a TERRACE under whatever else it carries: a
+// fused patch fill in a lighter, sunnier green per step (classic hypsometric
+// tinting), so higher ground visibly IS higher ground. Neighbours AT OR ABOVE
+// this height CONTINUE the terrace (the higher neighbour lays its own, lighter
+// body on the shared reading), so a plateau fuses into one organic shape
+// exactly the way a lake does — and the edge toward LOWER ground becomes the
+// slope face, painted under the one NW sun everything else obeys: the north
+// and west faces catch light, the south and east faces fall into shade.
+// The terrace deliberately reuses the patch machinery (patchPath /
+// patchSegments), so its outline jitters off the grid and its shared edges
+// fuse invisibly, like every other body of ground in the game.
+
+// A terrace is grass-family ground, so its tint is ANCHORED TO THE THEME's
+// board green and climbs from there — a fixed table read as a hollow on the
+// bright meadow board and as a glowing patch on the dark debug backdrop,
+// because "higher" is only ever higher RELATIVE to the ground it stands on.
+// One base per theme, one formula for the steps (per the terrain roadmap's
+// theming note: a tint function at the Hsl boundary, never per-kind tables):
+// each step turns toward sunny yellow-green and lifts the lightness, so two
+// adjacent steps stay tellable apart on any backdrop.
+const TERRACE_BASE: Record<string, Hsl> = {
+  // Just above the meadow board's green (#6aac6a ≈ hsl(120 28% 55%)).
+  meadow: [112, 30, 60],
+  // A drier grass-mat green, the way a model-railway baseboard paints hills.
+  table: [92, 24, 62],
+  // The debug flat ground (#3a6b4f, TestStage) is much darker than any theme
+  // board — anchored separately so `npm run shot` pictures stay comparable.
+  plain: [104, 30, 44],
+};
+
+export function heightTint(height: number, theme = "meadow"): Hsl {
+  const step = Math.max(1, height) - 1;
+  const [bh, bs, bl] = TERRACE_BASE[theme] ?? TERRACE_BASE.meadow;
+  return [bh - 9 * step, bs + 2 * step, Math.min(bl + 6 * step, 82)];
+}
+
+// Memo, for the same reason as `cache` below: a terrace only changes with its
+// height, its neighbour comparison, its coord or the seed.
+const heightCache = new Map<string, string>();
+
+/**
+ * The terrace one elevated tile lays, as an SVG fragment in the 0..100 box.
+ * `same` compares NEIGHBOUR HEIGHT >= this height (fuse) — lower neighbours
+ * are where the slope faces paint. "" at ground level.
+ */
+export function tileHeightSvg(
+  height: number,
+  coordId: string,
+  same: PatchSame,
+  seed = 1,
+  theme = "meadow",
+): string {
+  if (height <= 0) return "";
+  // THE THEME IS PART OF THE KEY — the memo trap the terrain roadmap wrote
+  // down before anyone hit it: switch theme mid-session and a key without it
+  // serves every terrace from the old palette.
+  const key =
+    `h${height}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
+    `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
+    `|${coordId}|${seed}|${theme}`;
+  const hit = heightCache.get(key);
+  if (hit !== undefined) return hit;
+
+  const { x, y } = parseCoordId(coordId);
+  const [hh, hs, hl] = heightTint(height, theme);
+  const d = patchPath(same, x, y, seed, GROUND_UNITS);
+  const parts: string[] = [];
+
+  // Soft fringe outside the body (unclipped, like every kind's), so the
+  // terrace blends into the ground below instead of ending at a hard line.
+  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS);
+  if (fringeD) {
+    parts.push(
+      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
+      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
+    );
+  }
+  parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+
+  // The slope faces: each DOWNHILL edge stroked inside the body — lit where it
+  // faces the sun (top/left), shaded where it faces away (right/bottom). Edge
+  // order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom, 3 left.
+  const slopes = patchSegments(same, x, y, seed, GROUND_UNITS)
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.stops);
+  if (slopes.length > 0) {
+    const clipId = `height-clip-${coordId.replace(",", "-")}-${height}`;
+    parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+    for (const { s, i } of slopes) {
+      const lit = i === 0 || i === 3;
+      const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
+      const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+      parts.push(
+        `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+      );
+    }
+  }
+
+  const built = parts.join("");
+  heightCache.set(key, built);
   return built;
 }
 

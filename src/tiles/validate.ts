@@ -1,5 +1,5 @@
 import { Position } from "@/types";
-import { Level, Port, portsOf, parseCoordId } from "@/tiles/model";
+import { Level, Port, heightOf, portsOf, parseCoordId } from "@/tiles/model";
 import { roadPortsOf } from "@/tiles/lanes";
 import { canBuildOn } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -10,6 +10,7 @@ export type IssueType =
   | "isolated-depot" // a depot connects to nothing
   | "invalid-station" // a station off through-track (no edge↔edge pair, or a Center stub)
   | "blocked-terrain" // track or road laid on ground that can't carry it
+  | "grade-step" // a joined boundary climbs more than one height step
   | "route-disconnected"; // a train can't reach its destination depot
 
 export interface Issue {
@@ -124,6 +125,22 @@ export function validateLevel(
           type: "dangling-track",
           tileId: id,
           detail: `port ${Position[e]} of ${id} has no connecting neighbour`,
+        });
+      }
+    }
+
+    // Grade rule: a joined boundary may climb at most ONE height step — that
+    // one-step joint IS the ramp. Two or more is a cliff no track can climb.
+    // Emitted once per joint (the lexically smaller id reports it).
+    for (const e of edges) {
+      const nid = joins(level, id, e);
+      if (!nid || nid < id) continue;
+      const dh = Math.abs(heightOf(level[nid]) - heightOf(tile));
+      if (dh > 1) {
+        issues.push({
+          type: "grade-step",
+          tileId: id,
+          detail: `${id} and ${nid} join across ${dh} height steps — a ramp climbs one`,
         });
       }
     }

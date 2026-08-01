@@ -10,17 +10,20 @@
 
 <script lang="ts">
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
-import { Level } from "@/tiles/model";
+import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { Level, heightOf } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
   GROUND_UNITS,
+  PatchSame,
   TerrainNeighbours,
   corridorsFor,
   terrainOf,
   tileCanopySvg,
   tileGroundSvg,
+  tileHeightSvg,
   tileScatterSvg,
 } from "@/tiles/terrain";
 
@@ -48,6 +51,9 @@ const TERRAIN_SEED = 20260726;
 @Component({})
 class TileGround extends Vue {
   @Inject() level!: Level;
+  // For the terrace tints: a hill is only "higher" relative to the ground the
+  // THEME paints, so the height layer needs to know which world it stands in.
+  @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ type: String, required: true }) coordId!: string;
   @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy";
 
@@ -89,6 +95,33 @@ class TileGround extends Vue {
     });
   }
 
+  // The hypsometric terrace an elevated cell lays UNDER its terrain patch:
+  // "same" here compares HEIGHT, not kind — a neighbour at or above this
+  // height continues the terrace (the higher one lays its own, lighter body),
+  // a lower one is where the slope face paints. See tileHeightSvg.
+  get heightHtml(): string {
+    const h = heightOf(this.level[this.coordId]);
+    if (h === 0) return "";
+    const { x, y } = parseCoordId(this.coordId);
+    const at = (dx: number, dy: number) =>
+      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]) >= h;
+    const same: PatchSame = {
+      top: at(0, -1),
+      right: at(1, 0),
+      bottom: at(0, 1),
+      left: at(-1, 0),
+      topLeft: at(-1, -1),
+      topRight: at(1, -1),
+      bottomRight: at(1, 1),
+      bottomLeft: at(-1, 1),
+    };
+    // The debug flat ground is its own (much darker) anchor — a terrace tinted
+    // for the meadow board would glare on it, and the shot pipeline runs with
+    // plainBackdrop on by default.
+    const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
+    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
+  }
+
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
@@ -97,7 +130,9 @@ class TileGround extends Vue {
         : this.layer === "scatter"
           ? tileScatterSvg
           : tileGroundSvg;
-    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    const base = build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    // The terrace renders below the terrain patch, on the ground layer only.
+    return this.layer === "ground" ? this.heightHtml + base : base;
   }
 }
 export default toNative(TileGround);

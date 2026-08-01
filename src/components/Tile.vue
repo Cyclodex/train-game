@@ -148,7 +148,67 @@
       </g>
     </svg>
 
-    <TileRail :possible-routes="railRoutes" />
+    <!-- Tunnel: the line is UNDERGROUND. No rails are drawn and the mountain's
+         scatter stays unbroken over the bore (see cellCorridors) — only a faint
+         dashed guide so the player can still read where the tunnel runs. -->
+    <svg
+      v-if="isTunnel"
+      class="tunnel-guide"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path v-for="(d, i) in tunnelGuides" :key="'tg' + i" :d="d" />
+    </svg>
+
+    <!-- Tunnel portals, one per end of the bore that meets open ground (an
+         internal seam between two tunnel tiles gets none). Drawn ABOVE the
+         trains, same layer story as the forest canopy: a unit is hidden the
+         moment its centre crosses onto the tunnel tile, and the arch masks
+         that pop so the train reads as driving INTO the mountain. -->
+    <svg
+      v-if="isTunnel"
+      class="tunnel-portals"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="p in tunnelPortals" :key="'tp' + p.port" :transform="p.transform">
+        <rect class="portal-shadow" :x="-21 * u" :y="-4 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
+        <rect class="portal-band" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="14 * u" :rx="2 * u" />
+        <rect class="portal-lintel" :x="-24 * u" :y="-7 * u" :width="48 * u" :height="4 * u" :rx="2 * u" />
+        <rect class="portal-mouth" :x="-9 * u" :y="1 * u" :width="18 * u" :height="8 * u" :rx="3 * u" />
+      </g>
+    </svg>
+
+    <TileRail v-if="!isTunnel" :possible-routes="railRoutes" />
+
+    <!-- Grade chevrons: where the line climbs into a HIGHER neighbour, two
+         chevrons on the ballast point uphill — the classic map notation for a
+         ramp, until painted hillsides arrive. -->
+    <svg
+      v-if="gradeMarks.length"
+      class="grade-marks"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="m in gradeMarks" :key="'gm' + m.port" :transform="m.transform">
+        <path :d="`M ${-7 * u} ${22 * u} L 0 ${14 * u} L ${7 * u} ${22 * u}`" />
+        <path :d="`M ${-7 * u} ${31 * u} L 0 ${23 * u} L ${7 * u} ${31 * u}`" />
+      </g>
+    </svg>
+
+    <!-- Flyover: one line rides a deck OVER the other. The deck (z5) covers
+         the at-grade copy of its own rails (z2) and carries fresh track on
+         top; game.ts lifts a train's units to z6 while they ride the named
+         pair, so the upper train visibly crosses the lower one — which stays
+         an ordinary train at z3/z4, briefly passing under the deck strip. -->
+    <svg
+      v-if="isFlyover"
+      class="flyover-deck"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path :d="flyoverSpan.d" class="bridge-shadow" :stroke-width="flyoverSpan.width" />
+      <path :d="flyoverSpan.d" class="bridge-span" :stroke-width="flyoverSpan.width" />
+      <path :d="flyoverSpan.d" class="bridge-parapet" :stroke-width="flyoverSpan.width * 0.86" />
+      <path :d="flyoverSpan.d" class="deck-sleepers" />
+      <path v-for="(r, i) in flyoverRails" :key="'fr' + i" :d="r" class="deck-rail" />
+    </svg>
 
     <!-- Station: platform slabs flanking the through-track, each with a bright
          edge line on the track side, plus a halt sign. Geometry only exists for
@@ -355,7 +415,7 @@
 
     <div v-if="config.debug" class="debug">
       <div class="debug-coordinates" v-text="coordId"></div>
-      <div class="debug-kind">{{ displayKind }}{{ roadLaneLabel }}</div>
+      <div class="debug-kind">{{ displayKind }}{{ roadLaneLabel }}{{ heightLabel }}</div>
     </div>
   </div>
 </template>
@@ -369,7 +429,9 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { fanArms } from "@/tiles/switchFan";
 import { Position, ActiveIntersection, Route } from "@/types";
 import {
+  Level,
   TileCell,
+  heightOf,
   kindOf,
   partnersOf,
   portsOf,
@@ -438,6 +500,10 @@ const LANE_WIDTH_PX_FRAC = 0.14;
 class Tile extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Inject({ from: "game" }) game!: Game;
+  // The whole level, for the one derivation that needs NEIGHBOURS: a tunnel
+  // portal exists only where the bore meets open ground, which the cell alone
+  // cannot know. Same inject TileGround uses for patch fusing.
+  @Inject() level!: Level;
   @Prop({ type: Object, required: true }) tile!: TileCell;
   @Prop({ type: String, required: true }) coordId!: string;
   // The editor paints its own switch hit-zones on top of the tile (they cycle
@@ -498,6 +564,10 @@ class Tile extends Vue {
   }
   get isDepot() {
     return this.tile.role === "depot";
+  }
+  // Debug: the cell's height step, when it has one (" h2").
+  get heightLabel() {
+    return this.tile.height ? ` h${this.tile.height}` : "";
   }
   get isStation() {
     return this.tile.role === "station";
@@ -587,6 +657,90 @@ class Tile extends Vue {
   }
   get isBridge() {
     return this.tile.bridge === true;
+  }
+  get isTunnel() {
+    return this.tile.tunnel === true;
+  }
+  get isFlyover() {
+    return this.tile.flyover !== undefined;
+  }
+  // The deck along the flyover pair — the same stroke-based structure as the
+  // bridge, so a curved flyover bends for free. A touch wider than the river
+  // span: it has to cover the pair's at-grade rails underneath it.
+  get flyoverSpan(): { d: string; width: number } {
+    const [a, b] = this.tile.flyover!;
+    const size = this.config.tileSize;
+    return { d: segmentPathD(a, b, size), width: size * 0.26 };
+  }
+  // Fresh track ON the deck (the z2 copy is covered by it).
+  get flyoverRails(): string[] {
+    const [a, b] = this.tile.flyover!;
+    return railPathsFor(a, b, this.config.tileSize, this.config.railDistanceFromPath);
+  }
+  // Ground units (the 100-unit art box) in px, for authoring the portal.
+  get u() {
+    return this.config.tileSize / 100;
+  }
+
+  // The dashed guide along each bored connection — the same centreline the
+  // train drives, so a curved bore reads correctly.
+  get tunnelGuides(): string[] {
+    if (!this.isTunnel) return [];
+    const size = this.config.tileSize;
+    return this.tile.connections.map(([a, b]) => segmentPathD(a, b, size));
+  }
+
+  // A chevron pair per connection end whose neighbour sits one step HIGHER —
+  // the climb starts here. Oriented like the portals: authored pointing "up"
+  // (outward through the port), so the same transform table serves both.
+  get gradeMarks(): { port: Position; transform: string }[] {
+    void this.game.levelVersion.value;
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const here = heightOf(this.tile);
+    const at: Record<number, string> = {
+      [Position.Top]: `translate(${size / 2}, 0)`,
+      [Position.Right]: `translate(${size}, ${size / 2}) rotate(90)`,
+      [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
+      [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
+    };
+    const out: { port: Position; transform: string }[] = [];
+    for (const p of portsOf(this.tile.connections)) {
+      if (p === Position.Center) continue;
+      const nc = neighborCoord(coord, p);
+      const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
+      if (heightOf(n) === here + 1) out.push({ port: p, transform: at[p] });
+    }
+    return out;
+  }
+
+  // One portal per port of the bore that faces NON-tunnel ground. An internal
+  // seam (tunnel beside tunnel) gets none, so a ridge two tiles deep reads as
+  // one mountain with one hole in each side. Oriented per port; every segment
+  // path meets its edge at the midpoint, so the arch sits on the centreline.
+  get tunnelPortals(): { port: Position; transform: string }[] {
+    if (!this.isTunnel) return [];
+    // Register the edit counter: a bore EXTENDED next door must retire this
+    // tile's portal at the now-internal seam, but `level` is the raw object in
+    // play (see Game.levelVersion) so the neighbour read alone cannot notify.
+    void this.game.levelVersion.value;
+    const size = this.config.tileSize;
+    const coord = parseCoordId(this.coordId);
+    const at: Record<number, string> = {
+      [Position.Top]: `translate(${size / 2}, 0)`,
+      [Position.Right]: `translate(${size}, ${size / 2}) rotate(90)`,
+      [Position.Bottom]: `translate(${size / 2}, ${size}) rotate(180)`,
+      [Position.Left]: `translate(0, ${size / 2}) rotate(270)`,
+    };
+    const out: { port: Position; transform: string }[] = [];
+    for (const p of portsOf(this.tile.connections)) {
+      if (p === Position.Center) continue;
+      const nc = neighborCoord(coord, p);
+      const n = nc ? this.level[getCoordinatesId(nc)] : undefined;
+      if (n?.tunnel) continue;
+      out.push({ port: p, transform: at[p] });
+    }
+    return out;
   }
 
   // The spans this cell carries: one per line crossing it, rail or road, as the
@@ -1757,6 +1911,102 @@ export default toNative(Tile);
   fill: none;
   stroke: #b7a992;
   stroke-linecap: butt;
+}
+
+/* --- grade chevrons (a climb starts here) ---
+   On the ballast, above the rails (same z, later DOM), below the trains. */
+.grade-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  path {
+    fill: none;
+    stroke: rgba(255, 244, 214, 0.85);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+}
+
+/* --- flyover deck (over the at-grade rails, under its own train) ---
+   Reuses the bridge stroke classes for shadow/deck/parapet. z5 sits above
+   TileRail (z2) — hiding the pair's at-grade rail copy and briefly hiding the
+   LOWER train (z3/z4) as it passes underneath, which is exactly what passing
+   under a bridge looks like from above. The upper train is lifted to z6 by
+   game.ts while it rides the pair. */
+.flyover-deck {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  pointer-events: none;
+  overflow: visible;
+}
+.deck-sleepers {
+  fill: none;
+  stroke: #693b3b;
+  stroke-width: 20px;
+  stroke-dasharray: 4 5;
+  stroke-dashoffset: 2;
+  stroke-linecap: butt;
+}
+.deck-rail {
+  fill: none;
+  stroke: gray;
+  stroke-width: 1px;
+}
+
+/* --- tunnel (the line is underground) ---
+   The guide is where the rails would be (z2, over the mountain scatter at z1
+   in its own cell): a faint dashed centreline, the map notation for a tunnel.
+   The portals sit ABOVE the trains (loco z4 / wagons z3), like the forest
+   canopy (z7): game.ts hides a unit once its centre is on the tunnel tile,
+   and the arch straddling the seam masks that pop. */
+.tunnel-guide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+  path {
+    fill: none;
+    stroke: rgba(18, 16, 13, 0.4);
+    stroke-width: 3px;
+    stroke-dasharray: 7 9;
+    stroke-linecap: round;
+  }
+}
+.tunnel-portals {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 7;
+  pointer-events: none;
+  overflow: visible;
+}
+.portal-shadow {
+  // SE offset baked into the rect coords, matching the one NW sun.
+  fill: rgba(12, 20, 30, 0.3);
+}
+.portal-band {
+  // Dressed stone against the slate mountain: close tones, per the terrain
+  // rule that scatter sits near its ground rather than paper-cutout bright.
+  fill: #857c6d;
+  stroke: #5c5546;
+  stroke-width: 1.5px;
+}
+.portal-lintel {
+  // The up-left(-ish) lit facet of the gallery roof.
+  fill: #9c9280;
+}
+.portal-mouth {
+  fill: #17140f;
 }
 
 /* --- station (platforms beside the rails + halt sign) ---
