@@ -100,6 +100,10 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    with a queue, `TrainStatus.Dwelling`, boarding logic and a platform render.
    Unlocks typed cargo (replacing colour matching), endless/management mode, and
    lets road traffic feed rail. `docs/road-future-improvements.md` §2.1.
+   **Planned (2026-07-31):** the phased Bahnhof/intermodal plan — station tile →
+   queues → terrain catchment → bus stops + P+R → Transport-Fever-like mode —
+   is `docs/superpowers/specs/2026-07-31-bahnhof-stations-intermodal-design.md`;
+   its phase 1 is buildable now.
 4. **Deadlock resolution.** Interlocking prevents collisions, but two trains can
    still reserve into a mutual wait. Needs cycle detection over the reservation
    graph plus a backout rule. `src/sim/simulation.ts`, `src/sim/network.ts`.
