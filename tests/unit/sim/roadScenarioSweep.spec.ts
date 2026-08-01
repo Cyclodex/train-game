@@ -28,27 +28,17 @@ import {
 
 const ROAD_SCENARIOS = SCENARIOS.filter(hasRoad);
 
-// KNOWN, MEASURED body-overlap on a few bus maps. These are not "tolerated
-// noise" — they are a real defect, recorded with the number they currently
-// produce so they cannot quietly get worse while the fix is designed.
-//
-// The mechanism: lane-change gap acceptance is evaluated on the vehicle's
-// CURRENT tile at the moment it commits. A long vehicle that crosses a tile seam
-// mid-change never re-checks against the traffic on the tile it arrives at, so a
-// bus that set off into a clear gap can finish the merge on the next tile with a
-// stopped bus already lying in it, and its tail sweeps through that bus's nose
-// for a few ticks. Bus maps show it because a bus is 1.45x a car's length and
-// bus lanes force frequent merges; car-only maps stay clean.
-//
-// Fixing it properly means re-checking a committed change across a seam without
-// leaving vehicles stranded astride the line (pausing mid-change makes a vehicle
-// overlap BOTH lanes and measured worse). Tracked in the road backlog.
-const KNOWN_OVERLAP: Record<string, number> = {
-  busarterial: 0.09,
-  buscross: 0.05,
-  busonewaycross: 0.05,
-  busmegacross: 0.04,
-};
+// Body overlap is now a hard failure on EVERY road scenario. It did not use to
+// be: four bus maps carried a measured, pinned overlap (busarterial 0.09,
+// buscross 0.05, busonewaycross 0.05, busmegacross 0.04) because lane-change gap
+// acceptance was decided once, on the vehicle's current tile, and never
+// re-checked — so a bus that set off into a clear gap could finish its merge on
+// the next tile inside a stopped bus. #56 reworked that (route-aware, lane-by-lane
+// gap acceptance; a refused change holds a lane short or backs out instead of
+// stalling astride the line; a merging body follows what it is merging into).
+// The pinned list is empty, and stays empty — a new entry here is a regression,
+// not a fact of life.
+const KNOWN_OVERLAP: Record<string, number> = {};
 const CLEAN_OVERLAP = 0.02;
 
 // Scenarios whose vehicles are SUPPOSED to stand still for long stretches: a car
