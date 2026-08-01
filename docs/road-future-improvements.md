@@ -80,6 +80,7 @@ A station tile with a queue of waiting passengers/cargo. Trains dwell, load matc
 - Lets road traffic feed stations (cars → passengers, trucks → freight).
 - Needs a `station` role on `TileCell`, `TrainStatus.Dwelling`, boarding logic, and platform render.
 - See `docs/brainstorm/02-terrain-and-tile-types.md` §2.4 and `docs/brainstorm/03-trains-cargo-economy.md` §3.4.
+- **Planned (2026-07-31):** phased design (station → queues → catchment → bus stops/P+R → mode) in `docs/superpowers/specs/2026-07-31-bahnhof-stations-intermodal-design.md`.
 - **Effort: L. Impact: highest.**
 
 ### 2.2 Cargo trucks on the road

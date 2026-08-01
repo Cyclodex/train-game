@@ -8,6 +8,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 export type IssueType =
   | "dangling-track" // a rail points at a neighbour that doesn't connect back
   | "isolated-depot" // a depot connects to nothing
+  | "invalid-station" // a station off through-track (no edge↔edge pair, or a Center stub)
   | "blocked-terrain" // track or road laid on ground that can't carry it
   | "grade-step" // a joined boundary climbs more than one height step
   | "route-disconnected"; // a train can't reach its destination depot
@@ -94,6 +95,26 @@ export function validateLevel(
         detail: `${id} carries a line over ${tile.terrain} — build round it, or bridge it`,
       });
     }
+    // Station legality: a station is a stop on THROUGH-track. It needs at least
+    // one edge↔edge pair (so trains pass it) and must not carry a Center stub
+    // (that is depot topology — traverse would end inside it). Checked before
+    // the empty-connections skip so a bare station cell is caught too.
+    if (tile.role === "station") {
+      const hasThrough = tile.connections.some(
+        ([a, b]) => a !== Position.Center && b !== Position.Center
+      );
+      const hasCenter = tile.connections.some(
+        ([a, b]) => a === Position.Center || b === Position.Center
+      );
+      if (!hasThrough || hasCenter) {
+        issues.push({
+          type: "invalid-station",
+          tileId: id,
+          detail: `station ${id} must sit on through-track (edge-to-edge rails, no Center stub)`,
+        });
+      }
+    }
+
     if (tile.connections.length === 0) continue;
     const edges = portsOf(tile.connections).filter(p => p !== Position.Center);
 

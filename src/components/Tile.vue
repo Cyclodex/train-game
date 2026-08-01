@@ -210,6 +210,50 @@
       <path v-for="(r, i) in flyoverRails" :key="'fr' + i" :d="r" class="deck-rail" />
     </svg>
 
+    <!-- Station: platform slabs flanking the through-track, each with a bright
+         edge line on the track side, plus a halt sign. Geometry only exists for
+         a straight station (the standard); any other shape gets the sign alone. -->
+    <svg
+      v-if="isStation"
+      class="station-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="(p, pi) in stationPlatforms" :key="'stp' + pi">
+        <rect :x="p.x" :y="p.y" :width="p.w" :height="p.h" rx="3" class="station-platform" />
+        <line
+          :x1="p.edge.x1"
+          :y1="p.edge.y1"
+          :x2="p.edge.x2"
+          :y2="p.edge.y2"
+          class="station-platform-edge"
+        />
+      </g>
+      <g class="station-sign" :transform="`translate(${stationSignPos.x} ${stationSignPos.y})`">
+        <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
+        <text x="0" y="4.5" text-anchor="middle">S</text>
+      </g>
+      <!-- Debug: the walking catchment — the reach whose town tiles set this
+           station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
+      <circle
+        v-if="config.debug"
+        :cx="config.tileSize / 2"
+        :cy="config.tileSize / 2"
+        :r="(config.tileSize / 2) * (2 * catchmentRadiusTiles + 1)"
+        class="station-catchment"
+      />
+      <!-- The waiting crowd: one dot per passenger in the platform queue, lined
+           up from the platform end so the queue visibly grows and drains. -->
+      <circle
+        v-for="(p, ci) in stationCrowd"
+        :key="'crowd' + ci"
+        :cx="p.cx"
+        :cy="p.cy"
+        r="4.5"
+        class="station-passenger"
+        :class="{ 'station-passenger--alt': ci % 2 === 1 }"
+      />
+    </svg>
+
     <!-- Signals (straights only) -->
     <svg
       v-for="light in signalLights"
@@ -445,6 +489,7 @@ import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
+import { WALK_RADIUS_TILES } from "@/tiles/catchment";
 
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
@@ -523,6 +568,92 @@ class Tile extends Vue {
   // Debug: the cell's height step, when it has one (" h2").
   get heightLabel() {
     return this.tile.height ? ` h${this.tile.height}` : "";
+  }
+  get isStation() {
+    return this.tile.role === "station";
+  }
+  // Platform slabs beside the through-track: one each side, set clear of the
+  // rails, with the track-facing long edge marked. Only a straight pair (the
+  // standard station shape) gets slabs — a station on any other shape renders
+  // just the halt sign, so an unusual author choice degrades, not breaks.
+  get stationPlatforms(): {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    edge: { x1: number; y1: number; x2: number; y2: number };
+  }[] {
+    if (!this.isStation) return [];
+    const size = this.config.tileSize;
+    const c = size / 2;
+    const inner = size * 0.13; // centreline → platform edge (clear of the rails)
+    const depth = size * 0.15; // slab depth
+    const margin = size * 0.05; // inset from the tile ends
+    const len = size - margin * 2;
+    const has = (p: Position, q: Position) =>
+      this.tile.connections.some(
+        ([a, b]) => (a === p && b === q) || (a === q && b === p)
+      );
+    const out: {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      edge: { x1: number; y1: number; x2: number; y2: number };
+    }[] = [];
+    if (has(Position.Top, Position.Bottom)) {
+      for (const side of [-1, 1]) {
+        const ex = c + side * inner;
+        out.push({
+          x: side < 0 ? ex - depth : ex,
+          y: margin,
+          w: depth,
+          h: len,
+          edge: { x1: ex, y1: margin, x2: ex, y2: margin + len },
+        });
+      }
+    } else if (has(Position.Left, Position.Right)) {
+      for (const side of [-1, 1]) {
+        const ey = c + side * inner;
+        out.push({
+          x: margin,
+          y: side < 0 ? ey - depth : ey,
+          w: len,
+          h: depth,
+          edge: { x1: margin, y1: ey, x2: margin + len, y2: ey },
+        });
+      }
+    }
+    return out;
+  }
+  // The halt sign sits in the tile corner, out of the way of track and slabs.
+  get stationSignPos(): { x: number; y: number } {
+    const size = this.config.tileSize;
+    return { x: size * 0.1, y: size * 0.1 };
+  }
+  catchmentRadiusTiles = WALK_RADIUS_TILES;
+  // One dot per waiting passenger, on the first platform slab at a fixed pitch
+  // (the queue grows along the platform) with a small deterministic scatter
+  // across its depth so it reads as people, not beads. The live count comes
+  // from the game's reactive per-frame mirror of the sim queue.
+  get stationCrowd(): { cx: number; cy: number }[] {
+    if (!this.isStation) return [];
+    const slabs = this.stationPlatforms;
+    if (!slabs.length) return [];
+    const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
+    const s = slabs[0];
+    const horizontal = s.w >= s.h;
+    const out: { cx: number; cy: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const t = (i + 0.75) / 13; // fixed pitch from the platform end
+      const scatter = (((i * 37) % 7) - 3) * (s.w >= s.h ? s.h : s.w) * 0.055;
+      if (horizontal) {
+        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter });
+      } else {
+        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h });
+      }
+    }
+    return out;
   }
   get isBridge() {
     return this.tile.bridge === true;
@@ -1877,6 +2008,56 @@ export default toNative(Tile);
 .portal-mouth {
   fill: #17140f;
 }
+
+/* --- station (platforms beside the rails + halt sign) ---
+   Above TileRail so the slabs sit ON the ballast shoulder, laterally clear of
+   the rails themselves; below the trains, which render in their own layer. */
+.station-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+  overflow: visible; // the debug catchment ring reaches into the neighbours
+}
+.station-catchment {
+  fill: rgba(28, 91, 216, 0.05);
+  stroke: rgba(28, 91, 216, 0.55);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+}
+.station-platform {
+  fill: #c3bcae; // paving, warm against the meadow, cooler than the town roofs
+  stroke: #948b7a;
+  stroke-width: 1;
+}
+.station-platform-edge {
+  stroke: #f6f2e8; // the bright safety line along the track side
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.station-sign rect {
+  fill: #1c5bd8; // the classic blue station shield
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.station-sign text {
+  fill: #fff;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+}
+.station-passenger {
+  fill: #8a5a3b; // warm coats against the pale paving
+  stroke: #fff;
+  stroke-width: 1.2;
+}
+.station-passenger--alt {
+  fill: #4a6d8c; // a second coat colour so the crowd isn't a uniform string
+}
+
+/* --- road layer (under the rails) --- */
 .road-layer {
   position: absolute;
   inset: 0;

@@ -21,6 +21,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "trains/signals": "🚦",
   "trains/junctions": "🔀",
   "trains/grades": "⛰️",
+  "trains/stations": "🚉",
   "trains/crossings": "🚧",
   "streets/basics": "🚗",
   "streets/curves": "🛞",
@@ -55,6 +56,12 @@ export const SCENARIO_ICONS: Record<string, string> = {
   crossing: "🚧",
   keepcrossingclear: "🚧",
   crossingkeeper: "💂",
+  // Trains — stations
+  station: "🚉",
+  boarding: "🧍",
+  catchment: "🏘️",
+  parkandride: "🅿️",
+  busfeeder: "🚏",
   // Streets — vehicles
   trucks: "🚛",
   buslane: "🚌",

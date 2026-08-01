@@ -391,6 +391,83 @@ lean — prune as much as you add. This file only stays useful if every task ten
   interior tile emits no stroke at all.
 - Two strokes rather than an SVG filter: at ~280 tiles a board a feGaussianBlur
   per tile is not worth it, and a two-step falloff reads as a gradient anyway.
+## STATIONS (phase 1 — the dwell, 2026-08-01)
+- A station is `role: "station"` on THROUGH-track (≥1 edge↔edge pair, no Center
+  stub — `validateLevel` flags the rest as `invalid-station`). Same connections
+  as a straight; `expandKind("station", rot)` authors one; `toggleStation`
+  (editOps) is the editor verb and hands back the SAME cell reference on a
+  refusal, so callers can tell "no-op" from "changed".
+- The stop line is INSIDE the tile: `STATION_STOP_PROGRESS` (0.5) of the head
+  segment, not a tile boundary. `clearDistanceAhead` early-returns the in-tile
+  remainder for a pending stop and cuts its look-ahead run mid-tile at a
+  station ahead; the braking cap then lands the head exactly on the line (same
+  finite-time clamp argument as signal stop lines).
+- A station IS a block boundary (`isBoundary`), exactly like a signal: the
+  approach reserves only up to the platform, and a dwelling train holds nothing
+  beyond its own tiles. Without this a 3 s dwell pins the route to the next
+  real signal for the whole stop.
+- Dwell-once-per-pass is tracked by PATH INDEX (`dwelledAtIndex`), never tile
+  id — a revisit is a higher index, so the train stops again (the bounce test
+  proves 2 dwells). `bounceOutOfDepot` resets the path to index 0 and must
+  reset the marker with it.
+- `assessGridlock` skips `"dwelling"` like parked/waiting, or scheduled stops
+  read as a dead board.
+- `/test/station` is the isolation scenario; sim behaviour in
+  `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
+
+## STATION PASSENGERS (phase 2 — queues & boarding, 2026-08-01)
+- Demand is a SCHEDULE handed to the sim (`SimConfig.stationDemand`: interval /
+  max / initial per tile id), never derived inside it — the sim executes, the
+  mode layer (later the terrain catchment) decides rates. No RNG anywhere.
+- The schedule is SNAPSHOTTED at sim creation: a station built mid-run dwells
+  trains but queues nobody until reset. game.ts currently hands every station
+  a default (1 pax / 5 s, max 10, 2 initial).
+- A full platform PAUSES the spawn clock (holds at max) — it does not bank a
+  backlog that floods the next train.
+- One-hop model (typeless): whoever is aboard alights at the NEXT call, then
+  the queue boards into the free seats. Matched depot arrivals end rides too
+  (`ArrivedEvent.alighted?`, absent when 0 so old fixtures compare equal); a
+  BOUNCE keeps riders aboard.
+- Capacity default: `PASSENGERS_PER_WAGON` (6) × wagons for "people", 0 for
+  "fraight" — a goods train calls but boards nobody. Boarding stretches the
+  dwell by `BOARDING_SEC_PER_PASSENGER` each.
+- Scoring: `Counters.passengersDelivered` fed by per-tick deltas assembled from
+  dwell/arrived events in game.ts `handleEvents` — same pattern as deliveries.
+- Crowd render: `game.stationQueues` is a reactive per-frame mirror (like
+  `occupied`); Tile.vue draws ≤12 dots at fixed pitch along the first slab.
+  The editor's stubGame must carry the field (empty), like parkingOccupancy.
+
+## STATION CATCHMENT (phase 3 — terrain sets the demand, 2026-08-01)
+- `tiles/catchment.ts`: `stationCatchment` counts urban/industry tiles within
+  `WALK_RADIUS_TILES` (2, Chebyshev); `stationDemandOf` maps the urban count
+  to the sim's demand schedule — monotone in every field, so "build nearer
+  the houses" is always right and never a cliff. Lonely halt still trickles.
+- DERIVED, NEVER STORED (the industry-doc rule): repainting the town re-prices
+  the station on next reset; no editable demand field exists to drift.
+- It lives in tiles/ (map reading), game.ts calls it when building the sim's
+  `stationDemand` — the sim stays terrain-blind and just executes.
+- Debug overlay: a dashed catchment ring per station (`.station-catchment`,
+  radius (2R+1)/2 tiles); needs `overflow: visible` on `.station-layer`.
+- `/test/catchment`: town station vs lonely halt on one line — the one
+  side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
+
+## PARK & RIDE (phase 4 — road feeds rail, 2026-08-01)
+- `parkAndRideTargets(level)` (tiles/catchment.ts): tile id → nearest station
+  within the walk radius, ties by distance then id — deterministic, computed
+  once. When a stall goes free→taken, game.ts injects passengers at that
+  station via `sim.addStationPassengers` (capped by the schedule `max`, else
+  `STATION_QUEUE_HARD_CAP`; a full platform turns walkers away, returns 0).
+- Transfer size comes from the ROW the stall belongs to (`rowFor` on the
+  parsed stall id — stall ids lead with their tile id): a bus stop (kind
+  "busstop" or `reserved: "bus"`) turns out a busload (4), anything else 1.
+- The diff runs in `game.advance()` — the headless world step — NEVER in
+  `updateParking` (the render mirror): model logic in a rAF callback is the
+  hidden-tab trap, and `tests/unit/parkAndRide.spec.ts` (60 headless seconds,
+  more passengers than the schedule can make) exists to keep it that way.
+  `prevStalls` resets with the game or a retry double-transfers.
+- `/test/parkandride` (kerb bays by the station) and `/test/busfeeder` (an
+  in-lane halt: crowd jumps by busloads, cars queue behind the bus).
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

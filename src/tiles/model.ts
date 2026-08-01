@@ -14,6 +14,7 @@ export type TileKind =
   | "cross"
   | "flyover"
   | "depot"
+  | "station"
   | "dead-end"
   | "road-straight"
   | "road-taper"
@@ -43,7 +44,12 @@ export type TerrainKind =
 
 export interface TileCell {
   connections: PortPair[];
-  role?: "depot";
+  // What the cell DOES in the simulation, beyond carrying track. A depot is a
+  // dead-end terminus (edge↔Center) that ends a journey; a station is a stop
+  // ALONG one: through-track (edge↔edge) where every train pauses for a dwell
+  // before continuing. Routing stays derived from `connections` either way —
+  // the role only adds behaviour (park/bounce vs dwell) and render.
+  role?: "depot" | "station";
   // The ground under this cell. Absent = grass. See tiles/terrain.ts and
   // docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md.
   terrain?: TerrainKind;
@@ -234,6 +240,7 @@ export function kindOf(cell: TileCell): TileKind {
   // its own kind, so the debug label never claims a junction where no switch
   // exists.
   if (cell.flyover) return "flyover";
+  if (cell.role === "station") return "station";
   const conns = cell.connections;
   const hasRoadLayer = (cell.road?.length ?? 0) > 0;
 
