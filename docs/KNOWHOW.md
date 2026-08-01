@@ -145,6 +145,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   silhouette is convex while the outline stays irregular. SIGN: the outline is
   wound clockwise, so **negative = outward** (same convention as `SEAM_OVERLAP`).
   Pinned by "bows every shore OUTWARD" + a control-point-outside-the-chord test.
+  WHERE IT LANDS: `edgeBow` feeds `edgeLean` only, i.e. a REAL corner's outward
+  sweep — and since 2026-08-01 that lean is capped at the tile edge. A long run's
+  belly comes from `shorePull` varying per lattice point, not from the bow.
 - OUTWARD-ONLY WAS ONLY HALF THE FIX. Bulging every edge left a CUSP at every
   shared corner: each edge bowed off its own chord, so the outline arrived ~24°
   off and left ~24° the other way — a sharp inward V at each tile boundary. You
@@ -163,9 +166,10 @@ lean — prune as much as you add. This file only stays useful if every task ten
     angle. Needs no cross-tile agreement: only ONE tile ever draws through a
     corner-role point (a same-kind side neighbour would change the role);
     two patches kissing diagonally pull apart into two bodies — deliberate.
-  · exactly one stops AND the diagonal differs → mid-shore RUN: push the point
-    outward (`cornerPush`) and lean by the lattice's shared slope (`cornerSlope`).
-    Both are seeded by the LATTICE POINT, so the two tiles agree on both.
+  · exactly one stops AND the diagonal differs → mid-shore RUN: pull the point
+    INWARD (`shorePull`, 6-12u) and lean by the lattice's shared slope
+    (`cornerSlope`). Both are seeded by the LATTICE POINT, so the two tiles
+    agree on both.
   · else (interior, or an L's reflex corner where the diagonal IS the same kind)
     → leave it on the lattice, flat. Smoothing a reflex corner pushes one arm
     north and the other east and TEARS THE PATCH OPEN — that case is why the
@@ -173,10 +177,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Pushing a shared corner outward does NOT by itself remove a cusp — it is a
   translation, and a cusp is a TANGENT discontinuity. Don't reach for a bigger
   bow/jitter to fix a kink; fix the tangents.
+- **A PATCH STAYS ON ITS OWN TILE (2026-08-01).** The mid-shore point used to be
+  pushed OUTWARD (7-19u) and the corner lean was unbounded, so a lake sat a fifth
+  of a tile in its neighbours and a river came out WIDER THAN THE BRIDGE BUILT TO
+  CROSS IT — a full-width deck still left water past both ends of the span, and
+  the crossing read as track laid on the river. A cell's terrain is what that
+  cell IS, so what answers for the cell (bridge deck, tunnel portal) spans exactly
+  one tile and the ground must fit inside it. Three parts, all in `terrain.ts`:
+  the mid-shore point is now pulled IN (`shorePull`); a real corner's lean is
+  capped at the tile edge (`outwardRoom` — a cubic lies in its control hull, so
+  capping the controls contains the whole sweep); and the unclipped fringe halo
+  is sized against the pull (20/10, was 30/15). Pinned by "keeps every shore ON
+  its own tile", checked PER AXIS — an edge that runs on into the next tile must
+  still reach the shared lattice point, jitter and all.
+  · The pull is bounded at BOTH ends and the bounds are not arbitrary. MIN >=
+    `CORNER_JITTER + CORNER_SLOPE` makes containment exact rather than
+    approximate; MAX < the corner inset's per-axis component keeps the shore
+    OUTSIDE its own chord — pull deeper and the boundary is sucked in once per
+    tile and a 2x2 lake comes out a cushion with a pinch in the middle of each
+    side. That is the same star-shaped defect as the old symmetric bow, arriving
+    from the other direction. Seen and reverted during this change.
+  · Cutting `CORNER_INSET` deeper (20-32) to buy back the roundness the cap takes
+    away was tried and reverted: a lone pond drops under the 55% coverage floor
+    and a big body barely changes. Containment costs some blobbiness on a MULTI-
+    tile body — a 2x2 lake now reads as a rounded rectangle. That is the trade,
+    not a defect.
+  · Scatter obeys the same rule: `peak`'s crest (34-48u) / apron widths, `boulder`'s
+    radius and the mountain/rock BANDS are pitched together so a ridge or a
+    boulder lands inside its cell. Before, a massif overhung the tunnel portal
+    that was supposed to be its mouth.
 - SILHOUETTE ≠ BOUNDING BOX (2026-07-26): outward bows + smooth runs alone still
   left every real corner ON the authored box corner — a 3x2 lake was a rectangle
-  with wavy edges. The inward corner pull + big leans relaxed it into a blob;
-  the mid-shore push (7-19u) gives long runs their belly. Pinned by area: a lone
+  with wavy edges. The inward corner pull + big leans relaxed it into a blob.
+  Pinned by area: a lone
   tile's outline covers 0.55-0.85 of its square (`patchOutlinePolygon` + grid
   sampling). An INTERIOR tile's own outline covers only ~92-96% — its jittered
   shared chords cede a strip that the NEIGHBOUR's identical chord covers. That
@@ -495,7 +528,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   to the one sun, deck, parapet. Stroke-based so a bridge on a CURVE bends for
   free. Rail AND road: nothing about a structure is rail-specific, and a road
   deck must be WIDER than its carriageway or it vanishes under the opaque road
-  surface (width from the lane count). /test scenario: `bridge`.
+  surface (width from the lane count, `+ size*0.18` so the parapet clears the
+  tarmac too). /test scenario: `bridge`.
+- THE DECK MUST COME BEFORE THE ROAD LAYER IN THE TEMPLATE (2026-08-01). Both are
+  z1, so DOM ORDER decides, and drawn later the opaque deck painted the street
+  out: a road bridge read as a GAP in the road. z-index alone will not save you
+  here — same-z siblings are ordered by the markup.
+- A DECK ONLY WORKS IF THE WATER FITS THE TILE. The span runs edge to edge, so
+  any water bulging past the boundary shows past the ends of the bridge however
+  the deck is drawn. That is why terrain patches are contained (see TERRAIN →
+  "A PATCH STAYS ON ITS OWN TILE"); the two are one feature, not two.
+- Pinned by traffic, not just by geometry: `bridge.spec.ts` runs the scenario's
+  own board and asserts a train reaches the far depot and a car goes bank to bank
+  over `4,5`. A span nothing crosses is not a bridge.
 - A RIVER IS NOT A KIND: it is a 1-wide line of `water`, which `patchPath` fuses
   into a ribbon. What separates it from a lake is that it cannot be gone round.
 

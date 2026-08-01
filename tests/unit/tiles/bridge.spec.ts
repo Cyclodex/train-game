@@ -11,6 +11,9 @@ import {
 } from "@/tiles/terrain";
 import { planRoute } from "@/tiles/routePlanner";
 import { validateLevel } from "@/tiles/validate";
+import { createSimulation } from "@/sim/simulation";
+import { createRoadSim } from "@/sim/road";
+import { bridge } from "@/levels/test/scenarios/bridge";
 
 const { Top, Right, Bottom, Left } = Position;
 const water = (): TileCell => ({ connections: [], terrain: "water" });
@@ -86,6 +89,72 @@ describe("bridges", () => {
     it("is the dearest thing to build", () => {
       expect(BRIDGE_BUILD_FACTOR).toBeGreaterThan(terrainBuildFactor({ connections: [], terrain: "urban" }));
     });
+  });
+
+  describe("what actually crosses it (the /test/bridge board)", () => {
+    // A span is only a bridge if traffic uses it. Run on the scenario's OWN
+    // board, so a change to the demo fails here rather than quietly leaving a
+    // crossing nothing can cross.
+    const railRow = 2;
+    const roadRow = 5;
+
+    it("carries a train from bank to bank", () => {
+      const sim = createSimulation({
+        level: bridge.level,
+        depotColors: { [`0,${railRow}`]: "blue", [`8,${railRow}`]: "green" },
+        trains: [
+          {
+            id: "train1",
+            coord: { x: 0, y: railRow },
+            entryPort: Position.Center,
+            color: "green",
+            type: "people",
+            wagonCount: 2,
+            speed: 1,
+          },
+        ],
+      });
+      const events = [];
+      for (let i = 0; i < 400; i++) events.push(...sim.step(0.1));
+      // The river runs bank to bank, so reaching the far depot IS the crossing.
+      expect(sim.trainState("train1")).toBe("parked");
+      expect(events.some(e => e.type === "arrived")).toBe(true);
+    });
+
+    it("carries cars over the road span", () => {
+      const sim = createRoadSim({
+        level: bridge.level,
+        width: bridge.size!.cols,
+        height: bridge.size!.rows,
+        seed: 5,
+        spawnInterval: 0.5,
+        carSpeed: 0.5,
+        carLength: 0.2,
+        maxCars: 8,
+      });
+      const span = `4,${roadRow}`;
+      let onSpan = 0;
+      let crossed = 0;
+      const seenWest = new Set<string>();
+      for (let i = 0; i < 1500; i++) {
+        sim.step(0.05, () => false);
+        for (const c of sim.sample()) {
+          for (const u of c.units) {
+            for (const s of [u.front, u.rear]) {
+              const id = `${s.coord.x},${s.coord.y}`;
+              if (id === span) onSpan++;
+              // Bank to bank: seen west of the river, later seen east of it.
+              if (s.coord.y === roadRow && s.coord.x <= 2) seenWest.add(c.id);
+              if (s.coord.y === roadRow && s.coord.x >= 6 && seenWest.has(c.id)) {
+                crossed++;
+              }
+            }
+          }
+        }
+      }
+      expect(onSpan).toBeGreaterThan(0);
+      expect(crossed).toBeGreaterThan(0);
+    }, 30000); // heavy sim loop — fine alone, can exceed 5s under full-suite load
   });
 
   describe("the route planner", () => {

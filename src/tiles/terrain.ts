@@ -32,11 +32,27 @@ export const TERRAIN_KINDS: readonly TerrainKind[] = [
 // scatter sizes stay independent of the px tile size.
 export const GROUND_UNITS = 100;
 
-// How far a tile corner is nudged off the grid, and how far a boundary bows out
-// between two corners. Together these are what stop a patch reading as a
-// rounded rectangle: the grid is still underneath, but nothing lands on it.
-// Both are small enough that an edge can never cross its neighbour.
-const CORNER_JITTER = 7;
+// A PATCH STAYS ON ITS OWN TILE.
+//
+// This is the containment rule every constant below is pitched against, and it
+// is a GAMEPLAY rule as much as a drawing one: a cell's terrain is what that
+// cell IS, so a structure that answers for the cell — a bridge over water, a
+// bore through rock — has to be able to cover it. While a lake bulged a fifth of
+// a tile into its neighbours, a full-width bridge deck still left water showing
+// past both ends of the span, and the crossing read as track laid on the river.
+// Everything a patch draws is therefore kept inside the tile box: the shore is
+// pulled IN off the lattice line (see SHORE_PULL) rather than pushed out, and a
+// rounded corner's lean is capped at the tile edge (see patchSegments).
+//
+// The one deliberate exception is the soft fringe (see buildGround), which is
+// translucent and exists precisely to blend across the seam.
+
+// How far a tile corner is nudged off the grid. This is what stops a patch
+// reading as a rounded rectangle: the grid is still underneath, but nothing
+// lands on it. Small — it is the ONE thing that can still put a patch a few
+// units over its own boundary (at the reflex corner of an L, where the point is
+// shared with a diagonal neighbour and so cannot be clamped by either tile).
+const CORNER_JITTER = 3;
 
 // SHORES BULGE OUTWARD. The bow used to be symmetric — `(r()*2-1)*EDGE_BOW` —
 // so about half of every patch's boundaries curved INWARD, and a concave shore
@@ -54,16 +70,43 @@ const EDGE_BOW_MIN = 0.34;
 const MID_OF_LEAN = 0.75;
 
 // A lattice point in the MIDDLE of a shore — one where the boundary runs
-// straight on into the next tile — is pushed off the grid too, outward, and the
+// straight on into the next tile — is pulled off the grid too, INWARD, and the
 // shore leans through it. Without this the outline returned to the bare lattice
 // point at every tile boundary and left a sharp inward V there: the bulges were
 // convex, but the CUSPS BETWEEN THEM drew the tile grid back onto the shore, so
-// you could count the tiles down the side of a lake. The push gives the shore
+// you could count the tiles down the side of a lake. The pull gives the shore
 // somewhere else to be; the slope is what makes the two tiles' curves meet
 // smoothly rather than at a kink (see patchSegments).
-const CORNER_PUSH_MIN = 7;
-const CORNER_PUSH_MAX = 19;
-const CORNER_SLOPE = 5;
+//
+// INWARD, not outward. It used to push out by the same amounts, which is what
+// put a lake a fifth of a tile into the meadow next door and left a river wider
+// than the bridge built to cross it (see the containment note above). The
+// smoothing is unchanged either way — the shore still never touches the grid
+// line, it now sits just inside it instead of just outside — and because BOTH
+// tiles read the same shared pull, the seam stays shut exactly as before.
+// SHALLOW, and bounded at both ends for different reasons.
+//
+// The minimum is not free: a mid-shore point may be nudged CORNER_JITTER back
+// toward the grid and its control point leans a further CORNER_SLOPE outward,
+// so MIN >= JITTER + SLOPE is what makes "the shore stays on its tile" exact
+// rather than approximate.
+//
+// The MAXIMUM is what keeps the shore CONVEX, and it is pitched against
+// CORNER_INSET: a real corner is cut ~10-18 units into the tile (the diagonal
+// pull, resolved onto one axis), so a mid-shore point deeper than that would sit
+// INSIDE the line between the corners either side of it — the boundary would be
+// sucked in once per tile and a 2x2 lake would come out as a cushion with a
+// pinch in the middle of each side. That is the same star-shaped defect the
+// outward-only bow was introduced to fix, just arriving from the other
+// direction: the shore has to stay OUTSIDE its chord and INSIDE its tile, and
+// the gap between these two constants is the room to do both.
+const SHORE_PULL_MIN = 6;
+const SHORE_PULL_MAX = 12;
+const CORNER_SLOPE = 3;
+
+// How far short of its own tile edge a rounded corner's lean has to stop (see
+// outwardRoom).
+const SHORE_EDGE_KEEP = 2;
 
 // A REAL corner — where the patch genuinely turns — is pulled INWARD, along the
 // tile's diagonal. This is what finally stopped an authored block silhouetting
@@ -73,6 +116,12 @@ const CORNER_SLOPE = 5;
 // makes the outline sweep from outside the lattice line down into the tile and
 // back — an effective corner radius of most of a tile, which is what reads as a
 // rounded blob. The two amounts vary per corner so the blob is never a circle.
+// Cutting these deeper was tried when containment capped the outward sweep at
+// the tile edge (see outwardRoom), to buy back some of the roundness the cap
+// takes away. It is not worth it: at 20..32 a lone pond's outline drops under
+// the 55% coverage floor — a puddle, not a pond — and the extra bite buys
+// almost no visible curve on a big body, whose sides are governed by the
+// mid-shore pull instead.
 const CORNER_INSET_MIN = 14;
 const CORNER_INSET_MAX = 26;
 
@@ -219,8 +268,8 @@ export const FOOT: Record<TerrainKind, number> = {
   farmland: 0,
   forest: 13,
   water: 6,
-  rock: 15,
-  mountain: 30,
+  rock: 13,
+  mountain: 26,
   // The SMALLEST town archetype's reach (`URBAN_SMALLEST_REACH`), not the
   // largest: a building's footprint is chosen to fit the room actually measured
   // at its spot (see `building`), so this only has to admit a shed. Gating on
@@ -604,14 +653,15 @@ export function edgeBow(
 }
 
 /**
- * How far a MID-SHORE lattice point is pushed off the grid, along the shore's
- * outward normal, and how steeply the shore leans as it passes through. Both are
- * seeded by the lattice point alone, so the two tiles that share it place it and
- * angle it identically — that agreement is the whole reason the seam stays shut.
+ * How far a MID-SHORE lattice point is pulled off the grid, INWARD along the
+ * shore's outward normal, and how steeply the shore leans as it passes through.
+ * Both are seeded by the lattice point alone, so the two tiles that share it
+ * place it and angle it identically — that agreement is the whole reason the
+ * seam stays shut.
  */
-export function cornerPush(gx: number, gy: number, seed: number): number {
+export function shorePull(gx: number, gy: number, seed: number): number {
   const r = makeRng(hashInts(seed, gx, gy, 0x3b));
-  return lerp(CORNER_PUSH_MIN, CORNER_PUSH_MAX, r());
+  return lerp(SHORE_PULL_MIN, SHORE_PULL_MAX, r());
 }
 
 export function cornerSlope(gx: number, gy: number, seed: number): number {
@@ -731,10 +781,10 @@ function corners(
     // difference between a field and a pond.
     if (style === "surveyed") return p;
     if (role.kind === "run") {
-      const push = cornerPush(gx, gy, seed);
+      const pull = shorePull(gx, gy, seed);
       const out = EDGE_FRAME[role.edge].out;
-      p.x += out.x * push;
-      p.y += out.y * push;
+      p.x -= out.x * pull;
+      p.y -= out.y * pull;
     } else if (role.kind === "corner") {
       // The inward diagonal is opposite the two adjacent edges' outward
       // normals; their sum has length sqrt(2), so divide to get a unit pull.
@@ -854,6 +904,23 @@ function edgeLean(
 }
 
 /**
+ * How much room a point has before the tile edge it is leaning toward. The
+ * containment rule (see the note by CORNER_JITTER) is enforced here and nowhere
+ * else: a cubic lies inside the convex hull of its four points, so capping a
+ * corner's outward lean at this distance keeps the whole rounded sweep on the
+ * tile — the shore reaches the boundary and stops there instead of spilling a
+ * quarter of a tile onto the ground next door.
+ */
+function outwardRoom(p: Pt, out: Pt, size: number): number {
+  const room = out.x !== 0 ? (out.x > 0 ? size - p.x : p.x) : out.y > 0 ? size - p.y : p.y;
+  // Stop SHORT of the boundary, never on it. A control point landing exactly on
+  // 0 or `size` would put the shore's steepest part on the grid line itself —
+  // the tile edge drawn back onto the water, which is the defect all the jitter
+  // exists to avoid. Two units is enough to keep every number off the grid.
+  return Math.max(0, room - SHORE_EDGE_KEEP);
+}
+
+/**
  * Every boundary of the patch, as cubics whose END TANGENTS are chosen, not
  * implied.
  *
@@ -907,9 +974,11 @@ function patchSegments(
       leadOut = seam;
       leadIn = -seam;
     } else {
+      // A real corner leans out by the edge's own amount, but never past the
+      // tile edge: the patch has to stay on its own cell (see outwardRoom).
       const lean = edgeLean(g, i, seed, reach);
-      leadOut = edgeLead(roles[i], g[i], seed, lean, 1);
-      leadIn = edgeLead(roles[j], g[j], seed, lean, -1);
+      leadOut = edgeLead(roles[i], g[i], seed, Math.min(lean, outwardRoom(a, out, size)), 1);
+      leadIn = edgeLead(roles[j], g[j], seed, Math.min(lean, outwardRoom(b, out, size)), -1);
     }
     segs.push({
       a,
@@ -1061,10 +1130,14 @@ const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
   // patch edge — the containment walk keeps them on the patch.
   forest: { x: [10, 90], y: [10, 90], scale: [0.72, 1.15] },
   // Boulders are bigger than a tree's footprint, so they keep a deeper margin.
-  rock: { x: [20, 80], y: [20, 80], scale: [0.72, 1.15] },
+  rock: { x: [24, 76], y: [24, 76], scale: [0.72, 1.15] },
   // A ridge is the biggest footprint on the board; keep its centre well inside
-  // the tile so the massif stays on its own ground.
-  mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
+  // the tile so the massif stays on its own ground. Band + `peak`'s own reach
+  // are pitched together so a crest lands inside the cell it belongs to — a
+  // mountain hanging over the neighbour is the same defect as a lake doing it
+  // (see the containment note by CORNER_JITTER), and worse, because a ridge is
+  // opaque: it drew over ground a tunnel portal or a bridge had to answer for.
+  mountain: { x: [33, 67], y: [33, 67], scale: [0.8, 1.1] },
   // Buildings are the biggest footprints on the board after a ridge, so they
   // keep well off the tile edge — and the scale range is narrow, because a town
   // whose houses vary by 40% reads as a perspective error rather than as
@@ -1144,7 +1217,9 @@ function splitBySun(pts: Pt2[]): { lit: Pt2[]; shade: Pt2[] } {
  * catching the light unevenly, which is tones a few steps apart.
  */
 function boulder(rng: Rng, scale: number): string {
-  const r = lerp(10, 16, rng()) * scale;
+  // Sized against the rock band (24..76) and the scale cap, same rule as the
+  // ridge: radius + the shadow's own 0.24r offset has to fit the margin.
+  const r = lerp(9, 14, rng()) * scale;
   const pts = blobPts(rng, r, 8, lerp(0.72, 1, rng()));
   const { lit, shade } = splitBySun(pts);
   // Offsets are baked into the POINTS, not wrapped in a nested translate: the
@@ -1216,7 +1291,11 @@ function shelf(rng: Rng, base: Hsl): string {
  * or three of these crossing each other read as a massif.
  */
 function peak(rng: Rng, scale: number): string {
-  const len = lerp(40, 58, rng()) * scale; // total crest length
+  // Crest length and apron widths are bounded by the tile, not by taste: at the
+  // band's edge (33/67) and the scale cap (1.1) a half-crest of 48/2 plus the
+  // wobble and the shadow offset just reaches the boundary. Grow either and the
+  // massif starts hanging over the next cell.
+  const len = lerp(34, 48, rng()) * scale; // total crest length
   const th = rng() * Math.PI; // crest bearing
   const u: Pt2 = { x: Math.cos(th), y: Math.sin(th) }; // along the crest
   let v: Pt2 = { x: -u.y, y: u.x }; // across it
@@ -1226,8 +1305,8 @@ function peak(rng: Rng, scale: number): string {
   // Wider than it is long is what separates a massif from a shard: the aprons
   // together span more than half the crest, so the footprint is a rugged blob
   // with a spine, not a spiky lens.
-  const wLit = lerp(14, 19, rng()) * scale;
-  const wShade = lerp(16, 22, rng()) * scale;
+  const wLit = lerp(12, 16, rng()) * scale;
+  const wShade = lerp(13, 18, rng()) * scale;
   const face = stone(rng, lerp(56, 64, rng()), [10, 18]);
   const shade = stone(rng, lerp(36, 44, rng()), [12, 20]);
 
@@ -2432,7 +2511,12 @@ function buildGround(
   const parts: string[] = [];
   const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, style);
   if (fringeD) {
-    const [wide, tight] = style === "surveyed" ? [18, 9] : [30, 15];
+    // Sized against the shore's own inset (SHORE_PULL_MIN): the stroke is
+    // centred on the boundary, so half of it reaches outward — half of `wide`
+    // is what the halo spills, and keeping that within the pull is what stops
+    // the ONE deliberately unclipped thing a patch draws from painting a lake's
+    // blue onto the meadow two tiles over.
+    const [wide, tight] = style === "surveyed" ? [14, 7] : [20, 10];
     parts.push(
       `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${wide}" stroke-linecap="round" opacity="0.15"/>`,
       `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${tight}" stroke-linecap="round" opacity="0.3"/>`,

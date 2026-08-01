@@ -5,6 +5,29 @@
     :style="reservationStyle"
     @pointerleave="closeSwitchFan"
   >
+    <!-- Bridge deck: the STRUCTURE carrying the line over what is under it.
+         Drawn between the ground and everything the line is made of, so the
+         water shows either side of the span while the road surface and the
+         sleepers sit ON the deck rather than in the river. Derived from the
+         same segment paths the rails and lanes follow, so a bridge on a curve
+         bends with it and nothing has to be authored per shape.
+
+         FIRST in the tile, before the road layer: both sit at z1, so DOM order
+         is what decides, and drawn later the (opaque) deck painted the street
+         out — a road bridge read as a gap in the road rather than as a bridge.
+         The rails are z2 and cross it either way. -->
+    <svg
+      v-if="isBridge"
+      class="bridge-deck"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g v-for="(s, i) in bridgeSpans" :key="'bd' + i">
+        <path :d="s.d" class="bridge-shadow" :stroke-width="s.width" />
+        <path :d="s.d" class="bridge-span" :stroke-width="s.width" />
+        <path :d="s.d" class="bridge-parapet" :stroke-width="s.width * 0.78" />
+      </g>
+    </svg>
+
     <!-- Road layer (under the rails): paved surface + dashed lane marking,
          derived from the cell's `road` pairs. Only when roads are enabled. -->
     <svg
@@ -129,23 +152,6 @@
         <path :d="m.shaft" class="lg-shaft" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
         <path :d="m.head" class="lg-head" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
       </template>
-    </svg>
-
-    <!-- Bridge deck: the STRUCTURE carrying the line over what is under it.
-         Drawn between the ground and the rails, so the water shows either side
-         of the span and the sleepers sit on the deck rather than in the river.
-         Derived from the same segment paths the rails follow, so a bridge on a
-         curve bends with it and nothing has to be authored per shape. -->
-    <svg
-      v-if="isBridge"
-      class="bridge-deck"
-      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
-    >
-      <g v-for="(s, i) in bridgeSpans" :key="'bd' + i">
-        <path :d="s.d" class="bridge-shadow" :stroke-width="s.width" />
-        <path :d="s.d" class="bridge-span" :stroke-width="s.width" />
-        <path :d="s.d" class="bridge-parapet" :stroke-width="s.width * 0.78" />
-      </g>
     </svg>
 
     <!-- Tunnel: the line is UNDERGROUND. No rails are drawn and the mountain's
@@ -764,7 +770,11 @@ class Tile extends Vue {
       const laneW = size * LANE_WIDTH_PX_FRAC;
       for (const [a, b] of roadEdges(road)) {
         const lanes = Math.max(laneCount(road, a) + laneCount(road, b), 2);
-        spans.push({ d: segmentPathD(a, b, size), width: lanes * laneW + size * 0.09 });
+        // Wide enough that BOTH deck strokes clear the carriageway: the road
+        // surface is opaque and covers whatever it is laid on, so the parapet
+        // (0.78 of this) has to stand outside it or a road bridge shows nothing
+        // but a hairline of structure.
+        spans.push({ d: segmentPathD(a, b, size), width: lanes * laneW + size * 0.18 });
       }
     }
     return spans;
