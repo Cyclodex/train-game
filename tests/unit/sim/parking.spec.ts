@@ -51,6 +51,20 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 // rendered game passes 38px/200px = 0.19).
 const CAR_LEN = 0.19;
 
+// LET THE WORKER BREATHE. Vitest's worker talks to the runner over an RPC
+// channel with a heartbeat, and a long SYNCHRONOUS loop starves it — the run
+// then dies with an unhandled `Timeout calling "onTaskUpdate"` while every
+// assertion passes, and vitest still exits 1. Green tests, red suite, and
+// nothing in the output says which test did it.
+//
+// The two long-run tests below are tens of seconds of tight, allocation-free
+// stepping (measured: 71s and 58s of unbroken sync work, and exactly two
+// unhandled errors per run). Yielding a macrotask every few hundred ticks costs
+// microseconds and keeps the channel alive. Any new multi-thousand-tick loop in
+// this file wants it too.
+const breathe = () => new Promise<void>(resolve => setImmediate(resolve));
+const BREATHE_EVERY = 500;
+
 const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
 
 function levelWith(rows: ParkingRow[], facility = "P"): Level {
@@ -62,7 +76,7 @@ function levelWith(rows: ParkingRow[], facility = "P"): Level {
 }
 
 describe("parking geometry — a bay is where the car in it stands", () => {
-  it("places a row of bays outside the kerb, evenly along the tile", () => {
+  it("places a row of bays outside the kerb, evenly along the tile", async () => {
     const row: ParkingRow = { from: Position.Left, kind: "parallel", count: 3 };
     const kerb = 28;
     const poses = [0, 1, 2].map(i => stallPose(row, i, 200, kerb));
@@ -79,7 +93,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     for (const p of poses) expect(Math.abs(p.angleDeg)).toBeLessThan(1e-6);
   });
 
-  it("noses a 90° bay away from the road, and mirrors it on the far bank", () => {
+  it("noses a 90° bay away from the road, and mirrors it on the far bank", async () => {
     const right: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 2 };
     const left: ParkingRow = { from: Position.Left, side: "left", kind: "perpendicular", count: 2 };
     const r = stallPose(right, 0, 200, 14);
@@ -92,7 +106,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     expect(r.x).toBeCloseTo(l.x);
   });
 
-  it("packs a row from the leading edge by default, and centres it on request", () => {
+  it("packs a row from the leading edge by default, and centres it on request", async () => {
     // "pack" starts the row AT the tile's leading edge, so consecutive tiles of a
     // long row line up. Centring every tile's row instead would push each one
     // inward and leave a hole of empty kerb at every tile seam, repeated down the
@@ -109,7 +123,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     expect(c0).toBeGreaterThan(stallPose(packed, 0, 200, 28).x);
   });
 
-  it("draws an echelon bay as a parallelogram, so ranks nest instead of overlapping", () => {
+  it("draws an echelon bay as a parallelogram, so ranks nest instead of overlapping", async () => {
     const row: ParkingRow = { from: Position.Left, kind: "angled", count: 3 };
     const a = stallBoxPoints(row, 0, 200, 14);
     const b = stallBoxPoints(row, 1, 200, 14);
@@ -122,7 +136,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     expect(a[3].x).toBeGreaterThan(a[0].x);
   });
 
-  it("measures the kerb of a one-way aisle by its own width, not the two-way floor", () => {
+  it("measures the kerb of a one-way aisle by its own width, not the two-way floor", async () => {
     // A 1-lane one-way aisle is painted 14px from the centreline (kerb-anchored to
     // its run's widest lane count). Measuring it with the two-way max(count, 2)
     // rule would put the kerb at 28px and float the bays a car's width off the
@@ -139,7 +153,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     expect(kerbOffsetAt(wide, { x: 0, y: 0 }, Position.Left, 200)).toBeCloseTo(56);
   });
 
-  it("identifies the two spellings of the same physical kerb", () => {
+  it("identifies the two spellings of the same physical kerb", async () => {
     // On an east-west street these two rows are BOTH the north kerb. Authoring
     // both would paint two sets of bays into one strip of tarmac and count every
     // space twice — which is why the validator rejects it.
@@ -153,7 +167,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
 describe("the parking manoeuvre", () => {
   const row: ParkingRow = { from: Position.Left, kind: "perpendicular", count: 2 };
 
-  it("runs from the lane to the bay and finishes square in it", () => {
+  it("runs from the lane to the bay and finishes square in it", async () => {
     const path = manoeuvrePath(row, 0, 200, 14, 7);
     const start = manoeuvreAt(path, 0);
     const end = manoeuvreAt(path, 1);
@@ -167,7 +181,7 @@ describe("the parking manoeuvre", () => {
     expect(end.angleDeg).toBeCloseTo(pose.angleDeg, 1);
   });
 
-  it("is parameterised by ARC LENGTH, so the car crawls in at a constant speed", () => {
+  it("is parameterised by ARC LENGTH, so the car crawls in at a constant speed", async () => {
     // This is the property that a raw Bézier parameter does NOT have: equal steps
     // in `m` must cover equal distance, or the car visibly surges through the
     // middle of the swing.
@@ -184,7 +198,7 @@ describe("the parking manoeuvre", () => {
     }
   });
 
-  it("anchors at the car's real position when the sim overrides the start", () => {
+  it("anchors at the car's real position when the sim overrides the start", async () => {
     // The sim triggers the swing wherever the car actually is, not where the
     // default curve would have begun — otherwise the sprite jumps sideways the
     // tick it starts to park.
@@ -196,7 +210,7 @@ describe("the parking manoeuvre", () => {
 describe("a garage is driven THROUGH, not reversed out of", () => {
   const garage: ParkingRow = { from: Position.Left, kind: "garage", count: 4 };
 
-  it("puts its two ramp mouths at different points along the tile", () => {
+  it("puts its two ramp mouths at different points along the tile", async () => {
     // One driveway in, one out. A single mouth serialises arrivals and departures
     // through the same hole and forces the car to come out backwards.
     const inM = stallPose(garage, 0, 200, 28, "in");
@@ -207,7 +221,7 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
     expect(outM.y).toBeCloseTo(inM.y);
   });
 
-  it("drives OUT forwards, ending aligned with the road", () => {
+  it("drives OUT forwards, ending aligned with the road", async () => {
     const path = forwardExitPath(garage, 0, 200, 28, 7);
     const start = manoeuvreAt(path, 0);
     const end = manoeuvreAt(path, 1);
@@ -222,7 +236,7 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
     expect(Math.abs(end.angleDeg)).toBeLessThan(5); // eastbound, along the street
   });
 
-  it("sends the car out on the far kerb when the author gives it a separate exit", () => {
+  it("sends the car out on the far kerb when the author gives it a separate exit", async () => {
     const twoRamp: ParkingRow = { ...garage, exitTo: Position.Right };
     expect(garageExitFrom(twoRamp)).toBe(Position.Right);
     const inM = stallPose(twoRamp, 0, 200, 28, "in");
@@ -231,7 +245,7 @@ describe("a garage is driven THROUGH, not reversed out of", () => {
     expect((inM.y - 100) * (outM.y - 100)).toBeLessThan(0);
   });
 
-  it("rejoins the road at the OUT ramp, not back at the entrance", () => {
+  it("rejoins the road at the OUT ramp, not back at the entrance", async () => {
     // The car must carry on from where it really emerged. Re-seeding it at the
     // in-ramp would teleport it backwards and make it drive the same stretch twice.
     const endT = forwardExitEndT(garage, 0, 200, 28);
@@ -272,7 +286,7 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
     }));
   };
 
-  it("never drives through the car in the bay next door", () => {
+  it("never drives through the car in the bay next door", async () => {
     // THE REPORTED PICTURE: a car swinging into a 90° bay across the ones either
     // side of it. Turning a car through a right angle takes its own length of
     // room, and these aisles were 14px wide for a 38px car — the pull-in went
@@ -297,7 +311,7 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
     expect(worst).toBeGreaterThanOrEqual(0);
   });
 
-  it("paves the clearance, and leaves an authored verge green", () => {
+  it("paves the clearance, and leaves an authored verge green", async () => {
     // The room a turning rank is held out by IS the aisle, so it is tarmac up to
     // the kerb — a band of grass between the road and the car park is not a car
     // park. An authored `gap` on a kerbside row is the opposite: a pavement.
@@ -309,7 +323,7 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
     expect(apronNearPx(kerbside, 200, 28)).toBeCloseTo(56); // the verge stays green
   });
 
-  it("runs one unbroken strip of tarmac across a tile seam", () => {
+  it("runs one unbroken strip of tarmac across a tile seam", async () => {
     // THE ECHELON APRON USED TO FOLLOW THE RAKE, so its road-side edge ran
     // −21..153 on a 200px tile while its far edge ran 21..195: consecutive tiles
     // stepped past each other and left a wedge of grass hard against the
@@ -373,7 +387,7 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
 describe("a kerbside space is pulled out of, an echelon bay is reversed out of", () => {
   const rank: ParkingRow = { from: Position.Left, kind: "parallel", count: 3 };
 
-  it("only the kinds a driver really noses out of get a forward exit", () => {
+  it("only the kinds a driver really noses out of get a forward exit", async () => {
     // Reversing is not a fallback here, it is the RIGHT motion for a bay you back
     // into. The line is drawn by kind, not by size or reservation.
     expect(exitsForward("parallel")).toBe(true);
@@ -384,7 +398,7 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     expect(exitsForward("busstop")).toBe(false);
   });
 
-  it("the registry hands one out for a kerb bay and withholds it from a 90° bay", () => {
+  it("the registry hands one out for a kerb bay and withholds it from a 90° bay", async () => {
     const kerb = createParkingRegistry(levelWith([rank]), CAR_LEN);
     const bay = kerb.pickStallOn("1,0", Position.Left, "car", "c1")!;
     const exit = kerb.exitFor(bay, 0)!;
@@ -401,7 +415,7 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     expect(echelon.exitFor(slot, 0)).toBeNull();
   });
 
-  it("a car faces ONE way in its bay, and the exit sets off along it", () => {
+  it("a car faces ONE way in its bay, and the exit sets off along it", async () => {
     // THE 180° SPIN. The entry curve and the exit curve each answered "which way
     // is this car pointing?" for themselves and disagreed: a kerbside car that had
     // backed in rested pointing down the road (right) while its exit set off
@@ -430,7 +444,7 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     }
   });
 
-  it("backs into a 90° bay, and never into an echelon one", () => {
+  it("backs into a 90° bay, and never into an echelon one", async () => {
     // Which kinds can be backed into is GEOMETRY, not driver taste. An echelon bay
     // is raked FORWARD — you reach it by turning toward its side — so a car backed
     // into one comes to rest facing back up the aisle it arrived down, and on a
@@ -451,7 +465,7 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     expect(echelon.canNoseIn(a)).toBe(true);
   });
 
-  it("pivots into a 90° bay instead of bulging across its neighbours", () => {
+  it("pivots into a 90° bay instead of bulging across its neighbours", async () => {
     // A REVERSE IS A PIVOT, and a cubic between two known tangents is not one.
     // The old curve swung out beyond the bay and came back, which is why it
     // measured worse than nosing in (−3.3/−5.6px against +3.3/+0.1) and why
@@ -483,7 +497,7 @@ describe("a kerbside space is pulled out of, an echelon bay is reversed out of",
     expect(Math.abs(end.angleDeg - (pose.angleDeg + 180))).toBeLessThan(1);
   });
 
-  it("noses out along the road instead of crabbing sideways into it", () => {
+  it("noses out along the road instead of crabbing sideways into it", async () => {
     const path = forwardExitPath(rank, 1, 200, 28, 7);
     const start = manoeuvreAt(path, 0);
     const end = manoeuvreAt(path, 1);
@@ -506,7 +520,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
   const bay: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, reserved: "bus" };
   const rank: ParkingRow = { from: Position.Left, kind: "parallel", count: 3 };
 
-  it("tapers a lay-by and leaves an ordinary rank square", () => {
+  it("tapers a lay-by and leaves an ordinary rank square", async () => {
     // A lay-by is cut INTO the verge: the kerb swings out, runs level, swings back.
     // A run of kerbside spaces is a continuous parking LANE — tapering each tile's
     // end would turn one street into a row of pockets.
@@ -518,7 +532,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
     expect(total).toBeLessThanOrEqual(200);
   });
 
-  it("centres a tapered bay, because a packed one has no room for its entry", () => {
+  it("centres a tapered bay, because a packed one has no room for its entry", async () => {
     // Packed rows start at the tile's leading edge, which leaves nothing in front
     // of the bay for the kerb to open through.
     const pose = stallPose(bay, 0, 200, 28);
@@ -529,7 +543,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
     expect(stallPose(rank, 0, 200, 28).x).toBeCloseTo(30);
   });
 
-  it("makes the entry SHALLOWER, not just longer", () => {
+  it("makes the entry SHALLOWER, not just longer", async () => {
     // The point of following the opening: the bus drifts in along the taper
     // instead of turning across the kerb line. Measured as the sharpest heading
     // change anywhere on the curve — the same swing, spread over more road.
@@ -554,7 +568,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
 describe("the parking registry — occupancy and fit", () => {
   const rows: ParkingRow[] = [{ from: Position.Left, kind: "parallel", count: 2 }];
 
-  it("hands out each bay exactly once", () => {
+  it("hands out each bay exactly once", async () => {
     const reg = createParkingRegistry(levelWith(rows), CAR_LEN);
     const a = reg.pickStallOn("1,0", Position.Left, "car", "car1")!;
     expect(a).toBeTruthy();
@@ -570,7 +584,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(reg.freeCount("P")).toBe(1);
   });
 
-  it("scatters drivers across the free bays instead of packing from one end", () => {
+  it("scatters drivers across the free bays instead of packing from one end", async () => {
     // Always taking the nearest space fills a car park solid from the entrance
     // while the far half stands empty — the one thing a real car park never looks
     // like. Different cars must land on different bays.
@@ -585,7 +599,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(picked.size).toBeGreaterThan(3);
   });
 
-  it("gives the same car the same bay every time (a seed replays exactly)", () => {
+  it("gives the same car the same bay every time (a seed replays exactly)", async () => {
     const reg = createParkingRegistry(
       levelWith([{ from: Position.Left, kind: "perpendicular", count: 7 }]),
       CAR_LEN,
@@ -596,7 +610,7 @@ describe("the parking registry — occupancy and fit", () => {
     }
   });
 
-  it("never offers a bay the car has already driven past", () => {
+  it("never offers a bay the car has already driven past", async () => {
     // `atStallEntry` only ever fires forwards, so a space behind the nose is one
     // the car could never turn into — it would sit at its stop line for ever.
     const reg = createParkingRegistry(
@@ -610,7 +624,7 @@ describe("the parking registry — occupancy and fit", () => {
     }
   });
 
-  it("keeps each class to its own bays — a bay is not just a space you fit in", () => {
+  it("keeps each class to its own bays — a bay is not just a space you fit in", async () => {
     // What the player reported: cars sitting in the lorry bays. Measured, it was
     // worse than that — a coach also took ordinary kerb spaces (a bus is 55px, a
     // parallel bay 60px) and a lorry drove down the ramp of an underground
@@ -645,7 +659,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(bayAdmits("car", "lorry")).toBe(false);
   });
 
-  it("keeps a bus stop, a loading bay and a lay-by apart — same size, different traffic", () => {
+  it("keeps a bus stop, a loading bay and a lay-by apart — same size, different traffic", async () => {
     // All three need a BIG bay, so size alone cannot tell them apart. That is
     // exactly why admission is a class and not a measurement.
     const stop: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, reserved: "bus" };
@@ -676,7 +690,7 @@ describe("the parking registry — occupancy and fit", () => {
     }
   });
 
-  it("sizes every reserved bay to the vehicle it is for", () => {
+  it("sizes every reserved bay to the vehicle it is for", async () => {
     // One predicate decides this. The inline `reserved === "long"` it replaced sat
     // at nine call sites, and every one of them would have gone on sizing a bus
     // stop like a car space — a 55px coach in a 60px bay, which fits by 5px and
@@ -692,7 +706,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(maxStallsPerTile("parallel", 200, false)).toBe(3);
   });
 
-  it("counts a lorry-only facility as real capacity, not as a full car park", () => {
+  it("counts a lorry-only facility as real capacity, not as a full car park", async () => {
     // The sign asks "could ANY vehicle use this?", so a lay-by of two lorry bays
     // reads 2/2 rather than reporting nought capacity and showing VOLL beside two
     // empty spaces. The ROUTER always names the kind, so a car is still never sent
@@ -708,7 +722,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(reg.openFacilities("truck").map(f => f.id)).toEqual(["P"]);
   });
 
-  it("refuses a vehicle that does not physically fit the bay", () => {
+  it("refuses a vehicle that does not physically fit the bay", async () => {
     // A truck is 1.7 car lengths (65px at the native tile); a standard parallel
     // bay is 60px. Letting it in would lay it across the two bays either side —
     // and nothing downstream would catch that, because the swept-body check never
@@ -724,7 +738,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(stallFits("semi", long, CAR_LEN)).toBe(false);
   });
 
-  it("keeps reserved bays out of capacity, so a car park cannot advertise space it has none of", () => {
+  it("keeps reserved bays out of capacity, so a car park cannot advertise space it has none of", async () => {
     const reg = createParkingRegistry(
       levelWith([
         { from: Position.Left, kind: "parallel", count: 2 },
@@ -737,7 +751,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(reg.pickStallOn("1,0", Position.Right, "car", "car1")).toBeNull();
   });
 
-  it("counts a car park that is spoken for as full (the aim token)", () => {
+  it("counts a car park that is spoken for as full (the aim token)", async () => {
     const reg = createParkingRegistry(levelWith(rows), CAR_LEN);
     expect(reg.availableFor("P", "car")).toBe(2);
     reg.aim("P", "car1");
@@ -750,7 +764,7 @@ describe("the parking registry — occupancy and fit", () => {
     expect(reg.availableFor("P", "car")).toBe(1);
   });
 
-  it("groups tiles that share a facility id into one car park", () => {
+  it("groups tiles that share a facility id into one car park", async () => {
     const lvl: Level = {
       "0,0": { ...street(), parking: { facility: "P", label: "Nord", rows } },
       "1,0": { ...street(), parking: { facility: "P", rows } },
@@ -767,16 +781,16 @@ describe("the parking registry — occupancy and fit", () => {
 describe("validateParking — the mistakes that would otherwise ship green", () => {
   const rows: ParkingRow[] = [{ from: Position.Left, kind: "parallel", count: 1 }];
 
-  it("accepts a well-formed kerbside row", () => {
+  it("accepts a well-formed kerbside row", async () => {
     expect(validateParking(levelWith(rows))).toEqual([]);
   });
 
-  it("rejects bays with no road to reach them", () => {
+  it("rejects bays with no road to reach them", async () => {
     const lvl: Level = { "0,0": { connections: [], parking: { rows } } };
     expect(validateParking(lvl)[0].message).toMatch(/no road/);
   });
 
-  it("rejects a rank too deep for the street it hugs", () => {
+  it("rejects a rank too deep for the street it hugs", async () => {
     // A 3+3 boulevard puts its kerb 84px out, leaving less room to the tile edge
     // than a car is wide. Kerb parking genuinely caps at a 2+2 arterial at this
     // tile size — the right answer, but one that has to be said out loud.
@@ -790,7 +804,7 @@ describe("validateParking — the mistakes that would otherwise ship green", () 
     expect(validateParking(lvl).map(i => i.message).join()).toMatch(/overhang/);
   });
 
-  it("rejects two rows that name the same physical kerb", () => {
+  it("rejects two rows that name the same physical kerb", async () => {
     const lvl = levelWith([
       { from: Position.Left, side: "left", kind: "parallel", count: 1 },
       { from: Position.Right, side: "right", kind: "parallel", count: 1 },
@@ -798,12 +812,12 @@ describe("validateParking — the mistakes that would otherwise ship green", () 
     expect(validateParking(lvl).map(i => i.message).join()).toMatch(/same bank/);
   });
 
-  it("rejects a far-bank row on a two-way road (nobody crosses oncoming to park)", () => {
+  it("rejects a far-bank row on a two-way road (nobody crosses oncoming to park)", async () => {
     const lvl = levelWith([{ from: Position.Left, side: "left", kind: "parallel", count: 1 }]);
     expect(validateParking(lvl).map(i => i.message).join()).toMatch(/cross oncoming/);
   });
 
-  it("rejects a row on a tapering tile, where the kerb moves across the tile", () => {
+  it("rejects a row on a tapering tile, where the kerb moves across the tile", async () => {
     // A 2+2 tile between a 1+1 neighbour and a 2+2 one: the painted road narrows
     // over the tile's own length, so its kerb is 28px out at one end and 56px at
     // the other. Bays sized against either end have their inner half under the
@@ -820,7 +834,7 @@ describe("validateParking — the mistakes that would otherwise ship green", () 
     expect(validateParking(lvl).map(i => i.message).join()).toMatch(/tapering/);
   });
 
-  it("rejects a car park with no way back to the road network (a car trap)", () => {
+  it("rejects a car park with no way back to the road network (a car trap)", async () => {
     // A one-way aisle that simply stops. There is no U-turn anywhere in the lane
     // model, so a driver who finds this car park full has nowhere to go.
     const lvl: Level = {
@@ -839,7 +853,7 @@ describe("validateParking — the mistakes that would otherwise ship green", () 
     ).toMatch(/no way back/);
   });
 
-  it("rejects more stalls than physically fit on a tile", () => {
+  it("rejects more stalls than physically fit on a tile", async () => {
     expect(maxStallsPerTile("perpendicular", 200)).toBe(7);
     const lvl = levelWith([{ from: Position.Left, kind: "perpendicular", count: 20 }]);
     expect(validateParking(lvl).map(i => i.message).join()).toMatch(/do not fit/);
@@ -865,7 +879,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     });
   }
 
-  it("noses out of a kerbside bay — never reverses into the road", () => {
+  it("noses out of a kerbside bay — never reverses into the road", async () => {
     // The rule as a PLAYER sees it: watch a bus leave a lay-by and it drives away
     // forwards. Asserted on the rendered pose rather than on the curve, because
     // the geometry being right is worth nothing if the phase machine still hands
@@ -875,6 +889,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let steps = 0;
     let worst = 0;
     for (let i = 0; i < 3000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       const leaving = new Set(
         sim.cars().filter(c => c.phase === "leaving").map(c => c.id),
@@ -899,7 +914,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worst).toBeGreaterThanOrEqual(-1e-9);
   });
 
-  it("never teleports a body between the road and a bay", () => {
+  it("never teleports a body between the road and a bay", async () => {
     // THE SEAM BUG, as a property. `headProgress` names the car's NOSE; every
     // manoeuvre curve names its CENTRE. Cross between them without converting and
     // the sprite steps half its own length — forward as it peels off, backwards as
@@ -919,6 +934,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let worstId = "";
     let ticks = 0;
     for (let i = 0; i < 4000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(DT, () => false);
       const seen = new Set<string>();
       for (const chord of sim.sample()) {
@@ -946,7 +962,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(`${worstId}:${biggest.toFixed(3)}`).toBe(`${worstId}:${Math.min(biggest, LIMIT).toFixed(3)}`);
   });
 
-  it("pulls away with the speed it left the bay at, instead of stalling on the lane", () => {
+  it("pulls away with the speed it left the bay at, instead of stalling on the lane", async () => {
     // `advanceParking` pins `velocity` at 0 for the whole manoeuvre — the curve
     // moves the car, the follower model does not — so handing it back at 0 makes a
     // coach that was gliding out at nearly cruise speed stop dead the instant it
@@ -956,6 +972,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     const leaving = new Set<string>();
     const handovers: number[] = [];
     for (let i = 0; i < 4000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       for (const c of sim.cars()) {
         if (c.phase === "leaving") leaving.add(c.id);
@@ -970,7 +987,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(Math.min(...handovers)).toBeGreaterThan(0.3);
   });
 
-  it("only peels off into a bay from the lane the bay is on", () => {
+  it("only peels off into a bay from the lane the bay is on", async () => {
     // A car diving into a kerbside space out of the INNER lane of a 2+2 street
     // cuts across the stream beside it. `/test/parkingkerb` is two lanes each way
     // with bays down both kerbs, so it is the map where this shows.
@@ -978,6 +995,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     const driving = new Set<string>();
     const lanes: number[] = [];
     for (let i = 0; i < 3000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       for (const c of sim.cars()) {
         if (c.phase === "driving") driving.add(c.id);
@@ -1033,7 +1051,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   // parked is BACKED into now (`canNoseIn` decides, not the driver), which is
   // what took these from −7.6px of driving through a parked car to clear.
 
-  it("never drives a manoeuvre through a car that is already parked", () => {
+  it("never drives a manoeuvre through a car that is already parked", async () => {
     // The geometric test above proves the DESIGNED curve clears its neighbours.
     // This one proves the car actually drives that curve — which it did not: the
     // stop line braked the nose to the curve's start, so the centre was half a
@@ -1043,15 +1061,16 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     //
     // Rendered poses, in world tiles, swept against every parked body on the map.
     for (const [map, seed] of [["parkinglot", 5], ["parkingkerb", 1], ["parkcity", 5]] as const) {
-      expectNoSweptOverlap(map, seed);
+      await expectNoSweptOverlap(map, seed);
     }
   }, 60_000);
 
-  function expectNoSweptOverlap(map: string, seed: number) {
+  async function expectNoSweptOverlap(map: string, seed: number) {
     const sim = simFor(map, seed);
     let worst = Infinity;
     let compared = 0;
     for (let i = 0; i < 1600; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       const phase = new Map(sim.cars().map(c => [c.id, c.phase]));
       const boxes = sim
@@ -1078,7 +1097,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
   }
 
-  it("reverses at a careful crawl, not at the speed it drove in", () => {
+  it("reverses at a careful crawl, not at the speed it drove in", async () => {
     // A BACKING LEG IS DRIVEN AT AN ABSOLUTE SPEED: REVERSE_PACE × the base
     // parking crawl (0.16 tiles/s), never scaled by `pace`. That last clause is
     // the actual regression this test pins. The first ship of REVERSE_PACE was a
@@ -1100,6 +1119,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       const backSpeeds: number[] = [];
       let prev = new Map<string, { x: number; y: number; hx: number; hy: number; phase: string }>();
       for (let i = 0; i < 3000; i++) {
+        if (i % BREATHE_EVERY === 0) await breathe();
         sim.step(0.05, () => false);
         const phase = new Map(sim.cars().map(c => [c.id, c.phase]));
         const now = new Map<string, { x: number; y: number; hx: number; hy: number; phase: string }>();
@@ -1146,51 +1166,105 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }
   }, 120_000);
 
-  it("a car leaving a bay waits for a real gap, and still gets out in seconds", () => {
-    // NO RIGHT OF WAY. A car whose dwell has ended waits IN ITS BAY — phase stays
-    // `parked`, so it has no road body and nobody brakes for it. It used to claim
-    // its lane slot the instant the dwell ended and let the traffic brake for a
-    // car that had not moved, which is priority, and a car pulling out of a space
-    // does not have it.
-    //
-    // The number that says whether the rule is livable is the wait between
-    // dwell-end and rolling — `dwellLeft` keeps counting down past zero, so
-    // `-dwellLeft` IS that wait. Seconds, not tens of seconds.
-    let sampled = 0;
-    for (const id of ["parkingkerb", "parkinglot", "parkcity"]) {
+  // NO RIGHT OF WAY. A car whose dwell has ended waits IN ITS BAY — phase stays
+  // `parked`, so it has no road body and nobody brakes for it. It used to claim
+  // its lane slot the instant the dwell ended and let the traffic brake for a car
+  // that had not moved, which is priority, and a car pulling out of a space does
+  // not have it.
+  //
+  // The number that says whether the rule is livable is the wait between
+  // dwell-end and rolling — `dwellLeft` keeps counting down past zero, so
+  // `-dwellLeft` IS that wait. Seconds, not tens of seconds.
+  //
+  // ONE 200-SECOND RUN PER MAP, MEASURED FOR EVERYTHING AT ONCE. The liveness
+  // check and the leaver-wait check used to be two tests walking the SAME nine
+  // sims — 3 maps x 3 seeds x 4000 ticks, twice — which is a third of this
+  // suite's runtime spent simulating the same traffic a second time to look at a
+  // different field of it.
+  //
+  // Merging them is not a coverage cut, and the split by map is not cosmetic
+  // either: as one case over all three maps it ran 70 seconds, and vitest's
+  // runner-worker RPC gives up on a call it cannot answer within 60
+  // (`DEFAULT_TIMEOUT = 6e4`, no config knob). The suite then dies on an
+  // unhandled `Timeout calling "onTaskUpdate"` with every assertion passing and
+  // the process still exiting 1 — green tests, red CI, and nothing naming the
+  // culprit. Keep new long-run cases per-map, and fold new measurements into
+  // this pass rather than adding another one.
+  for (const id of ["parkingkerb", "parkinglot", "parkcity"]) {
+    it(`${id} stays alive over a LONG run, and lets its parkers back out`, async () => {
+      let sampled = 0;
       for (const seed of [1, 3, 5]) {
         const sim = simFor(id, seed);
-        let worst = 0;
+        const where = `${id} seed ${seed}`;
+        let cycles = 0;
+        let worstStreak = 0;
+        let streak = 0;
+        let worstWait = 0;
+        const parkedOnce = new Set<string>();
         const waited = new Map<string, number>();
+        let prevM = new Map<string, number>();
         for (let i = 0; i < 4000; i++) {
+          if (i % BREATHE_EVERY === 0) await breathe();
           sim.step(0.05, () => false);
-          for (const c of sim.cars()) {
+          const cars = sim.cars();
+          for (const c of cars) {
             if (c.parked) {
+              parkedOnce.add(c.id);
+              // `dwellLeft` goes NEGATIVE once the stay is over, so this IS the
+              // wait between "wants out" and "rolling".
               if (c.dwellLeft < 0) waited.set(c.id, -c.dwellLeft);
-            } else if (c.phase === "leaving" && waited.has(c.id)) {
-              worst = Math.max(worst, waited.get(c.id)!);
-              waited.delete(c.id);
-              sampled++;
+            } else {
+              if (parkedOnce.has(c.id) && c.phase === "driving") {
+                parkedOnce.delete(c.id);
+                cycles++;
+              }
+              if (c.phase === "leaving" && waited.has(c.id)) {
+                worstWait = Math.max(worstWait, waited.get(c.id)!);
+                waited.delete(c.id);
+                sampled++;
+              }
             }
           }
+          // Manoeuvre progress counts as MOTION: `advanceParking` pins velocity
+          // at 0 while the curve moves the car, so with reversing at a realistic
+          // crawl a healthy car park would read as a dead map. This predicate has
+          // now been blind in both directions once each — `speed` could never
+          // fire, velocity-alone fires on cars that are visibly parking.
+          const mNow = new Map(cars.map(c => [c.id, c.manoeuvre]));
+          const rolling = cars.filter(c => !c.parked);
+          const anyMoving = rolling.some(
+            c =>
+              c.velocity > 0.001 ||
+              Math.abs((mNow.get(c.id) ?? 0) - (prevM.get(c.id) ?? mNow.get(c.id) ?? 0)) > 1e-9,
+          );
+          prevM = mNow;
+          streak = rolling.length > 0 && !anyMoving ? streak + 1 : 0;
+          worstStreak = Math.max(worstStreak, streak);
         }
-        const where = `${id} seed ${seed}`;
-        // Measured across these nine runs: worst 1.4–9.6s, average 0.7–2.4s.
-        expect(worst, `${where}: worst wait from dwell-end to rolling`).toBeLessThan(20);
-        // AND NOBODY IS STILL SITTING THERE at the end of a 200-second run. This
-        // is the half the courtesy yield buys: with the gap rule alone and the
-        // traffic at 2.5x, parkinglot left 4–9 cars waiting, the worst of them
-        // 45.8s. With drivers letting them out: 3–4, worst 9.6–33.4s.
+        // THE MAP IS ALIVE. A lane rule once held a car at a stop line it could
+        // not satisfy — it may not change lanes at a standstill, so it could never
+        // reach the lane its bay is served from, and never reached the tile end
+        // that hands the bay back. Wedged in a live lane for ever, and being the
+        // LEAD car it took the street with it. The registry sweep cannot see this:
+        // it runs 40 simulated seconds and the collapse takes 50–120.
+        expect(worstStreak * 0.05, `${where} stood completely still`).toBeLessThan(3);
+        expect(cycles, `${where} completed park-and-leave cycles`).toBeGreaterThan(20);
+        // AND THE LEAVERS GET OUT. Measured across these nine runs: worst
+        // 1.4–9.6s, average 0.7–2.4s.
+        expect(worstWait, `${where}: worst wait from dwell-end to rolling`).toBeLessThan(20);
+        // Nobody still sitting there at the end. This is the half the courtesy
+        // yield buys: with the gap rule alone and the traffic at 2.5x, parkinglot
+        // left 4–9 cars waiting, the worst of them 45.8s.
         const stranded = sim.cars().filter(c => c.parked && c.dwellLeft < -30);
         expect(stranded.length, `${where}: cars stranded in their bays`).toBe(0);
       }
-    }
-    // The rule has to have FIRED. A wait test passes trivially on a build where
-    // every car happens to leave on the tick its dwell ends.
-    expect(sampled, "no car ever waited for a gap").toBeGreaterThan(50);
-  }, 240_000);
+      // The wait rule has to have FIRED. It passes trivially on a build where
+      // every car happens to leave on the tick its dwell ends.
+      expect(sampled, `${id}: no car ever waited for a gap`).toBeGreaterThan(10);
+    }, 120_000);
+  }
 
-  it("never spins on the spot, and really does back into a 90° bay", () => {
+  it("never spins on the spot, and really does back into a 90° bay", async () => {
     // A CAR TURNS BY DRIVING. Every heading on the board comes from a curve
     // tangent, so a big per-tick step means two curves were joined at poses that
     // disagree — which is exactly what shipped: a kerbside car that had backed in
@@ -1204,6 +1278,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       let worst = 0;
       let prev = new Map<string, number>();
       for (let i = 0; i < 2400; i++) {
+        if (i % BREATHE_EVERY === 0) await breathe();
         sim.step(0.05, () => false);
         for (const c of sim.cars()) if (c.parkedReverse) reversed++;
         const now = new Map<string, number>();
@@ -1228,7 +1303,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(reversed, "no car ever backed into a bay").toBeGreaterThan(0);
   }, 120_000);
 
-  it("spawns nothing in the middle of the map", () => {
+  it("spawns nothing in the middle of the map", async () => {
     // A seam whose neighbour is a ONE-WAY pointing away feeds nothing, and that
     // read as "the world ends here": /test/parkcity spawned 4-9 vehicles a run at
     // the mouth of its car-park ramp (6,3, whose Bottom neighbour is a one-way
@@ -1248,74 +1323,14 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }
   });
 
-  it("keeps the street alive over a LONG run, on every parking map", () => {
-    // THE TEST THAT WAS MISSING. A lane rule I added held a car at a stop line it
-    // could not satisfy: it may not change lanes at a standstill, so it could
-    // never reach the lane its bay is served from, and it never reached the tile
-    // end that hands the bay back. Wedged in a live lane for ever — and because it
-    // is the LEAD car, the street behind it dies too. Measured before the fix:
-    // every live vehicle on /test/parkingkerb at zero velocity, at every seed.
-    //
-    // The registry sweep could not see it. It runs 40 simulated seconds and the
-    // collapse takes 50–120, and its standstill predicate read `speed` (the car's
-    // preferred cruise, never zero) instead of `velocity`. Both are fixed; this
-    // covers the duration the sweep cannot afford.
-    for (const id of ["parkingkerb", "parkcity", "parkinglot"]) {
-      for (const seed of [1, 3, 5]) {
-        const sim = simFor(id, seed);
-        let cycles = 0;
-        let worstStreak = 0;
-        let streak = 0;
-        const parkedOnce = new Set<string>();
-        let prevM = new Map<string, number>();
-        for (let i = 0; i < 4000; i++) {
-          sim.step(0.05, () => false);
-          const cars = sim.cars();
-          for (const c of cars) {
-            if (c.parked) parkedOnce.add(c.id);
-            else if (parkedOnce.has(c.id) && c.phase === "driving") {
-              parkedOnce.delete(c.id);
-              cycles++;
-            }
-          }
-          // Manoeuvre progress counts as MOTION: `advanceParking` pins velocity
-          // at 0 while the curve moves the car, so with reversing at a realistic
-          // crawl a healthy car park would read as a dead map. The predicate has
-          // now been blind in both directions once each — `speed` could never
-          // fire, velocity-alone fires on cars that are visibly parking.
-          const mNow = new Map(cars.map(c => [c.id, c.manoeuvre]));
-          const rolling = cars.filter(c => !c.parked);
-          const anyMoving = rolling.some(
-            c =>
-              c.velocity > 0.001 ||
-              Math.abs((mNow.get(c.id) ?? 0) - (prevM.get(c.id) ?? mNow.get(c.id) ?? 0)) > 1e-9,
-          );
-          prevM = mNow;
-          streak = rolling.length > 0 && !anyMoving ? streak + 1 : 0;
-          worstStreak = Math.max(worstStreak, streak);
-        }
-        const where = `${id} seed ${seed}`;
-        // Nothing standing completely still for more than a couple of seconds: a
-        // queue at a junction is normal, a dead map is not.
-        expect(worstStreak * 0.05, `${where} stood completely still`).toBeLessThan(3);
-        // And the bays are turning over, not merely not-crashed.
-        expect(cycles, `${where} completed park-and-leave cycles`).toBeGreaterThan(20);
-      }
-    }
-    // NINE two-hundred-second runs of a full road sim. It fits inside 60s on a
-    // dev laptop and does not on a shared CI/cloud container, where it timed out
-    // at 60s while the suite around it stayed green — a red that says nothing
-    // about the code. The budget is generous on purpose: the thing this test
-    // guards is a map that DIES, and that shows up as an assertion, never as a
-    // clock.
-  }, 240_000);
 
-  it("cars drive to a car park, park, dwell, and leave again", () => {
+  it("cars drive to a car park, park, dwell, and leave again", async () => {
     const sim = simFor("parkinglot");
     const phases = new Set<string>();
     const parkedOnce = new Set<string>();
     let cycles = 0;
     for (let i = 0; i < 2400; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       for (const c of sim.cars()) {
         phases.add(c.phase);
@@ -1332,7 +1347,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(cycles).toBeGreaterThan(3);
   });
 
-  it("a parked car occupies its bay and nobody else takes it", () => {
+  it("a parked car occupies its bay and nobody else takes it", async () => {
     const sim = simFor("parkinglot");
     for (let i = 0; i < 1200; i++) sim.step(0.05, () => false);
     const occ = sim.parkingOccupancy();
@@ -1342,7 +1357,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(new Set(Object.values(occ)).size).toBe(stalls.length);
   });
 
-  it("a parked car is off the carriageway — it reports no road body at all", () => {
+  it("a parked car is off the carriageway — it reports no road body at all", async () => {
     const sim = simFor("parkingkerb");
     for (let i = 0; i < 900; i++) {
       sim.step(0.05, () => false);
@@ -1354,7 +1369,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }
   });
 
-  it("stops sending cars to a car park once it is full", () => {
+  it("stops sending cars to a car park once it is full", async () => {
     // Saturate the map. Once every space is taken or spoken for, no further car
     // may target it — the alternative is a queue of drivers touring a full car
     // park, which is a traffic jam rather than a feature.
@@ -1372,7 +1387,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(status.length).toBeGreaterThan(0);
   });
 
-  it("drains as fast as it fills — a busy aisle must not trap its own cars", () => {
+  it("drains as fast as it fills — a busy aisle must not trap its own cars", async () => {
     // REGRESSION. A car waits for a gap in the aisle before reversing out of its
     // bay, and that gap used to be half a tile: on a single-lane car-park aisle
     // almost any moving car anywhere on the tile vetoed the manoeuvre. Measured on
@@ -1386,6 +1401,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let departures = 0;
     const parked = new Set<string>();
     for (let i = 0; i < 1600; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       for (const c of sim.cars()) {
         if (c.parked) {
@@ -1403,7 +1419,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(departures).toBeGreaterThan(parkings * 0.5);
   });
 
-  it("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", () => {
+  it("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", async () => {
     // REGRESSION. The facility "aim" token used to be taken while a spawn was
     // still being decided, before the blocked-entry-lane bail-out. `fillFast` —
     // which the rendered game uses — retries a spawn many times a tick, and most
@@ -1427,6 +1443,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     });
     let peakOccupied = 0;
     for (let i = 0; i < 3000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       if (i % 20 === 0) {
         const used = sim.parkingStatus().reduce((n, f) => n + (f.capacity - f.free), 0);
@@ -1439,7 +1456,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(finalUsed).toBeGreaterThan(0);
   });
 
-  it("never lets a car end up in a lorry bay, over a whole run", () => {
+  it("never lets a car end up in a lorry bay, over a whole run", async () => {
     // The end-to-end version of the rule, on the map built to show it: a street
     // with car spaces at one end and a lay-by at the other, and enough lorries and
     // coaches in the mix to want it.
@@ -1470,6 +1487,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let sawLorryParked = 0;
     let sawCarParked = 0;
     for (let i = 0; i < 2400; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       const kindById = new Map(sim.cars().map(c => [c.id, c.kind]));
       for (const [stall, carId] of Object.entries(sim.parkingOccupancy())) {
@@ -1490,7 +1508,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(sawCarParked).toBeGreaterThan(0);
   });
 
-  it("sends every class of vehicle to its own kind of facility, across a whole city", () => {
+  it("sends every class of vehicle to its own kind of facility, across a whole city", async () => {
     // The end-to-end statement of the rule, on the map that has all of them at
     // once. Six facilities, six different kinds of bay, and one run long enough
     // that each is actually used — this is the test that would have caught the
@@ -1510,6 +1528,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     });
     const seen = new Map<string, Set<string>>();
     for (let i = 0; i < 4000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       const kindById = new Map(sim.cars().map(c => [c.id, c.kind]));
       for (const [stall, carId] of Object.entries(sim.parkingOccupancy())) {
@@ -1547,7 +1566,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     // facilities is genuinely used or the assertions above prove nothing.
   }, 30000);
 
-  it("stands a halted bus ON its markings, not short of them", () => {
+  it("stands a halted bus ON its markings, not short of them", async () => {
     // A halt is a length of painted kerb, and the bus is supposed to be BESIDE it.
     // Braking the NOSE to the middle of the stretch parks the whole coach behind
     // it — hanging off the back of its own markings with the front half empty,
@@ -1569,6 +1588,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let seen = 0;
     let worstOut = 0;
     for (let i = 0; i < 2000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       for (const c of sim.cars()) {
         if (c.phase !== "parked" || c.tileId !== "1,1") continue;
@@ -1583,7 +1603,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worstOut).toBeLessThan(0.02);
   });
 
-  it("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", () => {
+  it("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", async () => {
     // The entire difference between the two kinds of stop, measured. Both hold a
     // bus for the same dwell on the same street; only the halt is in the running
     // lane, so only the halt should ever have anything stopped behind it.
@@ -1611,6 +1631,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let queuedBehindBay = 0;
 
     for (let i = 0; i < 2000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       sim.step(0.05, () => false);
       const cars = sim.cars();
       const stopped = cars.filter(c => c.phase === "parked");
@@ -1639,6 +1660,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     let sawHaltBody = false;
     let sawBayBody = false;
     for (let i = 0; i < 2000; i++) {
+      if (i % BREATHE_EVERY === 0) await breathe();
       mech.step(0.05, () => false);
       const bodies = new Map(mech.bodies().map(b => [b.id, b.points.length]));
       for (const c of mech.cars()) {
@@ -1665,7 +1687,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     ).toBe(0);
   }, 20000);
 
-  it("leaves every existing road scenario's parking layer empty", () => {
+  it("leaves every existing road scenario's parking layer empty", async () => {
     // The parking subsystem must cost a level that has none exactly nothing —
     // including its RNG draws, which is what keeps every pre-existing seeded run
     // byte-identical.
