@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { SCENARIOS } from "@/levels/test";
 import {
   simFor,
@@ -63,8 +64,13 @@ describe("road scenario sweep — every gallery scenario stays live", () => {
     expect(ROAD_SCENARIOS.length).toBeGreaterThan(20);
   });
 
+  // SLOW TIER: 75-odd scenarios x 800 ticks. The registry-wide sweep is a
+  // full-suite check by nature — it exists to catch the gallery entry nobody has
+  // looked at in months, which is not a question a fast lane needs to re-ask on
+  // every edit. The guard above it stays fast, so an emptied filter still fails
+  // immediately in either lane.
   for (const scenario of ROAD_SCENARIOS) {
-    it(`${scenario.id}: populates, flows, and never clips`, () => {
+    itSlow(`${scenario.id}: populates, flows, and never clips`, () => {
       const sim = simFor(scenario, SEED);
       const live = canSpawn(scenario);
       let peakCars = 0;

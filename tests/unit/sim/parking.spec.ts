@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { Position } from "@/types";
 import type { Level } from "@/tiles/model";
 import { oneWay, twoWay, nWayLanes } from "@/tiles/lanes";
@@ -879,7 +880,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     });
   }
 
-  it("noses out of a kerbside bay — never reverses into the road", async () => {
+  itSlow("noses out of a kerbside bay — never reverses into the road", async () => {
     // The rule as a PLAYER sees it: watch a bus leave a lay-by and it drives away
     // forwards. Asserted on the rendered pose rather than on the curve, because
     // the geometry being right is worth nothing if the phase machine still hands
@@ -914,7 +915,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worst).toBeGreaterThanOrEqual(-1e-9);
   });
 
-  it("never teleports a body between the road and a bay", async () => {
+  itSlow("never teleports a body between the road and a bay", async () => {
     // THE SEAM BUG, as a property. `headProgress` names the car's NOSE; every
     // manoeuvre curve names its CENTRE. Cross between them without converting and
     // the sprite steps half its own length — forward as it peels off, backwards as
@@ -1051,7 +1052,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   // parked is BACKED into now (`canNoseIn` decides, not the driver), which is
   // what took these from −7.6px of driving through a parked car to clear.
 
-  it("never drives a manoeuvre through a car that is already parked", async () => {
+  itSlow("never drives a manoeuvre through a car that is already parked", async () => {
     // The geometric test above proves the DESIGNED curve clears its neighbours.
     // This one proves the car actually drives that curve — which it did not: the
     // stop line braked the nose to the curve's start, so the centre was half a
@@ -1097,7 +1098,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worst, `${map}: swept a parked car`).toBeGreaterThanOrEqual(-0.001);
   }
 
-  it("reverses at a careful crawl, not at the speed it drove in", async () => {
+  itSlow("reverses at a careful crawl, not at the speed it drove in", async () => {
     // A BACKING LEG IS DRIVEN AT AN ABSOLUTE SPEED: REVERSE_PACE × the base
     // parking crawl (0.16 tiles/s), never scaled by `pace`. That last clause is
     // the actual regression this test pins. The first ship of REVERSE_PACE was a
@@ -1191,7 +1192,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   // culprit. Keep new long-run cases per-map, and fold new measurements into
   // this pass rather than adding another one.
   for (const id of ["parkingkerb", "parkinglot", "parkcity"]) {
-    it(`${id} stays alive over a LONG run, and lets its parkers back out`, async () => {
+    itSlow(`${id} stays alive over a LONG run, and lets its parkers back out`, async () => {
       let sampled = 0;
       for (const seed of [1, 3, 5]) {
         const sim = simFor(id, seed);
@@ -1264,7 +1265,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }, 120_000);
   }
 
-  it("never spins on the spot, and really does back into a 90° bay", async () => {
+  itSlow("never spins on the spot, and really does back into a 90° bay", async () => {
     // A CAR TURNS BY DRIVING. Every heading on the board comes from a curve
     // tangent, so a big per-tick step means two curves were joined at poses that
     // disagree — which is exactly what shipped: a kerbside car that had backed in
@@ -1324,7 +1325,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   });
 
 
-  it("cars drive to a car park, park, dwell, and leave again", async () => {
+  itSlow("cars drive to a car park, park, dwell, and leave again", async () => {
     const sim = simFor("parkinglot");
     const phases = new Set<string>();
     const parkedOnce = new Set<string>();
@@ -1419,7 +1420,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(departures).toBeGreaterThan(parkings * 0.5);
   });
 
-  it("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", async () => {
+  itSlow("keeps filling car parks under fill-fast spawning (no leaked aim tokens)", async () => {
     // REGRESSION. The facility "aim" token used to be taken while a spawn was
     // still being decided, before the blocked-entry-lane bail-out. `fillFast` —
     // which the rendered game uses — retries a spawn many times a tick, and most
@@ -1456,7 +1457,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(finalUsed).toBeGreaterThan(0);
   });
 
-  it("never lets a car end up in a lorry bay, over a whole run", async () => {
+  itSlow("never lets a car end up in a lorry bay, over a whole run", async () => {
     // The end-to-end version of the rule, on the map built to show it: a street
     // with car spaces at one end and a lay-by at the other, and enough lorries and
     // coaches in the mix to want it.
@@ -1508,7 +1509,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(sawCarParked).toBeGreaterThan(0);
   });
 
-  it("sends every class of vehicle to its own kind of facility, across a whole city", async () => {
+  itSlow("sends every class of vehicle to its own kind of facility, across a whole city", async () => {
     // The end-to-end statement of the rule, on the map that has all of them at
     // once. Six facilities, six different kinds of bay, and one run long enough
     // that each is actually used — this is the test that would have caught the
@@ -1603,7 +1604,7 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     expect(worstOut).toBeLessThan(0.02);
   });
 
-  it("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", async () => {
+  itSlow("a bus at a HALT queues the traffic; a bus in a LAY-BY does not", async () => {
     // The entire difference between the two kinds of stop, measured. Both hold a
     // bus for the same dwell on the same street; only the halt is in the running
     // lane, so only the halt should ever have anything stopped behind it.

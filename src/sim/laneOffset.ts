@@ -154,6 +154,39 @@ export function oneWayLaneOffsetPx(lanePos: number, runMax: number, tileSize: nu
   return (runMax / 2 - 0.5 - lanePos) * tileSize * LANE_WIDTH_FRAC;
 }
 
+// The lane index a vehicle must take on the next tile to keep the PHYSICAL
+// lateral position it already has, across a straight-road seam where the lane
+// count changes. The inverse of the offset rules above, and the reason it exists:
+// a lane index means nothing on its own — it is an index into an anchored band,
+// and the two anchors move a lane index in opposite directions.
+//
+//  • BIDIRECTIONAL (centre-anchored, `laneSeamOffsetPx`): lane `i` sits at
+//    `(count - 0.5 - i)·W` from the centreline, so lanes are added and dropped on
+//    the KERB side and the same physical lane is `i + (toCount - fromCount)` on
+//    the other side of the seam. Carrying the raw index across instead is what
+//    swept a car entering a 1→3 widening from the centre-adjacent lane clear
+//    across to the far kerb — two lanes of lateral movement it never decided to
+//    make, and against the merge arrows painted on the tile.
+//  • ONE-WAY (`kerbAnchored`, `oneWayLaneOffsetPx`): lane `i` sits at
+//    `(runMax/2 - 0.5 - i)·W` for the whole run, so lanes are added and dropped on
+//    the CENTRE side and index 0 is the same tarmac on both sides — the index
+//    carries across unchanged.
+//
+// Clamped into the destination's lanes, which is also the merge case: when a
+// narrowing eats more lanes than the vehicle has moved out of, every dropping
+// lane maps onto the surviving kerb/centre lane — exactly where the tapered
+// offsets converge.
+export function laneIndexAcrossSeam(
+  lane: number,
+  fromCount: number,
+  toCount: number,
+  kerbAnchored: boolean,
+): number {
+  if (toCount <= 0) return lane;
+  const shifted = kerbAnchored ? lane : lane + (toCount - fromCount);
+  return Math.max(0, Math.min(toCount - 1, shifted));
+}
+
 // Constant lateral offset (px) for a lane position on a tile whose band does not
 // taper (a uniform road, or a curve/junction where the surface keeps a constant
 // width). Equivalent to laneOffsetPx with bandEntry === bandExit.

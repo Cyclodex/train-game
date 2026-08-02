@@ -591,14 +591,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   that is a portal you want on the board.
 - THE ROOF IS A SECOND COPY, CLIPPED (`TileGround`, `.tile-roof`): the same
   ground/scatter art rendered again above the trains, `clip-path: inset(0)`.
-  Both halves of that matter. A patch BOWS OUT OF ITS TILE (corner push + edge
-  bow) by up to ~15 units, so an unclipped roof occludes a train out in the
-  open, at a wobbly rock edge, short of the tunnel — which is why the portal's
-  covered stretch runs all the way to the tile edge to meet the clip. And it has
-  to be a COPY, not a lift: clip the only copy and the ridge grows a flat spot
-  per bored tile, which is the tile grid the terrain art spends its whole budget
-  hiding. (The roof copy drops the height terrace — it renders under an opaque
-  patch, and duplicating it would duplicate its clipPath id.)
+  Both halves of that matter. CLIPPED because the soft fringe is deliberately
+  unclipped (half a stroke of the patch's colour, spilled onto the neighbour) —
+  lifted over the trains it washes a consist in mountain grey ten units before
+  the portal. A COPY, not a lift, so that fringe is still laid below everything
+  by the original. (The roof copy drops the height terrace — it renders under an
+  opaque patch, and duplicating it would duplicate its clipPath id.)
+- THE PORTAL IS SIZED AGAINST THE ROCK FACE, which is the tile edge: a patch
+  keeps to its own tile (`54b7391`), so the arch springs at the edge, its crown
+  lands on it, and the gallery stands entirely on open ground — 16u out, not the
+  30u it needed back when a massif overhung its own portal. The covered stretch
+  and the roof MUST meet at that edge; leave a gap and a train shows through it.
+  If the containment rule moves, `portalArt` moves with it.
 - The opening being UNDER the trains is also what keeps the hillside out of the
   portal: at z1 it covers the mountain's own bowed-out ground patch, so what
   shows inside a portal is always the bore. The neighbour's rails (z2) run over
@@ -657,14 +661,42 @@ lean — prune as much as you add. This file only stays useful if every task ten
   flat ground ("plain", #3a6b4f) is its own anchor so `npm run shot` pictures
   stay comparable. THE THEME IS PART OF THE MEMO KEY — the cache trap the
   terrain roadmap wrote down before anyone hit it. "Same" for the
-  patch machinery compares NEIGHBOUR HEIGHT >= OWN — a higher neighbour
-  continues the terrace and lays its own lighter body on top of the shared
-  reading, so a plateau fuses like a lake and the step edge always belongs to
-  the UPPER terrace. Downhill edges get slope faces clipped inside the body:
+  patch machinery compares NEIGHBOUR HEIGHT >= the band being drawn — a higher
+  neighbour continues the terrace and lays its own lighter body on top of the
+  shared reading, so a plateau fuses like a lake and the step edge always
+  belongs to the UPPER terrace. Downhill edges get slope faces clipped inside the body:
   LIT on top/left, SHADED on right/bottom (patchSegments' clockwise edge order
   is 0 top, 1 right, 2 bottom, 3 left — the one NW sun again). Own memo cache
   (`heightCache`). Author a hill as a BODY (heights on the whole footprint),
   not just on the track cells, or it reads as two embankments.
+- ONE BAND PER LEVEL OF THE FALL, NOT ONE PER CELL (2026-08-01). A cell drew a
+  single body — its OWN height — so a boundary that dropped more than one step
+  showed ONE contour where the same hill showed two or three elsewhere. It is
+  not an exotic case: `/test/grades` is a ridge with authored ramps east-west
+  and nothing north-south, so it terraced along the line and went SHEER at the
+  top and bottom of the hill, and `mountainpass`'s saddle broke into detached
+  slabs. `tileHeightSvg` now takes `HeightNeighbours` (the eight neighbours'
+  HEIGHTS, not "same" booleans) and lays band k = 1..h, lowest first.
+  · Band k fuses with any neighbour at >= k. Where it stops it is pushed INSIDE
+    the tile by `bandInsets` — `(k - n - 1) * TERRACE_BAND_INSET` (17u, capped
+    at 35) — so the LOWEST contour a cell owes always lands ON the boundary and
+    only the ones above it step in. That is the compatibility rule: a one-step
+    ramp is inset by 0, i.e. every board authored before this renders
+    unchanged, and only the multi-step drops gain the contours nobody authored.
+    Closer contours = steeper slope, which is what a contour map means anyway.
+  · So 1 -> 3 in one boundary is DRAWN as 1 -> 2 -> 3 without anyone having to
+    pad the hill with rings. Don't "fix" a jump by requiring the intermediate
+    ring in the data (validate/editor) — heights are per-cell, the renderer
+    answers for the gap.
+  · `patchPath`/`patchRimPath`/`patchSegments` take an optional per-edge
+    `EdgeInset` for this; `corners()` applies it (both edges at a corner push,
+    their normals are perpendicular so they compose) and `outwardRoom` takes it
+    off the room a rounded corner may lean into — spend the whole tile and the
+    sweep bulges back over the band below and eats the ring it sits in.
+  · A band the next one up would cover EXACTLY (every neighbour already above
+    it) is skipped: that is the plateau interior, i.e. most cells of a big hill.
+  · Pinned in `tests/unit/tiles/heightTerraces.spec.ts`; `/test/terraces` is the
+    side-by-side (stepped hill vs 3-step mesa) — the contrast IS the test.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
@@ -2025,11 +2057,24 @@ lean — prune as much as you add. This file only stays useful if every task ten
   same index is a different physical lane: 3L→2L, index 1 is the middle lane on one
   side of the seam and the centre lane on the other. Carrying it across with a plain
   `min(idx, count-1)` slid the car a WHOLE lane sideways in one tick (`roadlanemerge`,
-  measured 0.14 tiles). `road.ts seamLaneShift` adds `Δband` (rounded) so the car
-  keeps its physical lane; the widening's new kerb lane simply starts empty, which is
-  also the "spread outward into a new lane" behaviour the scenario's comment wanted.
+  measured 0.14 tiles). `laneIndexAcrossSeam` (`laneOffset.ts`) adds `Δcount` so the
+  car keeps its physical lane; the widening's new kerb lane simply starts empty, which
+  is also the "spread outward into a new lane" behaviour the scenario's comment wanted.
   One-way is kerb-anchored, so its shift is 0 — the two conventions are opposites and
-  the function forks on `isOneWayStraight`, not on lane counts.
+  the function forks on `kerbAnchored` (`isOneWayStraight`), not on lane counts.
+  See the fuller entry under "A LANE INDEX IS NOT A PLACE" below.
+- The SAME seam branch handles a CURVE, and there the physical lane is not `Δcount`
+  but the one `junctionExitLane` names — the exact mapping `turnExitOffsetPx` glides
+  the vehicle along inside the curve. Fork on `exitPort === opposite(entryPort)`:
+  straight ⇒ `laneIndexAcrossSeam`, turn ⇒ `junctionExitLane` delta. Drawn path and
+  assigned index then cannot drift apart at the boundary.
+- NEVER MEASURE A WIDTH AGAINST A JUNCTION. Neither seam rule may run when the
+  neighbour is a junction: its per-arm `laneCount` tallies the MOVEMENTS fanning
+  through the arm, not the arm's width (a bus-only turn off a 1-lane approach reads
+  as 2), and the arm adopts the road's band anyway (`roadSeamPaintTotal`). Read as a
+  widening, `busshortcut`'s tee threw a car a whole lane sideways into the bus lane
+  beside it. The index carries across unchanged; `laneDropAhead` / `laneDropUrgent`
+  bail on a junction neighbour for exactly the same reason.
 - One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
   widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
   (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i
@@ -2110,6 +2155,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
+- A LANE INDEX IS NOT A PLACE (2026-08-02). It is an index into an ANCHORED band,
+  and the two anchors move it in opposite directions when the road changes width:
+  bidirectional is centre-anchored so lanes are added/dropped at the KERB (the same
+  tarmac is `i + Δcount` on the far side of the seam), one-way is kerb-anchored so
+  they are added/dropped at the CENTRE (index carries across unchanged). The
+  straight-seam branch of `advance` carried the raw index over both, so a car
+  entering a 1→3 bidirectional widening in the centre-adjacent lane came out in
+  lane 0 — swept two lanes to the far kerb with no gap check, no decision and
+  against the merge arrows painted under it, then dragged back at the taper. Fixed
+  with `laneIndexAcrossSeam` (`laneOffset.ts` — it lives next to the offset rules it
+  inverts). Pinned by the offsets themselves: `laneOffsetConstPx(mapped, to)` ===
+  `laneOffsetConstPx(i, from)`.
+  · The remap is a lane-index DISCONTINUITY exactly like a junction seam, so it
+    sets `Car.lanePivot` too — the tail is still numbered in the old tile's band,
+    and without the pin it flicks a lane sideways the tick the head crosses.
+- TWO HORIZONS FOR A LANE DROP (`laneDropAhead` → `{near, far}`), because "must I
+  move?" and "is it worth moving?" are different questions:
+  · `LANE_DROP_LOOKAHEAD` (4) — a lane that stops inside it is one no car may aim
+    for. Applied as a CLAMP around `preferredLane` (`survivingLaneBand`), not as
+    another branch inside it, so keep-right / pending exit lane / overtake / spawn
+    are all filtered through one rule and none can send a car into a doomed lane.
+    Replaced the old next-tile-only merge branch: one tile of notice meant the
+    merge happened AT the taper.
+  · `LANE_KEEP_HORIZON` (8) — the DISCRETIONARY keep-right drift additionally wants
+    the lane to last this long. Without it a car dives for the kerb the moment a
+    wide stretch opens and merges straight back a tile later: a weave that gains
+    nothing. This is why a SHORT widening (`/test/roadlanemerge` row 3) is now
+    driven dead straight, and a long one is still used.
+  · WHICH SIDE dies is the anchor question again: surviving band = high indices on
+    a bidirectional road, low indices on a one-way run (`survivingLaneBand`).
+- ONE LANE PER MANOEUVRE (`reachableLane` stops at the first USABLE lane) + a
+  `LANE_CHANGE_SETTLE` (1.2 s) hold afterwards (`Car.laneHold`). Two lanes over is
+  two decisions with a look in between — the settle is bypassed only when the lane
+  ends on the very next tile (`laneDropUrgent`), never the one-lane cap. A lane the
+  class may not STOP in is still crossed for free, so cutting over a kerb bus lane
+  is one change, not two. Both ways a change can finish must set the hold (`arrive`
+  in `updateLateral`): the discrete-step overshoot guard is the one that usually
+  fires, and setting it on the exact-arrival path alone left it mostly dead.
+- Tests: `laneDrop.spec.ts` (behaviour, on the scenario's own board),
+  `laneOffset.spec.ts` (the remap ↔ offset identity). Scenario `/test/lanedrop`:
+  the SAME 1→3→1 road at two lengths, which is the whole rule in one picture.
 - Approach lane discipline (`road.ts desiredLane` branch F): among the lanes that
   permit the upcoming turn (`lanesAllowingExitFor`), pick by `turnKind` — LEFT→inner
   (max idx), RIGHT/STRAIGHT→kerb (min idx). Works for both dedicated turn pockets
@@ -2126,6 +2212,113 @@ lean — prune as much as you add. This file only stays useful if every task ten
   returns to kerb. Test: keep-right on an open stretch in `laneDiscipline.spec.ts`.
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
+
+## SIM HOT PATH — why the suite was slow (2026-08-01)
+- 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
+  and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled
+  body — is what every following / gap-acceptance / junction-conflict scan asks
+  for, so it is O(cars²) CALLS per tick, each re-walking the path (`segLen`) and
+  re-deriving the lateral lag (`lanePosAt`) for a dozen-odd points. Profiled on
+  /test/parkcity (37 vehicles): 60% of the entire tick, nearly all of it rebuilding
+  bodies that nothing had touched since the last call.
+  · FIX: memoise against an EXACT SIGNATURE of the car state it reads (path ref +
+    length, headIndex/headProgress, laneIndex/laneVel/laneAnchor, velocity,
+    lanePivot, phase/parkOnLane/manoeuvre/length) — NOT against the tick. `step`
+    advances cars one at a time and a later car MUST see an earlier one where it
+    now IS: a tick-scoped cache silently changes what the gates see, a
+    signature-scoped one cannot. Grow the signature when `computeBodyPoints` grows.
+  · The returned array is now SHARED. Every caller already treated it read-only.
+- `roadPortsOf` (and `isRoadJunction`, which is it plus a length test) was another
+  13%: rebuilding a Set from STATIC tile lanes inside the per-pair inner loops.
+  Memoised on the `Lane[]` ARRAY IDENTITY (a WeakMap).
+  · Safe only because every reducer in `tiles/editOps.ts` is PURELY FUNCTIONAL — an
+    edit hands back `{ ...cell, road: next }` with a NEW array, so an edited tile
+    misses the cache by construction and live editing still works. A reducer that
+    mutated a `Lane[]` in place would serve a stale answer HERE AND NOWHERE ELSE.
+    Keep them pure.
+- Result: parkcity 6178ms -> 1275ms per 1000 ticks (4.8x), unit suite 4m22s -> 1m07s.
+  The GAME LOOP got the same speedup — this was never a test-only cost.
+- SPATIAL PRUNE (2026-08-02), the follow-up: after the memo, the two O(cars²) scans
+  themselves were the top of the profile — `clearAhead` 24%, `bodySpanOnRoute` 12%.
+  Both walk EVERY other vehicle on the map, and on anything bigger than a fixture
+  almost none of them are near the route being scanned (parkcity: 192 tiles, 41
+  vehicles, ~1600 pairs a tick, most of them streets apart). `memoOnRoute` skips a
+  vehicle whose body shares no tile with the route.
+  · A NO-OP, not an approximation — the argument to check if you touch either loop:
+    every effect in both is reached through `projectPoint(route, p)`, which returns
+    null as soon as `route.get(p.tileId)` misses. No route tile => binds nothing,
+    spans nothing (`bodySpanOnRoute` leaves `front` at −Infinity => null), vetoes no
+    lane change. It only costs a dozen projections and a `tRange` Map to find out.
+  · The prune set comes from the MEMO's `tiles` (built with the sampled points), NOT
+    from `bodyTileIds` — that one walks path INDICES (`headIndex − length`) while the
+    points walk real driven ARC, and the two can disagree by a tile on a bend. A
+    prune built on the wrong set would skip a vehicle that IS in the way.
+  · parking.spec.ts 65.8s -> 47s (1.44x). It is a big-map win and a small-map wash:
+    parkcity 1249 -> ~900ms/1000 ticks, but on a 5-tile fixture every vehicle is on
+    every route, the prune never fires, and it is slightly negative. Hoisting the
+    memo lookup so the prune and the points share one signature check pays that back.
+- HOW TO PROVE A SIM OPTIMISATION CHANGED NOTHING (do this; don't just eyeball a
+  green suite): hash a state trace and diff it across the change. 75 road scenarios
+  x 3 seeds x 400 ticks, hashing `sim.cars()` kinematics AND every `sim.bodies()`
+  point (tileId/lane/entry/t/lanePos at 12dp) — the memo and the prune each came out
+  BIT-IDENTICAL, both at `ed41e161…5723`, which is also the PRE-optimisation hash.
+  Keep quoting that number: a future change to the road sim that is meant to be
+  behaviour-neutral should still produce it. A throwaway spec under `tests/unit/` is
+  the cheapest host (it needs the `@` alias).
+- The suite was RED on a slow machine BEFORE this, and not from an assertion:
+  `parking.spec.ts`'s two biggest cases blew their own timeouts. Green tests, red
+  CI — same family as the `onTaskUpdate` trap below, and the same cure: make it
+  faster, don't raise the limit.
+
+## TEST TIERS — fast lane vs full suite (2026-08-01)
+- `npm run test:unit` = FULL (~1m07s). What CI and the implement pipeline run; its
+  meaning is deliberately UNCHANGED, so nothing silently loses coverage.
+- `npm run test:unit:fast` = fast lane (~28s): everything except the long-run sim cases.
+- `npm run test:unit:changed` = only what your diff touches (vs `origin/master`) —
+  the sharpest tool while iterating. Needs `origin/master` fetched; edit a core file
+  like `sim/road.ts` and it correctly selects everything.
+- `npm run test:unit:profile` = ranked file + test costs and slow-tier candidates.
+  USE IT rather than guessing what to tag: the line moves whenever the hot path does.
+- Tag with `itSlow` / `describeSlow` from `tests/unit/support/tier.ts`, at roughly
+  >=900ms — in practice, anything stepping a sim more than a few hundred ticks.
+- SPLIT BY TEST, NOT BY FILE. `sim/parking.spec.ts` is the slowest file in the suite
+  AND holds ~60 millisecond-fast geometry/registry cases; tiering by file would
+  leave anyone working on parking with no quick signal at all.
+- The tier arrives via `test.env` in `vitest.fast.config.ts`, NOT a `VAR=x` prefix in
+  package.json — that shell form does not work on Windows, which this project is
+  developed on.
+- The fast lane SKIPS rather than EXCLUDES, so a run still prints "112 skipped" —
+  the standing reminder that a full run is owed before pushing.
+- THE SUITE IS CPU-BOUND, NOT CRITICAL-PATH-BOUND — measure before you optimise the
+  SHAPE of it. The obvious next lever looked like `sim/road.spec.ts`: 3k lines, 27
+  describes, 18.5s of the fast lane, and one spec file is one vitest worker, so it
+  "obviously" set the wall-clock floor. It did not. Splitting it into five files
+  (2026-08-01) moved the whole-suite wall by NOTHING on a 4-core box: fast lane
+  ~29.5s before and after, full lane ~70s before and after, both within run-to-run
+  noise. Total CPU is ~87s (fast) / ~210s (full) against 4 cores, so wall ≈ cpu/cores
+  and redistributing files cannot reduce total work.
+  · The split IS worth it where cores are free: the same 98 road tests run 18.0s as
+    one file vs 11.9s as five (1.5x), so it pays on an 8–16 core dev machine, where
+    the largest single file DOES become the floor. It just is not what fixes CI.
+  · GENERAL RULE: `wall ≈ max(total_cpu / cores, slowest_single_file)`. Work out
+    which term binds on the machine you care about BEFORE moving files around. The
+    2026-08-01 hot-path memo cut the first term 4x and was worth 4m22s -> 1m07s; the
+    file split cut the second term and was worth nothing on CI.
+- DO NOT CUT THE LONG-RUN CASES' SEEDS OR TICKS. It was considered and rejected on
+  2026-08-02, and the reasoning is worth keeping so it is not re-proposed as an easy
+  win. `parking.spec.ts`'s parkcity case runs 3 seeds x 4000 ticks = 200 simulated
+  seconds; its own comment records that the collapse it exists to catch takes 50–120s
+  to appear and that the 40s registry sweep cannot see it. Trimming to 3000 ticks
+  saves ~4s of a ~65s suite and cuts the margin over the known worst case from 67%
+  to 25% — and that 120s is an OBSERVED range, not a proven bound. Dropping a seed
+  removes a third of the random exploration on the map most likely to expose a
+  collapse. Bad trades both: the same 1.44x came from making the tick cheaper
+  (see SIM HOT PATH → SPATIAL PRUNE) and cost no coverage at all.
+- NEXT LEVER if the suite is still too slow: keep attacking CPU, not layout, and not
+  coverage. The scans are still the profile's top (`clearAhead`, `bodySpanOnRoute`);
+  a per-tick tile->cars index would beat the per-pair prune, but it has to survive
+  the fact that `step` moves cars one at a time, so the index goes stale MID-TICK —
+  the same hazard the body memo dodges by keying on state instead of on the tick.
 
 ## VERIFY
 - THE SUITE CAN EXIT 1 WITH EVERY TEST PASSING, and the message names nothing:
@@ -2156,7 +2349,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
     4000 ticks until they were merged into one pass — a third of the suite's
     runtime spent simulating identical traffic to look at a different field.
     207s -> 138s, no coverage lost.
+  · 2026-08-01: the hot-path memo above cut the suite 4m22s -> 1m07s, which makes
+    this far less likely to fire — but the setup file STAYS. It is the cheap
+    insurance, and the next long-run case re-arms the trap.
 - `npm run build` (vue-tsc+vite) = fastest gate; `npm run test:unit` = math. Keep green.
+  While iterating use `test:unit:changed` or `test:unit:fast`; run the FULL lane
+  before you push (see TEST TIERS above).
 - `npm run probe` = RENDER-level audit of every registry scenario (90 today) in a real browser
   (`scripts/probe.mjs`): every tile in the grid cell its coord names, no red
   mismatch paint, no console errors, every merge arrow forward + leaning to the

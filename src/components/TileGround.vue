@@ -29,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
   GROUND_UNITS,
-  PatchSame,
+  HeightNeighbours,
   TerrainNeighbours,
   corridorsFor,
   terrainOf,
@@ -107,17 +107,19 @@ class TileGround extends Vue {
     });
   }
 
-  // The hypsometric terrace an elevated cell lays UNDER its terrain patch:
-  // "same" here compares HEIGHT, not kind — a neighbour at or above this
-  // height continues the terrace (the higher one lays its own, lighter body),
-  // a lower one is where the slope face paints. See tileHeightSvg.
+  // The hypsometric terraces an elevated cell lays UNDER its terrain patch.
+  // The neighbours are handed over as HEIGHTS, not as "same" booleans: a cell
+  // draws one contour per level it stands above its lowest neighbour, so a
+  // summit dropping two or three steps at once draws the intermediate contours
+  // inside its own tile instead of showing a single sheer wall. See
+  // tileHeightSvg.
   get heightHtml(): string {
     const h = heightOf(this.level[this.coordId]);
     if (h === 0) return "";
     const { x, y } = parseCoordId(this.coordId);
     const at = (dx: number, dy: number) =>
-      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]) >= h;
-    const same: PatchSame = {
+      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]);
+    const around: HeightNeighbours = {
       top: at(0, -1),
       right: at(1, 0),
       bottom: at(0, 1),
@@ -131,7 +133,7 @@ class TileGround extends Vue {
     // for the meadow board would glare on it, and the shot pipeline runs with
     // plainBackdrop on by default.
     const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
-    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
+    return tileHeightSvg(h, this.coordId, around, TERRAIN_SEED, theme);
   }
 
   // A BORED cell gets its ground and scatter a SECOND time, above the trains:
@@ -216,13 +218,14 @@ export default toNative(TileGround);
 // and out of existence in the middle of the ridge). The portal arch and the
 // dashed guide are lifted over the roof in Tile.vue.
 .tile-roof {
-  // CLIPPED TO THE TILE, unlike every other ground layer. A patch bows out of
-  // its box on purpose (that overlap is how two patches interlock), and a ROOF
-  // that bows would occlude a train out in the open — swallowing it short of
-  // the tunnel, at a wobbly rock edge, before it ever reached the portal. The
-  // unclipped original underneath still draws the silhouette; this copy only
-  // has to cover the tile it belongs to, and the portal's covered stretch
-  // reaches the tile edge to meet it.
+  // CLIPPED TO THE TILE, unlike every other ground layer. The patch keeps to
+  // its own tile now, but the soft FRINGE deliberately does not — it is half a
+  // stroke of the patch's own colour spilled onto the neighbour, and lifted
+  // above the trains it would wash a passing consist in mountain grey a good
+  // ten units before the portal. The original underneath still lays that
+  // fringe, where it belongs and under everything. What is left after the clip
+  // covers exactly the tile, and the portal's covered stretch reaches the tile
+  // edge to meet it.
   clip-path: inset(0);
 }
 .tile-ground.tile-roof {

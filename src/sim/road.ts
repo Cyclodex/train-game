@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneCountAt, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type Lane, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -12,6 +12,7 @@ import {
 } from "./junctionSignal";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneSegmentLength } from "./pathGeometry";
+import { laneIndexAcrossSeam } from "./laneOffset";
 import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, RouteTurn } from "./roadRouter";
@@ -180,32 +181,6 @@ export function roadTraverse(
   return { exitPort, next: { coord: nextCoord, entryPort: oppositePort(exitPort) } };
 }
 
-// How a lane INDEX changes when a vehicle drives straight across the seam between
-// two roads of different width — the number to add to keep the vehicle in the same
-// PHYSICAL lane.
-//
-// A bidirectional road's lanes are anchored at the CENTRELINE and grow outward to
-// the kerb (sim/laneOffset.ts), so a widening adds its new lane at the KERB and a
-// narrowing drops the kerb lane: every other lane keeps its distance from the
-// centre while its index — counted FROM the kerb — shifts by the band difference.
-// Carrying the index across unchanged (a plain clamp) therefore slid the vehicle a
-// whole lane sideways in a single tick at every lane-count change, and the clamped
-// seam offsets on the two tiles disagreed by exactly that much.
-//
-// A ONE-WAY road is the opposite convention — kerb-anchored to its run's widest
-// count, so a surviving lane keeps its index and only the centre-side lane ends —
-// and shifts by nothing. Same for anything that isn't a plain straight either side.
-function seamLaneShift(
-  fromRoad: Lane[] | undefined,
-  fromEntry: Port,
-  toRoad: Lane[] | undefined,
-  toEntry: Port,
-): number {
-  if (isOneWayStraight(fromRoad, fromEntry) || isOneWayStraight(toRoad, toEntry)) return 0;
-  if (isRoadJunction(fromRoad) || isRoadJunction(toRoad)) return 0;
-  return Math.round((laneCountAt(toRoad, toEntry) - laneCountAt(fromRoad, fromEntry)) / 2);
-}
-
 // --- Spawn points -------------------------------------------------------------
 // A car spawns where a road opens onto the map edge: a road port that points off
 // the grid (no in-grid road neighbour to continue onto). Cars enter there and
@@ -367,6 +342,13 @@ export interface Car {
   // survives the next lane drop (merge) and that permits its next turn (F). The
   // car eases `laneIndex` toward this when the adjacent lane is clear (G).
   targetLane: number;
+  // Seconds left of the settle AFTER a completed lane change, during which the
+  // driver holds the lane they just moved into rather than starting another change
+  // (LANE_CHANGE_SETTLE). This plus the one-lane cap in `reachableLane` is what
+  // makes "two lanes over" read as two decisions with a look in between instead of
+  // one sweep across the carriageway. A lane that runs out on the next tile
+  // overrides it (`laneDropUrgent`).
+  laneHold: number;
   // Current lateral speed (lanes/sec, signed) — how fast `laneIndex` is changing.
   // Drives the body lean: a coupler a distance behind the head sits where the car
   // was a moment ago, so its lateral position lags by `laneVel · (arc / speed)`,
@@ -837,6 +819,16 @@ const LANE_CHANGE_GAP = 0.18;
 // second rather than blocking two for the length of a queue.
 const LANE_PARK_RATE = 1.2;
 const LANE_SETTLE = 1e-3;
+// ONE LANE AT A TIME. A lane change moves a vehicle exactly one lane it may use
+// (it may cross a lane it may not stop in — a kerb bus lane — to get there), and
+// then the driver settles for LANE_CHANGE_SETTLE seconds before deciding on the
+// next one. Two lanes wanted is two manoeuvres with a look in between, which is
+// what a driver actually does; sweeping straight across two lanes in one move is
+// the thing everyone recognises as bad driving. The settle is ~0.7 tiles at
+// cruise, so a car with four tiles of notice still makes two changes comfortably.
+// A vehicle whose lane RUNS OUT on the very next tile skips the wait (see
+// `laneDropUrgent`) — it must get out — but never the one-lane cap.
+const LANE_CHANGE_SETTLE = 1.2;
 // Lateral separation (in lanes) below which two same-direction bodies physically
 // CLIP — a car's rendered width (~20px) over the lane width (~28px) is ~0.71 lane,
 // so bodies whose lane centres are closer than this overlap sideways. Used by the
@@ -856,6 +848,19 @@ const TURN_LANE_LOOKAHEAD = 4;
 // exit-lane match (the "no dip to the kerb" invariant) — keep-right is for the open
 // stretch between junctions, not the seam right after one.
 const KEEP_RIGHT_AFTER_TILES = 3;
+// How far ahead a car reads the road's WIDTH, and the two different questions it
+// asks of what it sees (`laneDropAhead`):
+//  • MUST I MOVE? — a lane that stops within LANE_DROP_LOOKAHEAD tiles is a lane
+//    the car has to be out of, so its desired lane is clamped into the surviving
+//    band. Four tiles is the notice TURN_LANE_LOOKAHEAD already gives a turn, and
+//    room for two one-lane changes with the settle in between.
+//  • IS IT WORTH MOVING? — the DISCRETIONARY drift (keep-right) additionally
+//    wants the lane to last LANE_KEEP_HORIZON tiles. Without that second, longer
+//    horizon a car dives for the kerb the moment a wide stretch opens and merges
+//    straight back a tile later: a weave that gains nothing and contradicts the
+//    lane-drop arrows painted on the tile it is crossing.
+const LANE_DROP_LOOKAHEAD = 4;
+const LANE_KEEP_HORIZON = 8;
 // How far ahead (in tiles) a car scans for the next car / closed crossing. Cars
 // are short and slow, so a couple of tiles of look-ahead is plenty.
 const CAR_LOOKAHEAD = 2;
@@ -1171,7 +1176,116 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return null;
   }
 
+  // How narrow the road gets ahead of `coord`, in the direction of travel: the
+  // SMALLEST same-direction lane count found within `LANE_DROP_LOOKAHEAD` tiles
+  // (`near`) and within `LANE_KEEP_HORIZON` tiles (`far`). Walks the straight
+  // continuation exactly like `junctionAhead` and stops at a junction or the map
+  // edge — a junction fans and merges lanes by design, so its arm counts say
+  // nothing about which lane on THIS tile runs out.
+  //
+  // Tick-scoped memo: on a busy tile several cars ask the identical question every
+  // tick, and the level cannot change mid-tick. Cleared at the top of `step`, so a
+  // road edited between ticks is re-read (unlike a permanent cache, which is what
+  // makes this safe under live editing).
+  const dropScanCache = new Map<string, { near: number; far: number }>();
+  function laneDropAhead(
+    coord: Coordinates,
+    entry: Port,
+    startExit: Port | null,
+    cls: VehicleClass,
+  ): { near: number; far: number } {
+    const key = `${getCoordinatesId(coord)}|${entry}|${startExit ?? "x"}|${cls}`;
+    const hit = dropScanCache.get(key);
+    if (hit) return hit;
+    let near = Infinity;
+    let far = Infinity;
+    let c: Coordinates | null = coord;
+    let exit = startExit ?? roadExitPort(level, coord, entry, cls);
+    for (let k = 0; k < LANE_KEEP_HORIZON; k++) {
+      if (exit == null || !c) break;
+      const n = neighborCoord(c, exit);
+      if (!n) break;
+      const nTile = level[getCoordinatesId(n)];
+      if (!nTile?.road?.length || isRoadJunction(nTile.road)) break;
+      const nEntry = oppositePort(exit);
+      const count = laneCount(nTile.road, nEntry);
+      if (count <= 0) break;
+      if (k < LANE_DROP_LOOKAHEAD) near = Math.min(near, count);
+      far = Math.min(far, count);
+      c = n;
+      exit = roadExitPort(level, c, nEntry, cls);
+    }
+    const out = { near, far };
+    dropScanCache.set(key, out);
+    return out;
+  }
+
+  // The lane indices on the current tile that are still there `count`-lanes-ahead
+  // = `survives` tiles down the road, as an inclusive [lo, hi] band. WHICH SIDE
+  // the road loses depends on how its lanes are anchored, and that is the whole
+  // subtlety (see `laneIndexAcrossSeam`): a bidirectional road is centre-anchored
+  // and drops its KERB lanes (the surviving lanes are the high indices), a one-way
+  // run is kerb-anchored and drops its CENTRE lanes (the low indices survive).
+  function survivingLaneBand(
+    road: Level[string]["road"],
+    entry: Port,
+    count: number,
+    survives: number,
+  ): { lo: number; hi: number } {
+    if (!Number.isFinite(survives) || survives >= count) return { lo: 0, hi: count - 1 };
+    const keep = Math.max(1, survives);
+    return isOneWayStraight(road, entry)
+      ? { lo: 0, hi: keep - 1 }
+      : { lo: count - keep, hi: count - 1 };
+  }
+
+  // Does the car's lane STOP on the very next tile? Then the merge is urgent: it
+  // may change lane without waiting out the settle (it still moves one lane at a
+  // time). Rare now that the lane-drop clamp gives four tiles of notice — this is
+  // the backstop for a car that spawned in a dying lane or was held there by
+  // traffic.
+  function laneDropUrgent(car: Car): boolean {
+    const head = car.path[car.headIndex];
+    const tile = level[getCoordinatesId(head.coord)];
+    if (!tile?.road || isRoadJunction(tile.road)) return false;
+    const cls = clsOf(car);
+    const count = laneCount(tile.road, head.entryPort);
+    const exit = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls);
+    if (exit == null) return false;
+    const nCoord = neighborCoord(head.coord, exit);
+    const nTile = nCoord ? level[getCoordinatesId(nCoord)] : undefined;
+    if (!nCoord || !nTile?.road?.length || isRoadJunction(nTile.road)) return false;
+    const nCount = laneCount(nTile.road, oppositePort(exit));
+    if (nCount <= 0 || nCount >= count) return false;
+    const band = survivingLaneBand(tile.road, head.entryPort, count, nCount);
+    const cur = laneOf(car);
+    return cur < band.lo || cur > band.hi;
+  }
+
+  // The lane the driver WANTS: what `preferredLane` picks, held inside the band of
+  // lanes that still exist a few tiles down the road. Doing the lane-drop check as
+  // a CLAMP on the outside rather than as one more branch inside is what makes it
+  // unmissable — every preference (keep-right, the pending exit lane, an overtake,
+  // a spawn lane) is filtered through it, so no branch can send a car into a lane
+  // that is about to run out.
   function desiredLane(car: Car): number {
+    const head = car.path[car.headIndex];
+    const tile = level[getCoordinatesId(head.coord)];
+    const count = laneCount(tile?.road, head.entryPort);
+    const want = preferredLane(car);
+    if (count <= 1 || isRoadJunction(tile?.road)) return want;
+    const cls = clsOf(car);
+    const { near } = laneDropAhead(
+      head.coord,
+      head.entryPort,
+      head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls),
+      cls,
+    );
+    const band = survivingLaneBand(tile?.road, head.entryPort, count, near);
+    return Math.max(band.lo, Math.min(band.hi, want));
+  }
+
+  function preferredLane(car: Car): number {
     const head = car.path[car.headIndex];
     const tile = level[getCoordinatesId(head.coord)];
     const cls = clsOf(car);
@@ -1183,18 +1297,6 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // re-sort here (the exit arm being narrower must not drag the car sideways
     // mid-turn); lateral positioning is an approach-tile concern.
     if (isRoadJunction(tile?.road)) return clampLane(cur, curCount);
-
-    // (G) Lane drop on the immediately next tile — our lane doesn't continue, so
-    // merge to the innermost surviving lane (takes precedence: it's the urgent one).
-    const exit = head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls);
-    if (exit != null) {
-      const nCoord = neighborCoord(head.coord, exit);
-      const nTile = nCoord ? level[getCoordinatesId(nCoord)] : undefined;
-      if (nCoord && nTile?.road?.length) {
-        const nCount = laneCount(nTile.road, oppositePort(exit));
-        if (nCount > 0 && cur > nCount - 1) return clampLane(nCount - 1, curCount);
-      }
-    }
 
     // Overtaking (G+): while passing aim for the lane left of home; while
     // returning aim back toward the KERB-most legal lane (keep-right discipline),
@@ -1295,8 +1397,25 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // (the post-junction "dip to the kerb and back" an on-ramp merge once showed).
     // Branch (F) above already handles keep-right on a junction APPROACH; this is the
     // long-haul drift in between.
+    //
+    // DISCRETIONARY, so it answers to the long horizon as well: the drift only goes
+    // as far out as the lanes that are still there LANE_KEEP_HORIZON tiles away.
+    // Crossing to a kerb lane that ends in three tiles buys nothing and costs two
+    // lane changes plus the merge back — a driver reading the arrows stays put, and
+    // that is the whole difference between using a wide stretch and weaving through
+    // it. (The hard LANE_DROP_LOOKAHEAD clamp in `desiredLane` still applies on top;
+    // this is the softer "worth it?" test that keeps a car out of a doomed lane it
+    // was never obliged to leave in the first place.)
     if (car.pendingExitLane == null && car.tilesSinceJunction >= KEEP_RIGHT_AFTER_TILES) {
-      return clampLane(kerbMostLane(tile?.road, head.entryPort, cls), curCount);
+      const { far } = laneDropAhead(
+        head.coord,
+        head.entryPort,
+        head.exitPort ?? roadExitPort(level, head.coord, head.entryPort, cls),
+        cls,
+      );
+      const lasting = survivingLaneBand(tile?.road, head.entryPort, curCount, far);
+      const kerb = kerbMostLane(tile?.road, head.entryPort, cls);
+      return clampLane(Math.max(lasting.lo, Math.min(lasting.hi, kerb)), curCount);
     }
     return clampLane(cur, curCount);
   }
@@ -1399,6 +1518,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // no body for a bay, so this is the cheap way out of the loop rather than a
       // difference in outcome — but it is still the rule being stated.)
       if (!blocksLane(o)) continue;
+      if (!memoOnRoute(bodyMemoOf(o), route)) continue; // nowhere near us — see `memoOnRoute`
       const span = bodySpanOnRoute(o, route);
       if (!span) continue; // not on our route at all
       const latSep = Math.max(0, Math.max(lane, span.latLo) - Math.min(lane, span.latHi));
@@ -1455,7 +1575,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // A lane this class may not ride on can be CROSSED on the way to `want` but
       // never stopped in — a car cutting over a kerb bus lane to reach the kerb
       // must not decide to give up half-way and sit on the bus lane.
-      if (usableLaneIndices(road, head.entryPort, cls).includes(lane)) best = lane;
+      if (usableLaneIndices(road, head.entryPort, cls).includes(lane)) {
+        best = lane;
+        // ONE LANE PER MANOEUVRE. A driver wanting to be two lanes over changes
+        // once, settles, looks again, and changes again; they do not sweep across
+        // two lanes in a single movement. Counted in lanes this class may USE, so
+        // crossing a bus lane to reach the kerb still costs one change, not two.
+        break;
+      }
     }
     return best;
   }
@@ -1503,21 +1630,40 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     );
     const route = forwardRoute(car);
     car.targetLane = want;
+    // The settle between two changes. `laneHold` runs down while the driver holds
+    // the lane they just moved into; until it expires the only lane they may reach
+    // is the one they are in — unless the lane is about to run out, which is the
+    // one thing that will not wait.
+    if (car.laneHold > 0) car.laneHold = Math.max(0, car.laneHold - dt);
+    const holding = car.laneHold > 0 && !laneDropUrgent(car);
     // `targetLane` stays the lane the driver WANTS (what the debug overlay and the
     // lane-discipline tests read). What it may reach this instant is a separate
     // question, re-asked every tick: gap acceptance can hold it a lane short, or
     // send it back the way it came, without ever changing its mind about where it
     // is going.
-    const permitted = reachableLane(car, want, route);
+    const permitted = holding
+      ? Math.round(car.laneIndex)
+      : reachableLane(car, want, route);
+    // Arrived: pin to the lane and drop any residual lateral motion. Pinning on
+    // the POSITION alone matters — a car left with a lateral velocity it can no
+    // longer aim anywhere (diff 0 ⇒ no direction) used to keep drifting, off the
+    // end of the road's lanes on a kerb-lane target.
+    //
+    // Arriving in a DIFFERENT lane starts the settle: the manoeuvre began at
+    // `laneAnchor`, so comparing against it is what tells a completed change from
+    // a car simply sitting in its lane. Both ways a change can finish come through
+    // here — the target reached exactly, and the discrete-step guard below
+    // catching an overshoot — because a settle set on only one of them is a settle
+    // that mostly does not happen.
+    const arrive = (lane: number): void => {
+      if (Math.round(car.laneAnchor) !== lane) car.laneHold = LANE_CHANGE_SETTLE;
+      car.laneIndex = lane;
+      car.laneVel = 0;
+      car.laneAnchor = lane;
+    };
     const diff = permitted - car.laneIndex;
     if (Math.abs(diff) <= LANE_SETTLE) {
-      // Arrived: pin to the lane and drop any residual lateral motion. Pinning on
-      // the POSITION alone matters — a car left with a lateral velocity it can no
-      // longer aim anywhere (diff 0 ⇒ no direction) used to keep drifting, off the
-      // end of the road's lanes on a kerb-lane target.
-      car.laneIndex = permitted;
-      car.laneVel = 0;
-      car.laneAnchor = car.laneIndex;
+      arrive(permitted);
     } else if (car.velocity <= 0.001) {
       // Stopped: a driver doesn't START a lane change at a standstill (you change
       // lanes while driving, not while queueing). But a body left ASTRIDE a lane
@@ -1568,11 +1714,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.laneIndex += car.laneVel * dt;
       // Discrete-step guard: never coast past the target (would oscillate). If we
       // crossed it this tick, snap onto it and kill the lateral velocity.
-      if ((permitted - car.laneIndex) * dir < 0) {
-        car.laneIndex = permitted;
-        car.laneVel = 0;
-        car.laneAnchor = car.laneIndex;
-      }
+      if ((permitted - car.laneIndex) * dir < 0) arrive(permitted);
     }
   }
 
@@ -1903,15 +2045,149 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   }
 
 
+  // THE HOTTEST DATA IN THE TICK, so it is memoised. Every following, gap-
+  // acceptance and junction-conflict scan walks every OTHER car's body, which
+  // makes `bodyPoints` O(cars²) calls per tick — and each call re-walks the path
+  // (`segLen`) and re-derives the lateral lag (`lanePosAt`) for a dozen-odd sample
+  // points. Profiled on /test/parkcity (37 vehicles) it was 60% of the entire
+  // tick, and the same work over and over: within one tick most of those calls
+  // are for a car nothing has touched since the last one.
+  //
+  // Keyed on an EXACT signature of the car state the points are derived from —
+  // NOT on the tick. That distinction is the whole correctness argument: `step`
+  // advances cars one at a time and a later car must see an earlier one where it
+  // now IS, so a tick-scoped cache would silently change what the gates see. A
+  // signature-scoped one cannot — any field that could move a body point misses
+  // the memo. When you add a field that `computeBodyPoints` reads, add it here
+  // too, or you have cached a stale body.
+  //
+  // `kind` is absent deliberately: the memo is per-car (a WeakMap keyed by the
+  // car), and a car never changes kind. The returned array is SHARED — callers
+  // treat it as read-only, and all of them already do.
+  interface BodyPoint {
+    tileId: string;
+    entry: Port;
+    exit: Port | null;
+    t: number;
+    arc: number;
+    laneIndex: number;
+    lanePos: number;
+  }
+  interface BodyMemo {
+    path: RoadSegment[];
+    pathLen: number;
+    headIndex: number;
+    headProgress: number;
+    laneIndex: number;
+    laneVel: number;
+    laneAnchor: number;
+    velocity: number;
+    pivotIndex: number;
+    pivotLane: number;
+    phase: CarPhase;
+    parkOnLane: boolean;
+    manoeuvre: number;
+    length: number;
+    pts: BodyPoint[];
+    // The DISTINCT tiles `pts` lands on, built with them. Derived from the points
+    // themselves rather than from `bodyTileIds`, which walks path INDICES
+    // (`headIndex − length`) while the points walk real DRIVEN ARC — the two can
+    // disagree by a tile on a bend, and a prune built on the wrong one would skip a
+    // vehicle that really is in the way. See `memoOnRoute`.
+    tiles: Set<string>;
+  }
+  const bodyMemo = new WeakMap<Car, BodyMemo>();
+
   // The anchor points along a car's whole body as { tileId, entry, t }, used as
   // obstacles other cars must not roll into. Sampling the entire body (head back
   // to the exact tail at BODY_SAMPLE_STEP spacing) — not just the two ends —
   // means a long trailer that spans a junction tile mid-body still puts a point
   // on it, so a crossing car sees it occupied and holds off the tile.
-  function bodyPoints(
-    car: Car
-  ): { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] {
-    const pts: { tileId: string; entry: Port; exit: Port | null; t: number; arc: number; laneIndex: number; lanePos: number }[] = [];
+  function bodyPoints(car: Car): BodyPoint[] {
+    return bodyMemoOf(car).pts;
+  }
+
+  // Resolve (and refresh, if the car has moved) the car's body memo.
+  function bodyMemoOf(car: Car): BodyMemo {
+    const pivot = car.lanePivot;
+    const pivotIndex = pivot ? pivot.pathIndex : -1;
+    const pivotLane = pivot ? pivot.lane : -1;
+    const memo = bodyMemo.get(car);
+    if (
+      memo !== undefined &&
+      memo.path === car.path &&
+      memo.pathLen === car.path.length &&
+      memo.headIndex === car.headIndex &&
+      memo.headProgress === car.headProgress &&
+      memo.laneIndex === car.laneIndex &&
+      memo.laneVel === car.laneVel &&
+      memo.laneAnchor === car.laneAnchor &&
+      memo.velocity === car.velocity &&
+      memo.pivotIndex === pivotIndex &&
+      memo.pivotLane === pivotLane &&
+      memo.phase === car.phase &&
+      memo.parkOnLane === car.parkOnLane &&
+      memo.manoeuvre === car.manoeuvre &&
+      memo.length === car.length
+    ) {
+      return memo;
+    }
+    const pts = computeBodyPoints(car);
+    const fresh: BodyMemo = {
+      tiles: new Set(pts.map(p => p.tileId)),
+      path: car.path,
+      pathLen: car.path.length,
+      headIndex: car.headIndex,
+      headProgress: car.headProgress,
+      laneIndex: car.laneIndex,
+      laneVel: car.laneVel,
+      laneAnchor: car.laneAnchor,
+      velocity: car.velocity,
+      pivotIndex,
+      pivotLane,
+      phase: car.phase,
+      parkOnLane: car.parkOnLane,
+      manoeuvre: car.manoeuvre,
+      length: car.length,
+      pts,
+    };
+    bodyMemo.set(car, fresh);
+    return fresh;
+  }
+
+  // Does any part of the body described by `memo` sit on a tile of `route`?
+  //
+  // THE EARLY-OUT FOR THE TWO O(cars²) SCANS. `clearAhead` and
+  // `laneClearForChange` both walk every other vehicle on the map, and on anything
+  // bigger than a test fixture almost none of them are anywhere near the route
+  // being scanned — /test/parkcity is 192 tiles and 41 vehicles, so the
+  // overwhelming majority of the ~1600 pairs per tick are two cars streets apart.
+  //
+  // Skipping those is a NO-OP, not an approximation, and that is worth stating
+  // precisely because it is the whole safety argument: every effect in either loop
+  // is reached through `projectPoint(route, p)`, which returns null the moment
+  // `route.get(p.tileId)` misses. A vehicle with no body point on the route
+  // therefore binds nothing, spans nothing (`bodySpanOnRoute` leaves `front` at
+  // −Infinity and returns null) and vetoes no lane change — it just costs a dozen
+  // projections and a Map allocation to discover that.
+  //
+  // Uses the memo's `tiles` (1–3 entries, built from the sampled points) rather
+  // than `bodyTileIds`, which walks path indices and can disagree by a tile on a
+  // bend — see the note on `BodyMemo.tiles`.
+  //
+  // Takes the MEMO, not the car, so a caller that also wants the points pays the
+  // signature check once. On a small map (a 5-tile fixture where every vehicle is
+  // on every route) the prune never fires and is pure overhead, so what it costs
+  // when it misses is worth as much as what it saves when it hits.
+  function memoOnRoute(memo: BodyMemo, route: Map<string, { lead: number; entry: Port }>): boolean {
+    for (const tileId of memo.tiles) {
+      if (route.has(tileId)) return true;
+    }
+    return false;
+  }
+
+  function computeBodyPoints(car: Car): BodyPoint[] {
+    const pts: BodyPoint[] = [];
     // Lane identity for following/conflict is the integer lane the car occupies
     // (its continuous position rounded) — a mid-change car counts as in the lane
     // it is closest to. Deliberately still ONE value for the whole vehicle: making
@@ -2150,7 +2426,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // never be an obstacle. A bus at a HALT is still standing in the lane and
       // must NOT be skipped, or the queue behind it drives straight through it.
       if (!blocksLane(other)) continue;
-      const otherPts = bodyPoints(other);
+      // Nowhere near our route: binds nothing below, so skip before paying for a
+      // dozen projections and a `tRange` Map. See `memoOnRoute` for why this is a
+      // no-op rather than an approximation.
+      const otherMemo = bodyMemoOf(other);
+      if (!memoOnRoute(otherMemo, route)) continue;
+      const otherPts = otherMemo.pts;
       // Swept-body following, overlap-RECOVERING: keep our head a gap behind the
       // REAR-most point of any same-direction body whose lateral extent is within a
       // body width of ours — even one we have wrongly drawn level with. The
@@ -2561,20 +2842,55 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // left untouched until the car has settled a few tiles past the seam.
         car.tilesSinceJunction = 0;
       } else if (nextLaneCount > 0) {
-        // Straight / curve: keep the PHYSICAL lane. Which index that is on the far
-        // side of the seam is not always the same number (seamLaneShift), and on a
-        // CURVE it is the lane the movement lands in — the same mapping the tile's
-        // geometry glides the vehicle along, so the two can't drift apart.
-        const shift =
-          exitPort === oppositePort(head.entryPort)
-            ? seamLaneShift(prevRoad, head.entryPort, nextTile.road, nextEntry)
+        // Straight / curve: keep the vehicle where it PHYSICALLY is, which is not
+        // the same thing as keeping its lane index. On a bidirectional road the
+        // lanes are anchored at the centreline and a change of width is felt at the
+        // kerb, so the lane a car is driving in is numbered differently on the two
+        // sides of the seam (`laneIndexAcrossSeam`). Carrying the raw index across
+        // and merely clamping it down — what this did — teleported a car entering a
+        // 1→3 widening from the centre-adjacent lane it was in to the far kerb: two
+        // lanes of movement with no gap check, no signal and no decision behind it,
+        // straight through the arrows telling it to do the opposite. Now the index
+        // is remapped so the car stays on the tarmac it was on, and any move off it
+        // is an ordinary lane change like every other.
+        //
+        // A CURVE is the other half of the same rule: the tile we are leaving turned
+        // the vehicle onto a different arm, and the lane it physically lands in is
+        // the one `junctionExitLane` names — the SAME mapping `turnExitOffsetPx`
+        // glides it along inside the curve, so the drawn path and the assigned index
+        // cannot drift apart at the seam.
+        //
+        // Neither rule may measure itself against a JUNCTION, though: a junction's
+        // per-arm `laneCount` tallies the MOVEMENTS that fan through the arm, not
+        // the arm's real width (a bus-only turn off a 1-lane approach reads as 2),
+        // and its arm adopts the road's band anyway (`roadSeamPaintTotal`). Treating
+        // that tally as a width shifted a car entering the tee at `busshortcut`
+        // clean into the bus lane beside it. Same guard `laneDropAhead` and
+        // `laneDropUrgent` already apply when they compare widths.
+        const prevCount = laneCount(prevRoad, head.entryPort);
+        const kerbAnchored = isOneWayStraight(nextTile.road, nextEntry);
+        const wentStraight = exitPort === oppositePort(head.entryPort);
+        const clamp = (lane: number) => Math.max(0, Math.min(nextLaneCount - 1, lane));
+        const turnShift =
+          wentStraight || isRoadJunction(nextTile.road)
+            ? 0
             : junctionExitLane(
                 prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
               ) - laneOf(car);
-        const fit = (l: number) => Math.max(0, Math.min(l + shift, nextLaneCount - 1));
-        car.laneIndex = fit(car.laneIndex);
-        car.targetLane = fit(car.targetLane);
-        car.laneAnchor = fit(car.laneAnchor);
+        const across = (lane: number) =>
+          wentStraight && !isRoadJunction(nextTile.road)
+            ? laneIndexAcrossSeam(lane, prevCount, nextLaneCount, kerbAnchored)
+            : clamp(lane + turnShift);
+        const mapped = across(car.laneIndex);
+        // The body behind the seam is still in the OLD tile's lane numbering, so
+        // pin it exactly as a junction seam does — otherwise the tail jumps a lane
+        // sideways (into whatever is beside it) the tick the head crosses.
+        if (Math.round(mapped) !== Math.round(car.laneIndex)) {
+          car.lanePivot = { pathIndex: car.headIndex, lane: laneOf(car) };
+          car.laneAnchor += mapped - car.laneIndex;
+        }
+        car.targetLane = across(car.targetLane);
+        car.laneIndex = mapped;
         car.tilesSinceJunction += 1; // one more tile of open road since the junction
       }
       car.headIndex += 1;
@@ -2670,6 +2986,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       crossedCrossing: false,
       laneIndex: 0,
       targetLane: 0,
+      laneHold: 0,
       laneVel: 0,
       laneAnchor: 0,
       lanePivot: null,
@@ -2782,6 +3099,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       crossedCrossing: false,
       laneIndex: chosenLane,
       targetLane: chosenLane,
+      laneHold: 0,
       laneVel: 0,
       laneAnchor: chosenLane,
       lanePivot: null,
@@ -2950,6 +3268,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   return {
     step(dt: number, closed: CrossingClosed) {
+      // The road's WIDTH ahead is the same answer for every car on a tile and
+      // cannot change within a tick, but it CAN change between ticks (track laid in
+      // play), so the memo is per-tick and starts empty.
+      dropScanCache.clear();
       // Advance the junction signal phase clocks on sim time (deterministic),
       // feeding each its approaching buses for transit signal priority. Done
       // before cars move so this tick's aspects gate this tick's entries.

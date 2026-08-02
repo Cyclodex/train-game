@@ -183,12 +183,33 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `src/tiles/*`) — catches real bugs as the sim grows.
 15. **Fix the "fraight" typo** in one sweep (type strings + asset names), or leave
     it — but do it all at once, never piecemeal.
-16. **Longer term**: migrate the class components to `<script setup>` +
+16. **Keep making the road tick cheaper.** Two rounds have landed (a body-point
+    memo, then a spatial prune on the O(cars²) scans); `clearAhead` and
+    `bodySpanOnRoute` are still the top of the profile. The next step up is a
+    per-tick `tile -> cars` index instead of a per-pair prune — but it has to cope
+    with `step` advancing cars one at a time, so the index goes stale mid-tick.
+    That is the same trap the body memo dodges by keying on car STATE rather than
+    on the tick; solve it the same way or not at all. Verify with the state-trace
+    hash (`docs/KNOWHOW.md` → SIM HOT PATH), which has survived both rounds
+    unchanged. **Not** by cutting the long-run cases' seeds or ticks — that was
+    weighed and rejected, see TEST TIERS.
+17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
 
 ## Recently landed (kept for context)
 
+- **Test-suite performance (2026-08-01)**: memoising the road sim's hot path
+  (`bodyPoints`, `roadPortsOf`) took the unit suite from 4m22s to ~1m07s and the
+  game loop with it; two lanes (`test:unit:fast` / `:changed` / `:profile`) keep a
+  small change off the full suite. `sim/road.spec.ts` was then split into five
+  focused files — a pure move, worth 1.5x on the road tests where cores are free,
+  but honestly worth **nothing** to whole-suite wall time on a 4-core box, which is
+  the measurement that killed the "split the big file" idea as a CI lever.
+  `docs/KNOWHOW.md` → SIM HOT PATH / TEST TIERS. A second round (2026-08-02)
+  pruned the O(cars²) following scans to vehicles actually on the scanned route,
+  taking `parking.spec.ts` from 65.8s to 47s — again with no coverage cut, and
+  again bit-identical on the state trace.
 - The **model/view refactor**: an authoritative deterministic simulation with
   headless unit tests; collisions are impossible (a train never enters an occupied
   tile) and trains never move on a red signal.

@@ -169,11 +169,10 @@
          structure that is not above them. A train therefore runs INTO the dark
          instead of being cut off by it, which is the whole reason the opening is
          a separate element from the masonry above.
-         It also has to sit above the mountain's own ground patch, which bows out
-         of the tile far enough to reach in here: at z1 it covers that overhang,
-         so what shows inside a portal is always the bore and never the hillside.
-         The tile's rails stop at the bore, but the NEIGHBOUR's run on over this
-         and into it, which is exactly right. -->
+         Above the ground patches (z0) though, including the halo the mountain
+         spills onto its neighbour: what shows inside a portal is the bore, never
+         a wash of hillside. The tile's own rails stop at the bore, but the
+         NEIGHBOUR's run on over this and into it, which is exactly right. -->
     <svg
       v-if="isTunnel"
       class="tunnel-mouths"
@@ -189,15 +188,15 @@
     </svg>
 
     <!-- Tunnel portals, one per end of the bore that meets open ground (an
-         internal seam between two tunnel tiles gets none). The MASONRY, above
-         the trains and above the bore's own mountain roof (TileGround's
-         .tile-over-bore).
+         internal seam between two tunnel tiles gets none). The MASONRY, over the
+         trains and under the bore's mountain roof (TileGround's .tile-roof), so
+         the structure disappears INTO the hillside rather than sitting on it.
          Shape: a slab with a U cut out of it — an open approach between two
-         retaining walls, then the arch where the covered stretch begins. That
-         covered stretch is what swallows a train, and it runs from the arch all
-         the way to the tile edge, where the roof takes over. It has to: a
-         terrain patch bows OUT of its tile (corner push + edge bow, terrain.ts),
-         so the hillside would otherwise eat the train short of the tunnel. -->
+         retaining walls, then the arch where the covered stretch begins. The
+         covered stretch is what swallows a train, and it runs from the arch to
+         the tile edge, where the roof takes over. Since a patch now keeps to its
+         own tile (terrain.ts), that edge IS the rock face: the arch springs
+         where the mountain starts and the gallery stands on open ground. -->
     <svg
       v-if="isTunnel"
       class="tunnel-portals"
@@ -846,11 +845,15 @@ class Tile extends Vue {
   //
   // ONE SLAB WITH A U CUT OUT OF IT. The U is the open approach between two
   // retaining walls; where it rounds off is the arch, and from there inward the
-  // line is covered all the way to the tile edge. That covered stretch is not
-  // decoration: it is the occluder, and it has to reach the tile edge because
-  // the mountain's roof is clipped to the tile (a terrain patch bows out of its
-  // tile by up to ~15u, and an unclipped roof would swallow the train out there
-  // in the open, short of the tunnel).
+  // line is covered to the tile edge, where the roof takes over. That covered
+  // stretch is not decoration — it is the occluder, and the two must MEET or a
+  // train shows through in the gap.
+  //
+  // SIZED AGAINST THE ROCK FACE, which is the tile edge: a terrain patch keeps
+  // to its own tile (terrain.ts — it used to bow ~15u past it, and this portal
+  // used to be twice as long to clear that). So the arch springs at the edge and
+  // the gallery stands entirely on the open ground the line arrives on. If the
+  // containment rule ever moves, this geometry moves with it.
   //
   // The rest follows the terrain art's rules: flat facets rather than gradients,
   // a lit face and a shaded flank for volume, no line work (nothing else in the
@@ -866,13 +869,18 @@ class Tile extends Vue {
     const u = this.u;
     const pts = (list: [number, number][]) => list.map(([x, y]) => `${x * u},${y * u}`).join(" ");
     const n = (v: number) => v * u;
-    // FACE at y=-34, back edge at y=6 (inside the tile, under the roof).
-    // The U: jambs at x=±11 running back from the face to y=-22, then the arch.
-    const face = -30;
-    const back = 5;
-    const halfOut = 16; // half-width of the slab
-    const jamb = 9.5; // half-width of the opening
-    const spring = -20; // where the arch springs from
+    // FACE at y=-16, back edge at y=10 (inside the tile, under the roof). The U:
+    // jambs at x=±9 running back from the face to y=-9, where the arch springs —
+    // its crown lands on y=0, the tile edge, so the masonry hands the train over
+    // to the roof with no seam.
+    const face = -16;
+    // Well past the tile edge, because the ROOF's own patch stops a few units
+    // short of it (the shore is pulled in): the masonry has to cover that strip
+    // or a nose shows through between the two.
+    const back = 14;
+    const halfOut = 15; // half-width of the slab
+    const jamb = 9; // half-width of the opening
+    const spring = -9; // where the arch springs from
     return {
       // Outline traced anticlockwise around the U so the opening is a hole.
       wall:

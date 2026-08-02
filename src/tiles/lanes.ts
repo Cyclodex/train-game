@@ -367,13 +367,31 @@ export function turnSeamBand(
 }
 
 // Every port the road touches (as an approach or an exit).
+//
+// MEMOISED ON THE LANE ARRAY'S IDENTITY, because the road sim asks this (and
+// `isRoadJunction`, which is just this plus a length test) inside its per-body,
+// per-pair inner loops — it was 13% of a /test/parkcity tick, rebuilding the same
+// Set for the same static tile thousands of times a second.
+//
+// Safe under LIVE EDITING, which is the only reason a tile's lanes ever change:
+// every reducer in `tiles/editOps.ts` is purely functional and hands back a NEW
+// array (`{ ...cell, road: next }`), so an edited tile arrives here as a new key
+// and misses the cache by construction. Keep it that way — a reducer that
+// mutated a `Lane[]` in place would serve a stale answer here and nowhere else.
+// A WeakMap, so a discarded level's entries go with it.
+const portsCache = new WeakMap<Lane[], Port[]>();
 export function roadPortsOf(road: Lane[] | undefined): Port[] {
+  if (!road) return [];
+  const hit = portsCache.get(road);
+  if (hit) return hit;
   const out = new Set<Port>();
-  for (const lane of road ?? []) {
+  for (const lane of road) {
     out.add(lane.from);
     for (const to of laneAllExits(lane)) out.add(to);
   }
-  return [...out];
+  const ports = [...out];
+  portsCache.set(road, ports);
+  return ports;
 }
 
 // Only the APPROACH arms: ports some lane actually enters the tile FROM. An

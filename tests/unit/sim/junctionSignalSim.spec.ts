@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { fromPairs } from "@/tiles/lanes";
@@ -55,7 +56,7 @@ function entryArm(juncId: string, prevId: string): Position | null {
 }
 
 describe("signalised road junction — cars obey the lights", () => {
-  it("never lets a car ENTER the junction on a red arm (round-robin)", () => {
+  itSlow("never lets a car ENTER the junction on a red arm (round-robin)", () => {
     // Round-robin makes red the common case: only one arm is ever green, so the
     // gate is exercised hard. Track when each car first steps onto the centre tile
     // and assert that arm was not red at that moment.
@@ -135,7 +136,7 @@ describe("bus priority reduces a tracked bus's wait at the junction", () => {
     return stopped;
   }
 
-  it("a prioritised junction stops the bus stream less than a fixed-time one", () => {
+  itSlow("a prioritised junction stops the bus stream less than a fixed-time one", () => {
     const off = totalBusWait(false);
     const on = totalBusWait(true);
     // The fixed-time light genuinely stops buses (a meaningful baseline)…
