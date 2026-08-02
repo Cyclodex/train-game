@@ -515,6 +515,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
   running → 56% of journeys by rail, population 111→153; no trains → the two
   commuter towns halve while the walkable works town holds.
 - `/test/threecities` (mode `citizens`), city cards in `CityPanel.vue`.
+- **A DRIVING CITIZEN IS A CAR** (2026-08-02). `roadSim.requestTrip(fromTile,
+  toTile)` dispatches a real vehicle, routed by `planRouteToGoals` (the same
+  goal-directed BFS parking uses) and DESPAWNED on arrival instead of driving
+  off the map. `Car.tripGoal` marks such a car; `settleRequestedTrips()` retires
+  it at headProgress >= 0.5 on the goal tile. The citizen's driving leg then has
+  NO clock — it ends when the car arrives, so congestion costs the commuter real
+  time and real mood.
+    · `requestTrip` returns null when it cannot dispatch, and the citizen falls
+      back to the timer. A saturated road must slow people, never strand them.
+    · Requested cars have their own cap (MAX_REQUESTED_CARS), separate from the
+      ambient density slider — the slider is a scenery dial, commuters are not
+      scenery.
+    · `blankCar()` exists so a new `Car` field breaks all three construction
+      sites at compile time. That is the point; do not relax it to a partial.
+- **A CLOSED RING ROAD SPAWNS NOTHING.** `roadEntries` only finds an entry where
+  a road OPENS (off-grid, or a stub with nothing beyond). A ring has neither, so
+  ambient traffic cannot spawn — which is what makes `/test/citizencars` able to
+  claim that every car on it is a citizen, and `roadRequestTrip.spec.ts` asserts
+  the empty entry list directly. Reach for this whenever a scenario needs traffic
+  it fully controls.
+- **`game.roadCars` is a RENDER mirror** (updated in `frame()`, not `advance()`),
+  so it is EMPTY in a headless test — measuring cars with it reads 0 while ten
+  are driving. `citizenStats.driving` is the headless-visible count.
+- A town with only roads does not shrink, it CHURNS: the car-less are refused,
+  leave, and are replaced by people who may also lack cars. Population holds
+  steady while the town self-selects for drivers, so `access` shows the failure
+  only as a DIP — assert on the minimum over a run, never the end state.
 
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE

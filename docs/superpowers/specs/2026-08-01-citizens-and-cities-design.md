@@ -471,14 +471,74 @@ first when a board feels inert.
 
 ### Phase B — real cars, real buildings
 
-1. **Origin/destination car trips.** `road.ts` spawns only at map edges today.
-   Needs `roadSim.requestTrip({ fromTile, toFacility })` — a spawn at the road
-   tile nearest a plot, routed to a specific car park, using the parking
-   registry's existing "aim" tokens. Then a citizen driving to work *is* a car
-   on the board, and congestion feeds back into their journey time for free.
+1. **Origin/destination car trips — BUILT 2026-08-02.** `roadSim.requestTrip(
+   fromTileId, toTileId)` dispatches a real car from the road tile nearest the
+   origin plot to the one nearest the destination, using the same goal-directed
+   BFS parking already used (`planRouteToGoals`). The car is ordinary traffic in
+   every other respect — same lanes, same queues, same junction arbitration, same
+   level crossings — and it *stops being traffic* when it arrives rather than
+   driving off the map. A driving citizen's leg is no longer on a clock at all:
+   it ends when their car arrives, so **congestion is now paid for in the
+   commuter's own journey time, and therefore in their mood**.
+
+   Two properties worth keeping:
+   - **The fallback is a feature.** `requestTrip` returns `null` when it cannot
+     dispatch (no route, the street outside blocked, the requested-car cap hit),
+     and the citizen falls back to the timer. A saturated road slows people down;
+     it never strands them in a state with no way out.
+   - **Requested cars are capped separately** from the ambient density slider.
+     The slider is a scenery dial; a town's actual commuters are not scenery.
+
+   `/test/citizencars` is the isolation board, and it is built on one property:
+   **a closed ring road opens nowhere, so `roadEntries` is empty and ambient
+   traffic cannot spawn at all.** Every vehicle on it is therefore provably a
+   citizen — asserted directly in `tests/unit/sim/roadRequestTrip.spec.ts`.
+
+   Its second lesson was not designed in, and is worth keeping: a town with only
+   roads does not shrink, it **churns**. The residents without cars are refused
+   their commute and leave, more arrive (the town reads as happy, because
+   everyone still in it drives), and a car-only town quietly self-selects for
+   drivers at a steady population. `access` shows the truth only as a dip.
+
 2. **Buses as carriers.** Today a bus stop *produces* a busload; riding a bus is
    not modelled. The shadow-queue trick of §4.1 works identically for bus halts.
 3. **Density in the ground art** (§7).
+4. **Pedestrians you can see** — see §9.1.
+
+### 9.1 Pedestrians and footways (designed, not built)
+
+Walking is a timer today. To *see* people walk, they need somewhere to walk, and
+the recommendation is:
+
+**A footway is per-street data in the same family as lanes — but pedestrians are
+NOT vehicles in the road sim.** Concretely, a fifth tile axis
+`footway?: { sides?: ("left"|"right")[] }`, **derived by default** from `road`
+(every street gets a pavement each side unless it opts out), so every existing
+board gains pavements with zero authoring — the same trick city clustering uses.
+
+Why not a `Lane` with `kind: "footway"`, which is the obvious first instinct:
+
+- A pavement is **bidirectional on one strip**; a `Lane` is directed. Two lanes
+  per pavement to fake it doubles the lane count every car query iterates.
+- It sits **outside the kerb**, not in the carriageway. `laneOffset.ts` positions
+  lanes *within* the road width; a pavement is beyond it.
+- Pedestrians **may overlap** — two people occupy the same doorway. Every gate in
+  `road.ts` (following, swept bodies, junction conflicts) exists to guarantee the
+  opposite, and would have to learn an exception.
+- They do not queue at junctions like traffic; they cross it.
+
+The reuse the lane idea is reaching for is **routing**, and pedestrian routing is
+the part that does not need it: walking is an undirected walk over adjacent
+footway tiles, which is the `roadComponents` flood fill already in
+`tiles/cities.ts`. So: footways as tile data, geometry beside the kerb from
+`roadGeometry.ts`'s existing kerb positions, and a small `sim/pedestrians.ts`
+that moves dots along that graph — reusing the citizen sim's walking leg
+(`walkSpeed`, `walkMaxTiles`) rather than inventing a second one.
+
+The genuinely new mechanic that falls out, and the reason this is worth doing as
+a *game* feature rather than decoration: **a crossing.** Where a footway meets a
+carriageway or a railway, somebody has to give way — and that is a decision the
+player makes, exactly like a signal or a level crossing.
 
 ### Phase C — the rest of life
 

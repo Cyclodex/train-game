@@ -63,6 +63,15 @@ export interface Trip {
   onPlatform: boolean; // actually accepted onto the sim's platform
   waitedSec: number;
   transfers: number;
+  // The REAL CAR carrying this person, when the road sim dispatched one. While
+  // this is set the driving leg is not on a clock at all: it ends when the car
+  // arrives, so congestion, a queue at a junction and a closed level crossing
+  // are all paid for in the citizen's own journey time.
+  carTrip: string | null;
+  // How long the car has been going. A car that never arrives (gridlock, a
+  // route that stopped existing under a live edit) must not hold its passenger
+  // for ever — see `advanceTrip`.
+  carSec: number;
 }
 
 export interface Citizen {
@@ -191,10 +200,30 @@ export interface TransitPort {
   enqueue(stationId: string, n: number): number;
 }
 
+// The road world, same shape and same reason. Omitted → a driving citizen is an
+// abstract timer (which is all they ever were before this existed, and still
+// all they are on a board whose road sim is off).
+export interface DrivingPort {
+  // Send a real car from one road tile to another. Returns a trip id, or null
+  // when no car could be dispatched — no route, the street outside blocked, the
+  // road full. A null is not a failed journey: the citizen simply drives
+  // "off-screen" on a timer instead, so a saturated road never strands anyone.
+  request(fromTileId: string, toTileId: string): string | null;
+  // Is that car still going?
+  status(tripId: string): "driving" | "arrived";
+  // The caller has read the result and will not ask again.
+  release(tripId: string): void;
+}
+
 export interface CitizenStats {
   population: number;
   citizens: number;
   travelling: number;
+  // Citizens who are, right now, an actual car on the actual road. Distinct from
+  // `travelling`, which includes walkers and rail passengers — and the only way
+  // to see from OUTSIDE that a driving citizen became a vehicle rather than a
+  // timer, since the renderer's car list does not exist in a headless run.
+  driving: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -209,6 +238,7 @@ export interface CitizenSimConfig {
   seed?: number;
   tuning?: Partial<CitizenTuning>;
   transit?: TransitPort;
+  driving?: DrivingPort;
 }
 
 export interface CitizenSim {
@@ -244,6 +274,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const seed = config.seed ?? 1;
   const world = config.world;
   const transit = config.transit;
+  const driving = config.driving;
 
   // Separate RNG streams, as road.ts does: adding a citizen must not shift the
   // numbers another part of the model was going to draw.
@@ -260,8 +291,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       if (!stationCoord.has(s)) stationCoord.set(s, parseCoordId(s));
     }
   }
+  const parkAndRideByStation = new Map<string, ParkAndRideStation>();
   for (const s of world.parkAndRideStations) {
     if (!stationCoord.has(s.station)) stationCoord.set(s.station, parseCoordId(s.station));
+    parkAndRideByStation.set(s.station, s);
   }
 
   // --- state -------------------------------------------------------------------
@@ -403,6 +436,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const i = list.indexOf(c.id);
       if (i >= 0) list.splice(i, 1);
     }
+    // Somebody who leaves town mid-drive does not leave a ghost car behind.
+    if (c.trip?.carTrip) driving?.release(c.trip.carTrip);
     people.delete(c.id);
   }
 
@@ -600,7 +635,25 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       onPlatform: false,
       waitedSec: 0,
       transfers: 0,
+      carTrip: null,
+      carSec: 0,
     };
+    // A driving leg becomes an ACTUAL CAR on the board whenever the road sim can
+    // dispatch one: this person is now a vehicle in traffic, and their journey
+    // time is whatever the traffic gives them. When it cannot (no route, the
+    // street blocked, the road at its cap) the leg stays on its clock, which is
+    // exactly what it always was.
+    const trip = c.trip;
+    if (driving && (trip.mode === "car" || trip.mode === "parkAndRide")) {
+      const origin = plotOf(fromId)?.roadTile ?? null;
+      const target =
+        trip.mode === "car"
+          ? (plotOf(toId)?.roadTile ?? null)
+          : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
+      if (origin && target && origin !== target) {
+        trip.carTrip = driving.request(origin, target);
+      }
+    }
   }
 
   function finishTrip(c: Citizen, ok: boolean): void {
@@ -666,15 +719,42 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const t = c.trip;
     if (!t) return;
     switch (t.leg) {
-      case "walking":
       case "driving": {
+        // Riding in a real car: the leg ends when the CAR arrives, not when a
+        // clock runs out. That is the whole point — a jam, a queue at a junction
+        // and a closed level crossing are now paid for in this person's journey
+        // time, and therefore in their mood.
+        if (t.carTrip) {
+          t.carSec += dt;
+          if (driving?.status(t.carTrip) === "arrived") {
+            driving.release(t.carTrip);
+            t.carTrip = null;
+            arriveFromDrive(c, t);
+            return;
+          }
+          // A car that never arrives must not hold its passenger for ever: a
+          // live edit can delete the road under it, and gridlock is a thing the
+          // player is allowed to cause. Past the give-up point they abandon the
+          // car and the journey, which is the correct signal.
+          if (t.carSec > tuning.maxWaitSec * 2) {
+            driving?.release(t.carTrip);
+            t.carTrip = null;
+            finishTrip(c, false);
+          }
+          return;
+        }
+        t.legRemaining -= dt;
+        if (t.legRemaining <= 0) arriveFromDrive(c, t);
+        return;
+      }
+      case "walking": {
         t.legRemaining -= dt;
         if (t.legRemaining > 0) return;
-        if (t.mode === "walk" || t.mode === "car") {
+        if (t.mode === "walk") {
           finishTrip(c, true);
           return;
         }
-        // Reached the platform (on foot, or having parked the car).
+        // Reached the platform on foot.
         t.leg = "waiting";
         t.waitedSec = 0;
         boardOrWait(c);
@@ -697,6 +777,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       case "riding":
         return; // driven by the rail sim's events, not by a clock
     }
+  }
+
+  // The driving leg is over. For a car trip that IS the journey; for park & ride
+  // the car has been left at the station and the platform is next.
+  function arriveFromDrive(c: Citizen, t: Trip): void {
+    if (t.mode === "car") {
+      finishTrip(c, true);
+      return;
+    }
+    t.leg = "waiting";
+    t.waitedSec = 0;
+    boardOrWait(c);
   }
 
   function leavePlatform(c: Citizen): void {
@@ -1020,9 +1112,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   function stats(): CitizenStats {
     let travelling = 0;
     let population = 0;
+    let drivingNow = 0;
     for (const c of people.values()) {
       population += 1;
       if (c.trip) travelling += 1;
+      if (c.trip?.carTrip) drivingNow += 1;
     }
     const total =
       modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
@@ -1033,6 +1127,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       population,
       citizens: population,
       travelling,
+      driving: drivingNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,

@@ -86,6 +86,10 @@ export interface WorldPlot extends PlotSpec {
   // a street in one town and a street in another are not a road link, and the
   // whole Transport-Fever fantasy depends on saying so. `null` = no road.
   roadComponent: number | null;
+  // The road tile this plot's driveway joins — where a resident's car actually
+  // appears when they set off, and where a visitor's pulls up. `null` = no road
+  // in reach, which is the same thing as `hasRoad: false`.
+  roadTile: string | null;
   // Station tiles within walking reach of this plot.
   stationsInReach: string[];
 }
@@ -95,6 +99,8 @@ export interface WorldPlot extends PlotSpec {
 export interface ParkAndRideStation {
   station: string;
   roadComponent: number | null;
+  // The road tile a driver actually drives TO in order to leave the car here.
+  roadTile: string | null;
 }
 
 export interface CitizenWorld {
@@ -351,23 +357,33 @@ export function roadComponents(level: Level): Record<string, number> {
   return out;
 }
 
-// The road network reaching (x,y), or null when no road is close enough.
-function roadComponentNear(
+// The nearest road tile to (x,y) within `radius`, and the network it belongs
+// to. Nearest by Chebyshev ring then by id, so a plot's driveway joins the same
+// street on every run. `{ tile: null }` when there is no road in reach.
+function roadNear(
   level: Level,
   components: Record<string, number>,
   x: number,
   y: number,
   radius: number
-): number | null {
-  let best: number | null = null;
+): { tile: string | null; component: number | null } {
+  let bestTile: string | null = null;
+  let bestComponent: number | null = null;
+  let bestDist = Infinity;
   for (let dy = -radius; dy <= radius; dy++) {
     for (let dx = -radius; dx <= radius; dx++) {
-      const c = components[`${x + dx},${y + dy}`];
+      const id = `${x + dx},${y + dy}`;
+      const c = components[id];
       if (c === undefined) continue;
-      if (best === null || c < best) best = c;
+      const dist = Math.max(Math.abs(dx), Math.abs(dy));
+      if (dist < bestDist || (dist === bestDist && bestTile !== null && id < bestTile)) {
+        bestTile = id;
+        bestComponent = c;
+        bestDist = dist;
+      }
     }
   }
-  return best;
+  return { tile: bestTile, component: bestComponent };
 }
 
 /**
@@ -384,10 +400,8 @@ export function parkAndRideStationsOf(level: Level): ParkAndRideStation[] {
     if (cell.role !== "station") continue;
     const { x, y } = parseCoordId(id);
     if (hasNeighbourWithin(level, x, y, WALK_RADIUS_TILES, c => rowsOf(c).length > 0)) {
-      out.push({
-        station: id,
-        roadComponent: roadComponentNear(level, components, x, y, WALK_RADIUS_TILES),
-      });
+      const near = roadNear(level, components, x, y, WALK_RADIUS_TILES);
+      out.push({ station: id, roadComponent: near.component, roadTile: near.tile });
     }
   }
   return out.sort((a, b) => (a.station < b.station ? -1 : 1));
@@ -401,11 +415,12 @@ export function buildCitizenWorld(level: Level, seed = 1): CitizenWorld {
   const cities = citiesOf(level);
   const components = roadComponents(level);
   const plots = plotsOf(level, seed).map<WorldPlot>(p => {
-    const roadComponent = roadComponentNear(level, components, p.x, p.y, ROAD_ACCESS_TILES);
+    const near = roadNear(level, components, p.x, p.y, ROAD_ACCESS_TILES);
     return {
       ...p,
-      hasRoad: roadComponent !== null,
-      roadComponent,
+      hasRoad: near.component !== null,
+      roadComponent: near.component,
+      roadTile: near.tile,
       stationsInReach: stationsInReachOf(level, p.x, p.y),
     };
   });

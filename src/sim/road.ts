@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
-import { Level, isLevelCrossing } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, laneCount, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
+import { Level, isLevelCrossing, parseCoordId } from "@/tiles/model";
+import { exitsForCar, isRoadJunction, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -14,7 +14,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneSegmentLength } from "./pathGeometry";
 import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
-import { planRoute, RouteTurn } from "./roadRouter";
+import { planRoute, planRouteToGoals, RouteTurn } from "./roadRouter";
 import {
   createParkingRegistry,
   vehicleCanPark,
@@ -405,6 +405,12 @@ export interface Car {
   // stays "driving" for its whole life and nothing below is ever read, so the
   // parking layer costs the existing maps exactly nothing.
   phase: CarPhase;
+  // Where this car's journey ENDS on the map, for a trip that was REQUESTED
+  // rather than spawned as ambient traffic (`requestTrip`). Ambient cars drive
+  // off the edge of the world; a requested car is somebody going somewhere, and
+  // it stops when it gets there. Null for ambient traffic — which is every car
+  // that existed before the citizen layer.
+  tripGoal: { tileId: string; entryPort: Port } | null;
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
@@ -642,8 +648,24 @@ export interface RoadSimConfig {
   dwell?: { min: number; max: number };
 }
 
+// A journey requested from outside: still going, or finished. There is no
+// "failed" — a car that could not be dispatched never produced a trip id at all
+// (`requestTrip` returns null), and one that got lost still ends up somewhere.
+export type TripStatus = "driving" | "arrived";
+
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
+  // Send a REAL CAR from one road tile to another, for a caller who knows why
+  // (the citizen layer: somebody driving to work). Returns a trip id, or null
+  // when no car could be dispatched — no road, no route, the street outside
+  // blocked, or the requested-trip cap reached. The car is ordinary traffic in
+  // every other respect: same lanes, same junctions, same queues.
+  requestTrip(fromTileId: string, toTileId: string, kind?: VehicleKind): string | null;
+  // Is that journey still going? Unknown ids read "arrived" so a caller can
+  // never wait for ever on a trip that no longer exists.
+  tripStatus(tripId: string): TripStatus;
+  // Forget a finished trip (the caller has read the result).
+  clearFinishedTrip(tripId: string): void;
   // The crossing-flow snapshot for the objective layer (see RoadFrame).
   frame(): RoadFrame;
   cars(): {
@@ -2591,6 +2613,179 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
 
   // Attempt one spawn at a randomly-chosen entry. Returns true iff a car was
   // placed, so the fill-fast loop knows whether the road still has room.
+  // A Car with every field at its resting default, ready to be overridden. The
+  // Car type requires all of them, so adding a field to Car breaks this and the
+  // compiler says where — which is the point of having it.
+  function blankCar(id: string, kind: VehicleKind, seg: RoadSegment): Car {
+    return {
+      id,
+      kind,
+      speed: 0,
+      velocity: 0,
+      accel: 0,
+      brake: 0,
+      length: 0,
+      path: [seg],
+      headIndex: 0,
+      headProgress: 0,
+      launchTimer: 0,
+      routePlan: [],
+      routeStep: 0,
+      waitSeconds: 0,
+      waitedSec: 0,
+      crossedCrossing: false,
+      laneIndex: 0,
+      targetLane: 0,
+      laneVel: 0,
+      laneAnchor: 0,
+      lanePivot: null,
+      overtaker: false,
+      reverseParker: false,
+      parkedReverse: false,
+      heldSec: 0,
+      overtakePhase: "none",
+      overtakeOf: null,
+      overtakeHomeLane: 0,
+      destination: null,
+      pendingExitLane: null,
+      tilesSinceJunction: 0,
+      phase: "driving",
+      tripGoal: null,
+      parkTarget: null,
+      stall: null,
+      parkPath: null,
+      manoeuvre: 0,
+      parkOnLane: false,
+      parkExiting: false,
+      dwellLeft: 0,
+      parkTries: 0,
+      enteredTarget: false,
+    };
+  }
+
+  // --- Requested trips: a car that is SOMEBODY going SOMEWHERE ----------------
+  //
+  // Ambient traffic enters at a map edge and leaves by another one: it is
+  // scenery with a destination picked at random. A requested trip is the
+  // opposite — the origin, the destination and the reason all come from outside
+  // (the citizen layer), and the car exists because a person decided to drive to
+  // work. It uses exactly the same lane dynamics, junction arbitration, parking
+  // and crossing rules as every other car; only where it starts and where it
+  // stops are different.
+  //
+  // Requested cars are capped separately from the ambient density slider: the
+  // slider is a scenery dial, and a town's actual commuters are not scenery.
+  const MAX_REQUESTED_CARS = 60;
+
+  // Live requested trips: car id → whether it is still going. An entry survives
+  // the car's despawn so the caller can ask "did they get there?" on a later
+  // tick; it is dropped once read as finished.
+  const trips = new Map<string, "driving" | "arrived">();
+
+  function requestedCarCount(): number {
+    let n = 0;
+    for (const c of cars) if (c.tripGoal) n++;
+    return n;
+  }
+
+  // Every approach port a car could enter this road tile through.
+  function approachPorts(tileId: string, cls: VehicleClass): Port[] {
+    const road = level[tileId]?.road;
+    if (!road?.length) return [];
+    const out = new Set<Port>();
+    for (const lane of road) {
+      if (!laneUsableBy(lane, cls)) continue;
+      out.add(lane.from);
+    }
+    return [...out];
+  }
+
+  function requestTrip(
+    fromTileId: string,
+    toTileId: string,
+    kind: VehicleKind = "car"
+  ): string | null {
+    if (fromTileId === toTileId) return null;
+    if (requestedCarCount() >= MAX_REQUESTED_CARS) return null;
+    const cls = vehicleClassOf(kind);
+    const fromRoad = level[fromTileId]?.road;
+    if (!fromRoad?.length || !level[toTileId]?.road?.length) return null;
+
+    const from = parseCoordId(fromTileId);
+    const to = parseCoordId(toTileId);
+    // The journey ends when the car is standing on the destination tile, no
+    // matter which way it came in — so every approach of that tile is a goal.
+    const goals = approachPorts(toTileId, cls).map(entryPort => ({
+      coord: to,
+      entryPort,
+    }));
+    if (goals.length === 0) return null;
+
+    // The driver pulls out of their street onto whichever approach actually
+    // leads there. Ports are tried in a fixed order so a given board dispatches
+    // the same way every run.
+    for (const startPort of approachPorts(fromTileId, cls).sort((a, b) => a - b)) {
+      const plan = planRouteToGoals(level, from, startPort, goals, cls);
+      if (!plan.goal) continue;
+
+      const usable = usableLaneIndices(fromRoad, startPort, cls);
+      if (usable.length === 0) continue;
+      const exit = routeAwareExitForSpawn(from, startPort, plan.turns, cls);
+      const length = specLength(vehicleSpec(kind, carLength));
+      const probe = blankCar("", kind, { coord: from, entryPort: startPort, exitPort: exit });
+      // A closed crossing must not stop somebody LEAVING THEIR HOUSE — it is
+      // ahead of them, not under them — so the probe asks only about traffic.
+      let chosen = -1;
+      for (const lane of usable) {
+        probe.laneIndex = lane;
+        probe.length = length;
+        if (clearAhead(probe, () => false).clear > STOP_EPS) {
+          chosen = lane;
+          break;
+        }
+      }
+      if (chosen < 0) return null; // the street outside is blocked; try again later
+
+      const id = `car${nextId++}`;
+      const car = blankCar(id, kind, { coord: from, entryPort: startPort, exitPort: exit });
+      car.length = length;
+      car.speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+      // From REST, unlike an ambient car: this one has just pulled off a
+      // driveway, it has not been rolling in from off-screen.
+      car.velocity = 0;
+      car.accel = DEFAULT_CAR_ACCEL;
+      car.brake = DEFAULT_CAR_BRAKE;
+      car.routePlan = plan.turns;
+      car.laneIndex = chosen;
+      car.targetLane = chosen;
+      car.laneAnchor = chosen;
+      car.overtakeHomeLane = chosen;
+      car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
+      car.tripGoal = { tileId: toTileId, entryPort: plan.goal.entryPort };
+      cars.push(car);
+      trips.set(id, "driving");
+      return id;
+    }
+    return null;
+  }
+
+  // Requested cars that have reached their destination: they stop being traffic
+  // and the trip is marked arrived for whoever asked for it.
+  function settleRequestedTrips(): void {
+    for (let i = cars.length - 1; i >= 0; i--) {
+      const c = cars[i];
+      const goal = c.tripGoal;
+      if (!goal || c.phase !== "driving") continue;
+      if (tileIdOf(c) !== goal.tileId) continue;
+      // Half way across the destination tile reads as "pulled up at the address"
+      // rather than "clipped the corner of the street".
+      if (c.path[c.headIndex].entryPort !== goal.entryPort || c.headProgress < 0.5) continue;
+      trips.set(c.id, "arrived");
+      releaseStall(c);
+      cars.splice(i, 1);
+    }
+  }
+
   function trySpawn(closed: CrossingClosed): boolean {
     if (entries.length === 0 || activeCarCount() >= maxCarsOf()) return false;
     // Decide the vehicle kind FIRST (it fixes the lane-access class), then pick
@@ -2653,6 +2848,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       pendingExitLane: null,
       tilesSinceJunction: 0,
       phase: "driving",
+      tripGoal: null,
       parkTarget: null,
       stall: null,
       parkPath: null,
@@ -2765,6 +2961,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       pendingExitLane: null,
       tilesSinceJunction: 0,
       phase: "driving",
+      tripGoal: null, // ambient traffic: it drives off the map, not to an address
       parkTarget,
       stall: null,
       parkPath: null,
@@ -2957,6 +3154,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const alive = advance(cars[i], dt, closed);
         if (!alive) {
           if (cars[i].crossedCrossing) carsDelivered += 1;
+          // A REQUESTED car that leaves the map never reached its address (its
+          // route should have ended on it). Close the trip anyway rather than
+          // leave whoever asked for it waiting for ever.
+          if (cars[i].tripGoal) trips.set(cars[i].id, "arrived");
           // Hand the bay back on the way out. A claim that outlives its car would
           // strand that space for the rest of the run — the road-layer version of
           // "a parked train occupies its depot tile forever".
@@ -2964,6 +3165,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           cars.splice(i, 1);
         }
       }
+      // ...and the ones that DID reach their address stop being traffic.
+      settleRequestedTrips();
+    },
+    requestTrip,
+    tripStatus(tripId: string) {
+      return trips.get(tripId) ?? "arrived";
+    },
+    clearFinishedTrip(tripId: string) {
+      trips.delete(tripId);
     },
     frame(): RoadFrame {
       let maxCarWaitSec = 0;

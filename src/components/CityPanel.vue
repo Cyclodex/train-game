@@ -9,6 +9,13 @@
       <span class="city-panel__moving" title="Travelling right now">
         ➜ {{ stats.travelling }}
       </span>
+      <span
+        v-if="stats.driving > 0"
+        class="city-panel__driving"
+        title="Citizens who are a car on the road right now"
+      >
+        🚗 {{ stats.driving }}
+      </span>
     </header>
 
     <!-- The sentence the player is trying to change: how this board gets about. -->
@@ -170,6 +177,9 @@ export default toNative(CityPanel);
 }
 .city-panel__moving {
   opacity: 0.7;
+}
+.city-panel__driving {
+  opacity: 0.85;
 }
 
 .city-panel__share {

@@ -557,6 +557,8 @@ export interface CitizenHud {
   enabled: boolean;
   population: number;
   travelling: number;
+  // How many of this board's people are a car on the road at this instant.
+  driving: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -846,6 +848,7 @@ export function createGame(
     enabled: false,
     population: 0,
     travelling: 0,
+    driving: 0,
     tripsCompleted: 0,
     tripsRefused: 0,
     tripsAbandoned: 0,
@@ -864,10 +867,18 @@ export function createGame(
         world: buildCitizenWorld(level, citizenSetup.seed ?? colorSeed),
         seed: citizenSetup.seed ?? colorSeed,
         tuning: citizenSetup.tuning,
-        // The one thing the citizen sim pushes back into the railway: a person
+        // The two things the citizen sim pushes back into the world: a person
         // who chose the train becomes a passenger on a real platform, capped by
-        // the real platform.
+        // the real platform...
         transit: { enqueue: (stationId, n) => sim.addStationPassengers(stationId, n) },
+        // ...and a person who chose to drive becomes an actual car on the
+        // actual street, subject to every queue, junction and level crossing on
+        // the way. Their journey time is whatever the traffic gives them.
+        driving: {
+          request: (fromTileId, toTileId) => roadSim.requestTrip(fromTileId, toTileId),
+          status: tripId => roadSim.tripStatus(tripId),
+          release: tripId => roadSim.clearFinishedTrip(tripId),
+        },
       })
     );
     citizenStats.enabled = true;
@@ -881,6 +892,7 @@ export function createGame(
     const s = citizenSim.stats();
     citizenStats.population = s.population;
     citizenStats.travelling = s.travelling;
+    citizenStats.driving = s.driving;
     citizenStats.tripsCompleted = s.tripsCompleted;
     citizenStats.tripsRefused = s.tripsRefused;
     citizenStats.tripsAbandoned = s.tripsAbandoned;
