@@ -2267,8 +2267,44 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the cheapest host (it needs the `@` alias).
 - The suite was RED on a slow machine BEFORE this, and not from an assertion:
   `parking.spec.ts`'s two biggest cases blew their own timeouts. Green tests, red
-  CI — same family as the `onTaskUpdate` trap below, and the same cure: make it
-  faster, don't raise the limit.
+  CI — same family as the `onTaskUpdate` trap below. Making it 4.8x faster fixed
+  those two; it did NOT fix the class (see the next section — the 5s default was
+  still the binding constraint on a busy machine, and "make it faster, don't raise
+  the limit" was too strong a rule for a HANG GUARD).
+
+## A RED SIM TEST THAT IS NOT A BUG — READ THE FAILURE LINE FIRST (2026-08-02)
+- `sim/parking.spec.ts` (or any long-run sim case) failing on `master` with a
+  DIFFERENT COUNT EACH RUN — 2 one time, 6 the next — is the signature. Before
+  bisecting anything, read the failure line: `Test timed out in 5000ms.` is not an
+  assertion, and nothing in the sim is broken.
+- WHY IT CANNOT BE THE SIM. The road sim is deterministic — seeded `makeRng` only,
+  no `Math.random`, no `Date.now`/`performance.now` anywhere in `src/sim` — and the
+  assertions are pure functions of its state. Same commit + same seed CANNOT give a
+  different assertion result. So on identical code, a varying failure set has
+  exactly one mechanism left: the wall clock. Use that deduction; it cuts the
+  search from "which commit broke parking" to "how loaded was the machine".
+- REPRODUCE IT ON PURPOSE rather than waiting for it: 64 CPU burners on 20 cores
+  (~9x) turned parking.spec.ts red with TEN timeouts and ZERO assertion failures,
+  including both cases reported from a real red run. A scratch `while (Date.now() <
+  end)` script under `Start-Process -WindowStyle Hidden` is the whole rig — and kill
+  them by `CommandLine -like "*burn.js*"`, never by process name (this repo always
+  has other node processes alive).
+- Background jobs started with `&` in the Bash tool DIE when the call returns, so a
+  "under load" run that way is really a run with no load at all. Detach them.
+- MEASURED HEADROOM at the time of writing (idle → 4.5x load, vs budget): the cases
+  on the old 5s default sat at 7–13x idle, which is under 2x once a second job is
+  on the box. That is why the budget, not the behaviour, was deciding.
+- THE FIX IS `testTimeout: 30_000` in `vitest.config.ts`, plus per-case 60s/120s
+  where a case genuinely needs it. A timeout is a HANG GUARD, not a tolerance: it
+  must be loose enough that a parallel suite run cannot fail it, and 30s stays under
+  vitest's hardcoded 60s worker-RPC limit so a stuck test still names itself.
+- A per-case timeout is only worth writing when it is LARGER than the default. The
+  20s that sat on the bus-halt case was tighter than the new default and did nothing
+  but reintroduce the bug on that one test.
+- If a case wants more than 120s, make it CHEAPER (split per map/seed, as the
+  long-run parking cases already are). Only the budget may be raised — never an
+  assertion's tolerance — and a 120s case is proven safe with the in-loop
+  `breathe()`: it times out cleanly instead of poisoning the run.
 
 ## TEST TIERS — fast lane vs full suite (2026-08-01)
 - `npm run test:unit` = FULL (~1m07s). What CI and the implement pipeline run; its
