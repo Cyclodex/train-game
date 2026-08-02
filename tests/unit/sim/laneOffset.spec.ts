@@ -7,6 +7,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   laneOffsetPx,
   laneOffsetConstPx,
+  laneIndexAcrossSeam,
   oneWayLaneOffsetPx,
   seamBand,
   seamPositioningBand,
@@ -191,13 +192,84 @@ describe("lane lateral offset — seam continuity (rendering regression)", () =>
   });
 
   it("keeps the inner lane continuous across the seam too", () => {
-    // Inner lane (lanePos 1) on a 2->1 road: the inner lane is the one that
-    // DROPS, but the sim merges that car to lane 0 before the seam (desiredLane);
-    // the offset math itself must still be continuous for whatever lanePos it is
-    // handed, so a mid-merge fractional lanePos doesn't snap.
+    // A 2->1 road drops its KERB lane (lanePos 0) and keeps the inner one; the
+    // sim has merged that car inward before the seam (desiredLane). The offset
+    // math itself must still be continuous for whatever lanePos it is handed, so
+    // a mid-merge fractional lanePos doesn't snap.
     const level = laneRoad([2, 2, 1]);
     const offs = sweepOffsets(level, 3, 0.5); // a half-merged car
     expect(maxStep(offs)).toBeLessThan(W * 0.12);
+  });
+});
+
+describe("laneIndexAcrossSeam — the same tarmac, renumbered", () => {
+  const W = TILE * 0.14;
+  // The offset a lane index maps to on a bidirectional tile of `count` lanes.
+  const at = (lane: number, count: number) => laneOffsetConstPx(lane, count, TILE);
+
+  it("keeps a car's physical position when a bidirectional road widens", () => {
+    // 1 → 3: the single lane sits half a lane off the centreline, and so does
+    // lane 2 of the widened road — the two extra lanes appear OUTBOARD, at the
+    // kerb. Carrying the index across unchanged put the car in lane 0, two lanes
+    // further out: the phantom "1 → 3rd lane" sweep this fixes.
+    expect(laneIndexAcrossSeam(0, 1, 3, false)).toBe(2);
+    expect(at(2, 3)).toBeCloseTo(at(0, 1), 9);
+    expect(at(0, 3)).toBeCloseTo(at(0, 1) + 2 * W, 9); // what it used to get
+  });
+
+  it("maps every lane of a widening to its own offset, fractional ones included", () => {
+    for (const [from, to] of [[1, 2], [1, 3], [2, 3], [2, 4], [3, 5]]) {
+      for (let i = 0; i < from; i++) {
+        expect(at(laneIndexAcrossSeam(i, from, to, false), to)).toBeCloseTo(at(i, from), 9);
+      }
+    }
+  });
+
+  it("shifts a mid-change (fractional) position by the same amount", () => {
+    // A car crossing the seam half-way through a lane change keeps gliding: the
+    // fraction is preserved, so the glide continues from where it had got to.
+    expect(laneIndexAcrossSeam(0.5, 2, 3, false)).toBeCloseTo(1.5, 9);
+    expect(laneIndexAcrossSeam(1.25, 3, 4, false)).toBeCloseTo(2.25, 9);
+    // Except where the destination simply has no such lane — then it merges onto
+    // the last one, exactly as the tapered offsets converge there.
+    expect(laneIndexAcrossSeam(0.5, 1, 2, false)).toBeCloseTo(1, 9);
+  });
+
+  it("merges the dropping kerb lanes onto the survivor at a narrowing", () => {
+    // 3 → 1: every lane converges on the one that continues (the offsets do too —
+    // `laneSeamOffsetPx` clamps them all to the narrow kerb).
+    for (const i of [0, 1, 2]) expect(laneIndexAcrossSeam(i, 3, 1, false)).toBe(0);
+    // 3 → 2: only the kerb lane merges; the two inner lanes keep their tarmac.
+    expect(laneIndexAcrossSeam(0, 3, 2, false)).toBe(0);
+    expect(laneIndexAcrossSeam(1, 3, 2, false)).toBe(0);
+    expect(laneIndexAcrossSeam(2, 3, 2, false)).toBe(1);
+    expect(at(1, 2)).toBeCloseTo(at(2, 3), 9); // the survivor really is the same lane
+  });
+
+  it("carries the index unchanged along a KERB-ANCHORED one-way run", () => {
+    // A one-way run anchors on `runMax`, so lane 0 is the same tarmac on every
+    // tile of it and lanes are added/dropped on the CENTRE side — the opposite
+    // side from a bidirectional road, and the reason this takes a flag.
+    for (const [from, to] of [[1, 3], [3, 1], [2, 3], [3, 2]]) {
+      for (let i = 0; i < Math.min(from, to); i++) {
+        expect(laneIndexAcrossSeam(i, from, to, true)).toBe(i);
+      }
+    }
+    expect(laneIndexAcrossSeam(2, 3, 1, true)).toBe(0); // still clamped into the lanes that exist
+  });
+
+  it("never returns a lane the destination does not have", () => {
+    for (const from of [1, 2, 3, 4]) {
+      for (const to of [1, 2, 3, 4]) {
+        for (const kerb of [true, false]) {
+          for (let i = 0; i < from; i++) {
+            const out = laneIndexAcrossSeam(i, from, to, kerb);
+            expect(out).toBeGreaterThanOrEqual(0);
+            expect(out).toBeLessThanOrEqual(to - 1);
+          }
+        }
+      }
+    }
   });
 });
 

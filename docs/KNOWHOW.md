@@ -2106,6 +2106,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Lane switch (G): `Car.laneIndex` is FLOAT (lateral pos); round()=occupied lane;
   eases to int `targetLane` on accepted gap; ending lane merges before taper (sim
   owns lateral motion, render taper gone).
+- A LANE INDEX IS NOT A PLACE (2026-08-02). It is an index into an ANCHORED band,
+  and the two anchors move it in opposite directions when the road changes width:
+  bidirectional is centre-anchored so lanes are added/dropped at the KERB (the same
+  tarmac is `i + Δcount` on the far side of the seam), one-way is kerb-anchored so
+  they are added/dropped at the CENTRE (index carries across unchanged). The
+  straight-seam branch of `advance` carried the raw index over both, so a car
+  entering a 1→3 bidirectional widening in the centre-adjacent lane came out in
+  lane 0 — swept two lanes to the far kerb with no gap check, no decision and
+  against the merge arrows painted under it, then dragged back at the taper. Fixed
+  with `laneIndexAcrossSeam` (`laneOffset.ts` — it lives next to the offset rules it
+  inverts). Pinned by the offsets themselves: `laneOffsetConstPx(mapped, to)` ===
+  `laneOffsetConstPx(i, from)`.
+  · The remap is a lane-index DISCONTINUITY exactly like a junction seam, so it
+    sets `Car.lanePivot` too — the tail is still numbered in the old tile's band,
+    and without the pin it flicks a lane sideways the tick the head crosses.
+- TWO HORIZONS FOR A LANE DROP (`laneDropAhead` → `{near, far}`), because "must I
+  move?" and "is it worth moving?" are different questions:
+  · `LANE_DROP_LOOKAHEAD` (4) — a lane that stops inside it is one no car may aim
+    for. Applied as a CLAMP around `preferredLane` (`survivingLaneBand`), not as
+    another branch inside it, so keep-right / pending exit lane / overtake / spawn
+    are all filtered through one rule and none can send a car into a doomed lane.
+    Replaced the old next-tile-only merge branch: one tile of notice meant the
+    merge happened AT the taper.
+  · `LANE_KEEP_HORIZON` (8) — the DISCRETIONARY keep-right drift additionally wants
+    the lane to last this long. Without it a car dives for the kerb the moment a
+    wide stretch opens and merges straight back a tile later: a weave that gains
+    nothing. This is why a SHORT widening (`/test/roadlanemerge` row 3) is now
+    driven dead straight, and a long one is still used.
+  · WHICH SIDE dies is the anchor question again: surviving band = high indices on
+    a bidirectional road, low indices on a one-way run (`survivingLaneBand`).
+- ONE LANE PER MANOEUVRE (`reachableLane` stops at the first USABLE lane) + a
+  `LANE_CHANGE_SETTLE` (1.2 s) hold afterwards (`Car.laneHold`). Two lanes over is
+  two decisions with a look in between — the settle is bypassed only when the lane
+  ends on the very next tile (`laneDropUrgent`), never the one-lane cap. A lane the
+  class may not STOP in is still crossed for free, so cutting over a kerb bus lane
+  is one change, not two. Both ways a change can finish must set the hold (`arrive`
+  in `updateLateral`): the discrete-step overshoot guard is the one that usually
+  fires, and setting it on the exact-arrival path alone left it mostly dead.
+- Tests: `laneDrop.spec.ts` (behaviour, on the scenario's own board),
+  `laneOffset.spec.ts` (the remap ↔ offset identity). Scenario `/test/lanedrop`:
+  the SAME 1→3→1 road at two lengths, which is the whole rule in one picture.
 - Approach lane discipline (`road.ts desiredLane` branch F): among the lanes that
   permit the upcoming turn (`lanesAllowingExitFor`), pick by `turnKind` — LEFT→inner
   (max idx), RIGHT/STRAIGHT→kerb (min idx). Works for both dedicated turn pockets
