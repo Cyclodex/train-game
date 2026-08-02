@@ -35,9 +35,16 @@ const { Top, Right, Bottom, Left } = Position;
 // both directions has nowhere for opposing cars to pass. Directed lanes solve
 // that in general (see `twoWay`), but a ring wants one direction anyway.
 
-const street = (from: Position, to: Position): TileCell => ({
+// A street THROUGH the town, not beside it: the carriageway carries the town's
+// own ground, so the built-up area is continuous and the road runs across it
+// instead of leaving a ring of meadow between the houses and the tarmac.
+// Nothing is built on it — the keep-out corridors in `tiles/terrain.ts` already
+// step every roof back from a road — and nobody lives on it either, because a
+// tile with a road is town GROUND but not an ADDRESS (`tiles/cities.ts`).
+const street = (from: Position, to: Position, terrain: "urban" | "industry" = "urban"): TileCell => ({
   connections: [],
   road: [oneWay(from, to)],
+  terrain,
 });
 
 const home = (): TileCell => ({
@@ -61,8 +68,8 @@ const level: Record<string, TileCell> = {};
 
 // Corners first, then the four runs between them.
 level[`${X0},${Y0}`] = street(Bottom, Right); // NW: arrive from the left run, turn east
-level[`${X1},${Y0}`] = street(Left, Bottom); // NE: turn south
-level[`${X1},${Y1}`] = street(Top, Left); // SE: turn west
+level[`${X1},${Y0}`] = street(Left, Bottom, "industry"); // NE: turn south
+level[`${X1},${Y1}`] = street(Top, Left, "industry"); // SE: turn west
 level[`${X0},${Y1}`] = street(Right, Top); // SW: turn north
 for (let x = X0 + 1; x < X1; x++) {
   level[`${x},${Y0}`] = street(Left, Right); // top run, eastbound
@@ -70,7 +77,8 @@ for (let x = X0 + 1; x < X1; x++) {
 }
 for (let y = Y0 + 1; y < Y1; y++) {
   level[`${X0},${y}`] = street(Bottom, Top); // left run, northbound
-  level[`${X1},${y}`] = street(Top, Bottom); // right run, southbound
+  // The east side of the ring serves the works, so it stands on works ground.
+  level[`${X1},${y}`] = street(Top, Bottom, "industry"); // right run, southbound
 }
 
 // The houses: the whole west kerb, plus the inside of the ring's top run. Both

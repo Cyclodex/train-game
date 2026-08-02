@@ -26,6 +26,7 @@ import {
   tileHeightSvg,
   tileScatterSvg,
 } from "@/tiles/terrain";
+import { accessPathSvg, accessPortOf } from "@/tiles/access";
 
 // The world's ground, one tile at a time. A sibling of <Tile> rather than a
 // layer inside it, because ground exists whether or not anything is built on the
@@ -122,6 +123,20 @@ class TileGround extends Vue {
     return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
   }
 
+  // The LOCAL ACCESS path: the bit of ground between a plot and the street that
+  // serves it. Derived, never authored (see tiles/access.ts) — the player lays
+  // the arterial network and the last block draws itself.
+  //
+  // A METHOD, not a getter: a class getter is a cached computed in
+  // vue-facing-decorator, and this reads the level, which the build tool edits
+  // live. Cached, a street laid in play would never grow its paths.
+  private accessHtml(): string {
+    const port = accessPortOf(this.level, this.coordId);
+    if (port === null) return "";
+    const kind = terrainOf(this.level[this.coordId]);
+    return accessPathSvg(port, this.coordId, kind === "industry" ? "industry" : "urban");
+  }
+
   get html(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
@@ -131,8 +146,10 @@ class TileGround extends Vue {
           ? tileScatterSvg
           : tileGroundSvg;
     const base = build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
-    // The terrace renders below the terrain patch, on the ground layer only.
-    return this.layer === "ground" ? this.heightHtml + base : base;
+    // Order on the ground layer: terrace, then the terrain patch, then the path
+    // across it. Buildings and roads are later layers, so both sit on top and
+    // the path reads as ground rather than as a second road.
+    return this.layer === "ground" ? this.heightHtml + base + this.accessHtml() : base;
   }
 }
 export default toNative(TileGround);

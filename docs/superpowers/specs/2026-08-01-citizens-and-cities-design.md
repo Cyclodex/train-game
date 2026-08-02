@@ -505,6 +505,41 @@ first when a board feels inert.
 3. **Density in the ground art** (§7).
 4. **Pedestrians you can see** — see §9.1.
 
+### 9.2 Internal circulation — the last block is free (BUILT 2026-08-02)
+
+The question this answers: does the player have to draw every street *inside* a
+town, or do towns build their own?
+
+**Neither.** The link between a plot and the street that serves it is
+**derived** (`tiles/access.ts`), and rendered as a driveway/apron flaring to the
+kerb. Reasoning:
+
+- The model already assumed it. `ROAD_ACCESS_TILES = 1` has always meant "a plot
+  with a street within one tile is reachable". The link was never missing — it
+  was **invisible**, which is a rendering problem, not a modelling one.
+- Making the player lay every driveway is busywork with no decision in it. The
+  interesting decision is the **arterial** network: where the through-road runs,
+  whether the town gets a station.
+- Auto-generating real road *tiles* inside a town (the Transport Fever move)
+  fights the player: generated lanes land in the level data, become editable and
+  bulldozable, and must be regenerated on every growth step. That is a lot of
+  machinery for something nobody chooses.
+
+Two things fall out of it for free: the same derivation is the **pedestrian
+graph** (§9.1) — plot → access apron → footway — and it re-derives the instant a
+street is laid or bulldozed, with nothing stored to go stale.
+
+And the street itself now runs **through** the town rather than beside it: put
+the town's `terrain` on the road tiles and the built-up ground is continuous
+(the keep-out corridors already step every roof back from a carriageway). That
+needed one engine change — the city flood fill walks over town *ground*, while
+only *addresses* hold people — because otherwise a road laid through a town split
+it into two towns.
+
+**When would real internal streets earn their keep?** When a town outgrows what
+one frontage can serve. That belongs with the growth model as a *prompt*, not a
+silent auto-build — the same shape as `wantsRoom`: "Brookfield needs a street."
+
 ### 9.1 Pedestrians and footways (designed, not built)
 
 Walking is a timer today. To *see* people walk, they need somewhere to walk, and

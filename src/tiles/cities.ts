@@ -121,11 +121,21 @@ function isBuildableGround(cell: TileCell): boolean {
   return true;
 }
 
+// The GROUND a town is made of: its terrain, whatever else crosses it. A street
+// running through a town is still the town — this is what the clustering below
+// walks over, so laying a road through a place does not cut it in half.
+function isTownGround(cell: TileCell): boolean {
+  return cell.terrain === "urban" || cell.terrain === "industry";
+}
+
+// An ADDRESS: town ground with nothing built across it. The street is part of
+// the town but nobody lives on the carriageway, so only these hold people.
+//
+// The two predicates are deliberately different, and the difference is the
+// whole reason a street may run THROUGH a town: connectivity is a question
+// about ground, occupancy is a question about addresses.
 function isPlotGround(cell: TileCell): boolean {
-  return (
-    (cell.terrain === "urban" || cell.terrain === "industry") &&
-    isBuildableGround(cell)
-  );
+  return isTownGround(cell) && isBuildableGround(cell);
 }
 
 // --- clustering ----------------------------------------------------------------
@@ -181,13 +191,15 @@ export function citiesOf(level: Level): CitySpec[] {
       groups.set(`tag:${tag}`, list);
       continue;
     }
-    // Flood fill from here over untagged plot ground.
+    // Flood fill from here over untagged town GROUND — streets included, so a
+    // road laid through a town bridges its two halves instead of severing them
+    // — while only ADDRESSES join the city as members.
     const members: string[] = [];
     const stack = [id];
     seen.add(id);
     while (stack.length) {
       const cur = stack.pop() as string;
-      members.push(cur);
+      if (isPlotGround(level[cur])) members.push(cur);
       const { x, y } = parseCoordId(cur);
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
@@ -195,13 +207,15 @@ export function citiesOf(level: Level): CitySpec[] {
           const nid = `${x + dx},${y + dy}`;
           if (seen.has(nid)) continue;
           const cell = level[nid];
-          if (!cell || !isPlotGround(cell)) continue;
+          if (!cell || !isTownGround(cell)) continue;
           if (clusterKey(level, nid)) continue; // tagged cells are their own city
           seen.add(nid);
           stack.push(nid);
         }
       }
     }
+    // A run of street with no addresses beside it is not a town.
+    if (members.length === 0) continue;
     groups.set(`fill:${members.slice().sort(comparePlotId)[0]}`, members);
   }
 

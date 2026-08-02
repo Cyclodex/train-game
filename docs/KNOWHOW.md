@@ -535,6 +535,29 @@ lean — prune as much as you add. This file only stays useful if every task ten
   claim that every car on it is a citizen, and `roadRequestTrip.spec.ts` asserts
   the empty entry list directly. Reach for this whenever a scenario needs traffic
   it fully controls.
+- **A STREET RUNS THROUGH A TOWN, not beside it.** Put the town's `terrain` on
+  the road tiles: the keep-out corridors already step every roof back from a
+  carriageway, so the built-up ground stays continuous and the ring of meadow
+  between houses and tarmac disappears. Two predicates make this safe, and the
+  difference between them IS the feature:
+    · `isTownGround` — terrain only. What the city flood fill WALKS OVER, so a
+      road laid through a town bridges its halves instead of severing them.
+    · `isPlotGround` — town ground with nothing built across it. What holds
+      PEOPLE. Nobody lives on the carriageway.
+  Before the split, a street through a town read as two towns.
+- **LOCAL ACCESS IS DERIVED, never drawn** (`tiles/access.ts`). A plot within
+  `ROAD_ACCESS_TILES` of a street gets its driveway/apron rendered from the tile
+  centre out to that edge. No level data, nothing to keep in sync, re-derived
+  the moment a street is laid or bulldozed — and it is the pedestrian graph when
+  walking people arrive. Do NOT auto-generate road TILES inside a town: they
+  land in the level data, become editable and bulldozable, and must be
+  regenerated on every growth step.
+    · `accessPortOf` is O(1) per tile because the RENDERER asks per tile per
+      frame; `localAccessOf` (whole board) would be quadratic there.
+    · It is a METHOD in TileGround, not a getter — a vue-facing-decorator getter
+      is a cached computed, and a street laid in play would never grow paths.
+    · Draw it as a WEDGE flaring to the kerb, in a tone LIGHTER than the ground
+      (hard-standing). A constant-width darker quad reads as a timber plank.
 - **`game.roadCars` is a RENDER mirror** (updated in `frame()`, not `advance()`),
   so it is EMPTY in a headless test — measuring cars with it reads 0 while ten
   are driving. `citizenStats.driving` is the headless-visible count.
