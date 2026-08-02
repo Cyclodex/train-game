@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { scenarioById } from "@/levels/test";
 import { oppositePort } from "@/sim/topology";
 import { terrainBlocksBuilding, terrainOf } from "@/tiles/terrain";
@@ -12,7 +13,7 @@ import { simFor } from "../support/roadSim";
 const demoworld = scenarioById("demoworld");
 
 describe("demoworld", () => {
-  it("has crossroads cars can actually turn at", () => {
+  itSlow("has crossroads cars can actually turn at", () => {
     // A four-way junction authored as just the two opposite-port pairs
     // (`twoWay(L,R) + twoWay(T,B)`) looks exactly like a crossroads and behaves
     // like a flyover: every car goes straight through, nobody can turn. The

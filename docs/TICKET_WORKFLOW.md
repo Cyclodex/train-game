@@ -67,14 +67,25 @@ The repo ships a one-command screenshot helper so the picture is reproducible
 Claude action:
 
 ```
-npm run shot -- <scenarioId> [more ids] [--label before|after] [--out dir] [--no-debug]
+npm run shot -- <scenarioId> [more ids] [--label before|after] [--out dir] [--debug]
 ```
 
-It boots the app, opens `/test/<scenarioId>` with the **Debug overlay on** (the
-cyan car / amber bus driving-lines — *where vehicles actually drive*) and a flat
-backdrop, lets traffic populate, and writes a tight PNG of just the tiles
-(default `screenshots/`, git-ignored). The `<scenarioId>` is the slug from
-`src/levels/test/index.ts` (e.g. `roadonewaylanes`, `busmegacross`, `mixedcross`).
+It boots the app, opens `/test/<scenarioId>` with the **Debug overlay off** (what
+a player actually sees) and a flat backdrop, lets traffic populate, and writes a
+tight PNG of just the tiles (default `screenshots/`, git-ignored). The
+`<scenarioId>` is the slug from `src/levels/test/index.ts` (e.g.
+`roadonewaylanes`, `busmegacross`, `mixedcross`).
+
+**Debug overlay: off unless it is the subject.** The overlay paints over the
+board — the reservation tint and the cyan/amber driving-lines cover lane paint,
+terrain and depot art — so a debug shot can make a real change look like it did
+nothing. The helper does not trust the app's state: it reads the stage's Debug
+toggle and switches it off before shooting. Pass `--debug` when the overlay
+itself is what you are showing (routing, lane centrelines, *where* a vehicle
+drives); then use the same flag for **both** halves of a before/after pair and
+say so in the PR body. `gameConfig.debug` is `false` by default and not
+persisted, so `/#/play?…` route shots (which have no stage toggle) are
+debug-free by construction.
 
 **Who attaches what, and when:**
 

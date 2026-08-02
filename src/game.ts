@@ -1279,14 +1279,14 @@ export function createGame(
           unit.rear.exitPort === Position.Center &&
           unit.rear.t >= 0.999;
         const { x, y, angle } = positionUnit(unit);
-        // A unit whose centre is on a TUNNEL tile is underground: the portal
-        // swallowed it. Per-unit rather than per-train, so a long consist
-        // threads into the mountain wagon by wagon — the portal arch (drawn
-        // above the trains, like the canopy) masks the moment each one pops.
-        const tileUnder =
-          level[`${Math.floor(x / tileSize)},${Math.floor(y / tileSize)}`];
-        const inTunnel = tileUnder?.tunnel === true;
-        el.style.visibility = inShed || inTunnel ? "hidden" : "visible";
+        // NOTE: going underground is NOT handled here. A unit on a tunnel tile
+        // used to be switched to `visibility: hidden` once its CENTRE crossed
+        // the tile edge, which popped half a locomotive (100px of a 200px tile)
+        // out of existence on the rock face. The bore's mountain now renders
+        // above the trains and simply covers them (TileGround's .tile-over-bore
+        // roof + the portal mouth in Tile.vue), so the consist slides out of
+        // sight — and back out — continuously, with no state to flip.
+        el.style.visibility = inShed ? "hidden" : "visible";
         // Riding a flyover deck lifts the unit above the deck (z5): either
         // anchor on it keeps the sprite raised while it straddles the seams,
         // so it never flickers under the parapet mid-crossing. Clearing the

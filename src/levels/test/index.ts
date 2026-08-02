@@ -27,6 +27,7 @@ import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
+import { lanedrop } from "@/levels/test/scenarios/lanedrop";
 import { lanechangegap } from "@/levels/test/scenarios/lanechangegap";
 import { roadonewaylanes } from "@/levels/test/scenarios/roadonewaylanes";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
@@ -96,6 +97,7 @@ import { tunnel } from "@/levels/test/scenarios/tunnel";
 import { flyover } from "@/levels/test/scenarios/flyover";
 import { grades } from "@/levels/test/scenarios/grades";
 import { mountainpass } from "@/levels/test/scenarios/mountainpass";
+import { terraces } from "@/levels/test/scenarios/terraces";
 import { industry } from "@/levels/test/scenarios/industry";
 import { clearing } from "@/levels/test/scenarios/clearing";
 import { forestworld } from "@/levels/test/scenarios/forestworld";
@@ -150,7 +152,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
-      { id: "grades", label: "Grades", scenarios: [grades, mountainpass] },
+      { id: "grades", label: "Grades", scenarios: [grades, terraces, mountainpass] },
       { id: "stations", label: "Stations", scenarios: [station, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk] },
       {
         id: "crossings",
@@ -172,7 +174,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "lanes",
         label: "One-way & lanes",
-        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, roadonewaylanes, lanechangegap, crosslanes],
+        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, lanedrop, roadonewaylanes, lanechangegap, crosslanes],
       },
       {
         id: "crosses",

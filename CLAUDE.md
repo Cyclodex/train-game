@@ -49,7 +49,10 @@ npm install            # or: npm ci  (.npmrc sets ignore-scripts + save-exact)
 npm run dev            # Vite dev server at http://localhost:5173
 npm run build          # vue-tsc type-check + vite build -> dist/
 npm run preview        # serve the production build
-npm run test:unit      # vitest run
+npm run test:unit      # vitest run — THE FULL SUITE (~1m). What CI runs.
+npm run test:unit:fast # ~28s: skips the long-run sim cases. While iterating.
+npm run test:unit:changed # only tests your diff touches (vs origin/master).
+npm run test:unit:profile # where the suite's time goes + slow-tier candidates
 npm run browsers       # install the Playwright browser builds (once per machine)
 npm run test:e2e       # playwright e2e (needs `npm run browsers` first)
 npm run lint           # eslint --fix
@@ -327,7 +330,19 @@ See `IMPROVEMENTS.md` for the prioritised backlog.
 ## Verifying changes
 
 `npm run build` (vue-tsc + vite) is the fastest correctness check, and
-`npm run test:unit` covers the coordinate math. For behaviour, `npm run test:e2e`
+`npm run test:unit` covers the coordinate math.
+
+**The unit suite has two lanes.** While you iterate, run `npm run test:unit:changed`
+(only what your diff touches) or `npm run test:unit:fast` (~28s — the whole suite
+minus the long-running simulation cases, which are tagged `itSlow`; see
+`tests/unit/support/tier.ts`). Run the FULL `npm run test:unit` (~1m) before you
+push — the fast lane prints how many cases it skipped, so it never pretends to be
+the whole story. `npm run test:unit:profile` shows where the time actually goes and
+which cases are candidates for the slow tier; check it rather than guessing, and
+re-check after touching the simulation's hot path. Do NOT tag a test slow to get a
+red suite green — a slow test that fails still fails in the full lane.
+
+For behaviour, `npm run test:e2e`
 boots a real browser and asserts the level renders 41 tiles + 2 trains, the
 trains physically leave their depots, no two trains share a tile, a puzzle-mode
 run reaches its win overlay, and there are no console errors. For visual
@@ -347,11 +362,21 @@ npm run shot -- <scenarioId> --label before     # baseline, before your change
 npm run shot -- <scenarioId> --label after       # after — same scenario
 ```
 
-It loads `/test/<scenarioId>` in a real browser with the **Debug overlay on**
-(cyan car / amber bus driving-lines) and a flat backdrop, then writes a tight PNG
+It loads `/test/<scenarioId>` in a real browser with the **Debug overlay off**
+(what a player actually sees) and a flat backdrop, then writes a tight PNG
 (default `screenshots/`). A visual **issue** carries a screenshot of the wrong
 state; a visual **fix PR** carries a **before/after** pair (the implementer
 provides both). See `docs/TICKET_WORKFLOW.md` → **Visual verification**.
+
+**PR screenshots are debug-free.** The overlay paints *over* the board — the
+reservation tint and the cyan/amber driving-lines cover lane paint, terrain and
+depot art, so a debug shot can make a real change look like it did nothing. The
+helper therefore reads the stage's toggle and turns it **off** before shooting,
+whatever the app's state; `gameConfig.debug` itself is already `false` by default
+and is not persisted, so `/#/play?…` route shots are debug-free anyway. Add
+`--debug` only when the overlay *is* the subject (routing, lane centrelines,
+where a vehicle actually drives) — and say so in the PR, so the reviewer knows
+why the picture is painted over. Before/after must use the **same** flags.
 
 **Finish by handing back the links.** The last thing every task says is WHERE to
 look, so the reader never has to hunt for the right page. List every page the

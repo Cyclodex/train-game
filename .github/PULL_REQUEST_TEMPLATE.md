@@ -10,9 +10,10 @@ Closes #
 ## Before / After
 
 <!--
-Visual change? Show a before/after of the affected /test scenario (debug overlay
-on for lane/overlay/routing work). Capture with the committed helper and commit
-the PNGs under docs/verify/issue-<N>/:
+Visual change? Show a before/after of the affected /test scenario. The debug
+overlay is OFF (the helper's default — it paints over the board); add --debug to
+both shots only for lane/overlay/routing work, and say so below. Capture with the
+committed helper and commit the PNGs under docs/verify/issue-<N>/:
 
     npm run shot -- <scenarioId> --label before --out docs/verify/issue-<N>
     # …make the change…

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { createRoadSim } from "@/sim/road";
 import { lanesAllowingExit } from "@/tiles/lanes";
 import { crossturns2lane } from "@/levels/test/scenarios/crossturns";
@@ -8,7 +9,7 @@ import { crossturns2lane } from "@/levels/test/scenarios/crossturns";
 // lanes instead of all piling into lane 0 (the spawn-preference fix). Without the
 // latter, a 2-lane junction drives like a single lane.
 describe("multi-lane all-turns junction", () => {
-  it("cars cross from a permitted lane and use the inner lane too", () => {
+  itSlow("cars cross from a permitted lane and use the inner lane too", () => {
     const centre = crossturns2lane.level["2,2"].road!;
     const sim = createRoadSim({
       level: crossturns2lane.level,

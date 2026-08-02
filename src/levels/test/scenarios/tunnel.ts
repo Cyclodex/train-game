@@ -13,10 +13,11 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 //     over the line instead of clearing a right-of-way — the one thing that
 //     visually separates a tunnel from a cutting. Only the dashed guide (map
 //     notation) says where it runs.
-//  2. **The train vanishes at the portal.** `game.ts` hides each unit once its
-//     centre is on a tunnel tile; the portal arch is drawn above the trains
-//     (like the forest canopy), so the consist threads into the mountain wagon
-//     by wagon instead of popping.
+//  2. **The train drives INTO the portal.** Nothing is switched off. The dark
+//     opening renders UNDER the trains, the masonry over them, and the bore's
+//     own mountain over that (a clipped second copy of the rock, `.tile-roof`),
+//     so a unit runs into the dark, is swallowed at the arch, and comes out the
+//     far side the same way. Watch a nose enter: it goes in gradually.
 //  3. **Portals only where the bore meets open ground.** The ridge is two
 //     tiles deep and the seam between its two tunnel cells gets no portal —
 //     one mountain, one hole in each side.

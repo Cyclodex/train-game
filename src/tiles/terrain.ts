@@ -32,11 +32,27 @@ export const TERRAIN_KINDS: readonly TerrainKind[] = [
 // scatter sizes stay independent of the px tile size.
 export const GROUND_UNITS = 100;
 
-// How far a tile corner is nudged off the grid, and how far a boundary bows out
-// between two corners. Together these are what stop a patch reading as a
-// rounded rectangle: the grid is still underneath, but nothing lands on it.
-// Both are small enough that an edge can never cross its neighbour.
-const CORNER_JITTER = 7;
+// A PATCH STAYS ON ITS OWN TILE.
+//
+// This is the containment rule every constant below is pitched against, and it
+// is a GAMEPLAY rule as much as a drawing one: a cell's terrain is what that
+// cell IS, so a structure that answers for the cell — a bridge over water, a
+// bore through rock — has to be able to cover it. While a lake bulged a fifth of
+// a tile into its neighbours, a full-width bridge deck still left water showing
+// past both ends of the span, and the crossing read as track laid on the river.
+// Everything a patch draws is therefore kept inside the tile box: the shore is
+// pulled IN off the lattice line (see SHORE_PULL) rather than pushed out, and a
+// rounded corner's lean is capped at the tile edge (see patchSegments).
+//
+// The one deliberate exception is the soft fringe (see buildGround), which is
+// translucent and exists precisely to blend across the seam.
+
+// How far a tile corner is nudged off the grid. This is what stops a patch
+// reading as a rounded rectangle: the grid is still underneath, but nothing
+// lands on it. Small — it is the ONE thing that can still put a patch a few
+// units over its own boundary (at the reflex corner of an L, where the point is
+// shared with a diagonal neighbour and so cannot be clamped by either tile).
+const CORNER_JITTER = 3;
 
 // SHORES BULGE OUTWARD. The bow used to be symmetric — `(r()*2-1)*EDGE_BOW` —
 // so about half of every patch's boundaries curved INWARD, and a concave shore
@@ -54,16 +70,43 @@ const EDGE_BOW_MIN = 0.34;
 const MID_OF_LEAN = 0.75;
 
 // A lattice point in the MIDDLE of a shore — one where the boundary runs
-// straight on into the next tile — is pushed off the grid too, outward, and the
+// straight on into the next tile — is pulled off the grid too, INWARD, and the
 // shore leans through it. Without this the outline returned to the bare lattice
 // point at every tile boundary and left a sharp inward V there: the bulges were
 // convex, but the CUSPS BETWEEN THEM drew the tile grid back onto the shore, so
-// you could count the tiles down the side of a lake. The push gives the shore
+// you could count the tiles down the side of a lake. The pull gives the shore
 // somewhere else to be; the slope is what makes the two tiles' curves meet
 // smoothly rather than at a kink (see patchSegments).
-const CORNER_PUSH_MIN = 7;
-const CORNER_PUSH_MAX = 19;
-const CORNER_SLOPE = 5;
+//
+// INWARD, not outward. It used to push out by the same amounts, which is what
+// put a lake a fifth of a tile into the meadow next door and left a river wider
+// than the bridge built to cross it (see the containment note above). The
+// smoothing is unchanged either way — the shore still never touches the grid
+// line, it now sits just inside it instead of just outside — and because BOTH
+// tiles read the same shared pull, the seam stays shut exactly as before.
+// SHALLOW, and bounded at both ends for different reasons.
+//
+// The minimum is not free: a mid-shore point may be nudged CORNER_JITTER back
+// toward the grid and its control point leans a further CORNER_SLOPE outward,
+// so MIN >= JITTER + SLOPE is what makes "the shore stays on its tile" exact
+// rather than approximate.
+//
+// The MAXIMUM is what keeps the shore CONVEX, and it is pitched against
+// CORNER_INSET: a real corner is cut ~10-18 units into the tile (the diagonal
+// pull, resolved onto one axis), so a mid-shore point deeper than that would sit
+// INSIDE the line between the corners either side of it — the boundary would be
+// sucked in once per tile and a 2x2 lake would come out as a cushion with a
+// pinch in the middle of each side. That is the same star-shaped defect the
+// outward-only bow was introduced to fix, just arriving from the other
+// direction: the shore has to stay OUTSIDE its chord and INSIDE its tile, and
+// the gap between these two constants is the room to do both.
+const SHORE_PULL_MIN = 6;
+const SHORE_PULL_MAX = 12;
+const CORNER_SLOPE = 3;
+
+// How far short of its own tile edge a rounded corner's lean has to stop (see
+// outwardRoom).
+const SHORE_EDGE_KEEP = 2;
 
 // A REAL corner — where the patch genuinely turns — is pulled INWARD, along the
 // tile's diagonal. This is what finally stopped an authored block silhouetting
@@ -73,8 +116,26 @@ const CORNER_SLOPE = 5;
 // makes the outline sweep from outside the lattice line down into the tile and
 // back — an effective corner radius of most of a tile, which is what reads as a
 // rounded blob. The two amounts vary per corner so the blob is never a circle.
-const CORNER_INSET_MIN = 14;
+// The base amounts are pitched at a LONE tile, where a circle inscribed in the
+// square cuts each corner by ~14.6 units on each axis, i.e. ~21 along the
+// diagonal.
+const CORNER_INSET_MIN = 18;
 const CORNER_INSET_MAX = 26;
+
+// …but a corner of a BIGGER body has to be cut deeper, and this is why a 2x2
+// lake used to read as a rounded rectangle instead of as an oval. An ellipse
+// inscribed in a 2x2 block passes ~29 units inside each corner of the block ON
+// EACH AXIS — twice a lone tile's cut — because the shore has two tiles to
+// travel while it turns, not one. Cutting every corner by the lone-tile amount
+// therefore rounds a small pond correctly and leaves a big lake square.
+//
+// How big the body is, is READABLE LOCALLY: it is how many of this tile's edges
+// stop. Four = the body is this tile alone. Three = the end of a one-wide
+// ribbon. Two = a corner tile of something at least 2x2 — the case that needs
+// the deep cut. No cross-tile agreement is needed for this (unlike every shared
+// lattice value): a corner-role point is only ever drawn through by ONE tile,
+// because a same-kind side neighbour would have made it a run instead.
+const CORNER_INSET_BY_STOPS: Record<number, number> = { 4: 1, 3: 1.3, 2: 1.75 };
 
 // How much a real corner's end tangents lean outward, as a multiple of the old
 // bow-derived lean. At ~1 the outline turned ~78° at the corner point — a
@@ -219,8 +280,8 @@ export const FOOT: Record<TerrainKind, number> = {
   farmland: 0,
   forest: 13,
   water: 6,
-  rock: 15,
-  mountain: 30,
+  rock: 13,
+  mountain: 26,
   // The SMALLEST town archetype's reach (`URBAN_SMALLEST_REACH`), not the
   // largest: a building's footprint is chosen to fit the room actually measured
   // at its spot (see `building`), so this only has to admit a shed. Gating on
@@ -604,14 +665,15 @@ export function edgeBow(
 }
 
 /**
- * How far a MID-SHORE lattice point is pushed off the grid, along the shore's
- * outward normal, and how steeply the shore leans as it passes through. Both are
- * seeded by the lattice point alone, so the two tiles that share it place it and
- * angle it identically — that agreement is the whole reason the seam stays shut.
+ * How far a MID-SHORE lattice point is pulled off the grid, INWARD along the
+ * shore's outward normal, and how steeply the shore leans as it passes through.
+ * Both are seeded by the lattice point alone, so the two tiles that share it
+ * place it and angle it identically — that agreement is the whole reason the
+ * seam stays shut.
  */
-export function cornerPush(gx: number, gy: number, seed: number): number {
+export function shorePull(gx: number, gy: number, seed: number): number {
   const r = makeRng(hashInts(seed, gx, gy, 0x3b));
-  return lerp(CORNER_PUSH_MIN, CORNER_PUSH_MAX, r());
+  return lerp(SHORE_PULL_MIN, SHORE_PULL_MAX, r());
 }
 
 export function cornerSlope(gx: number, gy: number, seed: number): number {
@@ -715,7 +777,13 @@ function corners(
   size: number,
   roles: CornerRole[],
   style: EdgeStyle,
+  stops: boolean[],
+  inset: number[],
 ): Pt[] {
+  // How deep this tile's real corners are cut: the further the body extends,
+  // the longer the shore has to turn, and the deeper the cut has to be for the
+  // silhouette to read as one curve (see CORNER_INSET_BY_STOPS).
+  const insetScale = CORNER_INSET_BY_STOPS[stops.filter(Boolean).length] ?? 1;
   const local: Pt[] = [
     { x: 0, y: 0 },
     { x: size, y: 0 },
@@ -731,18 +799,29 @@ function corners(
     // difference between a field and a pond.
     if (style === "surveyed") return p;
     if (role.kind === "run") {
-      const push = cornerPush(gx, gy, seed);
+      const pull = shorePull(gx, gy, seed);
       const out = EDGE_FRAME[role.edge].out;
-      p.x += out.x * push;
-      p.y += out.y * push;
+      p.x -= out.x * pull;
+      p.y -= out.y * pull;
     } else if (role.kind === "corner") {
       // The inward diagonal is opposite the two adjacent edges' outward
       // normals; their sum has length sqrt(2), so divide to get a unit pull.
-      const inset = cornerInset(gx, gy, seed);
+      const cut = cornerInset(gx, gy, seed) * insetScale;
       const oBefore = EDGE_FRAME[(i + 3) % 4].out;
       const oAfter = EDGE_FRAME[i].out;
-      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * inset;
-      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * inset;
+      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * cut;
+      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * cut;
+    }
+    // A body that has to stop INSIDE its own tile (a terrace band whose fall to
+    // that neighbour is more than one step — see `bandInsets`) is pushed off the
+    // boundary by its share of the drop. Both edges meeting at this corner get a
+    // say and their normals are perpendicular, so the two pushes just compose.
+    for (const e of [(i + 3) % 4, i]) {
+      const push = inset[e];
+      if (!push) continue;
+      const out = EDGE_FRAME[e].out;
+      p.x -= out.x * push;
+      p.y -= out.y * push;
     }
     return p;
   });
@@ -815,6 +894,13 @@ function cornerDiagonals(same: PatchSame): boolean[] {
   return [!!same.topLeft, !!same.topRight, !!same.bottomRight, !!same.bottomLeft];
 }
 
+// How far each edge of a body is pushed INSIDE its own tile, in edge order
+// (top, right, bottom, left). Zero for every ordinary patch: a lake's boundary
+// is the tile boundary. Non-zero only for a terrace band that has to fit more
+// than one step of fall between the summit and the neighbour it drops to.
+export type EdgeInset = [number, number, number, number];
+const NO_INSET: EdgeInset = [0, 0, 0, 0];
+
 // Everything the two path builders need to agree on, worked out once.
 function patchFrame(
   same: PatchSame,
@@ -823,13 +909,14 @@ function patchFrame(
   seed: number,
   size: number,
   style: EdgeStyle,
+  inset: EdgeInset,
 ) {
   const stops = edgeStops(same);
   const roles = cornerRoles(stops, cornerDiagonals(same));
   return {
     stops,
     roles,
-    c: corners(x, y, seed, size, roles, style),
+    c: corners(x, y, seed, size, roles, style, stops, inset),
     g: cornerLattice(x, y),
     reach: size / 3,
   };
@@ -851,6 +938,40 @@ function edgeLean(
   const [bx, by] = g[(i + 1) % 4];
   const lean = (-edgeBow(ax, ay, bx, by, seed) / MID_OF_LEAN) * CORNER_ROUNDING;
   return Math.min(lean, reach * 0.95);
+}
+
+/**
+ * How much room a point has before the tile edge it is leaning toward. The
+ * containment rule (see the note by CORNER_JITTER) is enforced here and nowhere
+ * else: a cubic lies inside the convex hull of its four points, so capping a
+ * corner's outward lean at this distance keeps the whole rounded sweep on the
+ * tile — the shore reaches the boundary and stops there instead of spilling a
+ * quarter of a tile onto the ground next door.
+ */
+function outwardRoom(p: Pt, out: Pt, size: number, inset = 0): number {
+  const edge = out.x !== 0 ? (out.x > 0 ? size - p.x : p.x) : out.y > 0 ? size - p.y : p.y;
+  // An INSET edge (a terrace band above the tile boundary) has to stay inside
+  // its own contour line, not merely inside the tile: spend the whole room and
+  // the sweep bulges back out over the band below and eats the ring it is
+  // supposed to sit in.
+  const room = edge - inset;
+  // Divided by MID_OF_LEAN, because the CURVE is what has to stay on the tile,
+  // not its control points. A cubic whose two ends sit `d` inside the boundary
+  // and whose controls both lean `L` outward reaches `d - 0.75L` at its
+  // midpoint, so the exact condition is L <= d / 0.75 — the control point may
+  // legitimately sit outside the tile while the shore it draws does not.
+  //
+  // Capping at the hull instead (L <= d) was the first attempt and it is what
+  // made a lake look BOXY: the sweep died 5-7 units short of the boundary all
+  // the way round, so every side read as a straight run with a small turn at
+  // each end instead of as one arc. Rounding a corner needs the lean, and the
+  // lean has to be worth a third more than the room to spend it.
+  //
+  // The keep-off is subtracted first so the curve stops just SHORT of the grid
+  // line rather than on it: landing exactly on 0 or `size` would put the
+  // shore's steepest part on the tile edge, which is the thing the jitter is
+  // there to avoid.
+  return Math.max(0, room - SHORE_EDGE_KEEP) / MID_OF_LEAN;
 }
 
 /**
@@ -879,8 +1000,9 @@ function patchSegments(
   seed: number,
   size: number,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): ShoreSeg[] {
-  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style);
+  const { stops, roles, c, g, reach } = patchFrame(same, x, y, seed, size, style, inset);
   const segs: ShoreSeg[] = [];
   for (let i = 0; i < 4; i++) {
     const a = c[i];
@@ -907,9 +1029,13 @@ function patchSegments(
       leadOut = seam;
       leadIn = -seam;
     } else {
+      // A real corner leans out by the edge's own amount, but never past the
+      // tile edge: the patch has to stay on its own cell (see outwardRoom).
       const lean = edgeLean(g, i, seed, reach);
-      leadOut = edgeLead(roles[i], g[i], seed, lean, 1);
-      leadIn = edgeLead(roles[j], g[j], seed, lean, -1);
+      const room = outwardRoom(a, out, size, inset[i]);
+      const roomB = outwardRoom(b, out, size, inset[i]);
+      leadOut = edgeLead(roles[i], g[i], seed, Math.min(lean, room), 1);
+      leadIn = edgeLead(roles[j], g[j], seed, Math.min(lean, roomB), -1);
     }
     segs.push({
       a,
@@ -944,8 +1070,9 @@ export function patchPath(
   seed = 1,
   size = GROUND_UNITS,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): string {
-  const segs = patchSegments(same, x, y, seed, size, style);
+  const segs = patchSegments(same, x, y, seed, size, style, inset);
   const out = [`M${n1(segs[0].a.x)} ${n1(segs[0].a.y)}`];
   for (const s of segs) out.push(cubic(s));
   out.push("Z");
@@ -965,8 +1092,9 @@ export function patchRimPath(
   seed = 1,
   size = GROUND_UNITS,
   style: EdgeStyle = "organic",
+  inset: EdgeInset = NO_INSET,
 ): string {
-  return patchSegments(same, x, y, seed, size, style)
+  return patchSegments(same, x, y, seed, size, style, inset)
     .filter(s => s.stops)
     .map(s => `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`)
     .join(" ");
@@ -1061,10 +1189,14 @@ const SCATTER_BAND: Partial<Record<TerrainKind, ScatterBand>> = {
   // patch edge — the containment walk keeps them on the patch.
   forest: { x: [10, 90], y: [10, 90], scale: [0.72, 1.15] },
   // Boulders are bigger than a tree's footprint, so they keep a deeper margin.
-  rock: { x: [20, 80], y: [20, 80], scale: [0.72, 1.15] },
+  rock: { x: [24, 76], y: [24, 76], scale: [0.72, 1.15] },
   // A ridge is the biggest footprint on the board; keep its centre well inside
-  // the tile so the massif stays on its own ground.
-  mountain: { x: [26, 74], y: [26, 74], scale: [0.8, 1.15] },
+  // the tile so the massif stays on its own ground. Band + `peak`'s own reach
+  // are pitched together so a crest lands inside the cell it belongs to — a
+  // mountain hanging over the neighbour is the same defect as a lake doing it
+  // (see the containment note by CORNER_JITTER), and worse, because a ridge is
+  // opaque: it drew over ground a tunnel portal or a bridge had to answer for.
+  mountain: { x: [33, 67], y: [33, 67], scale: [0.8, 1.1] },
   // Buildings are the biggest footprints on the board after a ridge, so they
   // keep well off the tile edge — and the scale range is narrow, because a town
   // whose houses vary by 40% reads as a perspective error rather than as
@@ -1144,7 +1276,9 @@ function splitBySun(pts: Pt2[]): { lit: Pt2[]; shade: Pt2[] } {
  * catching the light unevenly, which is tones a few steps apart.
  */
 function boulder(rng: Rng, scale: number): string {
-  const r = lerp(10, 16, rng()) * scale;
+  // Sized against the rock band (24..76) and the scale cap, same rule as the
+  // ridge: radius + the shadow's own 0.24r offset has to fit the margin.
+  const r = lerp(9, 14, rng()) * scale;
   const pts = blobPts(rng, r, 8, lerp(0.72, 1, rng()));
   const { lit, shade } = splitBySun(pts);
   // Offsets are baked into the POINTS, not wrapped in a nested translate: the
@@ -1216,7 +1350,11 @@ function shelf(rng: Rng, base: Hsl): string {
  * or three of these crossing each other read as a massif.
  */
 function peak(rng: Rng, scale: number): string {
-  const len = lerp(40, 58, rng()) * scale; // total crest length
+  // Crest length and apron widths are bounded by the tile, not by taste: at the
+  // band's edge (33/67) and the scale cap (1.1) a half-crest of 48/2 plus the
+  // wobble and the shadow offset just reaches the boundary. Grow either and the
+  // massif starts hanging over the next cell.
+  const len = lerp(34, 48, rng()) * scale; // total crest length
   const th = rng() * Math.PI; // crest bearing
   const u: Pt2 = { x: Math.cos(th), y: Math.sin(th) }; // along the crest
   let v: Pt2 = { x: -u.y, y: u.x }; // across it
@@ -1226,8 +1364,8 @@ function peak(rng: Rng, scale: number): string {
   // Wider than it is long is what separates a massif from a shard: the aprons
   // together span more than half the crest, so the footprint is a rugged blob
   // with a spine, not a spiky lens.
-  const wLit = lerp(14, 19, rng()) * scale;
-  const wShade = lerp(16, 22, rng()) * scale;
+  const wLit = lerp(12, 16, rng()) * scale;
+  const wShade = lerp(13, 18, rng()) * scale;
   const face = stone(rng, lerp(56, 64, rng()), [10, 18]);
   const shade = stone(rng, lerp(36, 44, rng()), [12, 20]);
 
@@ -2176,6 +2314,20 @@ function buildCached(
 // The terrace deliberately reuses the patch machinery (patchPath /
 // patchSegments), so its outline jitters off the grid and its shared edges
 // fuse invisibly, like every other body of ground in the game.
+//
+// EVERY STEP OF THE FALL IS DRAWN, not just the top one (2026-08-01). A cell
+// used to lay ONE body, for its own height, so a summit that dropped straight
+// to the ground next door — h2 against h0 at the end of a ridge, or an authored
+// h3 beside an h1 — showed a single contour where the hill either side showed
+// two or three. The hill then read as terraced along the axis someone happened
+// to author a ramp on and as a sheer wall everywhere else, which is the glitch
+// this section now exists to prevent. So a cell of height h lays a BAND PER
+// LEVEL, 1..h: band k fuses with every neighbour standing at k or above, and
+// where it has to stop it is pushed INSIDE the tile by its share of the fall
+// (see `bandInsets`). The tile that jumps 1 -> 3 draws the missing level-2
+// contour inside its own cell — the steps are closer together, which is what a
+// steeper slope looks like on a contour map — and 1 -> 2 -> 3 authored over
+// three cells still draws exactly what it did before, one contour per boundary.
 
 // A terrace is grass-family ground, so its tint is ANCHORED TO THE THEME's
 // board green and climbs from there — a fixed table read as a hollow on the
@@ -2201,19 +2353,78 @@ export function heightTint(height: number, theme = "meadow"): Hsl {
   return [bh - 9 * step, bs + 2 * step, Math.min(bl + 6 * step, 82)];
 }
 
+/**
+ * The eight neighbours' HEIGHTS (absent cells read as 0), in the same order as
+ * TerrainNeighbours. Heights, not booleans: a cell has to know how FAR the
+ * ground falls on each side, because that is how many contours it owes.
+ */
+export interface HeightNeighbours {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+  topLeft: number;
+  topRight: number;
+  bottomRight: number;
+  bottomLeft: number;
+}
+
+// How far apart two contours drawn INSIDE one tile sit, in ground units. Only a
+// multi-step fall spends this: the first step off the summit always lands on the
+// tile boundary, so an ordinary one-step ramp is drawn exactly where it always
+// was and every board authored before this reads identically.
+const TERRACE_BAND_INSET = 17;
+
+// The neighbour heights in edge order (top, right, bottom, left) — the same
+// clockwise walk `corners`/`patchSegments` use.
+function edgeHeights(n: HeightNeighbours): number[] {
+  return [n.top, n.right, n.bottom, n.left];
+}
+
+/**
+ * Where band `k` of a tile standing at `height` has to stop, per edge. An edge
+ * whose neighbour already stands at `k` or higher does not stop at all (0). An
+ * edge that drops to `n < k` owes `k - n` contours between the summit and the
+ * boundary; this band is the (k - n)th of them counting down, so the LOWEST one
+ * sits on the boundary and each one above steps a fixed distance further in.
+ */
+export function bandInsets(k: number, neighbours: HeightNeighbours): EdgeInset {
+  return edgeHeights(neighbours).map(n => {
+    if (n >= k) return 0;
+    // Capped so that even a 3-step wall (h3 against bare ground on every side)
+    // leaves the summit an actual patch to be rather than a crossing of four
+    // contours: opposite edges can never claim more than the tile between them.
+    return Math.min((k - n - 1) * TERRACE_BAND_INSET, GROUND_UNITS * 0.35);
+  }) as EdgeInset;
+}
+
+// The `same` flags for band k: a neighbour AT OR ABOVE k continues this contour.
+function bandSame(k: number, n: HeightNeighbours): PatchSame {
+  return {
+    top: n.top >= k,
+    right: n.right >= k,
+    bottom: n.bottom >= k,
+    left: n.left >= k,
+    topLeft: n.topLeft >= k,
+    topRight: n.topRight >= k,
+    bottomRight: n.bottomRight >= k,
+    bottomLeft: n.bottomLeft >= k,
+  };
+}
+
 // Memo, for the same reason as `cache` below: a terrace only changes with its
-// height, its neighbour comparison, its coord or the seed.
+// height, its neighbours' heights, its coord or the seed.
 const heightCache = new Map<string, string>();
 
 /**
- * The terrace one elevated tile lays, as an SVG fragment in the 0..100 box.
- * `same` compares NEIGHBOUR HEIGHT >= this height (fuse) — lower neighbours
- * are where the slope faces paint. "" at ground level.
+ * The terraces one elevated tile lays, as an SVG fragment in the 0..100 box:
+ * one band per level from 1 up to `height`, lowest first, so the bands nest.
+ * "" at ground level.
  */
 export function tileHeightSvg(
   height: number,
   coordId: string,
-  same: PatchSame,
+  neighbours: HeightNeighbours,
   seed = 1,
   theme = "meadow",
 ): string {
@@ -2221,45 +2432,65 @@ export function tileHeightSvg(
   // THE THEME IS PART OF THE KEY — the memo trap the terrain roadmap wrote
   // down before anyone hit it: switch theme mid-session and a key without it
   // serves every terrace from the old palette.
-  const key =
-    `h${height}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
-    `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}|${theme}`;
+  const around = [
+    neighbours.top,
+    neighbours.right,
+    neighbours.bottom,
+    neighbours.left,
+    neighbours.topLeft,
+    neighbours.topRight,
+    neighbours.bottomRight,
+    neighbours.bottomLeft,
+  ];
+  const key = `h${height}|${around.join(",")}|${coordId}|${seed}|${theme}`;
   const hit = heightCache.get(key);
   if (hit !== undefined) return hit;
 
   const { x, y } = parseCoordId(coordId);
-  const [hh, hs, hl] = heightTint(height, theme);
-  const d = patchPath(same, x, y, seed, GROUND_UNITS);
   const parts: string[] = [];
+  const lowest = Math.min(...around);
 
-  // Soft fringe outside the body (unclipped, like every kind's), so the
-  // terrace blends into the ground below instead of ending at a hard line.
-  const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS);
-  if (fringeD) {
-    parts.push(
-      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
-      `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
-    );
-  }
-  parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+  for (let k = 1; k <= height; k++) {
+    // A band the NEXT one up covers exactly (every neighbour is already above
+    // it, so both bodies are the same full-bleed square) would be painted over
+    // entirely — skip it rather than emit a shape nobody can see. This is the
+    // plateau interior, i.e. most of a big hill's cells.
+    if (k < height && lowest >= k + 1) continue;
 
-  // The slope faces: each DOWNHILL edge stroked inside the body — lit where it
-  // faces the sun (top/left), shaded where it faces away (right/bottom). Edge
-  // order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom, 3 left.
-  const slopes = patchSegments(same, x, y, seed, GROUND_UNITS)
-    .map((s, i) => ({ s, i }))
-    .filter(({ s }) => s.stops);
-  if (slopes.length > 0) {
-    const clipId = `height-clip-${coordId.replace(",", "-")}-${height}`;
-    parts.unshift(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
-    for (const { s, i } of slopes) {
-      const lit = i === 0 || i === 3;
-      const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
-      const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+    const same = bandSame(k, neighbours);
+    const inset = bandInsets(k, neighbours);
+    const [hh, hs, hl] = heightTint(k, theme);
+    const d = patchPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+
+    // Soft fringe outside the body (unclipped, like every kind's), so each
+    // contour blends into the step below instead of ending at a hard line.
+    const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+    if (fringeD) {
       parts.push(
-        `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+        `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
+        `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="15" stroke-linecap="round" opacity="0.3"/>`,
       );
+    }
+    parts.push(`<path d="${d}" fill="${css([hh, hs, hl])}"/>`);
+
+    // The slope faces: each DOWNHILL edge stroked inside the body — lit where
+    // it faces the sun (top/left), shaded where it faces away (right/bottom).
+    // Edge order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom,
+    // 3 left.
+    const slopes = patchSegments(same, x, y, seed, GROUND_UNITS, "organic", inset)
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s.stops);
+    if (slopes.length > 0) {
+      const clipId = `height-clip-${coordId.replace(",", "-")}-${k}`;
+      parts.push(`<clipPath id="${clipId}"><path d="${d}"/></clipPath>`);
+      for (const { s, i } of slopes) {
+        const lit = i === 0 || i === 3;
+        const tone: Hsl = lit ? [hh, hs - 4, hl + 8] : [hh, hs + 4, hl - 11];
+        const seg = `M${n1(s.a.x)} ${n1(s.a.y)} ${cubic(s)}`;
+        parts.push(
+          `<path d="${seg}" fill="none" stroke="${css(tone)}" stroke-width="13" stroke-linecap="round" clip-path="url(#${clipId})" opacity="0.8"/>`,
+        );
+      }
     }
   }
 
@@ -2432,7 +2663,12 @@ function buildGround(
   const parts: string[] = [];
   const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, style);
   if (fringeD) {
-    const [wide, tight] = style === "surveyed" ? [18, 9] : [30, 15];
+    // Sized against the shore's own inset (SHORE_PULL_MIN): the stroke is
+    // centred on the boundary, so half of it reaches outward — half of `wide`
+    // is what the halo spills, and keeping that within the pull is what stops
+    // the ONE deliberately unclipped thing a patch draws from painting a lake's
+    // blue onto the meadow two tiles over.
+    const [wide, tight] = style === "surveyed" ? [14, 7] : [20, 10];
     parts.push(
       `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${wide}" stroke-linecap="round" opacity="0.15"/>`,
       `<path d="${fringeD}" fill="none" stroke="${css(base)}" stroke-width="${tight}" stroke-linecap="round" opacity="0.3"/>`,
@@ -2658,4 +2894,5 @@ function buildGround(
 // against a changed implementation.
 export function _clearTerrainCache(): void {
   cache.clear();
+  heightCache.clear();
 }

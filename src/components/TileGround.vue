@@ -6,6 +6,18 @@
     preserveAspectRatio="none"
     v-html="html"
   />
+  <!-- A bore's ROOF: the same art a SECOND time, clipped to the tile and lifted
+       above the trains. A copy rather than a lift, because the layer below still
+       has to draw the mountain's real, bowed-out silhouette — clip THAT and the
+       ridge grows a flat spot per bored tile and the tile grid is back. See
+       .tile-roof. -->
+  <svg
+    v-if="overBore && baseHtml"
+    :class="[`tile-${layer}`, 'tile-roof']"
+    :viewBox="`0 0 ${units} ${units}`"
+    preserveAspectRatio="none"
+    v-html="baseHtml"
+  />
 </template>
 
 <script lang="ts">
@@ -17,7 +29,7 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
   GROUND_UNITS,
-  PatchSame,
+  HeightNeighbours,
   TerrainNeighbours,
   corridorsFor,
   terrainOf,
@@ -97,17 +109,19 @@ class TileGround extends Vue {
     });
   }
 
-  // The hypsometric terrace an elevated cell lays UNDER its terrain patch:
-  // "same" here compares HEIGHT, not kind — a neighbour at or above this
-  // height continues the terrace (the higher one lays its own, lighter body),
-  // a lower one is where the slope face paints. See tileHeightSvg.
+  // The hypsometric terraces an elevated cell lays UNDER its terrain patch.
+  // The neighbours are handed over as HEIGHTS, not as "same" booleans: a cell
+  // draws one contour per level it stands above its lowest neighbour, so a
+  // summit dropping two or three steps at once draws the intermediate contours
+  // inside its own tile instead of showing a single sheer wall. See
+  // tileHeightSvg.
   get heightHtml(): string {
     const h = heightOf(this.level[this.coordId]);
     if (h === 0) return "";
     const { x, y } = parseCoordId(this.coordId);
     const at = (dx: number, dy: number) =>
-      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]) >= h;
-    const same: PatchSame = {
+      heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]);
+    const around: HeightNeighbours = {
       top: at(0, -1),
       right: at(1, 0),
       bottom: at(0, 1),
@@ -121,7 +135,7 @@ class TileGround extends Vue {
     // for the meadow board would glare on it, and the shot pipeline runs with
     // plainBackdrop on by default.
     const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
-    return tileHeightSvg(h, this.coordId, same, TERRAIN_SEED, theme);
+    return tileHeightSvg(h, this.coordId, around, TERRAIN_SEED, theme);
   }
 
   // The LOCAL ACCESS path: the bit of ground between a plot and the street that
@@ -138,7 +152,24 @@ class TileGround extends Vue {
     return accessPathSvg(port, this.coordId, kind === "industry" ? "industry" : "urban");
   }
 
-  get html(): string {
+  // A BORED cell gets its ground and scatter a SECOND time, above the trains:
+  // the mountain over a tunnel is a ROOF, so a consist is covered by the rock
+  // rather than switched off (see the .tile-roof rule). The canopy layer is
+  // already above the trains and stays where it is.
+  //
+  // Safe because a bore only ever exists on tunnelable ground (`addConnection`
+  // sets `TileCell.tunnel` exactly where `needsTunnel` holds — rock/mountain),
+  // and those kinds paint an opaque patch that covers the whole tile. A bore
+  // hand-authored onto grass would have no roof, and its train would drive over
+  // the top in plain sight — which is the right way for invalid data to read.
+  get overBore(): boolean {
+    return this.layer !== "canopy" && this.level[this.coordId]?.tunnel === true;
+  }
+
+  // The tile's own art for this layer, WITHOUT the height terrace: the terrace
+  // renders under an opaque patch, so the roof copy has no use for it — and
+  // duplicating it would duplicate the clipPath id it defines.
+  get baseHtml(): string {
     const kind = terrainOf(this.level[this.coordId]);
     const build =
       this.layer === "canopy"
@@ -146,16 +177,24 @@ class TileGround extends Vue {
         : this.layer === "scatter"
           ? tileScatterSvg
           : tileGroundSvg;
-    const base = build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
-    // Order on the ground layer: terrace, then the terrain patch, then the path
-    // across it. Buildings and roads are later layers, so both sit on top and
-    // the path reads as ground rather than as a second road.
-    if (this.layer !== "ground") return base;
-    // Order: terrace, terrain patch, the driveway across it, then the pavement
-    // beside the street. Roads and buildings are later layers, so both sit on
-    // top and all of this reads as ground.
+    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+  }
+
+  get html(): string {
+    // Everything but the ground layer is just the tile's own art.
+    if (this.layer !== "ground") return this.baseHtml;
+    // Order on the ground: the height terrace, the terrain patch, the driveway
+    // across it, then the pavement beside the street. Roads and buildings are
+    // later layers, so both sit on top and all of this reads as ground.
+    //
+    // The bore ROOF copy deliberately uses `baseHtml` instead, so a mountain
+    // over a tunnel is re-drawn above the trains without a second driveway or a
+    // second pavement painted on top of them.
     return (
-      this.heightHtml + base + this.accessHtml() + pavementPaths(this.level[this.coordId], this.units)
+      this.heightHtml +
+      this.baseHtml +
+      this.accessHtml() +
+      pavementPaths(this.level[this.coordId], this.units)
     );
   }
 }
@@ -199,5 +238,30 @@ export default toNative(TileGround);
   // cars' debug id labels can't leak through — each .road-car is its own
   // stacking context. Fare pins (z9) and switches (z14+) also stay above.
   z-index: 7;
+}
+// The mountain over a BORE, lifted above the trains — the same trick as the
+// canopy, applied to the whole cell instead of a few crowns. This is what makes
+// a tunnel work: the rock OCCLUDES the consist, so each unit slides out of
+// sight along the tile edge instead of being switched off at the tile centre
+// (which popped half a locomotive — the sprite is 100px of a 200px tile — into
+// and out of existence in the middle of the ridge). The portal arch and the
+// dashed guide are lifted over the roof in Tile.vue.
+.tile-roof {
+  // CLIPPED TO THE TILE, unlike every other ground layer. The patch keeps to
+  // its own tile now, but the soft FRINGE deliberately does not — it is half a
+  // stroke of the patch's own colour spilled onto the neighbour, and lifted
+  // above the trains it would wash a passing consist in mountain grey a good
+  // ten units before the portal. The original underneath still lays that
+  // fringe, where it belongs and under everything. What is left after the clip
+  // covers exactly the tile, and the portal's covered stretch reaches the tile
+  // edge to meet it.
+  clip-path: inset(0);
+}
+.tile-ground.tile-roof {
+  z-index: 7;
+}
+.tile-scatter.tile-roof {
+  // Above its own roof, as scatter always is above its own patch.
+  z-index: 8;
 }
 </style>

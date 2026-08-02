@@ -104,13 +104,28 @@ describe("terrain", () => {
     });
 
     it("bows the stopping edges far more than the internal ones", () => {
-      const stopping = patchPath(all(false), 2, 3, 9);
-      const internal = patchPath(all(true), 2, 3, 9);
-      const spread = (d: string) => {
-        const ys = [...d.matchAll(/[-\d.]+ ([-\d.]+)/g)].map(m => Number(m[1]));
-        return Math.max(...ys) - Math.min(...ys);
-      };
-      expect(spread(stopping)).toBeGreaterThan(spread(internal));
+      // Measured as the bow OFF EACH CHORD, not as the outline's spread: a shore
+      // is now contained by its tile (see the containment test below), so the
+      // widest outline is the interior one — it is the only one allowed past the
+      // boundary at all, by SEAM_OVERLAP. How much an edge CURVES is the thing
+      // this has always been about.
+      const bow = (d: string) =>
+        Math.max(
+          ...parsePath(d).map(s => {
+            const chord = { x: s.end.x - s.start.x, y: s.end.y - s.start.y };
+            const len = Math.hypot(chord.x, chord.y) || 1;
+            return Math.max(
+              ...[s.c1, s.c2].map(c =>
+                Math.abs(
+                  (chord.x * (c.y - s.start.y) - chord.y * (c.x - s.start.x)) / len,
+                ),
+              ),
+            );
+          }),
+        );
+      expect(bow(patchPath(all(false), 2, 3, 9))).toBeGreaterThan(
+        bow(patchPath(all(true), 2, 3, 9)) * 5,
+      );
     });
 
     it("bows every shore OUTWARD, never inward", () => {
@@ -209,6 +224,97 @@ describe("terrain", () => {
         expect(coverage(all(true), seed)).toBeGreaterThan(0.88);
       }
     });
+
+    it("reaches the tile edge mid-shore and cedes the tile's corners — round, not square", () => {
+      // The shape statement, from both sides at once. A patch that covered the
+      // corners would be a square; one that never reached an edge would be a
+      // shrunken square. Its FULLEST shore has to come right up to the boundary
+      // (how full varies per edge — see the bow), and every corner of the tile
+      // square has to be outside it.
+      for (const seed of [1, 2, 3, 5, 8, 13, 42, 99]) {
+        const poly = patchOutlinePolygon(all(false), 2, 3, seed);
+        const midEdges = [
+          { x: 50, y: 4 },
+          { x: 96, y: 50 },
+          { x: 50, y: 96 },
+          { x: 4, y: 50 },
+        ];
+        expect(midEdges.some(p => pointInPolygon(p, poly))).toBe(true);
+        for (const c of [
+          { x: 8, y: 8 },
+          { x: 92, y: 8 },
+          { x: 92, y: 92 },
+          { x: 8, y: 92 },
+        ]) {
+          expect(pointInPolygon(c, poly)).toBe(false);
+        }
+      }
+    });
+
+    it("cuts a bigger body's corner deeper than a lone pond's", () => {
+      // Why a 2x2 lake used to be a rounded rectangle: every corner was cut by
+      // the same amount, but a body that spans two tiles has twice as far to
+      // travel while it turns. An ellipse inscribed in a 2x2 block passes ~29
+      // units inside the block's corner on each axis, against ~15 for a circle
+      // in a single tile — so the cut scales with how many of the tile's edges
+      // stop (4 = alone, 2 = a corner of something bigger).
+      const bigCorner = {
+        top: false,
+        right: true,
+        bottom: true,
+        left: false,
+        bottomRight: true,
+      };
+      for (const seed of [1, 3, 7, 9, 42]) {
+        const lone = parsePath(patchPath(all(false), 2, 3, seed));
+        const big = parsePath(patchPath(bigCorner, 2, 3, seed));
+        // Corner 0 (the M point) is a real corner on both boards, at the same
+        // lattice point and from the same draw — so only the scale differs.
+        const depth = (s: ReturnType<typeof parsePath>) => s[0].start.x + s[0].start.y;
+        expect(depth(big)).toBeGreaterThan(depth(lone) * 1.5);
+      }
+    });
+
+    it("keeps every shore ON its own tile", () => {
+      // THE containment rule. A cell's terrain is what that cell IS, so what
+      // answers for the cell — a bridge deck, a tunnel portal — spans exactly
+      // one tile: while a shore bulged a fifth of a tile outward, a full-width
+      // deck still left water showing past both ends of the span and the
+      // crossing read as track laid on the river.
+      //
+      // The tolerance is one unit, not zero: an edge whose neighbour carries the
+      // same kind bows outward by SEAM_OVERLAP on purpose, so two bodies overlap
+      // by a hair instead of leaving an antialiasing hairline between them.
+      // (Cases with a reflex corner are left out: that point is shared with a
+      // DIAGONAL neighbour, so neither tile may move it off the lattice, and its
+      // jitter is the one thing that can still cross a boundary.)
+      // Checked per AXIS, because only a boundary where the terrain STOPS is a
+      // shore: where the patch runs on into the next tile it must still reach
+      // the shared lattice point, and that point carries its jitter.
+      const cases: { same: Parameters<typeof patchOutlinePolygon>[0]; axes: ("x" | "y")[] }[] =
+        [
+          { same: all(false), axes: ["x", "y"] }, // a lone pond
+          { same: { top: true, right: false, bottom: true, left: false }, axes: ["x"] }, // a river's banks
+          { same: { top: false, right: true, bottom: false, left: true }, axes: ["y"] }, // a shore running W–E
+        ];
+      for (const seed of [1, 2, 3, 5, 8, 13, 42, 99]) {
+        for (const { same, axes } of cases) {
+          for (const style of ["organic", "surveyed"] as const) {
+            // Surveyed ground (a field, a town) keeps every corner ON its shared
+            // lattice point by design — straight runs meeting at angles is the
+            // whole difference between a field and a pond — so its slack is the
+            // jitter those points already carry (CORNER_JITTER, 4).
+            const slack = style === "organic" ? 1 : 4.01;
+            for (const p of patchOutlinePolygon(same, 2, 3, seed, 100, style)) {
+              for (const axis of axes) {
+                expect(p[axis]).toBeGreaterThan(-slack);
+                expect(p[axis]).toBeLessThan(100 + slack);
+              }
+            }
+          }
+        }
+      }
+    });
   });
 
   describe("neighbour agreement (why the seams stay shut)", () => {
@@ -269,15 +375,17 @@ describe("terrain", () => {
       near(arrive, leave);
     });
 
-    it("smooths a running shore by lifting the corner off the lattice", () => {
-      // The other half of the fix: the shared point is pushed OUTWARD too, so
-      // the shore never comes back to touch the straight grid line. Compare the
-      // mid-shore corner with the bare jittered lattice point it would sit on.
+    it("smooths a running shore by lifting the corner off the lattice, INWARD", () => {
+      // The other half of the fix: the shared point is moved off the grid line
+      // too, so the shore never comes back to touch it. The direction is INWARD
+      // — a patch stays on its own tile (see SHORE_PULL), because a bridge or a
+      // portal can only answer for the cell it stands on, and a river wider than
+      // the deck built to cross it reads as track laid on the water.
       const run = parsePath(
         patchPath({ top: false, right: true, bottom: false, left: false }, 2, 3, 9),
       );
       const { dy } = latticeOffset(3, 3, 9);
-      expect(run[0].end.y).toBeLessThan(dy - 3); // above the lattice = outward
+      expect(run[0].end.y).toBeGreaterThan(dy + 3); // below the lattice = inward
     });
 
     it("leaves the inside corner of an L on the lattice, so both arms agree", () => {

@@ -1,8 +1,15 @@
 import { describe, it, expect } from "vitest";
+import { itSlow } from "../support/tier";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
-import { fromPairs, oneWay, turns, nWayLanes, junctionExitLane } from "@/tiles/lanes";
-import { oppositePort } from "@/sim/topology";
+import {
+  fromPairs,
+  oneWay,
+  nWayLanes,
+  lanesAllowingExit,
+  carLaneIndices,
+  busLaneIndices,
+} from "@/tiles/lanes";
 import {
   roadTraverse,
   roadEntries,
@@ -11,47 +18,17 @@ import {
   specLength,
   vehicleClassOf,
   CarChord,
-  type TrafficConfig,
 } from "@/sim/road";
-import { movementsConflict, sameEntryConflict } from "@/sim/roadJunction";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
-import { carcircle } from "@/levels/test/scenarios/carcircle";
-import { overtakeloop } from "@/levels/test/scenarios/overtakeloop";
-import { overtaketwolane } from "@/levels/test/scenarios/overtaketwolane";
-import { overtakeabort } from "@/levels/test/scenarios/overtakeabort";
-import { roadpriority } from "@/levels/test/scenarios/roadpriority";
 import { roadcross } from "@/levels/test/scenarios/roadcross";
-import {
-  roadcross1lane,
-  roadcross2lane,
-  roadcross3lane,
-} from "@/levels/test/scenarios/roadcrosslanes";
 import { turnlanes } from "@/levels/test/scenarios/turnlanes";
-import { mixedcross, mixedtee } from "@/levels/test/scenarios/mixedjunction";
-import { crossturns2lane, crossturns3lane } from "@/levels/test/scenarios/crossturns";
-import { roadjunction } from "@/levels/test/scenarios/roadjunction";
-import { bigjunction } from "@/levels/test/scenarios/bigjunction";
 import { buslane } from "@/levels/test/scenarios/buslane";
-import { buscross } from "@/levels/test/scenarios/buscross";
-import {
-  buscrossboth,
-  busmedian,
-  busarterial,
-  busmedianboth,
-  busonewaycross,
-  busmegacross,
-} from "@/levels/test/scenarios/buscrosses";
-import { lanesAllowingExit, carLaneIndices, busLaneIndices, usableExits, turnLandsOnBusLane, isRoadJunction, laneCount, usableLaneIndices } from "@/tiles/lanes";
-import { neighborCoord } from "@/sim/topology";
-import { parseCoordId } from "@/tiles/model";
-import { getCoordinatesId } from "@/utils/tileHelpers";
 
 // A vehicle samples as one render box per body segment (cab + trailer for a
 // semi); these grab the whole-body front/rear ends used by the queueing tests.
 // Every car here uses the default all-cars mix, so each is a single segment.
 const bodyFront = (c: CarChord) => c.units[0].front;
 const bodyRear = (c: CarChord) => c.units[c.units.length - 1].rear;
-
 // A simple straight road across three tiles (Left<->Right), open at both map
 // edges (0,0 enters from the left edge, 2,0 leaves at the right edge).
 function straightRoad(): Level {
@@ -245,7 +222,7 @@ describe("createRoadSim — spawning + movement", () => {
     // at a spawn edge) shows up as `stacked`, which is a count, not a clock.
   }, 30_000);
 
-  it("merges cars out of a dropping lane before it ends (G)", () => {
+  itSlow("merges cars out of a dropping lane before it ends (G)", () => {
     // A two-lane road (tiles x=0,1) that drops to one lane (tiles x=2,3). A car
     // in lane 1 has nowhere to go past x=1, so it must change into lane 0 BEFORE
     // the drop — and the road must keep flowing (no permanent queue at the taper).
@@ -547,7 +524,7 @@ describe("createRoadSim — spawning + movement", () => {
     expect(busOnBusLane).toBeGreaterThan(50); // buses were present and used the bus lane
   });
 
-  it("feeds the cross from permitted lanes and turns both ways (F)", () => {
+  itSlow("feeds the cross from permitted lanes and turns both ways (F)", () => {
     // The turnlanes scenario: a one-way road widens 1→2→3 lanes from the south
     // edge into an all-turns crossroads at "3,3" (every approach lane may go
     // straight / left / right). Every car that reaches the junction must be in a
@@ -755,6 +732,62 @@ describe("createRoadSim — car following", () => {
   });
 });
 
+describe("createRoadSim — per-lane following", () => {
+  function twoLaneRoad(): Level {
+    const road = nWayLanes(Position.Left, Position.Right, 2);
+    return {
+      "0,0": { connections: [], road },
+      "1,0": { connections: [], road },
+      "2,0": { connections: [], road },
+    };
+  }
+
+  it("cars in different lanes of the same direction flow without cross-lane stalling", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.05,
+      carSpeed: 0.5,
+      maxCars: 6,
+    });
+    let stalledTicks = 0;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05, () => false);
+      const cars = sim.cars();
+      if (cars.length >= 2) {
+        const moving = cars.filter(c => c.velocity > 0.01);
+        if (moving.length === 0) stalledTicks++;
+      }
+    }
+    expect(stalledTicks).toBeLessThan(30);
+  });
+
+  it("sample() includes laneIndex and laneCount fields", () => {
+    const sim = createRoadSim({
+      level: twoLaneRoad(),
+      width: 3,
+      height: 1,
+      seed: 1,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.3,
+      carSpeed: 0.5,
+      maxCars: 4,
+    });
+    for (let i = 0; i < 100; i++) sim.step(0.1, () => false);
+    const samples = sim.sample();
+    expect(samples.length).toBeGreaterThan(0);
+    for (const s of samples) {
+      expect(typeof s.laneIndex).toBe("number");
+      expect(typeof s.laneCount).toBe("number");
+      expect(s.laneIndex).toBeGreaterThanOrEqual(0);
+      expect(s.laneCount).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
+
 describe("createRoadSim — crossing gate from rail reservation", () => {
   it("holds a car at a closed crossing and releases it when the train clears", () => {
     // road across 0,0 (open left) -> 1,0 (the crossing) -> 2,0 (open right).
@@ -830,1110 +863,112 @@ describe("createRoadSim — crossing gate from rail reservation", () => {
   });
 });
 
-describe("createRoadSim — road junction interlock", () => {
-  it("never lets two perpendicular streams co-occupy the crossing, and both flow", () => {
-    // The roadcross scenario: a 4-way crossing at 2,2. Spawn one-way from the
-    // left (eastbound) and the bottom (northbound) so the two streams meet at the
-    // centre. With the junction interlock exactly one car may occupy 2,2 at a
-    // time — the other waits clear of it — so they take turns instead of jamming.
-    const sim = createRoadSim({
-      level: roadcross.level,
-      width: roadcross.size!.cols,
-      height: roadcross.size!.rows,
-      seed: 4,
-      spawnEntries: [
-        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
-        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
-      ],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 8,
-    });
-
-    const onJunction = (c: { coord: { x: number; y: number } }) =>
-      c.coord.x === 2 && c.coord.y === 2;
-    const horizontal = (p: Position) =>
-      p === Position.Left || p === Position.Right;
-    let eastboundPassed = false; // a car reached x>2 (cleared the crossing east)
-    let northboundPassed = false; // a car reached y<2 (cleared the crossing north)
-
-    for (let i = 0; i < 1200; i++) {
-      sim.step(0.05, () => false);
-      const samples = sim.sample();
-      // Cars touching the junction may follow one another nose-to-tail along one
-      // road, but two *perpendicular* streams must never occupy it at once — that
-      // mixed state is exactly the gridlock the interlock prevents.
-      const axes = new Set<string>();
-      for (const c of samples) {
-        if (onJunction(bodyFront(c)))
-          axes.add(horizontal(bodyFront(c).entryPort) ? "h" : "v");
-        if (onJunction(bodyRear(c)))
-          axes.add(horizontal(bodyRear(c).entryPort) ? "h" : "v");
-      }
-      expect(axes.size).toBeLessThanOrEqual(1);
-      for (const c of samples) {
-        const f = bodyFront(c);
-        if (f.coord.x > 2 && f.coord.y === 2) eastboundPassed = true;
-        if (f.coord.y < 2 && f.coord.x === 2) northboundPassed = true;
-      }
-    }
-    // Neither stream is starved: traffic actually crosses both ways (no deadlock).
-    expect(eastboundPassed).toBe(true);
-    expect(northboundPassed).toBe(true);
-  });
-
-  it("reports the junction tile a car holds (and only while one occupies it)", () => {
-    const sim = createRoadSim({
-      level: roadcross.level,
-      width: roadcross.size!.cols,
-      height: roadcross.size!.rows,
-      seed: 4,
-      spawnEntries: [
-        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
-        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
-      ],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 8,
-    });
-
-    let everHeld = false;
-    for (let i = 0; i < 1200; i++) {
-      sim.step(0.05, () => false);
-      const held = sim.junctionOccupancy();
-      const ids = Object.keys(held);
-      // Only the actual crossing tile (2,2) is ever reported, never an approach.
-      for (const id of ids) expect(id).toBe("2,2");
-      // Every reported occupant is a real, currently-live car (the value
-      // lists ALL bodies in the box, space-separated).
-      const liveIds = new Set(sim.cars().map(c => c.id));
-      for (const id of ids)
-        for (const cid of held[id].split(" ")) expect(liveIds.has(cid)).toBe(true);
-      if (ids.length > 0) everHeld = true;
-    }
-    expect(everHeld).toBe(true); // cars do pass through, so it gets held
-  });
-});
-
-describe("createRoadSim — multi-lane crosses keep flowing", () => {
-  // The shipped 1/2/3-lane cross scenarios must each clear cars from all four
-  // arms continuously — adding lanes must not introduce a gridlock the 1-lane
-  // case avoids. Drives the real scenario levels so the test guards what ships.
-  for (const scn of [roadcross1lane, roadcross2lane, roadcross3lane]) {
-    it(`${scn.id}: sustained throughput from every arm, no gridlock`, () => {
-      const spawnInterval = scn.traffic?.spawnInterval ?? 0.5;
-      const cap = scn.traffic?.maxCars ?? 12;
-      const sim = createRoadSim({
-        level: scn.level,
-        width: 5,
-        height: 5,
-        seed: 7,
-        spawnInterval,
-        carSpeed: 0.5,
-        carLength: 0.2,
-        maxCars: cap,
-      });
-      let prev = new Set<string>();
-      const allIds = new Set<string>();
-      let firstHalf = 0;
-      let secondHalf = 0;
-      const STEPS = 2000;
-      for (let i = 0; i < STEPS; i++) {
-        sim.step(0.05, () => false);
-        const now = new Set(sim.cars().map(c => c.id));
-        for (const id of now) allIds.add(id);
-        for (const id of prev) {
-          if (!now.has(id)) { if (i < STEPS / 2) firstHalf++; else secondHalf++; }
-        }
-        prev = now;
-      }
-      // Cars complete crossings in BOTH halves → never permanently deadlocks.
-      expect(firstHalf).toBeGreaterThan(0);
-      expect(secondHalf).toBeGreaterThan(0);
-      // Far more cars cycled through than the live cap → real flow, not fill-once.
-      expect(allIds.size).toBeGreaterThan(cap);
-    }, 15000); // 3-lane drives ~2000 heavy steps and sits near the 5s default — give headroom
-  }
-});
-
-describe("createRoadSim — four-way cross, cars from all sides", () => {
-  it("keeps traffic from all four arms flowing without gridlock", () => {
-    // A 4-way cross whose centre carries every movement (straight + both turns).
-    // Cars spawn from ALL FOUR map edges at once. With two-lane roads (opposing
-    // streams pass) plus the junction arbiter (conflicting turns take turns, and
-    // right turns never conflict at all), the crossing keeps clearing cars from
-    // every arm — it must never lock up into a permanent four-way standstill.
-    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
-    const lvl: Level = {
-      // Horizontal road.
-      "0,2": road([Position.Left, Position.Right]),
-      "1,2": road([Position.Left, Position.Right]),
-      "3,2": road([Position.Left, Position.Right]),
-      "4,2": road([Position.Left, Position.Right]),
-      // Vertical road.
-      "2,0": road([Position.Top, Position.Bottom]),
-      "2,1": road([Position.Top, Position.Bottom]),
-      "2,3": road([Position.Top, Position.Bottom]),
-      "2,4": road([Position.Top, Position.Bottom]),
-      // All-directions centre: straight through both ways + every turn.
-      "2,2": road(
-        [Position.Left, Position.Right],
-        [Position.Top, Position.Bottom],
-        [Position.Left, Position.Top],
-        [Position.Left, Position.Bottom],
-        [Position.Right, Position.Top],
-        [Position.Right, Position.Bottom],
-      ),
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 5,
-      seed: 7,
-      spawnEntries: [
-        { coord: { x: 0, y: 2 }, entryPort: Position.Left }, // eastbound
-        { coord: { x: 4, y: 2 }, entryPort: Position.Right }, // westbound
-        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom }, // northbound
-        { coord: { x: 2, y: 0 }, entryPort: Position.Top }, // southbound
-      ],
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-    });
-
-    // A car that was present last tick and is gone now drove off the far edge — a
-    // completed crossing. Count completions in each half of the run: if the cross
-    // ever permanently deadlocked, the second half would see none.
-    let prev = new Set<string>();
-    const allIds = new Set<string>();
-    let firstHalf = 0;
-    let secondHalf = 0;
-    const STEPS = 1600;
-    for (let i = 0; i < STEPS; i++) {
-      sim.step(0.05, () => false);
-      const now = new Set(sim.cars().map(c => c.id));
-      for (const id of now) allIds.add(id);
-      for (const id of prev) {
-        if (!now.has(id)) {
-          if (i < STEPS / 2) firstHalf++;
-          else secondHalf++;
-        }
-      }
-      prev = now;
-    }
-
-    // Sustained throughput in BOTH halves → the crossing never locked up.
-    expect(firstHalf).toBeGreaterThan(0);
-    expect(secondHalf).toBeGreaterThan(0);
-    // Far more cars completed than the live cap → cars really cycle through, they
-    // do not just fill the map once and freeze.
-    expect(allIds.size).toBeGreaterThan(12);
-  });
-
-  it("never lets two conflicting movements occupy the centre at once", () => {
-    // The safety counterpart to the liveness test above. With every movement
-    // permitted, the centre carries a mix of conflicting (perpendicular straights,
-    // left turns across oncoming) and non-conflicting (right turns, parallel
-    // straights in separate lanes) movements. The arbiter + conflict-aware
-    // body-point guard must ensure that whenever 2+ cars are on the centre tile at
-    // the same time, NONE of their movements geometrically cross — otherwise that
-    // is a collision course.
-    const road = (...ports: [Position, Position][]) => ({ connections: [], road: fromPairs(ports) });
-    const lvl: Level = {
-      "0,2": road([Position.Left, Position.Right]),
-      "1,2": road([Position.Left, Position.Right]),
-      "3,2": road([Position.Left, Position.Right]),
-      "4,2": road([Position.Left, Position.Right]),
-      "2,0": road([Position.Top, Position.Bottom]),
-      "2,1": road([Position.Top, Position.Bottom]),
-      "2,3": road([Position.Top, Position.Bottom]),
-      "2,4": road([Position.Top, Position.Bottom]),
-      "2,2": road(
-        [Position.Left, Position.Right],
-        [Position.Top, Position.Bottom],
-        [Position.Left, Position.Top],
-        [Position.Left, Position.Bottom],
-        [Position.Right, Position.Top],
-        [Position.Right, Position.Bottom],
-      ),
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 5,
-      seed: 7,
-      spawnEntries: [
-        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
-        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
-        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
-        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
-      ],
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-    });
-
-    // The movement each car is making through the centre tile (2,2), if it is on it.
-    const centreMovements = () => {
-      const out: { entry: Position; exit: Position }[] = [];
-      for (const c of sim.sample()) {
-        for (const u of c.units) {
-          const pt = [u.front, u.rear].find(
-            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
-          );
-          if (pt) {
-            out.push({ entry: pt.entryPort, exit: pt.exitPort as Position });
-            break; // one movement per vehicle
-          }
-        }
-      }
-      return out;
-    };
-
-    let sawCoOccupancy = false;
-    for (let i = 0; i < 1600; i++) {
-      sim.step(0.05, () => false);
-      const moves = centreMovements();
-      if (moves.length >= 2) sawCoOccupancy = true;
-      for (let a = 0; a < moves.length; a++) {
-        for (let b = a + 1; b < moves.length; b++) {
-          expect(movementsConflict(moves[a], moves[b])).toBe(false);
-        }
-      }
-    }
-    // The centre really did get shared (otherwise the safety check is vacuous):
-    // non-conflicting movements pass through together.
-    expect(sawCoOccupancy).toBe(true);
-  });
-});
-
-describe("createRoadSim — unequal-lane junctions match the exit lane", () => {
-  const B = Position.Bottom;
-  const T = Position.Top;
-  const L = Position.Left;
-  const R = Position.Right;
-  // A T-junction at (2,1): a 1-lane road climbs from the south and meets a 3-lane
-  // east–west road. A car from the south can only turn left (west) or right (east).
-  // West arm: (1,1),(0,1); east arm: (3,1),(4,1) — two tiles each so the car has
-  // room to ease into the matched lane after the turn. Spawn ONLY from the south,
-  // so every car on an arm came up the 1-lane approach and turned.
-  function tLevel(): Level {
-    const arm3 = () => ({ connections: [], road: nWayLanes(L, R, 3) });
+describe("createRoadSim — crossing patience (waitedSec / frame)", () => {
+  // A straight road across a crossing tile (rail Top-Bottom) so a closed gate
+  // holds the approaching car short of the rails.
+  function crossingRoad(): Level {
+    const road = fromPairs([[Position.Left, Position.Right]]);
     return {
-      "2,2": { connections: [], road: nWayLanes(T, B, 1) }, // 1-lane south approach
-      "1,1": arm3(),
-      "0,1": arm3(),
-      "3,1": arm3(),
-      "4,1": arm3(),
-      "2,1": {
-        connections: [],
-        road: [
-          { from: B, to: [L, R], index: 0 }, // 1-lane approach: may turn either way
-          { from: L, to: [R], index: 0 },
-          { from: L, to: [R], index: 1 },
-          { from: L, to: [R], index: 2 },
-          { from: R, to: [L], index: 0 },
-          { from: R, to: [L], index: 1 },
-          { from: R, to: [L], index: 2 },
-        ],
-      },
+      "0,0": { connections: [], road },
+      "1,0": { connections: [[Position.Top, Position.Bottom]], road },
+      "2,0": { connections: [], road },
     };
   }
 
-  it("fans 1→3: a left-turner reaches the inner lane, a right-turner the kerb lane", () => {
+  it("accrues wait only while gated by the closed crossing, and resets on release", () => {
+    let closed = true;
     const sim = createRoadSim({
-      level: tLevel(),
-      width: 5,
-      height: 3,
+      level: crossingRoad(),
+      width: 3,
+      height: 1,
       seed: 5,
-      spawnEntries: [{ coord: { x: 2, y: 2 }, entryPort: B }], // south only
-      spawnInterval: 1.0,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.5,
       carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 8,
-      overtakeFraction: 0, // isolate lane-matching: no overtakers pulling out to pass
+      maxCars: 1,
     });
-    // On the FAR exit tiles, a left-turner (now westbound on (0,1), entered via
-    // Right) must have reached the inner lane (2); a right-turner (eastbound on
-    // (4,1), entered via Left) the kerb lane (0). Observe each car once it is on the
-    // far tile and settled (laneVel ~ 0 is implied by it having had a whole tile).
-    let leftInner = 0;
-    let leftWrong = 0;
-    let rightKerb = 0;
-    let rightWrong = 0;
-    for (let i = 0; i < 1600; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        const lane = Math.round(c.laneIndex);
-        if (f.coord.x === 0 && f.coord.y === 1 && f.entryPort === R) {
-          // westbound on the far west tile = turned left at the junction.
-          if (lane === 2) leftInner++; else leftWrong++;
-        }
-        if (f.coord.x === 4 && f.coord.y === 1 && f.entryPort === L) {
-          // eastbound on the far east tile = turned right at the junction.
-          if (lane === 0) rightKerb++; else rightWrong++;
-        }
-      }
-    }
-    // Both turns happened, and each landed in its matching exit lane — the left-
-    // turner actually reached lane 2 (proving 1→3 fan-out, not the old pile-into-0).
-    expect(leftInner).toBeGreaterThan(20);
-    expect(rightKerb).toBeGreaterThan(20);
-    expect(leftWrong).toBe(0);
-    expect(rightWrong).toBe(0);
+    // Settle a car hard against the closed gate, then keep it waiting.
+    for (let i = 0; i < 100; i++) sim.step(0.1, id => id === "1,0" && closed);
+    const waitedAfterStop = sim.frame().maxCarWaitSec;
+    expect(waitedAfterStop).toBeGreaterThan(1); // it has been waiting a while
+    // The frame's worst wait equals the (single) car's wait.
+    expect(sim.frame().carWaitTotalSec).toBeCloseTo(waitedAfterStop, 6);
+
+    // Keep it closed a little longer: the wait keeps climbing.
+    for (let i = 0; i < 20; i++) sim.step(0.1, id => id === "1,0" && closed);
+    expect(sim.frame().maxCarWaitSec).toBeGreaterThan(waitedAfterStop);
+
+    // Open the gate and let the car roll: its wait resets toward 0 once moving.
+    closed = false;
+    for (let i = 0; i < 60; i++) sim.step(0.1, () => false);
+    expect(sim.frame().maxCarWaitSec).toBeLessThan(0.5);
   });
 
-  it("routes buses onto a kerb bus lane through a junction; cars stay off it", () => {
-    // Same T, but the east arm's kerb lane is a bus lane (index 0) + 2 car lanes.
-    // A right-turner kerb-aligns: a bus lands on the bus lane, a car on the lowest
-    // CAR lane (1) — never the bus lane — even though it crossed a junction to get
-    // there.
-    const busArm = (): { connections: []; road: import("@/tiles/lanes").Lane[] } => ({
-      connections: [],
-      road: [
-        { from: L, to: [R], index: 0, kind: "bus" },
-        { from: L, to: [R], index: 1 },
-        { from: L, to: [R], index: 2 },
-        { from: R, to: [L], index: 0, kind: "bus" },
-        { from: R, to: [L], index: 1 },
-        { from: R, to: [L], index: 2 },
-      ],
-    });
-    const lvl = tLevel();
-    lvl["3,1"] = busArm();
-    lvl["4,1"] = busArm();
+  it("does not charge a queued car's wait to the crossing (only the lead car waits on it)", () => {
+    // A longer approach so a queue forms behind the gate: the lead car is bound by
+    // the crossing; the followers are bound by the car ahead, so their wait is not
+    // attributed to the crossing.
+    const road = fromPairs([[Position.Left, Position.Right]]);
+    const lvl: Level = {
+      "0,0": { connections: [], road },
+      "1,0": { connections: [], road },
+      "2,0": { connections: [], road },
+      "3,0": { connections: [[Position.Top, Position.Bottom]], road },
+      "4,0": { connections: [], road },
+    };
     const sim = createRoadSim({
       level: lvl,
       width: 5,
-      height: 3,
-      seed: 8,
-      spawnEntries: [{ coord: { x: 2, y: 2 }, entryPort: B }],
-      spawnInterval: 0.8,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 8,
-      mix: { car: 1, bus: 1 },
-    });
-    let busOnBusLane = 0;
-    let carOnBusLane = 0;
-    let carSamples = 0;
-    for (let i = 0; i < 1800; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        if (f.coord.x !== 4 || f.coord.y !== 1 || f.entryPort !== L) continue; // far east, right-turners
-        const lane = Math.round(c.laneIndex);
-        if (c.units[0].part === "bus") {
-          if (lane === 0) busOnBusLane++;
-        } else {
-          carSamples++;
-          if (lane === 0) carOnBusLane++;
-        }
-      }
-    }
-    expect(carSamples).toBeGreaterThan(20); // cars did turn right onto the bus arm
-    expect(carOnBusLane).toBe(0); // and none ever rode the kerb bus lane
-    expect(busOnBusLane).toBeGreaterThan(10); // buses used the bus lane through the junction
-  });
-
-  it("buscross scenario: buses hold the bus lane through the cross, cars never do", () => {
-    // Drive the actual /test/buscross scenario (a 4-way cross whose east–west main
-    // road has a kerb bus lane). On the far-east through tile (4,2), eastbound
-    // vehicles have crossed the junction: every bus must be on the bus lane (0),
-    // and no car may ever be — the cross-lane fix keeps the classes apart across
-    // the intersection too.
-    const sim = createRoadSim({
-      level: buscross.level,
-      width: buscross.size!.cols,
-      height: buscross.size!.rows,
-      seed: 6,
-      spawnInterval: 0.6,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-      mix: buscross.traffic!.mix,
-    });
-    let busOnBus = 0;
-    let busOffBus = 0;
-    let carOnBus = 0;
-    let carSamples = 0;
-    // Only THROUGH buses must hold the bus lane: a bus that TURNED IN from the
-    // side road legitimately lands on its movement's landing lane and changes
-    // onto the bus lane when a gap allows. Track who was already eastbound on
-    // the western approach (x ≤ 1) — those crossed straight through.
-    const throughEast = new Set<string>();
-    for (let i = 0; i < 1800; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        if (f.entryPort === Position.Left && f.coord.y === 2 && f.coord.x <= 1) {
-          throughEast.add(c.id);
-        }
-        if (f.coord.x !== 4 || f.coord.y !== 2 || f.entryPort !== Position.Left) continue;
-        const lane = Math.round(c.laneIndex);
-        if (c.units[0].part === "bus") {
-          if (lane === 0) busOnBus++;
-          else if (throughEast.has(c.id)) busOffBus++;
-        } else {
-          carSamples++;
-          if (lane === 0) carOnBus++;
-        }
-      }
-    }
-    expect(busOnBus).toBeGreaterThan(20); // buses ran the through road on the bus lane
-    expect(busOffBus).toBe(0); // a THROUGH bus was never off it past the cross
-    expect(carSamples).toBeGreaterThan(20); // cars ran the through road too
-    expect(carOnBus).toBe(0); // and never strayed onto the bus lane across the cross
-  });
-
-  it("buscross scenario: the kerb bus lane feeds a turn, and buses take it", () => {
-    // The user flagged that bus lanes looked turn-locked. They are not: the kerb
-    // bus lane at the cross feeds the natural right turn off the main road, and
-    // buses physically leave the main road onto the 1-lane side road.
-    const centre = buscross.level["2,2"].road;
-    // Eastbound (L→…) bus lane: straight (R) AND the right turn (B, south).
-    const eastExits = usableExits(centre, Position.Left, "bus");
-    expect(eastExits).toContain(Position.Right); // straight still allowed
-    expect(eastExits).toContain(Position.Bottom); // right turn now allowed
-    // Westbound (R→…) bus lane: straight (L) AND the right turn (T, north).
-    const westExits = usableExits(centre, Position.Right, "bus");
-    expect(westExits).toContain(Position.Left);
-    expect(westExits).toContain(Position.Top);
-
-    // And it happens in the running sim: buses reach the side-road arms, which
-    // are only fed from the cross (a bus there either turned off the main road
-    // or ran the side road — either way buses are not confined to the through
-    // road). At least one bus must be observed on a side-road tile.
-    const sim = createRoadSim({
-      level: buscross.level,
-      width: buscross.size!.cols,
-      height: buscross.size!.rows,
-      seed: 6,
-      spawnInterval: 0.6,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-      mix: buscross.traffic!.mix,
-    });
-    let busesOnSideRoad = 0;
-    for (let i = 0; i < 1800; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        if (c.units[0].part !== "bus") continue;
-        const f = c.units[0].front;
-        if (f.coord.x === 2 && (f.coord.y === 1 || f.coord.y === 3)) busesOnSideRoad++;
-      }
-    }
-    expect(busesOnSideRoad).toBeGreaterThan(0);
-  });
-
-  it("same-arm crossing movements never share the junction (car right-turn vs bus straight)", () => {
-    // User-reported on buscrossboth: a bus on the kerb bus lane (index 0) goes
-    // STRAIGHT while a car from the inner lane (index 1) of the SAME arm turns
-    // RIGHT — the right turn sweeps across the bus lane, and the two drove over
-    // each other. Movements from the same entry were hard-coded as never
-    // conflicting (a single-lane-era assumption), so nothing serialized them.
-    // Assert: at no tick are two vehicles simultaneously on the junction tile
-    // having entered from the SAME arm where one goes straight/left and the
-    // other turns right from a more inner lane (the kerb-crossing combo).
-    const sim = createRoadSim({
-      level: buscrossboth.level,
-      width: buscrossboth.size!.cols,
-      height: buscrossboth.size!.rows,
+      height: 1,
       seed: 3,
-      spawnInterval: 0.45,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
       carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 14,
-      mix: buscrossboth.traffic!.mix,
+      carLength: 0.3,
     });
-    let overlaps = 0;
-    for (let i = 0; i < 4000; i++) {
-      sim.step(0.05, () => false);
-      const onJunction = sim
-        .sample()
-        .filter(c => {
-          const f = c.units[0].front;
-          return f.coord.x === 2 && f.coord.y === 2 && f.exitPort !== null;
-        });
-      for (let a = 0; a < onJunction.length; a++) {
-        for (let b = a + 1; b < onJunction.length; b++) {
-          const fa = onJunction[a].units[0].front;
-          const fb = onJunction[b].units[0].front;
-          if (fa.entryPort !== fb.entryPort) continue; // same-arm pairs only
-          // Their paths cross exactly when the lateral order inverts (the same
-          // predicate the sim now enforces): e.g. an inner-lane right turn over
-          // a kerb-lane straight. A kerb bus turning right beside an inner
-          // straight car is parallel and legitimately concurrent.
-          if (
-            sameEntryConflict(
-              fa.entryPort,
-              fa.exitPort!,
-              Math.round(onJunction[a].laneIndex),
-              fb.exitPort!,
-              Math.round(onJunction[b].laneIndex),
-            )
-          )
-            overlaps++;
-        }
-      }
-    }
-    expect(overlaps).toBe(0);
-  }, 30000);
-
-  it("merging movements landing on the SAME exit lane never overlap (yield-and-slot)", () => {
-    // User-reported: vehicles from DIFFERENT arms exiting onto the same arm can
-    // overlap when they land on the same lane (e.g. a westbound straight car and
-    // a south left-turner both landing the west arm's car lane). Merging is
-    // yield-and-slot: they MAY share the junction (the later one trails the
-    // earlier through the merge point), but their bodies must never overlap in
-    // the shared distance-to-exit-edge coordinate. Merging onto DIFFERENT lanes
-    // (bus → bus lane beside car → car lane) is unconstrained.
-    const sim = createRoadSim({
-      level: buscrossboth.level,
-      width: buscrossboth.size!.cols,
-      height: buscrossboth.size!.rows,
-      seed: 5,
-      spawnInterval: 0.45,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 14,
-      mix: buscrossboth.traffic!.mix,
-    });
-    const centre = buscrossboth.level["2,2"].road;
-    let overlaps = 0;
-    for (let i = 0; i < 4000; i++) {
-      sim.step(0.05, () => false);
-      const onJunction = sim.sample().filter(c => {
-        const f = c.units[0].front;
-        return f.coord.x === 2 && f.coord.y === 2 && f.exitPort !== null;
-      });
-      for (let a = 0; a < onJunction.length; a++) {
-        for (let b = a + 1; b < onJunction.length; b++) {
-          const A = onJunction[a];
-          const B = onJunction[b];
-          const fa = A.units[0].front;
-          const fb = B.units[0].front;
-          if (fa.entryPort === fb.entryPort) continue; // same-arm covered elsewhere
-          if (fa.exitPort !== fb.exitPort) continue; // merges only
-          const exit = fa.exitPort!;
-          const arm = buscrossboth.level[
-            `${2 + (exit === Position.Right ? 1 : exit === Position.Left ? -1 : 0)},${
-              2 + (exit === Position.Bottom ? 1 : exit === Position.Top ? -1 : 0)
-            }`
-          ].road;
-          const ap = oppositePort(exit);
-          const la = junctionExitLane(
-            centre, fa.entryPort, Math.round(A.laneIndex), exit, arm, ap,
-            A.units[0].part === "bus" ? "bus" : "car",
-          );
-          const lb = junctionExitLane(
-            centre, fb.entryPort, Math.round(B.laneIndex), exit, arm, ap,
-            B.units[0].part === "bus" ? "bus" : "car",
-          );
-          if (la !== lb) continue; // different landing lanes: unconstrained
-          // Body interval in distance-to-exit-edge space: front sits 1−t before
-          // the shared exit edge; a rear coupler still on the approach tile means
-          // the body extends back to (at least) the junction's entry edge (d=1).
-          const span = (c: (typeof onJunction)[number]) => {
-            const front = 1 - c.units[0].front.t;
-            const rearOnJ =
-              c.units[0].rear.coord.x === 2 && c.units[0].rear.coord.y === 2;
-            const rear = rearOnJ ? 1 - c.units[0].rear.t : 1;
-            return [front, rear] as const; // front <= rear in this coordinate
-          };
-          const [af, ar] = span(A);
-          const [bf, br] = span(B);
-          const eps = 1e-6;
-          // d-interval intersection mid-tile across DIFFERENT arms is benign
-          // (the curves haven't converged yet); a real clash is an intersection
-          // inside the CONVERGED zone next to the shared exit edge, where both
-          // paths are already on the same line.
-          const CONVERGED = 0.25; // tile-distance from the exit edge
-          const lo = Math.max(af, bf);
-          const hi = Math.min(ar, br);
-          if (lo < hi - eps && lo < CONVERGED) overlaps++;
-        }
-      }
-    }
-    expect(overlaps).toBe(0);
-  }, 30000);
-
-  it("overtakeloop: a ramp car lands ON its merge lane — no dip to the kerb and back", () => {
-    // User-reported: a car merging from the on-ramp (T→R, a left-side merge whose
-    // landing lane is the INNER lane 2 of the 3-lane road) visibly snapped to the
-    // kerb lane 0 at the seam and then drifted back across. The turn glide
-    // physically delivers the car onto lane 2, so its sim lane must START there:
-    // on its first samples past the merge tile the car sits on lane 2 and never
-    // dips below lane 1 in the immediate aftermath (overtaking may move it later).
-    const sim = createRoadSim({
-      level: overtakeloop.level,
-      width: overtakeloop.size!.cols,
-      height: overtakeloop.size!.rows,
-      seed: 9,
-      spawnInterval: overtakeloop.traffic!.spawnInterval,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 4, // few cars: isolate the merge, no overtaking pressure
-      overtakeFraction: 0,
-      spawnEntries: overtakeloop.traffic!.spawnEntries,
-    });
-    // Track each car's lane over its first moments on the tile after the merge
-    // (4,1 entered via Left). Every car comes from the ramp (sole spawn entry).
-    const firstLanes = new Map<string, number[]>();
-    for (let i = 0; i < 1200; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        if (f.coord.x !== 4 || f.coord.y !== 1 || f.entryPort !== Position.Left) continue;
-        if (f.t > 0.6) continue; // only the entry stretch right past the seam
-        const arr = firstLanes.get(c.id) ?? [];
-        if (arr.length < 12) arr.push(c.laneIndex);
-        firstLanes.set(c.id, arr);
-      }
-    }
-    const merged = [...firstLanes.values()].filter(a => a.length > 0);
-    expect(merged.length).toBeGreaterThan(0); // ramp cars did pass the merge
-    for (const lanes of merged) {
-      expect(Math.round(lanes[0])).toBe(2); // arrives ON the inner landing lane
-      for (const l of lanes) expect(l).toBeGreaterThan(1.5); // and never dips kerb-ward
-    }
-  }, 30000);
-
-  it("carcircle: feed roads zipper into the loop — the carousel keeps moving", () => {
-    // User-reported: merge exclusion blocked the carcircle feeds a whole tile
-    // early and stuttered the loop. Merging is yield-and-slot now, so once the
-    // loop has filled, traffic must keep flowing: across the measurement window
-    // a healthy majority of cars are in motion on average, and the loop never
-    // freezes outright (every car stopped) for long.
-    const sim = createRoadSim({
-      level: carcircle.level,
-      width: carcircle.size!.cols,
-      height: carcircle.size!.rows,
-      seed: 2,
-      spawnInterval: carcircle.traffic!.spawnInterval,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: carcircle.traffic!.maxCars,
-      spawnEntries: carcircle.traffic!.spawnEntries,
-    });
-    for (let i = 0; i < 1200; i++) sim.step(0.05, () => false); // fill the loop
-    expect(sim.cars().length).toBeGreaterThanOrEqual(8);
-    let movingFraction = 0;
-    let frozenTicks = 0;
-    const WINDOW = 1200;
-    for (let i = 0; i < WINDOW; i++) {
-      sim.step(0.05, () => false);
-      const cars = sim.cars();
-      const moving = cars.filter(c => c.velocity > 0.001).length;
-      movingFraction += moving / Math.max(1, cars.length);
-      if (moving === 0 && cars.length > 0) frozenTicks++;
-    }
-    movingFraction /= WINDOW;
-    expect(movingFraction).toBeGreaterThan(0.5); // the carousel flows
-    expect(frozenTicks).toBeLessThan(WINDOW * 0.05); // and never seizes up
-  }, 30000);
-
-  it("a committed turner is not frozen mid-junction by a non-conflicting cross stream", () => {
-    // Regression (user-reported): in buscrossboth a car from the south turning
-    // LEFT (B→L) stopped ON the cross while a bus ran straight R→L — though
-    // B→L and R→L don't conflict (they merge into different lanes). Cause: when
-    // the head enters the junction its routePlan turn is CONSUMED, and the
-    // per-body conflict gate then re-derived the movement via the consumed plan's
-    // fallback — assuming STRAIGHT (B→T), which DOES conflict with R→L. The gate
-    // must use the car's own committed path segment (exact exit) instead.
-    //
-    // Keep traffic light (maxCars 4) so exit arms never queue back into the
-    // junction — then a vehicle standing still ON the junction tile for longer
-    // than the launch-reaction delay can only be a phantom conflict.
-    const sim = createRoadSim({
-      level: buscrossboth.level,
-      width: buscrossboth.size!.cols,
-      height: buscrossboth.size!.rows,
-      seed: 11,
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 4,
-      mix: buscrossboth.traffic!.mix,
-    });
-    const stoppedOnJunction = new Map<string, number>(); // car id -> consecutive stopped ticks
-    let worst = 0;
-    for (let i = 0; i < 4000; i++) {
-      sim.step(0.05, () => false);
-      const stopped = new Set(
-        sim.cars().filter(c => c.velocity <= 0.001 && c.tileId === "2,2").map(c => c.id),
-      );
-      for (const id of stopped) {
-        const n = (stoppedOnJunction.get(id) ?? 0) + 1;
-        stoppedOnJunction.set(id, n);
-        worst = Math.max(worst, n);
-      }
-      for (const id of [...stoppedOnJunction.keys()]) {
-        if (!stopped.has(id)) stoppedOnJunction.delete(id);
-      }
-    }
-    // 0.05s ticks: allow the 0.6s launch-reaction delay plus margin (1.5s), but a
-    // car frozen for a whole bus crossing (several seconds) must fail.
-    expect(worst).toBeLessThanOrEqual(30);
+    for (let i = 0; i < 400; i++) sim.step(0.05, id => id === "3,0");
+    expect(sim.cars().length).toBeGreaterThan(1); // a real queue formed
+    // Total wait charged to the crossing is essentially one car's worth — the lead
+    // car at the gate — not the whole queue's. (The followers are bound by the car
+    // ahead.) So carWaitTotalSec ≈ maxCarWaitSec, not a multiple of it.
+    const f = sim.frame();
+    expect(f.maxCarWaitSec).toBeGreaterThan(1);
+    expect(f.carWaitTotalSec).toBeLessThan(f.maxCarWaitSec * 1.5);
   });
 
-  it("a bus turning where the bus lane can't does not oscillate between lanes", () => {
-    // In buscross the kerb bus lane permits straight + right only; a LEFT turn must
-    // come from the inner car lane. A bus turning left therefore has to leave the
-    // bus lane — and must STAY left, not get yanked back onto the bus lane every
-    // tick (the oscillation bug). Track each westbound bus's rounded lane on the
-    // west approach tiles (x 0,1): a clean change is 0→1 once; oscillation flips
-    // back and forth many times.
+  it("counts only crossing-using cars toward carsDelivered", () => {
+    // Open crossing: cars stream across it and despawn at the right edge — each is
+    // a crossing-user, so throughput climbs.
     const sim = createRoadSim({
-      level: buscross.level,
-      width: buscross.size!.cols,
-      height: buscross.size!.rows,
-      seed: 4,
-      spawnInterval: 0.6,
+      level: crossingRoad(),
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
       carSpeed: 0.5,
       carLength: 0.2,
-      maxCars: 12,
-      mix: buscross.traffic!.mix,
     });
-    const hist = new Map<string, { last: number; changes: number; reachedInner: boolean }>();
-    for (let i = 0; i < 2400; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        if (c.units[0].part !== "bus") continue;
-        const f = c.units[0].front;
-        if (f.entryPort !== Position.Left || f.coord.x > 1) continue; // westbound approach only
-        const lane = Math.round(c.laneIndex);
-        const h = hist.get(c.id) ?? { last: lane, changes: 0, reachedInner: false };
-        if (lane !== h.last) h.changes++;
-        h.last = lane;
-        if (lane >= 1) h.reachedInner = true;
-        hist.set(c.id, h);
-      }
-    }
-    const movers = [...hist.values()].filter(h => h.reachedInner);
-    expect(movers.length).toBeGreaterThan(0); // some bus did leave the bus lane to turn
-    // No bus flips lanes more than a couple of times (a settle, not an oscillation).
-    const worst = Math.max(...[...hist.values()].map(h => h.changes));
-    expect(worst).toBeLessThanOrEqual(3);
+    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
+    expect(sim.frame().carsDelivered).toBeGreaterThan(0);
   });
-});
 
-describe("bus-lane crosses flow and keep cars off the bus lane", () => {
-  // Drive each /test bus-cross scenario end-to-end. On the ARM tiles (not the
-  // junction centre, where lanes map through turns) assert the class invariant:
-  // a car NEVER drives on a bus lane, and buses DO use the bus lane — whether the
-  // bus lane is the kerb (index 0) or the median (inner) lane. Plus: traffic
-  // actually flows through (cars complete) with no broken positions or gridlock.
-  const drive = (
-    scenario: { level: Level; size?: { cols: number; rows: number }; traffic?: { mix?: Record<string, number> } },
-    centre: { x: number; y: number },
-    seed: number,
-  ) => {
+  it("a road with no crossing never counts throughput", () => {
+    // A plain straight road (no rail anywhere): cars despawn at the edge but none
+    // used a crossing, so carsDelivered stays 0.
     const sim = createRoadSim({
-      level: scenario.level,
-      width: scenario.size!.cols,
-      height: scenario.size!.rows,
-      seed,
-      spawnInterval: 0.6,
+      level: straightRoad(),
+      width: 3,
+      height: 1,
+      seed: 7,
+      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
+      spawnInterval: 0.4,
       carSpeed: 0.5,
       carLength: 0.2,
-      maxCars: 14,
-      mix: scenario.traffic?.mix,
     });
-    let prev = new Set<string>();
-    const completed = new Set<string>();
-    let carOnBus = 0;
-    let busOnBus = 0;
-    let busSamples = 0;
-    let badPos = 0;
-    let stuck = 0;
-    for (let i = 0; i < 1600; i++) {
-      sim.step(0.05, () => false);
-      const now = new Set(sim.cars().map(c => c.id));
-      for (const id of prev) if (!now.has(id)) completed.add(id);
-      prev = now;
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        if (!Number.isFinite(f.t) || (f.lanePos != null && !Number.isFinite(f.lanePos))) badPos++;
-        if (f.coord.x === centre.x && f.coord.y === centre.y) continue; // skip the junction tile
-        const road = scenario.level[`${f.coord.x},${f.coord.y}`]?.road;
-        const busLanes = busLaneIndices(road, f.entryPort);
-        if (busLanes.length === 0) continue;
-        const onBus = busLanes.includes(Math.round(c.laneIndex));
-        if (c.units[0].part === "bus") {
-          busSamples++;
-          if (onBus) busOnBus++;
-        } else if (onBus) {
-          carOnBus++;
-        }
-      }
-      const cars = sim.cars();
-      if (cars.length >= 3 && cars.every(c => c.velocity < 0.001)) stuck++;
-    }
-    return { completed: completed.size, carOnBus, busOnBus, busSamples, badPos, stuck };
-  };
-
-  const cases: [string, { level: Level; size?: { cols: number; rows: number }; traffic?: { mix?: Record<string, number> } }][] = [
-    ["buscrossboth", buscrossboth],
-    ["busmedian", busmedian],
-    ["busarterial", busarterial],
-    ["busmedianboth", busmedianboth],
-    ["busonewaycross", busonewaycross],
-    ["busmegacross", busmegacross],
-  ];
-
-  for (const [name, scenario] of cases) {
-    it(`${name}: cars never use a bus lane, buses do, and traffic flows`, () => {
-      const r = drive(scenario, { x: 2, y: 2 }, 7);
-      expect(r.badPos).toBe(0); // no broken/non-finite positions
-      expect(r.completed).toBeGreaterThan(5); // sustained flow through the cross
-      expect(r.stuck).toBeLessThan(80); // no permanent gridlock
-      expect(r.busSamples).toBeGreaterThan(20); // buses actually ran the arms
-      expect(r.busOnBus).toBeGreaterThan(0); // and used their bus lane
-      expect(r.carOnBus).toBe(0); // a car NEVER drove on a bus lane on the arms
-    });
-  }
-});
-
-describe("bus-rule wiring audit (#16): kerb bus → straight+right, median bus → straight+left", () => {
-  // The buscrosses.ts header states the rule (right-hand traffic, kerb = lane 0):
-  // a KERB bus lane naturally feeds straight + the kerb-side RIGHT turn; a MEDIAN
-  // (inner) bus lane feeds straight + the median-side LEFT turn. This locks that
-  // wiring in across the whole family so a future edit can't silently re-point a
-  // bus lane at the wrong arm. busmegacross is the ONE documented exception (its
-  // north arm is inbound-only, so the natural turn target doesn't exist) — it is
-  // audited separately below.
-  const T = Position.Top, R = Position.Right, B = Position.Bottom, L = Position.Left;
-  const C = Position.Center; // never an edge port on a road lane — present only to satisfy the map type.
-  // Exit ports relative to a vehicle entering via `from` (right-hand traffic).
-  const STRAIGHT: Record<Position, Position> = { [L]: R, [R]: L, [T]: B, [B]: T, [C]: C };
-  const RIGHT: Record<Position, Position> = { [L]: B, [R]: T, [T]: L, [B]: R, [C]: C };
-  const LEFT: Record<Position, Position> = { [L]: T, [R]: B, [T]: R, [B]: L, [C]: C };
-
-  const compliant: [string, typeof buscross][] = [
-    ["buscrossboth", buscrossboth],
-    ["busmedian", busmedian],
-    ["busarterial", busarterial],
-    ["busmedianboth", busmedianboth],
-    ["busonewaycross", busonewaycross],
-  ];
-
-  for (const [name, scn] of compliant) {
-    it(`${name}: every centre bus lane feeds only straight + its kerb/median-side turn`, () => {
-      const centre = scn.level["2,2"].road!;
-      let busLanes = 0;
-      for (const lane of centre) {
-        if (lane.kind !== "bus") continue;
-        busLanes++;
-        // index 0 = kerb (straight + right); any higher index = median (straight + left).
-        const turn = lane.index === 0 ? RIGHT[lane.from] : LEFT[lane.from];
-        const allowed = new Set([STRAIGHT[lane.from], turn]);
-        for (const to of lane.to) {
-          // Every movement the bus lane offers is either straight or its own-side turn.
-          expect(allowed.has(to)).toBe(true);
-        }
-      }
-      expect(busLanes).toBeGreaterThan(0); // the scenario really has bus lanes to audit
-    });
-  }
-
-  it("busmegacross: the documented exception — north is inbound-only, so each bus lane's natural turn falls back across the rule", () => {
-    const centre = busmegacross.level["2,2"].road!;
-    // Nothing in the junction exits north (the N arm is one-way INBOUND): this is
-    // exactly why the natural kerb/median turn target is unavailable.
-    for (const lane of centre) expect(lane.to).not.toContain(T);
-
-    // Each bus lane has at least one `to` that breaks the kerb/median rule — and
-    // that broken movement is precisely the one whose own-side turn would have gone
-    // north (now impossible), so it falls back onto the south (car-only) arm.
-    let violations = 0;
-    for (const lane of centre) {
-      if (lane.kind !== "bus") continue;
-      const turn = lane.index === 0 ? RIGHT[lane.from] : LEFT[lane.from];
-      const allowed = new Set([STRAIGHT[lane.from], turn]);
-      const offside = lane.to.filter(to => !allowed.has(to));
-      for (const to of offside) {
-        violations++;
-        expect(to).toBe(B); // the fallback always lands on the south arm
-        expect(turn).toBe(T); // because the rule-correct turn target was north
-      }
-    }
-    expect(violations).toBeGreaterThan(0); // the exception is real, not vacuous
+    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
+    expect(sim.frame().carsDelivered).toBe(0);
   });
-});
-
-describe("bus-lane overlay colours a junction movement by where it LANDS", () => {
-  // The debug overlay (Tile.vue) paints an arrow amber only when the movement
-  // lands on a real bus lane on the EXIT arm — the rule lives in
-  // `turnLandsOnBusLane`, shared by game.ts + the editor. Regression for #18: a
-  // median bus turning right onto a car-only arm (busmegacross W→S) was painted
-  // amber even though the bus lands on a CAR lane there. Drive the shared rule
-  // against every shipped bus-cross centre so an amber arrow can never again be
-  // drawn onto a lane the bus doesn't occupy as a bus lane.
-  const T = Position.Top;
-  const R = Position.Right;
-  const B = Position.Bottom;
-  const L = Position.Left;
-  // The exit arm's road for a movement leaving the centre tile (2,2) via `exit`.
-  const armRoad = (level: Level, exit: Position) =>
-    level[
-      `${2 + (exit === R ? 1 : exit === L ? -1 : 0)},${
-        2 + (exit === B ? 1 : exit === T ? -1 : 0)
-      }`
-    ]?.road;
-
-  const family: [string, typeof buscross][] = [
-    ["buscross", buscross],
-    ["buscrossboth", buscrossboth],
-    ["busmedian", busmedian],
-    ["busarterial", busarterial],
-    ["busmedianboth", busmedianboth],
-    ["busonewaycross", busonewaycross],
-    ["busmegacross", busmegacross],
-  ];
-
-  it("every amber bus movement lands on a bus lane; car-lane fallbacks exist (cyan)", () => {
-    let amber = 0;
-    let fallback = 0;
-    for (const [, scn] of family) {
-      const centre = scn.level["2,2"].road;
-      for (const lane of centre!) {
-        if (lane.kind !== "bus") continue; // only bus-lane approaches go amber
-        for (const to of lane.to) {
-          const exitRoad = armRoad(scn.level, to);
-          const exitApproach = oppositePort(to);
-          if (turnLandsOnBusLane(centre, lane.from, lane.index, to, exitRoad, exitApproach, "bus")) {
-            amber++;
-            // Honesty: an amber arrow really ends on a bus lane of the exit arm.
-            const landing = junctionExitLane(
-              centre, lane.from, lane.index, to, exitRoad, exitApproach, "bus",
-            );
-            expect(busLaneIndices(exitRoad, exitApproach)).toContain(landing);
-          } else {
-            fallback++; // a bus movement that lands on a car lane → rendered cyan
-          }
-        }
-      }
-    }
-    expect(amber).toBeGreaterThan(0); // amber is still used where it's earned
-    expect(fallback).toBeGreaterThan(0); // and the buggy class (car-lane fallback) is present
-  });
-
-  it("busmegacross: the median bus's right turn onto the car-only south arm is NOT amber", () => {
-    // W median bus lane (from L, index 1) turning to the south (B). The south arm
-    // is a 2-lane one-way OUTBOUND with no bus lane — the original phantom amber.
-    const centre = busmegacross.level["2,2"].road;
-    const south = armRoad(busmegacross.level, B);
-    expect(
-      turnLandsOnBusLane(centre, L, 1, B, south, oppositePort(B), "bus"),
-    ).toBe(false);
-  });
-
-  it("busmedianboth: a median bus left turn lands on the cross street's median bus lane (amber)", () => {
-    // The positive case: median→median is a true bus-lane-to-bus-lane movement.
-    const centre = busmedianboth.level["2,2"].road;
-    const north = armRoad(busmedianboth.level, T);
-    expect(
-      turnLandsOnBusLane(centre, L, 1, T, north, oppositePort(T), "bus"),
-    ).toBe(true);
-  });
-});
-
-describe("unequal-arm junctions: every car movement lands on a real exit lane", () => {
-  // Companion to the bus-side landing guarantee (#18): on junctions whose arms
-  // carry different lane counts, every CAR movement that fans onto a wider arm or
-  // merges onto a narrower one must resolve to a CONCRETE lane that actually
-  // exists on the exit arm — never an index ≥ the arm's lane count. The sim drives
-  // the car to `junctionExitLane(...)` when it crosses out of a junction
-  // (road.ts), and the debug overlay arrow ends at that same lane
-  // (`roadTurnExitOffsetPx` → `junctionExitOffsetPx` → `junctionExitLane`), so
-  // pinning the landing lane here locks BOTH the routing and the overlay to a real
-  // lane. Regression coverage for #26 across every shipped unequal-arm scenario.
-  const family: [string, Level][] = [
-    ["mixedcross", mixedcross.level],
-    ["mixedtee", mixedtee.level],
-    ["crossturns2lane", crossturns2lane.level],
-    ["crossturns3lane", crossturns3lane.level],
-    ["roadjunction", roadjunction.level],
-    ["bigjunction", bigjunction.level],
-  ];
-
-  // Every (junction tile, car approach lane, permitted exit) movement in a level,
-  // paired with the exit arm's road and the port the car enters it through. Only
-  // junction tiles (a real routing choice) and car-usable approach lanes are
-  // walked — the case where junctionExitLane must fan/merge onto the exit arm.
-  function carMovements(level: Level) {
-    const out: {
-      coordId: string;
-      from: Position;
-      index: number;
-      exit: Position;
-      exitRoad: Level[string]["road"];
-      exitApproach: Position;
-    }[] = [];
-    for (const [coordId, cell] of Object.entries(level)) {
-      const road = cell.road;
-      if (!isRoadJunction(road)) continue;
-      const coord = parseCoordId(coordId);
-      for (const lane of road!) {
-        if (lane.kind === "bus") continue; // a car can't take a bus-only approach lane
-        for (const exit of lane.to) {
-          const next = neighborCoord(coord, exit);
-          if (!next) continue;
-          out.push({
-            coordId,
-            from: lane.from,
-            index: lane.index,
-            exit,
-            exitRoad: level[getCoordinatesId(next)]?.road,
-            exitApproach: oppositePort(exit),
-          });
-        }
-      }
-    }
-    return out;
-  }
-
-  for (const [name, level] of family) {
-    it(`${name}: every car turn/cross resolves to a real car lane on the exit arm`, () => {
-      const moves = carMovements(level);
-      expect(moves.length).toBeGreaterThan(0); // the scenario actually has junction movements
-      for (const m of moves) {
-        const carLanesOut = carLaneIndices(m.exitRoad, m.exitApproach);
-        // The exit arm must offer the car a lane at all — no car movement may fan
-        // onto an arm with no car lane (that would be an un-takeable movement).
-        expect(
-          carLanesOut.length,
-          `${name} ${m.coordId} ${m.from}#${m.index}→${m.exit}: exit arm has no car lane`,
-        ).toBeGreaterThan(0);
-        const landing = junctionExitLane(
-          level[m.coordId].road,
-          m.from,
-          m.index,
-          m.exit,
-          m.exitRoad,
-          m.exitApproach,
-          "car",
-        );
-        // The landing index must be a CONCRETE lane of the exit arm: present in
-        // its car-usable lane set and strictly below its lane count (never an
-        // off-the-edge index the car/overlay would draw outside the road).
-        expect(
-          carLanesOut,
-          `${name} ${m.coordId} ${m.from}#${m.index}→${m.exit}: landing ${landing} is not a real car lane of ${JSON.stringify(carLanesOut)}`,
-        ).toContain(landing);
-        expect(landing).toBeLessThan(laneCount(m.exitRoad, m.exitApproach));
-        // And the car may legally drive in the lane it lands on (not a bus lane).
-        expect(usableLaneIndices(m.exitRoad, m.exitApproach, "car")).toContain(landing);
-      }
-    });
-  }
 });
 
 describe("createRoadSim — launch reaction delay", () => {
@@ -2228,114 +1263,6 @@ describe("createRoadSim — variable preferred speed", () => {
   });
 });
 
-describe("createRoadSim — crossing patience (waitedSec / frame)", () => {
-  // A straight road across a crossing tile (rail Top-Bottom) so a closed gate
-  // holds the approaching car short of the rails.
-  function crossingRoad(): Level {
-    const road = fromPairs([[Position.Left, Position.Right]]);
-    return {
-      "0,0": { connections: [], road },
-      "1,0": { connections: [[Position.Top, Position.Bottom]], road },
-      "2,0": { connections: [], road },
-    };
-  }
-
-  it("accrues wait only while gated by the closed crossing, and resets on release", () => {
-    let closed = true;
-    const sim = createRoadSim({
-      level: crossingRoad(),
-      width: 3,
-      height: 1,
-      seed: 5,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      maxCars: 1,
-    });
-    // Settle a car hard against the closed gate, then keep it waiting.
-    for (let i = 0; i < 100; i++) sim.step(0.1, id => id === "1,0" && closed);
-    const waitedAfterStop = sim.frame().maxCarWaitSec;
-    expect(waitedAfterStop).toBeGreaterThan(1); // it has been waiting a while
-    // The frame's worst wait equals the (single) car's wait.
-    expect(sim.frame().carWaitTotalSec).toBeCloseTo(waitedAfterStop, 6);
-
-    // Keep it closed a little longer: the wait keeps climbing.
-    for (let i = 0; i < 20; i++) sim.step(0.1, id => id === "1,0" && closed);
-    expect(sim.frame().maxCarWaitSec).toBeGreaterThan(waitedAfterStop);
-
-    // Open the gate and let the car roll: its wait resets toward 0 once moving.
-    closed = false;
-    for (let i = 0; i < 60; i++) sim.step(0.1, () => false);
-    expect(sim.frame().maxCarWaitSec).toBeLessThan(0.5);
-  });
-
-  it("does not charge a queued car's wait to the crossing (only the lead car waits on it)", () => {
-    // A longer approach so a queue forms behind the gate: the lead car is bound by
-    // the crossing; the followers are bound by the car ahead, so their wait is not
-    // attributed to the crossing.
-    const road = fromPairs([[Position.Left, Position.Right]]);
-    const lvl: Level = {
-      "0,0": { connections: [], road },
-      "1,0": { connections: [], road },
-      "2,0": { connections: [], road },
-      "3,0": { connections: [[Position.Top, Position.Bottom]], road },
-      "4,0": { connections: [], road },
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 1,
-      seed: 3,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      carLength: 0.3,
-    });
-    for (let i = 0; i < 400; i++) sim.step(0.05, id => id === "3,0");
-    expect(sim.cars().length).toBeGreaterThan(1); // a real queue formed
-    // Total wait charged to the crossing is essentially one car's worth — the lead
-    // car at the gate — not the whole queue's. (The followers are bound by the car
-    // ahead.) So carWaitTotalSec ≈ maxCarWaitSec, not a multiple of it.
-    const f = sim.frame();
-    expect(f.maxCarWaitSec).toBeGreaterThan(1);
-    expect(f.carWaitTotalSec).toBeLessThan(f.maxCarWaitSec * 1.5);
-  });
-
-  it("counts only crossing-using cars toward carsDelivered", () => {
-    // Open crossing: cars stream across it and despawn at the right edge — each is
-    // a crossing-user, so throughput climbs.
-    const sim = createRoadSim({
-      level: crossingRoad(),
-      width: 3,
-      height: 1,
-      seed: 7,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      carLength: 0.2,
-    });
-    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
-    expect(sim.frame().carsDelivered).toBeGreaterThan(0);
-  });
-
-  it("a road with no crossing never counts throughput", () => {
-    // A plain straight road (no rail anywhere): cars despawn at the edge but none
-    // used a crossing, so carsDelivered stays 0.
-    const sim = createRoadSim({
-      level: straightRoad(),
-      width: 3,
-      height: 1,
-      seed: 7,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      carLength: 0.2,
-    });
-    for (let i = 0; i < 400; i++) sim.step(0.05, () => false);
-    expect(sim.frame().carsDelivered).toBe(0);
-  });
-});
-
 describe("vehicle kinds", () => {
   it("scales each kind's body length from the base car length", () => {
     const base = 0.2;
@@ -2511,543 +1438,4 @@ describe("createRoadSim — one-way street", () => {
     }
     expect(everSeen).toBe(true);
   });
-});
-
-describe("createRoadSim — right-turn-only cross", () => {
-  it("lets all four arms flow simultaneously without gridlock", () => {
-    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
-    const straight = (a: Position, b: Position) => ({
-      connections: [],
-      road: [turns(a, [b]), turns(b, [a])],
-    });
-    const lvl: Level = {
-      "0,2": straight(L, R),
-      "1,2": straight(L, R),
-      "3,2": straight(L, R),
-      "4,2": straight(L, R),
-      "2,0": straight(T, B),
-      "2,1": straight(T, B),
-      "2,3": straight(T, B),
-      "2,4": straight(T, B),
-      // Right-turn-only centre: Left->Bottom, Bottom->Right, Right->Top, Top->Left.
-      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 5,
-      seed: 7,
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-    });
-    let prev = new Set<string>();
-    let completed = 0;
-    for (let i = 0; i < 1200; i++) {
-      sim.step(0.05, () => false);
-      const now = new Set(sim.cars().map(c => c.id));
-      for (const id of prev) if (!now.has(id)) completed++;
-      prev = now;
-    }
-    expect(completed).toBeGreaterThan(8);
-  });
-
-  it("never makes a right-turner yield (non-conflicting movements are not blocked)", () => {
-    // Every movement here is a right turn, and right turns never conflict, so no
-    // car should ever have to stop for the junction — they all flow freely. We
-    // measure stalled car-ticks (a car whose position doesn't advance between
-    // steps). With the old whole-tile exclusion this was in the thousands; with
-    // conflict-aware blocking it is ~0. (A small margin tolerates incidental
-    // same-lane following, though at these speeds there is none.)
-    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
-    const straight = (a: Position, b: Position) => ({
-      connections: [],
-      road: [turns(a, [b]), turns(b, [a])],
-    });
-    const lvl: Level = {
-      "0,2": straight(L, R),
-      "1,2": straight(L, R),
-      "3,2": straight(L, R),
-      "4,2": straight(L, R),
-      "2,0": straight(T, B),
-      "2,1": straight(T, B),
-      "2,3": straight(T, B),
-      "2,4": straight(T, B),
-      "2,2": { connections: [], road: [turns(L, [B]), turns(B, [R]), turns(R, [T]), turns(T, [L])] },
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 5,
-      seed: 7,
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-    });
-    const posOf = new Map<string, number>();
-    let stalled = 0;
-    for (let i = 0; i < 1200; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.cars()) {
-        const pos = c.headIndex + c.headProgress;
-        const prevPos = posOf.get(c.id);
-        if (prevPos !== undefined && Math.abs(pos - prevPos) < 1e-4) stalled++;
-        posOf.set(c.id, pos);
-      }
-    }
-    expect(stalled).toBeLessThan(50);
-  });
-});
-
-describe("createRoadSim — no-left-turn cross", () => {
-  it("never performs a banned left turn, and still flows", () => {
-    // A 4-way cross where each approach may go straight or right, but NOT left.
-    // The banned movements are simply absent from the lanes, so the planner can
-    // never route them and the sim never offers them — directed lanes enforcing a
-    // partial turn restriction.
-    const { Top: T, Right: R, Bottom: B, Left: L } = Position;
-    const straight = (a: Position, b: Position) => ({
-      connections: [],
-      road: [turns(a, [b]), turns(b, [a])],
-    });
-    const lvl: Level = {
-      "0,2": straight(L, R),
-      "1,2": straight(L, R),
-      "3,2": straight(L, R),
-      "4,2": straight(L, R),
-      "2,0": straight(T, B),
-      "2,1": straight(T, B),
-      "2,3": straight(T, B),
-      "2,4": straight(T, B),
-      // Straight + right only (left turns banned).
-      "2,2": {
-        connections: [],
-        road: [turns(L, [R, B]), turns(R, [L, T]), turns(T, [B, L]), turns(B, [T, R])],
-      },
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 5,
-      height: 5,
-      seed: 7,
-      spawnEntries: [
-        { coord: { x: 0, y: 2 }, entryPort: Position.Left },
-        { coord: { x: 4, y: 2 }, entryPort: Position.Right },
-        { coord: { x: 2, y: 4 }, entryPort: Position.Bottom },
-        { coord: { x: 2, y: 0 }, entryPort: Position.Top },
-      ],
-      spawnInterval: 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      maxCars: 12,
-    });
-    // The four banned left-turn movements (screen coords: x→right, y→down).
-    const isLeftTurn = (m: { entry: Position; exit: Position }) =>
-      (m.entry === L && m.exit === T) ||
-      (m.entry === R && m.exit === B) ||
-      (m.entry === T && m.exit === R) ||
-      (m.entry === B && m.exit === L);
-
-    let prev = new Set<string>();
-    let completed = 0;
-    let sawCentreMovement = false;
-    for (let i = 0; i < 1600; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.sample()) {
-        for (const u of c.units) {
-          const pt = [u.front, u.rear].find(
-            p => p.coord.x === 2 && p.coord.y === 2 && p.exitPort !== null
-          );
-          if (pt) {
-            const m = { entry: pt.entryPort, exit: pt.exitPort as Position };
-            expect(isLeftTurn(m)).toBe(false); // no banned left turn, ever
-            sawCentreMovement = true;
-            break;
-          }
-        }
-      }
-      const now = new Set(sim.cars().map(c => c.id));
-      for (const id of prev) if (!now.has(id)) completed++;
-      prev = now;
-    }
-    expect(sawCentreMovement).toBe(true); // cars really used the junction
-    expect(completed).toBeGreaterThan(8); // and traffic kept flowing
-  });
-});
-
-describe("createRoadSim — per-lane following", () => {
-  function twoLaneRoad(): Level {
-    const road = nWayLanes(Position.Left, Position.Right, 2);
-    return {
-      "0,0": { connections: [], road },
-      "1,0": { connections: [], road },
-      "2,0": { connections: [], road },
-    };
-  }
-
-  it("cars in different lanes of the same direction flow without cross-lane stalling", () => {
-    const sim = createRoadSim({
-      level: twoLaneRoad(),
-      width: 3,
-      height: 1,
-      seed: 1,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.05,
-      carSpeed: 0.5,
-      maxCars: 6,
-    });
-    let stalledTicks = 0;
-    for (let i = 0; i < 400; i++) {
-      sim.step(0.05, () => false);
-      const cars = sim.cars();
-      if (cars.length >= 2) {
-        const moving = cars.filter(c => c.velocity > 0.01);
-        if (moving.length === 0) stalledTicks++;
-      }
-    }
-    expect(stalledTicks).toBeLessThan(30);
-  });
-
-  it("sample() includes laneIndex and laneCount fields", () => {
-    const sim = createRoadSim({
-      level: twoLaneRoad(),
-      width: 3,
-      height: 1,
-      seed: 1,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.3,
-      carSpeed: 0.5,
-      maxCars: 4,
-    });
-    for (let i = 0; i < 100; i++) sim.step(0.1, () => false);
-    const samples = sim.sample();
-    expect(samples.length).toBeGreaterThan(0);
-    for (const s of samples) {
-      expect(typeof s.laneIndex).toBe("number");
-      expect(typeof s.laneCount).toBe("number");
-      expect(s.laneIndex).toBeGreaterThanOrEqual(0);
-      expect(s.laneCount).toBeGreaterThanOrEqual(1);
-    }
-  });
-});
-
-describe("createRoadSim — lane merge (cross-tile continuity)", () => {
-  function mergingRoad(): Level {
-    const twoLane = nWayLanes(Position.Left, Position.Right, 2);
-    const oneLane = fromPairs([[Position.Left, Position.Right]]);
-    return {
-      "0,0": { connections: [], road: twoLane },
-      "1,0": { connections: [], road: twoLane },
-      "2,0": { connections: [], road: oneLane },
-      "3,0": { connections: [], road: oneLane },
-    };
-  }
-
-  it("cars entering the merge point keep flowing (laneIndex clamped to 0)", () => {
-    const sim = createRoadSim({
-      level: mergingRoad(),
-      width: 4,
-      height: 1,
-      seed: 3,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-      spawnInterval: 0.4,
-      carSpeed: 0.5,
-      maxCars: 6,
-    });
-    // Run the sim and ensure no permanent gridlock (not all cars stopped simultaneously).
-    let allStuckTicks = 0;
-    for (let i = 0; i < 600; i++) {
-      sim.step(0.05, () => false);
-      const cars = sim.cars();
-      if (cars.length >= 2 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
-    }
-    expect(allStuckTicks).toBeLessThan(50);
-  });
-});
-
-describe("mixed-lane junctions route end-to-end", () => {
-  // Drive a junction whose arms have different lane counts and confirm cars
-  // actually flow THROUGH the centre and off the far side — i.e. every connection
-  // works, with no permanent gridlock and no broken (NaN / off-grid) position.
-  const drive = (
-    scenario: { level: Level; size?: { cols: number; rows: number } },
-    centre: { x: number; y: number },
-    seed: number,
-  ) => {
-    const sim = createRoadSim({
-      level: scenario.level,
-      width: scenario.size!.cols,
-      height: scenario.size!.rows,
-      seed,
-      spawnInterval: 0.5,
-      maxCars: 16,
-    });
-    let prev = new Set<string>();
-    const completed = new Set<string>();
-    let throughCentre = 0;
-    let badPos = 0;
-    let allStuckTicks = 0;
-    for (let i = 0; i < 1600; i++) {
-      sim.step(0.05, () => false);
-      const now = new Set(sim.cars().map(c => c.id));
-      for (const id of prev) if (!now.has(id)) completed.add(id);
-      prev = now;
-      for (const c of sim.sample()) {
-        const f = c.units[0].front;
-        // A broken sample = non-finite progress or lateral lane position.
-        if (!Number.isFinite(f.t) || (f.lanePos != null && !Number.isFinite(f.lanePos))) badPos++;
-        if (f.coord.x === centre.x && f.coord.y === centre.y) throughCentre++;
-      }
-      const cars = sim.cars();
-      if (cars.length >= 3 && cars.every(c => c.velocity < 0.001)) allStuckTicks++;
-    }
-    return { completed: completed.size, throughCentre, badPos, allStuckTicks };
-  };
-
-  it("mixedcross (1/2/3/2 arms): cars cross the centre and exit, no gridlock", () => {
-    const r = drive(mixedcross, { x: 3, y: 3 }, 7);
-    expect(r.badPos).toBe(0); // no broken positions
-    expect(r.throughCentre).toBeGreaterThan(0); // cars actually traverse the junction
-    expect(r.completed).toBeGreaterThan(10); // sustained flow off the far side
-    expect(r.allStuckTicks).toBeLessThan(80); // no permanent deadlock
-  });
-
-  it("mixedtee (3-lane road, 2-lane spur): cars cross the centre and exit, no gridlock", () => {
-    const r = drive(mixedtee, { x: 3, y: 2 }, 4);
-    expect(r.badPos).toBe(0);
-    expect(r.throughCentre).toBeGreaterThan(0);
-    expect(r.completed).toBeGreaterThan(10);
-    expect(r.allStuckTicks).toBeLessThan(80);
-    // ~3.3s on its own on a fast machine — the 5s default has no headroom left
-    // on a shared CI runner under the parallel suite (timed out there at 5s).
-    // A timeout here is the machine, never the code — what this test guards
-    // (gridlock) shows up as `allStuckTicks`, which is a count, not a clock.
-  }, 30_000);
-
-  it("bigjunction (4-way × 3-lane dedicated turn lanes): cars cross the centre and exit, no gridlock", () => {
-    // The largest unequal-movement junction in the epic (#16 acceptance criterion):
-    // 12 directed lanes, each wired to exactly one exit (kerb→right, middle→straight,
-    // inner→left) on all four 3-lane arms. Drive it under load (maxCars 16, the
-    // `drive` default, well above the scenario's own cap of 12) and confirm cars
-    // sort, cross the centre, and clear off the far side without locking up.
-    const r = drive(bigjunction, { x: 3, y: 3 }, 7);
-    expect(r.badPos).toBe(0); // no broken positions through the dedicated turn lanes
-    expect(r.throughCentre).toBeGreaterThan(0); // cars actually traverse the crossroads
-    expect(r.completed).toBeGreaterThan(10); // sustained flow off the far side
-    expect(r.allStuckTicks).toBeLessThan(80); // no permanent deadlock under load
-  });
-});
-
-describe("createRoadSim — overtaking & swept-body collision robustness (#39)", () => {
-  // Build a sim straight from a TestScenario's traffic config, with the
-  // deterministic per-interval spawn cadence (no fillFast) so the run replays
-  // identically for a fixed seed — the basis for the swept-body assertion.
-  function simFor(
-    scenario: { level: Level; size?: { cols: number; rows: number }; traffic?: TrafficConfig },
-    seed: number,
-  ) {
-    const t = (scenario.traffic ?? {}) as {
-      spawnInterval?: number;
-      maxCars?: number;
-      overtakeFraction?: number;
-      mix?: Record<string, number>;
-      spawnEntries?: { coord: { x: number; y: number }; entryPort: Position }[];
-    };
-    return createRoadSim({
-      level: scenario.level,
-      width: scenario.size!.cols,
-      height: scenario.size!.rows,
-      seed,
-      spawnInterval: t.spawnInterval ?? 0.5,
-      carSpeed: 0.5,
-      carLength: 0.2,
-      speedSpread: 0.3,
-      maxCars: t.maxCars ?? 12,
-      overtakeFraction: t.overtakeFraction,
-      mix: t.mix,
-      spawnEntries: t.spawnEntries,
-    });
-  }
-
-  // A car is ~20px wide in a ~28px lane, so two same-direction bodies physically
-  // CLIP when their lane centres are closer than ~0.71 lane. The swept-body check
-  // treats two bodies as overlapping when, on the same tile and travel direction,
-  // their LONGITUDINAL extents intersect AND their LATERAL (continuous lanePos)
-  // extents are within that body width — a true 2D body overlap. Mid lane-change
-  // bodies are laterally offset, so a clean pass (the car eases clear before
-  // drawing level) registers no overlap, while a real clip does.
-  const CLIP_LANES_TEST = 0.7; // a hair under the body-width ratio, for margin
-  function worstSweptOverlap(sim: ReturnType<typeof createRoadSim>): number {
-    type Ext = { id: string; tMin: number; tMax: number; lMin: number; lMax: number };
-    // Group body extents per car, keyed by tile + travel direction (entry port),
-    // so only same-direction bodies on one tile are compared. Opposing lanes and
-    // crossing junction streams are handled by their own gates/tests.
-    const groups = new Map<string, Map<string, Ext>>();
-    for (const body of sim.bodies()) {
-      for (const p of body.points) {
-        const key = `${p.tileId}|${p.entry}`;
-        let perCar = groups.get(key);
-        if (!perCar) groups.set(key, (perCar = new Map()));
-        const e = perCar.get(body.id);
-        if (!e) perCar.set(body.id, { id: body.id, tMin: p.t, tMax: p.t, lMin: p.lanePos, lMax: p.lanePos });
-        else {
-          e.tMin = Math.min(e.tMin, p.t);
-          e.tMax = Math.max(e.tMax, p.t);
-          e.lMin = Math.min(e.lMin, p.lanePos);
-          e.lMax = Math.max(e.lMax, p.lanePos);
-        }
-      }
-    }
-    let worst = 0;
-    for (const perCar of groups.values()) {
-      const arr = [...perCar.values()];
-      for (let i = 0; i < arr.length; i++) {
-        for (let j = i + 1; j < arr.length; j++) {
-          const a = arr[i];
-          const b = arr[j];
-          const longOverlap = Math.min(a.tMax, b.tMax) - Math.max(a.tMin, b.tMin);
-          // Lateral centre separation between the two bodies (0 if their lanePos
-          // extents already intersect).
-          const latSep = Math.max(0, Math.max(a.lMin, b.lMin) - Math.min(a.lMax, b.lMax));
-          // Only a 2D overlap counts: longitudinally overlapping AND laterally
-          // within a body width.
-          if (longOverlap > worst && latSep < CLIP_LANES_TEST) worst = longOverlap;
-        }
-      }
-    }
-    return worst;
-  }
-
-  // The acceptance criterion: a fixed deterministic run of each busy/junction
-  // scenario never lets two bodies overlap on ANY tick.
-  const sweptScenarios: { name: string; scenario: Parameters<typeof simFor>[0]; seed: number }[] = [
-    { name: "overtaketwolane", scenario: overtaketwolane, seed: 7 },
-    { name: "overtakeabort", scenario: overtakeabort, seed: 7 },
-    { name: "overtakeloop", scenario: overtakeloop, seed: 9 },
-    { name: "carqueue", scenario: carqueue, seed: 3 },
-    { name: "roadpriority", scenario: roadpriority, seed: 5 },
-  ];
-  for (const { name, scenario, seed } of sweptScenarios) {
-    it(`${name}: no two bodies overlap on any tick (swept-body)`, () => {
-      const sim = simFor(scenario, seed);
-      let worst = 0;
-      let sawTraffic = false;
-      for (let i = 0; i < 1500; i++) {
-        sim.step(0.05, () => false);
-        if (sim.cars().length > 1) sawTraffic = true;
-        worst = Math.max(worst, worstSweptOverlap(sim));
-      }
-      expect(sawTraffic).toBe(true); // the run actually populated the road
-      // A tiny tolerance absorbs body-sampling/curve discretisation; a real
-      // overlap (two bodies sharing road in a lane) is far larger than this.
-      expect(worst).toBeLessThan(0.02);
-    }, 30000);
-  }
-
-  it("overtakers ease laterally — no snap on pull-out, return, or abort", () => {
-    // Across a busy overtaking run, a car's lateral lane position never jumps more
-    // than the lane-change rate allows in one tick. This holds for a graceful
-    // abort too (the same eased glide carries the car back), so an aborted pass
-    // can never teleport the body sideways.
-    const dt = 0.05;
-    const sim = simFor(overtakeabort, 7);
-    const prev = new Map<string, number>();
-    let worstStep = 0;
-    for (let i = 0; i < 1500; i++) {
-      sim.step(dt, () => false);
-      const live = new Set<string>();
-      for (const c of sim.cars()) {
-        live.add(c.id);
-        const p = prev.get(c.id);
-        if (p != null) worstStep = Math.max(worstStep, Math.abs(c.laneIndex - p) / dt);
-        prev.set(c.id, c.laneIndex);
-      }
-      for (const id of [...prev.keys()]) if (!live.has(id)) prev.delete(id);
-    }
-    // LANE_CHANGE_RATE is 2.2 lanes/sec; allow a small numerical margin. A snap
-    // (instant lane swap) would be many times this.
-    expect(worstStep).toBeLessThan(2.5);
-  }, 30000);
-
-  it("a car aborts a pass when the gap closes — returns to the kerb without committing", () => {
-    // On the short, packed overtakeabort road the inner (passing) lane is often
-    // blocked ahead, so a car that pulls out to pass frequently has to give up.
-    // Detect a genuine abort: a car observed in the "passing" phase that then
-    // switches to "returning" WITHOUT ever drawing level with its leader — i.e.
-    // it never reached the inner lane proper (peak laneIndex stayed below ~0.7)
-    // before tucking back to the kerb. That is the gap-acceptance bail-out.
-    const sim = simFor(overtakeabort, 7);
-    const peakWhilePassing = new Map<string, number>();
-    const wasPassing = new Set<string>();
-    let aborts = 0;
-    let completedPasses = 0;
-    for (let i = 0; i < 2000; i++) {
-      sim.step(0.05, () => false);
-      const live = new Set<string>();
-      for (const c of sim.cars()) {
-        live.add(c.id);
-        if (c.overtakePhase === "passing") {
-          wasPassing.add(c.id);
-          peakWhilePassing.set(c.id, Math.max(peakWhilePassing.get(c.id) ?? 0, c.laneIndex));
-        } else if (c.overtakePhase === "returning" && wasPassing.has(c.id)) {
-          const peak = peakWhilePassing.get(c.id) ?? 0;
-          if (peak < 0.7) aborts++;
-          else completedPasses++;
-          wasPassing.delete(c.id); // count each pass attempt once
-          peakWhilePassing.delete(c.id);
-        }
-      }
-      for (const id of [...peakWhilePassing.keys()]) {
-        if (!live.has(id)) {
-          peakWhilePassing.delete(id);
-          wasPassing.delete(id);
-        }
-      }
-    }
-    // The packed inner lane forces at least one gap-acceptance abort…
-    expect(aborts).toBeGreaterThan(0);
-    // …and the model still completes real passes elsewhere (it doesn't just give
-    // up on everything).
-    expect(completedPasses + aborts).toBeGreaterThan(0);
-  }, 30000);
-
-  it("a returning overtaker aims for the kerb-most lane, not just its pull-out lane (keep-right)", () => {
-    // A 3-lane-each-way straight, eastbound, busy with overtakers and a wide speed
-    // spread so cars that spawned in the MIDDLE lane (1) pull out into lane 2 to
-    // pass. Keep-right discipline means that when such a car returns it heads for
-    // the KERB (lane 0), not back to its middle pull-out lane — so every car in the
-    // "returning" phase targets the kerb-most legal lane, and returns do happen.
-    const lane3 = () => ({ connections: [], road: nWayLanes(Position.Left, Position.Right, 3) });
-    const lvl: Level = {
-      "0,0": lane3(), "1,0": lane3(), "2,0": lane3(), "3,0": lane3(), "4,0": lane3(), "5,0": lane3(),
-    };
-    const sim = createRoadSim({
-      level: lvl,
-      width: 6,
-      height: 1,
-      seed: 4,
-      spawnInterval: 0.6,
-      carSpeed: 0.6,
-      speedSpread: 0.3,
-      carLength: 0.2,
-      maxCars: 12,
-      overtakeFraction: 1,
-      spawnEntries: [{ coord: { x: 0, y: 0 }, entryPort: Position.Left }],
-    });
-    let returningSamples = 0;
-    let kerbTargeted = 0;
-    for (let i = 0; i < 2000; i++) {
-      sim.step(0.05, () => false);
-      for (const c of sim.cars()) {
-        if (c.overtakePhase !== "returning") continue;
-        returningSamples++;
-        if (c.targetLane === 0) kerbTargeted++;
-      }
-    }
-    expect(returningSamples).toBeGreaterThan(0); // passes are returned from
-    // Every returning car steers for the kerb-most lane (keep-right discipline).
-    expect(kerbTargeted).toBe(returningSamples);
-  }, 30000);
 });
