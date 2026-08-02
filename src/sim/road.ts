@@ -2819,21 +2819,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         const want = junctionExitLane(
           prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
         );
-        // A TURN's lateral glide (couplerOffset's turn branch) physically carries
-        // the vehicle to `want` ACROSS the junction tile, so it must START there —
-        // resetting to the carried approach index made it land on its lane, snap
-        // back, then drift across again (an on-ramp car visibly dipping to the
-        // kerb before returning to its inner landing lane). Straight-through
-        // movements have no such glide (they keep the seam-taper branch), so they
-        // start at the nearest usable carried lane and ease over (pendingExitLane).
-        const turned = exitPort !== oppositePort(head.entryPort);
-        const start = turned
-          ? want
-          : nearestUsableLaneIndex(
-              nextTile.road, nextEntry,
-              nextLaneCount > 0 ? Math.min(car.laneIndex, nextLaneCount - 1) : car.laneIndex,
-              cls,
-            );
+        // The junction tile's lateral glide (laneGeometry's junction branch)
+        // physically carries the vehicle to `want` ACROSS the box, so it must START
+        // there — resetting to the carried approach index made it land on its lane,
+        // snap back, then drift across again (an on-ramp car visibly dipping to the
+        // kerb before returning to its inner landing lane). This holds for a
+        // STRAIGHT-through too: a junction whose arms differ in width glides the
+        // through-lane to the exit arm's matching lane exactly like a turn, so the
+        // straight must not start on the carried index either or it snaps at the
+        // seam by the difference between the two arms' bands.
+        const start = want;
         // Pin the lane the body behind this seam is really in before overwriting
         // it — `car.headIndex` still points at the junction segment here (the
         // increment is below), so it is exactly the last index on the old side.
@@ -2858,13 +2853,35 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // straight through the arrows telling it to do the opposite. Now the index
         // is remapped so the car stays on the tarmac it was on, and any move off it
         // is an ordinary lane change like every other.
+        //
+        // A CURVE is the other half of the same rule: the tile we are leaving turned
+        // the vehicle onto a different arm, and the lane it physically lands in is
+        // the one `junctionExitLane` names — the SAME mapping `turnExitOffsetPx`
+        // glides it along inside the curve, so the drawn path and the assigned index
+        // cannot drift apart at the seam.
+        //
+        // Neither rule may measure itself against a JUNCTION, though: a junction's
+        // per-arm `laneCount` tallies the MOVEMENTS that fan through the arm, not
+        // the arm's real width (a bus-only turn off a 1-lane approach reads as 2),
+        // and its arm adopts the road's band anyway (`roadSeamPaintTotal`). Treating
+        // that tally as a width shifted a car entering the tee at `busshortcut`
+        // clean into the bus lane beside it. Same guard `laneDropAhead` and
+        // `laneDropUrgent` already apply when they compare widths.
         const prevCount = laneCount(prevRoad, head.entryPort);
-        const mapped = laneIndexAcrossSeam(
-          car.laneIndex,
-          prevCount,
-          nextLaneCount,
-          isOneWayStraight(nextTile.road, nextEntry),
-        );
+        const kerbAnchored = isOneWayStraight(nextTile.road, nextEntry);
+        const wentStraight = exitPort === oppositePort(head.entryPort);
+        const clamp = (lane: number) => Math.max(0, Math.min(nextLaneCount - 1, lane));
+        const turnShift =
+          wentStraight || isRoadJunction(nextTile.road)
+            ? 0
+            : junctionExitLane(
+                prevRoad, head.entryPort, laneOf(car), exitPort, nextTile.road, nextEntry, cls,
+              ) - laneOf(car);
+        const across = (lane: number) =>
+          wentStraight && !isRoadJunction(nextTile.road)
+            ? laneIndexAcrossSeam(lane, prevCount, nextLaneCount, kerbAnchored)
+            : clamp(lane + turnShift);
+        const mapped = across(car.laneIndex);
         // The body behind the seam is still in the OLD tile's lane numbering, so
         // pin it exactly as a junction seam does — otherwise the tail jumps a lane
         // sideways (into whatever is beside it) the tick the head crosses.
@@ -2872,12 +2889,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           car.lanePivot = { pathIndex: car.headIndex, lane: laneOf(car) };
           car.laneAnchor += mapped - car.laneIndex;
         }
-        car.targetLane = laneIndexAcrossSeam(
-          car.targetLane,
-          prevCount,
-          nextLaneCount,
-          isOneWayStraight(nextTile.road, nextEntry),
-        );
+        car.targetLane = across(car.targetLane);
         car.laneIndex = mapped;
         car.tilesSinceJunction += 1; // one more tile of open road since the junction
       }
