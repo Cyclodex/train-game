@@ -661,14 +661,42 @@ lean — prune as much as you add. This file only stays useful if every task ten
   flat ground ("plain", #3a6b4f) is its own anchor so `npm run shot` pictures
   stay comparable. THE THEME IS PART OF THE MEMO KEY — the cache trap the
   terrain roadmap wrote down before anyone hit it. "Same" for the
-  patch machinery compares NEIGHBOUR HEIGHT >= OWN — a higher neighbour
-  continues the terrace and lays its own lighter body on top of the shared
-  reading, so a plateau fuses like a lake and the step edge always belongs to
-  the UPPER terrace. Downhill edges get slope faces clipped inside the body:
+  patch machinery compares NEIGHBOUR HEIGHT >= the band being drawn — a higher
+  neighbour continues the terrace and lays its own lighter body on top of the
+  shared reading, so a plateau fuses like a lake and the step edge always
+  belongs to the UPPER terrace. Downhill edges get slope faces clipped inside the body:
   LIT on top/left, SHADED on right/bottom (patchSegments' clockwise edge order
   is 0 top, 1 right, 2 bottom, 3 left — the one NW sun again). Own memo cache
   (`heightCache`). Author a hill as a BODY (heights on the whole footprint),
   not just on the track cells, or it reads as two embankments.
+- ONE BAND PER LEVEL OF THE FALL, NOT ONE PER CELL (2026-08-01). A cell drew a
+  single body — its OWN height — so a boundary that dropped more than one step
+  showed ONE contour where the same hill showed two or three elsewhere. It is
+  not an exotic case: `/test/grades` is a ridge with authored ramps east-west
+  and nothing north-south, so it terraced along the line and went SHEER at the
+  top and bottom of the hill, and `mountainpass`'s saddle broke into detached
+  slabs. `tileHeightSvg` now takes `HeightNeighbours` (the eight neighbours'
+  HEIGHTS, not "same" booleans) and lays band k = 1..h, lowest first.
+  · Band k fuses with any neighbour at >= k. Where it stops it is pushed INSIDE
+    the tile by `bandInsets` — `(k - n - 1) * TERRACE_BAND_INSET` (17u, capped
+    at 35) — so the LOWEST contour a cell owes always lands ON the boundary and
+    only the ones above it step in. That is the compatibility rule: a one-step
+    ramp is inset by 0, i.e. every board authored before this renders
+    unchanged, and only the multi-step drops gain the contours nobody authored.
+    Closer contours = steeper slope, which is what a contour map means anyway.
+  · So 1 -> 3 in one boundary is DRAWN as 1 -> 2 -> 3 without anyone having to
+    pad the hill with rings. Don't "fix" a jump by requiring the intermediate
+    ring in the data (validate/editor) — heights are per-cell, the renderer
+    answers for the gap.
+  · `patchPath`/`patchRimPath`/`patchSegments` take an optional per-edge
+    `EdgeInset` for this; `corners()` applies it (both edges at a corner push,
+    their normals are perpendicular so they compose) and `outwardRoom` takes it
+    off the room a rounded corner may lean into — spend the whole tile and the
+    sweep bulges back over the band below and eats the ring it sits in.
+  · A band the next one up would cover EXACTLY (every neighbour already above
+    it) is skipped: that is the plateau interior, i.e. most cells of a big hill.
+  · Pinned in `tests/unit/tiles/heightTerraces.spec.ts`; `/test/terraces` is the
+    side-by-side (stepped hill vs 3-step mesa) — the contrast IS the test.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
