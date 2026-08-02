@@ -545,6 +545,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
     · `isPlotGround` — town ground with nothing built across it. What holds
       PEOPLE. Nobody lives on the carriageway.
   Before the split, a street through a town read as two towns.
+- **FOOTWAYS (2026-08-02).** `TileCell.footway?: "both" | "none"` is the fifth
+  tile axis and only ever an OPT-OUT — every street has pavements unless it says
+  "none", so boards written before footways existed grew them for free.
+    · NOT a Lane, and do not be tempted: a pavement is bidirectional on ONE
+      strip (a Lane is directed), it sits OUTSIDE the kerb (laneOffset positions
+      lanes within the carriageway), and its users MAY OVERLAP — which every
+      following/swept-body/conflict gate in road.ts exists to forbid.
+    · Pavement art reuses the road's OWN kerb geometry (`roadKerbEdge` /
+      `roadCurveKerbEdge`) at a bigger offset, so it follows every bend exactly.
+      A hand-rolled parallel line drifts on curves.
+    · Paint ONE band per side per movement, deduplicated: `twoWay` is two lanes
+      over the same ground and painting per lane stacks two bands and shows a
+      seam at every tile edge.
+- **PEDESTRIANS ARE THEIR OWN SIM** (`sim/pedestrians.ts`): a route of tile ids,
+  a distance along it, a side of the street. Positions come out in TILE units so
+  a headless test reads them and the renderer only multiplies; `game.pedestrians`
+  is filled in `advance()`, not the render mirror.
+    · A walk route is `[plot, street…, plot]` — ADDRESSES ARE NEVER
+      THROUGH-ROUTES. Let people walk freely across plots and a short trip cuts
+      through gardens and never touches a pavement, which is the whole thing the
+      feature exists to show.
+    · `planWalk` returns null when no pavement joins the ends, and the citizen's
+      leg stays on its clock. A board with no roads (threecities) is unaffected.
+    · Step the walkers BEFORE the citizens in advance(), or every arrival is
+      reported a tick late.
+    · `citizenStats.onFoot` is the headless-visible count — same reason as
+      `driving`: the renderer's list does not exist in a test.
 - **LOCAL ACCESS IS DERIVED, never drawn** (`tiles/access.ts`). A plot within
   `ROAD_ACCESS_TILES` of a street gets its driveway/apron rendered from the tile
   centre out to that edge. No level data, nothing to keep in sync, re-derived

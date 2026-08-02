@@ -95,6 +95,33 @@ export function accessPortOf(level: Level, id: string): Port | null {
 }
 
 /**
+ * The road TILE that serves this plot — where its driveway comes out, and where
+ * a walk from its door joins the pavement. Null when nothing is in reach.
+ */
+export function accessTileOf(level: Level, id: string): string | null {
+  const port = accessPortOf(level, id);
+  if (port === null) return null;
+  const { x, y } = parseCoordId(id);
+  // The port says which EDGE the path leaves by. The street it reaches is the
+  // neighbour across that edge when there is one, and otherwise the diagonal
+  // that edge points at (see `accessPortOf`'s second pass).
+  const side = SIDES.find(([p]) => p === port);
+  if (side && hasRoad(level, `${x + side[1]},${y + side[2]}`)) {
+    return `${x + side[1]},${y + side[2]}`;
+  }
+  for (const [dx, dy] of [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ]) {
+    const nid = `${x + dx},${y + dy}`;
+    if (hasRoad(level, nid)) return nid;
+  }
+  return null;
+}
+
+/**
  * Every plot's local access on the board: tile id → the edge its path leaves
  * by. The whole-board view of `accessPortOf`, for tests and for the pedestrian
  * graph when walking people arrive.

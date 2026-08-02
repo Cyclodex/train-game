@@ -343,6 +343,15 @@
           :style="{ transform: `translate(-50%, -50%) rotate(${-car.angle}deg)` }"
         >{{ car.id }}</span>
       </div>
+      <!-- People on the pavement. Absolutely positioned like the road cars,
+           so they are not grid ITEMS and cannot displace a tile (KNOWHOW →
+           RENDER LAYOUT). Empty on every board without a citizen layer. -->
+      <div
+        v-for="p in pedestrians"
+        :key="p.id"
+        class="pedestrian"
+        :style="{ transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)` }"
+      />
       <CarRouteOverlay
         v-if="config.debug && carRoute"
         :segments="carRoute.segments"
@@ -1483,6 +1492,13 @@ class PlayView extends Vue {
   }
 
   // Live road-traffic cars, sampled to world positions by the game each frame.
+  // People walking on the pavements (Citizens mode). A GETTER onto the
+  // game's reactive array, exactly like roadCars — the array is written in
+  // place by game.advance(), so Vue re-renders without a new binding.
+  get pedestrians() {
+    return this.game.pedestrians;
+  }
+
   get roadCars() {
     return this.game.roadCars;
   }
@@ -1645,6 +1661,22 @@ export default toNative(PlayView);
     outline: 1px solid red;
   }
 }
+.pedestrian {
+  position: absolute;
+  z-index: 6; // same band as the cars: on the pavement, beside the road
+  top: 0;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  // Warm and pale so a figure reads against tarmac, pavement and grass
+  // alike, with a dark ring so it never dissolves into the light stone.
+  background: #f6e3c8;
+  border: 1.5px solid rgba(40, 32, 24, 0.65);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  will-change: transform;
+}
+
 .road-car {
   position: absolute;
   z-index: 6; // above the road surface and trains; booms (crossing) sit above

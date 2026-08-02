@@ -540,7 +540,7 @@ it into two towns.
 one frontage can serve. That belongs with the growth model as a *prompt*, not a
 silent auto-build — the same shape as `wantsRoom`: "Brookfield needs a street."
 
-### 9.1 Pedestrians and footways (designed, not built)
+### 9.1 Pedestrians and footways (BUILT 2026-08-02)
 
 Walking is a timer today. To *see* people walk, they need somewhere to walk, and
 the recommendation is:
@@ -573,7 +573,34 @@ that moves dots along that graph — reusing the citizen sim's walking leg
 The genuinely new mechanic that falls out, and the reason this is worth doing as
 a *game* feature rather than decoration: **a crossing.** Where a footway meets a
 carriageway or a railway, somebody has to give way — and that is a decision the
-player makes, exactly like a signal or a level crossing.
+player makes, exactly like a signal or a level crossing. **Still to build.**
+
+**What shipped**, exactly as designed above:
+
+- `TileCell.footway?: "both" | "none"` — the fifth tile axis, and only ever an
+  *opt-out*. Every board that already existed grew pavements the day this
+  landed; a motorway or a car-park aisle says `"none"`.
+- `tiles/footway.ts` — `hasFootway`, the walking graph (`walkNeighbours`,
+  `planWalk`) and `pavementPaths`. The pavement art reuses the road's **own**
+  kerb geometry (`roadKerbEdge` / `roadCurveKerbEdge`) at a larger offset, so it
+  follows every bend exactly; a hand-rolled parallel line drifts on curves.
+- `sim/pedestrians.ts` — walkers as a route of tile ids, a distance along it and
+  a side of the street. Positions come out in **tile units**, so a headless test
+  can read them and the renderer only multiplies.
+- A citizen's walking leg becomes a real figure, on the same contract as the
+  driving leg: **it ends when the walker arrives**, so what you watch and what
+  the city card scores are the same journey. `citizenStats.onFoot` is the
+  headless-visible count (the renderer's list is empty in a test).
+
+Two properties worth preserving:
+
+- **A walk route is `[plot, street…, plot]` — addresses are never through-routes.**
+  Let people walk freely across plots and a two-tile trip cuts through gardens
+  and never touches a pavement, which is precisely the thing this feature exists
+  to show.
+- **The fallback is a feature, again.** `planWalk` returns null when no pavement
+  joins the two ends, and the leg stays on its clock. `threecities` has no roads
+  at all and behaves exactly as it did.
 
 ### Phase C — the rest of life
 

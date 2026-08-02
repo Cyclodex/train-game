@@ -72,6 +72,10 @@ export interface Trip {
   // route that stopped existing under a live edit) must not hold its passenger
   // for ever — see `advanceTrip`.
   carSec: number;
+  // The person walking this leg on an actual pavement, when one connects the
+  // two ends. Same contract as `carTrip`: while it is set the leg ends when the
+  // WALKER arrives, not when a clock runs out.
+  walkTrip: string | null;
 }
 
 export interface Citizen {
@@ -203,6 +207,16 @@ export interface TransitPort {
 // The road world, same shape and same reason. Omitted → a driving citizen is an
 // abstract timer (which is all they ever were before this existed, and still
 // all they are on a board whose road sim is off).
+// The pavement, same shape and same reason as the two above. Omitted, or with
+// no footway route between the two ends, a walking citizen stays an abstract
+// timer — which is all they ever were, so a board with no pavements is
+// unaffected.
+export interface WalkingPort {
+  request(fromPlotId: string, toPlotId: string): string | null;
+  status(tripId: string): "walking" | "arrived";
+  release(tripId: string): void;
+}
+
 export interface DrivingPort {
   // Send a real car from one road tile to another. Returns a trip id, or null
   // when no car could be dispatched — no route, the street outside blocked, the
@@ -224,6 +238,8 @@ export interface CitizenStats {
   // to see from OUTSIDE that a driving citizen became a vehicle rather than a
   // timer, since the renderer's car list does not exist in a headless run.
   driving: number;
+  // ...and the same for people on an actual pavement.
+  onFoot: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -239,6 +255,7 @@ export interface CitizenSimConfig {
   tuning?: Partial<CitizenTuning>;
   transit?: TransitPort;
   driving?: DrivingPort;
+  walking?: WalkingPort;
 }
 
 export interface CitizenSim {
@@ -275,6 +292,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const world = config.world;
   const transit = config.transit;
   const driving = config.driving;
+  const walking = config.walking;
 
   // Separate RNG streams, as road.ts does: adding a citizen must not shift the
   // numbers another part of the model was going to draw.
@@ -436,8 +454,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const i = list.indexOf(c.id);
       if (i >= 0) list.splice(i, 1);
     }
-    // Somebody who leaves town mid-drive does not leave a ghost car behind.
+    // Somebody who leaves town mid-journey does not leave a ghost behind.
     if (c.trip?.carTrip) driving?.release(c.trip.carTrip);
+    if (c.trip?.walkTrip) walking?.release(c.trip.walkTrip);
     people.delete(c.id);
   }
 
@@ -637,6 +656,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       transfers: 0,
       carTrip: null,
       carSec: 0,
+      walkTrip: null,
     };
     // A driving leg becomes an ACTUAL CAR on the board whenever the road sim can
     // dispatch one: this person is now a vehicle in traffic, and their journey
@@ -653,6 +673,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       if (origin && target && origin !== target) {
         trip.carTrip = driving.request(origin, target);
       }
+    }
+    // A walking leg becomes an ACTUAL PERSON on the pavement whenever a footway
+    // route joins the two ends. The whole trip for a walk; the approach to the
+    // platform for a rail journey.
+    if (walking && trip.leg === "walking") {
+      const target = trip.mode === "walk" ? toId : (trip.station ?? "");
+      if (target) trip.walkTrip = walking.request(fromId, target);
     }
   }
 
@@ -748,8 +775,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         return;
       }
       case "walking": {
+        // On a real pavement: the leg ends when the WALKER gets there. The
+        // clock still runs alongside as the backstop — a pavement deleted under
+        // somebody's feet must not strand them.
         t.legRemaining -= dt;
-        if (t.legRemaining > 0) return;
+        if (t.walkTrip) {
+          const done = walking?.status(t.walkTrip) === "arrived";
+          if (!done && t.legRemaining > -tuning.maxWaitSec) return;
+          walking?.release(t.walkTrip);
+          t.walkTrip = null;
+        } else if (t.legRemaining > 0) {
+          return;
+        }
         if (t.mode === "walk") {
           finishTrip(c, true);
           return;
@@ -1113,10 +1150,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let travelling = 0;
     let population = 0;
     let drivingNow = 0;
+    let walkingNow = 0;
     for (const c of people.values()) {
       population += 1;
       if (c.trip) travelling += 1;
       if (c.trip?.carTrip) drivingNow += 1;
+      if (c.trip?.walkTrip) walkingNow += 1;
     }
     const total =
       modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
@@ -1128,6 +1167,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       citizens: population,
       travelling,
       driving: drivingNow,
+      onFoot: walkingNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,

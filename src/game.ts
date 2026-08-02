@@ -15,6 +15,7 @@ import {
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { buildCitizenWorld } from "@/tiles/cities";
+import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
   CityState,
   CitizenSim,
@@ -397,6 +398,9 @@ export interface Game {
   // the HUD knows not to draw the city cards at all.
   cities: CityState[];
   citizenStats: CitizenHud;
+  // People on the pavements, sampled to world PIXELS each frame for rendering.
+  // Empty for every mode without a citizen layer.
+  pedestrians: PedestrianDot[];
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -559,12 +563,21 @@ export interface CitizenHud {
   travelling: number;
   // How many of this board's people are a car on the road at this instant.
   driving: number;
+  // ...and how many are a figure on a pavement.
+  onFoot: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
   clock: string; // "07:35" — the citizens' day, not the calendar's year
   day: number;
   modeShare: Record<TravelMode, number>;
+}
+
+// One walking person, positioned for the renderer.
+export interface PedestrianDot {
+  id: string;
+  x: number; // world px
+  y: number;
 }
 
 // How many people a platform holds under the citizen layer. Generous on
@@ -843,12 +856,15 @@ export function createGame(
   // rebuilt on reset the same way the sims are, and it needs the level as it
   // stands then. `rebuildCitizens()` below is what reset() calls.
   let citizenSim: CitizenSim | null = null;
+  let pedestrianSim: PedestrianSim | null = null;
+  const pedestrians = reactive([]) as PedestrianDot[];
   const cities = reactive([]) as CityState[];
   const citizenStats = reactive({
     enabled: false,
     population: 0,
     travelling: 0,
     driving: 0,
+    onFoot: 0,
     tripsCompleted: 0,
     tripsRefused: 0,
     tripsAbandoned: 0,
@@ -860,8 +876,22 @@ export function createGame(
   function rebuildCitizens() {
     if (!citizenSetup) {
       citizenSim = null;
+      pedestrianSim = null;
       return;
     }
+    pedestrians.splice(0, pedestrians.length);
+    // The people ON the pavements. Its own little sim, NOT part of the road
+    // model: a pedestrian has no following distance, claims no junction and may
+    // share a doorway, all of which road.ts exists to forbid.
+    pedestrianSim = markRaw(
+      createPedestrianSim({
+        level,
+        seed: citizenSetup.seed ?? colorSeed,
+        // The same walking speed the citizen model scores journeys at, so the
+        // person on screen and the person in the model arrive together.
+        speed: citizenSetup.tuning?.walkSpeed,
+      })
+    );
     citizenSim = markRaw(
       createCitizenSim({
         world: buildCitizenWorld(level, citizenSetup.seed ?? colorSeed),
@@ -879,6 +909,12 @@ export function createGame(
           status: tripId => roadSim.tripStatus(tripId),
           release: tripId => roadSim.clearFinishedTrip(tripId),
         },
+        // ...and a person who walks becomes an actual figure on the pavement.
+        walking: {
+          request: (from, to) => pedestrianSim?.request(from, to) ?? null,
+          status: id => pedestrianSim?.status(id) ?? "arrived",
+          release: id => pedestrianSim?.release(id),
+        },
       })
     );
     citizenStats.enabled = true;
@@ -893,12 +929,29 @@ export function createGame(
     citizenStats.population = s.population;
     citizenStats.travelling = s.travelling;
     citizenStats.driving = s.driving;
+    citizenStats.onFoot = s.onFoot;
     citizenStats.tripsCompleted = s.tripsCompleted;
     citizenStats.tripsRefused = s.tripsRefused;
     citizenStats.tripsAbandoned = s.tripsAbandoned;
     citizenStats.clock = s.clock;
     citizenStats.day = s.day;
     citizenStats.modeShare = s.modeShare;
+  }
+
+  // Sampled in `advance()` rather than in the render mirror, for the same
+  // reason the park & ride transfer is: a headless test must be able to see
+  // where people are.
+  function updatePedestrians() {
+    const next = pedestrianSim?.sample() ?? [];
+    pedestrians.length = next.length;
+    for (let i = 0; i < next.length; i++) {
+      const w: WalkerSample = next[i];
+      const cur = pedestrians[i];
+      const x = w.x * tileSize;
+      const y = w.y * tileSize;
+      if (cur && cur.id === w.id && cur.x === x && cur.y === y) continue;
+      pedestrians[i] = { id: w.id, x, y };
+    }
   }
 
   rebuildCitizens();
@@ -1661,8 +1714,13 @@ export function createGame(
     // person becomes a rider and a rider becomes someone who arrived (or who
     // has to change trains). Headless, so a unit test can drive it.
     if (citizenSim) {
+      // Walkers first: a citizen's leg ends on the walker having arrived, so
+      // stepping the pavement after the people would report every arrival one
+      // tick late.
+      pedestrianSim?.step(scaled);
       citizenSim.step(scaled, simEvents);
       refreshCitizens();
+      updatePedestrians();
     }
     // A crossing is closed while a train reserves or sits on that tile.
     roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
@@ -2106,6 +2164,7 @@ export function createGame(
     stationQueues,
     cities,
     citizenStats,
+    pedestrians,
     roadCars,
     carJunctions,
     carDestinations,

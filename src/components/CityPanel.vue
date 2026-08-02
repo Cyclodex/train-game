@@ -10,6 +10,13 @@
         ➜ {{ stats.travelling }}
       </span>
       <span
+        v-if="stats.onFoot > 0"
+        class="city-panel__driving"
+        title="Citizens on a pavement right now"
+      >
+        🚶 {{ stats.onFoot }}
+      </span>
+      <span
         v-if="stats.driving > 0"
         class="city-panel__driving"
         title="Citizens who are a car on the road right now"

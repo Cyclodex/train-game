@@ -27,6 +27,7 @@ import {
   tileScatterSvg,
 } from "@/tiles/terrain";
 import { accessPathSvg, accessPortOf } from "@/tiles/access";
+import { pavementPaths } from "@/tiles/footway";
 
 // The world's ground, one tile at a time. A sibling of <Tile> rather than a
 // layer inside it, because ground exists whether or not anything is built on the
@@ -149,7 +150,13 @@ class TileGround extends Vue {
     // Order on the ground layer: terrace, then the terrain patch, then the path
     // across it. Buildings and roads are later layers, so both sit on top and
     // the path reads as ground rather than as a second road.
-    return this.layer === "ground" ? this.heightHtml + base + this.accessHtml() : base;
+    if (this.layer !== "ground") return base;
+    // Order: terrace, terrain patch, the driveway across it, then the pavement
+    // beside the street. Roads and buildings are later layers, so both sit on
+    // top and all of this reads as ground.
+    return (
+      this.heightHtml + base + this.accessHtml() + pavementPaths(this.level[this.coordId], this.units)
+    );
   }
 }
 export default toNative(TileGround);

@@ -96,6 +96,21 @@ export interface TileCell {
   // park's AISLES are ordinary `road` lanes, so the router drives its rows for
   // free; `parking` only ever adds the stalls beside them.
   parking?: ParkingCell;
+  // PAVEMENT (Fussweg / Trottoir): the footway alongside this cell's road.
+  //
+  // Absent means BOTH sides, which is what a street is — so every board written
+  // before footways existed grows them for free, and the field is only ever an
+  // OPT-OUT ("none" for a motorway, a service road, a runway). That is
+  // deliberate: a pavement you have to remember to add is a pavement most
+  // streets will not have.
+  //
+  // NOT a `Lane`, and the difference matters. A pavement is bidirectional on one
+  // strip where a lane is directed; it sits OUTSIDE the kerb where lanes are
+  // positioned within the carriageway; and its users may overlap, which every
+  // gate in the road sim exists to prevent. Pedestrians therefore get their own
+  // small simulation (`sim/pedestrians.ts`) over the same tile graph, not a seat
+  // in the traffic model. See tiles/footway.ts.
+  footway?: "both" | "none";
   // Which CITY this ground belongs to. Optional, and normally absent: cities are
   // derived by clustering connected urban/industry ground (`tiles/cities.ts`),
   // so every board written before cities existed has them for free. The tag is
