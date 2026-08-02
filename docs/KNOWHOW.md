@@ -2116,11 +2116,33 @@ lean — prune as much as you add. This file only stays useful if every task ten
     Keep them pure.
 - Result: parkcity 6178ms -> 1275ms per 1000 ticks (4.8x), unit suite 4m22s -> 1m07s.
   The GAME LOOP got the same speedup — this was never a test-only cost.
+- SPATIAL PRUNE (2026-08-02), the follow-up: after the memo, the two O(cars²) scans
+  themselves were the top of the profile — `clearAhead` 24%, `bodySpanOnRoute` 12%.
+  Both walk EVERY other vehicle on the map, and on anything bigger than a fixture
+  almost none of them are near the route being scanned (parkcity: 192 tiles, 41
+  vehicles, ~1600 pairs a tick, most of them streets apart). `memoOnRoute` skips a
+  vehicle whose body shares no tile with the route.
+  · A NO-OP, not an approximation — the argument to check if you touch either loop:
+    every effect in both is reached through `projectPoint(route, p)`, which returns
+    null as soon as `route.get(p.tileId)` misses. No route tile => binds nothing,
+    spans nothing (`bodySpanOnRoute` leaves `front` at −Infinity => null), vetoes no
+    lane change. It only costs a dozen projections and a `tRange` Map to find out.
+  · The prune set comes from the MEMO's `tiles` (built with the sampled points), NOT
+    from `bodyTileIds` — that one walks path INDICES (`headIndex − length`) while the
+    points walk real driven ARC, and the two can disagree by a tile on a bend. A
+    prune built on the wrong set would skip a vehicle that IS in the way.
+  · parking.spec.ts 65.8s -> 47s (1.44x). It is a big-map win and a small-map wash:
+    parkcity 1249 -> ~900ms/1000 ticks, but on a 5-tile fixture every vehicle is on
+    every route, the prune never fires, and it is slightly negative. Hoisting the
+    memo lookup so the prune and the points share one signature check pays that back.
 - HOW TO PROVE A SIM OPTIMISATION CHANGED NOTHING (do this; don't just eyeball a
   green suite): hash a state trace and diff it across the change. 75 road scenarios
   x 3 seeds x 400 ticks, hashing `sim.cars()` kinematics AND every `sim.bodies()`
-  point (tileId/lane/entry/t/lanePos at 12dp) — this memo came out BIT-IDENTICAL.
-  A throwaway spec under `tests/unit/` is the cheapest host (it needs the `@` alias).
+  point (tileId/lane/entry/t/lanePos at 12dp) — the memo and the prune each came out
+  BIT-IDENTICAL, both at `ed41e161…5723`, which is also the PRE-optimisation hash.
+  Keep quoting that number: a future change to the road sim that is meant to be
+  behaviour-neutral should still produce it. A throwaway spec under `tests/unit/` is
+  the cheapest host (it needs the `@` alias).
 - The suite was RED on a slow machine BEFORE this, and not from an assertion:
   `parking.spec.ts`'s two biggest cases blew their own timeouts. Green tests, red
   CI — same family as the `onTaskUpdate` trap below, and the same cure: make it
@@ -2160,9 +2182,21 @@ lean — prune as much as you add. This file only stays useful if every task ten
     which term binds on the machine you care about BEFORE moving files around. The
     2026-08-01 hot-path memo cut the first term 4x and was worth 4m22s -> 1m07s; the
     file split cut the second term and was worth nothing on CI.
-- NEXT LEVER if the suite is still too slow: attack CPU, not layout. `sim/parking.spec.ts`
-  is 63s of the full lane's ~210s CPU on its own, most of it three multi-thousand-tick
-  long-run cases. Cheaper ticks or fewer seeds there beat any amount of re-filing.
+- DO NOT CUT THE LONG-RUN CASES' SEEDS OR TICKS. It was considered and rejected on
+  2026-08-02, and the reasoning is worth keeping so it is not re-proposed as an easy
+  win. `parking.spec.ts`'s parkcity case runs 3 seeds x 4000 ticks = 200 simulated
+  seconds; its own comment records that the collapse it exists to catch takes 50–120s
+  to appear and that the 40s registry sweep cannot see it. Trimming to 3000 ticks
+  saves ~4s of a ~65s suite and cuts the margin over the known worst case from 67%
+  to 25% — and that 120s is an OBSERVED range, not a proven bound. Dropping a seed
+  removes a third of the random exploration on the map most likely to expose a
+  collapse. Bad trades both: the same 1.44x came from making the tick cheaper
+  (see SIM HOT PATH → SPATIAL PRUNE) and cost no coverage at all.
+- NEXT LEVER if the suite is still too slow: keep attacking CPU, not layout, and not
+  coverage. The scans are still the profile's top (`clearAhead`, `bodySpanOnRoute`);
+  a per-tick tile->cars index would beat the per-pair prune, but it has to survive
+  the fact that `step` moves cars one at a time, so the index goes stale MID-TICK —
+  the same hazard the body memo dodges by keying on state instead of on the tick.
 
 ## VERIFY
 - THE SUITE CAN EXIT 1 WITH EVERY TEST PASSING, and the message names nothing:

@@ -1373,6 +1373,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // no body for a bay, so this is the cheap way out of the loop rather than a
       // difference in outcome — but it is still the rule being stated.)
       if (!blocksLane(o)) continue;
+      if (!memoOnRoute(bodyMemoOf(o), route)) continue; // nowhere near us — see `memoOnRoute`
       const span = bodySpanOnRoute(o, route);
       if (!span) continue; // not on our route at all
       const latSep = Math.max(0, Math.max(lane, span.latLo) - Math.min(lane, span.latHi));
@@ -1921,6 +1922,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     manoeuvre: number;
     length: number;
     pts: BodyPoint[];
+    // The DISTINCT tiles `pts` lands on, built with them. Derived from the points
+    // themselves rather than from `bodyTileIds`, which walks path INDICES
+    // (`headIndex − length`) while the points walk real DRIVEN ARC — the two can
+    // disagree by a tile on a bend, and a prune built on the wrong one would skip a
+    // vehicle that really is in the way. See `memoOnRoute`.
+    tiles: Set<string>;
   }
   const bodyMemo = new WeakMap<Car, BodyMemo>();
 
@@ -1930,7 +1937,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // means a long trailer that spans a junction tile mid-body still puts a point
   // on it, so a crossing car sees it occupied and holds off the tile.
   function bodyPoints(car: Car): BodyPoint[] {
-    // MEMOISED — see `bodyMemo`. Everything below is the cold path.
+    return bodyMemoOf(car).pts;
+  }
+
+  // Resolve (and refresh, if the car has moved) the car's body memo.
+  function bodyMemoOf(car: Car): BodyMemo {
     const pivot = car.lanePivot;
     const pivotIndex = pivot ? pivot.pathIndex : -1;
     const pivotLane = pivot ? pivot.lane : -1;
@@ -1952,10 +1963,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       memo.manoeuvre === car.manoeuvre &&
       memo.length === car.length
     ) {
-      return memo.pts;
+      return memo;
     }
     const pts = computeBodyPoints(car);
-    bodyMemo.set(car, {
+    const fresh: BodyMemo = {
+      tiles: new Set(pts.map(p => p.tileId)),
       path: car.path,
       pathLen: car.path.length,
       headIndex: car.headIndex,
@@ -1971,8 +1983,40 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       manoeuvre: car.manoeuvre,
       length: car.length,
       pts,
-    });
-    return pts;
+    };
+    bodyMemo.set(car, fresh);
+    return fresh;
+  }
+
+  // Does any part of the body described by `memo` sit on a tile of `route`?
+  //
+  // THE EARLY-OUT FOR THE TWO O(cars²) SCANS. `clearAhead` and
+  // `laneClearForChange` both walk every other vehicle on the map, and on anything
+  // bigger than a test fixture almost none of them are anywhere near the route
+  // being scanned — /test/parkcity is 192 tiles and 41 vehicles, so the
+  // overwhelming majority of the ~1600 pairs per tick are two cars streets apart.
+  //
+  // Skipping those is a NO-OP, not an approximation, and that is worth stating
+  // precisely because it is the whole safety argument: every effect in either loop
+  // is reached through `projectPoint(route, p)`, which returns null the moment
+  // `route.get(p.tileId)` misses. A vehicle with no body point on the route
+  // therefore binds nothing, spans nothing (`bodySpanOnRoute` leaves `front` at
+  // −Infinity and returns null) and vetoes no lane change — it just costs a dozen
+  // projections and a Map allocation to discover that.
+  //
+  // Uses the memo's `tiles` (1–3 entries, built from the sampled points) rather
+  // than `bodyTileIds`, which walks path indices and can disagree by a tile on a
+  // bend — see the note on `BodyMemo.tiles`.
+  //
+  // Takes the MEMO, not the car, so a caller that also wants the points pays the
+  // signature check once. On a small map (a 5-tile fixture where every vehicle is
+  // on every route) the prune never fires and is pure overhead, so what it costs
+  // when it misses is worth as much as what it saves when it hits.
+  function memoOnRoute(memo: BodyMemo, route: Map<string, { lead: number; entry: Port }>): boolean {
+    for (const tileId of memo.tiles) {
+      if (route.has(tileId)) return true;
+    }
+    return false;
   }
 
   function computeBodyPoints(car: Car): BodyPoint[] {
@@ -2215,7 +2259,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // never be an obstacle. A bus at a HALT is still standing in the lane and
       // must NOT be skipped, or the queue behind it drives straight through it.
       if (!blocksLane(other)) continue;
-      const otherPts = bodyPoints(other);
+      // Nowhere near our route: binds nothing below, so skip before paying for a
+      // dozen projections and a `tRange` Map. See `memoOnRoute` for why this is a
+      // no-op rather than an approximation.
+      const otherMemo = bodyMemoOf(other);
+      if (!memoOnRoute(otherMemo, route)) continue;
+      const otherPts = otherMemo.pts;
       // Swept-body following, overlap-RECOVERING: keep our head a gap behind the
       // REAR-most point of any same-direction body whose lateral extent is within a
       // body width of ours — even one we have wrongly drawn level with. The
