@@ -3,7 +3,8 @@ import type { Level, Port } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { makeRng } from "@/utils/globalHelpers";
 import { laneSegmentPointAt } from "@/sim/pathGeometry";
-import { hasFootway, pavementOffsets, planWalk, sideOfPlot } from "@/tiles/footway";
+import { oppositePort } from "@/sim/topology";
+import { hasFootway, pavementOffsets, planWalk, roadThrough, sideOfPlot } from "@/tiles/footway";
 
 // PEOPLE ON THE PAVEMENT — the walking half of the citizen layer.
 //
@@ -61,6 +62,8 @@ export interface Walker {
   index: number;
   progress: number; // 0..1 across the current step
   speed: number; // tiles/sec
+  // How long they have been held at the kerb of the crossing they are on.
+  waitedSec: number;
 }
 
 // A walker sampled for drawing: where they are, in TILE units from the world
@@ -117,6 +120,13 @@ const SPEED_SPREAD = 0.2;
 // Crossing the road is a few strides sideways, not a tile of walking: it takes
 // this fraction of the time a tile does.
 const CROSS_PACE = 2.5;
+
+// The longest anybody stands at a kerb before going anyway. A backstop, not a
+// behaviour: the tile is already claimed, so nothing new drives onto it, and
+// this only matters if something contrives to sit on the crossing for ever. A
+// pedestrian frozen at a kerb is a deadlock, and a deadlock is worse than a
+// jaywalker.
+const CROSS_WAIT_MAX = 8;
 
 // The port of `from` that faces `to`, for two tiles sharing an edge.
 function portToward(from: string, to: string): Port | null {
@@ -184,6 +194,18 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
   }
 
   // Turn a (tiles, sides) route plus its two plots into per-leg steps.
+  //
+  // The subtlety that got this wrong first time: a footway step's entry and exit
+  // are the ROAD's ports, never the direction of the plot it came from. A house
+  // south of an east-west street is reached by walking ALONG the street and
+  // turning up the driveway — not by walking north across the carriageway. Take
+  // the ports from the plot and the walker crosses the road to get to a pavement
+  // that runs the other way, which is exactly the "steps onto the zebra and
+  // comes back out of the middle of the street" this produced.
+  //
+  // A driveway meets the pavement at the MIDDLE of the tile (the access apron
+  // runs from the plot centre to the shared edge, whose midpoint is t = 0.5), so
+  // a tile that adjoins a plot is only half walked.
   function buildSteps(
     fromPlot: string,
     toPlot: string,
@@ -191,8 +213,6 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     sides: (1 | -1)[]
   ): WalkStep[] | null {
     const steps: WalkStep[] = [];
-    // Distinct tiles, each with the sides held on it in order. A tile appears
-    // twice in the route exactly when it was crossed.
     interface Run {
       tileId: string;
       sides: (1 | -1)[];
@@ -207,38 +227,48 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     for (let r = 0; r < runs.length; r++) {
       const run = runs[r];
       const { x, y } = parseCoordId(run.tileId);
-      const prevId = r > 0 ? runs[r - 1].tileId : fromPlot;
-      const nextId = r < runs.length - 1 ? runs[r + 1].tileId : toPlot;
-      const entry = portToward(run.tileId, prevId);
-      const exit = portToward(run.tileId, nextId);
-      if (entry === null || exit === null) return null;
+      const prevTile = r > 0 ? runs[r - 1].tileId : null;
+      const nextTile = r < runs.length - 1 ? runs[r + 1].tileId : null;
 
-      if (run.sides.length === 1) {
+      // The ports the walker actually travels between on THIS tile's pavement.
+      let entry = prevTile ? portToward(run.tileId, prevTile) : null;
+      let exit = nextTile ? portToward(run.tileId, nextTile) : null;
+      if (entry === null && exit === null) {
+        // Neither neighbour is a pavement: the whole walk happens on this one
+        // tile (across the road, or in and out of the same street). Follow the
+        // road's own direction.
+        const through = roadThrough(level[run.tileId]);
+        if (!through) return null;
+        entry = through.from;
+        exit = through.to;
+      } else if (entry === null) entry = oppositePort(exit as Port);
+      else if (exit === null) exit = oppositePort(entry);
+
+      // Half a tile where a driveway joins, a whole tile where the pavement runs on.
+      const tStart = prevTile ? 0 : 0.5;
+      const tEnd = nextTile ? 1 : 0.5;
+
+      const along = (from: number, to: number, side: 1 | -1) => {
+        if (from === to) return; // a zero-length leg is not a step
         steps.push({
           kind: "along",
           tileId: run.tileId,
           x,
           y,
-          side: run.sides[0],
-          entry,
-          exit,
-          tFrom: 0,
-          tTo: 1,
+          side,
+          entry: entry as Port,
+          exit: exit as Port,
+          tFrom: from,
+          tTo: to,
         });
+      };
+
+      if (run.sides.length === 1) {
+        along(tStart, tEnd, run.sides[0]);
         continue;
       }
-      // Crossed here: walk up to the zebra, cross, carry on from it.
-      steps.push({
-        kind: "along",
-        tileId: run.tileId,
-        x,
-        y,
-        side: run.sides[0],
-        entry,
-        exit,
-        tFrom: 0,
-        tTo: 0.5,
-      });
+      // Crossed here: up to the zebra at the middle of the tile, over, and on.
+      along(tStart, 0.5, run.sides[0]);
       for (let k = 1; k < run.sides.length; k++) {
         steps.push({
           kind: "cross",
@@ -247,21 +277,11 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
           y,
           side: run.sides[k - 1],
           toSide: run.sides[k],
-          entry,
-          exit,
+          entry: entry as Port,
+          exit: exit as Port,
         });
       }
-      steps.push({
-        kind: "along",
-        tileId: run.tileId,
-        x,
-        y,
-        side: run.sides[run.sides.length - 1],
-        entry,
-        exit,
-        tFrom: 0.5,
-        tTo: 1,
-      });
+      along(0.5, tEnd, run.sides[run.sides.length - 1]);
     }
     if (steps.length === 0) return null;
 
@@ -291,16 +311,27 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     return steps;
   }
 
-  // Somebody is at a zebra: either standing at the kerb waiting for it to clear,
-  // or on it. Both claim the tile.
+  // Somebody AT a zebra: standing at its kerb about to step out, or on it. Both
+  // claim the tile, which is what stops the traffic.
+  //
+  // The claim is deliberately no wider than that. Claiming a step EARLIER — from
+  // the moment a walker starts the leg that ends at the crossing — was tried, to
+  // give cars more warning; on a busy road with a town's worth of people using
+  // one zebra it holds the tile almost continuously and the traffic never moves
+  // again (measured: a 589-second queue). Cars brake for a closed tile from
+  // wherever they are, so the kerb is early enough.
   function atCrossing(w: Walker): WalkStep | null {
-    const s = w.steps[w.index];
-    return s && s.kind === "cross" ? s : null;
+    const here = w.steps[w.index];
+    return here && here.kind === "cross" ? here : null;
   }
 
+  const onCrossing = atCrossing;
+
   function isWaiting(w: Walker): boolean {
-    const s = atCrossing(w);
-    return !!s && w.progress === 0 && roadBusy(s.tileId);
+    const s = onCrossing(w);
+    return (
+      !!s && w.progress === 0 && w.waitedSec < CROSS_WAIT_MAX && roadBusy(s.tileId)
+    );
   }
 
   return {
@@ -317,6 +348,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
         index: 0,
         progress: 0,
         speed: baseSpeed * (1 - SPEED_SPREAD + rng() * 2 * SPEED_SPREAD),
+        waitedSec: 0,
       });
       return id;
     },
@@ -327,7 +359,10 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
         // Held at the kerb. The tile is already claimed (see claimedCrossings),
         // so nothing new drives onto it; this waits for whatever was already
         // there to clear, which is what makes the wait terminate.
-        if (isWaiting(w)) continue;
+        if (isWaiting(w)) {
+          w.waitedSec += dt;
+          continue;
+        }
         const cur = w.steps[w.index];
         w.progress += w.speed * dt * (cur.kind === "cross" ? CROSS_PACE : 1);
         while (w.progress >= 1) {
@@ -343,6 +378,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
           // step, so `isWaiting` never fires and they stroll into the traffic.
           if (w.steps[w.index].kind === "cross") {
             w.progress = 0;
+            w.waitedSec = 0;
             break;
           }
         }

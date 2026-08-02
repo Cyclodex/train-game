@@ -3,6 +3,7 @@ import { createGame } from "@/game";
 import { citizensMode } from "@/modes/citizens";
 import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
+import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { createPedestrianSim } from "@/sim/pedestrians";
 import { pavementOffsets } from "@/tiles/footway";
@@ -142,15 +143,14 @@ describe("the pedestrian simulation", () => {
     });
     const id = sim.request("3,2", "3,0") as string;
 
-    // Held: the walker reaches the zebra and stops there.
+    // Held at the kerb: they reach the zebra and stop there.
     let sawWaiting = false;
-    for (let t = 0; t < 120; t += 0.1) {
+    for (let t = 0; t < 6; t += 0.1) {
       sim.step(0.1);
       if (sim.waitingCount() > 0) sawWaiting = true;
-      if (sawWaiting && t > 40) break;
     }
     expect(sawWaiting).toBe(true);
-    expect(sim.status(id)).toBe("walking"); // still stuck at the kerb
+    expect(sim.status(id)).toBe("walking");
     // ...and a waiting walker says so, so the view can show the queue.
     expect(sim.sample().some(w => w.waiting)).toBe(true);
 
@@ -165,6 +165,55 @@ describe("the pedestrian simulation", () => {
       }
     }
     expect(arrived).toBe(true);
+  });
+
+  it("goes anyway rather than standing at a kerb for ever", () => {
+    // The deadlock backstop. Somebody who waits indefinitely is a bug, not
+    // caution: the tile is already claimed, so nothing new can drive onto it,
+    // and a walker frozen at a kerb holds the crossing closed and takes the
+    // whole road down with it.
+    const sim = createPedestrianSim({
+      level: citizenwalk.level,
+      seed: 1,
+      speed: 0.25,
+      roadBusy: () => true, // a car that never, ever moves
+    });
+    const id = sim.request("3,2", "3,0") as string;
+    let arrived = false;
+    for (let t = 0; t < 120; t += 0.1) {
+      sim.step(0.1);
+      if (sim.status(id) === "arrived") {
+        arrived = true;
+        break;
+      }
+    }
+    expect(arrived).toBe(true);
+  });
+
+  it("crosses straight over and never doubles back into the road", () => {
+    // The bug this exists for was visible on the board: people stepped onto the
+    // zebra and came back out of the MIDDLE of the street. The cause was taking
+    // the pavement's entry/exit ports from the PLOT the walker came from rather
+    // than from the road, so the "pavement" ran across the carriageway and the
+    // walk doubled back along it.
+    const sim = createPedestrianSim({ level: citizenwalk.level, seed: 1, speed: 0.25 });
+    const id = sim.request("3,2", "3,0") as string; // house, over the north zebra, works
+
+    const ys: number[] = [];
+    for (let t = 0; t < 200; t += 0.05) {
+      sim.step(0.05);
+      const [w] = sim.sample();
+      if (!w) break;
+      // While on the crossing tile, track how far north they have got.
+      if (w.x > 3 && w.x < 4 && w.y > 1 && w.y < 2) ys.push(w.y);
+    }
+    expect(sim.status(id)).toBe("arrived");
+    expect(ys.length).toBeGreaterThan(4);
+    // Monotonic: south kerb to north kerb, never back the other way. A doubling
+    // back shows up here as a reversal.
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeLessThanOrEqual(ys[i - 1] + 1e-9);
+    // ...and they really did get from one pavement to the other.
+    expect(ys[0] - ys[ys.length - 1]).toBeGreaterThan(0.2);
   });
 
   it("refuses a walk it cannot make rather than inventing a walker", () => {
@@ -244,4 +293,55 @@ describe("citizens walk where you can see them", () => {
     expect(sawFoot).toBe(true);
     expect(sawCar).toBe(true);
   });
+});
+
+describe("a zebra on a busy road", () => {
+  // The board that tests this under load: a through road open at both map edges,
+  // two lanes each way, running at full density, with one crossing and a town
+  // that all has to get over it.
+  function busyGame() {
+    return createGame(
+      citizenzebra.level,
+      [],
+      200,
+      citizensMode,
+      1,
+      undefined,
+      citizenzebra.traffic,
+      "citizenzebra",
+      () => 100 // density slider at maximum
+    );
+  }
+
+  it("stops the traffic for people, without ever deadlocking", () => {
+    const game = busyGame();
+    let peakOnFoot = 0;
+    let worstCarWait = 0;
+    run(game, 1200, () => {
+      peakOnFoot = Math.max(peakOnFoot, game.citizenStats.onFoot);
+      worstCarWait = Math.max(worstCarWait, game.roadFrame.maxCarWaitSec);
+    });
+
+    // People really are crossing a busy road...
+    expect(peakOnFoot).toBeGreaterThan(5);
+    expect(game.citizenStats.tripsCompleted).toBeGreaterThan(50);
+    // ...the traffic really does give way to them...
+    expect(worstCarWait).toBeGreaterThan(1);
+    // ...and it gets going again. THE regression guard: a car held at the kerb
+    // still registers a body point on the crossing tile, so a walker that waits
+    // for "any car touching the tile" waits for a car that is waiting for the
+    // walker. That deadlock measured a 1078-second queue; anything above a
+    // minute here means it is back.
+    expect(worstCarWait).toBeLessThan(60);
+  }, 30000);
+
+  it("keeps the walkers moving too — nobody is stuck at the kerb for ever", () => {
+    const game = busyGame();
+    run(game, 900);
+    // A town that cannot cross its own road would show up as abandoned journeys.
+    expect(game.citizenStats.tripsAbandoned).toBeLessThan(
+      game.citizenStats.tripsCompleted / 10
+    );
+    expect(game.citizenStats.modeShare.walk).toBeGreaterThan(0.4);
+  }, 30000);
 });

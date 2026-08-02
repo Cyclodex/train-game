@@ -594,6 +594,26 @@ exactly like a signal or a level crossing. **BUILT 2026-08-02:**
 - A walker held at a kerb reports `waiting`, and the view rings them amber, so a
   queue at a crossing reads as a queue.
 
+`/test/citizenzebra` is the board that tests it under load: a through road open
+at both map edges, two lanes each way, at full density, with one crossing and a
+town that all has to get over it. Measured there: the traffic queues about
+**15 seconds** at the zebra and then flows — which is a crossing working, and the
+number that says the two mutual waits are not deadlocked.
+
+Three things went wrong on the way and are worth keeping written down:
+
+- **A footway step's entry/exit are the ROAD's ports, never the plot's.** A house
+  south of an east-west street is reached by walking ALONG the street and turning
+  up the driveway. Taking the ports from the plot made the "pavement" run across
+  the carriageway — people stepped onto the zebra and came back out of the middle
+  of the road.
+- **A car held at a closed tile still has a body point on it.** So "wait while any
+  car touches the crossing" deadlocks: the walker waits for a car that is waiting
+  for the walker. Only bodies well inside the tile count, and `CROSS_WAIT_MAX` is
+  the backstop.
+- **Zebra stripes run along the road and repeat across it.** Square to the road
+  they read as a stack of stop lines.
+
 Still to build: a crossing where a footway meets the RAILWAY (the pedestrian half
 of a level crossing), and signalised crossings with a button.
 

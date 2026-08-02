@@ -43,6 +43,20 @@ const PAVEMENT_GAP = 4;
 /** How wide the paved strip is drawn. */
 export const PAVEMENT_WIDTH = 8;
 
+/**
+ * The road's own through movement on this cell: which way the carriageway runs.
+ * The pavement follows it, and the zebra is painted square to it.
+ */
+export function roadThrough(cell: TileCell | undefined): { from: Port; to: Port } | null {
+  for (const lane of cell?.road ?? []) {
+    for (const exit of lane.to) {
+      if (lane.from === Position.Center || exit === Position.Center) continue;
+      return { from: lane.from, to: exit };
+    }
+  }
+  return null;
+}
+
 /** Is there a zebra on this cell — somewhere people may cross the road? */
 export function hasFootCrossing(cell: TileCell | undefined): boolean {
   return hasFootway(cell) && cell?.footCrossing === true;
@@ -300,50 +314,46 @@ export function pavementPaths(cell: TileCell | undefined, size = 100): string {
   return out.join("");
 }
 
-// The zebra: bars painted ACROSS the carriageway, drawn on the markings layer so
-// they sit on the tarmac rather than under it.
+// The zebra.
+//
+// The stripes run ALONG the direction of vehicle travel and repeat ACROSS the
+// carriageway — a driver sees them side by side, a pedestrian steps over one
+// after another. The first version had them the other way round (bars square to
+// the road, repeating along it), which reads as a stack of stop lines rather
+// than a crossing.
 const ZEBRA_FILL = "hsl(0 0% 96%)";
-const ZEBRA_BARS = 5;
+// How far along the road the crossing reaches — its depth, as a driver meets it.
+const ZEBRA_DEPTH = 26;
+const ZEBRA_BARS = 6;
 
 /**
- * The crossing stripes of one cell, in its own 0..100 ground space. Laid at the
- * middle of the tile — which is exactly where `sim/pedestrians.ts` puts somebody
- * crossing (t = 0.5), so the paint and the people agree.
+ * The crossing stripes of one cell, in its own 0..100 ground space. Centred on
+ * the tile — which is exactly where `sim/pedestrians.ts` puts somebody crossing
+ * (t = 0.5), so the paint and the people agree about where the zebra is.
  */
 export function crossingPaths(cell: TileCell | undefined, size = 100): string {
   if (!hasFootCrossing(cell)) return "";
-  const road = cell?.road ?? [];
-  // The tile's through direction: the bars run ACROSS it.
-  let from: Port | null = null;
-  let to: Port | null = null;
-  for (const lane of road) {
-    for (const exit of lane.to) {
-      if (lane.from === Position.Center || exit === Position.Center) continue;
-      from = lane.from;
-      to = exit;
-      break;
-    }
-    if (from !== null) break;
-  }
-  if (from === null || to === null) return "";
+  const through = roadThrough(cell);
+  if (!through) return "";
 
   const scale = size / 100;
   const half = roadHalfUnits(cell) * scale;
   const mid = size / 2;
-  // A crossing on a straight tile is square to the road; on a bend the tile's
-  // middle is a curve and a straight bar is close enough at this scale.
-  const vertical = from === Position.Top || from === Position.Bottom;
-  const barLong = half * 2; // across the carriageway
-  const barSpan = 26 * scale; // how far along the road the striping reaches
-  const pitch = barSpan / ZEBRA_BARS;
-  const barW = pitch * 0.55;
+  const depth = ZEBRA_DEPTH * scale;
+  // Bars repeat ACROSS the carriageway, so the pitch divides the road's width.
+  const pitch = (half * 2) / ZEBRA_BARS;
+  const barW = pitch * 0.6;
+
+  // Does the carriageway run north-south on this tile?
+  const northSouth = through.from === Position.Top || through.from === Position.Bottom;
 
   const out: string[] = [];
   for (let i = 0; i < ZEBRA_BARS; i++) {
-    const along = mid - barSpan / 2 + pitch * i + (pitch - barW) / 2;
-    const rect = vertical
-      ? { x: mid - barLong / 2, y: along, w: barLong, h: barW }
-      : { x: along, y: mid - barLong / 2, w: barW, h: barLong };
+    const across = mid - half + pitch * i + (pitch - barW) / 2;
+    // `depth` always runs ALONG the road; `barW` always across it.
+    const rect = northSouth
+      ? { x: across, y: mid - depth / 2, w: barW, h: depth }
+      : { x: mid - depth / 2, y: across, w: depth, h: barW };
     out.push(
       `<rect x="${rect.x.toFixed(1)}" y="${rect.y.toFixed(1)}" width="${rect.w.toFixed(1)}" height="${rect.h.toFixed(1)}" fill="${ZEBRA_FILL}" />`
     );

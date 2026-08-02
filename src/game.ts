@@ -1750,10 +1750,19 @@ export function createGame(
       id => !!(sim.reservedBy(id) || sim.occupiedBy(id)) || claimed.includes(id)
     );
     // Where the cars ended up, for the walkers waiting at a kerb.
+    //
+    // Only bodies WELL INSIDE a tile count. A car held at a closed crossing
+    // stops at its entry edge, and its nose still registers a body point on that
+    // tile — so counting every point deadlocked the pair of them: the walker
+    // waited for a car that was waiting for the walker, and the road never moved
+    // again (measured: a 1078-second queue). The margin is what tells "stopped
+    // at the kerb giving way" from "actually on the crossing".
     if (pedestrianSim) {
       carTiles.clear();
       for (const body of roadSim.bodies()) {
-        for (const pt of body.points) carTiles.add(pt.tileId);
+        for (const pt of body.points) {
+          if (pt.t > 0.15 && pt.t < 0.85) carTiles.add(pt.tileId);
+        }
       }
     }
     // Park & ride: whoever just pulled into a stall within walking reach of a

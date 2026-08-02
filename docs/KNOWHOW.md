@@ -631,6 +631,25 @@ lean — prune as much as you add. This file only stays useful if every task ten
     · Snap `progress` to 0 on ENTERING a cross step. Carrying the remainder of
       the last stride means a walker is essentially never at exactly 0 there, so
       the wait never fires and they stroll into the traffic.
+    · **A footway step's entry/exit are the ROAD's ports, NEVER the plot's.** A
+      house south of an east-west street is reached by walking ALONG the street
+      and turning up the driveway. Take the ports from the plot and the
+      "pavement" runs across the carriageway: people step onto the zebra and
+      come back out of the middle of the road. A tile adjoining a plot is only
+      HALF walked (t 0..0.5 or 0.5..1) — the driveway meets it at the middle.
+    · **The claim must be no wider than the kerb.** Claiming from a step earlier,
+      to give cars more warning, holds the tile almost continuously once a town
+      shares one zebra: measured a 589-second queue. Cars brake for a closed tile
+      from wherever they are, so the kerb is early enough.
+    · **A car held AT a closed tile still has a body point ON it.** So "wait
+      while any car touches the crossing" deadlocks: the walker waits for a car
+      that is waiting for the walker (measured 1078 seconds). Count only bodies
+      WELL inside the tile (t 0.15..0.85), and keep `CROSS_WAIT_MAX` as a
+      backstop — a pedestrian frozen at a kerb holds the crossing closed and
+      takes the whole road down with it.
+    · **Zebra stripes run ALONG the road and repeat ACROSS it** — a driver sees
+      them side by side, a pedestrian steps over one after another. Square to
+      the road (repeating along it) reads as a stack of stop lines.
     · The zebra art needs its own `markings` layer at z2: the road surface is
       drawn ABOVE the ground layer, so paint on the ground is buried under the
       carriageway it is painted on.
