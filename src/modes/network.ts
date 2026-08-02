@@ -100,7 +100,13 @@ export const networkMode: GameMode = {
     };
   },
   controls: {
-    switches: true,
+    // NO manual points. In this mode the TRAIN decides where it goes — it
+    // plans a route to its next stop and follows it — so a switch the player
+    // can throw is a control fighting the router, and the one thing it can
+    // reliably achieve is sending a service off its line. What the player
+    // steers here is the SERVICE (which trains run which stops), not the
+    // metals. Signals stay: they are about WHEN a train goes, not where.
+    switches: false,
     signalHolds: true,
     crossingGate: false,
     build: false,

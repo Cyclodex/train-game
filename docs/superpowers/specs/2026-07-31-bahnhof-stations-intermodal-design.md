@@ -200,10 +200,27 @@ station stops, cycled for ever.
   stations served twice a round trip). `railRing()` + `mkLineTrain()` author
   both; every station test world was rebuilt on this shape.
 
-**Still to build for the Transport-Fever loop proper:** the interactive layer —
-buying a train at the depot, drawing a line by clicking stations, and showing a
-train's line on the board. The engine verb (`assignLine`) and the routing are
-in; what is missing is the UI that calls them, which is the next slice.
+### Phase 7 — the service panel: buy a train, draw a line — **SHIPPED 2026-08-02**
+
+The interactive layer, and with it the mode's whole verb set:
+
+- A **Service card** lists every train, its stops as numbered pips (the one it
+  is heading for lit), and an **Edit** toggle.
+- Editing is a **board gesture**: the stations light up, a click appends a stop,
+  a click on an existing stop removes it. Click order is call order.
+- **+ Train** orders another one at a free depot, in service on the line being
+  edited — refused while a train is still standing in the depot, because the
+  new one would be built on top of it.
+- Platforms show the **liveries calling there**, so an unserved station is
+  visible at a glance.
+- **No manual points.** `ModeControls.switches` is false here: the train decides
+  where it goes, so a switch the player can throw only sends a service off its
+  line. The fans are not drawn either (a separate `switchesVisible` prop, since
+  the editor's read-only fan is a different thing). Signals stay — they are
+  about *when* a train goes, not where.
+
+Verified in a real browser end to end: 4 stations highlighted, a stop removed
+and re-appended, a train bought and immediately running the same line.
 
 Still open beyond that: destination-typed passengers (ride A→B rather than one hop),
 buses as carriers rather than feeders, and rising demand over time.

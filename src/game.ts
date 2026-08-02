@@ -31,7 +31,7 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
-import { makeRng } from "@/utils/globalHelpers";
+import { Colors, makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
@@ -391,6 +391,23 @@ export interface Game {
   occupied: Record<string, string>;
   // tileId -> passengers waiting at that station (the platform crowd).
   stationQueues: Record<string, number>;
+  // trainId -> the stops it serves (the service panel's model). A view copy of
+  // what the SIM owns; changes only on a player action.
+  trainLines: Record<string, string[]>;
+  // stationTileId -> the liveries calling there, so a platform can show its
+  // services. Derived from `trainLines`.
+  stationLines: Record<string, string[]>;
+  // Every station on the board, in a stable order — the stops a line can pick
+  // from, and what the panel offers.
+  stationTiles: string[];
+  // Every depot: where a train can be ordered.
+  depotTiles: string[];
+  // Put a train onto a line, or take it out of service with []. False for an
+  // unknown train.
+  setLine(trainId: string, stops: string[]): boolean;
+  // Order a new train at a depot and put it straight into service. Returns the
+  // new train's id, or null when there is no free depot to build it in.
+  buyTrain(stops: string[], depotId?: string): string | null;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -623,6 +640,13 @@ export function createGame(
   // tileId -> passengers waiting on that station's platform, mirrored from the
   // sim each frame so Tile.vue can draw the crowd reactively.
   const stationQueues = reactive({}) as Record<string, number>;
+  // trainId -> the stops it serves, mirrored from the sim so the service panel
+  // renders reactively. The SIM owns the line; this is a view copy, refreshed
+  // whenever a line changes (it changes on player action, not per frame).
+  const trainLines = reactive({}) as Record<string, string[]>;
+  // stationTileId -> the liveries of the services calling there. Derived from
+  // `trainLines`; the board reads this so a platform can show its services.
+  const stationLines = reactive({}) as Record<string, string[]>;
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree. A seeded RNG keeps the
@@ -1426,6 +1450,81 @@ export function createGame(
   }
   const defById: Record<string, TrainDef> = {};
   for (const def of trainDefs) defById[def.id] = def;
+
+  // --- the service: lines, and buying the trains to run them -----------------
+  // Refresh the view copy of a train's line from the sim (the owner of it).
+  function syncLine(trainId: string): void {
+    const stops = sim.trainLine(trainId);
+    if (stops.length) trainLines[trainId] = stops;
+    else delete trainLines[trainId];
+    syncStationLines();
+  }
+
+  // The reverse index the BOARD needs: which liveries call at each station, so
+  // a platform shows the services that serve it without the tile having to
+  // know anything about trains.
+  function syncStationLines(): void {
+    for (const id of Object.keys(stationLines)) delete stationLines[id];
+    for (const [trainId, stops] of Object.entries(trainLines)) {
+      for (const stop of stops) {
+        const at = (stationLines[stop] ??= []);
+        const colour = trainColors[trainId];
+        if (colour && !at.includes(colour)) at.push(colour);
+      }
+    }
+  }
+  for (const def of trainDefs) syncLine(def.id);
+
+  // Where a train can be ordered: every depot on the board, in a stable order.
+  const depotTiles = Object.keys(level)
+    .filter(id => level[id]?.role === "depot")
+    .sort();
+
+  // A new train, ordered at a depot and put straight into service on `stops`.
+  // The depot is the only place one can appear — that IS what a depot is for
+  // in this mode — and the id is minted from a counter so repeated purchases
+  // never collide with an authored roster.
+  let boughtCount = 0;
+  function buyTrain(stops: string[], depotId?: string): string | null {
+    const depot = depotId ?? depotTiles[0];
+    if (!depot || !level[depot]) return null;
+    // A depot with a train still standing in it cannot take another: the new
+    // one would be built on top of a body already occupying the tile.
+    if (sim.occupiedBy(depot)) return null;
+    const { x, y } = parseCoordId(depot);
+    boughtCount += 1;
+    const id = `bought${boughtCount}`;
+    const def: TrainDef = {
+      id,
+      x,
+      y,
+      type: "people",
+      wagonIds: [`${id}w1`, `${id}w2`, `${id}w3`],
+      ...(stops.length ? { line: [...stops] } : {}),
+    };
+    // The renderer draws from `trainDefs`/`unitIds`, so the roster has to learn
+    // about the new train before the sim does anything with it.
+    trainDefs.push(def);
+    defById[id] = def;
+    unitIds[id] = [id, ...def.wagonIds];
+    // A livery off the standard palette, walked in order so two trains bought
+    // in a row are told apart at a glance. Colour is decoration in this mode —
+    // nothing matches on it — so any distinct one will do.
+    trainColors[id] = Colors[boughtCount % Colors.length];
+    injectTrain(def);
+    syncLine(id);
+    return id;
+  }
+
+  // Put a train onto a line (or take it out of service with []). Thin wrapper
+  // over the sim verb that keeps the view copy honest.
+  function setLine(trainId: string, stops: string[]): boolean {
+    if (!sim.assignLine(trainId, stops)) return false;
+    const def = defById[trainId];
+    if (def) def.line = stops.length ? [...stops] : undefined;
+    syncLine(trainId);
+    return true;
+  }
   const objective = reactive(tracker.state()) as ObjectiveState;
   // Live crossing-flow snapshot, refreshed each tick from the road sim (the HUD
   // reads this for the falling-when-released wait readout).
@@ -1992,6 +2091,12 @@ export function createGame(
     reservations,
     occupied,
     stationQueues,
+    trainLines,
+    stationLines,
+    stationTiles,
+    depotTiles,
+    setLine,
+    buyTrain,
     roadCars,
     carJunctions,
     carDestinations,

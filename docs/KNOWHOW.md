@@ -500,6 +500,30 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
+- The player's whole verb set in the network mode: `game.setLine(trainId,
+  stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
+  view), so the loop is unit-testable headless.
+- `buyTrain` refuses when a train is standing in the depot — the new one would
+  be built on top of a body. With a 5-unit train and one depot that is ~20s of
+  unavailable "+ Train" after the start; the tooltip says why. Ordering also
+  has to teach the RENDERER about the train (`trainDefs`, `unitIds`,
+  `trainColors`) before `injectTrain`, or the sim drives a train nothing draws.
+- Line editing is a BOARD gesture: `editingTrainId` in PlayView, station tiles
+  get `.level-tile--pickable`, and a click appends the stop or removes it if it
+  is already there. Click order IS call order.
+- `game.trainLines` (trainId → stops) and `game.stationLines` (stationId →
+  liveries) are view copies of what the sim owns, refreshed on player action
+  rather than per frame; the editor's stubGame must carry `stationLines` too.
+- `ModeControls.switches` had never been read by anything until this mode
+  needed it false. PlayView now honours it, and Tile.vue gained a separate
+  `switchesVisible` prop: the EDITOR deliberately draws a read-only fan (a
+  picture of the authored arm), but a mode where the train routes itself must
+  not draw points at all — an un-clickable arrow is a control that lies.
+- When checking occupancy from a TEST, ask `sim.occupiedBy()`, never
+  `game.occupied`: the latter is the render mirror and is only refreshed inside
+  the rAF frame, so it stays empty for ever headless.
+
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
   graph the editor's `tiles/routePlanner.ts` searches, the same output shape the

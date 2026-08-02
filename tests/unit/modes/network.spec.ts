@@ -12,6 +12,7 @@ import { expandKind } from "@/tiles/kinds";
 import { Level } from "@/tiles/model";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { createGame, TrainDef } from "@/game";
+import { MODES } from "@/modes/index";
 
 function twoStationLevel(): Level {
   return {
@@ -46,6 +47,16 @@ describe("network mode setup", () => {
   it("shows the passenger card instead of the delivery card", () => {
     expect(networkMode.hud.passengers).toBe(true);
     expect(networkMode.hud.deliveries).toBe(false);
+  });
+
+  it("takes the points away from the player — the TRAIN decides where it goes", () => {
+    expect(networkMode.controls.switches).toBe(false);
+    // …and leaves the signals, which are about WHEN a train goes, not where.
+    expect(networkMode.controls.signalHolds).toBe(true);
+    // Every other mode still hands the player the points, unchanged.
+    for (const mode of MODES.filter(m => m.id !== networkMode.id)) {
+      expect(mode.controls.switches, `${mode.id} lost its switches`).toBe(true);
+    }
   });
 });
 
@@ -207,5 +218,78 @@ describe("the network board is winnable — and not trivially", () => {
     for (const stop of networkmode.trains.circle.line ?? []) {
       expect(called.has(stop), `never headed for ${stop}`).toBe(true);
     }
+  });
+});
+
+// The verbs the service panel calls. They live on the GAME (not the view), so
+// the whole player loop of this mode — order a train, put it on a line, take
+// it off again — is testable without a browser.
+describe("the service: buying trains and setting lines", () => {
+  function gameFor() {
+    const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
+      id: t.id,
+      x: t.x,
+      y: t.y,
+      type: t.type,
+      wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
+    }));
+    return createGame(
+      networkmode.level,
+      trains,
+      200,
+      networkMode,
+      1,
+      networkmode.colors
+    );
+  }
+
+  it("mirrors the authored line, and the reverse index the platforms read", () => {
+    const game = gameFor();
+    const stops = networkmode.trains.circle.line ?? [];
+    expect(game.trainLines.circle).toEqual(stops);
+    // Every stop knows the livery calling there.
+    for (const stop of stops) {
+      expect(game.stationLines[stop]).toContain(game.trainColors.circle);
+    }
+  });
+
+  it("setLine re-routes a train in service, and [] takes it out", () => {
+    const game = gameFor();
+    const one = [game.stationTiles[0]];
+    expect(game.setLine("circle", one)).toBe(true);
+    expect(game.trainLines.circle).toEqual(one);
+    expect(game.sim.trainNextStop("circle")).toBe(one[0]);
+
+    expect(game.setLine("circle", [])).toBe(true);
+    expect(game.trainLines.circle).toBeUndefined();
+    expect(game.sim.trainNextStop("circle")).toBeUndefined();
+    expect(game.setLine("nobody", one)).toBe(false);
+  });
+
+  it("buys a train at a free depot, in service on the line it was given", () => {
+    const game = gameFor();
+    // The authored train is standing in the only depot at t=0, so make room by
+    // running until it has pulled out. Ask the SIM, not `game.occupied` — that
+    // is the render mirror and it is only refreshed inside the rAF frame, so
+    // headless it stays empty for ever (the hidden-tab trap).
+    for (let t = 0; t < 20 && game.sim.occupiedBy(game.depotTiles[0]); t += 0.1) {
+      game.advance(0.1);
+    }
+    const stops = game.stationTiles.slice(0, 2);
+    const id = game.buyTrain(stops);
+    expect(id).not.toBeNull();
+    expect(game.trainLines[id!]).toEqual(stops);
+    expect(game.sim.trainNextStop(id!)).toBe(stops[0]);
+    // It is a real train: it has a livery and the sim is driving it.
+    expect(game.trainColors[id!]).toBeTruthy();
+    expect(game.sim.trainState(id!)).not.toBe("parked");
+  });
+
+  it("refuses to build a train on top of one standing in the depot", () => {
+    const game = gameFor();
+    // At t=0 the authored train has not moved: the depot is occupied.
+    expect(game.sim.occupiedBy(game.depotTiles[0])).toBeTruthy();
+    expect(game.buyTrain([])).toBeNull();
   });
 });

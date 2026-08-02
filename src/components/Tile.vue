@@ -279,6 +279,18 @@
       <g class="station-sign" :transform="`translate(${stationSignPos.x} ${stationSignPos.y})`">
         <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
         <text x="0" y="4.5" text-anchor="middle">S</text>
+        <!-- The services that call here: one pip per line livery, hung under
+             the station shield. A platform nobody serves shows none, which is
+             exactly the thing a player needs to spot. -->
+        <circle
+          v-for="(c, li) in servingLines"
+          :key="'sl' + li"
+          :cx="-6 + li * 6"
+          :cy="15"
+          r="2.6"
+          class="station-line-pip"
+          :style="{ fill: c }"
+        />
       </g>
       <!-- Debug: the walking catchment — the reach whose town tiles set this
            station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
@@ -353,7 +365,7 @@
          the points stand; point at it to unfold the alternatives and click the
          one you want. Geometry: src/tiles/switchFan.ts. -->
     <svg
-      v-if="switchWidgets.length"
+      v-if="switchWidgets.length && switchesVisible"
       class="switch-layer"
       :class="{ 'switch-layer--static': !switchInteractive }"
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
@@ -558,6 +570,12 @@ class Tile extends Vue {
   // the AUTHORED starting arm and persist it), so there the fan is a read-only
   // picture of that authored state and must not swallow the editor's clicks.
   @Prop({ type: Boolean, default: true }) switchInteractive!: boolean;
+  // Whether the points are DRAWN at all. The editor deliberately shows a
+  // read-only fan (a picture of the authored arm), which is why this is a
+  // second flag rather than `!switchInteractive`: a mode where the TRAIN
+  // decides its route (network) has no points for the player to read either,
+  // and an un-clickable arrow on the board is a control that lies.
+  @Prop({ type: Boolean, default: true }) switchesVisible!: boolean;
 
   // The engine shed is drawn, not loaded: see utils/trainArt.ts. Constant per
   // tile, so it is a plain field rather than a getter.
@@ -680,6 +698,11 @@ class Tile extends Vue {
     return { x: size * 0.1, y: size * 0.1 };
   }
   catchmentRadiusTiles = WALK_RADIUS_TILES;
+  // The liveries of the services calling at this platform (network mode).
+  get servingLines(): string[] {
+    if (!this.isStation) return [];
+    return (this.game.stationLines?.[this.coordId] ?? []).slice(0, 4);
+  }
   // One dot per waiting passenger, on the first platform slab at a fixed pitch
   // (the queue grows along the platform) with a small deterministic scatter
   // across its depth so it reads as people, not beads. The live count comes
@@ -2252,6 +2275,10 @@ export default toNative(Tile);
   fill: #8a5a3b; // warm coats against the pale paving
   stroke: #fff;
   stroke-width: 1.2;
+}
+.station-line-pip {
+  stroke: #fff;
+  stroke-width: 1;
 }
 .station-passenger--alt {
   fill: #4a6d8c; // a second coat colour so the crowd isn't a uniform string
