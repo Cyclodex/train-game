@@ -611,6 +611,29 @@ lean — prune as much as you add. This file only stays useful if every task ten
   a distance along it, a side of the street. Positions come out in TILE units so
   a headless test reads them and the renderer only multiplies; `game.pedestrians`
   is filled in `advance()`, not the render mirror.
+    · **A walker follows the pavement's own CURVE**: positions come from
+      `laneSegmentPointAt` (the sampler the cars use) at the pavement offset.
+      Lerping between tile CENTRES is right on a straight and wrong everywhere
+      else — on a corner the walker cuts across the inside of the bend, leaves
+      the drawn band and turns through a sharp V.
+- **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
+  graph's node is `(tile, SIDE)`, and the only move that changes side is at a
+  zebra. Drop that and a pavement is two networks drawn beside each other with
+  people teleporting over the tarmac.
+    · `sideOfPlot` must use the SAME sign convention as `pavementOffsets`, or
+      routing and paint disagree and walkers land on the wrong kerb.
+    · Yielding needed NO new rule in the traffic model: a walker claims the tile
+      and game.ts ORs it into the road sim's `closed` predicate — the same
+      mechanism a level crossing uses for a train. Cars already know how to
+      brake for a closed tile.
+    · The wait terminates BY CONSTRUCTION: the claim stops anything new
+      entering, so the walker only ever waits for what was already there.
+    · Snap `progress` to 0 on ENTERING a cross step. Carrying the remainder of
+      the last stride means a walker is essentially never at exactly 0 there, so
+      the wait never fires and they stroll into the traffic.
+    · The zebra art needs its own `markings` layer at z2: the road surface is
+      drawn ABOVE the ground layer, so paint on the ground is buried under the
+      carriageway it is painted on.
     · A walk route is `[plot, street…, plot]` — ADDRESSES ARE NEVER
       THROUGH-ROUTES. Let people walk freely across plots and a short trip cuts
       through gardens and never touches a pavement, which is the whole thing the

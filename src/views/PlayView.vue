@@ -243,6 +243,7 @@
         <!-- Standing scenery on its own layer above every patch fill, so a
              canopy overhanging the seam isn't cut by the next tile. -->
         <TileGround :coord-id="cell.key" layer="scatter" />
+        <TileGround :coord-id="cell.key" layer="markings" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
@@ -349,7 +350,7 @@
       <div
         v-for="p in pedestrians"
         :key="p.id"
-        class="pedestrian"
+        :class="['pedestrian', { 'pedestrian--waiting': p.waiting }]"
         :style="{ transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)` }"
       />
       <CarRouteOverlay
@@ -1675,6 +1676,13 @@ export default toNative(PlayView);
   border: 1.5px solid rgba(40, 32, 24, 0.65);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   will-change: transform;
+}
+
+// Held at a kerb, waiting for the road to clear. Dimmed and ringed amber so a
+// queue at a crossing reads as a queue rather than as people standing about.
+.pedestrian--waiting {
+  border-color: rgba(255, 176, 32, 0.95);
+  opacity: 0.8;
 }
 
 .road-car {

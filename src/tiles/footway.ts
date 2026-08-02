@@ -43,6 +43,11 @@ const PAVEMENT_GAP = 4;
 /** How wide the paved strip is drawn. */
 export const PAVEMENT_WIDTH = 8;
 
+/** Is there a zebra on this cell — somewhere people may cross the road? */
+export function hasFootCrossing(cell: TileCell | undefined): boolean {
+  return hasFootway(cell) && cell?.footCrossing === true;
+}
+
 /** Does this cell carry a pavement? Any road, unless it opted out. */
 export function hasFootway(cell: TileCell | undefined): boolean {
   if (!cell?.road || cell.road.length === 0) return false;
@@ -102,41 +107,148 @@ export function walkNeighbours(level: Level, id: string): string[] {
 }
 
 /**
- * A walking route from one PLOT to another: out of the door, along the
- * pavements, and in at the far end.
- *
- * `[origin, accessTile, ...pavements..., accessTile, destination]`, or null
- * when either end has no street in reach or no pavement connects them. A null
- * is not a refusal — the citizen layer falls back to its walking clock, so a
- * town with no pavements still works exactly as it did.
- *
- * Breadth-first, so the route is the fewest tiles — which for a walk is also
- * the shortest, since every step is one tile.
+ * One node of the walking graph: a tile AND which of its two pavements you are
+ * on. The side is part of the STATE, not a cosmetic choice, and that is what
+ * makes a crossing a mechanic rather than paint — the only way to change sides
+ * is at a tile with a zebra on it.
  */
-export function planWalk(level: Level, fromPlot: string, toPlot: string): string[] | null {
+export interface WalkNode {
+  tileId: string;
+  side: 1 | -1;
+}
+
+export function walkNodeKey(n: WalkNode): string {
+  return `${n.tileId}:${n.side}`;
+}
+
+/**
+ * A walking route from one PLOT to another: out of the door, along the
+ * pavements — crossing the road only where there is a crossing — and in at the
+ * far end.
+ *
+ * Returns the tiles walked plus the side held on each, or null when either end
+ * has no street in reach or no pavement connects them. A null is not a refusal:
+ * the citizen layer falls back to its walking clock, so a town with no pavements
+ * still works exactly as it did.
+ *
+ * Breadth-first over (tile, side), so the route is the fewest steps. A person
+ * whose destination is across the road from the nearest crossing really does
+ * walk down to it and back, and that detour is paid for in their journey time.
+ */
+export function planWalk(
+  level: Level,
+  fromPlot: string,
+  toPlot: string
+): { tiles: string[]; sides: (1 | -1)[] } | null {
   if (fromPlot === toPlot) return null;
   const start = accessTileOf(level, fromPlot);
   const goal = accessTileOf(level, toPlot);
   if (!start || !goal) return null;
   if (!hasFootway(level[start]) || !hasFootway(level[goal])) return null;
-  if (start === goal) return [fromPlot, start, toPlot];
 
-  const prev = new Map<string, string>([[start, ""]]);
-  const queue = [start];
+  // Which pavement each end is on: the side of the street the plot stands on.
+  const startSide = sideOfPlot(level, fromPlot, start);
+  const goalSide = sideOfPlot(level, toPlot, goal);
+  if (startSide === null || goalSide === null) return null;
+
+  const from: WalkNode = { tileId: start, side: startSide };
+  const goalKey = walkNodeKey({ tileId: goal, side: goalSide });
+  if (walkNodeKey(from) === goalKey) return { tiles: [start], sides: [startSide] };
+
+  const prev = new Map<string, WalkNode | null>([[walkNodeKey(from), null]]);
+  const node = new Map<string, WalkNode>([[walkNodeKey(from), from]]);
+  const queue: WalkNode[] = [from];
+
   while (queue.length) {
-    const cur = queue.shift() as string;
-    for (const next of walkNeighbours(level, cur)) {
-      if (prev.has(next)) continue;
-      prev.set(next, cur);
-      if (next === goal) {
-        const path: string[] = [];
-        for (let at = goal; at; at = prev.get(at) as string) path.unshift(at);
-        return [fromPlot, ...path, toPlot];
+    const cur = queue.shift() as WalkNode;
+    for (const next of walkMoves(level, cur)) {
+      const key = walkNodeKey(next);
+      if (prev.has(key)) continue;
+      prev.set(key, cur);
+      node.set(key, next);
+      if (key === goalKey) {
+        const tiles: string[] = [];
+        const sides: (1 | -1)[] = [];
+        for (let at: string | undefined = key; at; ) {
+          const n = node.get(at) as WalkNode;
+          tiles.unshift(n.tileId);
+          sides.unshift(n.side);
+          const p = prev.get(at);
+          at = p ? walkNodeKey(p) : undefined;
+        }
+        return { tiles, sides };
       }
       queue.push(next);
     }
   }
   return null;
+}
+
+/**
+ * Every move out of one (tile, side): along the street on the same pavement,
+ * and — only where a zebra says so — across to the other one.
+ */
+export function walkMoves(level: Level, from: WalkNode): WalkNode[] {
+  if (!hasFootway(level[from.tileId])) return [];
+  const out: WalkNode[] = walkNeighbours(level, from.tileId).map(tileId => ({
+    tileId,
+    side: from.side,
+  }));
+  // The crossing. This one line is the whole mechanic: take it away and a
+  // pavement is two separate networks that happen to be drawn beside each other.
+  if (hasFootCrossing(level[from.tileId])) {
+    out.push({ tileId: from.tileId, side: (from.side * -1) as 1 | -1 });
+  }
+  return out;
+}
+
+/**
+ * Which pavement of `roadTile` the plot stands on: +1 or -1, matching the sign
+ * `pavementOffsets` uses.
+ *
+ * The offset is measured RIGHT of travel along the tile's own through movement,
+ * so this asks the same question geometrically: on which side of the road's
+ * centreline does the plot lie?
+ */
+export function sideOfPlot(level: Level, plotId: string, roadTile: string): 1 | -1 | null {
+  const road = level[roadTile]?.road;
+  if (!road?.length) return null;
+  const plot = parseCoordId(plotId);
+  const tile = parseCoordId(roadTile);
+  // The tile's through direction (the first non-Center movement it carries).
+  let from: Port | null = null;
+  let to: Port | null = null;
+  for (const lane of road) {
+    for (const exit of lane.to) {
+      if (lane.from === Position.Center || exit === Position.Center) continue;
+      from = lane.from;
+      to = exit;
+      break;
+    }
+    if (from !== null) break;
+  }
+  if (from === null || to === null) return null;
+  // Direction of travel across the tile, as a vector, and the plot's offset
+  // from the tile centre. Right-of-travel in screen space (y down) is (-dy, dx).
+  const v = portVector(to);
+  const back = portVector(from);
+  const dir = { x: v.x - back.x, y: v.y - back.y };
+  if (dir.x === 0 && dir.y === 0) return 1;
+  const nx = -dir.y;
+  const ny = dir.x;
+  const px = plot.x - tile.x;
+  const py = plot.y - tile.y;
+  const dot = px * nx + py * ny;
+  if (dot === 0) return 1; // straight ahead of the tile: either side will do
+  return dot > 0 ? 1 : -1;
+}
+
+function portVector(p: Port): { x: number; y: number } {
+  if (p === Position.Top) return { x: 0, y: -1 };
+  if (p === Position.Right) return { x: 1, y: 0 };
+  if (p === Position.Bottom) return { x: 0, y: 1 };
+  if (p === Position.Left) return { x: -1, y: 0 };
+  return { x: 0, y: 0 };
 }
 
 // --- the drawing -------------------------------------------------------------
@@ -184,6 +296,57 @@ export function pavementPaths(cell: TileCell | undefined, size = 100): string {
         );
       }
     }
+  }
+  return out.join("");
+}
+
+// The zebra: bars painted ACROSS the carriageway, drawn on the markings layer so
+// they sit on the tarmac rather than under it.
+const ZEBRA_FILL = "hsl(0 0% 96%)";
+const ZEBRA_BARS = 5;
+
+/**
+ * The crossing stripes of one cell, in its own 0..100 ground space. Laid at the
+ * middle of the tile — which is exactly where `sim/pedestrians.ts` puts somebody
+ * crossing (t = 0.5), so the paint and the people agree.
+ */
+export function crossingPaths(cell: TileCell | undefined, size = 100): string {
+  if (!hasFootCrossing(cell)) return "";
+  const road = cell?.road ?? [];
+  // The tile's through direction: the bars run ACROSS it.
+  let from: Port | null = null;
+  let to: Port | null = null;
+  for (const lane of road) {
+    for (const exit of lane.to) {
+      if (lane.from === Position.Center || exit === Position.Center) continue;
+      from = lane.from;
+      to = exit;
+      break;
+    }
+    if (from !== null) break;
+  }
+  if (from === null || to === null) return "";
+
+  const scale = size / 100;
+  const half = roadHalfUnits(cell) * scale;
+  const mid = size / 2;
+  // A crossing on a straight tile is square to the road; on a bend the tile's
+  // middle is a curve and a straight bar is close enough at this scale.
+  const vertical = from === Position.Top || from === Position.Bottom;
+  const barLong = half * 2; // across the carriageway
+  const barSpan = 26 * scale; // how far along the road the striping reaches
+  const pitch = barSpan / ZEBRA_BARS;
+  const barW = pitch * 0.55;
+
+  const out: string[] = [];
+  for (let i = 0; i < ZEBRA_BARS; i++) {
+    const along = mid - barSpan / 2 + pitch * i + (pitch - barW) / 2;
+    const rect = vertical
+      ? { x: mid - barLong / 2, y: along, w: barLong, h: barW }
+      : { x: along, y: mid - barLong / 2, w: barW, h: barLong };
+    out.push(
+      `<rect x="${rect.x.toFixed(1)}" y="${rect.y.toFixed(1)}" width="${rect.w.toFixed(1)}" height="${rect.h.toFixed(1)}" fill="${ZEBRA_FILL}" />`
+    );
   }
   return out.join("");
 }

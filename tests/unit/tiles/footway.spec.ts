@@ -4,11 +4,13 @@ import { Level, TileCell } from "@/tiles/model";
 import { nWayLanes, twoWay } from "@/tiles/lanes";
 import { expandKind } from "@/tiles/kinds";
 import {
+  hasFootCrossing,
   hasFootway,
   pavementOffsets,
   pavementPaths,
   planWalk,
   roadHalfUnits,
+  sideOfPlot,
   walkNeighbours,
 } from "@/tiles/footway";
 
@@ -74,15 +76,51 @@ describe("the walking graph", () => {
     expect(walkNeighbours(level, "2,0")).toEqual([]);
   });
 
-  it("routes out of one door, along the street, and in at the other", () => {
+  it("knows which pavement a house stands on", () => {
     const level = highStreet();
-    const route = planWalk(level, "0,0", "4,2");
-    expect(route).toEqual(["0,0", "0,1", "1,1", "2,1", "3,1", "4,1", "4,2"]);
+    // North and south of the same street are opposite sides, and the sign
+    // matches the one `pavementOffsets` uses so the walker lands on the paint.
+    expect(sideOfPlot(level, "2,0", "2,1")).toBe(-1);
+    expect(sideOfPlot(level, "2,2", "2,1")).toBe(1);
   });
 
-  it("collapses to three steps when both doors share a street", () => {
+  it("routes along one pavement when both doors are on the same side", () => {
     const level = highStreet();
-    expect(planWalk(level, "2,0", "2,2")).toEqual(["2,0", "2,1", "2,2"]);
+    const route = planWalk(level, "0,0", "4,0");
+    expect(route?.tiles).toEqual(["0,1", "1,1", "2,1", "3,1", "4,1"]);
+    // Never changes side: there is no crossing, and none is needed.
+    expect(new Set(route?.sides)).toEqual(new Set([-1]));
+  });
+
+  it("WILL NOT CROSS THE ROAD without a crossing", () => {
+    // The mechanic, stated as a refusal. Two doors facing each other across a
+    // street with no zebra between them are not walkable, and the citizen layer
+    // falls back to its clock rather than teleporting somebody over the tarmac.
+    const level = highStreet();
+    expect(planWalk(level, "2,0", "2,2")).toBeNull();
+  });
+
+  it("crosses at a zebra, and takes the detour to reach one", () => {
+    const level = highStreet();
+    level["4,1"] = { ...street(), footCrossing: true };
+    expect(hasFootCrossing(level["4,1"])).toBe(true);
+    expect(hasFootCrossing(level["2,1"])).toBe(false);
+
+    const route = planWalk(level, "2,0", "2,2");
+    expect(route).not.toBeNull();
+    // Down to the crossing, over it, and back — the detour is the cost of
+    // putting the zebra where it is.
+    expect(route?.tiles).toEqual(["2,1", "3,1", "4,1", "4,1", "3,1", "2,1"]);
+    // The tile appears twice: once on each pavement. That repeat IS the crossing.
+    expect(route?.sides).toEqual([-1, -1, -1, 1, 1, 1]);
+  });
+
+  it("crosses on the spot when the zebra is right there", () => {
+    const level = highStreet();
+    level["2,1"] = { ...street(), footCrossing: true };
+    const route = planWalk(level, "2,0", "2,2");
+    expect(route?.tiles).toEqual(["2,1", "2,1"]);
+    expect(route?.sides).toEqual([-1, 1]);
   });
 
   it("returns null rather than a bad route when there is no way to walk", () => {
@@ -105,6 +143,8 @@ describe("the walking graph", () => {
     const level = highStreet();
     level["2,1"] = { ...street(), footway: "none" };
     // The motorway in the middle severs the walk; nothing else can get past it.
-    expect(planWalk(level, "0,0", "4,2")).toBeNull();
+    expect(planWalk(level, "0,0", "4,0")).toBeNull();
+    // ...and a crossing on a street with no pavement is not a crossing.
+    expect(hasFootCrossing({ ...street(), footway: "none", footCrossing: true })).toBe(false);
   });
 });

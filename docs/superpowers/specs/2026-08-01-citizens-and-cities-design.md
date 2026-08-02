@@ -572,8 +572,30 @@ that moves dots along that graph — reusing the citizen sim's walking leg
 
 The genuinely new mechanic that falls out, and the reason this is worth doing as
 a *game* feature rather than decoration: **a crossing.** Where a footway meets a
-carriageway or a railway, somebody has to give way — and that is a decision the
-player makes, exactly like a signal or a level crossing. **Still to build.**
+carriageway, somebody has to give way — and that is a decision the player makes,
+exactly like a signal or a level crossing. **BUILT 2026-08-02:**
+
+- `TileCell.footCrossing?: true` — a zebra on a road tile.
+- **The walking graph is side-aware.** A node is `(tile, side)`, not a tile, and
+  the only move that changes side is at a crossing. That one rule is the whole
+  mechanic: without it a pavement is two networks that happen to be drawn beside
+  each other and people teleport over the tarmac. `sideOfPlot` decides which
+  pavement a door is on, using the same sign `pavementOffsets` does, so the
+  routing and the paint cannot disagree.
+- **The detour is the cost.** Somebody whose work is across the road walks to the
+  nearest zebra and back, and that is paid for in their journey time and so in
+  their mood. Put the crossing in the wrong place and the commute bar says so.
+- **Yielding needed no new rule in the traffic model.** A walker at or on a zebra
+  CLAIMS the tile, and `game.ts` ORs those tiles into the road sim's `closed`
+  predicate — the identical mechanism a level crossing already uses when a train
+  is coming. Cars brake, queue and resume with machinery that was already proven.
+- The wait terminates by construction: the claim stops anything NEW entering, and
+  the walker then waits only for whatever was already on the tile to drive off.
+- A walker held at a kerb reports `waiting`, and the view rings them amber, so a
+  queue at a crossing reads as a queue.
+
+Still to build: a crossing where a footway meets the RAILWAY (the pedestrian half
+of a level crossing), and signalised crossings with a button.
 
 **What shipped**, exactly as designed above:
 
@@ -587,6 +609,13 @@ player makes, exactly like a signal or a level crossing. **Still to build.**
 - `sim/pedestrians.ts` — walkers as a route of tile ids, a distance along it and
   a side of the street. Positions come out in **tile units**, so a headless test
   can read them and the renderer only multiplies.
+- **A walker follows the pavement's own curve.** Positions come from
+  `laneSegmentPointAt` — the sampler the CARS use — at the pavement's lateral
+  offset, so a bend is walked round rather than cut across. The first version
+  lerped between tile CENTRES with a fixed perpendicular offset: right on a
+  straight, wrong everywhere else, and on a corner tile the walker left the drawn
+  pavement entirely and turned through a sharp V. Same curve as the paint, or it
+  is not a pavement.
 - A citizen's walking leg becomes a real figure, on the same contract as the
   driving leg: **it ends when the walker arrives**, so what you watch and what
   the city card scores are the same journey. `citizenStats.onFoot` is the

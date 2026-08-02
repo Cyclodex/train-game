@@ -578,6 +578,9 @@ export interface PedestrianDot {
   id: string;
   x: number; // world px
   y: number;
+  // Held at a kerb waiting for the road to clear. The view dims them, so a queue
+  // at a crossing reads as a queue.
+  waiting: boolean;
 }
 
 // How many people a platform holds under the citizen layer. Generous on
@@ -857,6 +860,13 @@ export function createGame(
   // stands then. `rebuildCitizens()` below is what reset() calls.
   let citizenSim: CitizenSim | null = null;
   let pedestrianSim: PedestrianSim | null = null;
+  // Tiles a car body is on, refreshed each tick. Read by the pedestrian sim to
+  // decide whether a zebra is clear to step onto.
+  const carTiles = new Set<string>();
+  // Tiles somebody has claimed a crossing on. Fed into the ROAD sim's `closed`
+  // predicate — the identical mechanism a level crossing uses when a train is
+  // coming, so cars brake, queue and resume with no new traffic rule at all.
+  let pedestrianClaims: string[] = [];
   const pedestrians = reactive([]) as PedestrianDot[];
   const cities = reactive([]) as CityState[];
   const citizenStats = reactive({
@@ -880,6 +890,8 @@ export function createGame(
       return;
     }
     pedestrians.splice(0, pedestrians.length);
+    pedestrianClaims = [];
+    carTiles.clear();
     // The people ON the pavements. Its own little sim, NOT part of the road
     // model: a pedestrian has no following distance, claims no junction and may
     // share a doorway, all of which road.ts exists to forbid.
@@ -890,6 +902,10 @@ export function createGame(
         // The same walking speed the citizen model scores journeys at, so the
         // person on screen and the person in the model arrive together.
         speed: citizenSetup.tuning?.walkSpeed,
+        // Is a vehicle physically on this tile? A walker claims the zebra (see
+        // the closed predicate in advance()) and then waits for whatever was
+        // already on it to drive clear — which is what makes the wait finite.
+        roadBusy: (tileId: string) => carTiles.has(tileId),
       })
     );
     citizenSim = markRaw(
@@ -949,8 +965,9 @@ export function createGame(
       const cur = pedestrians[i];
       const x = w.x * tileSize;
       const y = w.y * tileSize;
-      if (cur && cur.id === w.id && cur.x === x && cur.y === y) continue;
-      pedestrians[i] = { id: w.id, x, y };
+      if (cur && cur.id === w.id && cur.x === x && cur.y === y && cur.waiting === w.waiting)
+        continue;
+      pedestrians[i] = { id: w.id, x, y, waiting: w.waiting };
     }
   }
 
@@ -1718,12 +1735,27 @@ export function createGame(
       // stepping the pavement after the people would report every arrival one
       // tick late.
       pedestrianSim?.step(scaled);
+      pedestrianClaims = pedestrianSim?.claimedCrossings() ?? [];
       citizenSim.step(scaled, simEvents);
       refreshCitizens();
       updatePedestrians();
     }
-    // A crossing is closed while a train reserves or sits on that tile.
-    roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
+    // A crossing is closed while a train reserves or sits on that tile — and,
+    // now, while somebody is crossing the road on a zebra there. One predicate,
+    // two reasons: the road sim already knows how to brake for a closed tile, so
+    // yielding to a pedestrian needed no new rule in the traffic model.
+    const claimed = pedestrianClaims;
+    roadSim.step(
+      scaled,
+      id => !!(sim.reservedBy(id) || sim.occupiedBy(id)) || claimed.includes(id)
+    );
+    // Where the cars ended up, for the walkers waiting at a kerb.
+    if (pedestrianSim) {
+      carTiles.clear();
+      for (const body of roadSim.bodies()) {
+        for (const pt of body.points) carTiles.add(pt.tileId);
+      }
+    }
     // Park & ride: whoever just pulled into a stall within walking reach of a
     // station is now standing on its platform.
     transferParkedArrivals();

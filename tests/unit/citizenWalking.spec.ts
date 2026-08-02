@@ -5,6 +5,7 @@ import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { createPedestrianSim } from "@/sim/pedestrians";
+import { pavementOffsets } from "@/tiles/footway";
 import { roadEntries } from "@/sim/road";
 
 // Walking people, end to end. Like the driving spec, everything here runs
@@ -49,25 +50,121 @@ describe("the pedestrian simulation", () => {
     expect(sim.count()).toBe(0);
   });
 
-  it("puts people on the pavement, not down the middle of the road", () => {
+  it("keeps to the pavement on a straight, at the offset the paint uses", () => {
     const sim = createPedestrianSim({ level: citizenwalk.level, seed: 4, speed: 0.25 });
-    // Several walkers so both pavements are used.
-    for (const from of ["2,2", "3,2", "4,2", "5,2"]) sim.request(from, "3,0");
-    let offCentre = 0;
-    let samples = 0;
-    for (let t = 0; t < 30; t += 0.2) {
-      sim.step(0.2);
-      for (const w of sim.sample()) {
-        samples += 1;
-        // A tile centre sits at *.5; anybody walking the carriageway would sit
-        // on one of those lines. On a pavement they never do.
-        const dx = Math.abs((w.x % 1) - 0.5);
-        const dy = Math.abs((w.y % 1) - 0.5);
-        if (dx > 0.05 || dy > 0.05) offCentre += 1;
+    // A house inside the block to the works outside the NE corner: the route
+    // runs along the top of the ring and then turns.
+    const id = sim.request("2,2", "6,0");
+    expect(id).toBeTruthy();
+
+    // The expected lateral offset, straight from the geometry the art is drawn
+    // from — so the walker and the painted band can never drift apart.
+    const off = pavementOffsets(citizenwalk.level["3,1"])[0] / 100;
+
+    let checked = 0;
+    for (let t = 0; t < 120; t += 0.1) {
+      sim.step(0.1);
+      const [w] = sim.sample();
+      if (!w) break;
+      // On a straight run of the top of the ring (y row 1), the pavement sits a
+      // fixed distance either side of the carriageway's centreline. Tiles 4 and
+      // 5 only: tile 3 carries the zebra, and somebody ON it is deliberately out
+      // in the middle of the road.
+      const tileX = Math.floor(w.x);
+      if (w.y > 1 && w.y < 2 && tileX >= 4 && tileX <= 5) {
+        expect(Math.abs(Math.abs(w.y - 1.5) - off)).toBeLessThan(0.02);
+        checked += 1;
       }
     }
-    expect(samples).toBeGreaterThan(20);
-    expect(offCentre).toBe(samples);
+    expect(checked).toBeGreaterThan(5);
+  });
+
+  it("ROUNDS A BEND instead of cutting the corner", () => {
+    // The regression this exists for: the first version lerped between tile
+    // CENTRES, so on a corner tile a walker left the drawn pavement entirely and
+    // turned through a sharp V. A walker on a bend must follow a curve — which
+    // means bowing measurably away from the straight chord between where it
+    // enters the tile and where it leaves.
+    const sim = createPedestrianSim({ level: citizenwalk.level, seed: 4, speed: 0.25 });
+    sim.request("2,2", "6,0"); // turns at the ring's north-east corner, tile 6,1
+
+    const onCorner: { x: number; y: number }[] = [];
+    for (let t = 0; t < 120; t += 0.05) {
+      sim.step(0.05);
+      const [w] = sim.sample();
+      if (!w) break;
+      if (w.x > 6 && w.x < 7 && w.y > 1 && w.y < 2) onCorner.push({ x: w.x, y: w.y });
+    }
+    expect(onCorner.length).toBeGreaterThan(5);
+
+    // Greatest distance from the chord joining the first and last samples.
+    const a = onCorner[0];
+    const b = onCorner[onCorner.length - 1];
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    let bow = 0;
+    for (const p of onCorner) {
+      const d = Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / len;
+      bow = Math.max(bow, d);
+    }
+    // A straight line bows 0. A quarter-turn across a tile bows a good fraction
+    // of a tile, so this is a wide margin either side of the two behaviours.
+    expect(bow).toBeGreaterThan(0.04);
+  });
+
+  it("claims the zebra it is crossing, which is what stops the traffic", () => {
+    const sim = createPedestrianSim({ level: citizenwalk.level, seed: 1, speed: 0.25 });
+    // A house inside the block to the works outside it: they must cross.
+    sim.request("3,2", "3,0");
+    let claimed: string[] = [];
+    for (let t = 0; t < 120; t += 0.1) {
+      sim.step(0.1);
+      const c = sim.claimedCrossings();
+      if (c.length) {
+        claimed = c;
+        break;
+      }
+      if (sim.count() === 0) break;
+    }
+    // The board's northern zebra. game.ts feeds this straight into the road
+    // sim's `closed` predicate — the identical mechanism a level crossing uses
+    // when a train is coming — so yielding needed no new rule in the traffic
+    // model at all.
+    expect(claimed).toEqual(["3,1"]);
+  });
+
+  it("waits at the kerb while a car is on the crossing, and goes when it clears", () => {
+    let busy = true;
+    const sim = createPedestrianSim({
+      level: citizenwalk.level,
+      seed: 1,
+      speed: 0.25,
+      roadBusy: tileId => busy && tileId === "3,1",
+    });
+    const id = sim.request("3,2", "3,0") as string;
+
+    // Held: the walker reaches the zebra and stops there.
+    let sawWaiting = false;
+    for (let t = 0; t < 120; t += 0.1) {
+      sim.step(0.1);
+      if (sim.waitingCount() > 0) sawWaiting = true;
+      if (sawWaiting && t > 40) break;
+    }
+    expect(sawWaiting).toBe(true);
+    expect(sim.status(id)).toBe("walking"); // still stuck at the kerb
+    // ...and a waiting walker says so, so the view can show the queue.
+    expect(sim.sample().some(w => w.waiting)).toBe(true);
+
+    // The car drives off; they cross and complete the journey.
+    busy = false;
+    let arrived = false;
+    for (let t = 0; t < 200; t += 0.1) {
+      sim.step(0.1);
+      if (sim.status(id) === "arrived") {
+        arrived = true;
+        break;
+      }
+    }
+    expect(arrived).toBe(true);
   });
 
   it("refuses a walk it cannot make rather than inventing a walker", () => {

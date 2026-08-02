@@ -111,6 +111,19 @@ export interface TileCell {
   // small simulation (`sim/pedestrians.ts`) over the same tile graph, not a seat
   // in the traffic model. See tiles/footway.ts.
   footway?: "both" | "none";
+  // A PEDESTRIAN CROSSING on this road tile — the zebra.
+  //
+  // The one place people may cross the carriageway, and therefore the player's
+  // decision: without one, somebody whose work is on the far pavement has to
+  // walk to the nearest crossing and back, which costs them time and costs you
+  // their mood. With one, the traffic stops for them. Where the crossings go is
+  // the same kind of choice as where a signal goes.
+  //
+  // A crossing CLOSES its tile to traffic while somebody is on it — the road
+  // sim already knows how to do that, because it is exactly what a level
+  // crossing does to a car when a train is coming (`CrossingClosed`). See
+  // tiles/footway.ts and sim/pedestrians.ts.
+  footCrossing?: boolean;
   // Which CITY this ground belongs to. Optional, and normally absent: cities are
   // derived by clustering connected urban/industry ground (`tiles/cities.ts`),
   // so every board written before cities existed has them for free. The tag is

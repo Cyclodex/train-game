@@ -39,7 +39,7 @@ import {
   tileScatterSvg,
 } from "@/tiles/terrain";
 import { accessPathSvg, accessPortOf } from "@/tiles/access";
-import { pavementPaths } from "@/tiles/footway";
+import { crossingPaths, pavementPaths } from "@/tiles/footway";
 
 // The world's ground, one tile at a time. A sibling of <Tile> rather than a
 // layer inside it, because ground exists whether or not anything is built on the
@@ -69,7 +69,7 @@ class TileGround extends Vue {
   // THEME paints, so the height layer needs to know which world it stands in.
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ type: String, required: true }) coordId!: string;
-  @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy";
+  @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy" | "markings";
 
   units = GROUND_UNITS;
 
@@ -181,6 +181,10 @@ class TileGround extends Vue {
   }
 
   get html(): string {
+    // Road markings painted ON the tarmac: the zebra. Its own layer because the
+    // road surface is drawn above the ground, so a crossing on the ground layer
+    // would be buried under the carriageway it is painted on.
+    if (this.layer === "markings") return crossingPaths(this.level[this.coordId], this.units);
     // Everything but the ground layer is just the tile's own art.
     if (this.layer !== "ground") return this.baseHtml;
     // Order on the ground: the height terrace, the terrain patch, the driveway
@@ -204,7 +208,8 @@ export default toNative(TileGround);
 <style lang="scss" scoped>
 .tile-ground,
 .tile-scatter,
-.tile-canopy {
+.tile-canopy,
+.tile-markings {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -230,6 +235,12 @@ export default toNative(TileGround);
   // still paints over its own cell's scenery, while a canopy overhanging a
   // plain neighbour survives.
   z-index: 1;
+}
+.tile-markings {
+  // Above the road surface (z1), below the trains and the cars: paint on the
+  // tarmac. A zebra on a level crossing therefore sits under the rails, which
+  // is the right way round.
+  z-index: 2;
 }
 .tile-canopy {
   // Above the rails (z2), the trains (wagons z3 / loco z4) AND the road cars
