@@ -216,13 +216,14 @@ export default toNative(TileGround);
 // and out of existence in the middle of the ridge). The portal arch and the
 // dashed guide are lifted over the roof in Tile.vue.
 .tile-roof {
-  // CLIPPED TO THE TILE, unlike every other ground layer. A patch bows out of
-  // its box on purpose (that overlap is how two patches interlock), and a ROOF
-  // that bows would occlude a train out in the open — swallowing it short of
-  // the tunnel, at a wobbly rock edge, before it ever reached the portal. The
-  // unclipped original underneath still draws the silhouette; this copy only
-  // has to cover the tile it belongs to, and the portal's covered stretch
-  // reaches the tile edge to meet it.
+  // CLIPPED TO THE TILE, unlike every other ground layer. The patch keeps to
+  // its own tile now, but the soft FRINGE deliberately does not — it is half a
+  // stroke of the patch's own colour spilled onto the neighbour, and lifted
+  // above the trains it would wash a passing consist in mountain grey a good
+  // ten units before the portal. The original underneath still lays that
+  // fringe, where it belongs and under everything. What is left after the clip
+  // covers exactly the tile, and the portal's covered stretch reaches the tile
+  // edge to meet it.
   clip-path: inset(0);
 }
 .tile-ground.tile-roof {

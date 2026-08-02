@@ -591,14 +591,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   that is a portal you want on the board.
 - THE ROOF IS A SECOND COPY, CLIPPED (`TileGround`, `.tile-roof`): the same
   ground/scatter art rendered again above the trains, `clip-path: inset(0)`.
-  Both halves of that matter. A patch BOWS OUT OF ITS TILE (corner push + edge
-  bow) by up to ~15 units, so an unclipped roof occludes a train out in the
-  open, at a wobbly rock edge, short of the tunnel — which is why the portal's
-  covered stretch runs all the way to the tile edge to meet the clip. And it has
-  to be a COPY, not a lift: clip the only copy and the ridge grows a flat spot
-  per bored tile, which is the tile grid the terrain art spends its whole budget
-  hiding. (The roof copy drops the height terrace — it renders under an opaque
-  patch, and duplicating it would duplicate its clipPath id.)
+  Both halves of that matter. CLIPPED because the soft fringe is deliberately
+  unclipped (half a stroke of the patch's colour, spilled onto the neighbour) —
+  lifted over the trains it washes a consist in mountain grey ten units before
+  the portal. A COPY, not a lift, so that fringe is still laid below everything
+  by the original. (The roof copy drops the height terrace — it renders under an
+  opaque patch, and duplicating it would duplicate its clipPath id.)
+- THE PORTAL IS SIZED AGAINST THE ROCK FACE, which is the tile edge: a patch
+  keeps to its own tile (`54b7391`), so the arch springs at the edge, its crown
+  lands on it, and the gallery stands entirely on open ground — 16u out, not the
+  30u it needed back when a massif overhung its own portal. The covered stretch
+  and the roof MUST meet at that edge; leave a gap and a train shows through it.
+  If the containment rule moves, `portalArt` moves with it.
 - The opening being UNDER the trains is also what keeps the hillside out of the
   portal: at z1 it covers the mountain's own bowed-out ground patch, so what
   shows inside a portal is always the bore. The neighbour's rails (z2) run over
