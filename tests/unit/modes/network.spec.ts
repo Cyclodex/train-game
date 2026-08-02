@@ -119,7 +119,7 @@ describe("other modes are unaffected by the passenger win", () => {
 // the first cut of this one lost in 19 seconds — demand rates that had never
 // been set against what a train can actually carry. This drives the real board
 // headlessly and insists it is still winnable, so a future tuning change to
-// stationDemandOf (or to the shuttle) cannot quietly make it impossible again.
+// stationDemandOf (or to the board) cannot quietly make it impossible again.
 describe("the network board is winnable — and not trivially", () => {
   function playScenario(seconds: number) {
     const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
@@ -128,6 +128,10 @@ describe("the network board is winnable — and not trivially", () => {
       y: t.y,
       type: t.type,
       wagonIds: (t.wagons ?? []).map(w => w.id),
+      // The board's train is IN SERVICE on a line — without this it would
+      // follow the points instead of driving its route, which is a different
+      // board entirely.
+      ...(t.line?.length ? { line: t.line } : {}),
     }));
     const game = createGame(
       networkmode.level,
@@ -145,7 +149,7 @@ describe("the network board is winnable — and not trivially", () => {
     return game;
   }
 
-  it("is won by a shuttle that just keeps running, inside the brisk time", () => {
+  it("is won by a train that just keeps running its line, inside the brisk time", () => {
     const game = playScenario(180);
     const c = game.objective.counters;
     expect(game.objective.phase).toBe("won");
@@ -157,7 +161,7 @@ describe("the network board is winnable — and not trivially", () => {
     );
   });
 
-  it("is not a walkover: the crowds really build while the shuttle works", () => {
+  it("is not a walkover: the crowds really build while the train works", () => {
     const game = playScenario(180);
     const peak = game.objective.counters.peakStationQueue ?? 0;
     // Well above empty (there is real pressure) but under the overflow that
@@ -166,10 +170,42 @@ describe("the network board is winnable — and not trivially", () => {
     expect(peak).toBeLessThanOrEqual(OVERCROWD_LIMIT);
   });
 
-  it("keeps the shuttle shuttling: it never parks, it bounces", () => {
+  it("keeps the service running: the train never terminates anywhere", () => {
     const game = playScenario(90);
-    // Both depots mismatch on purpose, so every turn-back is a "mismatched"
-    // arrival. Zero of them would mean the train parked and the service died.
-    expect(game.objective.counters.mismatchedArrivals).toBeGreaterThan(0);
+    // A ring has no turn-back and no destination depot, so the train should
+    // simply still be in service — parked would mean the service died.
+    expect(game.sim.trainState("circle")).not.toBe("parked");
+    expect(game.sim.trainNextStop("circle")).toBeDefined();
+  });
+
+  it("serves every station on the line, not just the near ones", () => {
+    const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
+      id: t.id,
+      x: t.x,
+      y: t.y,
+      type: t.type,
+      wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
+    }));
+    const game = createGame(
+      networkmode.level,
+      trains,
+      200,
+      networkMode,
+      1,
+      networkmode.colors
+    );
+    game.startObjective();
+    const called = new Set<string>();
+    for (let t = 0; t < 180; t += 0.1) {
+      game.advance(0.1);
+      const stop = game.sim.trainNextStop("circle");
+      if (stop) called.add(stop);
+      if (game.objective.phase !== "playing") break;
+    }
+    // Every stop on the authored line became the train's target at some point.
+    for (const stop of networkmode.trains.circle.line ?? []) {
+      expect(called.has(stop), `never headed for ${stop}`).toBe(true);
+    }
   });
 });

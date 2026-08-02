@@ -16,6 +16,7 @@ describe("park & ride: parked cars feed the station queue", () => {
       y: t.y,
       type: t.type,
       wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
     }));
     const game = createGame(
       parkandride.level,
@@ -32,7 +33,7 @@ describe("park & ride: parked cars feed the station queue", () => {
     // Everyone who ever appeared on the platform is either still queueing,
     // riding the train, or already delivered.
     const appeared =
-      game.sim.stationQueue("2,0") +
+      game.sim.stationQueue("2,1") +
       game.sim.trainPassengers("train1") +
       game.sim.passengersDelivered();
 
@@ -40,7 +41,7 @@ describe("park & ride: parked cars feed the station queue", () => {
     // not hardcoded, so retuning the demand rates can never quietly turn this
     // into a test that passes on the schedule alone. Anything beyond it
     // arrived BY CAR.
-    const schedule = stationDemandOf(parkandride.level, "2,0");
+    const schedule = stationDemandOf(parkandride.level, "2,1");
     const scheduleOnly =
       (schedule.initial ?? 0) + Math.floor(seconds / schedule.intervalSec);
     expect(appeared).toBeGreaterThan(scheduleOnly);

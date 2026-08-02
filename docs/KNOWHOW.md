@@ -500,6 +500,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
+- `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
+  graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
+  road layer has had all along (`roadRouter`: plan, then follow per-junction
+  decisions). Every edge is one tile, so BFS *is* the shortest path.
+- The plan reaches the sim through the EXISTING `SwitchResolver` seam:
+  `switchOf(train)` translates the plan's exit PORT into the arm that produces
+  it (`armForExit`), so `traverse`/`resolveExitPort` are untouched and every
+  rule (reservation, occupancy, signals, stop lines) applies unchanged. A train
+  with no plan returns the global resolver — byte-for-byte the old behaviour.
+- Plans are PER LEG, recomputed at every call and after every depot turn-back.
+  That is what keeps `exitAt` unambiguous (a shortest path never repeats a
+  `(tile, entry)` node) and what makes track laid mid-run usable next leg.
+- A train IN SERVICE never terminates at a depot, whatever the colours say —
+  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  ordered and stabled; on a line they are turn-backs, not destinations.
+- Two line shapes, and the difference matters when authoring:
+  **a ring** needs no turn-back, so the board needs exactly ONE depot and each
+  station comes round once a lap; **a there-and-back shuttle** can only reverse
+  at a depot, so it needs one at each end and serves intermediate stations
+  TWICE a round trip (once each way). Both are covered by tests.
+- Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
+  any of these platforms in one call, but a station only gets served once a
+  lap. Size the towns against the lap, or the overflow fail fires on a board
+  whose trains were never the problem.
+- `sim.assignLine(id, stops)` is the verb an "assign train to line" UI calls;
+  `[]` takes the train out of service. `railRing()` in `levels/test/scenario.ts`
+  authors a loop; `mkLineTrain()` authors a train in service on one.
+
 ## NETWORK MODE (phase 5 — the passenger loop, 2026-08-01)
 - Win = people carried (`ObjectiveSpec.passengersRequired`), loss = a platform
   over `fail.maxStationQueue` (against the `peakStationQueue` high-water

@@ -1,65 +1,90 @@
+import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TileCell } from "@/tiles/model";
-import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { TestScenario, mkLineTrain } from "@/levels/test/scenario";
 
 const town = (): TileCell => ({ connections: [], terrain: "urban" });
+const stationEW = (): TileCell => ({
+  connections: [[Position.Left, Position.Right]],
+  role: "station",
+});
+const stationNS = (): TileCell => ({
+  connections: [[Position.Top, Position.Bottom]],
+  role: "station",
+});
 
-// THE NETWORK MODE in one board: a two-station line through a town, with a
-// shuttle that has to keep both platforms clear. The crowds build from the
-// terrain (the houses either side of each station), the HUD counts people
-// carried rather than trains parked, and letting a platform overflow ends the
-// run — which is the whole mode in one screen.
+// THE NETWORK MODE: a RING through four town stations, served by one train
+// that drives itself.
 //
-// BALANCED AGAINST ONE TRAIN, deliberately. The line is single track, so a
-// second shuttle would meet the first head-on and deadlock — there is no
-// passing loop here. That makes the board's capacity a fixed number (a
-// four-wagon train, so 24 seats a round trip) and the towns are sized to sit
-// just under it: comfortable if you keep the shuttle moving, lost if you leave
-// it standing. The first cut of this board paired one train with two full-size
-// towns and was unwinnable in 19 seconds.
+// The shape is the point. There is exactly ONE depot, and it is not a
+// destination — it is where the train was ordered from (Transport Fever's
+// idea). The train leaves it once, joins the ring, and then runs the line for
+// ever: no colour matching, no "everyone home", no second depot to aim at. A
+// ring needs no turn-back at all, so the board is track, platforms and the
+// towns that fill them.
+//
+// The line is authored here as a list of stops; the sim plans the route to each
+// one in turn (sim/railRouter.ts), which is the same thing an "assign this
+// train to this line" UI will do at run time.
+//
+// The towns are sized against ONE train, and the arithmetic that matters is
+// not capacity — a 24-seat train clears any of these platforms in one call —
+// but LAP TIME: a station is served once a lap, so its crowd peaks at roughly
+// (arrival rate x lap time). A ring of four stops takes ~45s, so a station
+// beside four town tiles peaks around eight or nine waiting. Ring the East
+// station with six and it tops out at the overflow limit with no margin,
+// which is how the first cut of this board was built.
 export const networkmode: TestScenario = {
   id: "networkmode",
   name: "Network mode",
   description:
-    "One shuttle, two town stations: carry the people before a platform overflows.",
+    "One train, one depot, a ring of four town stations — keep the platforms clear.",
   modeId: "network",
   level: {
-    // Houses around station A (2,1)…
-    "1,0": town(),
+    // --- the ring -----------------------------------------------------------
+    "1,1": expandKind("curve", 1), // ┌
+    "2,1": stationEW(), // North station
+    "3,1": expandKind("straight", 1),
+    "4,1": expandKind("curve", 2), // ┐
+
+    "1,2": stationNS(), // West station
+    "4,2": stationNS(), // East station
+
+    // Where the depot spur meets the ring: a T, so a train can pull out of the
+    // shed and turn either way onto the line.
+    "1,3": {
+      connections: [
+        [Position.Top, Position.Bottom], // the ring, running north-south
+        [Position.Left, Position.Top], // out of the shed, northbound
+        [Position.Left, Position.Bottom], // out of the shed, southbound
+      ],
+    },
+    "4,3": expandKind("straight", 0),
+
+    "1,4": expandKind("curve", 0), // └
+    "2,4": stationEW(), // South station
+    "3,4": expandKind("straight", 1),
+    "4,4": expandKind("curve", 3), // ┘
+
+    // --- the depot: a spur off the ring, and the only one on the board ------
+    "0,3": expandKind("depot", 1),
+
+    // --- the towns the passengers come from ---------------------------------
     "2,0": town(),
     "3,0": town(),
-    "1,2": town(),
-    "2,2": town(),
-    // …and around station B (5,1).
-    "4,0": town(),
-    "5,0": town(),
+    "0,1": town(),
+    "0,2": town(),
     "5,2": town(),
-    "6,2": town(),
-    // The line.
-    "0,1": expandKind("depot", 1),
-    "1,1": expandKind("straight", 1),
-    "2,1": expandKind("station", 1),
-    "3,1": expandKind("straight", 1),
-    "4,1": expandKind("straight", 1),
-    "5,1": expandKind("station", 1),
-    "6,1": expandKind("straight", 1),
-    "7,1": expandKind("depot", 3),
+    "2,5": town(),
+    "3,5": town(),
   },
   trains: {
-    shuttle: mkTrain("shuttle", 0, 1, "people", 4, "7,1"),
+    // Ordered at the depot, then in service on the ring for ever.
+    circle: mkLineTrain("circle", 0, 3, "people", 4, ["2,1", "4,2", "2,4", "1,2"]),
   },
-  // NEITHER depot matches the shuttle, and that is the point: a train that
-  // matches its destination PARKS there, which would end the service after one
-  // trip. A mismatch bounces it back out (sim: bounceOutOfDepot), so the two
-  // depots act as the turn-backs of a shuttle that runs all day — which is what
-  // a network mode needs and what a puzzle mode's "everyone home" never wanted.
   colors: {
-    depotColors: {
-      "0,1": "blue",
-      "7,1": "red",
-    },
-    trainColors: {
-      shuttle: "green",
-    },
+    depotColors: { "0,3": "blue" },
+    trainColors: { circle: "green" },
   },
+  size: { cols: 6, rows: 6 },
 };

@@ -22,6 +22,10 @@ export interface TrainObject extends Coordinates {
   // Time Attack: when set (>0), this train is injected by the mode's spawner at
   // this sim-time instead of being present from the start (a predefined schedule).
   spawnAtSec?: number;
+  // The LINE this train serves (network mode): station tile ids, in order,
+  // cycled for ever. Unlike `routeDestinations` — metadata the sim never reads
+  // — a line IS read by the sim: the train routes itself from stop to stop.
+  line?: string[];
 }
 
 export interface RouteDestinations {

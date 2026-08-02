@@ -180,7 +180,32 @@ shuttle's round trip (a busy station turns out one passenger every 4s), and
 `tests/unit/modes/network.spec.ts` drives the real board headlessly to prove it
 stays winnable — the balance is a test, not a hope.
 
-Still open: destination-typed passengers (ride A→B rather than one hop),
+### Phase 6 — LINES: the train drives itself — **SHIPPED 2026-08-02**
+
+The depot stops being a destination. In this mode it is only where a train is
+ordered from and stabled — trains enter and leave the game there, colour means
+nothing, and a train in service never terminates at one (a depot it reaches is
+a turn-back). What a train follows instead is a **line**: an ordered list of
+station stops, cycled for ever.
+
+- `sim/railRouter.ts` plans the leg to the next stop — BFS over
+  `(tile, entryPort)`, the editor's graph and the road layer's output shape.
+- The plan enters the sim through the existing `SwitchResolver` seam, so a
+  routed train obeys every signal, reservation and stop line exactly as a
+  hand-switched one. No plan → the old behaviour, untouched.
+- `sim.assignLine(id, stops)` is the run-time verb (`[]` retires the train) —
+  the API an "assign this train to this line" UI will call.
+- Boards are authored as a **ring** (one depot, no turn-back, each station once
+  a lap) or a **there-and-back shuttle** (a turn-back at each end, intermediate
+  stations served twice a round trip). `railRing()` + `mkLineTrain()` author
+  both; every station test world was rebuilt on this shape.
+
+**Still to build for the Transport-Fever loop proper:** the interactive layer —
+buying a train at the depot, drawing a line by clicking stations, and showing a
+train's line on the board. The engine verb (`assignLine`) and the routing are
+in; what is missing is the UI that calls them, which is the next slice.
+
+Still open beyond that: destination-typed passengers (ride A→B rather than one hop),
 buses as carriers rather than feeders, and rising demand over time.
 
 #### The original sketch (for reference)

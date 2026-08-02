@@ -72,6 +72,11 @@ export interface TrainDef {
   // mode's spawner at this sim-time, departing its depot then (Time Attack's
   // predefined schedule). Omitted / 0 → present from the start, as before.
   spawnAtSec?: number;
+  // The LINE this train serves (network mode): station tile ids, in order,
+  // cycled forever. Unlike `destinations` — which is metadata the sim never
+  // reads — a line IS read by the sim: the train routes itself to each stop in
+  // turn. Absent = a classic train that follows the points.
+  line?: string[];
 }
 
 const ALL_ARMS = [
@@ -665,6 +670,10 @@ export function createGame(
       color: trainColors[def.id],
       type: def.type,
       wagonCount: def.wagonIds.length,
+      // In service on a line (network mode): the train drives itself between
+      // these stops instead of following the points. Absent = the classic
+      // train, unchanged.
+      ...(def.line?.length ? { line: def.line } : {}),
       // Real sprite lengths (in tiles) so the sim spaces units to fit them.
       unitLengths: unitLengths(def.type, def.wagonIds.length, tileSize),
       coupling: couplingTiles(tileSize),

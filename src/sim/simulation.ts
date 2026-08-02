@@ -1,6 +1,7 @@
-import { Coordinates, Position } from "@/types";
+import { ActiveIntersection, Coordinates, Position } from "@/types";
 import {
   Level,
+  armExit,
   claimKey,
   claimKeysOf,
   heightOf,
@@ -14,6 +15,7 @@ import {
   traverse,
   routeToNextSignal,
 } from "./network";
+import { RailPlan, planRailRoute } from "./railRouter";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { gradeSpeedFactor, trainDynamics } from "./physics";
@@ -43,6 +45,8 @@ export interface TrainInit {
   unitLengths?: number[];
   // Gap between coupled units, in tiles. Defaults to DEFAULT_COUPLING.
   coupling?: number;
+  // The station tile ids this train serves, in order (see SimTrain.line).
+  line?: string[];
   // Passenger seats. Defaults to PASSENGERS_PER_WAGON per wagon for "people"
   // trains and 0 for "fraight" — a goods train calls at stations but boards
   // nobody (typed cargo is a later phase).
@@ -121,6 +125,17 @@ export interface SimTrain {
   // model — whoever is aboard alights at the next call.
   capacity: number;
   passengers: number;
+  // LINE (the network mode): the station tile ids this train serves, in order,
+  // cycling forever. A train with a line drives ITSELF — it plans a route to
+  // its next stop and prefers that route at every tile boundary, instead of
+  // going wherever the points happen to be set. Absent = the classic train,
+  // which follows the switches exactly as before.
+  line?: string[];
+  // Which stop of `line` the train is currently heading for.
+  lineIndex: number;
+  // The route being driven right now (this leg only). Recomputed at every call,
+  // so a level edited mid-run is routed over on the very next leg.
+  plan?: RailPlan;
 }
 
 export interface ArrivedEvent {
@@ -302,6 +317,15 @@ export interface Simulation {
   // from the player deliberately holding a signal, which look identical from
   // outside — both are trains standing still.
   trainBlock(id: string): Readonly<BlockInfo> | undefined;
+  // The stops this train serves, in order (empty when it has no line).
+  trainLine(id: string): string[];
+  // The stop it is heading for right now, or undefined without a line.
+  trainNextStop(id: string): string | undefined;
+  // Put a train into service on a line (or take it out again with []). The
+  // route to the first stop is planned immediately, so the train turns toward
+  // it on the next tick — this is the verb a "assign train to line" UI calls.
+  // Returns false for an unknown train.
+  assignLine(id: string, stops: string[]): boolean;
   // Passengers waiting on the platform at a station tile (0 for any other id).
   stationQueue(tileId: string): number;
   // Inject passengers ONTO a station's platform outside the schedule — the
@@ -413,6 +437,64 @@ export function createSimulation(config: SimConfig): Simulation {
     }
   }
 
+  // --- Lines: a train that drives itself ---------------------------------------
+  //
+  // A planned route names an EXIT PORT; the sim's one seam for "which way at
+  // this tile" is a SwitchResolver, which names an ARM. Translating between
+  // them here means the route flows through `traverse`/`resolveExitPort`
+  // untouched — every existing rule (reservation, occupancy, signals, stop
+  // lines) applies to a routed train exactly as to a hand-switched one.
+  const ARMS: ActiveIntersection[] = [
+    ActiveIntersection.Left,
+    ActiveIntersection.Straight,
+    ActiveIntersection.Right,
+  ];
+  function armForExit(entry: Port, exit: Port): ActiveIntersection | undefined {
+    return ARMS.find(arm => armExit(entry, arm) === exit);
+  }
+
+  // The resolver a given train steers by: its own route where the route has an
+  // opinion, the board's points everywhere else. A train with no line is
+  // byte-for-byte the train this sim always had.
+  function switchOf(train: SimTrain): SwitchResolver {
+    if (!train.plan) return getSwitch;
+    return (coordId, entryPort) => {
+      const exit = train.plan?.exitAt.get(`${coordId}:${entryPort}`);
+      if (exit === undefined) return getSwitch(coordId, entryPort);
+      return armForExit(entryPort, exit) ?? getSwitch(coordId, entryPort);
+    };
+  }
+
+  // The stop this train is heading for, or undefined when it has no line.
+  function currentStop(train: SimTrain): string | undefined {
+    if (!train.line?.length) return undefined;
+    return train.line[train.lineIndex % train.line.length];
+  }
+
+  // Plan the leg to the current stop from where the head is now. Called on
+  // departure and after every call, so the route is always derived from the
+  // live level — track laid mid-run is used on the next leg.
+  function planLeg(train: SimTrain): void {
+    const stop = currentStop(train);
+    if (!stop) {
+      train.plan = undefined;
+      return;
+    }
+    const head = train.path[train.headIndex];
+    train.plan =
+      planRailRoute(level, { coord: head.coord, entryPort: head.entryPort }, [stop]) ??
+      undefined;
+  }
+
+  // Move to the next stop on the line and plan the leg to it. A line is a
+  // CYCLE: past the last stop it wraps to the first, which is what makes a
+  // two-stop line a shuttle and a multi-stop line a circular service.
+  function advanceLine(train: SimTrain): void {
+    if (!train.line?.length) return;
+    train.lineIndex = (train.lineIndex + 1) % train.line.length;
+    planLeg(train);
+  }
+
   // True when this train still owes a stop at its current (station) segment:
   // the head is on a station tile it has not yet dwelled at this pass.
   function stationStopPending(train: SimTrain): boolean {
@@ -469,12 +551,19 @@ export function createSimulation(config: SimConfig): Simulation {
       dwelledAtIndex: -1,
       capacity,
       passengers: 0,
+      ...(init.line?.length ? { line: [...init.line] } : {}),
+      lineIndex: 0,
     };
   }
 
   const trains: Record<string, SimTrain> = {};
   for (const init of config.trains) {
     trains[init.id] = buildTrain(init);
+  }
+  // Trains on a line set off toward their first stop. Done after the roster is
+  // built so a plan is always derived from the finished level.
+  for (const train of Object.values(trains)) {
+    if (train.line?.length) planLeg(train);
   }
 
   // The set of CLAIM KEYS a train's body currently covers (head back to tail).
@@ -538,7 +627,7 @@ export function createSimulation(config: SimConfig): Simulation {
       const head = train.path[train.headIndex];
       for (const tid of routeToNextSignal(
         level,
-        getSwitch,
+        switchOf(train),
         isBoundary,
         head.coord,
         head.entryPort
@@ -575,7 +664,7 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // Restart a train at a depot, heading back out the way it came in.
   function bounceOutOfDepot(train: SimTrain, depotCoord: Coordinates): void {
-    const outer = resolveExitPort(level, getSwitch, depotCoord, Position.Center);
+    const outer = resolveExitPort(level, switchOf(train), depotCoord, Position.Center);
     train.path = [
       { coord: depotCoord, entryPort: Position.Center, exitPort: outer },
     ];
@@ -586,6 +675,10 @@ export function createSimulation(config: SimConfig): Simulation {
     // The path restarted at index 0, so a stale dwell index must not alias a
     // future station segment that happens to land on the same number.
     train.dwelledAtIndex = -1;
+    // The old plan started from the far side of the depot; a train that has
+    // just turned round needs the route to its stop re-derived from here, or
+    // it would carry a plan whose tiles it will never enter again.
+    if (train.line?.length) planLeg(train);
   }
 
   // The other train responsible for a claim not being free for `selfId`: its
@@ -645,7 +738,7 @@ export function createSimulation(config: SimConfig): Simulation {
     train: SimTrain,
     head: { coord: Coordinates; entryPort: Port }
   ): boolean {
-    const t = traverse(level, getSwitch, head.coord, head.entryPort);
+    const t = traverse(level, switchOf(train), head.coord, head.entryPort);
     if (!t.next) return false; // dead end, map edge, or depot arrival
     const headTileId = getCoordinatesId(head.coord);
     const nextTileId = getCoordinatesId(t.next.coord);
@@ -666,7 +759,7 @@ export function createSimulation(config: SimConfig): Simulation {
     if (reservations.get(nextKey) !== train.id) {
       const block = routeToNextSignal(
         level,
-        getSwitch,
+        switchOf(train),
         isBoundary,
         head.coord,
         head.entryPort
@@ -709,7 +802,7 @@ export function createSimulation(config: SimConfig): Simulation {
     if (reservations.get(nextKey) !== train.id) {
       const block = routeToNextSignal(
         level,
-        getSwitch,
+        switchOf(train),
         isBoundary,
         head.coord,
         head.entryPort
@@ -750,7 +843,7 @@ export function createSimulation(config: SimConfig): Simulation {
     ];
     while (dist < train.lookAhead) {
       if (!mayCross(train, head)) break;
-      const t = traverse(level, getSwitch, head.coord, head.entryPort);
+      const t = traverse(level, switchOf(train), head.coord, head.entryPort);
       if (!t.next) break; // defensive: mayCross already returns false here
       head = { coord: t.next.coord, entryPort: t.next.entryPort };
       // A station ahead ends the clear run at its platform, part-way into that
@@ -898,6 +991,12 @@ export function createSimulation(config: SimConfig): Simulation {
       }
       train.dwellRemaining =
         STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
+      // On a line: if this is the stop we were heading for, the leg is done —
+      // move to the next stop and plan the route to it while we stand here.
+      // (Any OTHER station we happen to pass is still served: the train calls,
+      // works the platform, and carries on to the stop it is actually bound
+      // for, which is what a real service does at an intermediate station.)
+      if (currentStop(train) === tileId) advanceLine(train);
       events.push({ type: "dwell", trainId: train.id, tileId, boarded, alighted });
       return;
     }
@@ -907,13 +1006,18 @@ export function createSimulation(config: SimConfig): Simulation {
     let blockInfo: BlockInfo | null = null;
     while (train.headProgress >= 1) {
       const head = train.path[train.headIndex];
-      const t = traverse(level, getSwitch, head.coord, head.entryPort);
+      const t = traverse(level, switchOf(train), head.coord, head.entryPort);
       if (!t.next) {
         if (t.exitPort === Position.Center) {
           // Arrived inside a depot. A matched arrival ends every rider's trip;
           // a bounce keeps them aboard for the ride back.
           const tileId = getCoordinatesId(head.coord);
-          const matched = depotColors[tileId] === train.color;
+          // A train IN SERVICE never terminates at a depot, whatever colour it
+          // is: on a line the depot is where trains are ordered and stabled,
+          // not a destination, so reaching one is a turn-back. (Transport
+          // Fever's shape, and the reason a network board needs only ONE
+          // depot.) Without a line, the classic colour-match rule stands.
+          const matched = !train.line?.length && depotColors[tileId] === train.color;
           const alighted = matched ? train.passengers : 0;
           if (alighted > 0) {
             train.passengers = 0;
@@ -962,7 +1066,7 @@ export function createSimulation(config: SimConfig): Simulation {
       if (reservations.get(nextKey) !== train.id) {
         const block = routeToNextSignal(
           level,
-          getSwitch,
+          switchOf(train),
           isBoundary,
           head.coord,
           head.entryPort
@@ -990,7 +1094,7 @@ export function createSimulation(config: SimConfig): Simulation {
 
       const nextExit = resolveExitPort(
         level,
-        getSwitch,
+        switchOf(train),
         t.next.coord,
         t.next.entryPort
       );
@@ -1105,6 +1209,27 @@ export function createSimulation(config: SimConfig): Simulation {
     trainBlock(id: string) {
       return blockStates.get(id);
     },
+    trainLine(id: string) {
+      return trains[id]?.line ? [...trains[id].line!] : [];
+    },
+    trainNextStop(id: string) {
+      const train = trains[id];
+      return train ? currentStop(train) : undefined;
+    },
+    assignLine(id: string, stops: string[]) {
+      const train = trains[id];
+      if (!train) return false;
+      if (stops.length === 0) {
+        delete train.line;
+        train.plan = undefined;
+        train.lineIndex = 0;
+        return true;
+      }
+      train.line = [...stops];
+      train.lineIndex = 0;
+      planLeg(train);
+      return true;
+    },
     stationQueue(tileId: string) {
       return queues.get(tileId) ?? 0;
     },
@@ -1151,7 +1276,7 @@ export function createSimulation(config: SimConfig): Simulation {
         // Ask the LEVEL, not the cached exit — the cache is the thing a rescue
         // is about to make stale, and a train held at a red signal (which has
         // somewhere to go) must not be mistaken for one that has nowhere.
-        const t = traverse(level, getSwitch, head.coord, head.entryPort);
+        const t = traverse(level, switchOf(train), head.coord, head.entryPort);
         if (t.next === null && t.exitPort !== Position.Center) out.push(id);
       }
       return out;
@@ -1164,7 +1289,7 @@ export function createSimulation(config: SimConfig): Simulation {
       // the train visibly travelled along, and rewriting it would teleport the
       // body onto a different curve.
       if (head.exitPort !== null) return;
-      head.exitPort = resolveExitPort(level, getSwitch, head.coord, head.entryPort);
+      head.exitPort = resolveExitPort(level, switchOf(train), head.coord, head.entryPort);
     },
     isHeld(tileId: string, exitPort: Port) {
       return manualHold.has(`${tileId}:${exitPort}`);

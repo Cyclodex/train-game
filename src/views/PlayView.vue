@@ -617,6 +617,8 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
     destinations: (t.routeDestinations ?? []).map(d => d.to),
+    // In service on a line (network mode) — the sim routes it stop to stop.
+    ...(t.line?.length ? { line: t.line } : {}),
     spawnAtSec: t.spawnAtSec,
   }));
 }
