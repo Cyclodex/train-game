@@ -9,6 +9,7 @@ import {
 } from "@/sim/objectives";
 import { EconomySpec, FareSpec } from "@/sim/economy";
 import { CalendarSetup } from "@/sim/calendar";
+import { CitizenTuning } from "@/sim/citizens";
 
 // Which existing player controls a mode enables. The sim already implements all
 // of these; a mode only gates whether the view exposes them.
@@ -53,6 +54,22 @@ export interface EconomySetup extends EconomySpec {
   calendar?: CalendarSetup;
 }
 
+// The citizen layer, handed to game.ts by setup(). Omitted → no cities, no
+// people, and the station spawn schedule keeps working exactly as before.
+//
+// Present → the board's towns are populated with citizens who live, work,
+// choose how to travel and judge the result. The synthetic per-station demand
+// (`stationDemandOf`) is turned OFF in that case, because the citizens ARE the
+// demand and two sources would double-count the platform.
+export interface CitizenSetup {
+  // Overrides on the citizen sim's tuning (day length, speeds, patience). The
+  // day length is the genre dial — see sim/citizens.ts DEFAULT_TUNING.
+  tuning?: Partial<CitizenTuning>;
+  // Seed for the population: who lives where, who owns a car, who works across
+  // the map. Defaults to the game's colour seed so a board is reproducible.
+  seed?: number;
+}
+
 // What a mode hands back from setup(): the board, trains, optional pinned colours,
 // and the objective spec the tracker will run.
 export interface ModeSetup {
@@ -62,6 +79,7 @@ export interface ModeSetup {
   colors?: ColorAssignment;
   objective: ObjectiveSpec;
   economy?: EconomySetup;
+  citizens?: CitizenSetup;
 }
 
 // Inputs available to setup(): the board the view currently has (default board,

@@ -65,6 +65,7 @@
       @pointercancel="onViewportPointerUp"
       @wheel.prevent="onViewportWheel"
     >
+    <CityPanel />
     <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
@@ -94,9 +95,14 @@
         :style="{ width: config.tileSize + 'px', height: config.tileSize + 'px' }"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Driveways and pavements, above EVERY tile's ground patch so a
+             neighbour's jittered patch cannot chew a notch out of them at the
+             seam. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="paving" />
         <!-- Standing scenery on its own layer above every patch fill, so a
              canopy overhanging the seam isn't cut by the next tile. -->
         <TileGround :coord-id="cell.key" layer="scatter" />
+        <TileGround :coord-id="cell.key" layer="markings" />
         <Tile
           v-if="cell.tile"
           :tile="cell.tile"
@@ -127,6 +133,15 @@
           :style="{ transform: `translate(-50%, -50%) rotate(${-car.angle}deg)` }"
         >{{ car.id }}</span>
       </div>
+      <!-- People on the pavement. Absolutely positioned like the road cars,
+           so they are not grid ITEMS and cannot displace a tile (KNOWHOW →
+           RENDER LAYOUT). Empty on every board without a citizen layer. -->
+      <div
+        v-for="p in pedestrians"
+        :key="p.id"
+        :class="['pedestrian', { 'pedestrian--waiting': p.waiting }]"
+        :style="{ transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)` }"
+      />
       <CarRouteOverlay
         v-if="config.debug && carRoute"
         :segments="carRoute.segments"
@@ -186,6 +201,7 @@ import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import CityPanel from "@/components/CityPanel.vue";
 import { type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
@@ -207,7 +223,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { Crossing, FarePin } })
+@Component({ components: { Crossing, FarePin, CityPanel } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;
@@ -372,6 +388,13 @@ class TestStage extends Vue {
 
   // Live road-traffic cars, sampled to world positions by the game each frame —
   // the same source PlayView renders, so the /test world shows car spacing too.
+  // People walking on the pavements (Citizens mode). A GETTER onto the
+  // game's reactive array, exactly like roadCars — the array is written in
+  // place by game.advance(), so Vue re-renders without a new binding.
+  get pedestrians() {
+    return this.game.pedestrians;
+  }
+
   get roadCars() {
     return this.game.roadCars;
   }
@@ -591,6 +614,29 @@ export default toNative(TestStage);
     outline: 1px solid red;
   }
 }
+.pedestrian {
+  position: absolute;
+  z-index: 6; // same band as the cars: on the pavement, beside the road
+  top: 0;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  // Warm and pale so a figure reads against tarmac, pavement and grass
+  // alike, with a dark ring so it never dissolves into the light stone.
+  background: #f6e3c8;
+  border: 1.5px solid rgba(40, 32, 24, 0.65);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  will-change: transform;
+}
+
+// Held at a kerb, waiting for the road to clear. Dimmed and ringed amber so a
+// queue at a crossing reads as a queue rather than as people standing about.
+.pedestrian--waiting {
+  border-color: rgba(255, 176, 32, 0.95);
+  opacity: 0.8;
+}
+
 .road-car {
   position: absolute;
   z-index: 6; // above the road surface and trains; crossing booms sit above

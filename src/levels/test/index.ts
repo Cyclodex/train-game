@@ -7,6 +7,11 @@ import { boarding } from "@/levels/test/scenarios/boarding";
 import { catchment } from "@/levels/test/scenarios/catchment";
 import { parkandride } from "@/levels/test/scenarios/parkandride";
 import { busfeeder } from "@/levels/test/scenarios/busfeeder";
+import { threecities } from "@/levels/test/scenarios/threecities";
+import { citizencars } from "@/levels/test/scenarios/citizencars";
+import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
+import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
+import { citizenrail } from "@/levels/test/scenarios/citizenrail";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -151,7 +156,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, boarding, catchment, parkandride, busfeeder] },
+      { id: "stations", label: "Stations", scenarios: [station, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail] },
       {
         id: "crossings",
         label: "Crossings",
