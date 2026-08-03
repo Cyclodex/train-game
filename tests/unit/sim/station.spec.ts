@@ -272,10 +272,14 @@ describe("station passengers (phase 2)", () => {
 describe("addStationPassengers (park & ride injection)", () => {
   it("adds to a station's queue up to its cap and refuses non-stations", () => {
     const sim = createSimulation({
+      // TWO stations: a passenger asks for somewhere, so a board with only
+      // one platform is a board nobody travels from.
       level: {
         "0,0": expandKind("depot", 1),
         "1,0": expandKind("station", 1),
-        "2,0": expandKind("depot", 3),
+        "2,0": expandKind("straight", 1),
+        "3,0": expandKind("station", 1),
+        "4,0": expandKind("depot", 3),
       },
       trains: [],
       stationDemand: { "1,0": { intervalSec: 1000, max: 3, initial: 0 } },
@@ -292,10 +296,136 @@ describe("addStationPassengers (park & ride injection)", () => {
 
   it("uses the hard cap for a station with no schedule of its own", () => {
     const sim = createSimulation({
-      level: { "1,0": expandKind("station", 1) },
+      level: {
+        "1,0": expandKind("station", 1),
+        "2,0": expandKind("straight", 1),
+        "3,0": expandKind("station", 1),
+      },
       trains: [],
     });
     expect(sim.addStationPassengers("1,0", 99)).toBe(STATION_QUEUE_HARD_CAP);
     expect(sim.stationQueue("1,0")).toBe(STATION_QUEUE_HARD_CAP);
+  });
+});
+
+// PHASE 6: passengers ask for a DESTINATION. This is what makes the shape of a
+// line matter — before it, any train going anywhere satisfied everyone.
+describe("station passengers with destinations", () => {
+  // A ring with three platforms, so a line can serve some and miss others.
+  //   1,0 ── 2,0(A) ── 3,0
+  //    │                │
+  //   1,1              3,1(B)
+  //    │                │
+  //   1,2 ── 2,2(C) ── 3,2
+  function ring(): Level {
+    const stationEW = () => ({
+      connections: [[Position.Left, Position.Right]] as [Position, Position][],
+      role: "station" as const,
+    });
+    return {
+      "1,0": expandKind("curve", 1),
+      "2,0": stationEW(),
+      "3,0": expandKind("curve", 2),
+      "1,1": expandKind("straight", 0),
+      "3,1": {
+        connections: [[Position.Top, Position.Bottom]] as [Position, Position][],
+        role: "station" as const,
+      },
+      "1,2": expandKind("curve", 0),
+      "2,2": stationEW(),
+      "3,2": expandKind("curve", 3),
+    };
+  }
+
+  const riderTrain = (line: string[], capacity = 10) => ({
+    ...TRAIN,
+    coord: { x: 2, y: 2 },
+    entryPort: Position.Left,
+    wagonCount: 2,
+    capacity,
+    line,
+  });
+
+  it("only lets people on a train whose line calls where they are going", () => {
+    const sim = createSimulation({
+      level: ring(),
+      // A line that serves C and A — but NOT B.
+      trains: [riderTrain(["2,2", "2,0"])],
+      // Everyone at C is sent round the ring in turn: A, B, A, B…
+      stationDemand: { "2,2": { intervalSec: 100, max: 10, initial: 4 } },
+    });
+    // Of the four waiting, the ones bound for B must be left behind.
+    const before = sim.stationWaiting("2,2");
+    expect(before).toContain("2,0");
+    expect(before).toContain("3,1");
+
+    run(sim, 40);
+    const left = sim.stationWaiting("2,2");
+    // Nobody bound for A is still standing there…
+    expect(left).not.toContain("2,0");
+    // …and everybody bound for B is, because no service takes them.
+    expect(left.filter(d => d === "3,1").length).toBe(
+      before.filter(d => d === "3,1").length
+    );
+  });
+
+  it("carries a rider PAST an intermediate stop to the one they asked for", () => {
+    const sim = createSimulation({
+      level: ring(),
+      // The line calls at C, then A, then B: someone at C bound for B must
+      // stay aboard through the call at A.
+      trains: [riderTrain(["2,2", "2,0", "3,1"])],
+      stationDemand: { "2,2": { intervalSec: 100, max: 10, initial: 4 } },
+    });
+    const events: SimEvent[] = [];
+    for (let t = 0; t < 60; t += 0.05) events.push(...sim.step(0.05));
+
+    const calls = events.filter(
+      (e): e is Extract<SimEvent, { type: "dwell" }> => e.type === "dwell"
+    );
+    const atA = calls.find(c => c.tileId === "2,0");
+    const atB = calls.find(c => c.tileId === "3,1");
+    // Someone got off at each — they were carried to what they asked for, not
+    // dumped at the first stop.
+    expect(atA?.alighted ?? 0).toBeGreaterThan(0);
+    expect(atB?.alighted ?? 0).toBeGreaterThan(0);
+    // And the platform they left is empty of both destinations by the end.
+    expect(sim.stationWaiting("2,2")).toEqual([]);
+  });
+
+  it("never sends anyone somewhere the railway cannot reach", () => {
+    const level: Level = {
+      ...ring(),
+      // An island platform, joined to nothing.
+      "9,9": {
+        connections: [[Position.Left, Position.Right]],
+        role: "station",
+      },
+    };
+    const sim = createSimulation({
+      level,
+      trains: [],
+      stationDemand: { "2,2": { intervalSec: 1, max: 20, initial: 0 } },
+    });
+    run(sim, 40);
+    expect(sim.stationQueue("2,2")).toBeGreaterThan(0);
+    expect(sim.stationWaiting("2,2")).not.toContain("9,9");
+  });
+
+  it("a train with NO line still runs the old one-hop service", () => {
+    const sim = createSimulation({
+      level: ring(),
+      trains: [{ ...riderTrain([]), line: undefined }],
+      stationDemand: { "2,2": { intervalSec: 100, max: 10, initial: 4 } },
+    });
+    const events: SimEvent[] = [];
+    for (let t = 0; t < 60; t += 0.05) events.push(...sim.step(0.05));
+    const calls = events.filter(
+      (e): e is Extract<SimEvent, { type: "dwell" }> => e.type === "dwell"
+    );
+    // It took people at C…
+    expect(calls[0]?.boarded ?? 0).toBeGreaterThan(0);
+    // …and set them all down at the very next call, wherever that was.
+    expect(calls[1]?.alighted ?? 0).toBe(calls[0]?.boarded ?? 0);
   });
 });

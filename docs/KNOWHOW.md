@@ -500,6 +500,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## THE LINE VIEW — names, call order, the route on the metals (2026-08-03)
+- `tiles/stationNames.ts`: a platform has a NAME (`TileCell.stationName`), and
+  a board that authored none gets a stable LETTER in reading order. A line has
+  to read as places — "Nordstadt → Ostmarkt" — or the panel is a list of
+  coordinates nobody can match to the board.
+- The name is an HTML plate, NOT SVG text: a fixed shield cannot size itself to
+  a word, and the first cut crushed "Nordstadt" into 18px.
+- `game.lineOverlay` (set via `setLineOverlay(trainId | null)`) is what the
+  board draws while a line is edited: a big call-order badge per stop, a
+  hollow "+" on the stations you could still add, and the route along the
+  metals. It is ENGINE work — the route is planned with the same
+  `planRailRoute` the trains drive, so the picture cannot disagree with them.
+- The overlay stores the SEGMENTS driven per tile (`[entry, exit][]`), never
+  just tile ids: on a junction, tile-level lighting paints every arm — the
+  depot spur included — and the drawn line then shows a route the train never
+  takes. That was visible on the first screenshot and is now a test.
+- Route colour is deliberately FIXED amber, not the train's livery: only one
+  line is drawn at a time and "grey" is a legitimate livery that made the route
+  invisible against the ballast.
+- REACTIVITY TRAP, hit again: the panel read `sim.trainNextStop`/`isRetiring`
+  directly. The sim is `markRaw`, so Vue never re-ran those getters and the
+  "next stop" pip froze on whatever it showed first. Anything the view watches
+  must come from a reactive mirror refreshed in the frame loop
+  (`trainNextStops`, `retiringTrains`), never from the sim.
+
 ## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
 - The player's whole verb set in the network mode: `game.setLine(trainId,
   stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
@@ -531,6 +556,57 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - When checking occupancy from a TEST, ask `sim.occupiedBy()`, never
   `game.occupied`: the latter is the render mirror and is only refreshed inside
   the rAF frame, so it stays empty for ever headless.
+
+## PASSENGERS WITH DESTINATIONS (2026-08-03)
+- A queue is a LIST of destination tile ids now, not a count, and a train
+  carries a `manifest` (one entry per rider) instead of a number. That is the
+  whole change: everything else follows from it.
+- BOARDING: a rider only gets on when the train's LINE calls at where they are
+  going. Everyone else waits — which is the first time the SHAPE of a line
+  matters, and the reason the mode is about planning rather than throughput.
+  ALIGHTING: at their destination, not at the next stop.
+- A train with NO line (every classic board) still takes anyone and sets them
+  down at its next call — the old one-hop service, unchanged. Same for a
+  RETIRING train: its riders are better off on a platform than in a shed.
+- Destinations are drawn round-robin (a per-station cursor, never RNG) from the
+  stations REACHABLE BY RAIL — `reachableStations` floods the track graph. A
+  passenger for an island would be one nothing can ever clear, and the platform
+  cap would turn that into a slow, unavoidable loss.
+- Consequence worth knowing when authoring: on a board with ONE station nobody
+  travels at all, because there is nowhere to ask for. Both intermodal boards
+  (`parkandride`, `busfeeder`) needed a second platform for this reason.
+- The crowd is drawn from `game.stationWaiting` (tileId → destinations) with a
+  colour hashed from the destination id, so a queue nobody serves reads as one
+  colour piling up. `stationQueue` still returns the count.
+- The CITIZEN layer reaches a platform through the same door:
+  `transit.enqueue(stationId, n)` is `addStationPassengers`, and it returns what
+  it ACTUALLY queued — 0 means "platform full, keep waiting", which is how
+  `boardOrWait` in `sim/citizens.ts` knows to keep the clock running. Since
+  destinations came in, a station with nowhere reachable to go also returns 0,
+  so a citizen board needs TWO platforms or its people wait forever and the town
+  scores you for it (`threecities` has three). The two layers do not yet agree
+  on WHERE a citizen wanted to go — the sim picks the destination round-robin,
+  the citizen tracks their own — which is the seam the transfer work opens up.
+
+## WITHDRAWING A TRAIN (2026-08-03)
+- Two verbs, deliberately not one. `retireTrain` is a JOURNEY: the train drops
+  its line, takes no new passengers (`boarded` is forced to 0 while retiring),
+  routes to the NEAREST depot and leaves the sim on arrival — the depot-arrival
+  branch checks `retiring` before any colour rule. `removeTrain` (scrap) is
+  instant and unrealistic, which is why it is a separate call and, in the UI, a
+  shift-click.
+- `retireTrain` returns false when no depot is reachable; PlayView then scraps,
+  so the button never appears to do nothing.
+- A train still QUEUED in the shed has no journey to make: withdrawing it is
+  cancelling the order, handled in game.ts before the sim is asked.
+- Removal has to be undone in three places or something is left behind:
+  `dropTrain` in the sim (roster + reservations + blockStates), `forgetTrain`
+  in game.ts (trainDefs, unitIds, trainLines, the queues), and the BOARD, which
+  reads `game.removedTrains` — the view cannot know when a retiring train
+  finally arrives, so it filters on that list rather than being told.
+- `step()` walks a snapshot of the roster, so a train that retires mid-tick
+  leaves a stale id in it: both the advance and the reservation release guard
+  on `trains[id]` still existing.
 
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same

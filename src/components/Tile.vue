@@ -226,6 +226,24 @@
 
     <TileRail v-if="!isTunnel" :possible-routes="railRoutes" />
 
+    <!-- THE LINE ITSELF, drawn along the metals it actually runs over — the
+         route comes from the same planner the trains drive, so the picture
+         cannot disagree with where they will go. Only while a line is being
+         edited; it would be noise the rest of the time. -->
+    <svg
+      v-if="lineRoutePaths.length"
+      class="line-route-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <path
+        v-for="(d, i) in lineRoutePaths"
+        :key="'lr' + i"
+        :d="d"
+        class="line-route"
+        :style="{ stroke: lineRouteColour }"
+      />
+    </svg>
+
     <!-- Grade chevrons: where the line climbs into a HIGHER neighbour, two
          chevrons on the ballast point uphill — the classic map notation for a
          ramp, until painted hillsides arrive. -->
@@ -291,6 +309,20 @@
           :style="{ fill: c }"
         />
       </g>
+      <!-- LINE EDITING: this platform's place in the line being drawn, big
+           enough to read at a glance across the board (Transport Fever shows
+           the order the same way). A station that is NOT on the line shows a
+           hollow marker instead, so the ones you could still add are just as
+           visible as the ones you have. -->
+      <g v-if="lineBadge" class="station-order" :class="{ 'station-order--off': !lineBadge.on }">
+        <circle :cx="config.tileSize / 2" :cy="config.tileSize / 2" r="21" />
+        <text
+          :x="config.tileSize / 2"
+          :y="config.tileSize / 2 + 9"
+          text-anchor="middle"
+        >{{ lineBadge.label }}</text>
+      </g>
+
       <!-- Debug: the walking catchment — the reach whose town tiles set this
            station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
       <circle
@@ -302,6 +334,9 @@
       />
       <!-- The waiting crowd: one dot per passenger in the platform queue, lined
            up from the platform end so the queue visibly grows and drains. -->
+      <!-- One dot per waiting passenger, COLOURED BY WHERE THEY ARE GOING. A
+           queue that never moves is then one colour piling up, which names
+           the service the line is missing. -->
       <circle
         v-for="(p, ci) in stationCrowd"
         :key="'crowd' + ci"
@@ -309,8 +344,10 @@
         :cy="p.cy"
         r="4.5"
         class="station-passenger"
-        :class="{ 'station-passenger--alt': ci % 2 === 1 }"
-      />
+        :style="{ fill: p.fill }"
+      >
+        <title>{{ p.title }}</title>
+      </circle>
     </svg>
 
     <!-- Signals (straights only) -->
@@ -461,6 +498,11 @@
          is the one parking layer that lives outside the road SVG. -->
     <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="sign" />
 
+    <!-- The station's NAME. HTML rather than SVG text because a plate has to
+         size itself to a word — "Nordstadt" does not fit in a fixed shield,
+         which is what the first cut tried. -->
+    <div v-if="isStation" class="station-nameplate">{{ stationLabel }}</div>
+
     <!-- Car destination marker (debug): a car is currently heading to this tile. -->
     <div v-if="config.debug && carDestinationId" class="car-destination-marker">
       <span class="car-destination-label">→{{ carDestinationId }}</span>
@@ -549,6 +591,27 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
 import { WALK_RADIUS_TILES } from "@/tiles/catchment";
+
+// A stable colour per DESTINATION tile, so a waiting passenger's dot says
+// where they are going and the same platform is the same colour everywhere on
+// the board. Hashed from the coordinate rather than looked up, so it needs no
+// registry and never shifts when a station is added.
+const DEST_COLOURS = [
+  "#e2574c",
+  "#f0b429",
+  "#3fa796",
+  "#5b8def",
+  "#a05fd0",
+  "#6aa84f",
+];
+function destinationColour(tileId: string | undefined): string {
+  if (!tileId) return "#8a5a3b";
+  let hash = 0;
+  for (let i = 0; i < tileId.length; i++) {
+    hash = (hash * 31 + tileId.charCodeAt(i)) >>> 0;
+  }
+  return DEST_COLOURS[hash % DEST_COLOURS.length];
+}
 
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
@@ -697,6 +760,35 @@ class Tile extends Vue {
     return { x: size * 0.1, y: size * 0.1 };
   }
   catchmentRadiusTiles = WALK_RADIUS_TILES;
+  // What to call this platform.
+  get stationLabel(): string {
+    return this.game.stationLabels?.[this.coordId] ?? "S";
+  }
+  // While a line is being drawn: this station's place in it, or a hollow
+  // marker when it is one you could still add.
+  get lineBadge(): { label: string; on: boolean; colour: string } | null {
+    const overlay = this.game.lineOverlay;
+    if (!this.isStation || !overlay?.trainId) return null;
+    const at = overlay.order[this.coordId];
+    return at
+      ? { label: String(at), on: true, colour: overlay.colour }
+      : { label: "+", on: false, colour: overlay.colour };
+  }
+  // The rail paths on THIS tile that the line being edited runs over — the
+  // SEGMENTS a train drives, not every connection the tile happens to carry.
+  // On a junction the difference is the whole point: the depot spur is a
+  // connection here and the line never takes it.
+  get lineRoutePaths(): string[] {
+    const overlay = this.game.lineOverlay;
+    const segments = overlay?.trainId ? overlay.path[this.coordId] : undefined;
+    if (!segments?.length) return [];
+    const size = this.config.tileSize;
+    return segments.map(([a, b]) => segmentPathD(a, b, size));
+  }
+  // Deliberately NOT the train's livery: only one line is drawn at a time, and
+  // a grey or white loco (both legitimate liveries) drew a route nobody could
+  // see against the ballast. One strong colour, the same as the badges.
+  lineRouteColour = "#f0b429";
   // The liveries of the services calling at this platform (network mode).
   get servingLines(): string[] {
     if (!this.isStation) return [];
@@ -706,21 +798,25 @@ class Tile extends Vue {
   // (the queue grows along the platform) with a small deterministic scatter
   // across its depth so it reads as people, not beads. The live count comes
   // from the game's reactive per-frame mirror of the sim queue.
-  get stationCrowd(): { cx: number; cy: number }[] {
+  get stationCrowd(): { cx: number; cy: number; fill: string; title: string }[] {
     if (!this.isStation) return [];
     const slabs = this.stationPlatforms;
     if (!slabs.length) return [];
+    const waiting = this.game.stationWaiting?.[this.coordId] ?? [];
     const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
     const s = slabs[0];
     const horizontal = s.w >= s.h;
-    const out: { cx: number; cy: number }[] = [];
+    const out: { cx: number; cy: number; fill: string; title: string }[] = [];
     for (let i = 0; i < count; i++) {
       const t = (i + 0.75) / 13; // fixed pitch from the platform end
       const scatter = (((i * 37) % 7) - 3) * (s.w >= s.h ? s.h : s.w) * 0.055;
+      const dest = waiting[i];
+      const fill = destinationColour(dest);
+      const title = dest ? `waiting for ${dest}` : "waiting";
       if (horizontal) {
-        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter });
+        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter, fill, title });
       } else {
-        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h });
+        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h, fill, title });
       }
     }
     return out;
@@ -2283,6 +2379,61 @@ export default toNative(Tile);
   fill: #8a5a3b; // warm coats against the pale paving
   stroke: #fff;
   stroke-width: 1.2;
+}
+.line-route-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 4; // over the rails, under the trains
+  pointer-events: none;
+}
+.line-route {
+  fill: none;
+  stroke-width: 13;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+/* The call-order badge: big, because it is read across the whole board. */
+.station-order circle {
+  fill: #f0b429;
+  stroke: #221803;
+  stroke-width: 3;
+}
+.station-order text {
+  fill: #221803;
+  font-family: sans-serif;
+  font-size: 22px;
+  font-weight: 800;
+}
+.station-order--off circle {
+  fill: rgba(20, 24, 30, 0.55);
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-dasharray: 5 4;
+}
+.station-order--off text {
+  fill: #fff;
+  font-size: 20px;
+}
+/* The name plate, above the platform and legible across the board. */
+.station-nameplate {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 96%;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(18, 22, 28, 0.82);
+  color: #f3f5f7;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 .station-line-pip {
   stroke: #fff;

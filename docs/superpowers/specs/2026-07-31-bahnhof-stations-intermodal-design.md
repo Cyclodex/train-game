@@ -223,7 +223,28 @@ The interactive layer, and with it the mode's whole verb set:
 Verified in a real browser end to end: 4 stations highlighted, a stop removed
 and re-appended, a train bought and immediately running the same line.
 
-Still open beyond that: destination-typed passengers (ride A→B rather than one hop),
+### Phase 8 — passengers with destinations — **SHIPPED 2026-08-03**
+
+The change D6 deferred, and the one that makes the network a network: a
+waiting passenger asks for a STATION, boards only a train whose line calls
+there, rides past intermediate stops, and gets off where they asked for.
+Before it, any train going anywhere satisfied everyone and the shape of a line
+was decoration.
+
+- Queues are lists of destinations; trains carry a manifest. Destinations are
+  round-robin (never RNG) over the stations REACHABLE BY RAIL, so nobody ever
+  asks for somewhere nothing can take them.
+- A train with no line keeps the old one-hop service exactly, so every classic
+  board is unchanged.
+- The platform crowd is coloured by destination — a queue nobody serves is one
+  colour piling up.
+- Authoring consequence: a ONE-station board has no journeys on it.
+
+Not modelled: TRANSFERS. A passenger only ever travels on a direct service, so
+two lines that meet do not yet hand passengers over. That is the next real
+step for this thread.
+
+Still open beyond that: buses as passenger CARRIERS rather than feeders,
 buses as carriers rather than feeders, and rising demand over time.
 
 #### The original sketch (for reference)

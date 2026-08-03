@@ -42,6 +42,8 @@ function describe(e: SimEvent): string {
     }
     case "departed":
       return `departed ${e.tileId}`;
+    case "retired":
+      return `stabled at ${e.tileId} — out of service`;
   }
 }
 
