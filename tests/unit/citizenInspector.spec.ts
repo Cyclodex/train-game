@@ -64,10 +64,15 @@ describe("the citizen inspector", () => {
     for (const p of plot?.residents ?? []) {
       expect(p.home === "2,1" || p.work === "2,1").toBe(true);
       expect(p.name.length).toBeGreaterThan(1);
-      // Their day is three fixed times, rolled once and never re-rolled.
-      expect(p.leavesAt).toMatch(/^\d\d:\d\d$/);
-      expect(p.returnsAt).toMatch(/^\d\d:\d\d$/);
-      expect(p.shopsAt).toMatch(/^\d\d:\d\d$/);
+      // Their day is a routine of fixed times, rolled once and never re-rolled.
+      // A list rather than three fields: how long it is depends on which life
+      // they were given (a tradesperson runs six errands, a worker three).
+      expect(p.stageLabel.length).toBeGreaterThan(2);
+      expect(p.schedule.length).toBeGreaterThanOrEqual(3);
+      for (const line of p.schedule) {
+        expect(line.at).toMatch(/^\d\d:\d\d$/);
+        expect(line.what.length).toBeGreaterThan(2);
+      }
     }
 
     // Nothing to inspect on empty grass, and nothing to inspect on a board with

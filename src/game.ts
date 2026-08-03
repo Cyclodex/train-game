@@ -16,14 +16,16 @@ import {
   BlockReason,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { buildCitizenWorld } from "@/tiles/cities";
+import { buildCitizenWorld, PlotKind } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
   Citizen,
   CityState,
   CitizenSim,
+  LifeStage,
   TravelMode,
   TripOutcome,
+  TripPurpose,
   createCitizenSim,
 } from "@/sim/citizens";
 import { facilityOf, rowFor } from "@/tiles/parking";
@@ -650,6 +652,9 @@ export interface CitizenHud {
   clock: string; // "07:35" — the citizens' day, not the calendar's year
   day: number;
   modeShare: Record<TravelMode, number>;
+  // Who this town is made of. `travelling` says how busy the board is right now;
+  // this says WHY it is busy at this hour rather than some other one.
+  byStage: Record<LifeStage, number>;
 }
 
 // THE INSPECTOR — one person's day, and the choice behind it.
@@ -677,11 +682,18 @@ export interface PersonCard {
   work: string | null;
   mood: number;
   carOwner: boolean;
-  // Their fixed daily times, on the in-game clock. Rolled once when they move
-  // in and never re-rolled — the schedule is a clock, not a planner.
-  leavesAt: string;
-  returnsAt: string;
-  shopsAt: string;
+  /** What stage of life they are at, and that stage in words for the panel. */
+  stage: LifeStage;
+  stageLabel: string;
+  /**
+   * Their day, in order, on the in-game clock. Rolled once when they move in and
+   * never re-rolled — a schedule is a clock, not a planner.
+   *
+   * A LIST rather than the three fixed fields it replaces, because a day is no
+   * longer three fixed things: a tradesperson has six, a retired resident four,
+   * and a child's afternoon happens every other day.
+   */
+  schedule: ScheduleLine[];
   // Right now.
   at: string;
   doing: string;
@@ -701,6 +713,16 @@ export interface PersonCard {
    * journey that caused it.
    */
   recent: TripNote[];
+}
+
+/** One line of somebody's day, as the panel prints it. */
+export interface ScheduleLine {
+  /** "07:35" — when the window opens, on the in-game clock. */
+  at: string;
+  /** "leaves for work", "drives out to a job". */
+  what: string;
+  /** False for the every-other-day entries, which the panel marks as such. */
+  daily: boolean;
 }
 
 /** One remembered journey, as a line the panel prints. */
@@ -750,7 +772,7 @@ export function durationLabel(sec: number): string {
 export interface PlotCard {
   id: string;
   city: string;
-  kind: "home" | "work" | "shop";
+  kind: PlotKind;
   density: number;
   people: number;
   capacity: number;
@@ -1168,6 +1190,7 @@ export function createGame(
     clock: "00:00",
     day: 0,
     modeShare: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+    byStage: { child: 0, worker: 0, shiftWorker: 0, tradesperson: 0, retired: 0 },
   }) as CitizenHud;
 
   function rebuildCitizens() {
@@ -1245,6 +1268,7 @@ export function createGame(
     citizenStats.clock = s.clock;
     citizenStats.day = s.day;
     citizenStats.modeShare = s.modeShare;
+    citizenStats.byStage = s.byStage;
   }
 
   // --- the inspector ----------------------------------------------------------
@@ -1268,18 +1292,24 @@ export function createGame(
     return FIRST_NAMES[(h >>> 0) % FIRST_NAMES.length];
   }
 
+  // Where a trip is HEADING, in the words the panel uses for it. One record, so
+  // "walking to school" and "driving to school" cannot drift apart.
+  const DESTINATION_TEXT: Record<TripPurpose, string> = {
+    home: "home",
+    work: "to work",
+    shop: "to the shops",
+    school: "to school",
+    leisure: "to the café",
+    callout: "out to a job",
+  };
+
   function doingOf(c: Citizen): string {
     if (!c.trip) {
       if (c.at === c.home) return "at home";
       if (c.work && c.at === c.work) return "at work";
       return "out";
     }
-    const dest =
-      c.trip.purpose === "home"
-        ? "home"
-        : c.trip.purpose === "work"
-          ? "to work"
-          : "to the shops";
+    const dest = DESTINATION_TEXT[c.trip.purpose] ?? "out";
     // On a transit trip the first timed leg is the APPROACH to the platform, not
     // the journey. Calling it "walking to work" while the chosen mode is the
     // train reads as the panel contradicting itself.
@@ -1300,6 +1330,37 @@ export function createGame(
     }
   }
 
+  // What each stage is, in two or three words. The panel says who somebody is
+  // before it says where they are going, because the routine below only makes
+  // sense once you know which life it belongs to.
+  const STAGE_LABEL: Record<LifeStage, string> = {
+    child: "School child",
+    worker: "Day job",
+    shiftWorker: "Shift work",
+    tradesperson: "Trade, on the road",
+    retired: "Retired",
+  };
+
+  // One routine entry, in words. Phrased from the person's side ("sets off for
+  // school") rather than the model's ("activity: school"), and it reads the
+  // ACTUAL routine — so a stage whose day is retuned needs nothing changed here.
+  const ACTIVITY_TEXT: Record<TripPurpose, string> = {
+    home: "heads home",
+    work: "leaves for work",
+    shop: "runs an errand",
+    school: "sets off for school",
+    leisure: "goes to the café",
+    callout: "drives out to a job",
+  };
+
+  function scheduleOf(c: Citizen): ScheduleLine[] {
+    return c.routine.map(a => ({
+      at: clockOf(a.hour),
+      what: ACTIVITY_TEXT[a.target] ?? "goes out",
+      daily: a.everyNDays <= 1,
+    }));
+  }
+
   function personCard(c: Citizen): PersonCard {
     const now = citizenSim?.now() ?? 0;
     return {
@@ -1309,9 +1370,9 @@ export function createGame(
       work: c.work,
       mood: c.mood,
       carOwner: c.profile.carOwner,
-      leavesAt: clockOf(c.outHour),
-      returnsAt: clockOf(c.backHour),
-      shopsAt: clockOf(c.shopHour),
+      stage: c.stage,
+      stageLabel: STAGE_LABEL[c.stage],
+      schedule: scheduleOf(c),
       at: c.at,
       doing: doingOf(c),
       travellingTo: c.trip?.to ?? null,
@@ -1323,10 +1384,13 @@ export function createGame(
     };
   }
 
-  const PURPOSE_TEXT: Record<string, string> = {
+  const PURPOSE_TEXT: Record<TripPurpose, string> = {
     work: "The trip to work",
     home: "The trip home",
     shop: "The errand",
+    school: "The school run",
+    leisure: "The trip to the café",
+    callout: "The call-out",
   };
 
   // One remembered journey, in words. The two numbers ARE the verdict — how

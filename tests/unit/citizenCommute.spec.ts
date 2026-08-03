@@ -121,9 +121,17 @@ describe("three cities: the citizens commute on the real railway", () => {
     const after = Object.fromEntries(game.cities.map(c => [c.name, c.population]));
 
     expect(game.citizenStats.tripsAbandoned).toBeGreaterThan(50);
-    // Westfield and Eastfield commute to Steinbach and cannot: they empty out.
-    expect(after.Westfield).toBeLessThan(before.Westfield / 2);
-    expect(after.Eastfield).toBeLessThan(before.Eastfield / 2);
+    // Westfield and Eastfield commute to Steinbach and cannot: they hollow out.
+    //
+    // NOT to nothing, and the floor is the point. Since life stages landed, a
+    // quarter of each town is children and retired residents whose whole day is
+    // a walk to the café and back — journeys this board makes perfectly well
+    // with no train on it at all. They stay, and they are right to: what a dead
+    // railway costs a town is its COMMUTERS, not its population. Before stages
+    // every non-worker was an idle mood that drifted down with everyone else's,
+    // and the town emptied to a rounding error.
+    expect(after.Westfield).toBeLessThan(before.Westfield * 0.65);
+    expect(after.Eastfield).toBeLessThan(before.Eastfield * 0.65);
     // Steinbach's work is next door to its houses, so it walks and survives.
     expect(after.Steinbach).toBeGreaterThanOrEqual(before.Steinbach * 0.8);
     // And the commute bar says why, before the population does.

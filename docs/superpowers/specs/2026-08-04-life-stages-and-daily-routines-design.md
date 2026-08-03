@@ -59,12 +59,14 @@ and gains:
 ```ts
 export type LifeStage = "child" | "worker" | "shiftWorker" | "tradesperson" | "retired";
 
-/** Where an activity sends somebody. Resolved when it FIRES, never stored. */
-export type ActivityTarget = "home" | "work" | "shop" | "leisure" | "school" | "callout";
-
 export interface Activity {
-  purpose: TripPurpose;
-  target: ActivityTarget;
+  // Where this sends them — resolved when it FIRES, never stored. An activity is
+  // named by its destination, so this IS the trip's purpose; there is no second
+  // `purpose` field to keep in step with it.
+  target: TripPurpose;
+  // Only fire when they are currently at this place. Absent = from anywhere,
+  // which is what a trip home always is.
+  from?: TripPurpose;
   hour: number;       // earliest start, on the in-game clock
   windowH: number;    // how long the window stays open; past it, skipped
   everyNDays: number; // 1 = daily, 2 = every other day
@@ -77,6 +79,11 @@ export interface Citizen {
   routine: Activity[];  // ordered by hour
 }
 ```
+
+`from` earns its place immediately: the old errand was rolled anywhere from
+10:00 to 19:00 and then gated on being at home, so for most workers the window
+opened while they were at their desk and **the trip simply never happened**.
+Anchoring an activity to where it starts says that out loud instead of losing it.
 
 `considerTrips` becomes: the 22:00 curfew first (unchanged), then walk the
 routine in order and fire the first activity that is *eligible* —

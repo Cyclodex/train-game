@@ -23,14 +23,84 @@ import type { SimEvent } from "@/sim/simulation";
 // what the map actually offers, times the trip, and lets the result move their
 // mood — and moods decide who moves in and who moves out.
 //
+// WHEN they travel is the other half, and it is a LIFE STAGE. Everybody used to
+// be the same commuter with the same three hours, which gave a board two spikes
+// and eleven dead hours; a person now gets a `routine` — a list of activities
+// with windows — chosen by which stage of life they are at. The tradesperson's
+// round of call-outs and the child's half-past-twelve trip home are the two that
+// own the middle of the day.
+//
 // Design: docs/superpowers/specs/2026-08-01-citizens-and-cities-design.md
+//         docs/superpowers/specs/2026-08-04-life-stages-and-daily-routines-design.md
 
 export type TravelMode = "walk" | "car" | "transit" | "parkAndRide";
 export const TRAVEL_MODES: TravelMode[] = ["walk", "car", "transit", "parkAndRide"];
 
-// What a trip is FOR, and therefore which happiness topic it scores against.
-export type TripPurpose = "work" | "home" | "shop";
+// What a trip is FOR — and, because an activity is named by where it sends you,
+// this doubles as the set of PLACES a routine can point at (see `Activity`).
+//
+// `callout` is the odd one and the interesting one: a tradesperson's job moves,
+// so their destination is a different address every day rather than a fixed
+// workplace. See `resolveTarget`.
+export type TripPurpose = "work" | "home" | "shop" | "school" | "leisure" | "callout";
 export type Topic = "commute" | "errands" | "access";
+
+// Which happiness topic a purpose scores against.
+//
+// Six purposes, still THREE topics, and deliberately so: getting to school or to
+// a call-out is a commute — a journey you have no choice about — and the café is
+// an errand. A fourth topic would drag `CityHappiness`, `recompute()`'s weights
+// and the whole panel behind it to say nothing new.
+function topicOf(purpose: TripPurpose): "commute" | "errands" {
+  return purpose === "shop" || purpose === "leisure" ? "errands" : "commute";
+}
+
+/**
+ * What stage of life somebody is at — which decides their DAY, and nothing else.
+ *
+ * Not a class system and not a speed modifier: every stage walks, drives and
+ * rides at the same rate. What differs is WHEN they leave the house and where
+ * they go, and that is the whole point. A town where everybody is a `worker`
+ * has exactly two busy hours; a town with all five is awake from seven to ten.
+ */
+export type LifeStage = "child" | "worker" | "shiftWorker" | "tradesperson" | "retired";
+
+/** Stable order, so shares, stats and panels line up everywhere. */
+export const LIFE_STAGES: LifeStage[] = [
+  "child",
+  "worker",
+  "shiftWorker",
+  "tradesperson",
+  "retired",
+];
+
+/**
+ * One thing somebody does on a normal day.
+ *
+ * `target` is a ROLE, never an address, and it is resolved when the activity
+ * FIRES — because the nearest shop can fill up, a call-out is somewhere
+ * different every day, and a school may not exist on this board at all.
+ * Freezing an address at move-in would freeze all three.
+ */
+export interface Activity {
+  /** Where this sends them, which is also what the trip is FOR. */
+  target: TripPurpose;
+  /**
+   * Only fire when they are currently AT this place. A worker's errand belongs
+   * to the evening at home, not to a coffee break at the office — without this
+   * an activity whose window opens during the working day drags people off the
+   * job. Absent = from anywhere, which is what a trip HOME always is.
+   */
+  from?: TripPurpose;
+  /** Earliest start, on the in-game clock. */
+  hour: number;
+  /** How long the window stays open, in hours. Past it, the day is missed. */
+  windowH: number;
+  /** 1 = every day, 2 = every other day. */
+  everyNDays: number;
+  /** The day this last fired — the once-a-day gate `lastOutDay` used to be. */
+  lastDay: number;
+}
 
 // The legs a trip passes through. Timed legs (`walking`, `driving`) run down a
 // clock; `waiting` and `riding` are driven by what the RAIL simulation actually
@@ -149,13 +219,13 @@ export interface Citizen {
   mood: number;
   at: string; // the plot they are currently at (their home while travelling home)
   trip: Trip | null;
-  // Day bookkeeping so each trip fires once a day, deterministically.
-  outHour: number;
-  backHour: number;
-  shopHour: number;
-  lastOutDay: number;
-  lastBackDay: number;
-  lastShopDay: number;
+  /** What stage of life they are at — which routine they were given. */
+  stage: LifeStage;
+  /**
+   * Their day, in order of hour. Rolled once when they move in and never
+   * re-rolled: a schedule is a clock, not a planner.
+   */
+  routine: Activity[];
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
   // The last few scored journeys, newest first: the evidence behind the mood.
@@ -253,8 +323,17 @@ export interface CitizenTuning {
   maxTransfers: number;
   // Share of adults who own a car.
   carOwnership: number;
-  // Share of residents with no job (children, retired) — they only run errands.
-  joblessShare: number;
+  /**
+   * How the town is made up, by life stage. Shares; normalised, so they need not
+   * add to one.
+   *
+   * This REPLACES the old `joblessShare`, which was documented as "children,
+   * retired" and treated both as the same person: somebody with nothing to do
+   * but one errand every second day. That single number is most of why the board
+   * was empty between the peaks — a quarter of the population had almost no
+   * reason to leave the house, and the rest all left at once.
+   */
+  stageMix: Record<LifeStage, number>;
 }
 
 // Calibrated against what the engine actually does, not against nothing:
@@ -287,7 +366,17 @@ export const DEFAULT_TUNING: CitizenTuning = {
   maxWaitSec: 45,
   maxTransfers: 6,
   carOwnership: 0.55,
-  joblessShare: 0.25,
+  // Roughly a Swiss village: half of it holds an ordinary day job, an eighth
+  // works a shift, an eighth has a trade that takes them out on the road, and
+  // the remaining quarter is the school run and the retired — the two groups
+  // that own the middle of the day.
+  stageMix: {
+    child: 0.1,
+    worker: 0.5,
+    shiftWorker: 0.12,
+    tradesperson: 0.13,
+    retired: 0.15,
+  },
 };
 
 // The rail world, as the citizen sim is allowed to touch it. Omitted → transit
@@ -339,6 +428,8 @@ export interface CitizenStats {
   tripsRefused: number;
   tripsAbandoned: number;
   modeShare: Record<TravelMode, number>;
+  /** How the town is made up — the mix that decides what its day looks like. */
+  byStage: Record<LifeStage, number>;
   day: number;
   hour: number;
   clock: string; // "07:35"
@@ -391,6 +482,98 @@ function clamp01(v: number): number {
 function manhattan(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
+
+// A small stable number from an id. Used wherever something must vary between
+// PEOPLE (or between days) without drawing from an RNG stream — a draw at read
+// time would make the same question give a different answer on the next frame.
+function hashId(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  return (h >>> 0) % 997;
+}
+
+/**
+ * The day each life stage lives, in order of hour.
+ *
+ * Read the `hour` column down the page and you can see the feature: `worker`
+ * alone gives a board two spikes and eleven dead hours, and every other stage
+ * exists to put somebody in one of those hours.
+ *
+ * One rule holds it together: a trip HOME never carries `from`, so wherever the
+ * day left somebody they can always get back. Everything else is anchored — an
+ * errand starts at home, a call-out starts at the yard.
+ */
+function makeRoutine(stage: LifeStage, rng: () => number): Activity[] {
+  const a = (
+    target: TripPurpose,
+    hour: number,
+    windowH: number,
+    everyNDays = 1,
+    from?: TripPurpose
+  ): Activity => ({ target, from, hour, windowH, everyNDays, lastDay: -1 });
+
+  switch (stage) {
+    // The school run, and the only counter-peak on the board: out BEFORE the
+    // commuters and home again at half past twelve, straight into the hole the
+    // working day leaves.
+    case "child":
+      return [
+        a("school", 7.25 + rng() * 0.5, 1.5, 1, "home"),
+        a("home", 12 + rng() * 1.5, 3),
+        a("leisure", 15 + rng() * 1.5, 2, 2, "home"),
+        a("home", 17 + rng() * 1.5, 5),
+      ];
+    // The status quo, with one fix: the errand has moved to the EVENING. It used
+    // to be rolled anywhere from 10:00 to 19:00 and then gated on being at home
+    // — so for most workers the window opened while they were at their desk and
+    // the trip simply never happened.
+    case "worker":
+      return [
+        a("work", 7 + rng() * 2, 3, 1, "home"),
+        a("home", 16 + rng() * 2, 6),
+        a("shop", 17.5 + rng() * 2, 2, 2, "home"),
+      ];
+    // The afternoon and the late evening, which nobody else touches.
+    case "shiftWorker":
+      return [
+        a("shop", 9.5 + rng(), 2, 2, "home"),
+        a("work", 13 + rng(), 3, 1, "home"),
+        a("home", 21 + rng(), 4),
+      ];
+    // The same person who goes to work — their job simply moves. Out to the yard
+    // early, then a round of call-outs in the van, back to the yard between them,
+    // home at the end. Six activities, and they own the whole middle of the day.
+    case "tradesperson":
+      return [
+        a("work", 6.5 + rng() * 0.5, 2, 1, "home"),
+        a("callout", 8.5 + rng() * 0.5, 2, 1, "work"),
+        a("work", 11 + rng() * 0.5, 2),
+        a("callout", 13 + rng() * 0.5, 2, 1, "work"),
+        a("work", 15.5 + rng() * 0.5, 2),
+        a("home", 17 + rng() * 0.5, 5),
+      ];
+    // The reliable mid-morning traffic: the café EVERY day, not every second one,
+    // because that is the difference between a town with a life and a town with
+    // an errand.
+    case "retired":
+      return [
+        a("leisure", 9 + rng() * 1.5, 2.5, 1, "home"),
+        a("home", 11 + rng() * 1.5, 3),
+        a("shop", 14 + rng() * 2, 2.5, 2, "home"),
+        a("home", 16.5 + rng() * 2, 5),
+      ];
+  }
+}
+
+/** The stages that hold down a job. Children and the retired do not. */
+const EMPLOYED: ReadonlySet<LifeStage> = new Set<LifeStage>([
+  "worker",
+  "shiftWorker",
+  "tradesperson",
+]);
+
+/** Where a stage's job is, when it is fussy about it. A trade needs a yard. */
+const PREFERRED_JOB: Partial<Record<LifeStage, PlotKind>> = { tradesperson: "work" };
 
 export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const tuning: CitizenTuning = { ...DEFAULT_TUNING, ...(config.tuning ?? {}) };
@@ -492,26 +675,66 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   const allJobPlots = jobPlotsFor("*");
 
-  function makeProfile(): TravelProfile {
+  // How somebody travels, given who they are. Only three stages bend it, and
+  // each for a concrete reason rather than for flavour.
+  function makeProfile(stage: LifeStage): TravelProfile {
+    const roll = profileRng();
+    const patience = 1.5 + profileRng() * 2.5;
+    const transit = 0.7 + profileRng() * 0.7;
+    const car = 0.7 + profileRng() * 0.7;
+    // A tradesperson has the VAN — it is the job, not a preference, so they
+    // always have it and it always wins (a low `carAffinity` is "driving feels
+    // cheap to me"). A child never drives. The retired own fewer cars and walk
+    // shorter distances.
+    const carOwner =
+      stage === "tradesperson"
+        ? true
+        : stage === "child"
+          ? false
+          : roll < tuning.carOwnership * (stage === "retired" ? 0.6 : 1);
     return {
-      carOwner: profileRng() < tuning.carOwnership,
-      walkPatience: 1.5 + profileRng() * 2.5,
-      transitAffinity: 0.7 + profileRng() * 0.7,
-      carAffinity: 0.7 + profileRng() * 0.7,
+      carOwner,
+      walkPatience: stage === "retired" ? patience * 0.7 : patience,
+      transitAffinity: transit,
+      carAffinity: stage === "tradesperson" ? car * 0.6 : car,
     };
+  }
+
+  // Which life this resident gets. A weighted pick over `stageMix`, drawn from
+  // the habit stream so adding a person never shifts anybody's travel profile.
+  function pickStage(): LifeStage {
+    let total = 0;
+    for (const s of LIFE_STAGES) total += Math.max(0, tuning.stageMix[s] ?? 0);
+    if (total <= 0) return "worker";
+    let roll = habitRng() * total;
+    for (const s of LIFE_STAGES) {
+      roll -= Math.max(0, tuning.stageMix[s] ?? 0);
+      if (roll <= 0) return s;
+    }
+    return "worker";
   }
 
   // Nearest workplace with a free job, chosen from the nearest few rather than
   // strictly the closest — which is what puts some people on a long commute,
   // and long commutes are what make a railway worth building.
-  function assignJob(homeId: string): string | null {
-    if (habitRng() < tuning.joblessShare) return null;
+  function assignJob(homeId: string, stage: LifeStage): string | null {
+    if (!EMPLOYED.has(stage)) return null;
     const home = plotById.get(homeId);
     if (!home) return null;
-    const open = allJobPlots
-      .filter(p => p.people < p.capacity)
-      .map(p => ({ p, d: manhattan(home, plotById.get(p.id) as WorldPlot) }))
-      .sort((a, b) => a.d - b.d);
+    const prefer = PREFERRED_JOB[stage];
+    const hiring = (pool: PlotState[]) =>
+      pool
+        .filter(p => p.people < p.capacity)
+        .map(p => ({ p, d: manhattan(home, plotById.get(p.id) as WorldPlot) }))
+        .sort((a, b) => a.d - b.d);
+    // A preference, not a requirement: a board with no industrial yard still
+    // employs its tradespeople rather than leaving them idle at home.
+    const open = prefer
+      ? (() => {
+          const pick = hiring(allJobPlots.filter(p => p.kind === prefer));
+          return pick.length ? pick : hiring(allJobPlots);
+        })()
+      : hiring(allJobPlots);
     if (open.length === 0) return null;
     const pool = open.slice(0, Math.min(6, open.length));
     const pick = pool[Math.floor(habitRng() * pool.length)] ?? pool[0];
@@ -523,20 +746,17 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const home = plots.get(homeId);
     if (!home || home.kind !== "home" || home.people >= home.capacity) return null;
     home.people += 1;
+    const stage = pickStage();
     const c: Citizen = {
       id: `c${nextId++}`,
       home: homeId,
-      work: assignJob(homeId),
-      profile: makeProfile(),
+      work: assignJob(homeId, stage),
+      profile: makeProfile(stage),
       mood: 0.6,
       at: homeId,
       trip: null,
-      outHour: 7 + habitRng() * 2,
-      backHour: 16 + habitRng() * 2,
-      shopHour: 10 + habitRng() * 9,
-      lastOutDay: -1,
-      lastBackDay: -1,
-      lastShopDay: -1,
+      stage,
+      routine: makeRoutine(stage, habitRng),
       unhappyDays: 0,
       recent: [],
     };
@@ -766,12 +986,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   // --- trips -------------------------------------------------------------------
 
-  function startTrip(
-    c: Citizen,
-    toId: string,
-    purpose: TripPurpose,
-    topic: "commute" | "errands"
-  ): void {
+  function startTrip(c: Citizen, toId: string, purpose: TripPurpose): void {
+    const topic = topicOf(purpose);
     const fromId = c.at;
     if (fromId === toId) return;
     const option = chooseMode(c, fromId, toId);
@@ -1122,43 +1338,56 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   function considerTrips(c: Citizen): void {
     if (c.trip) return;
     const hour = hourNow();
-    // Home for the night, whatever else happened today.
+    // Home for the night, whatever else the day did. The one activity nobody's
+    // routine has to declare, and the backstop that makes every `windowH` above
+    // safe to bound: miss your last trip home and this one still runs.
     if (hour >= 22 && c.at !== c.home) {
-      startTrip(c, c.home, "home", "commute");
+      startTrip(c, c.home, "home");
       return;
     }
-    if (c.work && c.at === c.home && c.lastOutDay !== dayIndex && hour >= c.outHour && hour < c.outHour + 3) {
-      c.lastOutDay = dayIndex;
-      startTrip(c, c.work, "work", "commute");
+    // The day, in order. The FIRST activity whose window is open, that has not
+    // already run today and that starts from where this person actually is.
+    for (let i = 0; i < c.routine.length; i++) {
+      const a = c.routine[i];
+      if (a.lastDay === dayIndex) continue;
+      if (hour < a.hour || hour >= a.hour + a.windowH) continue;
+      // Which days it runs. The ACTIVITY INDEX is in the hash on purpose: leave
+      // it out and every one of a person's every-other-day activities lands on
+      // the same days, so their other day is as empty as the board used to be.
+      if (a.everyNDays > 1 && (dayIndex + hashId(c.id) + i) % a.everyNDays !== 0) continue;
+      // Anchored activities wait for their starting point rather than being
+      // skipped: a tradesperson late back to the yard still gets their
+      // afternoon call-out when they arrive.
+      if (a.from && resolveTarget(c, a.from, i) !== c.at) continue;
+      // Marked done BEFORE the trip is attempted, exactly as `lastOutDay` was:
+      // a journey that cannot be made is scored once, not re-refused every tick.
+      a.lastDay = dayIndex;
+      const to = resolveTarget(c, a.target, i);
+      if (!to || to === c.at) continue; // nowhere to go, or already there
+      startTrip(c, to, a.target);
       return;
-    }
-    if (c.work && c.at === c.work && c.lastBackDay !== dayIndex && hour >= c.backHour) {
-      c.lastBackDay = dayIndex;
-      startTrip(c, c.home, "home", "commute");
-      return;
-    }
-    // Errands, every other day, from home.
-    if (
-      c.at === c.home &&
-      c.lastShopDay !== dayIndex &&
-      hour >= c.shopHour &&
-      hour < c.shopHour + 2 &&
-      (dayIndex + c.home.length + c.id.length) % 2 === 0
-    ) {
-      c.lastShopDay = dayIndex;
-      const shop = nearestShopFor(c);
-      if (shop) startTrip(c, shop, "shop", "errands");
     }
   }
 
-  const shopPlots = [...plots.values()].filter(p => p.kind === "shop");
+  // --- where an activity actually sends somebody -------------------------------
 
-  function nearestShopFor(c: Citizen): string | null {
+  const plotsOfKind = (kind: PlotKind) => [...plots.values()].filter(p => p.kind === kind);
+  const shopPlots = plotsOfKind("shop");
+  const leisurePlots = plotsOfKind("leisure");
+  const schoolPlots = plotsOfKind("school");
+  // Somewhere a tradesperson might be called out TO: a workplace, a shop or a
+  // house. Not a school or a café — those are destinations for the people who
+  // use them, and a plumber at the primary school every other day reads as noise.
+  const calloutPlots = [...plots.values()].filter(
+    p => p.kind === "work" || p.kind === "shop" || p.kind === "home"
+  );
+
+  function nearestOf(c: Citizen, pool: PlotState[]): string | null {
     const home = plotOf(c.home);
-    if (!home || shopPlots.length === 0) return null;
+    if (!home || pool.length === 0) return null;
     let best: string | null = null;
     let bestD = Infinity;
-    for (const s of shopPlots) {
+    for (const s of pool) {
       const sp = plotOf(s.id);
       if (!sp) continue;
       const d = manhattan(home, sp);
@@ -1168,6 +1397,65 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       }
     }
     return best;
+  }
+
+  // Could this person plausibly get there at all? Not the mode choice — that is
+  // `quoteModes`' job and it runs next — just enough to keep a call-out from
+  // being drawn on the far side of an unbridged map twice a day, every day.
+  function reachable(from: WorldPlot, to: WorldPlot): boolean {
+    if (from.roadComponent !== null && from.roadComponent === to.roadComponent) return true;
+    if (manhattan(from, to) <= tuning.walkMaxTiles) return true;
+    return (
+      from.stationsInReach.length > 0 &&
+      to.stationsInReach.length > 0 &&
+      !from.stationsInReach.every(s => to.stationsInReach.includes(s))
+    );
+  }
+
+  /**
+   * The job a tradesperson is sent to TODAY.
+   *
+   * Deterministic from (day, person, activity) rather than drawn: the same day
+   * replayed sends the same van to the same address, and two call-outs on one
+   * day are two different addresses. Another town is preferred where one is
+   * reachable — the whole point of a trade is that it travels, and a van that
+   * only ever crosses its own street is just a walk with extra steps.
+   */
+  function resolveCallout(c: Citizen, index: number): string | null {
+    const home = plotOf(c.home);
+    if (!home) return null;
+    const open = calloutPlots.filter(p => p.id !== c.work && p.id !== c.home);
+    if (open.length === 0) return null;
+    const reach = open.filter(p => {
+      const wp = plotOf(p.id);
+      return wp ? reachable(home, wp) : false;
+    });
+    const pool = reach.length ? reach : open;
+    const away = pool.filter(p => p.city !== home.city);
+    const from = away.length ? away : pool;
+    const pick = (dayIndex * 31 + hashId(c.id) * 7 + index) % from.length;
+    return from[pick].id;
+  }
+
+  function resolveTarget(c: Citizen, target: TripPurpose, index: number): string | null {
+    switch (target) {
+      case "home":
+        return c.home;
+      case "work":
+        return c.work;
+      case "shop":
+        return nearestOf(c, shopPlots);
+      // A café falls back to the corner shop, so a board with no leisure plot
+      // still gives its retired residents somewhere to be at ten in the morning.
+      case "leisure":
+        return nearestOf(c, leisurePlots.length ? leisurePlots : shopPlots);
+      // No fallback, deliberately. A board with no school has no school run, and
+      // sending children to the shops instead would hide that from the player.
+      case "school":
+        return nearestOf(c, schoolPlots);
+      case "callout":
+        return resolveCallout(c, index);
+    }
   }
 
   // --- the day review: who moves in, who moves out, what grows -----------------
@@ -1337,8 +1625,16 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let population = 0;
     let drivingNow = 0;
     let walkingNow = 0;
+    const byStage: Record<LifeStage, number> = {
+      child: 0,
+      worker: 0,
+      shiftWorker: 0,
+      tradesperson: 0,
+      retired: 0,
+    };
     for (const c of people.values()) {
       population += 1;
+      byStage[c.stage] += 1;
       if (c.trip) travelling += 1;
       if (c.trip?.carTrip) drivingNow += 1;
       if (c.trip?.walkTrip) walkingNow += 1;
@@ -1365,6 +1661,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
             parkAndRide: modeTotals.parkAndRide / total,
           }
         : { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+      byStage,
       day: dayIndex,
       hour,
       clock: `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`,
