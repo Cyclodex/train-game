@@ -700,7 +700,7 @@ import PersonPin from "@/components/PersonPin.vue";
 import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
-import { type Camera, type Size } from "@/camera";
+import { CHROME_INSETS, type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
 
@@ -1118,6 +1118,9 @@ class PlayView extends Vue {
       createCameraController(
         () => this.worldSize,
         () => this.viewportSize(),
+        // The board is full-bleed; the score card, drawer and dock float over
+        // it. These keep the BOARD clear of them (see camera.ts).
+        () => CHROME_INSETS,
       ),
     );
     this.routeCtrl = markRaw(

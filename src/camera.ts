@@ -21,6 +21,26 @@ export interface Size {
   height: number;
 }
 
+// The part of the viewport the floating HUD sits over. The board element is
+// full-bleed (the viewport is the whole window, so the world's ground reaches
+// every screen edge and can be panned under the glass), and this is what keeps
+// the CONTENT clear of the chrome: the fit centres the world inside the inset
+// rectangle, and the clamp lets a big world be panned until any tile can reach
+// it. That is the difference between "padding around the world" (which shrinks
+// the board's own area, leaving a dead border) and padding on its content.
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
+
+// The overlay chrome of the play/editor boards: score card + drawer at the top,
+// the tool dock at the bottom. Mirrors what used to be `.world`'s CSS padding.
+export const CHROME_INSETS: Insets = { top: 180, right: 24, bottom: 128, left: 24 };
+
 export const MIN_ZOOM = 0.15;
 export const MAX_ZOOM = 2;
 
@@ -50,33 +70,54 @@ export function clampCamera(
   world: Size,
   viewport: Size,
   margin = WORLD_MARGIN,
+  insets: Insets = NO_INSETS,
 ): Camera {
   const zoom = clampZoom(cam.zoom);
   const scaled = { width: world.width * zoom, height: world.height * zoom };
-  const axis = (pos: number, worldLen: number, viewLen: number) => {
-    if (worldLen <= viewLen) return (worldLen - viewLen) / 2 / zoom; // centred
+  const axis = (
+    pos: number,
+    worldLen: number,
+    viewLen: number,
+    lead: number,
+    trail: number,
+  ) => {
+    // The usable strip: the viewport minus whatever the HUD covers on this axis.
+    const avail = Math.max(0, viewLen - lead - trail);
+    // Centred in the USABLE strip, not the viewport — otherwise a small board
+    // sits visually low, half of it behind the dock.
+    if (worldLen <= avail) return -(lead + (avail - worldLen) / 2) / zoom;
     // The slack is the margin at BOTH ends: `-margin` pushes the world's leading
-    // edge that far off the viewport's, and the far bound does the same at the
-    // other end.
+    // edge that far off the usable strip's, and the far bound does the same at
+    // the other end. Adding the insets here is what lets the last row be pulled
+    // out from under the dock instead of being stranded behind it.
     return Math.min(
-      Math.max(pos, -margin / zoom),
-      (worldLen - viewLen + margin) / zoom,
+      Math.max(pos, -(lead + margin) / zoom),
+      (worldLen - viewLen + trail + margin) / zoom,
     );
   };
   return {
     zoom,
-    x: axis(cam.x, scaled.width, viewport.width),
-    y: axis(cam.y, scaled.height, viewport.height),
+    x: axis(cam.x, scaled.width, viewport.width, insets.left, insets.right),
+    y: axis(cam.y, scaled.height, viewport.height, insets.top, insets.bottom),
   };
 }
 
-export function panBy(cam: Camera, dxPx: number, dyPx: number, world: Size, viewport: Size): Camera {
+export function panBy(
+  cam: Camera,
+  dxPx: number,
+  dyPx: number,
+  world: Size,
+  viewport: Size,
+  insets: Insets = NO_INSETS,
+): Camera {
   // The drag is in SCREEN px; at zoom 0.5 a 10px drag should move the world 20px,
   // otherwise a zoomed-out board feels glued down.
   return clampCamera(
     { ...cam, x: cam.x - dxPx / cam.zoom, y: cam.y - dyPx / cam.zoom },
     world,
     viewport,
+    WORLD_MARGIN,
+    insets,
   );
 }
 
@@ -89,6 +130,7 @@ export function zoomAt(
   pointer: { x: number; y: number },
   world: Size,
   viewport: Size,
+  insets: Insets = NO_INSETS,
 ): Camera {
   const zoom = clampZoom(cam.zoom * factor);
   if (zoom === cam.zoom) return cam;
@@ -99,6 +141,8 @@ export function zoomAt(
     { zoom, x: worldX - pointer.x / zoom, y: worldY - pointer.y / zoom },
     world,
     viewport,
+    WORLD_MARGIN,
+    insets,
   );
 }
 
@@ -106,18 +150,28 @@ export function zoomAt(
 // `WORLD_MARGIN` at each side, the same gap a pan may open anywhere else.
 // Never zooms past 1: a small board is shown at its natural size rather than
 // blown up, which would just make the sprites soft.
-export function fitZoom(world: Size, viewport: Size, pad = WORLD_MARGIN * 2): number {
+export function fitZoom(
+  world: Size,
+  viewport: Size,
+  pad = WORLD_MARGIN * 2,
+  insets: Insets = NO_INSETS,
+): number {
   if (world.width <= 0 || world.height <= 0) return 1;
   const z = Math.min(
-    (viewport.width - pad) / world.width,
-    (viewport.height - pad) / world.height,
+    (viewport.width - insets.left - insets.right - pad) / world.width,
+    (viewport.height - insets.top - insets.bottom - pad) / world.height,
   );
   return clampZoom(Math.min(1, z));
 }
 
-export function fitCamera(world: Size, viewport: Size, pad = WORLD_MARGIN * 2): Camera {
-  const zoom = fitZoom(world, viewport, pad);
-  return clampCamera({ x: 0, y: 0, zoom }, world, viewport);
+export function fitCamera(
+  world: Size,
+  viewport: Size,
+  pad = WORLD_MARGIN * 2,
+  insets: Insets = NO_INSETS,
+): Camera {
+  const zoom = fitZoom(world, viewport, pad, insets);
+  return clampCamera({ x: 0, y: 0, zoom }, world, viewport, WORLD_MARGIN, insets);
 }
 
 // The CSS transform for the board element. `translate` is applied AFTER `scale`

@@ -1,11 +1,11 @@
 <template>
   <div class="editor-view" :class="{ debug: config.debug }">
     <MenuDrawer id="editor" title="Editor">
-      <button
-        class="drawer-btn accent"
-        :disabled="!canPlay"
-        @click="playThis"
-      >
+      <!-- Never disabled: starting is the USER's call. A level with no depots,
+           an odd one out, or an open-ended stub is a perfectly good thing to go
+           and look at — the drawer status below still says what is off, but it
+           does not hold the door shut. -->
+      <button class="drawer-btn accent" @click="playThis">
         <span>▶</span><span>Play this</span>
       </button>
       <button class="drawer-btn" @click="randomMap">
@@ -427,7 +427,7 @@ import {
 } from "@/tiles/model";
 import { SWITCH_INSET as SWITCH_HUB_INSET } from "@/tiles/switchFan";
 import { levelBounds, translateLevel } from "@/tiles/bounds";
-import { type Camera, type Size } from "@/camera";
+import { CHROME_INSETS, type Camera, type Size } from "@/camera";
 import { createCameraController, type CameraController } from "@/cameraController";
 import {
   emptyCell,
@@ -881,11 +881,6 @@ class EditorView extends Vue {
   get roadOnly(): boolean {
     return isRoadOnlyLevel(this.level);
   }
-  get canPlay(): boolean {
-    if (this.roadOnly) return this.valid.ok;
-    return this.routes.length > 0 && this.valid.ok;
-  }
-
   // --- Camera ---------------------------------------------------------------
   // Same shared controller as the play board and the test stage. Built in
   // `created()` (a field initialiser would capture a throwaway `this`, see
@@ -907,6 +902,10 @@ class EditorView extends Vue {
       createCameraController(
         () => this.worldSize,
         () => this.viewportSize(),
+        // The board is full-bleed; the drawer and the dock float over it. These
+        // keep the GRID clear of them (see camera.ts) — the clearance the
+        // `.world` padding used to give, without the dead border it left.
+        () => CHROME_INSETS,
       ),
     );
     this.routeCtrl = markRaw(
@@ -1746,13 +1745,20 @@ class EditorView extends Vue {
     Object.assign(this.level, level);
     this.persist();
   }
+  // Hand the level over and go. No gate: a board with no depot pair simply
+  // starts with no trains (a road-only or half-built world is still playable to
+  // walk around), and validation issues are shown in the drawer, not enforced.
   playThis() {
-    if (!this.canPlay) return;
     setCustomLevel({
       level: JSON.parse(JSON.stringify(this.level)),
       trains: trainsFromRoutes(this.routes),
     });
-    this.$router.push("/play");
+    // Pin the mode rather than reopening the last one played. /play otherwise
+    // runs whatever mode was used last, and a board-GENERATING mode (Daily
+    // derives its map from the date and ignores the context board) would throw
+    // the level away — you press Play on your own world and land on someone
+    // else's. Sandbox is the mode whose job is "this board, no objective".
+    this.$router.push({ path: "/play", query: { mode: "sandbox" } });
   }
   exportJson() {
     this.ioText = JSON.stringify(this.level);
