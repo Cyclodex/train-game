@@ -397,6 +397,8 @@ export interface Game {
   // stationTileId -> the liveries calling there, so a platform can show its
   // services. Derived from `trainLines`.
   stationLines: Record<string, string[]>;
+  // Trains ordered but still waiting in the shed, oldest first.
+  queuedTrains: string[];
   // Every station on the board, in a stable order — the stops a line can pick
   // from, and what the panel offers.
   stationTiles: string[];
@@ -407,7 +409,7 @@ export interface Game {
   setLine(trainId: string, stops: string[]): boolean;
   // Order a new train at a depot and put it straight into service. Returns the
   // new train's id, or null when there is no free depot to build it in.
-  buyTrain(stops: string[], depotId?: string): string | null;
+  buyTrain(stops: string[], depotId?: string): TrainDef | null;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -647,6 +649,10 @@ export function createGame(
   // stationTileId -> the liveries of the services calling there. Derived from
   // `trainLines`; the board reads this so a platform can show its services.
   const stationLines = reactive({}) as Record<string, string[]>;
+  // Ids of trains ordered but still waiting in the shed, oldest first — the
+  // panel shows them so a queue is visible rather than a button that seems to
+  // have done nothing.
+  const queuedTrains = reactive([]) as string[];
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree. A seeded RNG keeps the
@@ -1480,17 +1486,38 @@ export function createGame(
     .filter(id => level[id]?.role === "depot")
     .sort();
 
-  // A new train, ordered at a depot and put straight into service on `stops`.
-  // The depot is the only place one can appear — that IS what a depot is for
-  // in this mode — and the id is minted from a counter so repeated purchases
-  // never collide with an authored roster.
+  // Trains ordered but not yet out of the shed, oldest first. A depot holds
+  // ONE train at a time on the metals, so ordering three at once is fine —
+  // they roll out one after another as the mouth clears. Until then a queued
+  // train has DOM and a livery but no sim entry, which is exactly the state
+  // `renderTrains` already keeps a scheduled train in (hidden, not drawn).
+  const pendingTrains: TrainDef[] = [];
+
+  // Release whatever can leave: the head of the queue whose depot is clear.
+  // Called every world step, so a queue drains by itself in order.
+  function releasePendingTrains(): void {
+    for (let i = 0; i < pendingTrains.length; i++) {
+      const def = pendingTrains[i];
+      const depot = getCoordinatesId({ x: def.x, y: def.y });
+      if (sim.occupiedBy(depot)) continue; // its shed is still blocked
+      pendingTrains.splice(i, 1);
+      i -= 1;
+      const at = queuedTrains.indexOf(def.id);
+      if (at >= 0) queuedTrains.splice(at, 1);
+      injectTrain(def);
+      syncLine(def.id);
+    }
+  }
+
+  // A new train, ordered at a depot and put into service on `stops`. Ordering
+  // NEVER fails for want of room: a depot is where trains are built and they
+  // queue there, exactly as they do in Transport Fever — what a full depot
+  // delays is the departure, not the purchase. Returns the def (so the view
+  // can give it a sprite) or null only when the board has no depot at all.
   let boughtCount = 0;
-  function buyTrain(stops: string[], depotId?: string): string | null {
+  function buyTrain(stops: string[], depotId?: string): TrainDef | null {
     const depot = depotId ?? depotTiles[0];
     if (!depot || !level[depot]) return null;
-    // A depot with a train still standing in it cannot take another: the new
-    // one would be built on top of a body already occupying the tile.
-    if (sim.occupiedBy(depot)) return null;
     const { x, y } = parseCoordId(depot);
     boughtCount += 1;
     const id = `bought${boughtCount}`;
@@ -1511,9 +1538,15 @@ export function createGame(
     // in a row are told apart at a glance. Colour is decoration in this mode —
     // nothing matches on it — so any distinct one will do.
     trainColors[id] = Colors[boughtCount % Colors.length];
-    injectTrain(def);
-    syncLine(id);
-    return id;
+    if (sim.occupiedBy(depot)) {
+      // The shed is busy: it waits its turn on the metals.
+      pendingTrains.push(def);
+      queuedTrains.push(def.id);
+    } else {
+      injectTrain(def);
+      syncLine(def.id);
+    }
+    return def;
   }
 
   // Put a train onto a line (or take it out of service with []). Thin wrapper
@@ -1656,6 +1689,8 @@ export function createGame(
     // Park & ride: whoever just pulled into a stall within walking reach of a
     // station is now standing on its platform.
     transferParkedArrivals();
+    // Ordered trains roll out of the shed as it clears, in the order bought.
+    releasePendingTrains();
     // Fold the road's crossing-flow snapshot into the observation so the
     // objective layer can score patience + throughput (Crossing Keeper). The
     // automatic crossing can't produce an incident, so the delta stays 0.
@@ -2093,6 +2128,7 @@ export function createGame(
     stationQueues,
     trainLines,
     stationLines,
+    queuedTrains,
     stationTiles,
     depotTiles,
     setLine,

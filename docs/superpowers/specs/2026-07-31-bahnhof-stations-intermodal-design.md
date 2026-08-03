@@ -208,9 +208,10 @@ The interactive layer, and with it the mode's whole verb set:
   is heading for lit), and an **Edit** toggle.
 - Editing is a **board gesture**: the stations light up, a click appends a stop,
   a click on an existing stop removes it. Click order is call order.
-- **+ Train** orders another one at a free depot, in service on the line being
-  edited — refused while a train is still standing in the depot, because the
-  new one would be built on top of it.
+- **+ Train** orders another one, in service on the line being edited. A depot
+  is a QUEUE: ordering never fails for want of room, and trains roll out of the
+  shed one after another as the mouth clears (a busy depot delays the
+  departure, not the purchase). Queued trains show a 🏠 in the panel.
 - Platforms show the **liveries calling there**, so an unserved station is
   visible at a glance.
 - **No manual points.** `ModeControls.switches` is false here: the train decides

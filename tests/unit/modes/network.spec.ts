@@ -273,23 +273,63 @@ describe("the service: buying trains and setting lines", () => {
     // running until it has pulled out. Ask the SIM, not `game.occupied` — that
     // is the render mirror and it is only refreshed inside the rAF frame, so
     // headless it stays empty for ever (the hidden-tab trap).
-    for (let t = 0; t < 20 && game.sim.occupiedBy(game.depotTiles[0]); t += 0.1) {
+    for (let t = 0; t < 30 && game.sim.occupiedBy(game.depotTiles[0]); t += 0.1) {
       game.advance(0.1);
     }
     const stops = game.stationTiles.slice(0, 2);
-    const id = game.buyTrain(stops);
-    expect(id).not.toBeNull();
-    expect(game.trainLines[id!]).toEqual(stops);
-    expect(game.sim.trainNextStop(id!)).toBe(stops[0]);
+    const def = game.buyTrain(stops);
+    expect(def).not.toBeNull();
+    const id = def!.id;
+    expect(game.trainLines[id]).toEqual(stops);
+    expect(game.sim.trainNextStop(id)).toBe(stops[0]);
     // It is a real train: it has a livery and the sim is driving it.
-    expect(game.trainColors[id!]).toBeTruthy();
-    expect(game.sim.trainState(id!)).not.toBe("parked");
+    expect(game.trainColors[id]).toBeTruthy();
+    expect(game.sim.trainState(id)).not.toBe("parked");
+    expect(game.queuedTrains).not.toContain(id);
   });
 
-  it("refuses to build a train on top of one standing in the depot", () => {
+  // The depot is a QUEUE, not a gate: ordering never fails for want of room —
+  // what a busy shed delays is the departure, not the purchase.
+  it("queues trains ordered while the shed is busy, and rolls them out in order", () => {
     const game = gameFor();
-    // At t=0 the authored train has not moved: the depot is occupied.
+    // At t=0 the authored train is still standing in the only depot.
     expect(game.sim.occupiedBy(game.depotTiles[0])).toBeTruthy();
+
+    const stops = game.stationTiles.slice(0, 2);
+    const first = game.buyTrain(stops);
+    const second = game.buyTrain(stops);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    // Both were sold, and both are waiting their turn on the metals.
+    expect(game.queuedTrains).toEqual([first!.id, second!.id]);
+    expect(game.sim.trains[first!.id]).toBeUndefined();
+
+    // Run: they leave one after another, oldest first, as the mouth clears.
+    let firstOutAt = -1;
+    let secondOutAt = -1;
+    for (let t = 0; t < 120; t += 0.1) {
+      game.advance(0.1);
+      if (firstOutAt < 0 && game.sim.trains[first!.id]) firstOutAt = t;
+      if (secondOutAt < 0 && game.sim.trains[second!.id]) secondOutAt = t;
+      if (secondOutAt >= 0) break;
+    }
+    expect(firstOutAt).toBeGreaterThan(0);
+    expect(secondOutAt).toBeGreaterThan(firstOutAt);
+    expect(game.queuedTrains).toEqual([]);
+    // Both ended up in service on the line they were bought for.
+    expect(game.trainLines[first!.id]).toEqual(stops);
+    expect(game.trainLines[second!.id]).toEqual(stops);
+  });
+
+  it("returns null only when the board has no depot at all", () => {
+    const game = createGame(
+      { "0,0": expandKind("station", 1) },
+      [],
+      200,
+      networkMode,
+      1
+    );
+    expect(game.depotTiles).toEqual([]);
     expect(game.buyTrain([])).toBeNull();
   });
 });

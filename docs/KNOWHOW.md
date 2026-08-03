@@ -504,11 +504,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The player's whole verb set in the network mode: `game.setLine(trainId,
   stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
   view), so the loop is unit-testable headless.
-- `buyTrain` refuses when a train is standing in the depot — the new one would
-  be built on top of a body. With a 5-unit train and one depot that is ~20s of
-  unavailable "+ Train" after the start; the tooltip says why. Ordering also
-  has to teach the RENDERER about the train (`trainDefs`, `unitIds`,
-  `trainColors`) before `injectTrain`, or the sim drives a train nothing draws.
+- A depot is a QUEUE, not a gate: `buyTrain` never fails for want of room —
+  what a busy shed delays is the DEPARTURE, not the purchase. An order made
+  while the mouth is blocked goes on `pendingTrains`, and `releasePendingTrains`
+  (called from the world step) rolls them out oldest-first as the tile clears.
+  Only a board with NO depot returns null.
+- A queued train is exactly the state a SCHEDULED train sits in: DOM and livery
+  registered, no sim entry — `renderTrains` already hides those, so nothing new
+  was needed to keep a train in the shed invisible.
+- Two things must happen at ORDER time or the train is broken in a way that is
+  hard to see: the renderer roster (`trainDefs`, `unitIds`, `trainColors`) AND
+  the view's provided `trains` map (PlayView), which is what `<Train v-for>`
+  iterates. Miss the second and the sim drives a train with no sprite at all —
+  it happened, and only a browser check caught it.
 - Line editing is a BOARD gesture: `editingTrainId` in PlayView, station tiles
   get `.level-tile--pickable`, and a click appends the stop or removes it if it
   is already there. Click order IS call order.

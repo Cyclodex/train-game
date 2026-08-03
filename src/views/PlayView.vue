@@ -113,7 +113,13 @@
       </div>
       <div v-for="t in serviceTrains" :key="t.id" class="service-line">
         <span class="service-livery" :style="{ background: t.color }" />
-        <span class="service-id">{{ t.id }}</span>
+        <span class="service-id">
+          {{ t.id }}
+          <!-- Ordered but still in the shed: it leaves when the depot mouth
+               clears, so the queue is visible instead of the button looking
+               like it did nothing. -->
+          <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
+        </span>
         <span class="service-stops">
           <template v-if="t.stops.length">
             <span
@@ -1269,6 +1275,7 @@ class PlayView extends Vue {
     color: string;
     stops: string[];
     nextStop?: string;
+    queued: boolean;
   }[] {
     return Object.keys(this.game.trainColors)
       .sort()
@@ -1277,25 +1284,48 @@ class PlayView extends Vue {
         color: this.game.trainColors[id],
         stops: this.game.trainLines[id] ?? [],
         nextStop: this.game.sim.trainNextStop(id),
+        queued: this.game.queuedTrains.includes(id),
       }));
   }
-  // A train can only be ordered where trains come from — an empty depot.
+  // Ordering only needs a depot to exist. A busy one does not refuse the sale
+  // — the train is built and queues in the shed, and rolls out when the mouth
+  // clears (Transport Fever's rule: a full depot delays the departure, not the
+  // purchase).
   get canBuyTrain(): boolean {
-    return this.game.depotTiles.some(id => !this.game.occupied[id]);
+    return this.game.depotTiles.length > 0;
   }
   get buyTitle(): string {
     return this.canBuyTrain
       ? "Order another train, in service on the line you are editing"
-      : "No free depot — a train is standing in it";
+      : "This board has no depot to build a train in";
   }
   buyTrain(): void {
     const stops = this.editingTrainId
       ? (this.game.trainLines[this.editingTrainId] ?? [])
       : [];
+    // Prefer a depot that is free right now, so an order that CAN leave at
+    // once does; otherwise it joins the queue at the first one.
     const free = this.game.depotTiles.find(id => !this.game.occupied[id]);
-    const id = this.game.buyTrain(stops, free);
+    const def = this.game.buyTrain(stops, free);
+    if (!def) return;
+    // The board draws from the provided roster, so a bought train needs its
+    // TrainObject here or it would run invisibly — the sim would move a train
+    // with no sprite. (It did, until this was noticed.)
+    this.trains[def.id] = {
+      id: def.id,
+      x: def.x,
+      y: def.y,
+      status: TrainStatus.LeavingDepot,
+      type: def.type,
+      wagons: def.wagonIds.map(id => ({ id, type: def.type })),
+      ...(stops.length ? { line: [...stops] } : {}),
+    };
     // A train ordered with no line yet is the one you will want to route next.
-    if (id && stops.length === 0) this.editingTrainId = id;
+    if (stops.length === 0) this.editingTrainId = def.id;
+  }
+  // Trains ordered but still in the shed, waiting their turn on the metals.
+  get queuedTrainIds(): string[] {
+    return this.game.queuedTrains;
   }
   toggleEditLine(trainId: string): void {
     this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
@@ -2455,6 +2485,10 @@ export default toNative(PlayView);
 .service-stop--next {
   background: #f0b429;
   color: #221803;
+}
+.service-queued {
+  opacity: 0.75;
+  font-size: 11px;
 }
 .service-idle {
   color: #8b939c;
