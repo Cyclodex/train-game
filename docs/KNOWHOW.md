@@ -500,6 +500,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## THE LINE VIEW — names, call order, the route on the metals (2026-08-03)
+- `tiles/stationNames.ts`: a platform has a NAME (`TileCell.stationName`), and
+  a board that authored none gets a stable LETTER in reading order. A line has
+  to read as places — "Nordstadt → Ostmarkt" — or the panel is a list of
+  coordinates nobody can match to the board.
+- The name is an HTML plate, NOT SVG text: a fixed shield cannot size itself to
+  a word, and the first cut crushed "Nordstadt" into 18px.
+- `game.lineOverlay` (set via `setLineOverlay(trainId | null)`) is what the
+  board draws while a line is edited: a big call-order badge per stop, a
+  hollow "+" on the stations you could still add, and the route along the
+  metals. It is ENGINE work — the route is planned with the same
+  `planRailRoute` the trains drive, so the picture cannot disagree with them.
+- The overlay stores the SEGMENTS driven per tile (`[entry, exit][]`), never
+  just tile ids: on a junction, tile-level lighting paints every arm — the
+  depot spur included — and the drawn line then shows a route the train never
+  takes. That was visible on the first screenshot and is now a test.
+- Route colour is deliberately FIXED amber, not the train's livery: only one
+  line is drawn at a time and "grey" is a legitimate livery that made the route
+  invisible against the ballast.
+- REACTIVITY TRAP, hit again: the panel read `sim.trainNextStop`/`isRetiring`
+  directly. The sim is `markRaw`, so Vue never re-ran those getters and the
+  "next stop" pip froze on whatever it showed first. Anything the view watches
+  must come from a reactive mirror refreshed in the frame loop
+  (`trainNextStops`, `retiringTrains`), never from the sim.
+
 ## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
 - The player's whole verb set in the network mode: `game.setLine(trainId,
   stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the

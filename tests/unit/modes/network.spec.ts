@@ -13,6 +13,7 @@ import { Level } from "@/tiles/model";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { createGame, TrainDef } from "@/game";
 import { MODES } from "@/modes/index";
+import { Position } from "@/types";
 
 function twoStationLevel(): Level {
   return {
@@ -429,5 +430,80 @@ describe("taking a train out of service", () => {
     expect(game.sim.trains[extra!.id]).toBeDefined();
     expect(game.sim.trainNextStop(extra!.id)).toBeDefined();
     expect(game.sim.trainState(extra!.id)).not.toBe("parked");
+  });
+});
+
+// The line overlay: what the board shows while a line is being drawn. It is
+// engine work, not decoration — the route comes from the same planner the
+// trains drive, so the picture cannot disagree with where they will go.
+describe("the line overlay", () => {
+  function gameFor() {
+    const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
+      id: t.id,
+      x: t.x,
+      y: t.y,
+      type: t.type,
+      wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
+    }));
+    return createGame(
+      networkmode.level,
+      trains,
+      200,
+      networkMode,
+      1,
+      networkmode.colors
+    );
+  }
+
+  it("numbers the stops in call order and draws the metals between them", () => {
+    const game = gameFor();
+    game.setLineOverlay("circle");
+    const stops = networkmode.trains.circle.line ?? [];
+    stops.forEach((id, i) => {
+      expect(game.lineOverlay.order[id]).toBe(i + 1);
+    });
+    // The ring's tiles are drawn, and each carries the SEGMENTS driven.
+    expect(Object.keys(game.lineOverlay.path).length).toBeGreaterThan(stops.length);
+    for (const segs of Object.values(game.lineOverlay.path)) {
+      expect(segs.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("never lights an arm the line does not take — the depot spur stays dark", () => {
+    const game = gameFor();
+    game.setLineOverlay("circle");
+    // 1,3 is the T where the shed joins the ring: the line runs THROUGH it
+    // (north-south) and never turns into the depot.
+    const atJunction = game.lineOverlay.path["1,3"] ?? [];
+    expect(atJunction.length).toBeGreaterThan(0);
+    for (const [a, b] of atJunction) {
+      expect([a, b]).not.toContain(Position.Left); // Left is the shed
+    }
+    // …and the depot tile itself is not on the drawn line at all.
+    expect(game.lineOverlay.path["0,3"]).toBeUndefined();
+  });
+
+  it("redraws as the line is edited, and clears on null", () => {
+    const game = gameFor();
+    game.setLineOverlay("circle");
+    const before = Object.keys(game.lineOverlay.path).length;
+
+    game.setLine("circle", game.stationTiles.slice(0, 2));
+    expect(Object.keys(game.lineOverlay.order).length).toBe(2);
+    expect(Object.keys(game.lineOverlay.path).length).not.toBe(before);
+
+    game.setLineOverlay(null);
+    expect(game.lineOverlay.trainId).toBeNull();
+    expect(game.lineOverlay.order).toEqual({});
+    expect(game.lineOverlay.path).toEqual({});
+  });
+
+  it("names every platform, so the panel lists places and not coordinates", () => {
+    const game = gameFor();
+    expect(game.stationLabels["2,1"]).toBe("Nordstadt");
+    expect(Object.keys(game.stationLabels).sort()).toEqual(
+      game.stationTiles.slice().sort()
+    );
   });
 });

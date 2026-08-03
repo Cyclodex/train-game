@@ -2,6 +2,8 @@ import { reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
 import { stationDemandOf, parkAndRideTargets } from "@/tiles/catchment";
+import { stationNames } from "@/tiles/stationNames";
+import { planRailRoute } from "@/sim/railRouter";
 import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
 import type { RouteStep } from "@/tiles/routePlanner";
 import {
@@ -422,6 +424,21 @@ export interface Game {
   // Trains gone from the game — retired or scrapped. The board reads this to
   // stop drawing them.
   removedTrains: string[];
+  // trainId -> the stop it is heading for, and the ids being withdrawn. View
+  // copies of sim state, refreshed each frame (the sim itself is not reactive).
+  trainNextStops: Record<string, string>;
+  retiringTrains: string[];
+  // stationTileId -> its display name.
+  stationLabels: Record<string, string>;
+  // The line currently being shown on the board (call-order badges + the route
+  // along the metals), or a cleared one. Set by the view via setLineOverlay.
+  lineOverlay: {
+    trainId: string | null;
+    colour: string;
+    order: Record<string, number>;
+    path: Record<string, [Port, Port][]>;
+  };
+  setLineOverlay(trainId: string | null): void;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -673,6 +690,76 @@ export function createGame(
   // keeps its own roster keyed by id and cannot know when a RETIRING train
   // finally reaches its shed, so it reads this instead.
   const removedTrains = reactive([]) as string[];
+  // The stop each train is heading for, and which are being withdrawn. These
+  // live in the SIM, which is markRaw and therefore invisible to Vue — a view
+  // getter that read them directly never re-ran and the panel froze on whatever it
+  // showed first. Mirrored per frame like every other live readout.
+  const trainNextStops = reactive({}) as Record<string, string>;
+  const retiringTrains = reactive([]) as string[];
+
+  // What each platform is CALLED. Level data, so computed once.
+  const stationLabels = stationNames(level);
+
+  // THE LINE OVERLAY: while a line is being edited the board shows it the way
+  // Transport Fever does — a big call-order number on each stop and the route
+  // itself drawn along the metals. Held here rather than in the view because
+  // the ROUTE has to be planned (the same router the trains use), and that is
+  // engine work, not rendering.
+  const lineOverlay = reactive({
+    trainId: null as string | null,
+    colour: "",
+    // stationTileId -> its 1-based place in the line.
+    order: {} as Record<string, number>,
+    // The SEGMENTS the line runs over, per tile: the (entry, exit) pairs a
+    // train actually drives. Not merely the tile ids — on a junction that
+    // would light every arm, including the depot spur the line never takes.
+    path: {} as Record<string, [Port, Port][]>,
+  });
+
+  function clearLineOverlay(): void {
+    lineOverlay.trainId = null;
+    lineOverlay.colour = "";
+    for (const k of Object.keys(lineOverlay.order)) delete lineOverlay.order[k];
+    for (const k of Object.keys(lineOverlay.path)) delete lineOverlay.path[k];
+  }
+
+  // Show (or re-show, after an edit) the line a train runs. Null clears it.
+  function setLineOverlay(trainId: string | null): void {
+    clearLineOverlay();
+    if (!trainId) return;
+    lineOverlay.trainId = trainId;
+    lineOverlay.colour = trainColors[trainId] ?? "#f0b429";
+    const stops = trainLines[trainId] ?? [];
+    stops.forEach((id, i) => {
+      // A stop listed twice keeps its FIRST place — the badge says when the
+      // train first calls there, which is what a reader wants.
+      if (!(id in lineOverlay.order)) lineOverlay.order[id] = i + 1;
+    });
+    const addSegment = (tileId: string, a: Port, b: Port) => {
+      const at = (lineOverlay.path[tileId] ??= []);
+      if (!at.some(([x, y]) => (x === a && y === b) || (x === b && y === a))) {
+        at.push([a, b]);
+      }
+    };
+    // The metals between each pair of stops, planned with the router the
+    // trains themselves use — so the drawn line is the line they will drive,
+    // not a straight guess between platforms.
+    for (let i = 0; i < stops.length; i++) {
+      const from = stops[i];
+      const to = stops[(i + 1) % stops.length];
+      if (stops.length < 2 || from === to) continue;
+      const coord = parseCoordId(from);
+      // Try each way out of the station; take the shorter route that arrives.
+      let best: { tileId: string; entryPort: Port; exitPort: Port }[] | null = null;
+      for (const entry of [Position.Left, Position.Right, Position.Top, Position.Bottom]) {
+        const plan = planRailRoute(level, { coord, entryPort: entry }, [to]);
+        if (plan && (!best || plan.steps.length < best.length)) best = plan.steps;
+      }
+      for (const step of best ?? []) {
+        addSegment(step.tileId, step.entryPort, step.exitPort);
+      }
+    }
+  }
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree. A seeded RNG keeps the
@@ -1209,6 +1296,20 @@ export function createGame(
     id => level[id]?.role === "station"
   );
 
+  // Mirror the per-train facts the service panel shows. Cheap: a handful of
+  // trains, and Vue only notifies on a real change.
+  function updateTrainStatus() {
+    for (const def of trainDefs) {
+      const stop = sim.trainNextStop(def.id);
+      if (stop) trainNextStops[def.id] = stop;
+      else if (def.id in trainNextStops) delete trainNextStops[def.id];
+      const retiring = sim.isRetiring(def.id);
+      const at = retiringTrains.indexOf(def.id);
+      if (retiring && at < 0) retiringTrains.push(def.id);
+      else if (!retiring && at >= 0) retiringTrains.splice(at, 1);
+    }
+  }
+
   // Mirror each station's live platform queue for the crowd render. Vue's
   // reactive set is a no-op while the count is unchanged, so this is cheap.
   function updateStationQueues() {
@@ -1618,6 +1719,8 @@ export function createGame(
     const def = defById[trainId];
     if (def) def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
+    // The picture on the board is of THIS line; redraw it as it is edited.
+    if (lineOverlay.trainId === trainId) setLineOverlay(trainId);
     return true;
   }
   const objective = reactive(tracker.state()) as ObjectiveState;
@@ -1793,6 +1896,7 @@ export function createGame(
     updateRoadSignals();
     updateReservations();
     updateStationQueues();
+    updateTrainStatus();
     raf = requestAnimationFrame(frame);
   }
 
@@ -2202,6 +2306,11 @@ export function createGame(
     retireTrain,
     scrapTrain,
     removedTrains,
+    trainNextStops,
+    retiringTrains,
+    stationLabels,
+    lineOverlay,
+    setLineOverlay,
     roadCars,
     carJunctions,
     carDestinations,

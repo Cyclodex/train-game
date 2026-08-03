@@ -50,6 +50,11 @@ export interface TileCell {
   // before continuing. Routing stays derived from `connections` either way —
   // the role only adds behaviour (park/bounce vs dwell) and render.
   role?: "depot" | "station";
+  // What this station is CALLED. A line reads as a list of places, not a list
+  // of coordinates, so a board that means anything names its platforms. Absent
+  // → a derived letter (see tiles/stationNames.ts), which keeps every older
+  // board working and still gives the panel something to print.
+  stationName?: string;
   // The ground under this cell. Absent = grass. See tiles/terrain.ts and
   // docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md.
   terrain?: TerrainKind;

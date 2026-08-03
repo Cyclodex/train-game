@@ -120,6 +120,9 @@
                like it did nothing. -->
           <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
         </span>
+        <!-- The stops as PLACES, not numbers: a line reads "A → C → D", and
+             the one the train is heading for is lit. Hovering gives the tile
+             for anyone debugging a board. -->
         <span class="service-stops">
           <template v-if="t.stops.length">
             <span
@@ -127,7 +130,8 @@
               :key="s + i"
               class="service-stop"
               :class="{ 'service-stop--next': s === t.nextStop }"
-              >{{ i + 1 }}</span
+              :title="`stop ${i + 1}: ${s}`"
+              >{{ stationLabel(s) }}</span
             >
           </template>
           <span v-else class="service-idle">no line</span>
@@ -1300,9 +1304,11 @@ class PlayView extends Vue {
         id,
         color: this.game.trainColors[id],
         stops: this.game.trainLines[id] ?? [],
-        nextStop: this.game.sim.trainNextStop(id),
+        // From the reactive mirrors, NOT the sim: the sim is markRaw, so a
+        // getter reading it never re-runs and the panel freezes.
+        nextStop: this.game.trainNextStops[id],
         queued: this.game.queuedTrains.includes(id),
-        retiring: this.game.sim.isRetiring(id),
+        retiring: this.game.retiringTrains.includes(id),
       }));
   }
   // Ordering only needs a depot to exist. A busy one does not refuse the sale
@@ -1339,7 +1345,10 @@ class PlayView extends Vue {
       ...(stops.length ? { line: [...stops] } : {}),
     };
     // A train ordered with no line yet is the one you will want to route next.
-    if (stops.length === 0) this.editingTrainId = def.id;
+    if (stops.length === 0) {
+      this.editingTrainId = def.id;
+      this.game.setLineOverlay(def.id);
+    }
   }
   // Trains ordered but still in the shed, waiting their turn on the metals.
   get queuedTrainIds(): string[] {
@@ -1354,7 +1363,7 @@ class PlayView extends Vue {
   retireTrain(trainId: string, ev: MouseEvent): void {
     if (ev.shiftKey) {
       this.game.scrapTrain(trainId);
-      if (this.editingTrainId === trainId) this.editingTrainId = null;
+      if (this.editingTrainId === trainId) this.stopEditingLine();
       return;
     }
     if (!this.game.retireTrain(trainId)) {
@@ -1362,10 +1371,21 @@ class PlayView extends Vue {
       // say so rather than appearing to do nothing.
       this.game.scrapTrain(trainId);
     }
-    if (this.editingTrainId === trainId) this.editingTrainId = null;
+    if (this.editingTrainId === trainId) this.stopEditingLine();
+  }
+
+  stopEditingLine(): void {
+    this.editingTrainId = null;
+    this.game.setLineOverlay(null);
+  }
+  stationLabel(tileId: string): string {
+    return this.game.stationLabels[tileId] ?? tileId;
   }
   toggleEditLine(trainId: string): void {
     this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
+    // Draw (or clear) the line on the board: big call-order numbers on the
+    // stops and the route along the metals.
+    this.game.setLineOverlay(this.editingTrainId);
   }
   // A click on a station while a line is being drawn: append it, or remove it
   // if it is already a stop. Order is click order, which is the order the
@@ -2456,6 +2476,7 @@ export default toNative(PlayView);
   position: absolute;
   top: 16px;
   right: 16px;
+  max-width: 340px;
   z-index: 30;
   min-width: 260px;
   padding: 10px 12px;
@@ -2505,18 +2526,20 @@ export default toNative(PlayView);
 .service-stops {
   flex: 1 1 auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
 }
+/* A stop is a PLACE, so its chip sizes to the name rather than being a disc
+   with a word crushed into it. */
 .service-stop {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
+  padding: 1px 7px;
+  border-radius: 999px;
   background: #2b3138;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 /* The stop the train is actually heading for right now. */
 .service-stop--next {
