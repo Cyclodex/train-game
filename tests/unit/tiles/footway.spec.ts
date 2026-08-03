@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { Level, TileCell } from "@/tiles/model";
-import { nWayLanes, twoWay } from "@/tiles/lanes";
+import { nWayLanes, oneWay, twoWay } from "@/tiles/lanes";
 import { expandKind } from "@/tiles/kinds";
 import {
   hasFootCrossing,
@@ -22,6 +22,11 @@ const street = (from = Position.Left, to = Position.Right): TileCell => ({
   road: twoWay(from, to),
   terrain: "urban",
 });
+
+// The pavement art of ONE cell standing on its own. `pavementPaths` seam-matches
+// each end to its neighbour, so it takes the level; an isolated tile has none
+// and keeps its own full width, which is what these cases are about.
+const draw = (cell: TileCell, size = 100): string => pavementPaths({ "0,0": cell }, "0,0", size);
 
 describe("footways: derived by default, opt out explicitly", () => {
   it("gives every street a pavement without anyone asking", () => {
@@ -54,10 +59,58 @@ describe("footways: derived by default, opt out explicitly", () => {
   it("draws one band per side and never twice for a two-way street", () => {
     // twoWay is two lanes over the SAME ground; painting per lane would stack
     // two bands per side and show a seam at every tile edge.
-    const paths = pavementPaths(street()).match(/<path /g) ?? [];
+    const paths = draw(street()).match(/<path /g) ?? [];
     expect(paths).toHaveLength(2);
-    expect(pavementPaths(town())).toBe("");
-    expect(pavementPaths({ ...street(), footway: "none" })).toBe("");
+    expect(draw(town())).toBe("");
+    expect(draw({ ...street(), footway: "none" })).toBe("");
+  });
+
+  // THE BUG THAT VANISHED THE PAVEMENT ON EVERY BEND. A curve carries no lanes
+  // on the port opposite an arm, so the old `laneCount(p) + laneCount(opposite)`
+  // sum measured every bend as the 2-lane minimum: a 2-lanes-each-way street
+  // laid its band 28 units in from its own kerb — under the tarmac, which is
+  // painted over it — and the pavement disappeared for the length of the corner.
+  it("keeps a multi-lane bend's pavement OUTSIDE the tarmac", () => {
+    const straight: TileCell = {
+      connections: [],
+      road: nWayLanes(Position.Left, Position.Right, 2),
+    };
+    const bend: TileCell = {
+      connections: [],
+      road: nWayLanes(Position.Left, Position.Bottom, 2),
+    };
+    // A bend is exactly as wide as the straight it continues — 4 lanes across,
+    // so its kerb (and its pavement) sits at the same distance out. Before the
+    // fix the bend measured 2 lanes and the band landed under the road.
+    expect(roadHalfUnits(bend)).toBe(2 * 14);
+    expect(roadHalfUnits(bend)).toBe(roadHalfUnits(straight));
+    expect(pavementOffsets(bend)[0]).toBeGreaterThan(roadHalfUnits(bend));
+  });
+
+  // A 1-lane one-way street is drawn its true ONE lane wide (the run-max kerb
+  // anchor), so a min-2 floor left its pavement floating half a lane out in the
+  // grass with a strip of ground behind the kerb.
+  it("hugs the kerb of a single-lane one-way street", () => {
+    const one: TileCell = { connections: [], road: [oneWay(Position.Left, Position.Right)] };
+    expect(roadHalfUnits(one)).toBe(7);
+    expect(roadHalfUnits(street())).toBe(14);
+  });
+
+  // A width change is a TAPER on the tarmac, so it has to be a taper on the
+  // pavement too: measure the band against the tile alone and it steps sideways
+  // at a seam where the kerb it follows does not.
+  it("meets a narrower neighbour flush instead of stepping at the seam", () => {
+    const level: Level = {
+      "0,0": { connections: [], road: nWayLanes(Position.Left, Position.Right, 2) },
+      "1,0": street(),
+    };
+    const endOf = (id: string, which: 0 | 1) =>
+      [...pavementPaths(level, id, 100).matchAll(/d="M ([\d.-]+) ([\d.-]+) L ([\d.-]+) ([\d.-]+)"/g)]
+        .map(m => (which === 0 ? Number(m[2]) : Number(m[4])))
+        .sort((a, b) => a - b);
+    // The wide tile's right-hand end and the narrow tile's left-hand end are the
+    // same seam: the two bands have to arrive at the same y.
+    expect(endOf("0,0", 1)).toEqual(endOf("1,0", 0));
   });
 });
 
@@ -195,7 +248,7 @@ describe("the pavement reaches the tile boundary", () => {
   // renderer fix is a layer of its own (TileGround → .tile-paving); this is the
   // geometry half of the contract, so a band can never be authored short.
   it("starts on one edge and ends on the other, on a straight", () => {
-    const d = pavementPaths(street(), 100);
+    const d = draw(street(), 100);
     // Every band on a straight runs the full width of the tile.
     const ends = [...d.matchAll(/d="M (-?[\d.]+) (-?[\d.]+) L (-?[\d.]+) (-?[\d.]+)"/g)];
     expect(ends.length).toBe(2);
@@ -207,7 +260,7 @@ describe("the pavement reaches the tile boundary", () => {
 
   it("meets the tile edge on a bend too, on both sides", () => {
     const bend: TileCell = { connections: [], road: twoWay(Position.Left, Position.Bottom) };
-    const ds = [...pavementPaths(bend, 100).matchAll(/ d="([^"]+)"/g)].map(m => m[1]);
+    const ds = [...draw(bend, 100).matchAll(/ d="([^"]+)"/g)].map(m => m[1]);
     expect(ds.length).toBe(2);
     for (const d of ds) {
       const pts = [...d.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map(m => [Number(m[1]), Number(m[2])]);

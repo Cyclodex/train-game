@@ -232,7 +232,7 @@ class TileGround extends Vue {
     // every tile's patch (see the layer notes), below the road surface and the
     // buildings, and a long way below the people walking on it.
     if (this.layer === "paving")
-      return this.accessHtml() + pavementPaths(this.level[this.coordId], this.units);
+      return this.accessHtml() + pavementPaths(this.level, this.coordId, this.units);
     return this.baseHtml;
   }
 }
