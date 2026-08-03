@@ -2626,13 +2626,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
   tarmac is 168px of a 200px tile, so the post stood IN the carriageway and the arm
   covered the two inner lanes. Same lesson as the pavement offset in `footway.ts` —
   road width is data, so anything beside a road must read it.
-- ONE HALF-BARRIER PER APPROACH, ON OPPOSITE VERGES. Traffic keeps right, so the
-  down carriageway is the local −x half and its bar hinges on the −x verge; the up
-  carriageway's hinges on +x. Each arm is HALF the road long and they meet at the
-  centreline — the diagonal pair a real Bahnübergang uses, and the only arrangement
-  that scales (a single full-width arm on a 6-lane road is absurd). ONE-WAY roads get
-  ONE full-width barrier on the approach side instead: no oncoming half to leave
-  clear, and a bar behind the crossing guards nothing.
+- A BIG STREET HAS FOUR BARS: both sides of the rails × both verges
+  (`BIG_STREET_LANES = 2`, i.e. anything wider than 1+1). Each row is closed by its
+  own pair meeting at the centreline, so NO arm is ever longer than half the road —
+  reaching the far verge on a 6-lane street would swing an arm right across the
+  oncoming lanes. A narrow 1+1 street keeps the classic diagonal PAIR: one bar per
+  row, on the approaching driver's right verge (traffic keeps right, so the down
+  carriageway is the local −x half and its bar hinges on −x).
+- ROWS ≠ BARS, AND SIGNS GO WITH THE ROW. One warning triangle per APPROACH, at that
+  approach's driver's-right post — two on a two-way street however many bars it has.
+  ONE-WAY roads are guarded on the approach side ONLY (a bar behind the crossing
+  guards nothing): one row, one sign, and one bar if narrow / a verge pair if big.
 - THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
   CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
   (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the

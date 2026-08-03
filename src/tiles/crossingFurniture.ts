@@ -25,10 +25,16 @@ import { roadSeamPaintTotal } from "@/tiles/lanes";
 // HANDEDNESS. Traffic keeps right, so a vehicle travelling local-DOWN drives on
 // the local −x half (facing +y on a y-down screen, its right hand points −x) and
 // meets the rails coming from the local top. Its half-barrier therefore hinges on
-// the −x verge; the local-UP approach's hinges on +x. That diagonal pair — one
-// bar left, one bar right, each covering its own carriageway — is how a real
-// Bahnübergang guards a dual carriageway, and it scales to any lane count: each
-// arm is only ever half the road long.
+// the −x verge; the local-UP approach's hinges on +x. On a narrow street that is
+// the whole arrangement — the classic diagonal pair of half-barriers, each arm
+// covering its own carriageway.
+//
+// A BIG STREET GETS A BAR ON BOTH VERGES OF BOTH ROWS — four in total. Once a
+// carriageway is more than one lane wide, guarding it from the far verge means an
+// arm reaching across the oncoming lanes, so each row is closed by its OWN pair:
+// one bar in from the left, one in from the right, meeting in the middle. That is
+// also how a real wide crossing is built — no arm is ever longer than half the
+// road, whatever the lane count.
 
 export type RoadFlow = "two-way" | "down" | "up";
 
@@ -36,6 +42,7 @@ export type RoadFlow = "two-way" | "down" | "up";
 export interface RoadSpan {
   xMin: number; // px, the −x kerb (negative on a two-way road)
   xMax: number; // px, the +x kerb
+  lanes: number; // painted lanes across, both directions — what makes a street "big"
   flow: RoadFlow;
 }
 
@@ -96,8 +103,9 @@ export function crossingRoadSpan(p: {
     const selfTotal = Math.max(p.downLanes + p.upLanes, 2);
     const totalDown = roadSeamPaintTotal(selfTotal, p.crossDown, p.downIsJunction);
     const totalUp = roadSeamPaintTotal(selfTotal, p.crossUp, p.upIsJunction);
-    const half = (((totalDown + totalUp) / 2) * W) / 2;
-    return { xMin: -half, xMax: half, flow: "two-way" };
+    const lanes = (totalDown + totalUp) / 2;
+    const half = (lanes * W) / 2;
+    return { xMin: -half, xMax: half, lanes, flow: "two-way" };
   }
 
   // One-way: kerb-anchored to the run's widest count (see laneOffset.ts
@@ -116,19 +124,34 @@ export function crossingRoadSpan(p: {
   // The closing lane keeps its tarmac across a narrowing tile, so the inner edge
   // runs at the wider of the two ends on the exit side; take the mid-tile value.
   const inner = kerb - ((entryCount + Math.max(entryCount, exitCount)) / 2) * W;
+  const lanes = (kerb - inner) / W;
   return down
-    ? { xMin: -kerb, xMax: -inner, flow: "down" }
-    : { xMin: inner, xMax: kerb, flow: "up" };
+    ? { xMin: -kerb, xMax: -inner, lanes, flow: "down" }
+    : { xMin: inner, xMax: kerb, lanes, flow: "up" };
 }
+
+// Above this many painted lanes a street is BIG: every guarded row gets a bar in
+// from BOTH verges instead of one bar reaching across. Two lanes (1+1) is the
+// narrow street that keeps the classic diagonal pair.
+export const BIG_STREET_LANES = 2;
 
 /**
  * Where the booms and signs stand for a road of the given painted span.
  *
- * Two-way → two half-barriers, one hinged on each verge, each reaching to the
- * centreline: the local-top row guards the down carriageway (−x), the bottom row
- * the up carriageway (+x). One-way → a single FULL barrier, on the approach side
- * only, spanning the whole width (there is no oncoming half to leave clear, and
- * a barrier behind a one-way crossing guards nothing).
+ * ROWS. A two-way street is guarded on both sides of the rails — the local-top
+ * row stops the down carriageway, the bottom row the up one. A one-way street
+ * gets its single row on the approach side only; a barrier behind a one-way
+ * crossing guards nothing.
+ *
+ * BARS PER ROW. A narrow street (≤ `BIG_STREET_LANES`) takes ONE bar per row,
+ * hinged on the verge to the approaching driver's right. A big street takes TWO
+ * per row — one in from each verge, meeting in the middle — so four in total on
+ * an ordinary two-way street. Reaching the far verge on a wide road would mean an
+ * arm swinging right across the oncoming lanes; the pair keeps every arm to half
+ * the road however many lanes it has.
+ *
+ * SIGNS are per ROW, not per bar: one warning triangle per approach, standing at
+ * that approach's driver's-right post, the way a crossing is actually signed.
  */
 export function crossingLayout(size: number, span: RoadSpan): CrossingLayout {
   const verge = size * VERGE_FRAC;
@@ -139,24 +162,33 @@ export function crossingLayout(size: number, span: RoadSpan): CrossingLayout {
 
   const leftHinge = clamp(span.xMin - verge);
   const rightHinge = clamp(span.xMax + verge);
-  // The tip of a half-barrier: the centreline, but never behind its own hinge
-  // (a one-way road can sit entirely on one side of it).
-  const midTip = Math.min(Math.max(0, span.xMin), span.xMax);
+  const big = span.lanes > BIG_STREET_LANES;
+  // Where two bars of the same row meet. On a two-way street that is the
+  // centreline — each bar then covers exactly its own carriageway — and on a
+  // one-way street (no centreline) the middle of the tarmac.
+  const meet = span.flow === "two-way" ? 0 : (span.xMin + span.xMax) / 2;
 
   const booms: CrossingBoom[] = [];
   const signs: CrossingSign[] = [];
-  const add = (y: number, hinge: number, tip: number, signY: number) => {
-    const length = Math.abs(tip - hinge);
-    booms.push({ y, hinge, length, dir: tip >= hinge ? 1 : -1 });
-    signs.push({ x: hinge, y: signY });
+  const bar = (y: number, hinge: number, tip: number) =>
+    booms.push({ y, hinge, length: Math.abs(tip - hinge), dir: tip >= hinge ? 1 : -1 });
+
+  // One guarded row: `side` is the approaching driver's right-hand verge (−1 for
+  // the down carriageway, +1 for the up one) — where its sign stands, and where
+  // its single bar hinges when the street is narrow enough for one.
+  const row = (y: number, side: 1 | -1, signY: number) => {
+    if (big) {
+      bar(y, leftHinge, meet);
+      bar(y, rightHinge, meet);
+    } else if (side < 0) {
+      bar(y, leftHinge, span.flow === "two-way" ? 0 : span.xMax);
+    } else {
+      bar(y, rightHinge, span.flow === "two-way" ? 0 : span.xMin);
+    }
+    signs.push({ x: side < 0 ? leftHinge : rightHinge, y: signY });
   };
 
-  if (span.flow !== "up") {
-    // The down carriageway approaches from the local top.
-    add(rowTop, leftHinge, span.flow === "down" ? span.xMax : midTip, rowTop - gap);
-  }
-  if (span.flow !== "down") {
-    add(rowBottom, rightHinge, span.flow === "up" ? span.xMin : midTip, rowBottom + gap);
-  }
+  if (span.flow !== "up") row(rowTop, -1, rowTop - gap);
+  if (span.flow !== "down") row(rowBottom, 1, rowBottom + gap);
   return { booms, signs };
 }

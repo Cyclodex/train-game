@@ -94,42 +94,68 @@ describe("crossing furniture — the painted span it is measured from", () => {
 });
 
 describe("crossing furniture — a bar on the left and a bar on the right", () => {
-  // 1..3 lanes per direction: up to 168px of a 200px tile, every width a board
-  // actually uses. (Wider than the tile is the clamp's business, tested below.)
-  it("gives a two-way street one half-barrier per approach, hinged off the tarmac", () => {
-    for (const n of [1, 2, 3]) {
+  const verge = SIZE * VERGE_FRAC;
+  const rowTop = BOOM_ROW_FRACS[0] * SIZE;
+  const rowBottom = BOOM_ROW_FRACS[1] * SIZE;
+
+  it("gives a BIG street four bars — two per row, one in from each verge", () => {
+    // 2..3 lanes per direction. This is the arrangement the fix is about: on a
+    // wide road no arm may reach across the oncoming lanes, so every guarded row
+    // is closed by its own pair meeting at the centreline.
+    for (const n of [2, 3]) {
       const span = twoWaySpan(n);
       const { booms, signs } = crossingLayout(SIZE, span);
-      expect(booms).toHaveLength(2);
-      expect(signs).toHaveLength(2);
+      expect(booms).toHaveLength(4);
+      expect(signs).toHaveLength(2); // one warning triangle per APPROACH, not per bar
 
-      const [top, bottom] = booms;
-      // One row either side of the rails, which run through the tile's middle.
-      expect(top.y).toBeCloseTo(BOOM_ROW_FRACS[0] * SIZE, 6);
-      expect(bottom.y).toBeCloseTo(BOOM_ROW_FRACS[1] * SIZE, 6);
-      // Opposite verges: the down carriageway's bar on the left, the up one's
-      // on the right — the diagonal pair a real crossing uses.
-      expect(top.hinge).toBeLessThan(0);
-      expect(bottom.hinge).toBeGreaterThan(0);
-      expect(top.dir).toBe(1);
-      expect(bottom.dir).toBe(-1);
+      for (const [y, pair] of [
+        [rowTop, booms.slice(0, 2)],
+        [rowBottom, booms.slice(2)],
+      ] as const) {
+        const [left, right] = pair;
+        expect(left.y).toBeCloseTo(y, 6);
+        expect(right.y).toBeCloseTo(y, 6);
+        // 1. No post stands on the road — one on each verge.
+        expect(left.hinge).toBeCloseTo(span.xMin - verge, 6);
+        expect(right.hinge).toBeCloseTo(span.xMax + verge, 6);
+        // 2. The row is fully guarded: the two arms meet at the centreline.
+        expect(left.dir).toBe(1);
+        expect(right.dir).toBe(-1);
+        expect(left.hinge + left.length).toBeCloseTo(0, 6);
+        expect(right.hinge - right.length).toBeCloseTo(0, 6);
+        // …and neither is longer than half the road plus its verge.
+        expect(left.length).toBeCloseTo(n * W + verge, 6);
+        expect(right.length).toBeCloseTo(n * W + verge, 6);
+      }
+    }
+  });
 
-      // 1. No post stands on the road.
-      const verge = SIZE * VERGE_FRAC;
-      expect(top.hinge).toBeCloseTo(span.xMin - verge, 6);
-      expect(bottom.hinge).toBeCloseTo(span.xMax + verge, 6);
+  it("leaves a narrow 1+1 street the classic diagonal pair", () => {
+    const span = twoWaySpan(1);
+    const { booms, signs } = crossingLayout(SIZE, span);
+    expect(booms).toHaveLength(2);
+    expect(signs).toHaveLength(2);
+    const [top, bottom] = booms;
+    expect(top.y).toBeCloseTo(rowTop, 6);
+    expect(bottom.y).toBeCloseTo(rowBottom, 6);
+    // Opposite verges: the down carriageway's bar on the left, the up one's on
+    // the right, each covering its own lane.
+    expect(top.hinge).toBeCloseTo(span.xMin - verge, 6);
+    expect(bottom.hinge).toBeCloseTo(span.xMax + verge, 6);
+    expect(top.hinge + top.length).toBeCloseTo(0, 6);
+    expect(bottom.hinge - bottom.length).toBeCloseTo(0, 6);
+  });
 
-      // 2. Between them the arms span kerb to kerb, meeting at the centreline.
-      expect(top.hinge + top.dir * top.length).toBeCloseTo(0, 6);
-      expect(bottom.hinge + bottom.dir * bottom.length).toBeCloseTo(0, 6);
-      expect(top.length).toBeGreaterThanOrEqual(-span.xMin);
-      expect(bottom.length).toBeGreaterThanOrEqual(span.xMax);
-
-      // Each sign stands beside its own post, up the road from it.
-      expect(signs[0].x).toBeCloseTo(top.hinge, 6);
-      expect(signs[1].x).toBeCloseTo(bottom.hinge, 6);
-      expect(signs[0].y).toBeLessThan(top.y);
-      expect(signs[1].y).toBeGreaterThan(bottom.y);
+  it("stands each sign at its own approach's driver's-right post", () => {
+    for (const n of [1, 2, 3]) {
+      const { booms, signs } = crossingLayout(SIZE, twoWaySpan(n));
+      expect(signs[0].x).toBeLessThan(0); // down carriageway: right hand is −x
+      expect(signs[1].x).toBeGreaterThan(0);
+      expect(signs[0].y).toBeLessThan(rowTop);
+      expect(signs[1].y).toBeGreaterThan(rowBottom);
+      // The sign shares a post with a bar of its own row.
+      expect(booms.some(b => b.y === rowTop && b.hinge === signs[0].x)).toBe(true);
+      expect(booms.some(b => b.y === rowBottom && b.hinge === signs[1].x)).toBe(true);
     }
   });
 
@@ -142,44 +168,41 @@ describe("crossing furniture — a bar on the left and a bar on the right", () =
     expect(wide.length).toBeGreaterThan(narrow.length * 2.5);
   });
 
-  it("guards a one-way street with a single full barrier, on the approach side", () => {
-    // No oncoming half to leave clear, and a barrier behind the crossing guards
-    // nothing — so one bar, spanning the whole carriageway.
-    const down = crossingLayout(
-      SIZE,
-      crossingRoadSpan({
-        size: SIZE,
-        downLanes: 3,
-        upLanes: 0,
-        crossDown: 3,
-        crossUp: 3,
-        downIsJunction: false,
-        upIsJunction: false,
-        runMax: 3,
-      }),
-    );
-    expect(down.booms).toHaveLength(1);
-    const b = down.booms[0];
-    expect(b.y).toBeCloseTo(BOOM_ROW_FRACS[0] * SIZE, 6); // the approach side
-    expect(b.dir).toBe(1);
-    expect(b.length).toBeCloseTo(3 * W + SIZE * VERGE_FRAC, 6); // the full width
+  function oneWaySpan(lanes: number, dir: "down" | "up") {
+    return crossingRoadSpan({
+      size: SIZE,
+      downLanes: dir === "down" ? lanes : 0,
+      upLanes: dir === "up" ? lanes : 0,
+      crossDown: lanes,
+      crossUp: lanes,
+      downIsJunction: false,
+      upIsJunction: false,
+      runMax: lanes,
+    });
+  }
 
-    const up = crossingLayout(
-      SIZE,
-      crossingRoadSpan({
-        size: SIZE,
-        downLanes: 0,
-        upLanes: 3,
-        crossDown: 3,
-        crossUp: 3,
-        downIsJunction: false,
-        upIsJunction: false,
-        runMax: 3,
-      }),
-    );
-    expect(up.booms).toHaveLength(1);
-    expect(up.booms[0].y).toBeCloseTo(BOOM_ROW_FRACS[1] * SIZE, 6);
-    expect(up.booms[0].dir).toBe(-1);
+  it("guards a one-way street on the approach side only", () => {
+    // No oncoming half to leave clear, and a barrier behind the crossing guards
+    // nothing — so ONE row. A big one-way street still gets a bar from each verge.
+    const down = crossingLayout(SIZE, oneWaySpan(3, "down"));
+    expect(down.signs).toHaveLength(1);
+    expect(down.booms).toHaveLength(2);
+    for (const b of down.booms) expect(b.y).toBeCloseTo(rowTop, 6); // the approach side
+    expect(down.booms[0].hinge + down.booms[0].length).toBeCloseTo(0, 6); // they meet
+    expect(down.booms[1].hinge - down.booms[1].length).toBeCloseTo(0, 6);
+
+    const up = crossingLayout(SIZE, oneWaySpan(3, "up"));
+    expect(up.booms).toHaveLength(2);
+    for (const b of up.booms) expect(b.y).toBeCloseTo(rowBottom, 6);
+  });
+
+  it("guards a single-lane one-way street with one full-width bar", () => {
+    const { booms, signs } = crossingLayout(SIZE, oneWaySpan(1, "down"));
+    expect(booms).toHaveLength(1);
+    expect(signs).toHaveLength(1);
+    const span = oneWaySpan(1, "down");
+    expect(booms[0].dir).toBe(1);
+    expect(booms[0].hinge + booms[0].length).toBeCloseTo(span.xMax, 6);
   });
 
   it("keeps the post inside the tile on an absurdly wide street", () => {

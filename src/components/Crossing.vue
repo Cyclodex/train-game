@@ -6,10 +6,10 @@
   occupies the tile).
 
   Everything is POSITIONED FROM THE ROAD, not from tile percentages: see
-  tiles/crossingFurniture.ts. A two-way street gets one half-barrier per
-  approach — hinged on the verge outside its own kerb, reaching to the centre
-  line, so a 3+3-lane street is guarded by a bar on the left AND one on the
-  right instead of one short bar parked on the tarmac. -->
+  tiles/crossingFurniture.ts. A BIG street is guarded on both sides of the rails
+  and from both verges — four bars, each hinged outside its own kerb and reaching
+  the centre line — instead of one short bar parked on the tarmac. A narrow 1+1
+  street keeps the classic diagonal pair. -->
   <div class="crossing" :style="overlayStyle">
     <div class="crossing-rot" :style="rotStyle">
       <!-- one boom per guarded approach; arm down (across the road) when closed -->
