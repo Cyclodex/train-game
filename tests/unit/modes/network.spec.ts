@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { computed } from "vue";
 import {
   networkMode,
   passengerTargetOf,
@@ -304,6 +305,11 @@ describe("the service: buying trains and setting lines", () => {
     // Both were sold, and both are waiting their turn on the metals.
     expect(game.queuedTrains).toEqual([first!.id, second!.id]);
     expect(game.sim.trains[first!.id]).toBeUndefined();
+    // The line they were BOUGHT for is theirs from the moment of sale — the
+    // panel reads `trainLines`, and "no line" on an order you just placed onto
+    // a line reads as "that did not work".
+    expect(game.trainLines[first!.id]).toEqual(stops);
+    expect(game.trainLines[second!.id]).toEqual(stops);
 
     // Run: they leave one after another, oldest first, as the mouth clears.
     let firstOutAt = -1;
@@ -332,6 +338,79 @@ describe("the service: buying trains and setting lines", () => {
     );
     expect(game.depotTiles).toEqual([]);
     expect(game.buyTrain([])).toBeNull();
+  });
+
+  // THE ROSTER IS A VIEW SOURCE, so it has to be reactive. The service panel's
+  // list of trains is a Vue computed over `game.trainColors`, and `game` is
+  // provided markRaw — so if that record is a plain object the computed has
+  // nothing to track, caches its first answer, and a bought train NEVER appears
+  // in the panel. On a network board that starts with no trains the list then
+  // stays empty for ever, however many you order.
+  //
+  // This is the same reactivity trap as `trainNextStops`/`retiringTrains`, hit
+  // a third time, which is why it is tested here rather than trusted: reading
+  // `game.trainColors` directly would pass even when the panel is frozen.
+  it("a bought train reaches a view derived from the roster", () => {
+    const game = gameFor();
+    const roster = computed(() => Object.keys(game.trainColors).sort());
+    // Prime the cache exactly as the panel's first render does.
+    const before = [...roster.value];
+    const def = game.buyTrain([]);
+    expect(def).not.toBeNull();
+    expect(before).not.toContain(def!.id);
+    expect(roster.value).toContain(def!.id);
+  });
+
+  // ROUTING A TRAIN THAT IS STILL IN THE SHED. This is the normal case, not an
+  // edge one: the depot mouth is busy whenever another train is standing in it,
+  // so a train bought right then is queued — and the very next thing the player
+  // does is click stations to give it a line. The sim has no entry for a queued
+  // train, so going through `sim.assignLine` alone refused every one of those
+  // clicks WITHOUT SAYING SO: the panel kept reading "no line" and the board
+  // did nothing, on a board where buying is the whole verb set.
+  it("routes a train that is still queued in the shed, and it keeps that line when it rolls out", () => {
+    const game = gameFor();
+    // At t=0 the authored train occupies the only depot, so this order queues.
+    const def = game.buyTrain([]);
+    expect(def).not.toBeNull();
+    const id = def!.id;
+    expect(game.queuedTrains).toContain(id);
+    expect(game.sim.trains[id]).toBeUndefined();
+
+    const stops = game.stationTiles.slice(0, 2);
+    expect(game.setLine(id, stops)).toBe(true);
+    // The panel reads this — it must show the line straight away, not after
+    // the train happens to leave.
+    expect(game.trainLines[id]).toEqual(stops);
+    // And the platforms know a second service calls there.
+    for (const stop of stops) {
+      expect(game.stationLines[stop]).toContain(game.trainColors[id]);
+    }
+
+    // Run until it rolls out: the line it was given while queued is the line
+    // it actually works.
+    for (let t = 0; t < 120 && !game.sim.trains[id]; t += 0.1) game.advance(0.1);
+    expect(game.sim.trains[id]).toBeDefined();
+    expect(game.sim.trainLine(id)).toEqual(stops);
+    expect(game.trainLines[id]).toEqual(stops);
+  });
+
+  it("still refuses a line for a train that does not exist at all", () => {
+    const game = gameFor();
+    expect(game.setLine("nobody", game.stationTiles.slice(0, 1))).toBe(false);
+  });
+
+  // Scrapping runs the other way through the same list.
+  it("a scrapped train leaves a view derived from the roster", () => {
+    const game = gameFor();
+    const listed = computed(() =>
+      Object.keys(game.trainColors)
+        .filter(id => !game.removedTrains.includes(id))
+        .sort()
+    );
+    expect(listed.value).toContain("circle");
+    game.scrapTrain("circle");
+    expect(listed.value).not.toContain("circle");
   });
 });
 
