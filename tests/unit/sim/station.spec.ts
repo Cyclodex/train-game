@@ -177,7 +177,10 @@ describe("station passengers (phase 2)", () => {
   it("spawns passengers on the schedule and caps the queue at max", () => {
     const sim = createSimulation({
       level: twoStationLine(),
-      trains: [],
+      // A stopper has to exist for anyone to turn up: nobody walks to a
+      // station that cannot take them anywhere (D10), and a train with no line
+      // is a service over everything it can reach.
+      trains: [TRAIN],
       stationDemand: { "2,0": { intervalSec: 1, max: 4, initial: 0 } },
     });
     for (let i = 0; i < 5; i++) sim.step(0.5); // 2.5 s → 2 spawns
@@ -281,7 +284,8 @@ describe("addStationPassengers (park & ride injection)", () => {
         "3,0": expandKind("station", 1),
         "4,0": expandKind("depot", 3),
       },
-      trains: [],
+      // Somebody has to be running, or there is no service to walk to (D10).
+      trains: [{ ...TRAIN, coord: { x: 0, y: 0 } }],
       stationDemand: { "1,0": { intervalSec: 1000, max: 3, initial: 0 } },
     });
     expect(sim.addStationPassengers("1,0", 2)).toBe(2);
@@ -301,7 +305,7 @@ describe("addStationPassengers (park & ride injection)", () => {
         "2,0": expandKind("straight", 1),
         "3,0": expandKind("station", 1),
       },
-      trains: [],
+      trains: [{ ...TRAIN, coord: { x: 1, y: 0 }, entryPort: Position.Left }],
     });
     expect(sim.addStationPassengers("1,0", 99)).toBe(STATION_QUEUE_HARD_CAP);
     expect(sim.stationQueue("1,0")).toBe(STATION_QUEUE_HARD_CAP);
@@ -346,27 +350,24 @@ describe("station passengers with destinations", () => {
     line,
   });
 
-  it("only lets people on a train whose line calls where they are going", () => {
+  it("sends nobody to a station its services never reach", () => {
     const sim = createSimulation({
       level: ring(),
       // A line that serves C and A — but NOT B.
       trains: [riderTrain(["2,2", "2,0"])],
-      // Everyone at C is sent round the ring in turn: A, B, A, B…
       stationDemand: { "2,2": { intervalSec: 100, max: 10, initial: 4 } },
     });
-    // Of the four waiting, the ones bound for B must be left behind.
+    // NOBODY at C is bound for B. Phase 8 sent them there anyway (the metals
+    // reach it) and they then stood on the platform for ever, which is not how
+    // a person behaves: you check whether a connection exists, and if it does
+    // not you do not set out at all (D10).
     const before = sim.stationWaiting("2,2");
-    expect(before).toContain("2,0");
-    expect(before).toContain("3,1");
+    expect(before.length).toBe(4);
+    expect(before.every(d => d === "2,0")).toBe(true);
 
     run(sim, 40);
-    const left = sim.stationWaiting("2,2");
-    // Nobody bound for A is still standing there…
-    expect(left).not.toContain("2,0");
-    // …and everybody bound for B is, because no service takes them.
-    expect(left.filter(d => d === "3,1").length).toBe(
-      before.filter(d => d === "3,1").length
-    );
+    // And the ones who did set out are carried away.
+    expect(sim.stationWaiting("2,2")).not.toContain("2,0");
   });
 
   it("carries a rider PAST an intermediate stop to the one they asked for", () => {
@@ -404,7 +405,7 @@ describe("station passengers with destinations", () => {
     };
     const sim = createSimulation({
       level,
-      trains: [],
+      trains: [riderTrain(["2,2", "2,0", "3,1"])],
       stationDemand: { "2,2": { intervalSec: 1, max: 20, initial: 0 } },
     });
     run(sim, 40);

@@ -608,6 +608,52 @@ lean — prune as much as you add. This file only stays useful if every task ten
   leaves a stale id in it: both the advance and the reservation release guard
   on `trains[id]` still existing.
 
+## CHANGING TRAINS (phase 9, 2026-08-03)
+- `sim/lineGraph.ts` is a SECOND router and answers a different question from
+  `railRouter`: not "can a train physically get there" but "can a PASSENGER get
+  there on the services that exist". Stations are nodes; two are adjacent when
+  some line calls at both. BFS depth = number of RIDES, so depth-1 = changes.
+- `alightFor(lineId, at, to)`: the destination when the line goes there, else
+  the stop on it that leaves the shortest onward journey. The candidate must be
+  **strictly** closer than staying put — with `<=` a triangle of lines hands a
+  rider round for ever. A line is treated as a CYCLE, so direction never matters.
+- The hop is decided at BOARDING (`offFor`) and never stored on a waiting
+  passenger. That is what makes redrawing a line mid-run safe: there is no plan
+  to go stale, the next boarding just re-decides.
+- A `Rider` is `{final, off}`. At `off`: `final === off` is a DELIVERY, anything
+  else is a CHANGE — back onto the platform, at the FRONT and **past the cap**.
+  Refusing a change would delete someone mid-journey, invisibly.
+- A LINELESS train keeps the exact one-hop service: everyone down at the next
+  call, all counted delivered. Deliberate — making them change instead would
+  re-queue and re-board the whole load at every platform, inflating dwell times
+  and the balance of every board written before lines existed.
+- `DwellEvent.changing` is how a score tells the two apart: arrivals are
+  `alighted - changing`.
+
+## NOBODY WALKS TO A STATION THAT CANNOT TAKE THEM (D10, 2026-08-03)
+- A passenger's destination is drawn from `lineNetwork().reachableFrom(here)` —
+  what a SERVICE reaches, not what the metals reach. Phase 8 used the metals, so
+  people queued for journeys nothing could make, stood there for ever and drove
+  the overcrowd predicate: a punishment for demand the player was never given the
+  chance to serve.
+- The payoff: a platform queue now means ONE thing, and a fixable one — the
+  service is too thin. It used to mix that with "no service goes there", which
+  nothing the queue itself suggests could fix.
+- A train with NO line counts as a synthetic line over `reachableStations` from
+  where it stands: a stopper calls everywhere it passes, so it IS the network on
+  a board where nobody has drawn anything. Without that, every classic board and
+  half the specs would spawn nobody. It affects the GRAPH only — boarding and
+  alighting for a lineless train are untouched.
+- Consequence for specs: `trains: []` + `stationDemand` now yields an EMPTY
+  platform. Several phase-2 tests needed a train adding for that reason. If a
+  queue you expect is empty, ask what service was supposed to serve it.
+- Initial queues are seeded AFTER the roster is built (`seedInitialQueues`) —
+  at construction time there are no trains and no lines, so nothing is served
+  and nobody would ever appear.
+- `enqueuePassenger(tile, dest)` queues ONE person with a known destination, for
+  a caller that has already decided (a citizen, a test). `addStationPassengers`
+  stays the anonymous-demand verb and still returns what it actually queued.
+
 ## A LINE IS AN OBJECT, NOT A FIELD ON A TRAIN (D11, 2026-08-03)
 - `SimLine {id, name, stops, pinned?}` in a registry; `SimTrain.lineId` points
   at one. `stopsOf(train)` is the only reader — never reach for a train's stops
