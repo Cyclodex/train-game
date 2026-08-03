@@ -4,7 +4,7 @@ import { parseCoordId } from "@/tiles/model";
 import { makeRng } from "@/utils/globalHelpers";
 import { laneSegmentPointAt } from "@/sim/pathGeometry";
 import { oppositePort } from "@/sim/topology";
-import { hasFootway, pavementOffsets, planWalk, roadThrough, sideOfPlot } from "@/tiles/footway";
+import { hasFootway, pavementOffsetFor, planWalk, roadThrough, sideOfPlot } from "@/tiles/footway";
 
 // PEOPLE ON THE PAVEMENT — the walking half of the citizen layer.
 //
@@ -148,10 +148,6 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
   const walkers = new Map<string, Walker>();
   let nextId = 1;
 
-  function offsetOf(tileId: string, side: 1 | -1): number {
-    return (pavementOffsets(level[tileId])[0] / 100) * side;
-  }
-
   // Where the pavement puts somebody at `t` across a tile: the SAME offset curve
   // the paint follows, from the sampler the cars use.
   function pavePoint(
@@ -164,8 +160,11 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     const { x, y } = parseCoordId(tileId);
     // Defensive: a tile entered and left by the same edge has no crossing to
     // follow. Treat it as a straight through so the walker still moves sanely.
-    const to = exit === entry ? (((entry + 2) % 4) as Port) : exit;
-    const off = offsetOf(tileId, side);
+    const to = exit === entry ? oppositePort(entry) : exit;
+    // A side is fixed to the street; this offset is relative to the walker's
+    // direction of travel. Walking the street back the other way flips it — see
+    // `pavementOffsetFor`.
+    const off = pavementOffsetFor(level[tileId], side, entry, to) / 100;
     const p = laneSegmentPointAt(entry, to, 1, off, off, t);
     return { x: x + p.x, y: y + p.y, headingDeg: p.tangentDeg };
   }

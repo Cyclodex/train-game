@@ -600,7 +600,7 @@ town that all has to get over it. Measured there: the traffic queues about
 **15 seconds** at the zebra and then flows — which is a crossing working, and the
 number that says the two mutual waits are not deadlocked.
 
-Three things went wrong on the way and are worth keeping written down:
+Four things went wrong on the way and are worth keeping written down:
 
 - **A footway step's entry/exit are the ROAD's ports, never the plot's.** A house
   south of an east-west street is reached by walking ALONG the street and turning
@@ -613,6 +613,20 @@ Three things went wrong on the way and are worth keeping written down:
   the backstop.
 - **Zebra stripes run along the road and repeat across it.** Square to the road
   they read as a stack of stop lines.
+- **A pavement `side` is fixed to the street; a geometry offset is relative to
+  the direction of travel.** `sideOfPlot` picks the side against the tile's own
+  through movement, but `laneSegmentPointAt` measures its offset right-of-travel
+  — so a walk that runs *against* the tile's direction has to flip the sign
+  (`pavementOffsetFor`). Passing the raw side through put everyone walking
+  "backwards" on the opposite bank; they looked fine the whole way, and then the
+  driveway at the far end hauled them straight across the carriageway. On
+  `citizenzebra` — canonical direction eastbound, jobs reached by walking west
+  from the zebra — that was **125 walkers** out on the tarmac away from the
+  crossing, each for only about a second and a half, so it read on screen as the
+  occasional jaywalker rather than as broken geometry. The lesson generalises:
+  when a fact is anchored to the MAP and a consumer measures from the AGENT,
+  the conversion is a function, not a multiplication, and it belongs next to the
+  definition.
 
 Still to build: a crossing where a footway meets the RAILWAY (the pedestrian half
 of a level crossing), and signalised crossings with a button.

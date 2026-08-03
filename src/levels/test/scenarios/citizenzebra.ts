@@ -39,7 +39,8 @@ const home = (): TileCell => ({ connections: [], terrain: "urban", city: "kreuzf
 const works = (): TileCell => ({ connections: [], terrain: "industry", city: "kreuzfeld" });
 
 const WIDTH = 12;
-const CROSSING_X = 6;
+/** The one tile people may legally be out in the road on. */
+export const CROSSING_X = 6;
 
 const level: Record<string, TileCell> = {};
 

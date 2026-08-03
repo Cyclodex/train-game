@@ -622,6 +622,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   people teleporting over the tarmac.
     · `sideOfPlot` must use the SAME sign convention as `pavementOffsets`, or
       routing and paint disagree and walkers land on the wrong kerb.
+    · **A `side` is fixed to the STREET; a sampler offset is relative to the
+      DIRECTION OF TRAVEL.** They are not the same number. `sideOfPlot` decides
+      the side against the tile's own through movement, so a walk that runs
+      AGAINST that movement must flip the sign before handing it to
+      `laneSegmentPointAt` — that is `pavementOffsetFor(cell, side, entry, exit)`,
+      and nothing may reach for `pavementOffsets(...)[0] * side` directly. Using
+      the raw sign put everyone walking "backwards" on the opposite bank, and the
+      driveway at the far end then hauled them straight over the carriageway:
+      on `citizenzebra` (canonical eastbound, jobs reached by walking west from
+      the zebra) that was 125 people crossing the road anywhere but the crossing,
+      each for ~1.5s, which reads on screen as an occasional jaywalker rather
+      than as broken geometry. Guarded by "nobody crosses the carriageway
+      anywhere but the zebra" in `tests/unit/citizenWalking.spec.ts`.
     · Yielding needed NO new rule in the traffic model: a walker claims the tile
       and game.ts ORs it into the road sim's `closed` predicate — the same
       mechanism a level crossing uses for a train. Cars already know how to

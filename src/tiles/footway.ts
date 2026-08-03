@@ -92,6 +92,48 @@ export function pavementOffsets(cell: TileCell | undefined): [number, number] {
   return [half, -half];
 }
 
+/** The right-of-travel normal of a movement across a tile, in screen space (y down). */
+function travelNormal(from: Port, to: Port): { x: number; y: number } {
+  const v = portVector(to);
+  const back = portVector(from);
+  const dir = { x: v.x - back.x, y: v.y - back.y };
+  return { x: -dir.y, y: dir.x };
+}
+
+/**
+ * The signed lateral offset, in ground units, that puts a walker on pavement
+ * `side` while they travel `entry`→`exit` across this cell.
+ *
+ * WHY THIS IS NOT JUST `pavementOffsets(cell)[0] * side`, which is what it was
+ * and which is wrong half the time: a `side` is FIXED to the tile (it is which
+ * bank of the street you are on, and `sideOfPlot` decides it against the road's
+ * own through direction), but an offset handed to `laneSegmentPointAt` is
+ * relative to the DIRECTION OF TRAVEL. Walk the same street back the other way
+ * and right-of-travel points at the other bank, so a constant sign silently
+ * teleports the walker across the carriageway.
+ *
+ * The symptom was people crossing the road anywhere but the zebra: on a board
+ * whose canonical direction is eastbound, everybody walked east to the crossing,
+ * changed sides properly, then walked WEST on the coordinates of the pavement
+ * they had just left — and the driveway at the far end dragged them back over
+ * the tarmac to reach their door.
+ */
+export function pavementOffsetFor(
+  cell: TileCell | undefined,
+  side: 1 | -1,
+  entry: Port,
+  exit: Port
+): number {
+  const off = pavementOffsets(cell)[0] * side;
+  const through = roadThrough(cell);
+  if (!through) return off;
+  const a = travelNormal(entry, exit);
+  const b = travelNormal(through.from, through.to);
+  // Travelling against the tile's own direction flips which bank is on the
+  // right. Square to it (dot 0) is ambiguous — leave the sign alone.
+  return a.x * b.x + a.y * b.y < 0 ? -off : off;
+}
+
 // --- the walking graph -------------------------------------------------------
 
 const STEPS: [Port, number, number][] = [
@@ -242,14 +284,10 @@ export function sideOfPlot(level: Level, plotId: string, roadTile: string): 1 | 
     if (from !== null) break;
   }
   if (from === null || to === null) return null;
-  // Direction of travel across the tile, as a vector, and the plot's offset
-  // from the tile centre. Right-of-travel in screen space (y down) is (-dy, dx).
-  const v = portVector(to);
-  const back = portVector(from);
-  const dir = { x: v.x - back.x, y: v.y - back.y };
-  if (dir.x === 0 && dir.y === 0) return 1;
-  const nx = -dir.y;
-  const ny = dir.x;
+  // Which bank of the street the plot is on, measured against the tile's OWN
+  // through direction — the same reference `pavementOffsetFor` converts from.
+  const { x: nx, y: ny } = travelNormal(from, to);
+  if (nx === 0 && ny === 0) return 1;
   const px = plot.x - tile.x;
   const py = plot.y - tile.y;
   const dot = px * nx + py * ny;

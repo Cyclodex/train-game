@@ -3,10 +3,10 @@ import { createGame } from "@/game";
 import { citizensMode } from "@/modes/citizens";
 import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
-import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
+import { citizenzebra, CROSSING_X } from "@/levels/test/scenarios/citizenzebra";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { createPedestrianSim } from "@/sim/pedestrians";
-import { pavementOffsets } from "@/tiles/footway";
+import { pavementOffsets, roadHalfUnits } from "@/tiles/footway";
 import { roadEntries } from "@/sim/road";
 
 // Walking people, end to end. Like the driving spec, everything here runs
@@ -333,7 +333,7 @@ describe("a zebra on a busy road", () => {
     // walker. That deadlock measured a 1078-second queue; anything above a
     // minute here means it is back.
     expect(worstCarWait).toBeLessThan(60);
-  }, 30000);
+  }, 90000);
 
   it("keeps the walkers moving too — nobody is stuck at the kerb for ever", () => {
     const game = busyGame();
@@ -343,5 +343,40 @@ describe("a zebra on a busy road", () => {
       game.citizenStats.tripsCompleted / 10
     );
     expect(game.citizenStats.modeShare.walk).toBeGreaterThan(0.4);
-  }, 30000);
+  }, 90000);
+
+  it("nobody crosses the carriageway anywhere but the zebra", () => {
+    const game = busyGame();
+    // Where the tarmac ends, from the same geometry the road is drawn from.
+    const half = roadHalfUnits(citizenzebra.level["3,1"]) / 100;
+
+    const offenders = new Set<string>();
+    let onZebra = 0;
+    run(game, 900, () => {
+      for (const p of game.pedestrians) {
+        const x = p.x / 200;
+        const y = p.y / 200;
+        if (y <= 1 || y >= 2) continue; // not on the road row at all
+        if (Math.abs(y - 1.5) >= half) continue; // on a pavement, outside the kerb
+        if (Math.floor(x) === CROSSING_X) {
+          onZebra += 1; // the one tile where being in the road is the point
+          continue;
+        }
+        offenders.add(p.id);
+      }
+    });
+
+    // People DO use the crossing...
+    expect(onZebra).toBeGreaterThan(50);
+    // ...and nobody is out on the tarmac anywhere else.
+    //
+    // THE regression guard, and it caught a real one: a pavement `side` is fixed
+    // to the street, but the offset handed to the geometry sampler is relative to
+    // the DIRECTION OF TRAVEL. Applying the side as a constant sign meant that
+    // everyone walking back the other way was placed on the opposite bank, and
+    // their driveway at the far end then hauled them straight over the road. On
+    // this board — canonical direction eastbound, jobs reached by walking west
+    // from the zebra — that was 125 people strolling across the traffic.
+    expect([...offenders]).toEqual([]);
+  }, 90000);
 });

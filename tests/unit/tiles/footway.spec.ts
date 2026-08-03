@@ -7,6 +7,7 @@ import {
   hasFootCrossing,
   hasFootway,
   pavementOffsets,
+  pavementOffsetFor,
   pavementPaths,
   planWalk,
   roadHalfUnits,
@@ -146,5 +147,42 @@ describe("the walking graph", () => {
     expect(planWalk(level, "0,0", "4,0")).toBeNull();
     // ...and a crossing on a street with no pavement is not a crossing.
     expect(hasFootCrossing({ ...street(), footway: "none", footCrossing: true })).toBe(false);
+  });
+});
+
+describe("which bank of the street a walker is on", () => {
+  // A `side` belongs to the STREET; the offset the geometry sampler wants
+  // belongs to the walker's DIRECTION OF TRAVEL. Getting those two confused put
+  // people on the wrong pavement the moment they walked back the other way, and
+  // the driveway at the far end then dragged them over the carriageway.
+  it("flips the offset when the walk runs against the tile's own direction", () => {
+    const cell = street(Position.Left, Position.Right); // canonical: eastbound
+    const [half] = pavementOffsets(cell);
+
+    // Eastbound, side +1: right of travel, so the south bank.
+    expect(pavementOffsetFor(cell, 1, Position.Left, Position.Right)).toBeCloseTo(half);
+    // Westbound, side +1: STILL the south bank, which is now on the left — so
+    // the offset handed to the sampler has to change sign.
+    expect(pavementOffsetFor(cell, -1, Position.Right, Position.Left)).toBeCloseTo(half);
+    expect(pavementOffsetFor(cell, 1, Position.Right, Position.Left)).toBeCloseTo(-half);
+  });
+
+  it("agrees with the side a plot is assigned, whichever way it is walked", () => {
+    const level: Level = { "1,1": street(), "1,0": town(), "1,2": town() };
+    const north = sideOfPlot(level, "1,0", "1,1") as 1 | -1;
+    const south = sideOfPlot(level, "1,2", "1,1") as 1 | -1;
+    expect(north).toBe(-south);
+    // The house north of the street is north of the centreline no matter which
+    // way its owner happens to be walking.
+    const cell = level["1,1"];
+    expect(pavementOffsetFor(cell, north, Position.Left, Position.Right)).toBeLessThan(0);
+    expect(pavementOffsetFor(cell, north, Position.Right, Position.Left)).toBeGreaterThan(0);
+  });
+
+  it("keeps a bend's two directions on the same pavement", () => {
+    const bend: TileCell = { connections: [], road: twoWay(Position.Top, Position.Right) };
+    const [half] = pavementOffsets(bend);
+    expect(pavementOffsetFor(bend, 1, Position.Top, Position.Right)).toBeCloseTo(half);
+    expect(pavementOffsetFor(bend, 1, Position.Right, Position.Top)).toBeCloseTo(-half);
   });
 });
