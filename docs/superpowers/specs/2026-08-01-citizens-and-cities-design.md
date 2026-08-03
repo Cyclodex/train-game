@@ -659,12 +659,16 @@ in the street is taken by train — **not because the train is fast, but because
 the car is not on offer at all.** That is the mode's central lever, and until now
 nothing on screen said it.
 
-**Unit note.** Journey times are board seconds, not in-game minutes. See
-`docs/KNOWHOW.md`; converting a 95-second rail commute to the citizens' clock
-gives 7.9 hours, which is internally consistent and useless to plan with. Worth
-revisiting `secPerDay` on its own terms some day — journeys currently occupy a
-large fraction of the modelled day, which is why `outHour` needs a three-hour
-window to catch everybody.
+**Unit note, and a lesson.** Journey times print on the town's own clock — the
+same one the times of day use, so "leaves 07:08" and "took 1h 24m" compose into
+"arrives 08:32".
+
+They were board seconds first, and the reason is worth keeping: at
+`secPerDay: 300` a 105-second commute converted to 7.9 in-game hours, so the
+in-game clock was nonsense and seconds were the only honest thing to print. That
+was a broken *calibration* being treated as a *display* decision. §9.0.2 fixed
+the calibration; the unit followed. Raw board seconds remain as a tooltip, since
+that is the number a stopwatch can check.
 
 ### 9.0.2 Calibration: making the clock agree with the board (2026-08-03)
 

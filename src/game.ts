@@ -19,6 +19,7 @@ import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road
 import { buildCitizenWorld } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
+  DEFAULT_TUNING,
   Citizen,
   CityState,
   CitizenSim,
@@ -417,6 +418,9 @@ export interface Game {
   inspectPlot(plotId: string): PlotCard | null;
   inspectPerson(id: string): PersonCard | null;
   compareModes(id: string): ModeCompare[];
+  // A journey length on the town's clock ("14 min", "1h 24m"), using THIS
+  // game's day length — so a view never has to know `secPerDay`.
+  durationLabel(sec: number): string;
   // Ticks once per drawn frame. Read it from any getter that samples the sims
   // on demand, or Vue will cache the first answer for ever — see the note where
   // it is declared.
@@ -718,8 +722,10 @@ export interface ModeCompare {
   mode: TravelMode;
   /** The honest door-to-door estimate in board seconds. Null when not on offer. */
   seconds: number | null;
-  /** "1m 35s" — the same number, ready to render. */
+  /** "14 min" / "1h 24m" — the same number on the town's clock, ready to render. */
   label: string;
+  /** The same journey in raw board seconds. A tooltip, not the headline. */
+  boardLabel: string;
   /**
    * The same journey after this person's habits: the walk inflated past their
    * patience, the car scaled by how much they like driving, the train by how
@@ -732,8 +738,30 @@ export interface ModeCompare {
   why: string | null;
 }
 
-/** "1m 35s" / "42s" — a board duration, as the panel prints it. */
-export function durationLabel(sec: number): string {
+/**
+ * A journey length on the TOWN'S OWN CLOCK: "14 min", "1h 24m".
+ *
+ * Board seconds were the wrong unit and it took fixing the day length to see
+ * why. They were chosen when a day was 300 board seconds, which made a
+ * cross-city commute convert to eight and a half in-game hours — so the
+ * in-game clock was nonsense and seconds were the only honest thing to print.
+ * Calibrating the day (`secPerDay`, measured) removed that problem, and left
+ * the real one exposed: the card MIXED TWO UNITS. "Leaves at 07:08" and "took
+ * 1m 23s" do not compose — a player cannot work out when she gets there. One
+ * clock, and the arithmetic works.
+ */
+export function inGameDuration(sec: number, secPerDay: number): string {
+  if (!isFinite(sec)) return "—";
+  const mins = Math.round((sec / secPerDay) * 24 * 60);
+  if (mins < 1) return "<1 min";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+/** "1m 35s" / "42s" — raw board seconds, for debugging and tooltips. */
+export function boardDuration(sec: number): string {
   if (!isFinite(sec)) return "—";
   const s = Math.round(sec);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
@@ -1242,6 +1270,12 @@ export function createGame(
 
   // --- the inspector ----------------------------------------------------------
 
+  // Journey lengths, on the same clock the times of day use. Bound to this
+  // game's day length so a caller never has to know it.
+  function durationLabel(sec: number): string {
+    return inGameDuration(sec, citizenSetup?.tuning?.secPerDay ?? DEFAULT_TUNING.secPerDay);
+  }
+
   function clockOf(hour: number): string {
     const h = Math.floor(hour) % 24;
     const m = Math.floor((hour - Math.floor(hour)) * 60);
@@ -1377,6 +1411,9 @@ export function createGame(
       mode: q.mode,
       seconds: q.unavailable ? null : q.estimateSec,
       label: q.unavailable ? "—" : durationLabel(q.estimateSec),
+      // The raw board seconds, for a tooltip: the town's clock is the honest
+      // unit to read, and this is the one you can check with a stopwatch.
+      boardLabel: q.unavailable ? "—" : boardDuration(q.estimateSec),
       perceivedSeconds: q.unavailable ? null : q.cost,
       chosen: q.chosen,
       why: q.unavailable ? (REFUSAL_TEXT[q.unavailable] ?? q.unavailable) : null,
@@ -2923,6 +2960,7 @@ export function createGame(
     inspectPlot,
     inspectPerson,
     compareModes,
+    durationLabel,
     renderTick,
     locatePerson,
     personWalking,
