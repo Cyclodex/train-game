@@ -628,6 +628,44 @@ Four things went wrong on the way and are worth keeping written down:
   the conversion is a function, not a multiplication, and it belongs next to the
   definition.
 
+### 9.0.1 The inspector: how people decide, made visible (BUILT 2026-08-03)
+
+The mode choice was always the heart of the model and was never visible. It is
+one comparison, made per trip, in perceived seconds:
+
+| mode | what it costs them |
+|---|---|
+| walk | `d / walkSpeed`, then inflated by `walkImpatience` for every tile past their own `walkPatience` |
+| car | `d × roadDetour / carSpeed + parkPenaltySec`, × `carAffinity` — and only if ONE road network reaches both ends |
+| transit | `walkToStation + assumedHeadwaySec + ride + walkFromStation`, × `transitAffinity` |
+| park & ride | `drive + headway + ride + egress`, × the mean of the two affinities |
+
+Cheapest wins. The schedule around it is a clock, not a planner: `outHour`,
+`backHour` and `shopHour` are rolled once when somebody moves in (07–09, 16–18,
+10–19) and never re-rolled, with `lastOutDay`/`lastBackDay`/`lastShopDay` so each
+trip fires once a day. Everything interesting is downstream of "it is time to
+go" — the mode is re-decided every single trip against what the map offers now.
+
+`CitizenSim.quoteFor` exposes that comparison, and `quoteModes` has exactly two
+callers: the chooser and the panel. That is deliberate and is the load-bearing
+design decision here — a panel that re-derived the answer would drift from the
+decision and be confidently wrong.
+
+**What it teaches, on `/test/citizenchoice`:** three neighbours on one street get
+three different answers, and the table says why. A job four tiles away is walked
+(the train is on offer and loses: the assumed headway alone costs more than the
+whole walk). A job six tiles down the same street is driven. A job over the gap
+in the street is taken by train — **not because the train is fast, but because
+the car is not on offer at all.** That is the mode's central lever, and until now
+nothing on screen said it.
+
+**Unit note.** Journey times are board seconds, not in-game minutes. See
+`docs/KNOWHOW.md`; converting a 95-second rail commute to the citizens' clock
+gives 7.9 hours, which is internally consistent and useless to plan with. Worth
+revisiting `secPerDay` on its own terms some day — journeys currently occupy a
+large fraction of the modelled day, which is why `outHour` needs a three-hour
+window to catch everybody.
+
 ### 9.1.1 The pedestrian level crossing (BUILT 2026-08-03)
 
 The other crossing, and it is the zebra's **opposite** rather than its sibling.

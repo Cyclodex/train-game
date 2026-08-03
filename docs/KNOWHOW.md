@@ -729,6 +729,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **THE INSPECTOR MUST NOT RE-DERIVE THE DECISION** (`CitizenSim.quoteFor`,
+  `game.compareModes`, `CitizenInspector.vue`, 2026-08-03). Click a house → its
+  roll call; click a person or a figure on the pavement → their day plus every
+  way they could make the journey, priced. The table is the very list
+  `chooseMode` compares (`quoteModes` has exactly two callers, the chooser and
+  the panel) — a panel that recomputed "what would they have done" drifts from
+  the decision the moment either side is touched, and is then worse than no
+  panel, because it is confidently wrong.
+    · TWO numbers per row, and the gap is the point: `estimateSec` is the honest
+      door-to-door estimate, `cost` is the same journey after that person's
+      habits. A mode winning on `cost` while losing on `estimateSec` is somebody
+      choosing against their own stopwatch.
+    · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
+      "too far to walk"). "Why not" is half of what a planner came to find out,
+      and a silently short table answers none of it.
+    · **Journey times are BOARD SECONDS, not in-game minutes.** The citizens'
+      day is `secPerDay` sim seconds wide (300 in Citizens mode), so 1 sim second
+      is 4.8 in-game minutes and a cross-town rail commute converts to EIGHT
+      HOURS — internally consistent and useless to plan with. Board seconds are
+      what a stopwatch on the running board reads. Times of DAY stay on the
+      in-game clock, because that is the clock the HUD shows. (The underlying
+      mismatch — journeys are a large fraction of the modelled day — is a real
+      tuning question, not a display bug.)
+    · Zero winners is a legal, meaningful outcome: the model REFUSING the
+      journey. Say so in the panel; an empty table explains the one case that
+      most needs explaining.
+    · A person's NAME is a hash of their id, never an RNG draw — a panel that
+      renames somebody between two frames is a panel nobody trusts.
+    · A transit trip's first timed leg is the approach to the platform. Calling
+      it "walking to work" while the chosen mode says Train reads as the panel
+      contradicting itself; say "walking to the station".
+- **THE 6-NEAREST JOB DRAW BEATS CAPACITY** (`assignJob`). A newcomer picks at
+  random from the six nearest OPEN workplaces, so what spreads a town across its
+  job clusters is how MANY plots each cluster has, not how big they are — a work
+  plot holds twelve, so two of them swallowed a whole town on the first draft of
+  `/test/citizenchoice` and the far cluster stayed empty.
+- **A STATION CATCHMENT IS 2 TILES, SO STOPS 6 APART LEAVE GAPS**
+  (`WALK_RADIUS_TILES`). With stops at 3, 9 and 15, columns 6 and 12 have no
+  station in reach at all: a carless resident there whose job is out of walking
+  range cannot travel by ANY means and the trip is refused. Fine to build on
+  purpose, a bad accident to ship — check plot columns against stop spacing.
 - **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
   graph's node is `(tile, SIDE)`, and the only move that changes side is at a
   zebra. Drop that and a pavement is two networks drawn beside each other with
