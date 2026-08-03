@@ -628,6 +628,81 @@ Four things went wrong on the way and are worth keeping written down:
   the conversion is a function, not a multiplication, and it belongs next to the
   definition.
 
+### 9.0.1 The inspector: how people decide, made visible (BUILT 2026-08-03)
+
+The mode choice was always the heart of the model and was never visible. It is
+one comparison, made per trip, in perceived seconds:
+
+| mode | what it costs them |
+|---|---|
+| walk | `d / walkSpeed`, then inflated by `walkImpatience` for every tile past their own `walkPatience` |
+| car | `d × roadDetour / carSpeed + parkPenaltySec`, × `carAffinity` — and only if ONE road network reaches both ends |
+| transit | `walkToStation + assumedHeadwaySec + ride + walkFromStation`, × `transitAffinity` |
+| park & ride | `drive + headway + ride + egress`, × the mean of the two affinities |
+
+Cheapest wins. The schedule around it is a clock, not a planner: `outHour`,
+`backHour` and `shopHour` are rolled once when somebody moves in (07–09, 16–18,
+10–19) and never re-rolled, with `lastOutDay`/`lastBackDay`/`lastShopDay` so each
+trip fires once a day. Everything interesting is downstream of "it is time to
+go" — the mode is re-decided every single trip against what the map offers now.
+
+`CitizenSim.quoteFor` exposes that comparison, and `quoteModes` has exactly two
+callers: the chooser and the panel. That is deliberate and is the load-bearing
+design decision here — a panel that re-derived the answer would drift from the
+decision and be confidently wrong.
+
+**What it teaches, on `/test/citizenchoice`:** three neighbours on one street get
+three different answers, and the table says why. A job four tiles away is walked
+(the train is on offer and loses: the assumed headway alone costs more than the
+whole walk). A job six tiles down the same street is driven. A job over the gap
+in the street is taken by train — **not because the train is fast, but because
+the car is not on offer at all.** That is the mode's central lever, and until now
+nothing on screen said it.
+
+**Unit note.** Journey times are board seconds, not in-game minutes. See
+`docs/KNOWHOW.md`; converting a 95-second rail commute to the citizens' clock
+gives 7.9 hours, which is internally consistent and useless to plan with. Worth
+revisiting `secPerDay` on its own terms some day — journeys currently occupy a
+large fraction of the modelled day, which is why `outHour` needs a three-hour
+window to catch everybody.
+
+### 9.0.2 Calibration: making the clock agree with the board (2026-08-03)
+
+Three faults, found by asking one question the inspector made askable — *why is
+this person unhappy when her walk to work is four seconds?*
+
+**1. The estimate ignored the door.** A plot-to-plot straight line is not a
+journey; the real one goes down the driveway, along the pavement and up the
+other driveway. Measured at a near-constant **2.5 tiles** whatever the
+separation, because it is two fixed end legs, not a detour that scales. So the
+panel quoted a one-tile commute at 4s, the walker took 15-20s, and `expectedSec`
+used the same optimistic distance — maximum unhappiness twice a day, and gone
+from the board by day three. `walkAccessTiles` fixes both, and it goes on the
+CAR as well: charging it to walking alone made people drive next door (the walk
+share on `/test/citizenwalk` fell from 89% to 46%).
+
+**2. The day was eight times too short.** Measured medians and what each journey
+plainly is in a real town:
+
+| journey | measured | means | at old 300s/day | at 1800s/day |
+|---|---:|---|---|---|
+| walk to a local job | 18 s | ~12 min | 1h 26m | **14 min** |
+| drive across the suburb | 13 s | ~10 min | 1h 02m | **10 min** |
+| rail commute, city to city | 105 s | 60-90 min | **8h 24m** | **1h 24m** |
+
+Eight and a half hours to get to work is what "leaves at 07:00, arrives after
+dark" looks like from the inside, and the three-hour departure window in
+`considerTrips` had been papering over it. `secPerDay: 1800` is the measured
+answer; the cost is a 30-minute real day at 1x, which is what 2x/4x exist for.
+
+**3. Boards opened at midnight**, showing an empty town for seven in-game hours
+before anyone left the house. `startHour: 7` opens on the morning peak.
+
+And the reason all three were findable: **"unhappy" now shows its evidence.**
+Every scored trip is kept with its two numbers and rendered as a sentence, so
+the panel says *"The trip to work took 2m 14s — far longer than they expected
+(1m 15s)"* rather than a mood the player cannot act on.
+
 ### 9.1.1 The pedestrian level crossing (BUILT 2026-08-03)
 
 The other crossing, and it is the zebra's **opposite** rather than its sibling.

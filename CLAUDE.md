@@ -327,6 +327,29 @@ broken scenario fails CI. Design notes:
 
 See `IMPROVEMENTS.md` for the prioritised backlog.
 
+## After every push: check for merge conflicts
+
+`git push` succeeding says nothing about whether the branch still merges. Master
+moves under you — another PR lands while you are working — and the first anyone
+hears of it is a red "This branch has conflicts" on the PR, often hours later.
+
+So the push is not finished until you have checked:
+
+```
+git fetch origin master
+git merge-tree $(git merge-base HEAD origin/master) HEAD origin/master | grep -c '^+<<<<<<<'
+```
+
+Zero means clean. Anything else: merge master in, resolve, re-run
+`npm run test:unit`, and push again — then check once more, because master can
+move while you are resolving.
+
+Conflicts here are usually trivial and of one shape: two branches each APPENDING
+to the same list (a mode registry, a `Game` interface, the render frame's tail).
+Keep both sides. Read what each addition is for before choosing an order — in
+`frame()`, for instance, the render heartbeat has to tick LAST, after everything
+it might wake has been mirrored.
+
 ## Verifying changes
 
 `npm run build` (vue-tsc + vite) is the fastest correctness check, and

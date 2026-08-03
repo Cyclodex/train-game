@@ -97,15 +97,29 @@ describe("citizens: the population", () => {
 });
 
 describe("citizens: the clock", () => {
-  it("runs a day and sends people out in the morning", () => {
+  it("opens at 07:00, not at midnight", () => {
+    // A board that starts at 00:00 shows an empty town for seven in-game hours
+    // before anybody leaves the house, and whoever opened it sits through that
+    // every single time. The morning peak is the thing the mode is about, so it
+    // is the thing you see first.
     const world = buildCitizenWorld(twoTownLevel());
     const sim = createCitizenSim({ world, seed: 5, tuning: { secPerDay: 120 } });
-    expect(sim.stats().clock).toBe("00:00");
-    run(sim, 40); // 08:00
-    expect(sim.stats().hour).toBeGreaterThan(7);
-    expect(sim.stats().hour).toBeLessThan(9);
-    run(sim, 90); // into the next day
+    expect(sim.stats().clock).toBe("07:00");
+    run(sim, 5); // 08:00 — one in-game hour is 5s at this day length
+    expect(sim.stats().hour).toBeGreaterThan(7.9);
+    expect(sim.stats().hour).toBeLessThan(8.1);
+    // ...and the day still rolls over a full 24 hours after the OPENING, not at
+    // t = secPerDay. At this day length an hour is 5s, so midnight is t=85.
+    run(sim, 70); // 22:00, still day 0
+    expect(sim.day()).toBe(0);
+    run(sim, 20); // past midnight
     expect(sim.day()).toBe(1);
+  });
+
+  it("honours a different opening hour", () => {
+    const world = buildCitizenWorld(twoTownLevel());
+    const sim = createCitizenSim({ world, seed: 5, tuning: { secPerDay: 120, startHour: 0 } });
+    expect(sim.stats().clock).toBe("00:00");
   });
 });
 

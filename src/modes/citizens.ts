@@ -8,8 +8,8 @@ import { CitizenTuning } from "@/sim/citizens";
 // patience and a person's expectations both have to be set against that, or
 // every commuter gives up on a perfectly ordinary railway.
 //
-//  · `secPerDay` is THE genre dial: short makes a twitchy throughput game, long
-//    a planning one. Four minutes leaves room for a real journey inside a day.
+//  · `secPerDay` is THE genre dial, and it is now MEASURED rather than picked.
+//    See the table below.
 //  · `maxWaitSec` must exceed the headway your board can offer, or waiting is a
 //    coin flip. A hundred seconds tolerates two missed trains.
 //  · `refSpeed` sets what people think a trip "should" take door to door — the
@@ -18,8 +18,30 @@ import { CitizenTuning } from "@/sim/citizens";
 // Worked against `threecities`, which is the reference board: a twenty-six tile
 // line, so a shuttle comes back round to any given platform about every two
 // minutes, and a cross-map commute is around a hundred seconds door to door.
+//
+// THE DAY LENGTH, CALIBRATED. Measured over 2000 board seconds on the two
+// reference boards, median door-to-door, then read against what each journey is
+// obviously meant to BE in a real town:
+//
+//   | journey                  | measured | means, in a real town |
+//   |--------------------------|---------:|-----------------------|
+//   | walk to a local job      |     18 s | ~12 min               |
+//   | drive across the suburb  |     13 s | ~10 min               |
+//   | rail commute, city to city |  105 s | ~60-90 min            |
+//
+// That fixes the exchange rate at roughly 30 real-world seconds per board
+// second, so a 24-hour day is about 1800 board seconds. At the old 300 the same
+// commute read as EIGHT AND A HALF IN-GAME HOURS: people left home at 07:00 and
+// arrived at work after dark, which is what the three-hour departure window in
+// `considerTrips` was quietly papering over.
+//
+// At 1800 the clock finally agrees with the board: the local walk is 14 in-game
+// minutes, the drive 10, and the cross-map commute an hour and a half — a long
+// intercity haul, which is exactly what it looks like. The cost is that a full
+// in-game day is half an hour of real time at 1x, which is why the mode has
+// 2x/4x; a city builder is not meant to be watched a day at a sitting.
 const TUNING: Partial<CitizenTuning> = {
-  secPerDay: 300,
+  secPerDay: 1800,
   maxWaitSec: 180,
   assumedHeadwaySec: 50,
   refSpeed: 0.1,
@@ -88,3 +110,25 @@ export const citizensMode: GameMode = {
     money: false,
   },
 };
+
+/**
+ * The same mode with the dials nudged — for TESTS, and only for tests.
+ *
+ * A calibrated day is 1800 board seconds, which is right for playing and
+ * hopeless for asserting anything that takes DAYS: growth, emigration, the
+ * mood review. A test that wants to watch five days would have to run nine
+ * thousand seconds of simulation.
+ *
+ * So a test says out loud that it is compressing the clock, instead of the
+ * shipped calibration being quietly bent to keep the suite fast. Everything
+ * else — speeds, patience, the walking maximum — stays exactly as it ships.
+ */
+export function citizensModeWith(overrides: Partial<CitizenTuning>): GameMode {
+  return {
+    ...citizensMode,
+    setup(ctx: ModeContext): ModeSetup {
+      const base = citizensMode.setup(ctx);
+      return { ...base, citizens: { tuning: { ...TUNING, ...overrides } } };
+    },
+  };
+}
