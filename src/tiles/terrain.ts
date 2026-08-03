@@ -2550,11 +2550,35 @@ function sampleSeg(s: ShoreSeg): Pt[] {
   return pts;
 }
 
+// The four corners of the tile, in the same clockwise order as the diagonals:
+// top-left, top-right, bottom-right, bottom-left.
+const CORNER_PT: Pt[] = [
+  { x: 0, y: 0 },
+  { x: GROUND_UNITS, y: 0 },
+  { x: GROUND_UNITS, y: GROUND_UNITS },
+  { x: 0, y: GROUND_UNITS },
+];
+
+/** The diagonal neighbours' heights, in CORNER_PT order. */
+function diagonalHeights(n: HeightNeighbours): number[] {
+  return [n.topLeft, n.topRight, n.bottomRight, n.bottomLeft];
+}
+
 /**
  * Every break in the ground on this cell, as keep-out corridors in its own
- * 0..100 box: the contours its own terrace draws, plus any shared boundary a
- * HIGHER neighbour drops over. Empty on flat ground and on a plateau's
- * interior, which is most of any hill.
+ * 0..100 box: the contours its own terrace draws, any shared boundary a
+ * HIGHER neighbour drops over, and any CORNER a diagonal neighbour steps at.
+ * Empty on flat ground and on a plateau's interior, which is most of any hill.
+ *
+ * The DIAGONAL case is the one with no edge to hang the keep-out on. Where
+ * three cells stand level and the fourth does not, nothing stops at any
+ * boundary this tile shares — the break belongs to the two tiles either side of
+ * the odd one out, and both of their banks run through the corner point all
+ * four cells meet at. A building here reaches past its own tile edge
+ * (TOWN_OVERHANG), so it can crowd that corner without ever crossing an edge
+ * this tile fences. The answer is the corner itself: a degenerate one-point
+ * corridor, which fences a disc of BANK_HALF around it — the same trick a
+ * placed building already uses to keep the next one off its roof.
  */
 export function terraceBanks(
   coordId: string,
@@ -2576,6 +2600,12 @@ export function terraceBanks(
   }
   edgeHeights(around).forEach((n, e) => {
     if (n > height) out.push({ pts: EDGE_LINE[e], half: BANK_HALF });
+  });
+  // EITHER WAY round the diagonal: a corner where the ground is higher is the
+  // foot of someone's wall, one where it is lower is the top of the drop. Both
+  // are a break, and neither shows up on any edge this tile can fence.
+  diagonalHeights(around).forEach((n, c) => {
+    if (n !== height) out.push({ pts: [CORNER_PT[c], CORNER_PT[c]], half: BANK_HALF });
   });
   return out;
 }

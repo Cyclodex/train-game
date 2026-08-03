@@ -1235,6 +1235,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
       just `tileGroundSvg`: scatter is built by its own call with its own memo
       entry, and threading it into the ground alone left the banks nowhere near
       the placement that needed them (they silently did nothing).
+    · A DIAGONAL drop has no edge to fence: three cells level and the fourth
+      not means nothing stops at any boundary this tile shares — the break
+      belongs to the two tiles either side of the odd one out, and both banks
+      run through the corner all four meet at. Fenced with a degenerate
+      one-point corridor on that corner. IT DOES NOT BIND TODAY and the test
+      says so: the urban band (26..74) plus the overhang cap already hold a roof
+      ~18u off any tile corner, against a 7u disc. It is a guard for when those
+      numbers move, which is why the test asserts the CORRIDOR rather than the
+      picture. (The EDGE fences are the opposite — they genuinely move
+      buildings, and the non-vacuity assertion beside them proves it.)
   · Pinned in `heightTerraces.spec.ts` ("terraces on terrain") +
     `terrain.spec.ts` ("elevated ground"); `/test/hillsides` is the picture —
     one slope, eight grounds, the grass row in the middle as the control.

@@ -15,6 +15,7 @@ import {
   terrainOf,
   fieldPlanAt,
   edgeStyleOf,
+  terraceBanks,
   heightTint,
   Elevation,
   HeightNeighbours,
@@ -976,6 +977,7 @@ describe("terrain", () => {
       bottomLeft: 0,
     };
     const up = (height: number): Elevation => ({ height, around: flat });
+    const allSides = (h: number) => ({ top: h, right: h, bottom: h, left: h });
 
     // The bank's own half-width in tiles/terrain.ts. Buildings are placed by
     // their centre and sized to the room measured there, so what the keep-out
@@ -1078,6 +1080,58 @@ describe("terrain", () => {
           tileScatterSvg("urban", c, around("urban"), 11, [], underCliff),
         )) {
           expect(edge).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+    });
+
+    it("fences a corner the ground only steps at DIAGONALLY", () => {
+      // The case with no edge to hang a keep-out on: three cells stand level
+      // and the fourth does not, so nothing stops at any boundary this tile
+      // shares. The break belongs to the two tiles either side of the odd one
+      // out, and both of their banks run through the corner all four meet at —
+      // which a building reaching past its own tile edge can crowd without ever
+      // crossing an edge this tile fences.
+      const nwDrops: Elevation = { height: 1, around: { ...flat, ...allSides(1), topLeft: 0 } };
+      // How close each building gets to the top-left corner: centre distance
+      // less its own radius.
+      const cornerGaps = (svg: string) =>
+        svg
+          .split('<g transform="translate(')
+          .slice(1)
+          .map(g => {
+            const [x, y] = g.slice(0, g.indexOf(")")).split(" ").map(Number);
+            const dim = (attr: string) =>
+              Math.max(
+                ...[...g.matchAll(new RegExp(`${attr}="([\\d.]+)"`, "g"))].map(m =>
+                  Number(m[1]),
+                ),
+                0,
+              );
+            return Math.hypot(x, y) - Math.hypot(dim("width"), dim("height")) / 2;
+          });
+
+      // The fence itself, which is the part worth pinning: a degenerate
+      // one-point corridor on the corner, and only where the diagonal steps.
+      const corner = (e: Elevation) =>
+        terraceBanks("2,2", 11, "urban", e).filter(
+          c => c.pts.length === 2 && c.pts[0].x === 0 && c.pts[0].y === 0,
+        );
+      const level: Elevation = { height: 1, around: { ...flat, ...allSides(1), topLeft: 1 } };
+      expect(corner(nwDrops)).toHaveLength(1);
+      expect(corner(level)).toHaveLength(0);
+      // A diagonal that stands HIGHER is a break too — the foot of its wall.
+      expect(corner({ ...nwDrops, around: { ...nwDrops.around, topLeft: 2 } })).toHaveLength(1);
+
+      // …and no building crosses it. NOTE this holds with room to spare today:
+      // the urban band (26..74) plus the overhang cap already keep a roof ~18
+      // units off any tile corner, so the disc never actually binds. It is a
+      // guard, not a fix for something visible — which is exactly why the
+      // corridor above is asserted directly rather than through the picture.
+      for (const c of coords) {
+        for (const gap of cornerGaps(
+          tileScatterSvg("urban", c, around("urban"), 11, [], nwDrops),
+        )) {
+          expect(gap).toBeGreaterThan(BANK_HALF - 1);
         }
       }
     });
