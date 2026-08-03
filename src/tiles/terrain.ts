@@ -796,21 +796,26 @@ function corners(
     const role = roles[i];
     // Surveyed ground keeps every corner ON its shared lattice point: no belly
     // pushed out mid-shore, no bite taken out of the corner. That is the whole
-    // difference between a field and a pond.
-    if (style === "surveyed") return p;
-    if (role.kind === "run") {
-      const pull = shorePull(gx, gy, seed);
-      const out = EDGE_FRAME[role.edge].out;
-      p.x -= out.x * pull;
-      p.y -= out.y * pull;
-    } else if (role.kind === "corner") {
-      // The inward diagonal is opposite the two adjacent edges' outward
-      // normals; their sum has length sqrt(2), so divide to get a unit pull.
-      const cut = cornerInset(gx, gy, seed) * insetScale;
-      const oBefore = EDGE_FRAME[(i + 3) % 4].out;
-      const oAfter = EDGE_FRAME[i].out;
-      p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * cut;
-      p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * cut;
+    // difference between a field and a pond. It still takes the band inset
+    // below, though — a terraced field has to fit its steps inside its own tile
+    // exactly as a hillside does, and skipping the push here stacked every band
+    // of a surveyed multi-step drop on the same tile boundary, so only the top
+    // one was ever visible.
+    if (style === "organic") {
+      if (role.kind === "run") {
+        const pull = shorePull(gx, gy, seed);
+        const out = EDGE_FRAME[role.edge].out;
+        p.x -= out.x * pull;
+        p.y -= out.y * pull;
+      } else if (role.kind === "corner") {
+        // The inward diagonal is opposite the two adjacent edges' outward
+        // normals; their sum has length sqrt(2), so divide to get a unit pull.
+        const cut = cornerInset(gx, gy, seed) * insetScale;
+        const oBefore = EDGE_FRAME[(i + 3) % 4].out;
+        const oAfter = EDGE_FRAME[i].out;
+        p.x -= ((oBefore.x + oAfter.x) / Math.SQRT2) * cut;
+        p.y -= ((oBefore.y + oAfter.y) / Math.SQRT2) * cut;
+      }
     }
     // A body that has to stop INSIDE its own tile (a terrace band whose fall to
     // that neighbour is more than one step — see `bandInsets`) is pushed off the
@@ -2271,6 +2276,7 @@ function buildCached(
   neighbours: TerrainNeighbours,
   seed: number,
   corridors: Corridor[],
+  elevation?: Elevation,
 ): { ground: string; scatter: string; canopy: string } {
   const same: PatchSame = {
     top: neighbours.top === kind,
@@ -2292,13 +2298,49 @@ function buildCached(
   const key =
     `${kind}|${+same.top}${+same.right}${+same.bottom}${+same.left}` +
     `${+same.topLeft!}${+same.topRight!}${+same.bottomRight!}${+same.bottomLeft!}` +
-    `|${coordId}|${seed}|${corrKey}`;
+    `|${coordId}|${seed}|${corrKey}|${elevationKey(elevation)}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
 
-  const built = buildGround(kind, coordId, same, seed, corridors);
+  const built = buildGround(kind, coordId, same, seed, corridors, elevation);
   cache.set(key, built);
   return built;
+}
+
+/**
+ * How high a cell stands and how far the ground falls around it — everything
+ * the ground build needs to lay the cell's terraces IN THE RIGHT PLACE.
+ *
+ * The terrace used to be composed by the VIEW (terrace fragment, then terrain
+ * fragment), which is why it only ever showed on grass: every other kind paints
+ * an opaque patch straight over it. It belongs INSIDE the ground build, right
+ * after the patch fill and before the detail — so a raised field keeps its
+ * furrows, a raised rock field its scree and a raised town its paving, all of
+ * them ON the lighter step rather than under it.
+ */
+export interface Elevation {
+  height: number;
+  around: HeightNeighbours;
+  theme?: string;
+}
+
+function elevationKey(e?: Elevation): string {
+  if (!e) return "";
+  const n = e.around;
+  const around = [
+    n.top,
+    n.right,
+    n.bottom,
+    n.left,
+    n.topLeft,
+    n.topRight,
+    n.bottomRight,
+    n.bottomLeft,
+  ];
+  // Flat ground with flat ground all round it is the common case and has
+  // nothing to say: same key as no elevation at all, so it shares the memo.
+  if (e.height <= 0 && around.every(h => h <= 0)) return "";
+  return `h${e.height}:${around.join(",")}:${e.theme ?? ""}`;
 }
 
 // --- Heights: hypsometric terraces -------------------------------------------
@@ -2347,7 +2389,54 @@ const TERRACE_BASE: Record<string, Hsl> = {
   plain: [104, 30, 44],
 };
 
-export function heightTint(height: number, theme = "meadow"): Hsl {
+// EVERY GROUND TERRACES, IN ITS OWN COLOUR (2026-08-03). A hill is not made of
+// grass — a wood climbs, a rock field climbs, a massif is nothing BUT climbing —
+// and the terrace used to be the theme's green whatever the cell carried, laid
+// UNDER an opaque terrain patch. So raising a wood or a mountain changed the
+// data, the grade physics and the chevrons, and not one pixel of the ground:
+// only bare grass ever looked higher.
+//
+// A kind that paints its own ground anchors the terrace to THAT colour instead
+// of to the theme's: a step lifts the lightness and takes a little saturation
+// out (aerial perspective — the higher it is, the more air is in front of it),
+// so a hillside wood is a paler wood and a high massif a paler slate. Same
+// formula for every kind, no per-kind step tables (the terrain roadmap's rule),
+// and grass keeps its own theme-anchored ramp unchanged.
+//
+// Grass counts from step 0 because its base tint already sits ABOVE the board's
+// green; a kind anchored to its own ground has to move on the FIRST step or a
+// height-1 wood would be exactly the colour of the flat wood beside it.
+//
+// THE STEP IS A SHARE OF THE HEADROOM, not a fixed number of points. A flat
+// lift is wrong at both ends of the palette: seven points is barely a step on
+// the dark forest green (30%) and bleaches the town's pale tan (68%) to paper by
+// the third one — a hill town came out whiter than the depot roofs. Taking an
+// eighth of the distance to white instead gives the dark grounds the bigger
+// absolute lift they need to read at all and the pale ones the small one they
+// can afford, and no base can ever climb out of its own colour. Bounded at both
+// ends so a mid-tone still steps visibly and nothing washes out.
+const KIND_STEP_SHARE = 0.13;
+const KIND_STEP_MIN = 4;
+const KIND_STEP_MAX = 9;
+// Each step takes a little saturation out too: the further away a thing is, the
+// more air is in front of it, and up IS away on a board seen from above.
+const KIND_STEP_SAT = 2;
+
+export function heightTint(
+  height: number,
+  theme = "meadow",
+  kind: TerrainKind = "grass",
+): Hsl {
+  const own = GROUND[kind];
+  if (own) {
+    const step = Math.max(1, height);
+    const [h, s, l] = own;
+    const lift = Math.min(
+      KIND_STEP_MAX,
+      Math.max(KIND_STEP_MIN, (100 - l) * KIND_STEP_SHARE),
+    );
+    return [h, Math.max(0, s - KIND_STEP_SAT * step), Math.min(l + lift * step, 92)];
+  }
   const step = Math.max(1, height) - 1;
   const [bh, bs, bl] = TERRACE_BASE[theme] ?? TERRACE_BASE.meadow;
   return [bh - 9 * step, bs + 2 * step, Math.min(bl + 6 * step, 82)];
@@ -2416,6 +2505,111 @@ function bandSame(k: number, n: HeightNeighbours): PatchSame {
 // height, its neighbours' heights, its coord or the seed.
 const heightCache = new Map<string, string>();
 
+// --- Terrace banks (a keep-out, not art) -------------------------------------
+//
+// Where a terrace STOPS, the ground breaks: that line is a slope face on a
+// hillside and a cut retaining wall in a town, and either way it is not
+// somewhere a building can stand. Placement already keeps buildings off rails
+// and roads with corridors, so a bank is pushed on as one more corridor and the
+// existing gate does the rest — a block near a step shrinks to what fits the
+// bench, and one that fits nothing is dropped.
+//
+// TWO SOURCES, and the second is the one that is easy to miss. A bank drawn by
+// THIS tile (the contours of its own bands) is the obvious half. But the FIRST
+// step off a summit lands on the shared tile boundary and is drawn by the
+// UPPER tile only — the tile at the foot of that wall knows nothing about it,
+// and a building there overhangs the tile edge by TOWN_OVERHANG, so it hangs
+// over the drop. Each side reads the same boundary from its own
+// `HeightNeighbours` (mine falls to yours / yours rises above mine), so both
+// keep off it without either needing the other's neighbours.
+
+// The slope face is stroked 13 units wide, centred on the edge; half of that,
+// rounded up, is the bank's own footprint.
+const BANK_HALF = 7;
+
+// The four tile edges as polylines in the local 0..100 box, in EDGE_FRAME order
+// (top, right, bottom, left).
+const EDGE_LINE: Pt[][] = [
+  [{ x: 0, y: 0 }, { x: GROUND_UNITS, y: 0 }],
+  [{ x: GROUND_UNITS, y: 0 }, { x: GROUND_UNITS, y: GROUND_UNITS }],
+  [{ x: GROUND_UNITS, y: GROUND_UNITS }, { x: 0, y: GROUND_UNITS }],
+  [{ x: 0, y: GROUND_UNITS }, { x: 0, y: 0 }],
+];
+
+/** One cubic flattened to a polyline. Six samples is plenty at this scale. */
+function sampleSeg(s: ShoreSeg): Pt[] {
+  const pts: Pt[] = [];
+  for (let k = 0; k <= 6; k++) {
+    const t = k / 6;
+    const u = 1 - t;
+    pts.push({
+      x: u ** 3 * s.a.x + 3 * u * u * t * s.p1.x + 3 * u * t * t * s.p2.x + t ** 3 * s.b.x,
+      y: u ** 3 * s.a.y + 3 * u * u * t * s.p1.y + 3 * u * t * t * s.p2.y + t ** 3 * s.b.y,
+    });
+  }
+  return pts;
+}
+
+// The four corners of the tile, in the same clockwise order as the diagonals:
+// top-left, top-right, bottom-right, bottom-left.
+const CORNER_PT: Pt[] = [
+  { x: 0, y: 0 },
+  { x: GROUND_UNITS, y: 0 },
+  { x: GROUND_UNITS, y: GROUND_UNITS },
+  { x: 0, y: GROUND_UNITS },
+];
+
+/** The diagonal neighbours' heights, in CORNER_PT order. */
+function diagonalHeights(n: HeightNeighbours): number[] {
+  return [n.topLeft, n.topRight, n.bottomRight, n.bottomLeft];
+}
+
+/**
+ * Every break in the ground on this cell, as keep-out corridors in its own
+ * 0..100 box: the contours its own terrace draws, any shared boundary a
+ * HIGHER neighbour drops over, and any CORNER a diagonal neighbour steps at.
+ * Empty on flat ground and on a plateau's interior, which is most of any hill.
+ *
+ * The DIAGONAL case is the one with no edge to hang the keep-out on. Where
+ * three cells stand level and the fourth does not, nothing stops at any
+ * boundary this tile shares — the break belongs to the two tiles either side of
+ * the odd one out, and both of their banks run through the corner point all
+ * four cells meet at. A building here reaches past its own tile edge
+ * (TOWN_OVERHANG), so it can crowd that corner without ever crossing an edge
+ * this tile fences. The answer is the corner itself: a degenerate one-point
+ * corridor, which fences a disc of BANK_HALF around it — the same trick a
+ * placed building already uses to keep the next one off its roof.
+ */
+export function terraceBanks(
+  coordId: string,
+  seed = 1,
+  kind: TerrainKind = "grass",
+  elevation?: Elevation,
+): Corridor[] {
+  if (!elevation) return [];
+  const { height, around } = elevation;
+  const out: Corridor[] = [];
+  const { x, y } = parseCoordId(coordId);
+  const style = edgeStyleOf(kind);
+  for (let k = 1; k <= height; k++) {
+    const same = bandSame(k, around);
+    const inset = bandInsets(k, around);
+    for (const s of patchSegments(same, x, y, seed, GROUND_UNITS, style, inset)) {
+      if (s.stops) out.push({ pts: sampleSeg(s), half: BANK_HALF });
+    }
+  }
+  edgeHeights(around).forEach((n, e) => {
+    if (n > height) out.push({ pts: EDGE_LINE[e], half: BANK_HALF });
+  });
+  // EITHER WAY round the diagonal: a corner where the ground is higher is the
+  // foot of someone's wall, one where it is lower is the top of the drop. Both
+  // are a break, and neither shows up on any edge this tile can fence.
+  diagonalHeights(around).forEach((n, c) => {
+    if (n !== height) out.push({ pts: [CORNER_PT[c], CORNER_PT[c]], half: BANK_HALF });
+  });
+  return out;
+}
+
 /**
  * The terraces one elevated tile lays, as an SVG fragment in the 0..100 box:
  * one band per level from 1 up to `height`, lowest first, so the bands nest.
@@ -2427,6 +2621,7 @@ export function tileHeightSvg(
   neighbours: HeightNeighbours,
   seed = 1,
   theme = "meadow",
+  kind: TerrainKind = "grass",
 ): string {
   if (height <= 0) return "";
   // THE THEME IS PART OF THE KEY — the memo trap the terrain roadmap wrote
@@ -2442,13 +2637,20 @@ export function tileHeightSvg(
     neighbours.bottomRight,
     neighbours.bottomLeft,
   ];
-  const key = `h${height}|${around.join(",")}|${coordId}|${seed}|${theme}`;
+  const key = `h${height}|${around.join(",")}|${coordId}|${seed}|${theme}|${kind}`;
   const hit = heightCache.get(key);
   if (hit !== undefined) return hit;
 
   const { x, y } = parseCoordId(coordId);
   const parts: string[] = [];
   const lowest = Math.min(...around);
+  // A terrace is drawn the way ITS GROUND is drawn (see EDGE_STYLE): weather
+  // contours a hillside, people cut a bench. So a wood or a massif rounds and
+  // bows, while a field, a town or a works steps on the straight banks its
+  // patch already uses — a retaining wall, not a shoreline.
+  const style = edgeStyleOf(kind);
+  // Only bare grass gets the soft fringe (see below).
+  const softFringe = !GROUND[kind];
 
   for (let k = 1; k <= height; k++) {
     // A band the NEXT one up covers exactly (every neighbour is already above
@@ -2459,12 +2661,21 @@ export function tileHeightSvg(
 
     const same = bandSame(k, neighbours);
     const inset = bandInsets(k, neighbours);
-    const [hh, hs, hl] = heightTint(k, theme);
-    const d = patchPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+    const [hh, hs, hl] = heightTint(k, theme, kind);
+    const d = patchPath(same, x, y, seed, GROUND_UNITS, style, inset);
 
     // Soft fringe outside the body (unclipped, like every kind's), so each
     // contour blends into the step below instead of ending at a hard line.
-    const fringeD = patchRimPath(same, x, y, seed, GROUND_UNITS, "organic", inset);
+    //
+    // GRASS ONLY. The fringe is a halo of the band's own colour spilled OUTWARD
+    // — downhill — and on bare grass, where there is nothing under it but the
+    // theme's backdrop, that is a soft falloff. Over a ground that paints its
+    // own opaque patch it is a pale bar laid along the low side of every step:
+    // the ground just BELOW a contour came out lighter than the terrace above
+    // it, which is the light back to front. A step between two tones of the same
+    // colour family does not need blending — the contour and its slope face are
+    // the whole reading, and a terrace IS a hard edge.
+    const fringeD = softFringe ? patchRimPath(same, x, y, seed, GROUND_UNITS, style, inset) : "";
     if (fringeD) {
       parts.push(
         `<path d="${fringeD}" fill="none" stroke="${css([hh, hs, hl])}" stroke-width="30" stroke-linecap="round" opacity="0.15"/>`,
@@ -2477,7 +2688,7 @@ export function tileHeightSvg(
     // it faces the sun (top/left), shaded where it faces away (right/bottom).
     // Edge order is patchSegments' clockwise walk: 0 top, 1 right, 2 bottom,
     // 3 left.
-    const slopes = patchSegments(same, x, y, seed, GROUND_UNITS, "organic", inset)
+    const slopes = patchSegments(same, x, y, seed, GROUND_UNITS, style, inset)
       .map((s, i) => ({ s, i }))
       .filter(({ s }) => s.stops);
     if (slopes.length > 0) {
@@ -2499,11 +2710,30 @@ export function tileHeightSvg(
   return built;
 }
 
+/** The terrace bands an `Elevation` asks for, in this cell's own ground. */
+function terraceSvg(
+  kind: TerrainKind,
+  coordId: string,
+  seed: number,
+  elevation?: Elevation,
+): string {
+  if (!elevation || elevation.height <= 0) return "";
+  return tileHeightSvg(
+    elevation.height,
+    coordId,
+    elevation.around,
+    seed,
+    elevation.theme ?? "meadow",
+    kind,
+  );
+}
+
 /**
  * The FLAT ground for one tile as an SVG fragment, in a 0..100 box: the terrain
- * patch, its rim and its ground marks (paving, scree, gardens). Returns "" for
- * grass (see terrainOf) so the common tile costs nothing. Renders UNDER
- * everything, including every neighbour's standing objects.
+ * patch, the terraces of an elevated cell, the rim and the ground marks
+ * (paving, scree, gardens). Returns "" for flat grass (see terrainOf) so the
+ * common tile costs nothing. Renders UNDER everything, including every
+ * neighbour's standing objects.
  */
 export function tileGroundSvg(
   kind: TerrainKind,
@@ -2511,8 +2741,9 @@ export function tileGroundSvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
   corridors: Corridor[] = [],
+  elevation?: Elevation,
 ): string {
-  return buildCached(kind, coordId, neighbours, seed, corridors).ground;
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).ground;
 }
 
 /**
@@ -2528,8 +2759,9 @@ export function tileScatterSvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
   corridors: Corridor[] = [],
+  elevation?: Elevation,
 ): string {
-  return buildCached(kind, coordId, neighbours, seed, corridors).scatter;
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).scatter;
 }
 
 /**
@@ -2544,8 +2776,9 @@ export function tileCanopySvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
   corridors: Corridor[] = [],
+  elevation?: Elevation,
 ): string {
-  return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).canopy;
 }
 
 /**
@@ -2566,6 +2799,7 @@ function buildMeadow(
   coordId: string,
   seed: number,
   corridors: Corridor[],
+  terraces = "",
 ): { ground: string; scatter: string; canopy: string } {
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -2619,7 +2853,10 @@ function buildMeadow(
   }
   placed.sort((a, b) => a.y - b.y);
   return {
-    ground: marks.join(""),
+    // Grass paints no patch of its own, so its terrace IS the ground here — and
+    // it goes first, exactly where the view used to put it, so every board
+    // authored on plain grass renders identically to before.
+    ground: terraces + marks.join(""),
     scatter: placed.map(p => p.g).join(""),
     canopy: "",
   };
@@ -2631,13 +2868,15 @@ function buildGround(
   same: PatchSame,
   seed: number,
   corridors: Corridor[],
+  elevation?: Elevation,
 ): { ground: string; scatter: string; canopy: string } {
   const base = GROUND[kind];
+  const terraces = terraceSvg(kind, coordId, seed, elevation);
   // Grass has no ground of its own to paint, but it does have things growing on
   // it — a different build entirely, and the only one that must never emit a
   // fill (see meadowScatter).
-  if (kind === "grass") return buildMeadow(coordId, seed, corridors);
-  if (!base) return { ground: "", scatter: "", canopy: "" };
+  if (kind === "grass") return buildMeadow(coordId, seed, corridors, terraces);
+  if (!base) return { ground: terraces, scatter: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -2675,6 +2914,12 @@ function buildGround(
     );
   }
   parts.push(`<path d="${d}" fill="${css(base)}"/>`);
+
+  // THE TERRACES GO HERE: over the ground's own fill (which is what the flat
+  // cell next door still shows), under everything that is drawn ON that ground.
+  // A raised field keeps its furrows and its hedge, a raised rock field its
+  // scree, a raised town its paving — all of them on the lighter step.
+  if (terraces) parts.push(terraces);
 
   // Everything placed on this tile must STAND ON the patch. The bands keep
   // objects off the tile edges, but a real corner now cedes a deep bite of the
@@ -2747,6 +2992,15 @@ function buildGround(
   // same test rather than two. Without it a tile's two or three buildings, now
   // that they are building-sized, simply pile on top of each other.
   const blockers = corridors.slice();
+  // …and to the TERRACE BANKS, for the grounds people build on. A retaining
+  // wall is as much a thing you cannot stand a house on as a railway is: a
+  // block dropped across a step came out half on the upper bench and half on
+  // the lower one, hanging in the air over its own cut. Buildings only — a tree
+  // or a boulder on a slope is exactly right, and a wood that stepped back from
+  // every contour would be a wood full of bald rings.
+  if (kind === "urban" || kind === "industry") {
+    blockers.push(...terraceBanks(coordId, seed, kind, elevation));
+  }
   const room = (p: Pt2): number =>
     blockers.length ? corridorClearance(p, blockers) : Infinity;
 

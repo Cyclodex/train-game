@@ -1127,8 +1127,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   unclipped (half a stroke of the patch's colour, spilled onto the neighbour) —
   lifted over the trains it washes a consist in mountain grey ten units before
   the portal. A COPY, not a lift, so that fringe is still laid below everything
-  by the original. (The roof copy drops the height terrace — it renders under an
-  opaque patch, and duplicating it would duplicate its clipPath id.)
+  by the original. (The roof copy CARRIES the height terrace, since 2026-08-03:
+  the terrace lives inside the ground fragment now, and a bored ridge that
+  terraced below the trains and not above them showed a step at every portal.
+  It duplicates the terrace's clipPath id, which is harmless for the same reason
+  the patch's own `terrain-clip` already was: both copies define the identical
+  geometry, so `url(#id)` resolving to the first is the right answer.)
 - THE PORTAL IS SIZED AGAINST THE ROCK FACE, which is the tile edge: a patch
   keeps to its own tile (`54b7391`), so the arch springs at the edge, its crown
   lands on it, and the gallery stands entirely on open ground — 16u out, not the
@@ -1184,8 +1188,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   shows " h<N>". /test scenario: `grades` (light shuttle vs heavy freight
   racing the same hill — the gap on the ramps is the mechanic).
 - HYPSOMETRIC TERRACES (`tileHeightSvg`, 2026-07-31): a cell with height > 0
-  lays a fused patch fill UNDER its terrain patch on the ground layer, lighter
-  and warmer per step. THE TINT IS THEME-ANCHORED (`heightTint(h, theme)`,
+  lays a fused patch fill on the ground layer, lighter and warmer per step. ON
+  GRASS the tint is THEME-ANCHORED (`heightTint(h, theme)`,
   `TERRACE_BASE`): "higher" only exists relative to the ground the theme
   paints — a fixed table read as a hollow on the bright meadow board and as a
   glowing patch on the dark debug flat. One base per theme + one step formula
@@ -1229,6 +1233,66 @@ lean — prune as much as you add. This file only stays useful if every task ten
     it) is skipped: that is the plateau interior, i.e. most cells of a big hill.
   · Pinned in `tests/unit/tiles/heightTerraces.spec.ts`; `/test/terraces` is the
     side-by-side (stepped hill vs 3-step mesa) — the contrast IS the test.
+- EVERY GROUND TERRACES, IN ITS OWN COLOUR (2026-08-03). The terrace was the
+  meadow's green whatever the cell carried AND the view composed it BEFORE the
+  terrain fragment — so every kind that paints an opaque patch covered it, and
+  raising a wood/rock/massif/town changed the data, the grade and the chevrons
+  and not one pixel of the ground. Only grass (which paints no fill) ever looked
+  higher. Three parts, all in `tiles/terrain.ts`:
+  · `heightTint(h, theme, kind)` anchors to `GROUND[kind]` when the kind paints
+    its own ground, and only then falls back to the theme's `TERRACE_BASE`.
+    Hue is untouched (hue is what says "wood" or "slate"); lightness climbs and
+    saturation drops a little (aerial perspective). THE STEP IS A SHARE OF THE
+    HEADROOM to white (13%, clamped 4..9 points), NOT a flat lift: 7 points flat
+    was invisible on the forest's 30% and bleached the town's 68% tan to paper
+    by step 3 — a hill town whiter than a depot roof.
+  · The terrace is DRAWN THE WAY ITS GROUND IS (`edgeStyleOf(kind)`): organic
+    contours for forest/rock/mountain/water, SURVEYED straight banks for
+    farmland/urban/industry — weather shapes a hillside, people cut a bench.
+    That needed `corners()` to stop returning early for surveyed ground BEFORE
+    applying `bandInsets`, or a surveyed multi-step drop stacked every band on
+    the same tile edge and showed one.
+  · NO SOFT FRINGE except on grass. The fringe is a halo of the band's colour
+    spilled downhill; over the backdrop it is a falloff, over an opaque patch it
+    is a pale bar along the LOW side of every step — the light back to front.
+  · COMPOSITION MOVED INTO THE GROUND BUILD (`Elevation` → `tileGroundSvg`,
+    keyed into the memo by `elevationKey`): the terrace is spliced right after
+    the patch fill and BEFORE the detail, so a raised field keeps its furrows, a
+    raised rock field its scree and a raised town its paving — all ON the
+    lighter step. Grass puts it first (it has no fill), which is byte-for-byte
+    what the view used to emit, so every grass board renders unchanged.
+  · NOTHING BUILDS ON A BANK (`terraceBanks`). Where a terrace stops, the
+    ground breaks — a slope face on a hillside, a cut retaining wall in a town —
+    and a block dropped across a step came out half on the upper bench and half
+    on the lower one. The banks are pushed onto the SAME `blockers` list that
+    keeps buildings off rails and roads, so the existing gate does the work: a
+    block near a step shrinks to what fits the bench and one that fits nothing
+    is dropped. BUILDINGS ONLY (urban/industry) — a wood that stepped back from
+    every contour would be a wood full of bald rings.
+    · TWO SOURCES, and the second is the trap: the first step off a summit lands
+      on the SHARED boundary and is drawn by the UPPER tile alone, so the tile
+      at the foot of that wall (whose buildings overhang the tile edge by
+      TOWN_OVERHANG) knows nothing about it. Each side reads the same boundary
+      from its own `HeightNeighbours` — mine falls to yours / yours rises above
+      mine — so neither needs the other's neighbours. THAT is why a FLAT cell
+      gets an `Elevation` too (`TileGround.elevation` no longer bails at h0).
+    · The elevation must reach `tileScatterSvg`/`tileCanopySvg` as well, not
+      just `tileGroundSvg`: scatter is built by its own call with its own memo
+      entry, and threading it into the ground alone left the banks nowhere near
+      the placement that needed them (they silently did nothing).
+    · A DIAGONAL drop has no edge to fence: three cells level and the fourth
+      not means nothing stops at any boundary this tile shares — the break
+      belongs to the two tiles either side of the odd one out, and both banks
+      run through the corner all four meet at. Fenced with a degenerate
+      one-point corridor on that corner. IT DOES NOT BIND TODAY and the test
+      says so: the urban band (26..74) plus the overhang cap already hold a roof
+      ~18u off any tile corner, against a 7u disc. It is a guard for when those
+      numbers move, which is why the test asserts the CORRIDOR rather than the
+      picture. (The EDGE fences are the opposite — they genuinely move
+      buildings, and the non-vacuity assertion beside them proves it.)
+  · Pinned in `heightTerraces.spec.ts` ("terraces on terrain") +
+    `terrain.spec.ts` ("elevated ground"); `/test/hillsides` is the picture —
+    one slope, eight grounds, the grass row in the middle as the control.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
