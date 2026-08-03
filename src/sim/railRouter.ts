@@ -148,6 +148,35 @@ function splitKey(key: string): [string, string] {
   return [key.slice(0, i), key.slice(i + 1)];
 }
 
+// Every station a train could reach from `fromTileId` by rail, itself
+// included, in a stable order. A flood over the track graph rather than a
+// route search: it answers "is there any way at all", which is what deciding
+// where a PASSENGER may ask to go needs — the route to take is the train's
+// problem, later.
+export function reachableStations(level: Level, fromTileId: string): string[] {
+  const seen = new Set<string>([fromTileId]);
+  const stack = [fromTileId];
+  while (stack.length) {
+    const id = stack.pop()!;
+    const cell = level[id];
+    if (!cell) continue;
+    for (const port of PORT_ORDER) {
+      if (port === Position.Center) continue;
+      if (!partnersOf(cell.connections, port).length) continue;
+      const n = neighborCoord(parseCoordId(id), port);
+      if (!n) continue;
+      const nId = getCoordinatesId(n);
+      const nCell = level[nId];
+      if (!nCell || seen.has(nId)) continue;
+      // They must actually join across the shared edge.
+      if (!partnersOf(nCell.connections, oppositePort(port)).length) continue;
+      seen.add(nId);
+      stack.push(nId);
+    }
+  }
+  return [...seen].filter(id => level[id]?.role === "station").sort();
+}
+
 // Every station tile on a board, in a stable order. The default line for a
 // board that has not authored one, and what the mode offers as stops.
 export function stationTilesOf(level: Level): string[] {

@@ -391,6 +391,8 @@ export interface Game {
   occupied: Record<string, string>;
   // tileId -> passengers waiting at that station (the platform crowd).
   stationQueues: Record<string, number>;
+  // tileId -> the destination each of them asked for, in queue order.
+  stationWaiting: Record<string, string[]>;
   // trainId -> the stops it serves (the service panel's model). A view copy of
   // what the SIM owns; changes only on a player action.
   trainLines: Record<string, string[]>;
@@ -652,6 +654,10 @@ export function createGame(
   // tileId -> passengers waiting on that station's platform, mirrored from the
   // sim each frame so Tile.vue can draw the crowd reactively.
   const stationQueues = reactive({}) as Record<string, number>;
+  // tileId -> where each of them is going, in queue order. The crowd is drawn
+  // from this, so a dot's colour says which platform its person asked for —
+  // a queue nobody serves is then visible as one colour piling up.
+  const stationWaiting = reactive({}) as Record<string, string[]>;
   // trainId -> the stops it serves, mirrored from the sim so the service panel
   // renders reactively. The SIM owns the line; this is a view copy, refreshed
   // whenever a line changes (it changes on player action, not per frame).
@@ -1212,6 +1218,13 @@ export function createGame(
         continue;
       }
       stationQueues[id] = sim.stationQueue(id);
+      const waiting = sim.stationWaiting(id);
+      // Replace in place only when it really changed, so Vue does not
+      // re-render every platform on every frame.
+      const cur = stationWaiting[id];
+      if (!cur || cur.length !== waiting.length || waiting.some((d, i) => cur[i] !== d)) {
+        stationWaiting[id] = waiting;
+      }
     }
   }
 
@@ -2178,6 +2191,7 @@ export function createGame(
     reservations,
     occupied,
     stationQueues,
+    stationWaiting,
     trainLines,
     stationLines,
     queuedTrains,
@@ -2274,6 +2288,7 @@ export function createGame(
       for (const id of Object.keys(reservations)) delete reservations[id];
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
+      for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
       prevStalls = new Set();
       roadCars.splice(0, roadCars.length);
       roadFrame.maxCarWaitSec = 0;

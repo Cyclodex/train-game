@@ -302,6 +302,9 @@
       />
       <!-- The waiting crowd: one dot per passenger in the platform queue, lined
            up from the platform end so the queue visibly grows and drains. -->
+      <!-- One dot per waiting passenger, COLOURED BY WHERE THEY ARE GOING. A
+           queue that never moves is then one colour piling up, which names
+           the service the line is missing. -->
       <circle
         v-for="(p, ci) in stationCrowd"
         :key="'crowd' + ci"
@@ -309,8 +312,10 @@
         :cy="p.cy"
         r="4.5"
         class="station-passenger"
-        :class="{ 'station-passenger--alt': ci % 2 === 1 }"
-      />
+        :style="{ fill: p.fill }"
+      >
+        <title>{{ p.title }}</title>
+      </circle>
     </svg>
 
     <!-- Signals (straights only) -->
@@ -550,6 +555,27 @@ import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
 import { WALK_RADIUS_TILES } from "@/tiles/catchment";
 
+// A stable colour per DESTINATION tile, so a waiting passenger's dot says
+// where they are going and the same platform is the same colour everywhere on
+// the board. Hashed from the coordinate rather than looked up, so it needs no
+// registry and never shifts when a station is added.
+const DEST_COLOURS = [
+  "#e2574c",
+  "#f0b429",
+  "#3fa796",
+  "#5b8def",
+  "#a05fd0",
+  "#6aa84f",
+];
+function destinationColour(tileId: string | undefined): string {
+  if (!tileId) return "#8a5a3b";
+  let hash = 0;
+  for (let i = 0; i < tileId.length; i++) {
+    hash = (hash * 31 + tileId.charCodeAt(i)) >>> 0;
+  }
+  return DEST_COLOURS[hash % DEST_COLOURS.length];
+}
+
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
 // markings stay in agreement.
@@ -706,21 +732,25 @@ class Tile extends Vue {
   // (the queue grows along the platform) with a small deterministic scatter
   // across its depth so it reads as people, not beads. The live count comes
   // from the game's reactive per-frame mirror of the sim queue.
-  get stationCrowd(): { cx: number; cy: number }[] {
+  get stationCrowd(): { cx: number; cy: number; fill: string; title: string }[] {
     if (!this.isStation) return [];
     const slabs = this.stationPlatforms;
     if (!slabs.length) return [];
+    const waiting = this.game.stationWaiting?.[this.coordId] ?? [];
     const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
     const s = slabs[0];
     const horizontal = s.w >= s.h;
-    const out: { cx: number; cy: number }[] = [];
+    const out: { cx: number; cy: number; fill: string; title: string }[] = [];
     for (let i = 0; i < count; i++) {
       const t = (i + 0.75) / 13; // fixed pitch from the platform end
       const scatter = (((i * 37) % 7) - 3) * (s.w >= s.h ? s.h : s.w) * 0.055;
+      const dest = waiting[i];
+      const fill = destinationColour(dest);
+      const title = dest ? `waiting for ${dest}` : "waiting";
       if (horizontal) {
-        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter });
+        out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter, fill, title });
       } else {
-        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h });
+        out.push({ cx: s.x + s.w / 2 + scatter, cy: s.y + t * s.h, fill, title });
       }
     }
     return out;

@@ -15,7 +15,7 @@ import {
   traverse,
   routeToNextSignal,
 } from "./network";
-import { RailPlan, planRailRoute } from "./railRouter";
+import { RailPlan, planRailRoute, reachableStations } from "./railRouter";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { gradeSpeedFactor, trainDynamics } from "./physics";
@@ -121,10 +121,13 @@ export interface SimTrain {
   // (a revisit is a new, higher path index).
   dwellRemaining: number;
   dwelledAtIndex: number;
-  // Passengers: seats on this train and the count currently riding. One-hop
-  // model — whoever is aboard alights at the next call.
+  // Passengers: seats on this train, and WHERE each rider is going (one entry
+  // per person, the tile id of the station they asked for). A rider gets off
+  // when the train calls at their destination — not at the next stop — which
+  // is what makes the shape of a line matter. A train with no line carries
+  // anyone and sets them down at its next call (the old one-hop service).
   capacity: number;
-  passengers: number;
+  manifest: string[];
   // LINE (the network mode): the station tile ids this train serves, in order,
   // cycling forever. A train with a line drives ITSELF — it plans a route to
   // its next stop and prefers that route at every tile boundary, instead of
@@ -352,6 +355,9 @@ export interface Simulation {
   removeTrain(id: string): boolean;
   // Passengers waiting on the platform at a station tile (0 for any other id).
   stationQueue(tileId: string): number;
+  // WHERE each of them is going, in queue order — what the platform draws so
+  // a player can see which service a crowd is actually waiting for.
+  stationWaiting(tileId: string): string[];
   // Inject passengers ONTO a station's platform outside the schedule — the
   // park-and-ride edge (game.ts adds one per car that parks within walking
   // reach). Capped at the station's schedule `max` (or STATION_QUEUE_HARD_CAP
@@ -440,10 +446,44 @@ export function createSimulation(config: SimConfig): Simulation {
   const stationDemand: Record<string, StationDemand> = {
     ...(config.stationDemand ?? {}),
   };
-  const queues = new Map<string, number>();
+  // Per station: WHO is waiting, as the tile id each of them asked for. A
+  // count would have been enough while everybody got off at the next stop;
+  // with destinations the queue has to remember what it wants.
+  const queues = new Map<string, string[]>();
   const spawnClocks = new Map<string, number>();
+  // Where the next person at each station will ask to go. A cursor walked in
+  // order rather than an RNG draw: destinations must be deterministic like
+  // everything else in here, and a round robin also spreads demand evenly
+  // instead of clumping the way random would.
+  const destCursors = new Map<string, number>();
+  // The stations each station can be reached from BY RAIL, computed once. A
+  // person only ever asks for somewhere the railway could take them — asking
+  // for an island would be a passenger nothing can ever clear, and the
+  // platform cap would turn that into a slow, unavoidable loss.
+  const destChoices = new Map<string, string[]>();
+  for (const tid of Object.keys(stationDemand)) {
+    destChoices.set(
+      tid,
+      reachableStations(level, tid).filter(id => id !== tid)
+    );
+  }
+  // The next destination for someone starting at `tid`, or null when the
+  // railway connects this platform to nowhere.
+  function nextDestination(tid: string): string | null {
+    const choices = destChoices.get(tid) ?? [];
+    if (choices.length === 0) return null;
+    const at = destCursors.get(tid) ?? 0;
+    destCursors.set(tid, at + 1);
+    return choices[at % choices.length];
+  }
   for (const [tid, d] of Object.entries(stationDemand)) {
-    queues.set(tid, Math.min(d.initial ?? 0, d.max));
+    const seed = Math.min(d.initial ?? 0, d.max);
+    const start: string[] = [];
+    for (let i = 0; i < seed; i++) {
+      const dest = nextDestination(tid);
+      if (dest) start.push(dest);
+    }
+    queues.set(tid, start);
     spawnClocks.set(tid, 0);
   }
   let passengersDeliveredTotal = 0;
@@ -451,10 +491,13 @@ export function createSimulation(config: SimConfig): Simulation {
   function advanceDemand(dt: number): void {
     for (const [tid, d] of Object.entries(stationDemand)) {
       let clock = (spawnClocks.get(tid) ?? 0) + dt;
-      let q = queues.get(tid) ?? 0;
+      const q = queues.get(tid) ?? [];
       while (clock >= d.intervalSec) {
         clock -= d.intervalSec;
-        if (q < d.max) q += 1;
+        if (q.length < d.max) {
+          const dest = nextDestination(tid);
+          if (dest) q.push(dest);
+        }
       }
       spawnClocks.set(tid, clock);
       queues.set(tid, q);
@@ -589,7 +632,7 @@ export function createSimulation(config: SimConfig): Simulation {
       dwellRemaining: 0,
       dwelledAtIndex: -1,
       capacity,
-      passengers: 0,
+      manifest: [],
       ...(init.line?.length ? { line: [...init.line] } : {}),
       lineIndex: 0,
     };
@@ -1019,17 +1062,40 @@ export function createSimulation(config: SimConfig): Simulation {
       // next call), then board from the platform queue into the free seats.
       // Each boarding passenger stretches the stop a little, so a crowded
       // platform visibly costs time.
-      const alighted = train.passengers;
-      train.passengers = 0;
+      // ALIGHT: whoever asked for THIS station is here. A train with no line
+      // (the classic service) has no future stops to promise, so it sets
+      // everyone down at its next call — the old one-hop behaviour, unchanged
+      // for every board that never mentions a line. A retiring train does the
+      // same: its riders are better off on a platform than in a shed.
+      const onelegged = !train.line?.length || train.retiring;
+      const staying: string[] = [];
+      let alighted = 0;
+      for (const dest of train.manifest) {
+        if (onelegged || dest === tileId) alighted += 1;
+        else staying.push(dest);
+      }
+      train.manifest = staying;
       passengersDeliveredTotal += alighted;
-      const queue = queues.get(tileId) ?? 0;
-      // A train on its way to be stabled sets nobody's expectations: it lets
-      // its riders off and takes nobody new, so the platform waits for a train
-      // that is actually going somewhere.
-      const boarded = train.retiring ? 0 : Math.min(queue, train.capacity);
-      if (boarded > 0) {
-        queues.set(tileId, queue - boarded);
-        train.passengers = boarded;
+
+      // BOARD: only people this train can actually take — its line has to call
+      // at where they are going. Everyone else waits for a service that does,
+      // which is the whole reason a line's SHAPE matters. A lineless train
+      // takes anyone (it is going to set them down next stop regardless).
+      const queue = queues.get(tileId) ?? [];
+      const serves = new Set(train.line ?? []);
+      let boarded = 0;
+      if (!train.retiring) {
+        const left: string[] = [];
+        for (const dest of queue) {
+          const canTake =
+            train.manifest.length < train.capacity &&
+            (!train.line?.length || serves.has(dest));
+          if (canTake) {
+            train.manifest.push(dest);
+            boarded += 1;
+          } else left.push(dest);
+        }
+        queues.set(tileId, left);
       }
       train.dwellRemaining =
         STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
@@ -1067,9 +1133,9 @@ export function createSimulation(config: SimConfig): Simulation {
             return;
           }
           const matched = !train.line?.length && depotColors[tileId] === train.color;
-          const alighted = matched ? train.passengers : 0;
+          const alighted = matched ? train.manifest.length : 0;
           if (alighted > 0) {
-            train.passengers = 0;
+            train.manifest = [];
             passengersDeliveredTotal += alighted;
           }
           events.push({
@@ -1308,18 +1374,40 @@ export function createSimulation(config: SimConfig): Simulation {
       return true;
     },
     stationQueue(tileId: string) {
-      return queues.get(tileId) ?? 0;
+      return queues.get(tileId)?.length ?? 0;
+    },
+    stationWaiting(tileId: string) {
+      return [...(queues.get(tileId) ?? [])];
     },
     addStationPassengers(tileId: string, count: number) {
       if (!isStationTile(tileId) || count <= 0) return 0;
       const cap = stationDemand[tileId]?.max ?? STATION_QUEUE_HARD_CAP;
-      const cur = queues.get(tileId) ?? 0;
-      const accepted = Math.max(0, Math.min(count, cap - cur));
-      if (accepted > 0) queues.set(tileId, cur + accepted);
+      const q = queues.get(tileId) ?? [];
+      const room = Math.max(0, Math.min(count, cap - q.length));
+      let accepted = 0;
+      for (let i = 0; i < room; i++) {
+        // Someone who arrived by car or bus wants somewhere too. A station
+        // with no schedule of its own has no destination cursor, so derive
+        // the choices on demand for it.
+        if (!destChoices.has(tileId)) {
+          destChoices.set(
+            tileId,
+            reachableStations(level, tileId).filter(id => id !== tileId)
+          );
+        }
+        // Nobody travels from a platform the railway connects to nothing —
+        // there is nowhere to ask for. So the walker simply does not appear,
+        // and the count says so.
+        const dest = nextDestination(tileId);
+        if (!dest) break;
+        q.push(dest);
+        accepted += 1;
+      }
+      queues.set(tileId, q);
       return accepted;
     },
     trainPassengers(id: string) {
-      return trains[id]?.passengers ?? 0;
+      return trains[id]?.manifest.length ?? 0;
     },
     passengersDelivered() {
       return passengersDeliveredTotal;

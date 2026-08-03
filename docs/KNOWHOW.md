@@ -532,6 +532,28 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `game.occupied`: the latter is the render mirror and is only refreshed inside
   the rAF frame, so it stays empty for ever headless.
 
+## PASSENGERS WITH DESTINATIONS (2026-08-03)
+- A queue is a LIST of destination tile ids now, not a count, and a train
+  carries a `manifest` (one entry per rider) instead of a number. That is the
+  whole change: everything else follows from it.
+- BOARDING: a rider only gets on when the train's LINE calls at where they are
+  going. Everyone else waits — which is the first time the SHAPE of a line
+  matters, and the reason the mode is about planning rather than throughput.
+  ALIGHTING: at their destination, not at the next stop.
+- A train with NO line (every classic board) still takes anyone and sets them
+  down at its next call — the old one-hop service, unchanged. Same for a
+  RETIRING train: its riders are better off on a platform than in a shed.
+- Destinations are drawn round-robin (a per-station cursor, never RNG) from the
+  stations REACHABLE BY RAIL — `reachableStations` floods the track graph. A
+  passenger for an island would be one nothing can ever clear, and the platform
+  cap would turn that into a slow, unavoidable loss.
+- Consequence worth knowing when authoring: on a board with ONE station nobody
+  travels at all, because there is nowhere to ask for. Both intermodal boards
+  (`parkandride`, `busfeeder`) needed a second platform for this reason.
+- The crowd is drawn from `game.stationWaiting` (tileId → destinations) with a
+  colour hashed from the destination id, so a queue nobody serves reads as one
+  colour piling up. `stationQueue` still returns the count.
+
 ## WITHDRAWING A TRAIN (2026-08-03)
 - Two verbs, deliberately not one. `retireTrain` is a JOURNEY: the train drops
   its line, takes no new passengers (`boarded` is forced to 0 while retiring),
