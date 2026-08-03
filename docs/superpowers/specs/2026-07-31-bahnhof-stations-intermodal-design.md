@@ -291,15 +291,38 @@ two or three times and quietly inflate every objective. Only `off === final`
 is a delivery; a transfer is its own event, so the HUD can show "changing" as
 distinct from "arrived".
 
-**D10 — demand stays TRACK-reachable, not SERVICE-reachable.** The tempting move
-is to only create passengers a line can actually carry. Rejected: at the start
-of a level there are no lines, so no demand would ever appear and the player
-would face an empty board with nothing to respond to. Demand is what the town
-WANTS (unchanged from phase 8: round-robin over track-reachable stations); the
-line graph decides what gets carried. A destination nothing serves shows up as
-one colour piling up on the platform — the existing signal, now with a precise
-meaning: "no service goes there". The overcrowd fail predicate stays the
-mode's difficulty knob.
+**D10 — NOBODY GOES TO A STATION THAT CANNOT TAKE THEM.** A passenger is only
+created for a destination the line graph actually serves (directly or by
+changing). Phase 8 spawned over TRACK-reachable stations, which put people on a
+platform for a journey no service could make; they then stood there for ever,
+coloured the crowd and drove the overcrowd predicate. That is not how a person
+behaves. You check whether a connection exists, and if it does not you drive,
+you walk, or you stay at home — you do not walk to the platform and wait for a
+train that was never going to come.
+
+The consequence is that the platform crowd becomes an HONEST signal. Under
+phase 8 a growing queue mixed two completely different failures: "your service
+is too infrequent" (fair, fixable by adding a train) and "there is no service
+at all" (unfixable by anything the queue itself suggests). After D10 a crowd
+can only ever mean the first. Trap (3) below — the interchange locking itself
+against the queue cap — largely dissolves with it.
+
+Unmet demand does not vanish, it MOVES OFF the platform. It belongs where the
+person is, not where they never went: the citizen layer already has exactly
+this and it is the better instrument — `chooseMode` falls back to car or walk,
+or refuses the trip outright, which costs mood and feeds the city's `access`
+topic (`tripsRefused`, `FAILURE_WEIGHT`). A town that wants a railway tells you
+by being unhappy about its commute, not by piling figures onto a platform you
+never connected.
+
+That leaves one real gap, which 9E owns: on a NETWORK-mode board without the
+citizen layer, synthetic demand is all there is, so a fresh level with no lines
+would be silent — no crowds, no complaints, no hint of which pairs of towns
+want each other. The fix is a latent-demand readout (a station badge, or the
+town card: "N people would travel to Weststadt"), which is what TF2 shows for
+an unserved connection. It is a HUD job, not a queue job — and it must not feed
+the fail predicate, because failing a player for demand they were never given
+the chance to serve is the punishment D10 exists to remove.
 
 **Slices** (each its own PR, each headless-testable):
 
@@ -312,19 +335,28 @@ mode's difficulty knob.
   asks the line graph instead of `serves.has(dest)`; alighting re-queues on a
   transfer; delivered counts only at `final`. A lineless train keeps its exact
   one-hop behaviour, so every classic board stays byte-identical.
+- **9B′ — spawn behind the line graph (D10).** `addStationPassengers` draws its
+  destination round-robin over SERVED stations, not track-reachable ones, and
+  queues nobody when nothing is served — it already returns what it actually
+  queued, so both callers handle 0 today. Watch the ordering: the round-robin
+  cursor must stay deterministic as the served set changes under it, or a run
+  stops being replayable.
 - **9C — the test world.** A `transfer` scenario: two lines, one interchange,
-  a passenger who cannot arrive without changing. Plus the regression that
-  matters — the same board with ONE line through everything must not produce a
-  single transfer.
+  a passenger who cannot arrive without changing. Plus the two regressions that
+  matter — the same board with ONE line through everything must not produce a
+  single transfer, and a board with NO line must not produce a single waiting
+  passenger.
 - **9D — the citizen handover.** Queue entries gain an opaque tag; the dwell
   event carries boarded/alighted TAGS, not just counts. `transit.enqueue` takes
   the citizen's real destination station (`nearestStation(to)` — already
   computed in `optionsFor`). Then `shadowQueue`, the seat a through-rider holds
   after the sim freed it, and the `maxTransfers` guess all go away, and the two
   layers keep ONE ledger.
-- **9E — the HUD.** Show a changing passenger as changing (the platform crowd
-  already colours by destination); a "no service to X" hint is the natural
-  follow-up but is not required for the mechanic.
+- **9E — the HUD, and LATENT demand.** Show a changing passenger as changing.
+  And, because D10 empties the platforms of everyone you have not connected,
+  show what a station WOULD carry if you served it — the readout that replaces
+  the crowd as the "build here" signal on a citizen-less board. Read-only: it
+  never feeds the fail predicate.
 
 **Traps to expect.** (1) A cycle in the line graph must not become an infinite
 transfer loop — the hop must strictly decrease distance-to-destination, or a
@@ -332,7 +364,11 @@ rider can be handed round a triangle for ever. (2) Re-queueing at the front is
 invisible in a count-only queue, so 9D's tags are what make it observable. (3)
 `STATION_QUEUE_HARD_CAP` counts a transferring rider once they are on the
 platform, so a busy interchange can lock itself; the cap needs to be a spawn
-gate, not a queue-length invariant.
+gate, not a queue-length invariant. (4) D10 changes the BALANCE of every
+network board: passengers now appear only once a line exists, so the phase-3
+demand rates and the mode's passenger targets were tuned against a world that
+no longer happens. Re-check `tests/unit/modes/network.spec.ts`'s balance
+regression rather than assuming it still holds.
 
 #### The original sketch (for reference)
 
