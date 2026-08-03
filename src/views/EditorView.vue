@@ -643,7 +643,7 @@ const HINTS: Record<Tool, string> = {
   terrain:
     "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them). Routing across water builds a bridge, across rock/mountain a tunnel — both priced accordingly.",
   height:
-    "Drag to raise (🔼) or lower (🔽) the ground one step per stroke — paint a hill as an AREA, not just along the line. Track may climb ONE step per tile boundary (that joint is the ramp); anything steeper is flagged as a cliff. Climbs slow heavy trains, so a pass costs freight real time.",
+    "Drag to raise (🔼) or lower (🔽) the ground one step per stroke — paint a hill as an AREA, not just along the line. It works on ANY ground: a wood, a rock field or a massif terraces in its own colour, and a field, a town or a works steps on straight cut banks. Track may climb ONE step per tile boundary (that joint is the ramp); anything steeper is flagged as a cliff. Climbs slow heavy trains, so a pass costs freight real time.",
   flyover:
     "Click a diamond crossing (two rails crossing without switches) to cycle which line rides the bridge deck: flat → first line over → other line over → flat. Grade-separated lines never wait for each other — no junction, no conflict.",
 };

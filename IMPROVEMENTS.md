@@ -111,6 +111,7 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    design, the model and the measured results; `/#/test/threecities` is the
    board. Phase A (the model, the mode, the city cards) is built; phase B is
    real cars for driving citizens and buses as carriers.
+   **Its open end is platform LENGTH — see item 8.**
 4. **Deadlock resolution.** Interlocking prevents collisions, but two trains can
    still reserve into a mutual wait. Needs cycle detection over the reservation
    graph plus a backout rule. `src/sim/simulation.ts`, `src/sim/network.ts`.
@@ -129,6 +130,33 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 7. **Polish.** Sound effects (depart, brake, deliver, crash), richer arrival
    feedback, and pixel-uniform wagon coupling (spacing is measured in tile
    fractions, so couplings read slightly tighter on curves than on straights).
+8. **Platforms longer than one tile** (the open end of the station thread, filed
+   2026-08-04). A platform is one tile; a loco and two carriages are 1.54 of
+   one. Since 2026-08-04 the sim stops a train so its CARRIAGES are centred on
+   the slab and the loco is drawn clear of the far end
+   (`platformStopDistance`, `/test/platformstop`, KNOWHOW → *Drawing up at the
+   platform*), and a train ordered into service is built with two carriages
+   (`SERVICE_TRAIN_WAGONS`). That is the honest fit for a one-tile halt, not a
+   station that can grow. What is missing is a REAL long platform:
+   - Two station tiles side by side already *look* like one slab (they are drawn
+     edge to edge) but are two separate stops — the train draws up, dwells, then
+     draws up again for the neighbour. A multi-tile platform has to be ONE stop:
+     a facility spanning cells, with one queue, one dwell and one stop line
+     centred on the whole thing (`pendingPlatformStop` picks the earliest
+     unserved station segment — that is the seam to cut).
+   - Then carriage count becomes a real decision instead of a constant: a longer
+     platform earns a longer train (more seats per call), which is the
+     Transport-Fever lever this game has not got yet. Lift
+     `SERVICE_TRAIN_WAGONS` into "as long as the shortest platform on the line".
+   - An editor verb to lay a platform of N cells, and validation that a line's
+     trains fit the platforms it calls at.
+   - Watch the interlocking: a train drawn up already holds the block past the
+     station because its loco is out there. A longer platform makes that
+     overhang bigger, so a station's block boundary may need to move to the far
+     end of the platform rather than sit on each cell.
+   Belongs with the station-building/architecture work rather than the sim: the
+   plan lives in
+   `docs/superpowers/specs/2026-07-31-bahnhof-stations-intermodal-design.md`.
 
 ## Road traffic
 
