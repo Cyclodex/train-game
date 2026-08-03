@@ -1177,24 +1177,31 @@ describe("parking in the simulation — a cycle, not a sink", () => {
   // dwell-end and rolling — `dwellLeft` keeps counting down past zero, so
   // `-dwellLeft` IS that wait. Seconds, not tens of seconds.
   //
-  // ONE 200-SECOND RUN PER MAP, MEASURED FOR EVERYTHING AT ONCE. The liveness
+  // ONE 200-SECOND RUN PER MAP AND SEED, MEASURED FOR EVERYTHING AT ONCE. The liveness
   // check and the leaver-wait check used to be two tests walking the SAME nine
   // sims — 3 maps x 3 seeds x 4000 ticks, twice — which is a third of this
   // suite's runtime spent simulating the same traffic a second time to look at a
   // different field of it.
   //
-  // Merging them is not a coverage cut, and the split by map is not cosmetic
-  // either: as one case over all three maps it ran 70 seconds, and vitest's
-  // runner-worker RPC gives up on a call it cannot answer within 60
+  // Merging them is not a coverage cut, and the split by map and seed is not
+  // cosmetic either: as one case over all three maps it ran 70 seconds, and
+  // vitest's runner-worker RPC gives up on a call it cannot answer within 60
   // (`DEFAULT_TIMEOUT = 6e4`, no config knob). The suite then dies on an
   // unhandled `Timeout calling "onTaskUpdate"` with every assertion passing and
   // the process still exiting 1 — green tests, red CI, and nothing naming the
-  // culprit. Keep new long-run cases per-map, and fold new measurements into
-  // this pass rather than adding another one.
+  // culprit. Fold new measurements into this pass rather than adding another one.
+  //
+  // ONE CASE PER SEED, not one per map. Per map, `parkcity` alone was 11.4s of the
+  // 12.6s these cost, and a 120s budget on an 11.4s case is 10x — which sounds
+  // ample and is not: measured, an ordinary parallel job on the same machine
+  // stretches it to 48s and a saturated one past 120s, so the budget rather than
+  // the behaviour decided the verdict. Per seed it is ~3.8s against the same
+  // budget. THIS is the move when a long-run case runs out of room — make it
+  // cheaper, never raise an assertion's tolerance to fit.
   for (const id of ["parkingkerb", "parkinglot", "parkcity"]) {
-    itSlow(`${id} stays alive over a LONG run, and lets its parkers back out`, async () => {
-      let sampled = 0;
-      for (const seed of [1, 3, 5]) {
+    for (const seed of [1, 3, 5]) {
+      itSlow(`${id} seed ${seed} stays alive over a LONG run, and lets its parkers back out`, async () => {
+        let sampled = 0;
         const sim = simFor(id, seed);
         const where = `${id} seed ${seed}`;
         let cycles = 0;
@@ -1258,11 +1265,14 @@ describe("parking in the simulation — a cycle, not a sink", () => {
         // left 4–9 cars waiting, the worst of them 45.8s.
         const stranded = sim.cars().filter(c => c.parked && c.dwellLeft < -30);
         expect(stranded.length, `${where}: cars stranded in their bays`).toBe(0);
-      }
-      // The wait rule has to have FIRED. It passes trivially on a build where
-      // every car happens to leave on the tick its dwell ends.
-      expect(sampled, `${id}: no car ever waited for a gap`).toBeGreaterThan(10);
-    }, 120_000);
+        // The wait rule has to have FIRED. It passes trivially on a build where
+        // every car happens to leave on the tick its dwell ends. Per seed now
+        // rather than pooled over three, which is the stricter reading: EVERY run
+        // has to exercise it, not just whichever one carried the total. Measured
+        // per seed: 24–33 on parkingkerb, 26–29 on parkinglot, 10–12 on parkcity.
+        expect(sampled, `${where}: no car ever waited for a gap`).toBeGreaterThan(3);
+      }, 120_000);
+    }
   }
 
   itSlow("never spins on the spot, and really does back into a 90° bay", async () => {
@@ -1562,10 +1572,12 @@ describe("parking in the simulation — a cycle, not a sink", () => {
     }
     // And a semi never parks anywhere at all.
     for (const kinds of seen.values()) expect(kinds.has("semi")).toBe(false);
-    // 200 simulated seconds on a 16x12 city with 34 vehicles: slower than the
-    // default 5s budget, and the run has to be long enough that every one of six
-    // facilities is genuinely used or the assertions above prove nothing.
-  }, 30000);
+    // 200 simulated seconds on a 16x12 city with 34 vehicles, and the run has to
+    // be that long or six facilities do not all get used and the assertions above
+    // prove nothing. Same weight as the `parkcity stays alive` case below, so the
+    // same 120s budget: 3.5s idle, 16s measured under a 4.5x load, and the 30s it
+    // used to carry was one of the two that went red on a busy machine.
+  }, 120_000);
 
   it("stands a halted bus ON its markings, not short of them", async () => {
     // A halt is a length of painted kerb, and the bus is supposed to be BESIDE it.
@@ -1686,7 +1698,11 @@ describe("parking in the simulation — a cycle, not a sink", () => {
       queuedBehindBay,
       "traffic queued behind the LAY-BY — the bus did not leave the running lane",
     ).toBe(0);
-  }, 20000);
+    // No per-case budget: two 2000-tick runs are ~0.5s, well inside the project
+    // default. The 20s that used to sit here predates that default and was
+    // TIGHTER than it — a per-case timeout is only worth writing when the case
+    // needs MORE.
+  });
 
   it("leaves every existing road scenario's parking layer empty", async () => {
     // The parking subsystem must cost a level that has none exactly nothing —

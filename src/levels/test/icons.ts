@@ -92,6 +92,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   timeattack: "⏱️",
   buildgap: "🏗️",
   daily: "📅",
+  networkmode: "🚉",
 };
 
 export function iconForDomain(domainId: string): string {

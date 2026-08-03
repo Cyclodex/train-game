@@ -500,6 +500,102 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
+- The player's whole verb set in the network mode: `game.setLine(trainId,
+  stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
+  view), so the loop is unit-testable headless.
+- A depot is a QUEUE, not a gate: `buyTrain` never fails for want of room —
+  what a busy shed delays is the DEPARTURE, not the purchase. An order made
+  while the mouth is blocked goes on `pendingTrains`, and `releasePendingTrains`
+  (called from the world step) rolls them out oldest-first as the tile clears.
+  Only a board with NO depot returns null.
+- A queued train is exactly the state a SCHEDULED train sits in: DOM and livery
+  registered, no sim entry — `renderTrains` already hides those, so nothing new
+  was needed to keep a train in the shed invisible.
+- Two things must happen at ORDER time or the train is broken in a way that is
+  hard to see: the renderer roster (`trainDefs`, `unitIds`, `trainColors`) AND
+  the view's provided `trains` map (PlayView), which is what `<Train v-for>`
+  iterates. Miss the second and the sim drives a train with no sprite at all —
+  it happened, and only a browser check caught it.
+- Line editing is a BOARD gesture: `editingTrainId` in PlayView, station tiles
+  get `.level-tile--pickable`, and a click appends the stop or removes it if it
+  is already there. Click order IS call order.
+- `game.trainLines` (trainId → stops) and `game.stationLines` (stationId →
+  liveries) are view copies of what the sim owns, refreshed on player action
+  rather than per frame; the editor's stubGame must carry `stationLines` too.
+- `ModeControls.switches` had never been read by anything until this mode
+  needed it false. PlayView now honours it, and Tile.vue gained a separate
+  `switchesVisible` prop: the EDITOR deliberately draws a read-only fan (a
+  picture of the authored arm), but a mode where the train routes itself must
+  not draw points at all — an un-clickable arrow is a control that lies.
+- When checking occupancy from a TEST, ask `sim.occupiedBy()`, never
+  `game.occupied`: the latter is the render mirror and is only refreshed inside
+  the rAF frame, so it stays empty for ever headless.
+
+## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
+- `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
+  graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
+  road layer has had all along (`roadRouter`: plan, then follow per-junction
+  decisions). Every edge is one tile, so BFS *is* the shortest path.
+- The plan reaches the sim through the EXISTING `SwitchResolver` seam:
+  `switchOf(train)` translates the plan's exit PORT into the arm that produces
+  it (`armForExit`), so `traverse`/`resolveExitPort` are untouched and every
+  rule (reservation, occupancy, signals, stop lines) applies unchanged. A train
+  with no plan returns the global resolver — byte-for-byte the old behaviour.
+- Plans are PER LEG, recomputed at every call and after every depot turn-back.
+  That is what keeps `exitAt` unambiguous (a shortest path never repeats a
+  `(tile, entry)` node) and what makes track laid mid-run usable next leg.
+- A train IN SERVICE never terminates at a depot, whatever the colours say —
+  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  ordered and stabled; on a line they are turn-backs, not destinations.
+- Two line shapes, and the difference matters when authoring:
+  **a ring** needs no turn-back, so the board needs exactly ONE depot and each
+  station comes round once a lap; **a there-and-back shuttle** can only reverse
+  at a depot, so it needs one at each end and serves intermediate stations
+  TWICE a round trip (once each way). Both are covered by tests.
+- Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
+  any of these platforms in one call, but a station only gets served once a
+  lap. Size the towns against the lap, or the overflow fail fires on a board
+  whose trains were never the problem.
+- `sim.assignLine(id, stops)` is the verb an "assign train to line" UI calls;
+  `[]` takes the train out of service. `railRing()` in `levels/test/scenario.ts`
+  authors a loop; `mkLineTrain()` authors a train in service on one.
+
+## NETWORK MODE (phase 5 — the passenger loop, 2026-08-01)
+- Win = people carried (`ObjectiveSpec.passengersRequired`), loss = a platform
+  over `fail.maxStationQueue` (against the `peakStationQueue` high-water
+  counter). The win rule is "EVERY stated target met", so `deliveriesRequired:
+  0` + a passenger target does not win at t=0 — and a board that never mentions
+  passengers behaves exactly as before.
+- The board's two depots deliberately MISMATCH the shuttle: a matched depot
+  PARKS the train and the service dies after one trip, a mismatch bounces it
+  back out. So the network mode's "mismatched arrivals" are turn-backs, not
+  errors — which is why its third star is briskness, never `mismatchedArrivals
+  === 0` (that star would punish the mechanic the mode runs on).
+- Single track = ONE train. A second shuttle meets the first head-on and
+  deadlocks; capacity is raised with WAGONS (seats), not with more trains,
+  until a board authors a passing loop.
+- `game.ts` reports `maxStationQueue` from the SIM each tick, never from the
+  reactive render mirror — the mirror only updates inside the rAF frame, so a
+  headless run would score an empty station forever.
+- `npm run shot -- '#/play?mode=…' --start` clicks the Ready card so a mode can
+  be photographed RUNNING instead of showing its briefing.
+
+## STATION DEMAND IS TUNED AGAINST A TRAIN (2026-08-01)
+- `stationDemandOf`'s rates only mean something next to what a shuttle can
+  carry: at DEFAULT_SPEED a round trip is ~30-40s and a people wagon seats 6,
+  so a busy station (6 town tiles) turns out one passenger every 4s. The
+  phase-3 numbers were ~2.5x hotter and made the first network board
+  unwinnable in 19 seconds — nothing revealed it until a mode consumed them.
+- The no-town fallback (30s) must stay SLOWER than the one-house case (24s),
+  or the middle of nowhere out-generates a hamlet and the "build nearer the
+  houses" rule inverts at its first step. The monotonicity spec catches this —
+  it caught exactly this during the retune.
+- A platform's `max` exceeds the network mode's OVERCROWD_LIMIT only for a real
+  town (5+ tiles in reach), so a quiet halt can never lose you a level by
+  itself. Retuning either number without the other silently makes the overflow
+  fail decorative (max ≤ limit) or unavoidable.
+
 ## PARK & RIDE (phase 4 — road feeds rail, 2026-08-01)
 - `parkAndRideTargets(level)` (tiles/catchment.ts): tile id → nearest station
   within the walk radius, ties by distance then id — deterministic, computed
@@ -2187,6 +2283,27 @@ lean — prune as much as you add. This file only stays useful if every task ten
   iterates every scenario). Don't reintroduce the floor — it pinches nothing real.
 - Box crossing gated by conflict-matrix arbiter (`roadArbiter.ts`, `roadJunction.ts`);
   `conflictKey` lane-indexed ⇒ parallel lanes cross independently.
+- A JUNCTION'S STRAIGHT-THROUGH IS A TURN OF 0°, NOT A ROAD. It is the same
+  `junctionExitLane` + exit-arm band as a left/right turn — never the road seam-taper
+  (`laneSeamOffsetPx`), which anchors the lane index on the TILE'S OWN band. A
+  junction's `laneCountAt` is a movement tally, not the arm's width (a 3-lane side
+  arm inflates the count on EVERY other arm), so the taper branch put every inner
+  through-lane half a lane off the road it came from: the car snapped entering the
+  box and snapped back leaving it. This is the "car changes lane on the cross for no
+  reason" report, and it needs the SAME fork in all three places that draw a lane —
+  `laneGeometry.couplerOffsets`, `Tile.vue laneArrows`, and the sim's exit-lane
+  assignment (`road.ts`: a straight out of a junction now starts on `want`, exactly
+  like a turn, because the box now glides it there). Fixed 2026-08-02; `crosslanes`,
+  `mixedtee`, `mixedcross`, `turngallery`, `busmegacross`, `parkcity` all carried it.
+- THE INVARIANT THAT CATCHES ALL OF THIS: `tests/unit/sim/laneContinuity.spec.ts`
+  reconstructs the point `game.ts` actually draws (couplerOffsets + `laneSegmentPointAt`)
+  for every vehicle of every road scenario and asserts the step PERPENDICULAR to its
+  heading stays < 0.02 tiles/tick. Lateral only — longitudinal travel is the vehicle
+  doing its job, and folding it in turns the check into an arbitrary speed test.
+  Half a lane is 0.07, a whole lane 0.14, a real lane change ~0.006/tick, so the
+  band between "driving" and "teleporting" is wide and unambiguous. Reach for it
+  first whenever a car "swerves for no reason": it names the scenario, tile, ports
+  and lane.
 - STACKED junctions (a junction directly above another, no road tile between —
   `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
   min. A junction's exit-port `laneCountAt` counts only the straight-through
@@ -2232,8 +2349,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   ANCHOR forks; the geometry never does.
 - `laneSeamOffsetPx` is BIDIRECTIONAL-ONLY (min-seam clamp). Its `centred`
   band-substitution branch was one-way's old model — dead since the run-max kerb
-  anchor, removed 2026-07-25 with its 4 tests. One-way never seam-adjusts:
-  `oneWayLaneOffsetPx` is run-constant.
+  anchor, removed 2026-07-25 with its 4 tests. One-way is run-constant
+  (`oneWayLaneOffsetPx`) for every SURVIVING lane; only the DROPPING (centre-side)
+  lane is seam-adjusted, by clamping its index to the lanes that cross the seam
+  (`laneGeometry.oneWaySeamCount`) so a car that never finished its merge GLIDES
+  into the survivor over the closing tile instead of being teleported a full lane by
+  the index clamp on the far side. Same clamp the painted gore and `Tile.vue`'s
+  one-way arrow already used — this only brought the CAR into line with them.
+- A LANE INDEX IS NOT PORTABLE ACROSS A WIDTH CHANGE (bidirectional). Lanes anchor
+  at the CENTRELINE but are numbered from the KERB, so when the band changes the
+  same index is a different physical lane: 3L→2L, index 1 is the middle lane on one
+  side of the seam and the centre lane on the other. Carrying it across with a plain
+  `min(idx, count-1)` slid the car a WHOLE lane sideways in one tick (`roadlanemerge`,
+  measured 0.14 tiles). `laneIndexAcrossSeam` (`laneOffset.ts`) adds `Δcount` so the
+  car keeps its physical lane; the widening's new kerb lane simply starts empty, which
+  is also the "spread outward into a new lane" behaviour the scenario's comment wanted.
+  One-way is kerb-anchored, so its shift is 0 — the two conventions are opposites and
+  the function forks on `kerbAnchored` (`isOneWayStraight`), not on lane counts.
+  See the fuller entry under "A LANE INDEX IS NOT A PLACE" below.
+- The SAME seam branch handles a CURVE, and there the physical lane is not `Δcount`
+  but the one `junctionExitLane` names — the exact mapping `turnExitOffsetPx` glides
+  the vehicle along inside the curve. Fork on `exitPort === opposite(entryPort)`:
+  straight ⇒ `laneIndexAcrossSeam`, turn ⇒ `junctionExitLane` delta. Drawn path and
+  assigned index then cannot drift apart at the boundary.
+- NEVER MEASURE A WIDTH AGAINST A JUNCTION. Neither seam rule may run when the
+  neighbour is a junction: its per-arm `laneCount` tallies the MOVEMENTS fanning
+  through the arm, not the arm's width (a bus-only turn off a 1-lane approach reads
+  as 2), and the arm adopts the road's band anyway (`roadSeamPaintTotal`). Read as a
+  widening, `busshortcut`'s tee threw a car a whole lane sideways into the bus lane
+  beside it. The index carries across unchanged; `laneDropAhead` / `laneDropUrgent`
+  bail on a junction neighbour for exactly the same reason.
 - One-way: no centreline; KERB-ANCHOR (index 0 = kerb, +n right-of-travel) to run's
   widest count (`oneWayRunMaxAt`, `game.roadOneWayRunMax`) = motorway drop; CENTRE
   (left/−n) lane(s) end w/ hatched island (Sperrfläche)+merge arrows on −n. lane i
@@ -2426,8 +2571,44 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the cheapest host (it needs the `@` alias).
 - The suite was RED on a slow machine BEFORE this, and not from an assertion:
   `parking.spec.ts`'s two biggest cases blew their own timeouts. Green tests, red
-  CI — same family as the `onTaskUpdate` trap below, and the same cure: make it
-  faster, don't raise the limit.
+  CI — same family as the `onTaskUpdate` trap below. Making it 4.8x faster fixed
+  those two; it did NOT fix the class (see the next section — the 5s default was
+  still the binding constraint on a busy machine, and "make it faster, don't raise
+  the limit" was too strong a rule for a HANG GUARD).
+
+## A RED SIM TEST THAT IS NOT A BUG — READ THE FAILURE LINE FIRST (2026-08-02)
+- `sim/parking.spec.ts` (or any long-run sim case) failing on `master` with a
+  DIFFERENT COUNT EACH RUN — 2 one time, 6 the next — is the signature. Before
+  bisecting anything, read the failure line: `Test timed out in 5000ms.` is not an
+  assertion, and nothing in the sim is broken.
+- WHY IT CANNOT BE THE SIM. The road sim is deterministic — seeded `makeRng` only,
+  no `Math.random`, no `Date.now`/`performance.now` anywhere in `src/sim` — and the
+  assertions are pure functions of its state. Same commit + same seed CANNOT give a
+  different assertion result. So on identical code, a varying failure set has
+  exactly one mechanism left: the wall clock. Use that deduction; it cuts the
+  search from "which commit broke parking" to "how loaded was the machine".
+- REPRODUCE IT ON PURPOSE rather than waiting for it: 64 CPU burners on 20 cores
+  (~9x) turned parking.spec.ts red with TEN timeouts and ZERO assertion failures,
+  including both cases reported from a real red run. A scratch `while (Date.now() <
+  end)` script under `Start-Process -WindowStyle Hidden` is the whole rig — and kill
+  them by `CommandLine -like "*burn.js*"`, never by process name (this repo always
+  has other node processes alive).
+- Background jobs started with `&` in the Bash tool DIE when the call returns, so a
+  "under load" run that way is really a run with no load at all. Detach them.
+- MEASURED HEADROOM at the time of writing (idle → 4.5x load, vs budget): the cases
+  on the old 5s default sat at 7–13x idle, which is under 2x once a second job is
+  on the box. That is why the budget, not the behaviour, was deciding.
+- THE FIX IS `testTimeout: 30_000` in `vitest.config.ts`, plus per-case 60s/120s
+  where a case genuinely needs it. A timeout is a HANG GUARD, not a tolerance: it
+  must be loose enough that a parallel suite run cannot fail it, and 30s stays under
+  vitest's hardcoded 60s worker-RPC limit so a stuck test still names itself.
+- A per-case timeout is only worth writing when it is LARGER than the default. The
+  20s that sat on the bus-halt case was tighter than the new default and did nothing
+  but reintroduce the bug on that one test.
+- If a case wants more than 120s, make it CHEAPER (split per map/seed, as the
+  long-run parking cases already are). Only the budget may be raised — never an
+  assertion's tolerance — and a 120s case is proven safe with the in-loop
+  `breathe()`: it times out cleanly instead of poisoning the run.
 
 ## TEST TIERS — fast lane vs full suite (2026-08-01)
 - `npm run test:unit` = FULL (~1m07s). What CI and the implement pipeline run; its

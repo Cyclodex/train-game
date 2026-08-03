@@ -1,5 +1,5 @@
 import { Position } from "@/types";
-import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { TestScenario, mkLineTrain, railRing } from "@/levels/test/scenario";
 import { expandKind } from "@/tiles/kinds";
 import { nWayLanes } from "@/tiles/lanes";
 import type { ParkingRow } from "@/tiles/parking";
@@ -29,12 +29,19 @@ export const parkandride: TestScenario = {
   description:
     "Cars park by the kerb, their drivers walk to the platform, the train picks them up.",
   level: {
-    // The rail line, station in the middle.
-    "0,0": expandKind("depot", 1),
-    "1,0": expandKind("straight", 1),
-    "2,0": expandKind("station", 1),
-    "3,0": expandKind("straight", 1),
-    "4,0": expandKind("depot", 3),
+    // The rail: a compact ring the train works for ever, with its platform on
+    // the SOUTH side — a short walk from the kerb, which is the whole point.
+    // One depot, on a spur: where the train came from, never where it is going.
+    ...railRing(1, 0, 4, 1),
+    "2,1": { connections: [[Position.Left, Position.Right]], role: "station" },
+    "0,1": expandKind("depot", 1),
+    "1,1": {
+      connections: [
+        [Position.Top, Position.Right], // the ring's corner
+        [Position.Left, Position.Top], // out of the shed, onto the ring
+        [Position.Left, Position.Right],
+      ],
+    },
     // The street, one block south, with bays inside the station's reach.
     "0,2": street(),
     "1,2": {
@@ -58,13 +65,10 @@ export const parkandride: TestScenario = {
     "4,2": street(),
   },
   trains: {
-    train1: mkTrain("train1", 0, 0, "people", 2, "4,0"),
+    train1: mkLineTrain("train1", 0, 1, "people", 2, ["2,1"]),
   },
   colors: {
-    depotColors: {
-      "0,0": "blue",
-      "4,0": "green",
-    },
+    depotColors: { "0,1": "blue" },
     trainColors: {
       train1: "green",
     },

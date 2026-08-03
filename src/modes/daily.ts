@@ -78,6 +78,8 @@ function toTrainDefs(trains: ReturnType<typeof trainsFromRoutes>): TrainDef[] {
     type: t.type as "people" | "fraight",
     wagonIds: (t.wagons ?? []).map(w => w.id),
     destinations: (t.routeDestinations ?? []).map(d => d.to),
+    // In service on a line (network mode) — the sim routes it stop to stop.
+    ...(t.line?.length ? { line: t.line } : {}),
   }));
 }
 

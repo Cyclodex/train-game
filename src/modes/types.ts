@@ -27,6 +27,10 @@ export interface ModeControls {
 // Which readouts/overlays the HUD shows for this mode. A pure view hint.
 export interface HudDescriptor {
   deliveries: boolean; // "N/M delivered" card
+  // "N/M carried" card — the network mode's readout, replacing the delivery
+  // card rather than joining it (one progress number per mode). Optional so
+  // every mode written before stations existed needs no change.
+  passengers?: boolean;
   timer: boolean; // elapsed (or remaining) time
   stars: boolean; // star pips
   startOverlay: boolean; // Ready screen with a Start button

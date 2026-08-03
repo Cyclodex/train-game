@@ -278,6 +278,18 @@
       <g class="station-sign" :transform="`translate(${stationSignPos.x} ${stationSignPos.y})`">
         <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
         <text x="0" y="4.5" text-anchor="middle">S</text>
+        <!-- The services that call here: one pip per line livery, hung under
+             the station shield. A platform nobody serves shows none, which is
+             exactly the thing a player needs to spot. -->
+        <circle
+          v-for="(c, li) in servingLines"
+          :key="'sl' + li"
+          :cx="-6 + li * 6"
+          :cy="15"
+          r="2.6"
+          class="station-line-pip"
+          :style="{ fill: c }"
+        />
       </g>
       <!-- Debug: the walking catchment — the reach whose town tiles set this
            station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
@@ -352,7 +364,7 @@
          the points stand; point at it to unfold the alternatives and click the
          one you want. Geometry: src/tiles/switchFan.ts. -->
     <svg
-      v-if="switchWidgets.length"
+      v-if="switchWidgets.length && switchesVisible"
       class="switch-layer"
       :class="{ 'switch-layer--static': !switchInteractive }"
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
@@ -557,6 +569,12 @@ class Tile extends Vue {
   // the AUTHORED starting arm and persist it), so there the fan is a read-only
   // picture of that authored state and must not swallow the editor's clicks.
   @Prop({ type: Boolean, default: true }) switchInteractive!: boolean;
+  // Whether the points are DRAWN at all. The editor deliberately shows a
+  // read-only fan (a picture of the authored arm), which is why this is a
+  // second flag rather than `!switchInteractive`: a mode where the TRAIN
+  // decides its route (network) has no points for the player to read either,
+  // and an un-clickable arrow on the board is a control that lies.
+  @Prop({ type: Boolean, default: true }) switchesVisible!: boolean;
 
   // The engine shed is drawn, not loaded: see utils/trainArt.ts. Constant per
   // tile, so it is a plain field rather than a getter.
@@ -679,6 +697,11 @@ class Tile extends Vue {
     return { x: size * 0.1, y: size * 0.1 };
   }
   catchmentRadiusTiles = WALK_RADIUS_TILES;
+  // The liveries of the services calling at this platform (network mode).
+  get servingLines(): string[] {
+    if (!this.isStation) return [];
+    return (this.game.stationLines?.[this.coordId] ?? []).slice(0, 4);
+  }
   // One dot per waiting passenger, on the first platform slab at a fixed pitch
   // (the queue grows along the platform) with a small deterministic scatter
   // across its depth so it reads as people, not beads. The live count comes
@@ -1540,7 +1563,11 @@ class Tile extends Vue {
           (isBus || busOnly) && this.tileIsRoadJunction
             ? this.game.roadTurnExitIsBusLane(coord, lane.from, to, lane.index, cls)
             : isBus || busOnly;
-        if (oppositePort(lane.from) === to) {
+        // A JUNCTION's straight-through is the zero-degree case of a turn, NOT a
+        // road taper: its arms may differ in width, so the movement glides to the
+        // lane `junctionExitLane` lands the vehicle in on the exit arm (the branch
+        // below). Only a real straight/one-way ROAD tile tapers.
+        if (oppositePort(lane.from) === to && !this.tileIsRoadJunction) {
           if (oneWay) {
             const R = this.game.roadOneWayRunMax(coord, lane.from);
             // Seam-taper: at a lane-count change the dropping lane's arrow angles
@@ -1577,12 +1604,8 @@ class Tile extends Vue {
           // positions on each adjoining road's real band.
           const bandEntry = this.positioningBandAt(coord, lane.from);
           const bandExit = this.positioningBandAt(coord, to);
-          // On a junction tile, laneCountAt/2 under-counts the seam when some lanes
-          // turn off — use the arm's road-positioning band as selfBand so inner
-          // straight-through lanes don't collapse to the centreline (the 3L+2L bug).
-          const bandSelf = this.tileIsRoadJunction ? bandEntry : selfBand;
-          const offA = laneSeamOffsetPx(lane.index, bandSelf, bandEntry, size);
-          const offB = laneSeamOffsetPx(lane.index, bandSelf, bandExit, size);
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
@@ -2260,6 +2283,10 @@ export default toNative(Tile);
   fill: #8a5a3b; // warm coats against the pale paving
   stroke: #fff;
   stroke-width: 1.2;
+}
+.station-line-pip {
+  stroke: #fff;
+  stroke-width: 1;
 }
 .station-passenger--alt {
   fill: #4a6d8c; // a second coat colour so the crowd isn't a uniform string

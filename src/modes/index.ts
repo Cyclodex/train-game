@@ -6,6 +6,7 @@ import { sandboxMode } from "@/modes/sandbox";
 import { dailyMode } from "@/modes/daily";
 import { tycoonMode } from "@/modes/tycoon";
 import { citizensMode } from "@/modes/citizens";
+import { networkMode } from "@/modes/network";
 
 // The mode menu. Add a mode by dropping a file in `modes/` and appending it
 // here (mirrors the /test SCENARIOS registry). Order is the picker order.
@@ -13,6 +14,7 @@ export const MODES: GameMode[] = [
   dailyMode,
   puzzleMode,
   tycoonMode,
+  networkMode,
   citizensMode,
   crossingKeeperMode,
   timeAttackMode,

@@ -74,6 +74,20 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     return oneWayRunMax(c => level[getCoordinatesId(c)]?.road, coord, entry);
   }
 
+  // How many lanes of a ONE-WAY run actually cross the `port` seam of the tile at
+  // `coord`, whose own count is `local`: the narrower of the two sides, since the
+  // dropping lane ends at the seam. A JUNCTION neighbour never pinches the run (it
+  // adopts the road, matching roadSeamPaintTotal), and with no road neighbour at
+  // all the run keeps its own width. Mirrors Tile.vue's one-way arrow taper.
+  function oneWaySeamCount(coord: Coordinates, port: Port, local: number): number {
+    const nb = neighborCoord(coord, port);
+    if (!nb) return local;
+    const nbRoad = level[getCoordinatesId(nb)]?.road;
+    if (!nbRoad?.length || isRoadJunction(nbRoad)) return local;
+    const crossing = laneCountAt(nbRoad, oppositePort(port));
+    return crossing > 0 ? Math.min(local, crossing) : local;
+  }
+
   // The junction-aware positioning band of the tile at `coord` where its `port`
   // seam meets the neighbour there (see sim/laneOffset.ts seamPositioningBand).
   function positioningBandAt(coord: Coordinates, port: Port): number {
@@ -137,22 +151,54 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     if (bandAt(s.coord, entry) <= 0) return { offEntry: 0, offExit: 0 };
     // One-way STRAIGHT: highway lane drop. Kerb-anchor (index 0) to the run's widest
     // count so the through lanes are dead straight and the centre lane ends.
+    //
+    // A SURVIVING lane is therefore run-constant — same offset on every tile of the
+    // run, no seam taper. The DROPPING (centre-side) lane is the exception: it does
+    // not exist past the seam, so a vehicle still in it has to be somewhere. Clamp
+    // the lane at each seam to the lanes that actually cross it and the offsets at
+    // the two ends differ, so the vehicle GLIDES into the last surviving lane over
+    // the closing tile — which is what the painted gore and the debug arrow already
+    // draw (Tile.vue's one-way branch clamps the arrow the same way). Without it a
+    // car that hasn't finished its merge is carried to the seam in a lane that then
+    // vanishes, and the index clamp on the far side teleports it a full lane
+    // sideways in one tick.
     if (exit !== null && exit === oppositePort(entry) && isOneWayStraightAt(s.coord, entry)) {
-      const off = oneWayLaneOffsetPx(lanePos, oneWayRunMaxAt(s.coord, entry), tileSize);
-      return { offEntry: off, offExit: off };
+      const runMax = oneWayRunMaxAt(s.coord, entry);
+      const local = laneCount(level[getCoordinatesId(s.coord)]?.road, entry);
+      const at = (port: Port) =>
+        oneWayLaneOffsetPx(
+          Math.min(lanePos, Math.max(1, oneWaySeamCount(s.coord, port, local)) - 1),
+          runMax,
+          tileSize,
+        );
+      return { offEntry: at(entry), offExit: at(exit) };
     }
     const selfBand = centeredBandAt(s.coord, entry);
     // Bidirectional straight tile: taper the band from the entry seam to the exit
     // seam so a continuing lane glides as the kerb shifts.
-    if (exit !== null && exit === oppositePort(entry)) {
+    //
+    // A JUNCTION is excluded even when the movement runs straight through it
+    // (exit === opposite(entry)). The taper branch anchors the lane index on the
+    // tile's OWN band, and a junction's `laneCountAt` is not its arm's real width
+    // — it tallies the movements that fan through the arm — so anchoring on it put
+    // every inner through-lane half a lane off the road it came from, and the
+    // clamp alone could not repair it. A junction's straight-through is just the
+    // zero-degree case of a turn: sit on the entry ARM's road band, then glide to
+    // the lane `junctionExitLane` lands the vehicle in on the exit arm (which is
+    // also what the sim assigns on crossing the seam). That is the branch below.
+    const hereIsJunction = isRoadJunction(level[getCoordinatesId(s.coord)]?.road);
+    if (exit !== null && exit === oppositePort(entry) && !hereIsJunction) {
       return {
         offEntry: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, entry), tileSize),
         offExit: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, exit), tileSize),
       };
     }
-    // Curve / junction: a uniform straight-through curve keeps a constant offset
-    // (offEntry === offExit), but a TURN onto a different arm eases to the lane it
-    // lands in on the exit arm. Dead-end / map edge → hold the approach offset.
+    // Curve / junction: sit on the entry arm's band, then ease to the lane the
+    // vehicle lands in on the exit arm (turnExitOffsetPx). A uniform curve keeps a
+    // constant offset (offEntry === offExit); a turn — or a straight-through a
+    // junction whose arms differ in width — glides to its real exit lane instead
+    // of holding the approach offset and snapping at the boundary.
+    // Dead-end / map edge → hold the approach offset.
     const offEntry = laneOffsetConstPx(lanePos, positioningBandAt(s.coord, entry), tileSize);
     if (exit === null) return { offEntry, offExit: offEntry };
     const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
