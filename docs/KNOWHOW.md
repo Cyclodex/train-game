@@ -34,6 +34,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either end. Page padding cannot do this: it made the page taller than the window
   AND still pinned a big world's edge hard against the viewport, with nothing to
   push the outer row of tiles off the frame's vignette.
+- CLEARANCE FROM THE HUD IS THE CAMERA'S JOB TOO (2026-08-03): `.world` is
+  FULL-BLEED (no padding) and the fixed chrome floats over it; `CHROME_INSETS`
+  (top 180 / sides 24 / bottom 128, the old `.world` padding) is passed to
+  `createCameraController`'s 3rd arg by PlayView + EditorView. `clampCamera`
+  centres a small world in the INSET strip and lets a big one be panned until
+  its last row clears the dock; `fitZoom` fits inside the strip. Padding on the
+  wrapper could not do either: it shrank the camera's window, so the world's
+  ground stopped short of the screen in a dead border, and the bottom rows could
+  only ever be dragged as far as the dock. TestStage passes no insets (its
+  controls are in flow, not over the board) and is unchanged.
 - `/test` IS EXACTLY ONE SCREEN AND NEVER SCROLLS. `.test-view` is a `100vh` flex
   column; `.test-stage` fills its parent (`flex:1; min-height:0`) — it used to be
   `100vh` ITSELF, below a breadcrumb and a description, so the page was ~160px
@@ -2178,6 +2188,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.
+- EDITOR HAND-OFF IS UNGATED (2026-08-03): "Play this" is never disabled and
+  `playThis()` has no `canPlay` check — depot pairs and validation issues are
+  REPORTED in the drawer status, not enforced. A board with no depot pair simply
+  starts with no trains. It pushes `/play?mode=sandbox` EXPLICITLY: /play
+  otherwise reopens the last-used mode, and a board-GENERATING one (Daily derives
+  its map from the date and ignores the context board) threw the level away.
+  Pinned by the "plays a board with no depots at all" editor e2e.
 
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:
