@@ -525,6 +525,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
   must come from a reactive mirror refreshed in the frame loop
   (`trainNextStops`, `retiringTrains`), never from the sim.
 
+## STATION ARCHITECTURE — the building and its sign (2026-08-04)
+- `utils/stationArt.ts` draws the platform's BUILDING, the sister module to
+  `trainArt.ts`'s depot shed. Two sizes, `stationSizeFor(urban)`: ≥3 town tiles
+  in walking reach → Empfangsgebäude, else a halt shelter. DERIVED from
+  `stationCatchment`, never a field — same rule as the demand schedule, so
+  painting houses beside a halt promotes it on the next render.
+- The art's frame is x ALONG the platform, y AWAY from the track (y=0 street
+  side). `Tile.vue`'s `stationStrip`/`stationBuilding` drop it on the outer
+  strip with ONE transform about its top-left (`transform-origin: 0 0`):
+  unrotated for a left-right station, `rotate(-90deg)` for a top-bottom one.
+  `stationAxis` returns null for any other shape → no building, and the tile
+  degrades to plate + slabs rather than breaking.
+- The CSS box and `STATION_ART_BOX` are the same fractions of a 200px tile, and
+  MUST move together: the `<svg>` has the default `preserveAspectRatio`, so a
+  mismatched aspect letterboxes the art instead of stretching it.
+- The box reaches PAST the platform's inner edge (tileSize*0.22) on purpose —
+  the canopy belongs OVER the platform. It stops at *0.26, clear of the crowd
+  dots (which sit at the slab's mid-line ±5px), and is drawn last so anyone
+  underneath shows through the glazing.
+- WHAT MAKES IT READ, learned the expensive way: at 150x30px, LESS. A first cut
+  with hipped roofs, a taller concourse block, roof lights and two chimneys read
+  as three blue boxes in a row. What works is exactly what the town houses do —
+  one body, one gabled roof split lit/shade, a hard SE drop shadow — plus the
+  one railway note: a rafter-ribbed canopy on posts with a blue leading edge. A
+  pale untinted canopy is essential; tinting it the roof's blue merged house and
+  canopy into a single slab.
+- The name plate is mounted ON the building (`stationPlateStyle`) instead of
+  floating over the grass, and the serving-line colours moved INSIDE it as dots.
+  The old blue "S" shield is gone: with a building there, a second glyph saying
+  "this is a station" was three markers in three corners for one fact.
+- `/test/stationhouse` is the scenario: town station (left-right), the same
+  building quarter-turned (top-bottom), and a meadow halt. The halt needs a 5x5
+  clear of every urban tile or it promotes itself and the map stops making its
+  own point.
+
 ## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
 - The player's whole verb set in the network mode: `game.setLine(trainId,
   stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
