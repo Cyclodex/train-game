@@ -3,6 +3,8 @@ import { straight } from "@/levels/test/scenarios/straight";
 import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
 import { station } from "@/levels/test/scenarios/station";
+import { platformstop } from "@/levels/test/scenarios/platformstop";
+import { stationhouse } from "@/levels/test/scenarios/stationhouse";
 import { boarding } from "@/levels/test/scenarios/boarding";
 import { catchment } from "@/levels/test/scenarios/catchment";
 import { parkandride } from "@/levels/test/scenarios/parkandride";
@@ -102,6 +104,7 @@ import { flyover } from "@/levels/test/scenarios/flyover";
 import { grades } from "@/levels/test/scenarios/grades";
 import { mountainpass } from "@/levels/test/scenarios/mountainpass";
 import { terraces } from "@/levels/test/scenarios/terraces";
+import { hillsides } from "@/levels/test/scenarios/hillsides";
 import { industry } from "@/levels/test/scenarios/industry";
 import { clearing } from "@/levels/test/scenarios/clearing";
 import { forestworld } from "@/levels/test/scenarios/forestworld";
@@ -156,8 +159,8 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
-      { id: "grades", label: "Grades", scenarios: [grades, terraces, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice] },
+      { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice] },
       {
         id: "crossings",
         label: "Crossings",

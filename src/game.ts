@@ -44,6 +44,13 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
+// How many carriages a train ordered into service is built with. A PLATFORM IS
+// ONE TILE LONG and a carriage is half of one, so two is what actually stands
+// beside the slab when the train draws up (see platformStopDistance in
+// sim/simulation.ts). Three overhung the platform at both ends: passengers
+// boarded a carriage parked on plain track. Raise this only alongside longer
+// (multi-tile) platforms.
+export const SERVICE_TRAIN_WAGONS = 2;
 import { Colors, makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
@@ -2262,7 +2269,10 @@ export function createGame(
       x,
       y,
       type: "people",
-      wagonIds: [`${id}w1`, `${id}w2`, `${id}w3`],
+      wagonIds: Array.from(
+        { length: SERVICE_TRAIN_WAGONS },
+        (_, i) => `${id}w${i + 1}`
+      ),
       ...(stops.length ? { line: [...stops] } : {}),
     };
     // The renderer draws from `trainDefs`/`unitIds`, so the roster has to learn

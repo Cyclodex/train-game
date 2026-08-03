@@ -177,3 +177,112 @@ describe("height terraces", () => {
     );
   });
 });
+
+// EVERY GROUND TERRACES, IN ITS OWN COLOUR (2026-08-03).
+//
+// The terrace used to be the meadow's green whatever the cell carried, painted
+// UNDER the terrain patch — so raising a wood, a rock field or a town changed
+// the data, the grade and the chevrons, and not one pixel of the ground. Only
+// grass, which paints no patch of its own, ever looked higher.
+describe("terraces on terrain", () => {
+  beforeEach(() => _clearTerrainCache());
+
+  const hues = (svg: string) => bodies(svg).map(c => Number(c.slice(4).split(" ")[0]));
+  const lights = (svg: string) =>
+    bodies(svg).map(c => Number(c.split(" ")[2].replace("%)", "")));
+
+  it("tints a hillside in its OWN ground, not in the meadow's green", () => {
+    for (const kind of ["forest", "rock", "mountain", "urban"] as const) {
+      const svg = tileHeightSvg(1, "2,2", around(0), 9, "meadow", kind);
+      // The kind's own hue (GROUND), not the terrace green.
+      expect(hues(svg)[0]).not.toBe(heightTint(1, "meadow")[0]);
+      expect(hues(svg)[0]).toBe(heightTint(1, "meadow", kind)[0]);
+    }
+  });
+
+  it("lifts every step, and never off its own colour", () => {
+    // A step has to MOVE (a height-1 wood the colour of the flat wood beside it
+    // is the bug this fixes) and has to stay recognisably that ground: hue is
+    // what says "wood" or "slate", so only the lightness climbs.
+    const svg = tileHeightSvg(3, "2,2", around(0), 9, "meadow", "forest");
+    const [l1, l2, l3] = lights(svg);
+    expect(l1).toBeGreaterThan(30); // the flat forest's own lightness
+    expect(l2).toBeGreaterThan(l1);
+    expect(l3).toBeGreaterThan(l2);
+    expect(new Set(hues(svg)).size).toBe(1);
+  });
+
+  it("keeps the pale grounds off white", () => {
+    // A flat lift bleached the town's tan to paper by the third step — a hill
+    // town whiter than a depot roof. The step is a share of the headroom.
+    for (const kind of ["urban", "rock", "industry"] as const) {
+      expect(heightTint(3, "meadow", kind)[2]).toBeLessThan(82);
+    }
+  });
+
+  it("ignores the theme for a ground that paints its own patch", () => {
+    // The theme anchor exists because grass shows the BOARD. A wood shows the
+    // wood, on any board.
+    expect(tileHeightSvg(2, "2,2", around(0), 9, "plain", "forest")).toEqual(
+      tileHeightSvg(2, "2,2", around(0), 9, "meadow", "forest"),
+    );
+  });
+
+  it("keys the memo on the kind", () => {
+    // Same cell, same heights, different ground: a key without the kind would
+    // serve the wood's terrace to the rock field next door.
+    const wood = tileHeightSvg(2, "2,2", around(0), 9, "meadow", "forest");
+    expect(tileHeightSvg(2, "2,2", around(0), 9, "meadow", "rock")).not.toEqual(wood);
+    expect(tileHeightSvg(2, "2,2", around(0), 9, "meadow", "forest")).toEqual(wood);
+  });
+
+  it("steps SURVEYED ground on straight banks", () => {
+    // A field, a town and a works are cut to a line by people; a hillside is
+    // shaped by weather. The terrace is drawn the way its own patch is drawn,
+    // so a terraced field has straight banks and a wood has contours.
+    // How far the drawn edge bows off the chord between its two corners: ~0 for
+    // a surveyed bank (its controls sit ON the chord), units for a contour.
+    const bow = (svg: string, i: number) => {
+      const pts = outline(svg, i);
+      const corners = pts.filter((_, k) => k % 6 === 0);
+      let worst = 0;
+      corners.forEach((a, k) => {
+        const b = corners[(k + 1) % corners.length];
+        const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        for (const p of pts.slice(k * 6, k * 6 + 6)) {
+          const off = Math.abs((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) / len;
+          worst = Math.max(worst, off);
+        }
+      });
+      return worst;
+    };
+    const straight = (svg: string, i: number) => bow(svg, i) < 0.5;
+    expect(straight(tileHeightSvg(1, "2,2", around(0), 9, "meadow", "urban"), 0)).toBe(true);
+    expect(straight(tileHeightSvg(1, "2,2", around(0), 9, "meadow", "forest"), 0)).toBe(
+      false,
+    );
+  });
+
+  it("insets a surveyed band's steps too", () => {
+    // `corners()` used to return early for surveyed ground BEFORE applying the
+    // band inset, so a town dropping three steps at one boundary stacked all
+    // three bands on the same tile edge and showed one. A cut bench still has
+    // to fit its steps inside its own tile.
+    const svg = tileHeightSvg(3, "2,2", around(0), 9, "meadow", "urban");
+    const inward = (i: number) =>
+      Math.min(...outline(svg, i).map(p => Math.min(p.x, p.y, 100 - p.x, 100 - p.y)));
+    expect(bodies(svg)).toHaveLength(3);
+    expect(inward(1)).toBeGreaterThan(inward(0));
+    expect(inward(2)).toBeGreaterThan(inward(1));
+  });
+
+  it("leaves the soft fringe to grass alone", () => {
+    // The fringe is a halo of the band's colour spilled DOWNHILL. Over the
+    // backdrop that is a falloff; over a ground that paints its own opaque
+    // patch it is a pale bar along the LOW side of every step — the light back
+    // to front.
+    const halo = /stroke-width="30"/;
+    expect(tileHeightSvg(2, "2,2", around(0), 9)).toMatch(halo);
+    expect(tileHeightSvg(2, "2,2", around(0), 9, "meadow", "forest")).not.toMatch(halo);
+  });
+});
