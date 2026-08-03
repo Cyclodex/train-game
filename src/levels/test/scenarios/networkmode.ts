@@ -82,7 +82,7 @@ export const networkmode: TestScenario = {
   },
   trains: {
     // Ordered at the depot, then in service on the ring for ever.
-    circle: mkLineTrain("circle", 0, 3, "people", 4, ["2,1", "4,2", "2,4", "1,2"]),
+    circle: mkLineTrain("circle", 0, 3, "people", 2, ["2,1", "4,2", "2,4", "1,2"]),
   },
   colors: {
     depotColors: { "0,3": "blue" },

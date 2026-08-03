@@ -1,6 +1,8 @@
 import { reactive } from "vue";
 import {
   Camera,
+  Insets,
+  NO_INSETS,
   Size,
   createCamera,
   cameraTransform,
@@ -34,9 +36,13 @@ export interface CameraController {
 // click rather than a one-pixel pan that swallows it.
 const PAN_SLOP = 4;
 
+// `insets` is the HUD chrome that floats OVER the board (see camera.ts): the
+// viewport is the whole window, and this keeps the world's content clear of the
+// score card and the dock without shrinking the board's own area.
 export function createCameraController(
   worldSize: () => Size,
   viewportSize: () => Size,
+  insets: () => Insets = () => NO_INSETS,
 ): CameraController {
   const state = reactive({ camera: createCamera(), panning: false }) as {
     camera: Camera;
@@ -55,19 +61,29 @@ export function createCameraController(
     get overflows() {
       const w = worldSize();
       const v = viewportSize();
-      return w.width > v.width || w.height > v.height;
+      const i = insets();
+      // Against the USABLE strip: a world that only fits behind the dock does
+      // overflow, and the zoom controls have to be offered for it.
+      return w.width > v.width - i.left - i.right || w.height > v.height - i.top - i.bottom;
     },
     fit() {
-      state.camera = fitCamera(worldSize(), viewportSize());
+      state.camera = fitCamera(worldSize(), viewportSize(), undefined, insets());
     },
     zoomBy(factor: number) {
       const v = viewportSize();
+      const i = insets();
       state.camera = zoomAt(
         state.camera,
         factor,
-        { x: v.width / 2, y: v.height / 2 },
+        // About the middle of the usable strip, not the window's — otherwise a
+        // zoom step drifts the board under the chrome.
+        {
+          x: (i.left + v.width - i.right) / 2,
+          y: (i.top + v.height - i.bottom) / 2,
+        },
         worldSize(),
         v,
+        i,
       );
     },
     onWheel(e: WheelEvent, viewportEl: HTMLElement | undefined) {
@@ -79,6 +95,7 @@ export function createCameraController(
         { x: e.clientX - r.left, y: e.clientY - r.top },
         worldSize(),
         viewportSize(),
+        insets(),
       );
     },
     // Which button starts a pan is the CALLER's policy, not this controller's:
@@ -108,7 +125,14 @@ export function createCameraController(
         captured = true;
       }
       state.panning = true;
-      state.camera = panBy(state.camera, e.movementX, e.movementY, worldSize(), viewportSize());
+      state.camera = panBy(
+        state.camera,
+        e.movementX,
+        e.movementY,
+        worldSize(),
+        viewportSize(),
+        insets(),
+      );
     },
     onPointerUp(e: PointerEvent) {
       if (pointerId !== e.pointerId) return;
@@ -123,7 +147,7 @@ export function createCameraController(
     // Re-clamp without moving: a window that grew could otherwise leave the board
     // stranded against an edge with empty space beside it.
     reclamp() {
-      state.camera = panBy(state.camera, 0, 0, worldSize(), viewportSize());
+      state.camera = panBy(state.camera, 0, 0, worldSize(), viewportSize(), insets());
     },
   };
 }

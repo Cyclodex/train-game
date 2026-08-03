@@ -716,7 +716,12 @@ class Tile extends Vue {
     const c = size / 2;
     const inner = size * 0.13; // centreline → platform edge (clear of the rails)
     const depth = size * 0.15; // slab depth
-    const margin = size * 0.05; // inset from the tile ends
+    // Edge to edge, no inset: the train draws up with its carriages centred on
+    // the tile (sim/simulation.ts → platformStopDistance) and a two-carriage
+    // block is a shade LONGER than one tile, so an inset slab would leave the
+    // ends of the train standing off the end of the platform. Full width also
+    // lets two station tiles side by side read as one long platform.
+    const margin = 0;
     const len = size - margin * 2;
     const has = (p: Position, q: Position) =>
       this.tile.connections.some(
