@@ -31,6 +31,17 @@
         {{ person.name }}
         <span class="inspector__mood">{{ moodFace(person.mood) }}</span>
       </h3>
+      <!-- Drop a big marker on them and keep it there. A toggle, not a mode:
+           click it again and the pin is gone. Its own row rather than floated
+           into the heading, which put it under the close button. -->
+      <button
+        class="inspector__pin"
+        :class="{ 'is-on': pinned === person.id }"
+        :title="pinned === person.id ? 'Remove the pin' : 'Pin ' + person.name + ' on the board'"
+        @click="togglePin(person.id)"
+      >
+        📍 {{ pinned === person.id ? "Pinned — click to remove" : "Pin them on the board" }}
+      </button>
       <p class="inspector__sub">
         lives {{ person.home }} ·
         <template v-if="person.work">works {{ person.work }}</template>
@@ -115,13 +126,15 @@ const MODE_ICON: Record<TravelMode, string> = {
   parkAndRide: "🅿️",
 };
 
-@Component({ emits: ["close"] })
+@Component({ emits: ["close", "pin"] })
 class CitizenInspector extends Vue {
   @Inject() game!: Game;
   /** The plot the player clicked, if any. */
   @Prop({ type: String, default: null }) plotId!: string | null;
   /** A person clicked directly on the board (a figure on the pavement). */
   @Prop({ type: String, default: null }) focusId!: string | null;
+  /** Who currently has a pin on them, so the button can read as a toggle. */
+  @Prop({ type: String, default: null }) pinned!: string | null;
 
   // The person being read, when one was picked out of a plot's roll call.
   personId: string | null = null;
@@ -131,16 +144,22 @@ class CitizenInspector extends Vue {
     this.personId = null;
   }
 
+  // All three of these read the markRaw'd sims on demand, so each one has to
+  // touch the render heartbeat or Vue caches the first answer and the card
+  // freezes on whatever the person was doing when it opened.
   get plot(): PlotCard | null {
+    void this.game.renderTick.value;
     return this.plotId ? this.game.inspectPlot(this.plotId) : null;
   }
 
   get person(): PersonCard | null {
+    void this.game.renderTick.value;
     const id = this.focusId ?? this.personId;
     return id ? this.game.inspectPerson(id) : null;
   }
 
   get modes(): ModeCompare[] {
+    void this.game.renderTick.value;
     return this.person ? this.game.compareModes(this.person.id) : [];
   }
 
@@ -151,6 +170,13 @@ class CitizenInspector extends Vue {
 
   show(id: string): void {
     this.personId = id;
+  }
+
+  // The view owns the pin, not the panel: the marker lives on the board, and
+  // it must survive the panel being closed — you pin somebody precisely so you
+  // can put the card away and watch them.
+  togglePin(id: string): void {
+    this.$emit("pin", this.pinned === id ? null : id);
   }
 
   label(m: TravelMode): string {
@@ -217,6 +243,28 @@ export default toNative(CitizenInspector);
   margin: 0 0 2px;
   font-size: 14px;
   font-weight: 600;
+}
+.inspector__pin {
+  display: block;
+  width: 100%;
+  margin: 8px 0 2px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: none;
+  color: #9aa4b0;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  &:hover {
+    color: #e9edf2;
+    border-color: rgba(255, 255, 255, 0.35);
+  }
+  &.is-on {
+    color: #1a1408;
+    background: #ffd166;
+    border-color: #ffd166;
+  }
 }
 .inspector__coord {
   color: #8b949e;

@@ -296,7 +296,9 @@
     <CitizenInspector
       :plot-id="inspectPlotId"
       :focus-id="inspectPersonId"
+      :pinned="pinnedPersonId"
       @close="closeInspector"
+      @pin="setPinned"
     />
     <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
@@ -458,6 +460,9 @@
         :style="{ transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)` }"
         @click.stop="onWalkerClick(p.id)"
       />
+      <!-- The pin over a pinned person. Absolutely positioned like the cars and
+           the walkers, so it is not a grid ITEM (KNOWHOW → RENDER LAYOUT). -->
+      <PersonPin v-if="pinnedPersonId" :person-id="pinnedPersonId" :zoom="camera.zoom" />
       <CarRouteOverlay
         v-if="config.debug && carRoute"
         :segments="carRoute.segments"
@@ -672,6 +677,7 @@ import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
 import CityPanel from "@/components/CityPanel.vue";
 import CitizenInspector from "@/components/CitizenInspector.vue";
+import PersonPin from "@/components/PersonPin.vue";
 import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
@@ -752,7 +758,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector } })
+@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -1401,6 +1407,15 @@ class PlayView extends Vue {
     if (!id) return;
     this.inspectPlotId = null;
     this.inspectPersonId = id;
+  }
+
+  // The pinned person: a big marker on the board that follows them, kept by the
+  // VIEW rather than the panel so it survives the card being closed — you pin
+  // somebody precisely so you can put the card away and watch them.
+  pinnedPersonId: string | null = null;
+
+  setPinned(id: string | null): void {
+    this.pinnedPersonId = id;
   }
 
   closeInspector(): void {

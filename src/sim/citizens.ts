@@ -76,6 +76,11 @@ export interface Trip {
   // two ends. Same contract as `carTrip`: while it is set the leg ends when the
   // WALKER arrives, not when a clock runs out.
   walkTrip: string | null;
+  // The train they are sitting on, while they are sitting on one. Bookkeeping
+  // for the INSPECTOR rather than the model — `riders` already knows who is on
+  // which train, but only the other way round, and a pin following one named
+  // person needs the arrow pointing this way.
+  trainId: string | null;
 }
 
 /** Why a mode is not on offer for a particular journey. */
@@ -735,6 +740,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       carTrip: null,
       carSec: 0,
       walkTrip: null,
+      trainId: null,
     };
     // A driving leg becomes an ACTUAL CAR on the board whenever the road sim can
     // dispatch one: this person is now a vehicle in traffic, and their journey
@@ -960,6 +966,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         if (!c?.trip) continue;
         c.trip.leg = "riding";
         c.trip.onPlatform = false;
+        c.trip.trainId = e.trainId;
         staying.push(id);
       }
       riders.set(e.trainId, staying);

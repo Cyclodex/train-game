@@ -219,6 +219,77 @@ describe("the citizen inspector", () => {
     expect(legs).not.toContain("walking to work");
   });
 
+  it("locates a person wherever they happen to be — the pin's whole job", () => {
+    const game = newGame(citizenchoice);
+
+    // At rest, before anyone sets off: the pin sits on the tile they are in.
+    const first = (game.inspectPlot("2,1")?.residents ?? [])[0];
+    expect(first).toBeTruthy();
+    const home = game.locatePerson(first.id);
+    expect(home?.on).toBe("indoors");
+    expect(home?.x).toBeCloseTo(2.5 * 200, 6);
+    expect(home?.y).toBeCloseTo(1.5 * 200, 6);
+
+    // ...and over a day it follows them onto every kind of thing that carries
+    // somebody. Each of these is a different sampler, and a pin that only knew
+    // about walkers would silently stick to a doorway for half the population.
+    const modes = new Set<string>();
+    const moved = new Map<string, number>();
+    run(game, 900, () => {
+      for (const dot of game.pedestrians) {
+        const id = game.personWalking(dot.id);
+        if (!id) continue;
+        const fix = game.locatePerson(id) as NonNullable<ReturnType<typeof game.locatePerson>>;
+        modes.add(fix.on);
+        // A walker's pin is ON the walker, not a tile centre near them.
+        if (fix.on === "foot") {
+          expect(fix.x).toBeCloseTo(dot.x, 6);
+          expect(fix.y).toBeCloseTo(dot.y, 6);
+          moved.set(id, (moved.get(id) ?? 0) + 1);
+        }
+      }
+      for (let x = 1; x <= 5; x++) {
+        for (const p of game.inspectPlot(`${x},1`)?.residents ?? []) {
+          const fix = game.locatePerson(p.id);
+          if (fix) modes.add(fix.on);
+        }
+      }
+    });
+    // Walking, driving, riding and standing about all resolve to somewhere.
+    expect(modes.has("foot")).toBe(true);
+    expect(modes.has("car")).toBe(true);
+    expect(modes.has("indoors")).toBe(true);
+    expect([...moved.values()].some(n => n > 5)).toBe(true);
+
+    // Somebody who has left town has no position, and the pin must vanish
+    // rather than freeze over their old address.
+    expect(game.locatePerson("nobody")).toBeNull();
+  }, 30000);
+
+  it("follows a rail passenger onto the train itself", () => {
+    // The one case that needed a new field: `riders` knew who was on which
+    // train but only that way round, and a pin over one named person needs the
+    // arrow pointing the other way.
+    const game = newGame(threecities);
+    let onTrain = 0;
+    const seen = new Set<number>();
+    run(game, 900, () => {
+      for (let x = 1; x <= 5; x++) {
+        for (const p of game.inspectPlot(`${x},1`)?.residents ?? []) {
+          const fix = game.locatePerson(p.id);
+          if (fix?.on !== "train") continue;
+          onTrain += 1;
+          seen.add(Math.round(fix.x));
+        }
+      }
+    });
+    expect(onTrain).toBeGreaterThan(0);
+    // A pin on a moving train moves. A stationary one would mean it had latched
+    // onto a platform and called it a train.
+    const xs = [...seen];
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(400);
+  }, 30000);
+
   it("prints a duration a person can read", () => {
     expect(durationLabel(8)).toBe("8s");
     expect(durationLabel(59.4)).toBe("59s");

@@ -729,6 +729,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **A GETTER THAT READS THE `markRaw` SIMS HAS NO REACTIVE DEPENDENCY**, so Vue
+  evaluates it ONCE and caches the answer for ever (2026-08-03). This is the
+  price of the `markRaw(game)` rule, and it is invisible until something is
+  meant to move: the person pin appeared in exactly the right place and then
+  never budged, measured at 0px of travel in 4 seconds. `game.renderTick` is a
+  `ref` bumped once per drawn frame — touch `game.renderTick.value` at the top
+  of any getter that samples the sims on demand (`locatePerson`, `inspectPlot`,
+  `inspectPerson`, `compareModes`). Anything that does NOT touch it stays as
+  cheap as it was, which is the point of a heartbeat over mirroring a whole
+  population into reactive state to serve one open panel.
+- **THE PIN FOLLOWS A PERSON THROUGH FIVE DIFFERENT SAMPLERS** (`locatePerson`).
+  On foot → the walker's live position; in a car → the car's (the road sim's
+  trip id IS the car id, so it is a lookup); on a train → the loco; on a
+  platform or indoors → the tile centre. A pin that only knew about walkers
+  would silently stick to a doorway for half the population, since roughly half
+  of all journeys are driven.
+    · Rail geometry is measured off an SVG path (`getPointAtLength`), so the
+      exact loco position needs a `document`. Headless it falls back to the
+      loco's TILE CENTRE — coarser by half a tile, still tracks the train across
+      the map, and testable. Do not pretend the pure path exists.
+    · The pin lives inside the camera-scaled world, so it must COUNTER-SCALE
+      (`1 / zoom`, capped at 1) or it shrinks to a speck at the 40% a whole town
+      is viewed at — the exact zoom at which a "find this person" marker is most
+      needed.
+    · The pinned id belongs to the VIEW, not the panel: you pin somebody
+      precisely so you can close the card and watch them.
 - **THE INSPECTOR MUST NOT RE-DERIVE THE DECISION** (`CitizenSim.quoteFor`,
   `game.compareModes`, `CitizenInspector.vue`, 2026-08-03). Click a house → its
   roll call; click a person or a figure on the pavement → their day plus every

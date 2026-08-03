@@ -412,6 +412,15 @@ export interface Game {
   inspectPlot(plotId: string): PlotCard | null;
   inspectPerson(id: string): PersonCard | null;
   compareModes(id: string): ModeCompare[];
+  // Ticks once per drawn frame. Read it from any getter that samples the sims
+  // on demand, or Vue will cache the first answer for ever — see the note where
+  // it is declared.
+  renderTick: Ref<number>;
+  // Where somebody is on the board right now, for the PIN that follows them.
+  // Null when they no longer exist. Sampled from the SIMS, not read off the
+  // DOM, so the pin is right on its first frame and a headless test can prove
+  // it tracks a moving person.
+  locatePerson(id: string): PersonFix | null;
   // The person behind a figure on the pavement / behind a car on the road.
   personWalking(walkerId: string): string | null;
   personDriving(carTripId: string): string | null;
@@ -648,6 +657,15 @@ export interface PersonCard {
   elapsedSec: number | null;
   expectedSec: number | null;
   unhappyDays: number;
+}
+
+/** Where a pinned person is right now, in world pixels, and what they are on. */
+export interface PersonFix {
+  id: string;
+  x: number;
+  y: number;
+  /** What is carrying them — the pin labels itself with this. */
+  on: "foot" | "car" | "train" | "platform" | "indoors";
 }
 
 /** One row of the "what would each way take?" table. */
@@ -1214,6 +1232,73 @@ export function createGame(
       chosen: q.chosen,
       why: q.unavailable ? (REFUSAL_TEXT[q.unavailable] ?? q.unavailable) : null,
     }));
+  }
+
+  // WHERE IS THIS PERSON? One answer per leg, every one of them sampled from a
+  // simulation rather than read off the render mirror — a pin built from
+  // `roadCars` would be a frame late and empty in a headless test.
+  //
+  // A person is only ever in one of five places, and the pin says which:
+  //  · on foot     — the walker's live position on the pavement
+  //  · in a car    — the car's live position (the trip id IS the car id, see
+  //                  road.ts `trips.set(id, "driving")`, so this is a lookup)
+  //  · on a train  — the loco of the train they boarded
+  //  · on a platform / indoors — the middle of the tile they are standing in,
+  //    which is as precise as the model gets and precise enough to point at.
+  function locatePerson(id: string): PersonFix | null {
+    const c = citizenSim?.citizen(id);
+    if (!c) return null;
+    const centreOf = (tileId: string) => {
+      const { x, y } = parseCoordId(tileId);
+      return { x: (x + 0.5) * tileSize, y: (y + 0.5) * tileSize };
+    };
+    const trip = c.trip;
+
+    if (trip?.walkTrip) {
+      const w = pedestrianSim?.sample().find(sample => sample.id === trip.walkTrip);
+      if (w) return { id, x: w.x * tileSize, y: w.y * tileSize, on: "foot" };
+    }
+    if (trip?.carTrip) {
+      for (const car of roadSim.sample()) {
+        if (car.id !== trip.carTrip) continue;
+        const unit = car.units[0];
+        if (!unit) break;
+        const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
+        const p = positionRoadUnit(
+          unit,
+          unit.front.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.front, car.laneIndex, cls),
+          unit.rear.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.rear, car.laneIndex, cls)
+        );
+        return { id, x: p.x, y: p.y, on: "car" };
+      }
+    }
+    if (trip?.trainId && sim.trains[trip.trainId]) {
+      const units = sim.sampleTrain(trip.trainId);
+      if (units.length) {
+        // The one sampler here that is NOT pure: rail geometry is measured off
+        // an SVG path (`getPointAtLength`), so the exact loco position needs a
+        // document. In the browser that is always true and the pin rides the
+        // engine. Headless, fall back to the tile the loco is on — coarser by
+        // half a tile, still tracks the train across the map, and testable.
+        if (typeof document !== "undefined") {
+          const { x, y } = positionUnit(units[0]);
+          return { id, x, y, on: "train" };
+        }
+        const { x: cx, y: cy } = units[0].front.coord;
+        return {
+          id,
+          x: (cx + 0.5) * tileSize,
+          y: (cy + 0.5) * tileSize,
+          on: "train",
+        };
+      }
+    }
+    if (trip?.leg === "waiting" && trip.station)
+      return { id, ...centreOf(trip.station), on: "platform" };
+    // Not moving, or on a leg with no body on the board yet: they are at an
+    // address. `at` stays their home while they travel home, which is exactly
+    // where the pin belongs for somebody who has not set off.
+    return { id, ...centreOf(c.at), on: "indoors" };
   }
 
   // The person behind a figure on the pavement — so clicking a dot on the board
@@ -2094,6 +2179,15 @@ export function createGame(
 
   const paused = ref(false);
   const speed = ref(1);
+  // A reactive heartbeat for views that read the SIMS on demand rather than a
+  // mirrored array. `locatePerson` (the pin) and the inspector panel both walk
+  // the markRaw'd simulations directly — which is right, because mirroring a
+  // whole population per frame to serve one open panel would be absurd — but it
+  // means Vue sees no dependency and caches the computed for ever. The pin
+  // appeared in the correct place and then never moved again. Touch this and a
+  // getter re-runs each drawn frame; anything that does NOT touch it stays as
+  // cheap as it was.
+  const renderTick = ref(0);
   const deliveries = ref(0);
   let raf = 0;
   let last = 0;
@@ -2210,6 +2304,7 @@ export function createGame(
     updateRoadSignals();
     updateReservations();
     updateStationQueues();
+    renderTick.value += 1;
     raf = requestAnimationFrame(frame);
   }
 
@@ -2614,6 +2709,8 @@ export function createGame(
     inspectPlot,
     inspectPerson,
     compareModes,
+    renderTick,
+    locatePerson,
     personWalking,
     personDriving,
     trainLines,
