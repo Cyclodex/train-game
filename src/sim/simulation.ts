@@ -579,10 +579,21 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // True when this train still owes a stop at its current (station) segment:
   // the head is on a station tile it has not yet dwelled at this pass.
+  // Does this train CALL at that station, or run past it? A train on a line
+  // serves its OWN stops and nothing else — that is what makes an express
+  // express, and without it a line is only a suggestion about the order in
+  // which a train visits everything. A train with no line stops everywhere,
+  // which is the classic service every older board expects.
+  function callsAt(train: SimTrain, tileId: string): boolean {
+    if (!isStationTile(tileId)) return false;
+    if (!train.line?.length) return true;
+    return train.line.includes(tileId);
+  }
+
   function stationStopPending(train: SimTrain): boolean {
     const head = train.path[train.headIndex];
     return (
-      isStationTile(getCoordinatesId(head.coord)) &&
+      callsAt(train, getCoordinatesId(head.coord)) &&
       train.dwelledAtIndex !== train.headIndex
     );
   }
@@ -930,8 +941,9 @@ export function createSimulation(config: SimConfig): Simulation {
       head = { coord: t.next.coord, entryPort: t.next.entryPort };
       // A station ahead ends the clear run at its platform, part-way into that
       // tile (tiles ahead of the head are always unserved — the dwell marker
-      // only ever points at a segment the head has reached).
-      if (isStationTile(getCoordinatesId(head.coord))) {
+      // only ever points at a segment the head has reached). One this train
+      // runs PAST is not a stop line at all, so it must not brake for it.
+      if (callsAt(train, getCoordinatesId(head.coord))) {
         dist += STATION_STOP_PROGRESS;
         return Math.min(dist, train.lookAhead);
       }
@@ -1099,12 +1111,18 @@ export function createSimulation(config: SimConfig): Simulation {
       }
       train.dwellRemaining =
         STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
-      // On a line: if this is the stop we were heading for, the leg is done —
-      // move to the next stop and plan the route to it while we stand here.
-      // (Any OTHER station we happen to pass is still served: the train calls,
-      // works the platform, and carries on to the stop it is actually bound
-      // for, which is what a real service does at an intermediate station.)
-      if (currentStop(train) === tileId) advanceLine(train);
+      // On a line, calling anywhere on it moves the cursor PAST that stop —
+      // not just at the one we were bound for. A line is an order to visit, and
+      // arriving early at a later stop (a loop can bring one up sooner than the
+      // cursor expects) should still count as having served it, or the train
+      // would come back for a platform it just worked.
+      if (train.line?.length) {
+        const at = train.line.indexOf(tileId);
+        if (at >= 0) {
+          train.lineIndex = (at + 1) % train.line.length;
+          planLeg(train);
+        }
+      }
       events.push({ type: "dwell", trainId: train.id, tileId, boarded, alighted });
       return;
     }

@@ -206,3 +206,70 @@ describe("the route sets the points", () => {
     expect(dwellsAt(events)).toContain("2,0");
   });
 });
+
+// AN EXPRESS: a line names WHICH stations a train serves, not merely the order
+// it visits everything in. Without this a line is only a suggestion and every
+// train is a stopper — which is what the first cut did.
+describe("a line says which stations a train serves", () => {
+  // Four platforms on one ring, so a two-stop line has two to run past.
+  //   1,0 ── 2,0(A) ── 3,0(B) ── 4,0
+  //    │                          │
+  //   1,1                        4,1
+  //    │                          │
+  //   1,2 ── 2,2(C) ── 3,2(D) ── 4,2
+  function fourStationRing(): Level {
+    const stn = () => ({
+      connections: [[Position.Left, Position.Right]] as [Position, Position][],
+      role: "station" as const,
+    });
+    return {
+      "1,0": expandKind("curve", 1),
+      "2,0": stn(),
+      "3,0": stn(),
+      "4,0": expandKind("curve", 2),
+      "1,1": expandKind("straight", 0),
+      "4,1": expandKind("straight", 0),
+      "1,2": expandKind("curve", 0),
+      "2,2": stn(),
+      "3,2": stn(),
+      "4,2": expandKind("curve", 3),
+    };
+  }
+
+  const ringTrain = (line?: string[]) => ({
+    ...train(line),
+    coord: { x: 2, y: 2 },
+    entryPort: Position.Left,
+  });
+
+  it("runs an EXPRESS straight past the stations that are not its stops", () => {
+    const sim = createSimulation({
+      level: fourStationRing(),
+      // Serves C and B only: A and D must be run through without stopping.
+      trains: [ringTrain(["2,2", "3,0"])],
+    });
+    const calls = dwellsAt(run(sim, 150));
+    expect(calls.length).toBeGreaterThan(3);
+    expect(new Set(calls)).toEqual(new Set(["2,2", "3,0"]));
+    // …and it alternates between exactly those two, lap after lap.
+    expect(calls.slice(0, 4)).toEqual(["2,2", "3,0", "2,2", "3,0"]);
+  });
+
+  it("a STOPPER with every platform on its line still calls at them all", () => {
+    const sim = createSimulation({
+      level: fourStationRing(),
+      trains: [ringTrain(["2,2", "3,2", "2,0", "3,0"])],
+    });
+    const calls = dwellsAt(run(sim, 150));
+    expect(new Set(calls)).toEqual(new Set(["2,2", "3,2", "2,0", "3,0"]));
+  });
+
+  it("a train with NO line stops everywhere, as it always did", () => {
+    const sim = createSimulation({
+      level: fourStationRing(),
+      trains: [ringTrain()],
+    });
+    const calls = dwellsAt(run(sim, 150));
+    expect(new Set(calls)).toEqual(new Set(["2,2", "3,2", "2,0", "3,0"]));
+  });
+});
