@@ -28,6 +28,7 @@ import { parseCoordId } from "@/tiles/model";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import {
   Corridor,
+  Elevation,
   GROUND_UNITS,
   HeightNeighbours,
   TerrainNeighbours,
@@ -35,7 +36,6 @@ import {
   terrainOf,
   tileCanopySvg,
   tileGroundSvg,
-  tileHeightSvg,
   tileScatterSvg,
 } from "@/tiles/terrain";
 import { accessPathSvg, accessPortOf } from "@/tiles/access";
@@ -119,15 +119,21 @@ class TileGround extends Vue {
     });
   }
 
-  // The hypsometric terraces an elevated cell lays UNDER its terrain patch.
+  // How high this cell stands and how far the ground falls around it, handed to
+  // the ground build so it can lay the terraces IN its own art — over the
+  // terrain patch's fill, under the detail drawn on it (see `Elevation`). It
+  // used to be a separate fragment composed here, before the terrain, which is
+  // why only grass ever looked elevated: every other kind paints an opaque
+  // patch straight over it.
+  //
   // The neighbours are handed over as HEIGHTS, not as "same" booleans: a cell
   // draws one contour per level it stands above its lowest neighbour, so a
   // summit dropping two or three steps at once draws the intermediate contours
   // inside its own tile instead of showing a single sheer wall. See
   // tileHeightSvg.
-  get heightHtml(): string {
+  get elevation(): Elevation | undefined {
     const h = heightOf(this.level[this.coordId]);
-    if (h === 0) return "";
+    if (h === 0) return undefined;
     const { x, y } = parseCoordId(this.coordId);
     const at = (dx: number, dy: number) =>
       heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]);
@@ -143,9 +149,10 @@ class TileGround extends Vue {
     };
     // The debug flat ground is its own (much darker) anchor — a terrace tinted
     // for the meadow board would glare on it, and the shot pipeline runs with
-    // plainBackdrop on by default.
+    // plainBackdrop on by default. (Only grass reads the theme: every other
+    // ground anchors its terrace to its OWN colour.)
     const theme = this.config.plainBackdrop ? "plain" : this.config.worldTheme;
-    return tileHeightSvg(h, this.coordId, around, TERRAIN_SEED, theme);
+    return { height: h, around, theme };
   }
 
   // The LOCAL ACCESS path: the bit of ground between a plot and the street that
@@ -183,18 +190,26 @@ class TileGround extends Vue {
     );
   }
 
-  // The tile's own art for this layer, WITHOUT the height terrace: the terrace
-  // renders under an opaque patch, so the roof copy has no use for it — and
-  // duplicating it would duplicate the clipPath id it defines.
+  // The tile's own art for this layer — the ground layer INCLUDING its
+  // terraces, so a bored tile's roof copy carries the same lighter step the
+  // ground beneath it does (a mountain that terraces below the trains and not
+  // above them would show a seam at every portal). The duplicated clipPath ids
+  // that costs are harmless: both copies define the identical geometry, which
+  // is already true of the patch's own `terrain-clip`.
   get baseHtml(): string {
     const kind = terrainOf(this.level[this.coordId]);
-    const build =
-      this.layer === "canopy"
-        ? tileCanopySvg
-        : this.layer === "scatter"
-          ? tileScatterSvg
-          : tileGroundSvg;
-    return build(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    if (this.layer === "canopy")
+      return tileCanopySvg(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    if (this.layer === "scatter")
+      return tileScatterSvg(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
+    return tileGroundSvg(
+      kind,
+      this.coordId,
+      this.neighbours,
+      TERRAIN_SEED,
+      this.corridors,
+      this.elevation,
+    );
   }
 
   get html(): string {
@@ -208,9 +223,7 @@ class TileGround extends Vue {
     // buildings, and a long way below the people walking on it.
     if (this.layer === "paving")
       return this.accessHtml() + pavementPaths(this.level[this.coordId], this.units);
-    // Everything but the ground layer is just the tile's own art.
-    if (this.layer !== "ground") return this.baseHtml;
-    return this.heightHtml + this.baseHtml;
+    return this.baseHtml;
   }
 }
 export default toNative(TileGround);

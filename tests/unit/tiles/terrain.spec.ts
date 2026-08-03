@@ -15,6 +15,9 @@ import {
   terrainOf,
   fieldPlanAt,
   edgeStyleOf,
+  heightTint,
+  Elevation,
+  HeightNeighbours,
   FOOT,
   TERRAIN_BUILD_FACTOR,
   URBAN_SMALLEST_REACH,
@@ -952,6 +955,72 @@ describe("terrain", () => {
       );
       const big = (ws: number[]) => (ws.length ? Math.max(...ws) : 0);
       expect(big(beside)).toBeLessThan(big(open));
+    });
+  });
+
+  // WHERE the terrace of an elevated cell goes. It used to be composed by the
+  // VIEW — terrace fragment, then terrain fragment — which is why raising
+  // anything but grass showed nothing at all: every other kind paints an opaque
+  // patch straight over it. It belongs INSIDE the ground build.
+  describe("elevated ground", () => {
+    beforeEach(() => _clearTerrainCache());
+
+    const flat: HeightNeighbours = {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      topLeft: 0,
+      topRight: 0,
+      bottomRight: 0,
+      bottomLeft: 0,
+    };
+    const up = (height: number): Elevation => ({ height, around: flat });
+
+    it("lays the terrace OVER the ground's own fill", () => {
+      // The bug, at its smallest: a raised wood that looks exactly like the flat
+      // wood beside it.
+      const wood = tileGroundSvg("forest", "2,2", around("forest"), 9);
+      const hill = tileGroundSvg("forest", "2,2", around("forest"), 9, [], up(2));
+      expect(hill).not.toEqual(wood);
+      // The forest's own fill is still there, UNDER the terrace — a flat
+      // neighbour has to meet that colour at the foot of the slope.
+      const base = wood.match(/fill="(hsl\([^"]+)"\/>/)![1];
+      const [h, s] = heightTint(2, "meadow", "forest");
+      expect(hill.indexOf(base)).toBeGreaterThanOrEqual(0);
+      expect(hill.indexOf(base)).toBeLessThan(hill.indexOf(`hsl(${h} ${s}%`));
+    });
+
+    it("keeps the ground's detail ON the step, not under it", () => {
+      // The whole reason the terrace is spliced mid-build rather than layered
+      // by the view: a terraced field still has its furrows, a raised town its
+      // paving, a raised rock field its scree.
+      const field = tileGroundSvg("farmland", "2,2", around("farmland"), 9, [], up(2));
+      const [h, s] = heightTint(2, "meadow", "farmland");
+      // The furrows are the one group clipped to the patch, so they name it.
+      expect(field.indexOf(`hsl(${h} ${s}%`)).toBeLessThan(field.indexOf("<g clip-path="));
+    });
+
+    it("draws nothing extra at ground level", () => {
+      expect(tileGroundSvg("rock", "2,2", around("rock"), 9, [], up(0))).toEqual(
+        tileGroundSvg("rock", "2,2", around("rock"), 9),
+      );
+    });
+
+    it("leaves flat grass exactly as it was", () => {
+      // Grass is the compatibility case: it paints no fill, so its terrace goes
+      // FIRST, exactly where the view used to put it.
+      const meadow = tileGroundSvg("grass", "2,2", around("grass"), 9);
+      const knoll = tileGroundSvg("grass", "2,2", around("grass"), 9, [], up(1));
+      expect(knoll.endsWith(meadow)).toBe(true);
+    });
+
+    it("keys the memo on the elevation", () => {
+      // Two cells alike in every way the old key knew about, one of them a hill.
+      const hill = tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(2));
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9)).not.toEqual(hill);
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(1))).not.toEqual(hill);
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(2))).toEqual(hill);
     });
   });
 });
