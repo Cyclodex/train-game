@@ -69,8 +69,12 @@ export interface CrossingLayout {
 export const VERGE_FRAC = 0.04;
 // The two barrier rows, either side of the rails (which run through the middle).
 export const BOOM_ROW_FRACS: [number, number] = [0.28, 0.72];
-// How far up/down the road the warning sign stands from its barrier row.
+// How far up/down the road the light signal stands from its barrier row.
 const SIGN_GAP_FRAC = 0.15;
+// How far short of each other two facing arms stop, as a fraction of the tile —
+// the gap that makes a closed crossing read as two barriers instead of one bar.
+// Well under a car's width (0.14 of a tile), so the road still reads as closed.
+export const CENTRE_GAP_FRAC = 0.045;
 // Keep the post inside the tile even on an absurdly wide road.
 const EDGE_FRAC = 0.48;
 
@@ -150,15 +154,25 @@ export const BIG_STREET_LANES = 2;
  * arm swinging right across the oncoming lanes; the pair keeps every arm to half
  * the road however many lanes it has.
  *
- * SIGNS are per ROW, not per bar: one warning triangle per approach, standing at
- * that approach's driver's-right post, the way a crossing is actually signed.
+ * ONE SIGNAL PER POST, not per row. A Swiss crossing carries a Blinklichtsignal
+ * on every barrier mast, so a four-bar street has four — one at each corner. It
+ * is also what makes a closed crossing READ as two barriers per side rather than
+ * one long bar.
+ *
+ * THE CENTRE GAP does the same job. Two half-barriers meeting exactly on the
+ * centreline draw as a single unbroken bar; real ones stop short of each other,
+ * so every arm whose tip is the meeting point is shortened by `CENTRE_GAP_FRAC`.
+ * The gap stays far narrower than a car, so the road still reads as closed. An
+ * arm that ends at a KERB (a narrow one-way street's full barrier) is not
+ * shortened — nothing meets it.
  */
 export function crossingLayout(size: number, span: RoadSpan): CrossingLayout {
   const verge = size * VERGE_FRAC;
   const limit = size * EDGE_FRAC;
   const clamp = (v: number) => Math.max(-limit, Math.min(limit, v));
   const [rowTop, rowBottom] = BOOM_ROW_FRACS.map(f => f * size);
-  const gap = size * SIGN_GAP_FRAC;
+  const signGap = size * SIGN_GAP_FRAC;
+  const centreGap = size * CENTRE_GAP_FRAC;
 
   const leftHinge = clamp(span.xMin - verge);
   const rightHinge = clamp(span.xMax + verge);
@@ -170,25 +184,29 @@ export function crossingLayout(size: number, span: RoadSpan): CrossingLayout {
 
   const booms: CrossingBoom[] = [];
   const signs: CrossingSign[] = [];
-  const bar = (y: number, hinge: number, tip: number) =>
-    booms.push({ y, hinge, length: Math.abs(tip - hinge), dir: tip >= hinge ? 1 : -1 });
-
-  // One guarded row: `side` is the approaching driver's right-hand verge (−1 for
-  // the down carriageway, +1 for the up one) — where its sign stands, and where
-  // its single bar hinges when the street is narrow enough for one.
-  const row = (y: number, side: 1 | -1, signY: number) => {
-    if (big) {
-      bar(y, leftHinge, meet);
-      bar(y, rightHinge, meet);
-    } else if (side < 0) {
-      bar(y, leftHinge, span.flow === "two-way" ? 0 : span.xMax);
-    } else {
-      bar(y, rightHinge, span.flow === "two-way" ? 0 : span.xMin);
-    }
-    signs.push({ x: side < 0 ? leftHinge : rightHinge, y: signY });
+  // `stopShort` = this arm ends where another one does, so leave the gap.
+  const bar = (y: number, hinge: number, tip: number, stopShort: boolean, signY: number) => {
+    const dir: 1 | -1 = tip >= hinge ? 1 : -1;
+    const length = Math.max(0, Math.abs(tip - hinge) - (stopShort ? centreGap : 0));
+    booms.push({ y, hinge, length, dir });
+    signs.push({ x: hinge, y: signY });
   };
 
-  if (span.flow !== "up") row(rowTop, -1, rowTop - gap);
-  if (span.flow !== "down") row(rowBottom, 1, rowBottom + gap);
+  // One guarded row: `side` is the approaching driver's right-hand verge (−1 for
+  // the down carriageway, +1 for the up one) — where its single bar hinges when
+  // the street is narrow enough for one.
+  const row = (y: number, side: 1 | -1, signY: number) => {
+    if (big) {
+      bar(y, leftHinge, meet, true, signY);
+      bar(y, rightHinge, meet, true, signY);
+    } else if (side < 0) {
+      bar(y, leftHinge, span.flow === "two-way" ? 0 : span.xMax, span.flow === "two-way", signY);
+    } else {
+      bar(y, rightHinge, span.flow === "two-way" ? 0 : span.xMin, span.flow === "two-way", signY);
+    }
+  };
+
+  if (span.flow !== "up") row(rowTop, -1, rowTop - signGap);
+  if (span.flow !== "down") row(rowBottom, 1, rowBottom + signGap);
   return { booms, signs };
 }

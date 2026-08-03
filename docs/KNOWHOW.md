@@ -2633,10 +2633,26 @@ lean — prune as much as you add. This file only stays useful if every task ten
   oncoming lanes. A narrow 1+1 street keeps the classic diagonal PAIR: one bar per
   row, on the approaching driver's right verge (traffic keeps right, so the down
   carriageway is the local −x half and its bar hinges on −x).
-- ROWS ≠ BARS, AND SIGNS GO WITH THE ROW. One warning triangle per APPROACH, at that
-  approach's driver's-right post — two on a two-way street however many bars it has.
-  ONE-WAY roads are guarded on the approach side ONLY (a bar behind the crossing
-  guards nothing): one row, one sign, and one bar if narrow / a verge pair if big.
+- A SIGNAL ON EVERY MAST — one per BAR, not one per row (four on a big two-way
+  street, at the tile's four corners). That is the Swiss arrangement (a barrier and
+  a Blinklichtsignal on each side of the road) and it is also what makes a closed
+  crossing read as a PAIR of barriers per side rather than one long bar. ONE-WAY
+  roads are guarded on the approach side ONLY (a bar behind the crossing guards
+  nothing): one row, one bar if narrow / a verge pair if big.
+- THE CENTRE GAP (`CENTRE_GAP_FRAC = 0.045`) is the other half of that. Two arms
+  meeting exactly on the centreline draw as one unbroken bar — the "looks like a
+  single barrier" report. Every arm whose tip is the MEETING POINT stops short by
+  the gap; an arm ending at a KERB (a narrow one-way street's full barrier) does
+  not, since nothing meets it. The gap stays well under a car's width (0.14 tile)
+  so the road still reads as closed.
+- THE SIGNAL ART IS SWISS, not German (checked against the SSV / Wikipedia
+  descriptions, 2026-08-04): a white-rimmed BLACK triangular panel carrying two red
+  lights side by side AT THE SAME HEIGHT, alternating. The old art was a red-and-
+  white warning triangle with the lamps hanging below it, which is not a signal any
+  country uses. The lamps are children of an UNCLIPPED wrapper — `clip-path` clips
+  descendants, so lamps inside the triangle element get their outer edges eaten.
+  The unlit lens is dark red (#6b3030), not black: on a black panel a black lens
+  disappears and the signal reads as having only one light.
 - THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
   CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
   (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the

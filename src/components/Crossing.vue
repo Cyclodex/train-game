@@ -1,15 +1,15 @@
 <template>
-  <!-- Level-crossing (Bahnübergang) furniture overlay: boom barriers, warning
-  lights and roadside triangle signals. The road surface is drawn by the tile's
-  road layer and the cars by the road simulation; this component only adds the
-  crossing furniture and reads the gate state (CLOSED while a train reserves or
-  occupies the tile).
+  <!-- Level-crossing (Bahnübergang) furniture overlay: boom barriers and their
+  Blinklichtsignale. The road surface is drawn by the tile's road layer and the
+  cars by the road simulation; this component only adds the crossing furniture
+  and reads the gate state (CLOSED while a train reserves or occupies the tile).
 
   Everything is POSITIONED FROM THE ROAD, not from tile percentages: see
   tiles/crossingFurniture.ts. A BIG street is guarded on both sides of the rails
-  and from both verges — four bars, each hinged outside its own kerb and reaching
-  the centre line — instead of one short bar parked on the tarmac. A narrow 1+1
-  street keeps the classic diagonal pair. -->
+  and from both verges — four bars, each hinged outside its own kerb — instead of
+  one short bar parked on the tarmac. A narrow 1+1 street keeps the classic
+  diagonal pair. Every mast carries its own signal, and facing arms stop short of
+  each other, so a closed crossing reads as the pair of barriers it is. -->
   <div class="crossing" :style="overlayStyle">
     <div class="crossing-rot" :style="rotStyle">
       <!-- one boom per guarded approach; arm down (across the road) when closed -->
@@ -24,8 +24,9 @@
         <div class="boom-post"></div>
       </div>
 
-      <!-- roadside crossing signals: a classic up-pointing warning triangle on a
-      post with two alternating red lamps, one guarding each approach. -->
+      <!-- Blinklichtsignal — one on EVERY barrier mast, the Swiss arrangement: a
+      black triangular panel carrying two red lights side by side at the same
+      height, alternating while the crossing is closed. -->
       <div
         v-for="(s, i) in layout.signs"
         :key="'sign' + i"
@@ -33,8 +34,7 @@
         :class="{ active: closed }"
         :style="signStyle(s)"
       >
-        <div class="xing-tri"></div>
-        <div class="xing-lamps">
+        <div class="xing-panel">
           <span class="xing-lamp xing-lamp--a"></span>
           <span class="xing-lamp xing-lamp--b"></span>
         </div>
@@ -225,7 +225,8 @@ geometry below is written once for a rightward sweep. */
   transform: rotate(0deg); /* lowered across the road */
 }
 
-/* roadside crossing signals: up-pointing warning triangle + alternating lamps */
+/* Blinklichtsignal (CH): a white-rimmed BLACK triangular panel carrying two red
+lights side by side at the same height, on a short mast. One per barrier mast. */
 .xing-signal {
   position: absolute;
   z-index: 8;
@@ -234,41 +235,55 @@ geometry below is written once for a rightward sweep. */
   align-items: center;
   transform: translate(-50%, -50%);
 }
-.xing-tri {
-  width: 0;
-  height: 0;
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
-  border-bottom: 16px solid #d23b3b;
+/* The panel itself is the two pseudo-elements (rim + face); the lamps are real
+children of the UNCLIPPED wrapper, because a clip-path clips its descendants and
+would eat the lights sitting near the triangle's edges. */
+.xing-panel {
   position: relative;
+  width: 24px;
+  height: 20px;
 }
-.xing-tri::after {
+.xing-panel::before,
+.xing-panel::after {
   content: "";
   position: absolute;
-  left: -5px;
-  top: 5px;
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 9px solid #f6f6f6;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
-.xing-lamps {
-  display: flex;
-  gap: 4px;
-  margin-top: 1px;
+.xing-panel::before {
+  inset: 0;
+  background: #f2f2f2; /* the rim */
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+.xing-panel::after {
+  left: 1.5px;
+  right: 1.5px;
+  top: 2px;
+  bottom: 1px;
+  background: #1d1d1d; /* the panel face */
 }
 .xing-post {
   width: 3px;
-  height: 16px;
+  height: 13px;
   background: #555;
   border-radius: 1px;
 }
+/* The two lenses sit low on the panel, where the triangle is widest. Dark red
+when off — a lens, not a hole — so the signal still reads as TWO lights while
+only one of them is lit. */
 .xing-lamp {
-  width: 6px;
-  height: 6px;
+  position: absolute;
+  z-index: 1;
+  bottom: 2px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #5a2a2a;
+  background: #6b3030;
+}
+.xing-lamp--a {
+  left: 5.5px;
+}
+.xing-lamp--b {
+  right: 5.5px;
 }
 .xing-signal.active .xing-lamp--a {
   animation: lamp-blink 1s steps(1) infinite;
@@ -285,7 +300,7 @@ geometry below is written once for a rightward sweep. */
   }
   50.01%,
   100% {
-    background: #5a2a2a;
+    background: #6b3030;
     box-shadow: none;
   }
 }
