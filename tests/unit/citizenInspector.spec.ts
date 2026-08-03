@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { createGame, TrainDef, durationLabel } from "@/game";
-import { citizensMode } from "@/modes/citizens";
+import { createGame, PersonCard, TrainDef, durationLabel } from "@/game";
+import { citizensMode, citizensModeWith } from "@/modes/citizens";
 import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { puzzleMode } from "@/modes/puzzle";
@@ -25,12 +25,15 @@ function defsOf(scenario: TestScenario): TrainDef[] {
   }));
 }
 
-function newGame(scenario: TestScenario) {
+// The shipped mode by default. `tuning` compresses the day for the tests that
+// need several of them to pass — the shipped 1800s day is calibrated for
+// playing, not for a suite.
+function newGame(scenario: TestScenario, tuning?: Parameters<typeof citizensModeWith>[0]) {
   return createGame(
     scenario.level,
     defsOf(scenario),
     200,
-    citizensMode,
+    tuning ? citizensModeWith(tuning) : citizensMode,
     1,
     scenario.colors,
     scenario.traffic,
@@ -289,6 +292,77 @@ describe("the citizen inspector", () => {
     const xs = [...seen];
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(400);
   }, 30000);
+
+  it("says WHY somebody is unhappy, not just that they are", () => {
+    // A mood is not actionable; the journey behind it is. Every scored trip is
+    // remembered with its two numbers, so the card can name the failure the
+    // player has to fix.
+    const game = newGame(citizenchoice, { secPerDay: 300 });
+    run(game, 1200);
+
+    const notes: string[] = [];
+    let worst: PersonCard | null = null;
+    for (let x = 0; x < 20; x++) {
+      for (let y = 0; y < 5; y++) {
+        for (const p of game.inspectPlot(`${x},${y}`)?.residents ?? []) {
+          if (p.home !== `${x},${y}`) continue;
+          notes.push(...p.recent.map(n => n.text));
+          if (!worst || p.mood < worst.mood) worst = p;
+        }
+      }
+    }
+    // Everyone who has travelled carries their evidence...
+    expect(notes.length).toBeGreaterThan(20);
+    // ...in words a player can act on, with both numbers in them.
+    expect(notes.some(t => /took .* — .*longer than they expected/.test(t))).toBe(true);
+    // ...and the unhappiest person on the board can say what went wrong.
+    expect((worst as PersonCard).recent.length).toBeGreaterThan(0);
+    expect((worst as PersonCard).recent.some(n => !n.good)).toBe(true);
+  }, 30000);
+
+  it("does not punish a next-door commute for being a walk", () => {
+    // THE bug this rule exists for. A plot-to-plot straight line is not a walk:
+    // the real one goes down the drive, along the pavement and up the other
+    // drive, a near-constant 2.5 tiles whatever the separation. Without that,
+    // the panel quoted a one-tile commute at 4s, the walker took 15-20s, and the
+    // citizen was scored against the same optimistic distance — maximum
+    // unhappiness twice a day, and gone from the board by the third.
+    const game = newGame(citizenchoice, { secPerDay: 300 });
+    run(game, 5);
+
+    // Somebody whose job is next door.
+    let nextDoor: PersonCard | null = null;
+    for (let x = 1; x <= 5 && !nextDoor; x++) {
+      for (const p of game.inspectPlot(`${x},1`)?.residents ?? []) {
+        if (p.work && Math.abs(Number(p.work.split(",")[0]) - x) === 1 && p.work.endsWith(",1")) {
+          nextDoor = p;
+          break;
+        }
+      }
+    }
+    expect(nextDoor).not.toBeNull();
+    const id = (nextDoor as PersonCard).id;
+
+    // The quote is honest about the two driveway legs...
+    const walk = game.compareModes(id).find(m => m.mode === "walk");
+    expect(walk?.seconds).toBeGreaterThan(10);
+    // ...and they are still not driving next door, which is what charging the
+    // access to the walk ALONE produced (the walk share on citizenwalk fell
+    // from 89% to 46%). A driver walks to their car too.
+    expect(game.compareModes(id).find(m => m.chosen)?.mode).toBe("walk");
+
+    // Over several days it makes them happy, not miserable.
+    run(game, 1200);
+    const after = game.inspectPerson(id);
+    expect(after).not.toBeNull();
+    expect((after as PersonCard).mood).toBeGreaterThan(0.6);
+    expect((after as PersonCard).unhappyDays).toBe(0);
+  }, 30000);
+
+  it("opens the board at 07:00, so the morning peak is the first thing you see", () => {
+    const game = newGame(citizenchoice);
+    expect(game.citizenStats.clock).toBe("07:00");
+  });
 
   it("prints a duration a person can read", () => {
     expect(durationLabel(8)).toBe("8s");

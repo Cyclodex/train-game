@@ -68,6 +68,21 @@
         thinking of leaving.
       </p>
 
+      <!-- WHY. A mood is not actionable; the journey behind it is. -->
+      <template v-if="person.recent.length">
+        <h4 class="inspector__h4">Recent journeys</h4>
+        <ul class="inspector__log">
+          <li
+            v-for="(n, i) in person.recent"
+            :key="i"
+            :class="{ 'is-bad': !n.good }"
+          >
+            <span class="inspector__delta">{{ n.delta >= 0 ? "+" : "" }}{{ n.delta.toFixed(2) }}</span>
+            {{ n.text }}
+          </li>
+        </ul>
+      </template>
+
       <!-- THE COMPARISON. Every way of making this journey, priced. -->
       <h4 class="inspector__h4">
         {{ person.travellingTo ? "This journey" : "Their commute" }}, every way
@@ -334,6 +349,28 @@ export default toNative(CitizenInspector);
 }
 .inspector__now {
   margin: 0 0 4px;
+}
+.inspector__log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #9aa4b0;
+  font-size: 11px;
+  li {
+    display: flex;
+    gap: 6px;
+    padding: 2px 0;
+  }
+  .is-bad {
+    color: #e6a08a;
+  }
+}
+.inspector__delta {
+  flex: 0 0 auto;
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
 }
 .inspector__warn {
   margin: 0 0 8px;

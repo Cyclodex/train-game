@@ -119,6 +119,28 @@ export interface ModeQuote {
   unavailable?: ModeRefusal;
 }
 
+/**
+ * One scored journey, kept so the inspector can say WHY somebody is unhappy.
+ *
+ * "Thinking of leaving" with no reason beside it is the least useful thing a
+ * panel can say: the player cannot act on a mood, only on the journey that
+ * caused it. This is the evidence.
+ */
+export interface TripOutcome {
+  purpose: TripPurpose;
+  mode: TravelMode | null;
+  /** How long it took, and how long they thought it should. Board seconds. */
+  actualSec: number;
+  expectedSec: number;
+  /** What it did to their mood. Negative is a grievance. */
+  delta: number;
+  /** Set when the journey never happened at all. */
+  failed: "refused" | "abandoned" | null;
+}
+
+/** How many scored journeys a person remembers. Enough to see a pattern. */
+export const RECENT_TRIPS = 5;
+
 export interface Citizen {
   id: string;
   home: string;
@@ -136,6 +158,8 @@ export interface Citizen {
   lastShopDay: number;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
+  // The last few scored journeys, newest first: the evidence behind the mood.
+  recent: TripOutcome[];
 }
 
 export interface PlotState {
@@ -172,6 +196,13 @@ export interface CitizenTuning {
   // How long an in-game day lasts, in sim seconds. THE genre dial: short makes a
   // twitchy throughput game, long a planning one.
   secPerDay: number;
+  // What time it is when the board opens.
+  //
+  // 07:00 by default, and not midnight: a board that starts at 00:00 shows you
+  // an empty town for seven in-game hours before anybody leaves the house, and
+  // whoever opened it has to sit through that every single time. Opening at the
+  // morning peak means the first thing you see is the thing the mode is about.
+  startHour: number;
   // Door-to-door speeds in tiles/sec, used to SCORE a mode before it is taken.
   walkSpeed: number;
   carSpeed: number;
@@ -189,6 +220,27 @@ export interface CitizenTuning {
   assumedHeadwaySec: number;
   // What parking costs a driver, in seconds of perceived time.
   parkPenaltySec: number;
+  // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
+  //
+  // A plot-to-plot straight line is not a journey. The real one goes down the
+  // driveway, along the pavement and up the other driveway, and
+  // `sim/pedestrians` walks exactly that — measured at a near-constant 2.5
+  // tiles of extra walking whatever the separation (2.39 at four tiles apart,
+  // 2.64 at one), because it is two fixed end legs and not a detour that scales.
+  //
+  // Leaving it out was not a rounding error, it was a trap: the panel quoted a
+  // next-door commute at 4s, the walker took 15-20s, and the citizen was scored
+  // against the same optimistic distance — so somebody whose job was ONE TILE
+  // from their door took the maximum unhappiness penalty twice a day and left
+  // town on the third. A yardstick nobody can reach is not an expectation.
+  //
+  // It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+  // made people drive next door — measured: the walk share on `/test/citizenwalk`
+  // fell from 89% to 46% — which is absurd, and the reason is obvious once
+  // stated: a driver walks to their car and from their parking space too.
+  // Transit does not get it, because its access and egress legs are already
+  // modelled explicitly.
+  walkAccessTiles: number;
   // Nobody walks further than this, whatever their patience. Past it, a trip
   // with no other mode available is REFUSED — which is the signal that the
   // network has failed someone completely, and the only thing `access` counts.
@@ -218,6 +270,7 @@ export interface CitizenTuning {
 //   >8 tiles      rail, and rail is the ONLY option between unconnected towns
 export const DEFAULT_TUNING: CitizenTuning = {
   secPerDay: 120,
+  startHour: 7,
   walkSpeed: 0.25,
   carSpeed: 0.6,
   trainSpeed: 0.45, // the sim's 0.5, minus what dwells cost on the way
@@ -228,6 +281,7 @@ export const DEFAULT_TUNING: CitizenTuning = {
   refSpeed: 0.22,
   assumedHeadwaySec: 12,
   parkPenaltySec: 8,
+  walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
   maxWaitSec: 45,
@@ -413,6 +467,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const riders = new Map<string, string[]>(); // train id → citizen ids aboard
 
   let clock = 0;
+  // How far into the first day t=0 sits. See `startHour`.
+  const dayOffsetSec = (tuning.startHour / 24) * tuning.secPerDay;
   let dayIndex = 0;
   let tripsCompleted = 0;
   let tripsRefused = 0;
@@ -482,6 +538,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       lastBackDay: -1,
       lastShopDay: -1,
       unhappyDays: 0,
+      recent: [],
     };
     people.set(c.id, c);
     return c;
@@ -613,7 +670,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // their own patience it is priced as the slog it is, so a car or a train
     // wins as soon as one is on offer — but it stays possible, because in a
     // real town a short walk is never impossible.
-    const walkSec = d / tuning.walkSpeed;
+    // Door to door, not centre to centre. The two end legs are most of a short
+    // journey and the panel used to pretend they did not exist. Walked at
+    // walking pace whichever mode is taken — you walk to your car as well.
+    const accessSec = tuning.walkAccessTiles / tuning.walkSpeed;
+    const walkSec = d / tuning.walkSpeed + accessSec;
     if (d <= tuning.walkMaxTiles) {
       const slog = 1 + Math.max(0, d - c.profile.walkPatience) * tuning.walkImpatience;
       offer("walk", walkSec, walkSec * slog, null);
@@ -622,7 +683,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // CAR. Needs ONE road network reaching both ends. Two towns with their own
     // streets and nothing between them cannot be driven between, and that is
     // what makes the railway the answer rather than a nicety.
-    const driveSec = (d * tuning.roadDetour) / tuning.carSpeed + tuning.parkPenaltySec;
+    const driveSec =
+      (d * tuning.roadDetour) / tuning.carSpeed + tuning.parkPenaltySec + accessSec;
     if (!c.profile.carOwner) refuse("car", "no-car");
     else if (from.roadComponent === null || from.roadComponent !== to.roadComponent)
       refuse("car", "no-road-link");
@@ -666,7 +728,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const prCoord = stationCoord.get(pr.station) as { x: number; y: number };
       const drive =
         (manhattan(from, prCoord) * tuning.roadDetour) / tuning.carSpeed +
-        tuning.parkPenaltySec;
+        tuning.parkPenaltySec +
+        accessSec;
       const egress = walkToStation(to, alight) / tuning.walkSpeed;
       const ride =
         manhattan(prCoord, stationCoord.get(alight) as { x: number; y: number }) /
@@ -717,6 +780,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // Refused: no way to make this journey at all. The single strongest
       // signal in the model, and it lands on `access`.
       tripsRefused += 1;
+      remember(c, {
+        purpose,
+        mode: null,
+        actualSec: 0,
+        expectedSec: 0,
+        delta: -0.3,
+        failed: "refused",
+      });
       c.mood = clamp01(c.mood - 0.3);
       if (cityId) feedTopic(cityId, "access", 0, FAILURE_WEIGHT);
       return;
@@ -730,7 +801,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       to: toId,
       mode: option.mode,
       startedAt: clock,
-      expectedSec: Math.max(4, dist / tuning.refSpeed),
+      // The same door-to-kerb allowance as the quote. `refSpeed` is deliberately
+      // slower than any single mode BECAUSE it is a door-to-door expectation,
+      // but it was being applied to a centre-to-centre distance — so on a short
+      // trip the yardstick was shorter than the walk anybody could physically
+      // make. Still a straight line, still nothing to do with the network: a bad
+      // network cannot grade itself.
+      expectedSec: Math.max(4, (dist + tuning.walkAccessTiles) / tuning.refSpeed),
       leg: option.mode === "walk" ? "walking" : option.mode === "car" ? "driving" : option.mode === "parkAndRide" ? "driving" : "walking",
       legRemaining: option.approachSec,
       station: option.station,
@@ -767,6 +844,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
   }
 
+  function remember(c: Citizen, o: TripOutcome): void {
+    c.recent.unshift(o);
+    if (c.recent.length > RECENT_TRIPS) c.recent.length = RECENT_TRIPS;
+  }
+
   function finishTrip(c: Citizen, ok: boolean): void {
     const t = c.trip;
     if (!t) return;
@@ -774,6 +856,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const cityId = plotOf(c.home)?.city;
     if (!ok) {
       tripsAbandoned += 1;
+      remember(c, {
+        purpose: t.purpose,
+        mode: t.mode,
+        actualSec: clock - t.startedAt,
+        expectedSec: t.expectedSec,
+        delta: -0.3,
+        failed: "abandoned",
+      });
       c.mood = clamp01(c.mood - 0.3);
       if (cityId) {
         feedTopic(cityId, t.topic, 0, FAILURE_WEIGHT);
@@ -789,6 +879,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // Better than expected nudges up a little; much worse pulls down hard. A
     // good commute is normal, a bad one is an event.
     const delta = Math.max(-0.35, Math.min(0.12, 1.4 - ratio));
+    remember(c, {
+      purpose: t.purpose,
+      mode: t.mode,
+      actualSec: actual,
+      expectedSec: t.expectedSec,
+      delta,
+      failed: null,
+    });
     c.mood = clamp01(c.mood + delta);
     tripsCompleted += 1;
     modeTotals[t.mode] += 1;
@@ -1014,8 +1112,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   // --- the day -----------------------------------------------------------------
 
+  // The clock runs from `startHour`, so t=0 is the morning rather than midnight.
+  // Everything downstream (`considerTrips`, the day roll-over, the HUD) reads
+  // this one function, so the offset lands everywhere at once.
   function hourNow(): number {
-    return ((clock % tuning.secPerDay) / tuning.secPerDay) * 24;
+    return (((clock + dayOffsetSec) % tuning.secPerDay) / tuning.secPerDay) * 24;
   }
 
   function considerTrips(c: Citizen): void {
@@ -1222,7 +1323,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       else considerTrips(c);
     }
 
-    const day = Math.floor(clock / tuning.secPerDay);
+    const day = Math.floor((clock + dayOffsetSec) / tuning.secPerDay);
     if (day !== dayIndex) {
       dayIndex = day;
       reviewDay();

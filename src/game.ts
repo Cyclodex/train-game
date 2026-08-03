@@ -21,6 +21,7 @@ import {
   CityState,
   CitizenSim,
   TravelMode,
+  TripOutcome,
   createCitizenSim,
 } from "@/sim/citizens";
 import { facilityOf, rowFor } from "@/tiles/parking";
@@ -657,6 +658,21 @@ export interface PersonCard {
   elapsedSec: number | null;
   expectedSec: number | null;
   unhappyDays: number;
+  /**
+   * WHY they feel that way: their last few journeys, newest first, already put
+   * into words. "Thinking of leaving" with nothing beside it is the least
+   * useful thing a panel can say — a player cannot act on a mood, only on the
+   * journey that caused it.
+   */
+  recent: TripNote[];
+}
+
+/** One remembered journey, as a line the panel prints. */
+export interface TripNote {
+  text: string;
+  /** Negative for a grievance, positive for a journey that went well. */
+  delta: number;
+  good: boolean;
 }
 
 /** Where a pinned person is right now, in world pixels, and what they are on. */
@@ -1189,6 +1205,32 @@ export function createGame(
       elapsedSec: c.trip ? now - c.trip.startedAt : null,
       expectedSec: c.trip ? c.trip.expectedSec : null,
       unhappyDays: c.unhappyDays,
+      recent: c.recent.map(noteOf),
+    };
+  }
+
+  const PURPOSE_TEXT: Record<string, string> = {
+    work: "The trip to work",
+    home: "The trip home",
+    shop: "The errand",
+  };
+
+  // One remembered journey, in words. The two numbers ARE the verdict — how
+  // long it took against how long they thought it should — so the sentence
+  // leads with them rather than with an adjective.
+  function noteOf(o: TripOutcome): TripNote {
+    const what = PURPOSE_TEXT[o.purpose] ?? "A trip";
+    if (o.failed === "refused")
+      return { text: `${what} was impossible — no way to make it at all.`, delta: o.delta, good: false };
+    if (o.failed === "abandoned")
+      return { text: `${what} was given up on after ${durationLabel(o.actualSec)}.`, delta: o.delta, good: false };
+    const over = o.actualSec / Math.max(o.expectedSec, 0.001);
+    const verdict =
+      over > 1.6 ? "far longer than they expected" : over > 1.05 ? "longer than they expected" : "about as expected";
+    return {
+      text: `${what} took ${durationLabel(o.actualSec)} — ${verdict} (${durationLabel(o.expectedSec)}).`,
+      delta: o.delta,
+      good: o.delta >= 0,
     };
   }
 

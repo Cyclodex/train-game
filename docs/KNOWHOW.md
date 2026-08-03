@@ -729,6 +729,46 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **A PLOT-TO-PLOT STRAIGHT LINE IS NOT A JOURNEY** (`walkAccessTiles`,
+  2026-08-03). The real one goes down the driveway, along the pavement and up
+  the other driveway — MEASURED at a near-constant **2.5 tiles** whatever the
+  separation (2.64 at one tile apart, 2.39 at four), because it is two fixed end
+  legs and not a detour that scales. Leaving it out was a trap, not a rounding
+  error: the panel quoted a next-door commute at 4s, the walker took 15-20s, and
+  the citizen was scored against the same optimistic distance — so somebody
+  whose job was ONE TILE from their door took the maximum unhappiness penalty
+  twice a day and left town on the third. A yardstick nobody can reach is not an
+  expectation; it is a guaranteed failure.
+    · It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+      made people drive next door — measured, the walk share on
+      `/test/citizenwalk` fell from 89% to 46%. A driver walks to their car and
+      from their parking space too. Transit does not get it: its access and
+      egress legs are already modelled explicitly.
+    · The same allowance goes into `expectedSec`. That does NOT break "a bad
+      network must not grade itself" — a constant door-to-kerb term is not read
+      from the network, it is true of every journey on every map.
+- **THE DAY LENGTH IS MEASURED, NOT PICKED** (`secPerDay: 1800`, 2026-08-03).
+  Median door-to-door over 2000 board seconds on the reference boards: a local
+  walk 18s, a local drive 13s, a city-to-city rail commute 105s. Read against
+  what each obviously IS in a real town (12 min / 10 min / 60-90 min) that fixes
+  the exchange rate at ~30 real seconds per board second, so a 24-hour day is
+  ~1800 board seconds. At the old 300 the same commute read as EIGHT AND A HALF
+  in-game HOURS — people left at 07:00 and arrived after dark — which is what
+  the three-hour departure window in `considerTrips` was quietly papering over.
+  The cost is a 30-minute real day at 1x, which is what 2x/4x are for.
+- **BOARDS OPEN AT 07:00** (`startHour`). A citizen board that starts at midnight
+  shows an empty town for seven in-game hours before anyone leaves the house,
+  and whoever opened it sits through that every single time. The morning peak is
+  the thing the mode is about, so it is the thing you see first.
+- **A TEST THAT NEEDS DAYS SAYS SO** (`citizensModeWith`). The shipped day is
+  calibrated for playing; a test watching growth or emigration would need nine
+  thousand seconds of simulation. Compress the clock explicitly in the test
+  rather than bending the shipped calibration to keep the suite fast.
+- **"THINKING OF LEAVING" WITH NO REASON IS THE LEAST USEFUL THING A PANEL CAN
+  SAY.** A player cannot act on a mood, only on the journey that caused it, so
+  every scored trip is remembered (`Citizen.recent`, `TripOutcome`) with its two
+  numbers and rendered as a sentence: "The trip to work took 2m 14s — far longer
+  than they expected (1m 15s)."
 - **A GETTER THAT READS THE `markRaw` SIMS HAS NO REACTIVE DEPENDENCY**, so Vue
   evaluates it ONCE and caches the answer for ever (2026-08-03). This is the
   price of the `markRaw(game)` rule, and it is invisible until something is
