@@ -61,16 +61,26 @@ export interface TrainInit {
 // moving forward so its whole body slides into the depot (clearing the approach
 // tiles) before it freezes as "parked".
 // "dwelling" is a timed stop at a station platform (role: "station"): the train
-// halts mid-tile at STATION_STOP_PROGRESS, waits STATION_DWELL_SEC, then runs
-// on. It keeps occupying its tiles (trains behind wait) but, because a station
-// is a block BOUNDARY (see isBoundary), it holds no reservation beyond itself.
+// draws up so its CARRIAGES stand beside the platform (see platformStopDistance)
+// — which for anything longer than a lone loco means pulling the loco clear of
+// the far end of the slab — waits STATION_DWELL_SEC, then runs on. It keeps
+// occupying its tiles (trains behind wait) for the whole stop.
 export type TrainState = "waiting" | "running" | "parking" | "parked" | "dwelling";
 
-// How long a train stands at a station platform, in sim seconds, and where on
-// the station tile's segment it stops (0..1 progress — the platform middle).
+// How long a train stands at a station platform, in sim seconds, and where the
+// platform's MIDDLE is on the station tile's segment (0..1 progress).
 // Exported so tests and the renderer agree with the sim on both.
 export const STATION_DWELL_SEC = 3;
-export const STATION_STOP_PROGRESS = 0.5;
+export const PLATFORM_CENTRE_PROGRESS = 0.5;
+// The old name for the platform centre, when the sim stopped the LOCO there and
+// left every carriage trailing off the back of the slab. Kept as an alias for
+// callers that only ever meant "the middle of the platform".
+export const STATION_STOP_PROGRESS = PLATFORM_CENTRE_PROGRESS;
+// A stop nobody could align: when a train is brought to a stand short of its
+// platform stop line (a dead end, a red signal, a train in the way) it opens its
+// doors where it stands, provided it has at least reached the platform centre.
+// Without this a station one tile from the buffers would never be served.
+const MIN_PLATFORM_REACH = PLATFORM_CENTRE_PROGRESS;
 // Passenger model (phase 2, typeless): seats per PEOPLE wagon (the loco carries
 // none), and the extra stop time each boarding passenger adds to the dwell.
 export const PASSENGERS_PER_WAGON = 6;
@@ -590,12 +600,49 @@ export function createSimulation(config: SimConfig): Simulation {
     return train.line.includes(tileId);
   }
 
-  function stationStopPending(train: SimTrain): boolean {
-    const head = train.path[train.headIndex];
-    return (
-      callsAt(train, getCoordinatesId(head.coord)) &&
-      train.dwelledAtIndex !== train.headIndex
-    );
+  // How far past a station tile's ENTRY this train's head has to run before the
+  // train stands correctly at the platform.
+  //
+  // A platform is one tile long; a train is not. Stopping the LOCO on the
+  // platform (what this used to do) parked the one vehicle nobody boards beside
+  // the slab and left every carriage trailing back over the plain track behind
+  // it. So the alignment is on the CARRIAGES: the block from the nose of the
+  // first wagon to the tail of the last one is centred on the platform, which
+  // draws the loco past the far end of the slab — exactly what a real train does
+  // at a platform too short for it. A lone loco has no carriages, so its own
+  // body is the block and it comes to rest centred on the platform.
+  function platformStopDistance(train: SimTrain): number {
+    const last = train.unitLengths.length - 1;
+    const first = last > 0 ? 1 : 0; // the first BOARDABLE unit
+    // Distances back from the head to the nose of `first` and the tail of `last`.
+    const nose = train.unitOffsets[first] - train.unitLengths[first] / 2;
+    const tail = train.unitOffsets[last] + train.unitLengths[last] / 2;
+    return PLATFORM_CENTRE_PROGRESS + (nose + tail) / 2;
+  }
+
+  // The stop this train still owes, if any: the path index of the station and
+  // how much further the head has to run to be aligned with its platform.
+  //
+  // Derived from the path rather than latched on arrival, because the head ends
+  // up BEYOND the station tile — by the time the train is standing correctly the
+  // platform is behind it, so "is the head on an unserved station tile?" is no
+  // longer the question. Segments are one progress unit each (the convention the
+  // rest of the sim's distances use), so the head's distance from a station's
+  // entry is simply the index gap plus the head's progress.
+  function pendingPlatformStop(
+    train: SimTrain
+  ): { index: number; remaining: number } | null {
+    const reach = platformStopDistance(train);
+    const from = Math.max(0, train.headIndex - Math.ceil(reach) - 1);
+    // The EARLIEST unserved station in reach: a train must work its platforms in
+    // the order it passes them, and two stations can sit inside one train length.
+    for (let i = Math.max(from, train.dwelledAtIndex + 1); i <= train.headIndex; i++) {
+      const seg = train.path[i];
+      if (!seg || !callsAt(train, getCoordinatesId(seg.coord))) continue;
+      const travelled = train.headIndex - i + train.headProgress;
+      return { index: i, remaining: Math.max(0, reach - travelled) };
+    }
+    return null;
   }
 
   // Build the SimTrain for an init descriptor. The single source of truth for a
@@ -924,32 +971,34 @@ export function createSimulation(config: SimConfig): Simulation {
   // no reservations (those happen only when the train physically crosses). The
   // scan accumulates the rest of the current tile plus one tile per crossable
   // boundary, stopping at the first boundary mayCross() refuses.
-  function clearDistanceAhead(train: SimTrain): number {
-    // An unserved station under the head puts the stop line INSIDE the current
-    // tile: the platform at STATION_STOP_PROGRESS, not the tile boundary.
-    if (stationStopPending(train)) {
-      return Math.max(0, STATION_STOP_PROGRESS - train.headProgress);
-    }
+  function clearDistanceAhead(
+    train: SimTrain,
+    stop: { index: number; remaining: number } | null
+  ): number {
+    // A stop already owed (the head is on, or just past, an unserved platform)
+    // fixes the stop line. It is a CAP, not the answer: drawing up at a platform
+    // takes the loco over the boundary into the next tile, so the run still has
+    // to be cleared tile by tile like any other.
+    let limit = stop ? stop.remaining : Infinity;
     let dist = 1 - train.headProgress;
     let head: { coord: Coordinates; entryPort: Port } = train.path[
       train.headIndex
     ];
-    while (dist < train.lookAhead) {
+    while (dist < train.lookAhead && dist < limit) {
       if (!mayCross(train, head)) break;
       const t = traverse(level, switchOf(train), head.coord, head.entryPort);
-      if (!t.next) break; // defensive: mayCross already returns false here
+      if (!t.next) break; // dead end / depot mouth: the metals stop here
       head = { coord: t.next.coord, entryPort: t.next.entryPort };
-      // A station ahead ends the clear run at its platform, part-way into that
-      // tile (tiles ahead of the head are always unserved — the dwell marker
-      // only ever points at a segment the head has reached). One this train
+      // A station ahead sets the stop line at its platform, which lies part-way
+      // through (and usually past) that tile. Only the FIRST one counts — the
+      // train stops there before anything beyond it can matter. One this train
       // runs PAST is not a stop line at all, so it must not brake for it.
-      if (callsAt(train, getCoordinatesId(head.coord))) {
-        dist += STATION_STOP_PROGRESS;
-        return Math.min(dist, train.lookAhead);
+      if (limit === Infinity && callsAt(train, getCoordinatesId(head.coord))) {
+        limit = dist + platformStopDistance(train);
       }
       dist += 1;
     }
-    return Math.min(dist, train.lookAhead);
+    return Math.min(dist, limit, train.lookAhead);
   }
 
   // The height step the head segment is climbing: height of the tile its exit
@@ -981,10 +1030,14 @@ export function createSimulation(config: SimConfig): Simulation {
       if (train.dwellRemaining <= 0) {
         train.dwellRemaining = 0;
         train.state = "running";
+        // The STATION it is leaving, not the tile under the head — a train
+        // drawn up at a platform has its loco past the far end of it, so the
+        // head is usually a tile further on (see platformStopDistance).
+        const served = train.path[train.dwelledAtIndex] ?? train.path[train.headIndex];
         events.push({
           type: "departed",
           trainId: train.id,
-          tileId: getCoordinatesId(train.path[train.headIndex].coord),
+          tileId: getCoordinatesId(served.coord),
         });
       }
       return;
@@ -1028,7 +1081,8 @@ export function createSimulation(config: SimConfig): Simulation {
 
     // How far we may go before the next stop line, and the fastest we may be
     // travelling now to still brake to rest within it.
-    const clear = clearDistanceAhead(train);
+    const stop = pendingPlatformStop(train);
+    const clear = clearDistanceAhead(train, stop);
     const vSafe = Math.sqrt(2 * train.brake * clear);
     // A grade caps the cruise, by mass: while the head segment climbs into a
     // higher tile, a heavy train crawls where a light one keeps most of its
@@ -1057,19 +1111,48 @@ export function createSimulation(config: SimConfig): Simulation {
 
     train.headProgress += move;
 
-    // Station stop: the braking cap above (clear collapses onto the platform
-    // stop line) walks the head exactly onto STATION_STOP_PROGRESS in finite
-    // time — the final tick's move is clamped to the remaining clear distance.
-    // Once it lands, begin the dwell.
-    if (
-      stationStopPending(train) &&
-      STATION_STOP_PROGRESS - train.headProgress <= 1e-9
-    ) {
-      train.headProgress = Math.min(train.headProgress, STATION_STOP_PROGRESS);
-      train.state = "dwelling";
-      train.dwelledAtIndex = train.headIndex;
+    // Why the train is held at the end of this tick, if it is. Stays null while
+    // the train keeps moving; set just before a traffic break below.
+    const blockInfo = crossBoundaries(train, events);
+    // A depot at the end of the run can park, bounce or retire the train inside
+    // that walk — none of which is a train that could be drawing up anywhere.
+    if (!trains[train.id] || train.state !== "running") return;
+
+    // Station stop. Two ways a train's doors open:
+    //  1. It reached its stop line — the braking cap above collapses `clear`
+    //     onto it, and each tick's move is clamped to what is left, so the head
+    //     lands exactly on it in finite time.
+    //  2. It was brought to a stand short of the line and cannot go on (buffers
+    //     ahead, a red signal, a train in the way) but has at least drawn level
+    //     with the platform. Better an untidy stop than a station never served.
+    const landed = pendingPlatformStop(train);
+    if (landed) {
+      const stalled = blockInfo !== null || clear <= 1e-9;
+      const drawnUp = train.headIndex - landed.index + train.headProgress;
+      if (
+        landed.remaining <= 1e-9 ||
+        (stalled && drawnUp >= MIN_PLATFORM_REACH)
+      ) {
+        beginDwell(train, landed.index, events);
+        return;
+      }
+    }
+
+    if (blockInfo) noteBlocked(train, blockInfo, events);
+    else noteProceeding(train, events);
+  }
+
+  // Open the doors: set the train dwelling at the platform on path segment
+  // `stationIndex`, exchange passengers, and advance its line cursor.
+  function beginDwell(
+    train: SimTrain,
+    stationIndex: number,
+    events: SimEvent[]
+  ): void {
+    train.state = "dwelling";
+      train.dwelledAtIndex = stationIndex;
       train.velocity = 0;
-      const tileId = getCoordinatesId(train.path[train.headIndex].coord);
+      const tileId = getCoordinatesId(train.path[stationIndex].coord);
       // Alight first (one-hop model: whoever is aboard ends their ride at the
       // next call), then board from the platform queue into the free seats.
       // Each boarding passenger stretches the stop a little, so a crowded
@@ -1124,11 +1207,16 @@ export function createSimulation(config: SimConfig): Simulation {
         }
       }
       events.push({ type: "dwell", trainId: train.id, tileId, boarded, alighted });
-      return;
-    }
+  }
 
-    // Why the train is held at the end of this tick, if it is. Stays null while
-    // the train keeps moving; set just before a traffic break below.
+  // Walk the head over every tile boundary it has run past this tick, claiming
+  // blocks as it goes. Returns why the train was held at a boundary it may not
+  // cross, or null when nothing stopped it. May end the train's run (a depot
+  // arrival parks, bounces or retires it), so callers must re-check its state.
+  function crossBoundaries(
+    train: SimTrain,
+    events: SimEvent[]
+  ): BlockInfo | null {
     let blockInfo: BlockInfo | null = null;
     while (train.headProgress >= 1) {
       const head = train.path[train.headIndex];
@@ -1148,7 +1236,7 @@ export function createSimulation(config: SimConfig): Simulation {
           if (train.retiring) {
             events.push({ type: "retired", trainId: train.id, tileId });
             dropTrain(train.id);
-            return;
+            return null;
           }
           const matched = !train.line?.length && depotColors[tileId] === train.color;
           const alighted = matched ? train.manifest.length : 0;
@@ -1239,10 +1327,7 @@ export function createSimulation(config: SimConfig): Simulation {
       train.headIndex += 1;
       train.headProgress -= 1;
     }
-
-    // Edge-trigger the blocked/proceeding events from this tick's outcome.
-    if (blockInfo) noteBlocked(train, blockInfo, events);
-    else noteProceeding(train, events);
+    return blockInfo;
   }
 
   return {

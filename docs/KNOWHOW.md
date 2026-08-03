@@ -446,15 +446,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   as a straight; `expandKind("station", rot)` authors one; `toggleStation`
   (editOps) is the editor verb and hands back the SAME cell reference on a
   refusal, so callers can tell "no-op" from "changed".
-- The stop line is INSIDE the tile: `STATION_STOP_PROGRESS` (0.5) of the head
-  segment, not a tile boundary. `clearDistanceAhead` early-returns the in-tile
-  remainder for a pending stop and cuts its look-ahead run mid-tile at a
-  station ahead; the braking cap then lands the head exactly on the line (same
-  finite-time clamp argument as signal stop lines).
 - A station IS a block boundary (`isBoundary`), exactly like a signal: the
-  approach reserves only up to the platform, and a dwelling train holds nothing
-  beyond its own tiles. Without this a 3 s dwell pins the route to the next
-  real signal for the whole stop.
+  approach reserves only up to the platform. (A train DRAWN UP at one does hold
+  the block past it — its loco is physically out there; see below.)
 - Dwell-once-per-pass is tracked by PATH INDEX (`dwelledAtIndex`), never tile
   id — a revisit is a higher index, so the train stops again (the bounce test
   proves 2 dwells). `bounceOutOfDepot` resets the path to index 0 and must
@@ -463,6 +457,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
   read as a dead board.
 - `/test/station` is the isolation scenario; sim behaviour in
   `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
+
+## DRAWING UP AT THE PLATFORM (2026-08-04) — a train is longer than its halt
+- A platform is ONE TILE. A loco and a people wagon are 100 px each on a 200 px
+  tile, so loco + 2 carriages = 1.54 tiles: nothing puts the whole train beside
+  the slab. The alignment is therefore on the CARRIAGES —
+  `platformStopDistance()` centres the block from the nose of unit 1 to the tail
+  of the last unit on `PLATFORM_CENTRE_PROGRESS` (0.5), which draws the loco
+  clear of the far end. A lone loco has no carriages, so its own body is the
+  block and it stops centred (the old behaviour, for that case only).
+- CONSEQUENCE: the stop line is usually PAST the station tile — for the standard
+  2-carriage train the head comes to rest ~0.53 into the NEXT tile. So the head
+  is not on the station when the train is standing at it. Anything that asked
+  "is the head on an unserved station?" is wrong; `pendingPlatformStop()` scans
+  BACK over the last `ceil(reach)+1` path segments instead and returns
+  `{index, remaining}`. The `departed` event must report `path[dwelledAtIndex]`,
+  not the head tile.
+- `clearDistanceAhead(train, stop)` takes that pending stop as a CAP, not an
+  answer: drawing up crosses a tile boundary, so the run is still cleared tile by
+  tile (mayCross/occupancy). A blocked approach holds the train short of the
+  platform, which is correct.
+- Because the loco crosses onto the next tile to draw up, a dwelling train DOES
+  reserve the block beyond the station. That is honest (it is standing there),
+  but it costs a little throughput versus the old in-tile stop.
+- FALLBACK, and it is load-bearing: if the train is brought to a stand short of
+  the line and cannot go on (buffers, red signal, train ahead) it dwells where it
+  stands, provided it has reached `MIN_PLATFORM_REACH` (the platform centre).
+  Without it a terminus platform — stop line past the end of the metals — is a
+  station no service ever calls at, and the line cursor never advances: deadlock.
+- `advance()` order matters: move → `crossBoundaries()` → dwell check. The dwell
+  used to run before the boundary walk; with the head now landing on a later
+  segment it must run after, and must re-check `trains[id]` + `state` because a
+  depot in that walk can park, bounce or RETIRE the train mid-tick.
+- Platform slabs are drawn edge to edge (`margin = 0` in `Tile.vue`): the
+  2-carriage block is 204 px, a shade longer than the tile, so an inset slab left
+  the ends of the train off the platform. Two station tiles side by side also
+  read as one long platform this way (they are still two separate stops).
+- Trains ordered into service are built with `SERVICE_TRAIN_WAGONS = 2`
+  (game.ts). Three overhung the platform at both ends. Raise it only alongside
+  real multi-tile platforms.
+- `/test/platformstop` is the isolation scenario (six-tile ring so the stop comes
+  round every few seconds).
 
 ## STATION PASSENGERS (phase 2 — queues & boarding, 2026-08-01)
 - Demand is a SCHEDULE handed to the sim (`SimConfig.stationDemand`: interval /
