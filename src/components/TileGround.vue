@@ -131,9 +131,14 @@ class TileGround extends Vue {
   // summit dropping two or three steps at once draws the intermediate contours
   // inside its own tile instead of showing a single sheer wall. See
   // tileHeightSvg.
+  //
+  // A FLAT cell under a hill needs this too, even though it lays no terrace of
+  // its own: the first step off a summit is drawn on the shared boundary by the
+  // UPPER tile, and a building down here overhangs the tile edge — so without
+  // the neighbours' heights it would hang over the foot of a wall it cannot see
+  // (`terraceBanks`).
   get elevation(): Elevation | undefined {
     const h = heightOf(this.level[this.coordId]);
-    if (h === 0) return undefined;
     const { x, y } = parseCoordId(this.coordId);
     const at = (dx: number, dy: number) =>
       heightOf(this.level[getCoordinatesId({ x: x + dx, y: y + dy })]);
@@ -198,11 +203,16 @@ class TileGround extends Vue {
   // is already true of the patch's own `terrain-clip`.
   get baseHtml(): string {
     const kind = terrainOf(this.level[this.coordId]);
-    if (this.layer === "canopy")
-      return tileCanopySvg(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
-    if (this.layer === "scatter")
-      return tileScatterSvg(kind, this.coordId, this.neighbours, TERRAIN_SEED, this.corridors);
-    return tileGroundSvg(
+    // The ELEVATION goes to every layer, not just the one that paints the
+    // terrace: what stands on a cell has to keep off its banks (`terraceBanks`),
+    // and scatter is built by its own call.
+    const build =
+      this.layer === "canopy"
+        ? tileCanopySvg
+        : this.layer === "scatter"
+          ? tileScatterSvg
+          : tileGroundSvg;
+    return build(
       kind,
       this.coordId,
       this.neighbours,

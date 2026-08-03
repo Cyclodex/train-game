@@ -2325,7 +2325,7 @@ export interface Elevation {
 }
 
 function elevationKey(e?: Elevation): string {
-  if (!e || e.height <= 0) return "";
+  if (!e) return "";
   const n = e.around;
   const around = [
     n.top,
@@ -2337,6 +2337,9 @@ function elevationKey(e?: Elevation): string {
     n.bottomRight,
     n.bottomLeft,
   ];
+  // Flat ground with flat ground all round it is the common case and has
+  // nothing to say: same key as no elevation at all, so it shares the memo.
+  if (e.height <= 0 && around.every(h => h <= 0)) return "";
   return `h${e.height}:${around.join(",")}:${e.theme ?? ""}`;
 }
 
@@ -2502,6 +2505,81 @@ function bandSame(k: number, n: HeightNeighbours): PatchSame {
 // height, its neighbours' heights, its coord or the seed.
 const heightCache = new Map<string, string>();
 
+// --- Terrace banks (a keep-out, not art) -------------------------------------
+//
+// Where a terrace STOPS, the ground breaks: that line is a slope face on a
+// hillside and a cut retaining wall in a town, and either way it is not
+// somewhere a building can stand. Placement already keeps buildings off rails
+// and roads with corridors, so a bank is pushed on as one more corridor and the
+// existing gate does the rest — a block near a step shrinks to what fits the
+// bench, and one that fits nothing is dropped.
+//
+// TWO SOURCES, and the second is the one that is easy to miss. A bank drawn by
+// THIS tile (the contours of its own bands) is the obvious half. But the FIRST
+// step off a summit lands on the shared tile boundary and is drawn by the
+// UPPER tile only — the tile at the foot of that wall knows nothing about it,
+// and a building there overhangs the tile edge by TOWN_OVERHANG, so it hangs
+// over the drop. Each side reads the same boundary from its own
+// `HeightNeighbours` (mine falls to yours / yours rises above mine), so both
+// keep off it without either needing the other's neighbours.
+
+// The slope face is stroked 13 units wide, centred on the edge; half of that,
+// rounded up, is the bank's own footprint.
+const BANK_HALF = 7;
+
+// The four tile edges as polylines in the local 0..100 box, in EDGE_FRAME order
+// (top, right, bottom, left).
+const EDGE_LINE: Pt[][] = [
+  [{ x: 0, y: 0 }, { x: GROUND_UNITS, y: 0 }],
+  [{ x: GROUND_UNITS, y: 0 }, { x: GROUND_UNITS, y: GROUND_UNITS }],
+  [{ x: GROUND_UNITS, y: GROUND_UNITS }, { x: 0, y: GROUND_UNITS }],
+  [{ x: 0, y: GROUND_UNITS }, { x: 0, y: 0 }],
+];
+
+/** One cubic flattened to a polyline. Six samples is plenty at this scale. */
+function sampleSeg(s: ShoreSeg): Pt[] {
+  const pts: Pt[] = [];
+  for (let k = 0; k <= 6; k++) {
+    const t = k / 6;
+    const u = 1 - t;
+    pts.push({
+      x: u ** 3 * s.a.x + 3 * u * u * t * s.p1.x + 3 * u * t * t * s.p2.x + t ** 3 * s.b.x,
+      y: u ** 3 * s.a.y + 3 * u * u * t * s.p1.y + 3 * u * t * t * s.p2.y + t ** 3 * s.b.y,
+    });
+  }
+  return pts;
+}
+
+/**
+ * Every break in the ground on this cell, as keep-out corridors in its own
+ * 0..100 box: the contours its own terrace draws, plus any shared boundary a
+ * HIGHER neighbour drops over. Empty on flat ground and on a plateau's
+ * interior, which is most of any hill.
+ */
+export function terraceBanks(
+  coordId: string,
+  seed = 1,
+  kind: TerrainKind = "grass",
+  elevation?: Elevation,
+): Corridor[] {
+  if (!elevation) return [];
+  const { height, around } = elevation;
+  const out: Corridor[] = [];
+  const { x, y } = parseCoordId(coordId);
+  const style = edgeStyleOf(kind);
+  for (let k = 1; k <= height; k++) {
+    const same = bandSame(k, around);
+    const inset = bandInsets(k, around);
+    for (const s of patchSegments(same, x, y, seed, GROUND_UNITS, style, inset)) {
+      if (s.stops) out.push({ pts: sampleSeg(s), half: BANK_HALF });
+    }
+  }
+  edgeHeights(around).forEach((n, e) => {
+    if (n > height) out.push({ pts: EDGE_LINE[e], half: BANK_HALF });
+  });
+  return out;
+}
+
 /**
  * The terraces one elevated tile lays, as an SVG fragment in the 0..100 box:
  * one band per level from 1 up to `height`, lowest first, so the bands nest.
@@ -2651,8 +2729,9 @@ export function tileScatterSvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
   corridors: Corridor[] = [],
+  elevation?: Elevation,
 ): string {
-  return buildCached(kind, coordId, neighbours, seed, corridors).scatter;
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).scatter;
 }
 
 /**
@@ -2667,8 +2746,9 @@ export function tileCanopySvg(
   neighbours: TerrainNeighbours = ALL_GRASS,
   seed = 1,
   corridors: Corridor[] = [],
+  elevation?: Elevation,
 ): string {
-  return buildCached(kind, coordId, neighbours, seed, corridors).canopy;
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).canopy;
 }
 
 /**
@@ -2882,6 +2962,15 @@ function buildGround(
   // same test rather than two. Without it a tile's two or three buildings, now
   // that they are building-sized, simply pile on top of each other.
   const blockers = corridors.slice();
+  // …and to the TERRACE BANKS, for the grounds people build on. A retaining
+  // wall is as much a thing you cannot stand a house on as a railway is: a
+  // block dropped across a step came out half on the upper bench and half on
+  // the lower one, hanging in the air over its own cut. Buildings only — a tree
+  // or a boulder on a slope is exactly right, and a wood that stepped back from
+  // every contour would be a wood full of bald rings.
+  if (kind === "urban" || kind === "industry") {
+    blockers.push(...terraceBanks(coordId, seed, kind, elevation));
+  }
   const room = (p: Pt2): number =>
     blockers.length ? corridorClearance(p, blockers) : Infinity;
 

@@ -977,6 +977,30 @@ describe("terrain", () => {
     };
     const up = (height: number): Elevation => ({ height, around: flat });
 
+    // The bank's own half-width in tiles/terrain.ts. Buildings are placed by
+    // their centre and sized to the room measured there, so what the keep-out
+    // guarantees is that nothing REACHES across it.
+    const BANK_HALF = 7;
+    const coords = Array.from({ length: 20 }, (_, i) => `${i},4`);
+    // How far west each building actually reaches: its centre less its own
+    // radius (`reach` in `building` — hypot of the roof's sides, halved, which
+    // is what makes the bound hold whatever angle it was turned to).
+    const westEdges = (svg: string) =>
+      svg
+        .split('<g transform="translate(')
+        .slice(1)
+        .map(g => {
+          const x = Number(g.slice(0, g.indexOf(" ")));
+          const dim = (attr: string) =>
+            Math.max(
+              ...[...g.matchAll(new RegExp(`${attr}="([\\d.]+)"`, "g"))].map(m =>
+                Number(m[1]),
+              ),
+              0,
+            );
+          return x - Math.hypot(dim("width"), dim("height")) / 2;
+        });
+
     it("lays the terrace OVER the ground's own fill", () => {
       // The bug, at its smallest: a raised wood that looks exactly like the flat
       // wood beside it.
@@ -1013,6 +1037,60 @@ describe("terrain", () => {
       const meadow = tileGroundSvg("grass", "2,2", around("grass"), 9);
       const knoll = tileGroundSvg("grass", "2,2", around("grass"), 9, [], up(1));
       expect(knoll.endsWith(meadow)).toBe(true);
+    });
+
+    it("stands no building on a terrace bank", () => {
+      // A retaining wall is not somewhere you put a house. A block dropped
+      // across a step came out half on the upper bench and half on the lower
+      // one, hanging over its own cut.
+      //
+      // The bank here is the WEST boundary: this cell stands at 2, the ground
+      // to the west at 1. Buildings are placed by their centre and sized to the
+      // room measured there, so the invariant is a clear strip along the bank.
+      const dropsWest: Elevation = { height: 2, around: { ...flat, left: 1 } };
+      for (const c of coords) {
+        for (const edge of westEdges(
+          tileScatterSvg("urban", c, around("urban"), 11, [], dropsWest),
+        )) {
+          expect(edge).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+
+      // …and that strip is real estate somebody would otherwise have built on,
+      // so the assertion above is not vacuous.
+      const before = coords.flatMap(c =>
+        westEdges(tileScatterSvg("urban", c, around("urban"), 11)).filter(
+          e => e <= BANK_HALF - 1,
+        ),
+      );
+      expect(before.length).toBeGreaterThan(0);
+    });
+
+    it("keeps a town off the foot of the NEXT tile's wall", () => {
+      // The half that is easy to miss: the first step off a summit is drawn on
+      // the shared boundary by the UPPER tile, and a building down here
+      // overhangs the tile edge (TOWN_OVERHANG) — so it hangs over a drop it
+      // cannot see. Each side reads the same boundary from its own neighbour
+      // heights, so both keep off it.
+      const underCliff: Elevation = { height: 0, around: { ...flat, left: 2 } };
+      for (const c of coords) {
+        for (const edge of westEdges(
+          tileScatterSvg("urban", c, around("urban"), 11, [], underCliff),
+        )) {
+          expect(edge).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+    });
+
+    it("leaves trees and boulders on the slope", () => {
+      // Buildings only. A wood that stepped back from every contour would be a
+      // wood full of bald rings, and a boulder field is nothing but slopes.
+      const drops: Elevation = { height: 2, around: { ...flat, left: 1 } };
+      for (const kind of ["forest", "rock"] as const) {
+        expect(tileScatterSvg(kind, "3,4", around(kind), 11, [], drops)).toEqual(
+          tileScatterSvg(kind, "3,4", around(kind), 11),
+        );
+      }
     });
 
     it("keys the memo on the elevation", () => {
