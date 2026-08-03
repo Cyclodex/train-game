@@ -139,6 +139,21 @@
         >
           {{ editingTrainId === t.id ? "Done" : "Edit" }}
         </button>
+        <!-- Withdraw: the ORDERLY verb. The train drops its line and runs to
+             the nearest depot, where it is stabled. Shift-click scraps it
+             where it stands — the emergency, and deliberately awkward. -->
+        <button
+          class="service-retire"
+          :class="{ 'service-retire--on': t.retiring }"
+          :title="
+            t.retiring
+              ? 'Running to the depot to be stabled — shift-click to scrap it now'
+              : 'Withdraw: run to the nearest depot and stable it (shift-click to scrap where it stands)'
+          "
+          @click="retireTrain(t.id, $event)"
+        >
+          {{ t.retiring ? "↩" : "✕" }}
+        </button>
       </div>
       <p v-if="editingTrainId" class="service-hint">
         Click stations on the board to build the line for
@@ -1276,8 +1291,10 @@ class PlayView extends Vue {
     stops: string[];
     nextStop?: string;
     queued: boolean;
+    retiring: boolean;
   }[] {
     return Object.keys(this.game.trainColors)
+      .filter(id => !this.game.removedTrains.includes(id))
       .sort()
       .map(id => ({
         id,
@@ -1285,6 +1302,7 @@ class PlayView extends Vue {
         stops: this.game.trainLines[id] ?? [],
         nextStop: this.game.sim.trainNextStop(id),
         queued: this.game.queuedTrains.includes(id),
+        retiring: this.game.sim.isRetiring(id),
       }));
   }
   // Ordering only needs a depot to exist. A busy one does not refuse the sale
@@ -1326,6 +1344,25 @@ class PlayView extends Vue {
   // Trains ordered but still in the shed, waiting their turn on the metals.
   get queuedTrainIds(): string[] {
     return this.game.queuedTrains;
+  }
+  // Withdrawing a train. The DEFAULT is orderly: it drops its line and runs to
+  // the nearest depot to be stabled, which is what a railway actually does and
+  // takes as long as the journey takes. Shift-click is the emergency: gone
+  // where it stands. Both are on one control because they are the same
+  // intention at two urgencies, and the modifier keeps the drastic one out of
+  // reach of an ordinary mis-click.
+  retireTrain(trainId: string, ev: MouseEvent): void {
+    if (ev.shiftKey) {
+      this.game.scrapTrain(trainId);
+      if (this.editingTrainId === trainId) this.editingTrainId = null;
+      return;
+    }
+    if (!this.game.retireTrain(trainId)) {
+      // No depot it can reach — the orderly verb has nowhere to send it, so
+      // say so rather than appearing to do nothing.
+      this.game.scrapTrain(trainId);
+    }
+    if (this.editingTrainId === trainId) this.editingTrainId = null;
   }
   toggleEditLine(trainId: string): void {
     this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
@@ -2485,6 +2522,20 @@ export default toNative(PlayView);
 .service-stop--next {
   background: #f0b429;
   color: #221803;
+}
+.service-retire {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: #d98b84;
+  padding: 2px 8px;
+  cursor: pointer;
+  line-height: 1.1;
+}
+.service-retire--on {
+  color: #221803;
+  background: #d98b84;
+  border-color: transparent;
 }
 .service-queued {
   opacity: 0.75;

@@ -532,6 +532,26 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `game.occupied`: the latter is the render mirror and is only refreshed inside
   the rAF frame, so it stays empty for ever headless.
 
+## WITHDRAWING A TRAIN (2026-08-03)
+- Two verbs, deliberately not one. `retireTrain` is a JOURNEY: the train drops
+  its line, takes no new passengers (`boarded` is forced to 0 while retiring),
+  routes to the NEAREST depot and leaves the sim on arrival — the depot-arrival
+  branch checks `retiring` before any colour rule. `removeTrain` (scrap) is
+  instant and unrealistic, which is why it is a separate call and, in the UI, a
+  shift-click.
+- `retireTrain` returns false when no depot is reachable; PlayView then scraps,
+  so the button never appears to do nothing.
+- A train still QUEUED in the shed has no journey to make: withdrawing it is
+  cancelling the order, handled in game.ts before the sim is asked.
+- Removal has to be undone in three places or something is left behind:
+  `dropTrain` in the sim (roster + reservations + blockStates), `forgetTrain`
+  in game.ts (trainDefs, unitIds, trainLines, the queues), and the BOARD, which
+  reads `game.removedTrains` — the view cannot know when a retiring train
+  finally arrives, so it filters on that list rather than being told.
+- `step()` walks a snapshot of the roster, so a train that retires mid-tick
+  leaves a stale id in it: both the advance and the reservation release guard
+  on `trains[id]` still existing.
+
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
   graph the editor's `tiles/routePlanner.ts` searches, the same output shape the

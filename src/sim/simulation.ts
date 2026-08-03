@@ -136,6 +136,10 @@ export interface SimTrain {
   // The route being driven right now (this leg only). Recomputed at every call,
   // so a level edited mid-run is routed over on the very next leg.
   plan?: RailPlan;
+  // Withdrawn from service and running to a depot to be stabled. It keeps its
+  // stops-worth of passengers to the end of the leg but takes no new ones, and
+  // it is removed from the sim the moment it reaches the shed.
+  retiring?: boolean;
 }
 
 export interface ArrivedEvent {
@@ -192,6 +196,13 @@ export interface DwellEvent {
   alighted: number;
 }
 
+// A retiring train reached a depot and was stabled: it is gone from the sim.
+export interface RetiredEvent {
+  type: "retired";
+  trainId: string;
+  tileId: string;
+}
+
 // A dwelling train's stop time elapsed and it pulled away from the platform.
 export interface DepartedEvent {
   type: "departed";
@@ -205,7 +216,8 @@ export type SimEvent =
   | BlockedEvent
   | ProceedingEvent
   | DwellEvent
-  | DepartedEvent;
+  | DepartedEvent
+  | RetiredEvent;
 
 // Internal record of why a train is currently held, used to edge-trigger the
 // blocked/proceeding events (only emit on a change of state).
@@ -326,6 +338,18 @@ export interface Simulation {
   // it on the next tick — this is the verb a "assign train to line" UI calls.
   // Returns false for an unknown train.
   assignLine(id: string, stops: string[]): boolean;
+  // WITHDRAW a train from service the orderly way: it finishes nothing, takes
+  // no new passengers, and runs to the nearest depot, where it is stabled and
+  // leaves the sim (a `retired` event says when). False for an unknown train
+  // or when no depot is reachable from where it stands — the caller can then
+  // offer the emergency verb instead.
+  retireTrain(id: string): boolean;
+  // True while a train is on its way to be stabled.
+  isRetiring(id: string): boolean;
+  // SCRAP a train where it stands: gone this instant, its reservations
+  // released. The emergency verb — nothing about it is realistic, which is
+  // exactly why it is separate from `retireTrain`.
+  removeTrain(id: string): boolean;
   // Passengers waiting on the platform at a station tile (0 for any other id).
   stationQueue(tileId: string): number;
   // Inject passengers ONTO a station's platform outside the schedule — the
@@ -463,6 +487,21 @@ export function createSimulation(config: SimConfig): Simulation {
       if (exit === undefined) return getSwitch(coordId, entryPort);
       return armForExit(entryPort, exit) ?? getSwitch(coordId, entryPort);
     };
+  }
+
+  // Every depot on the board — where a withdrawn train can be stabled.
+  // Derived from the LEVEL each time, so a depot built mid-run counts.
+  function depotTiles(): string[] {
+    return Object.keys(level).filter(id => level[id]?.role === "depot");
+  }
+
+  // Take a train out of the sim entirely and release everything it held.
+  function dropTrain(id: string): void {
+    delete trains[id];
+    for (const [key, owner] of reservations) {
+      if (owner === id) reservations.delete(key);
+    }
+    blockStates.delete(id);
   }
 
   // The stop this train is heading for, or undefined when it has no line.
@@ -984,7 +1023,10 @@ export function createSimulation(config: SimConfig): Simulation {
       train.passengers = 0;
       passengersDeliveredTotal += alighted;
       const queue = queues.get(tileId) ?? 0;
-      const boarded = Math.min(queue, train.capacity);
+      // A train on its way to be stabled sets nobody's expectations: it lets
+      // its riders off and takes nobody new, so the platform waits for a train
+      // that is actually going somewhere.
+      const boarded = train.retiring ? 0 : Math.min(queue, train.capacity);
       if (boarded > 0) {
         queues.set(tileId, queue - boarded);
         train.passengers = boarded;
@@ -1017,6 +1059,13 @@ export function createSimulation(config: SimConfig): Simulation {
           // not a destination, so reaching one is a turn-back. (Transport
           // Fever's shape, and the reason a network board needs only ONE
           // depot.) Without a line, the classic colour-match rule stands.
+          // A RETIRING train's journey ends here whatever the colours say: it
+          // was sent to be stabled, and the shed is where it leaves the game.
+          if (train.retiring) {
+            events.push({ type: "retired", trainId: train.id, tileId });
+            dropTrain(train.id);
+            return;
+          }
           const matched = !train.line?.length && depotColors[tileId] === train.color;
           const alighted = matched ? train.passengers : 0;
           if (alighted > 0) {
@@ -1121,8 +1170,12 @@ export function createSimulation(config: SimConfig): Simulation {
       advanceDemand(dt);
       // Deterministic order so tile reservation between trains is stable.
       for (const id of Object.keys(trains).sort()) {
-        advance(trains[id], dt, events);
-        releaseStaleReservations(trains[id]);
+        // A train can RETIRE inside advance() and leave the roster, so the
+        // snapshot this loop walks may name one that no longer exists.
+        const train = trains[id];
+        if (!train) continue;
+        advance(train, dt, events);
+        if (trains[id]) releaseStaleReservations(train);
       }
       return events;
     },
@@ -1228,6 +1281,30 @@ export function createSimulation(config: SimConfig): Simulation {
       train.line = [...stops];
       train.lineIndex = 0;
       planLeg(train);
+      return true;
+    },
+    retireTrain(id: string) {
+      const train = trains[id];
+      if (!train) return false;
+      const head = train.path[train.headIndex];
+      const plan = planRailRoute(
+        level,
+        { coord: head.coord, entryPort: head.entryPort },
+        depotTiles()
+      );
+      if (!plan) return false; // nowhere to stable it; scrap is the way out
+      delete train.line;
+      train.lineIndex = 0;
+      train.plan = plan;
+      train.retiring = true;
+      return true;
+    },
+    isRetiring(id: string) {
+      return trains[id]?.retiring === true;
+    },
+    removeTrain(id: string) {
+      if (!trains[id]) return false;
+      dropTrain(id);
       return true;
     },
     stationQueue(tileId: string) {

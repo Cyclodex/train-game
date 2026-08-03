@@ -410,6 +410,16 @@ export interface Game {
   // Order a new train at a depot and put it straight into service. Returns the
   // new train's id, or null when there is no free depot to build it in.
   buyTrain(stops: string[], depotId?: string): TrainDef | null;
+  // Withdraw a train the orderly way: it leaves its line and runs to the
+  // nearest depot, where it is stabled and leaves the game. False when there
+  // is no depot it can reach — offer `scrapTrain` then.
+  retireTrain(trainId: string): boolean;
+  // Scrap a train where it stands (the emergency verb). Always succeeds for a
+  // train that exists, including one still queued in the shed.
+  scrapTrain(trainId: string): boolean;
+  // Trains gone from the game — retired or scrapped. The board reads this to
+  // stop drawing them.
+  removedTrains: string[];
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -653,6 +663,10 @@ export function createGame(
   // panel shows them so a queue is visible rather than a button that seems to
   // have done nothing.
   const queuedTrains = reactive([]) as string[];
+  // Ids of trains that have left the game (stabled or scrapped). The view
+  // keeps its own roster keyed by id and cannot know when a RETIRING train
+  // finally reaches its shed, so it reads this instead.
+  const removedTrains = reactive([]) as string[];
 
   // Depot + train colours are owned here so the simulation's "matched delivery"
   // logic and the rendered colours always agree. A seeded RNG keeps the
@@ -1549,6 +1563,41 @@ export function createGame(
     return def;
   }
 
+  // Everything the game keeps about a train, forgotten in one place. Called
+  // when the sim tells us one is gone (retired) and when we scrap one.
+  function forgetTrain(trainId: string): void {
+    const at = trainDefs.findIndex(d => d.id === trainId);
+    if (at >= 0) trainDefs.splice(at, 1);
+    delete defById[trainId];
+    delete unitIds[trainId];
+    delete trainLines[trainId];
+    const queuedAt = queuedTrains.indexOf(trainId);
+    if (queuedAt >= 0) queuedTrains.splice(queuedAt, 1);
+    const pendingAt = pendingTrains.findIndex(d => d.id === trainId);
+    if (pendingAt >= 0) pendingTrains.splice(pendingAt, 1);
+    if (!removedTrains.includes(trainId)) removedTrains.push(trainId);
+    syncStationLines();
+  }
+
+  function retireTrain(trainId: string): boolean {
+    // One still queued in the shed never left it: there is nothing to run to
+    // a depot, so withdrawing it is simply cancelling the order.
+    if (queuedTrains.includes(trainId)) {
+      forgetTrain(trainId);
+      return true;
+    }
+    if (!sim.retireTrain(trainId)) return false;
+    syncLine(trainId); // it has dropped its line; the panel should show that
+    return true;
+  }
+
+  function scrapTrain(trainId: string): boolean {
+    const queued = queuedTrains.includes(trainId);
+    if (!queued && !sim.removeTrain(trainId)) return false;
+    forgetTrain(trainId);
+    return true;
+  }
+
   // Put a train onto a line (or take it out of service with []). Thin wrapper
   // over the sim verb that keeps the view copy honest.
   function setLine(trainId: string, stops: string[]): boolean {
@@ -1600,6 +1649,9 @@ export function createGame(
     let mismatchedDelta = 0;
     let passengersDeliveredDelta = 0;
     for (const e of events) {
+      // A train that reached its shed is gone from the sim; forget it here too
+      // so the board stops drawing it and the panel stops listing it.
+      if (e.type === "retired") forgetTrain(e.trainId);
       // Passenger rides end at station calls and at matched depot arrivals.
       if (e.type === "dwell") passengersDeliveredDelta += e.alighted;
       if (e.type === "arrived") passengersDeliveredDelta += e.alighted ?? 0;
@@ -2133,6 +2185,9 @@ export function createGame(
     depotTiles,
     setLine,
     buyTrain,
+    retireTrain,
+    scrapTrain,
+    removedTrains,
     roadCars,
     carJunctions,
     carDestinations,

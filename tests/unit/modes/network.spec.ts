@@ -333,3 +333,101 @@ describe("the service: buying trains and setting lines", () => {
     expect(game.buyTrain([])).toBeNull();
   });
 });
+
+// Withdrawing a train. Two verbs on purpose: the orderly one is a JOURNEY (it
+// runs to a depot and is stabled there), the emergency one is instant and
+// deliberately unrealistic — so they cannot be the same call.
+describe("taking a train out of service", () => {
+  function gameFor() {
+    const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
+      id: t.id,
+      x: t.x,
+      y: t.y,
+      type: t.type,
+      wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
+    }));
+    return createGame(
+      networkmode.level,
+      trains,
+      200,
+      networkMode,
+      1,
+      networkmode.colors
+    );
+  }
+
+  it("retires the orderly way: drops the line, runs to a depot, is stabled there", () => {
+    const game = gameFor();
+    for (let t = 0; t < 20; t += 0.1) game.advance(0.1); // get it out on the ring
+
+    expect(game.retireTrain("circle")).toBe(true);
+    // It is out of service immediately — no line, taking nobody new…
+    expect(game.trainLines.circle).toBeUndefined();
+    expect(game.sim.isRetiring("circle")).toBe(true);
+    // …but still on the board, running to its shed.
+    expect(game.sim.trains.circle).toBeDefined();
+    expect(game.removedTrains).not.toContain("circle");
+
+    // It gets there, and then it is gone from the game.
+    for (let t = 0; t < 120 && game.sim.trains.circle; t += 0.1) game.advance(0.1);
+    expect(game.sim.trains.circle).toBeUndefined();
+    expect(game.removedTrains).toContain("circle");
+    expect(game.trainLines.circle).toBeUndefined();
+  });
+
+  it("takes no new passengers once withdrawn", () => {
+    const game = gameFor();
+    for (let t = 0; t < 20; t += 0.1) game.advance(0.1);
+    game.retireTrain("circle");
+    // Run it to the shed and watch: it may drop riders, never pick any up.
+    let maxAboard = 0;
+    for (let t = 0; t < 120 && game.sim.trains.circle; t += 0.1) {
+      game.advance(0.1);
+      maxAboard = Math.max(maxAboard, game.sim.trainPassengers("circle"));
+    }
+    // Whatever it was carrying when withdrawn only ever goes down.
+    expect(game.sim.trains.circle).toBeUndefined();
+    expect(maxAboard).toBeLessThanOrEqual(24);
+  });
+
+  it("scraps a train where it stands, releasing what it held", () => {
+    const game = gameFor();
+    for (let t = 0; t < 20; t += 0.1) game.advance(0.1);
+    const tile = game.sim.trainTileId("circle");
+    expect(game.sim.occupiedBy(tile)).toBe("circle");
+
+    expect(game.scrapTrain("circle")).toBe(true);
+    expect(game.sim.trains.circle).toBeUndefined();
+    expect(game.removedTrains).toContain("circle");
+    // The metals it was standing on are free again.
+    expect(game.sim.occupiedBy(tile)).toBeUndefined();
+    expect(game.scrapTrain("circle")).toBe(false); // gone is gone
+  });
+
+  it("cancels an order that is still queued in the shed", () => {
+    const game = gameFor();
+    const def = game.buyTrain(game.stationTiles.slice(0, 2));
+    expect(game.queuedTrains).toContain(def!.id);
+    // Withdrawing one that never left the shed is just cancelling the order.
+    expect(game.retireTrain(def!.id)).toBe(true);
+    expect(game.queuedTrains).not.toContain(def!.id);
+    expect(game.removedTrains).toContain(def!.id);
+    // And it never appears on the metals afterwards.
+    for (let t = 0; t < 60; t += 0.1) game.advance(0.1);
+    expect(game.sim.trains[def!.id]).toBeUndefined();
+  });
+
+  it("keeps the rest of the service running when one train leaves", () => {
+    const game = gameFor();
+    for (let t = 0; t < 20; t += 0.1) game.advance(0.1);
+    const extra = game.buyTrain(networkmode.trains.circle.line ?? []);
+    for (let t = 0; t < 40; t += 0.1) game.advance(0.1);
+    game.scrapTrain("circle");
+    for (let t = 0; t < 40; t += 0.1) game.advance(0.1);
+    // The remaining train is unaffected and still working its line.
+    expect(game.sim.trains[extra!.id]).toBeDefined();
+    expect(game.sim.trainNextStop(extra!.id)).toBeDefined();
+    expect(game.sim.trainState(extra!.id)).not.toBe("parked");
+  });
+});
