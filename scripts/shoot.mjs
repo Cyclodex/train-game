@@ -40,6 +40,9 @@
 //                     with every train WAITING, so nothing on them moves — and
 //                     states that only exist once trains are rolling, like a pin
 //                     held by another train's block, are otherwise unshootable)
+//   --start           click Start on a mode's Ready card, so the shot is of the
+//                     mode RUNNING rather than of its briefing (network mode's
+//                     passenger HUD, a crowd draining). No-op without a card.
 //   --density <0-100> car density % (default: 60)
 //   --wait <ms>       settle time before the shot (default: 4500)
 //   --port <n>        dev-server port (default: 5181)
@@ -62,6 +65,7 @@ function parseArgs(argv) {
     debug: false,
     backdrop: false,
     send: false,
+    start: false,
     density: 60,
     wait: 4500,
     port: 5181,
@@ -73,6 +77,7 @@ function parseArgs(argv) {
     else if (a === "--no-debug") opt.debug = false;
     else if (a === "--backdrop") opt.backdrop = true;
     else if (a === "--send") opt.send = true;
+    else if (a === "--start") opt.start = true;
     else if (a === "--out") opt.out = argv[++i];
     else if (a === "--label") opt.label = argv[++i];
     else if (a === "--density") opt.density = Number(argv[++i]);
@@ -252,6 +257,17 @@ async function main() {
       // motion, including states that only exist once trains are rolling (a pin
       // held by another train's reserved block). Pair it with a short --wait:
       // 4.5s is long enough for a small board to finish its runs and go quiet.
+      // A mode with a Ready card opens PAUSED behind it, so a plain shot is of
+      // the card, not the game. --start clicks Start, which is the only way to
+      // photograph a running mode (the passenger HUD filling, a crowd draining)
+      // rather than its briefing. Harmless where there is no card.
+      if (opt.start) {
+        const startBtn = page.getByRole("button", { name: "Start", exact: true });
+        if (await startBtn.count()) {
+          await startBtn.click({ timeout: 2000 }).catch(() => {});
+        }
+      }
+
       if (opt.send) {
         const pins = page.locator(".fare-pin");
         for (let i = 0, n = await pins.count(); i < n; i++) {

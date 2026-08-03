@@ -1,4 +1,5 @@
 import { Level } from "@/tiles/model";
+import { expandKind } from "@/tiles/kinds";
 import { TrainObject, TrainsDefinition, TrainStatus } from "@/types";
 import { ColorAssignment } from "@/utils/colorAssignment";
 import { TrainRoute } from "@/tiles/validate";
@@ -34,6 +35,63 @@ export interface TestScenario {
   // (blocked terrain, trains-in-depots, grid fit) still applies here, and
   // every other scenario keeps the full validation.
   allowIncomplete?: boolean;
+}
+
+// A closed loop of track round the rectangle (x0,y0)-(x1,y1): curves at the
+// four corners, straights along the sides. The shape a network board wants,
+// because a ring needs no turn-back — a train can run it for ever, so a board
+// needs exactly one depot (where the train was ordered) and no destination at
+// all. Overwrite individual tiles afterwards to place stations on it.
+export function railRing(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+): Level {
+  const out: Level = {};
+  for (let x = x0; x <= x1; x++) {
+    out[`${x},${y0}`] = expandKind("straight", 1);
+    out[`${x},${y1}`] = expandKind("straight", 1);
+  }
+  for (let y = y0; y <= y1; y++) {
+    out[`${x0},${y}`] = expandKind("straight", 0);
+    out[`${x1},${y}`] = expandKind("straight", 0);
+  }
+  out[`${x0},${y0}`] = expandKind("curve", 1); // ┌ right + bottom
+  out[`${x1},${y0}`] = expandKind("curve", 2); // ┐ bottom + left
+  out[`${x1},${y1}`] = expandKind("curve", 3); // ┘ left + top
+  out[`${x0},${y1}`] = expandKind("curve", 0); // └ top + right
+  return out;
+}
+
+// A train IN SERVICE on a line: it starts in the depot at (x,y) and then runs
+// the given stops for ever, routing itself between them (sim/railRouter.ts).
+// The depot is only where it comes from — there is no destination depot, which
+// is why this helper takes no `to`. The network mode's shape.
+export function mkLineTrain(
+  id: string,
+  x: number,
+  y: number,
+  type: "people" | "fraight",
+  wagonCount: number,
+  line: string[]
+): TrainObject {
+  return {
+    id,
+    x,
+    y,
+    status: TrainStatus.LeavingDepot,
+    type,
+    wagons: Array.from({ length: wagonCount }, (_, i) => ({
+      id: `${id}w${i + 1}`,
+      type,
+    })),
+    line,
+    // Validation reads this to check the board is connected; the first stop is
+    // the honest answer to "where is this train trying to get to".
+    routeDestinations: line.length ? [{ to: line[0] }] : [],
+    currentRouteDestination: 0,
+  };
 }
 
 // Build a train that starts in the depot at (x,y), leaves outward, and routes to

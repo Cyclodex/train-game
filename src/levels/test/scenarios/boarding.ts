@@ -1,35 +1,41 @@
+import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
-import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { TestScenario, mkLineTrain, railRing } from "@/levels/test/scenario";
 
-// Two stations on one line: the passenger loop in miniature. Passengers gather
-// on both platforms (the default demand schedule); the train boards at its
-// first call, carries them one hop, and lets them off at the next — watch the
-// crowds drain into the train and the activity log count "(n on, m off)".
-// Colours are pinned so the far depot matches and the run ends parked.
+// BOARDING AND RIDING: two platforms on a ring, and one train working them
+// both for ever. Passengers gather (the default demand schedule), the train
+// takes as many as it has seats for, carries them one hop, and lets them off
+// at the next call — watch the crowds drain and the log count "(n on, m off)".
+//
+// The ring is what makes it watchable: a shuttle from depot to depot shows the
+// exchange once, a ring shows it every lap, in both directions of the flow.
 export const boarding: TestScenario = {
   id: "boarding",
   name: "Boarding & riding",
   description:
-    "Crowds build on two platforms; the train boards, rides a hop, lets them off.",
+    "Two platforms, one train: crowds build, board, ride a hop, and get off.",
   level: {
-    "0,0": expandKind("depot", 1),
-    "1,0": expandKind("straight", 1),
-    "2,0": expandKind("station", 1),
-    "3,0": expandKind("straight", 1),
-    "4,0": expandKind("station", 1),
-    "5,0": expandKind("straight", 1),
-    "6,0": expandKind("depot", 3),
+    ...railRing(1, 0, 4, 3),
+    // A platform on the top side and another on the bottom, so the ride
+    // between them is a real hop rather than a shunt.
+    "2,0": { connections: [[Position.Left, Position.Right]], role: "station" },
+    "3,3": { connections: [[Position.Left, Position.Right]], role: "station" },
+    // The one depot, on a spur.
+    "0,2": expandKind("depot", 1),
+    "1,2": {
+      connections: [
+        [Position.Top, Position.Bottom],
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+      ],
+    },
   },
   trains: {
-    train1: mkTrain("train1", 0, 0, "people", 2, "6,0"),
+    train1: mkLineTrain("train1", 0, 2, "people", 2, ["2,0", "3,3"]),
   },
   colors: {
-    depotColors: {
-      "0,0": "blue",
-      "6,0": "green",
-    },
-    trainColors: {
-      train1: "green",
-    },
+    depotColors: { "0,2": "blue" },
+    trainColors: { train1: "green" },
   },
+  size: { cols: 5, rows: 4 },
 };

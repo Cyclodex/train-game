@@ -73,10 +73,26 @@ export function parkAndRideTargets(level: Level): Record<string, string> {
 // and a platform that is not empty when the level opens. All values are
 // simple monotone functions of the urban count, so "build the station nearer
 // the houses" is always the right move and never a cliff.
+// The rates are set against what a TRAIN can actually do, which is the only
+// scale that means anything: at DEFAULT_SPEED (0.5 tiles/sec) a shuttle needs
+// roughly 30-40s to work a short line and come back, and a people wagon seats
+// PASSENGERS_PER_WAGON. A busy station (6 town tiles) therefore turns out a
+// passenger every 4s — a couple of trainloads per round trip, so a good service
+// keeps up and a neglected one visibly does not. The first numbers here were
+// authored before any mode consumed them and were ~2.5x hotter than that; the
+// network mode made an unwinnable board out of them, which is exactly the sort
+// of thing only a real consumer can tell you.
 export function stationDemandOf(level: Level, coordId: string): StationDemand {
   const { urban } = stationCatchment(level, coordId);
   return {
-    intervalSec: urban > 0 ? Math.max(1.5, 10 / urban) : 15,
+    // The no-town fallback must stay SLOWER than the one-house case (24s), or
+    // the middle of nowhere out-generates a hamlet and the whole "build nearer
+    // the houses" rule inverts at its own first step.
+    intervalSec: urban > 0 ? Math.max(3, 24 / urban) : 30,
+    // The platform cap. Above the network mode's OVERCROWD_LIMIT only for a
+    // REAL town (5+ tiles in reach), so a quiet halt can never lose you the
+    // level by itself — the crowd that ends a run has to be one you were given
+    // the traffic to justify.
     max: Math.min(4 + 2 * urban, 16),
     initial: Math.min(2 + Math.floor(urban / 2), 8),
   };

@@ -500,6 +500,102 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - `/test/catchment`: town station vs lonely halt on one line — the one
   side-by-side that shows the rule; `tests/unit/tiles/catchment.spec.ts`.
 
+## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
+- The player's whole verb set in the network mode: `game.setLine(trainId,
+  stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
+  view), so the loop is unit-testable headless.
+- A depot is a QUEUE, not a gate: `buyTrain` never fails for want of room —
+  what a busy shed delays is the DEPARTURE, not the purchase. An order made
+  while the mouth is blocked goes on `pendingTrains`, and `releasePendingTrains`
+  (called from the world step) rolls them out oldest-first as the tile clears.
+  Only a board with NO depot returns null.
+- A queued train is exactly the state a SCHEDULED train sits in: DOM and livery
+  registered, no sim entry — `renderTrains` already hides those, so nothing new
+  was needed to keep a train in the shed invisible.
+- Two things must happen at ORDER time or the train is broken in a way that is
+  hard to see: the renderer roster (`trainDefs`, `unitIds`, `trainColors`) AND
+  the view's provided `trains` map (PlayView), which is what `<Train v-for>`
+  iterates. Miss the second and the sim drives a train with no sprite at all —
+  it happened, and only a browser check caught it.
+- Line editing is a BOARD gesture: `editingTrainId` in PlayView, station tiles
+  get `.level-tile--pickable`, and a click appends the stop or removes it if it
+  is already there. Click order IS call order.
+- `game.trainLines` (trainId → stops) and `game.stationLines` (stationId →
+  liveries) are view copies of what the sim owns, refreshed on player action
+  rather than per frame; the editor's stubGame must carry `stationLines` too.
+- `ModeControls.switches` had never been read by anything until this mode
+  needed it false. PlayView now honours it, and Tile.vue gained a separate
+  `switchesVisible` prop: the EDITOR deliberately draws a read-only fan (a
+  picture of the authored arm), but a mode where the train routes itself must
+  not draw points at all — an un-clickable arrow is a control that lies.
+- When checking occupancy from a TEST, ask `sim.occupiedBy()`, never
+  `game.occupied`: the latter is the render mirror and is only refreshed inside
+  the rAF frame, so it stays empty for ever headless.
+
+## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
+- `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
+  graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
+  road layer has had all along (`roadRouter`: plan, then follow per-junction
+  decisions). Every edge is one tile, so BFS *is* the shortest path.
+- The plan reaches the sim through the EXISTING `SwitchResolver` seam:
+  `switchOf(train)` translates the plan's exit PORT into the arm that produces
+  it (`armForExit`), so `traverse`/`resolveExitPort` are untouched and every
+  rule (reservation, occupancy, signals, stop lines) applies unchanged. A train
+  with no plan returns the global resolver — byte-for-byte the old behaviour.
+- Plans are PER LEG, recomputed at every call and after every depot turn-back.
+  That is what keeps `exitAt` unambiguous (a shortest path never repeats a
+  `(tile, entry)` node) and what makes track laid mid-run usable next leg.
+- A train IN SERVICE never terminates at a depot, whatever the colours say —
+  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  ordered and stabled; on a line they are turn-backs, not destinations.
+- Two line shapes, and the difference matters when authoring:
+  **a ring** needs no turn-back, so the board needs exactly ONE depot and each
+  station comes round once a lap; **a there-and-back shuttle** can only reverse
+  at a depot, so it needs one at each end and serves intermediate stations
+  TWICE a round trip (once each way). Both are covered by tests.
+- Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
+  any of these platforms in one call, but a station only gets served once a
+  lap. Size the towns against the lap, or the overflow fail fires on a board
+  whose trains were never the problem.
+- `sim.assignLine(id, stops)` is the verb an "assign train to line" UI calls;
+  `[]` takes the train out of service. `railRing()` in `levels/test/scenario.ts`
+  authors a loop; `mkLineTrain()` authors a train in service on one.
+
+## NETWORK MODE (phase 5 — the passenger loop, 2026-08-01)
+- Win = people carried (`ObjectiveSpec.passengersRequired`), loss = a platform
+  over `fail.maxStationQueue` (against the `peakStationQueue` high-water
+  counter). The win rule is "EVERY stated target met", so `deliveriesRequired:
+  0` + a passenger target does not win at t=0 — and a board that never mentions
+  passengers behaves exactly as before.
+- The board's two depots deliberately MISMATCH the shuttle: a matched depot
+  PARKS the train and the service dies after one trip, a mismatch bounces it
+  back out. So the network mode's "mismatched arrivals" are turn-backs, not
+  errors — which is why its third star is briskness, never `mismatchedArrivals
+  === 0` (that star would punish the mechanic the mode runs on).
+- Single track = ONE train. A second shuttle meets the first head-on and
+  deadlocks; capacity is raised with WAGONS (seats), not with more trains,
+  until a board authors a passing loop.
+- `game.ts` reports `maxStationQueue` from the SIM each tick, never from the
+  reactive render mirror — the mirror only updates inside the rAF frame, so a
+  headless run would score an empty station forever.
+- `npm run shot -- '#/play?mode=…' --start` clicks the Ready card so a mode can
+  be photographed RUNNING instead of showing its briefing.
+
+## STATION DEMAND IS TUNED AGAINST A TRAIN (2026-08-01)
+- `stationDemandOf`'s rates only mean something next to what a shuttle can
+  carry: at DEFAULT_SPEED a round trip is ~30-40s and a people wagon seats 6,
+  so a busy station (6 town tiles) turns out one passenger every 4s. The
+  phase-3 numbers were ~2.5x hotter and made the first network board
+  unwinnable in 19 seconds — nothing revealed it until a mode consumed them.
+- The no-town fallback (30s) must stay SLOWER than the one-house case (24s),
+  or the middle of nowhere out-generates a hamlet and the "build nearer the
+  houses" rule inverts at its first step. The monotonicity spec catches this —
+  it caught exactly this during the retune.
+- A platform's `max` exceeds the network mode's OVERCROWD_LIMIT only for a real
+  town (5+ tiles in reach), so a quiet halt can never lose you a level by
+  itself. Retuning either number without the other silently makes the overflow
+  fail decorative (max ≤ limit) or unavoidable.
+
 ## PARK & RIDE (phase 4 — road feeds rail, 2026-08-01)
 - `parkAndRideTargets(level)` (tiles/catchment.ts): tile id → nearest station
   within the walk radius, ties by distance then id — deterministic, computed

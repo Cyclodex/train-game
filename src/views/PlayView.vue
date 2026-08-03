@@ -55,8 +55,99 @@
         <span>🧪</span><span>Test world</span>
       </router-link>
     </MenuDrawer>
+    <!-- NETWORK mode's score card: people carried, and how full the busiest
+         platform is right now. It REPLACES the delivery card (one progress
+         number per mode — HUD density, design doc §5.5). -->
+    <div v-if="hud.passengers" class="score-card">
+      <div class="score-head">
+        <span class="score-icon">🧍</span>
+        <span class="score-label">Passengers</span>
+        <span class="score-count">
+          <span class="score-now">{{ passengersCarried }}</span>
+          <span class="score-sep">/</span>
+          <span class="score-total">{{ passengerTarget }}</span>
+          <span v-if="passengersCarried >= passengerTarget" class="score-check">✓</span>
+        </span>
+      </div>
+      <div class="score-bar">
+        <div class="score-bar-fill" :style="{ width: passengersPct + '%' }"></div>
+        <span class="score-pct">{{ passengersPct }}%</span>
+      </div>
+      <div v-if="hud.timer && !dateLabel" class="score-timer">
+        ⏱ {{ elapsedLabel }}
+      </div>
+      <div
+        class="score-platform"
+        :class="platformClass"
+        title="Busiest platform — the run ends if one overflows"
+      >
+        🚉 {{ worstPlatform }}/{{ overcrowdLimit }} waiting
+      </div>
+      <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
+        <span
+          v-for="s in stars"
+          :key="s.id"
+          class="star-pip"
+          :class="{ 'star-pip--on': s.earned }"
+          :title="s.label"
+          >★</span
+        >
+      </div>
+    </div>
+
+    <!-- THE SERVICE PANEL (network mode): the whole player verb set of this
+         mode in one card — which trains run which stops, and ordering another
+         train when the service cannot keep up. Editing a line is a board
+         gesture: click the stations, in the order you want them called at. -->
+    <div v-if="hud.passengers" class="service-card">
+      <div class="service-head">
+        <span>🚉 Service</span>
+        <button
+          class="service-buy"
+          :disabled="!canBuyTrain"
+          :title="buyTitle"
+          @click="buyTrain"
+        >
+          + Train
+        </button>
+      </div>
+      <div v-for="t in serviceTrains" :key="t.id" class="service-line">
+        <span class="service-livery" :style="{ background: t.color }" />
+        <span class="service-id">
+          {{ t.id }}
+          <!-- Ordered but still in the shed: it leaves when the depot mouth
+               clears, so the queue is visible instead of the button looking
+               like it did nothing. -->
+          <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
+        </span>
+        <span class="service-stops">
+          <template v-if="t.stops.length">
+            <span
+              v-for="(s, i) in t.stops"
+              :key="s + i"
+              class="service-stop"
+              :class="{ 'service-stop--next': s === t.nextStop }"
+              >{{ i + 1 }}</span
+            >
+          </template>
+          <span v-else class="service-idle">no line</span>
+        </span>
+        <button
+          class="service-edit"
+          :class="{ 'service-edit--on': editingTrainId === t.id }"
+          @click="toggleEditLine(t.id)"
+        >
+          {{ editingTrainId === t.id ? "Done" : "Edit" }}
+        </button>
+      </div>
+      <p v-if="editingTrainId" class="service-hint">
+        Click stations on the board to build the line for
+        <b>{{ editingTrainId }}</b> — click a stop again to remove it.
+      </p>
+    </div>
+
     <div
-      v-if="!roadOnly"
+      v-if="!roadOnly && !hud.passengers"
       class="score-card"
       :class="{
         'score-card--pulse': pulsing,
@@ -231,12 +322,13 @@
         :class="{
           'level-tile--build-glow': buildArmed && buildGlowId === cell.key,
           'level-tile--razeable': razeArmed && canRaze(cell.key),
+          'level-tile--pickable': lineEditing && isStationTile(cell.key),
         }"
         :style="{
           width: config.tileSize + 'px',
           height: config.tileSize + 'px',
         }"
-        @click="onTileRaze(cell.key)"
+        @click="onTileClicked(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
         <!-- Standing scenery on its own layer above every patch fill, so a
@@ -247,7 +339,8 @@
           :tile="cell.tile"
           :coord-id="cell.key"
           class="tile-component"
-          :switch-interactive="!buildArmed && !razeArmed"
+          :switch-interactive="switchesEnabled && !buildArmed && !razeArmed"
+          :switches-visible="switchesEnabled"
         />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
@@ -547,6 +640,7 @@ import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default"
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
 import { GameMode, ModeSetup } from "@/modes/types";
+import { passengerTargetOf, OVERCROWD_LIMIT } from "@/modes/network";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
 import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
@@ -577,6 +671,8 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
     type: t.type,
     wagonIds: (t.wagons ?? []).map(w => w.id),
     destinations: (t.routeDestinations ?? []).map(d => d.to),
+    // In service on a line (network mode) — the sim routes it stop to stop.
+    ...(t.line?.length ? { line: t.line } : {}),
     spawnAtSec: t.spawnAtSec,
   }));
 }
@@ -1160,6 +1256,103 @@ class PlayView extends Vue {
     this.game.bulldoze(tileId);
   }
 
+  // --- the service: lines and rolling stock (network mode) -------------------
+  // Which train's line the player is currently drawing, if any. While this is
+  // set, a click on a station tile edits that line instead of doing whatever
+  // the board would otherwise do.
+  editingTrainId: string | null = null;
+
+  get lineEditing(): boolean {
+    return this.editingTrainId !== null;
+  }
+  isStationTile(tileId: string): boolean {
+    return this.level[tileId]?.role === "station";
+  }
+  // The service, as the panel shows it: every train with its stops and the one
+  // it is heading for right now.
+  get serviceTrains(): {
+    id: string;
+    color: string;
+    stops: string[];
+    nextStop?: string;
+    queued: boolean;
+  }[] {
+    return Object.keys(this.game.trainColors)
+      .sort()
+      .map(id => ({
+        id,
+        color: this.game.trainColors[id],
+        stops: this.game.trainLines[id] ?? [],
+        nextStop: this.game.sim.trainNextStop(id),
+        queued: this.game.queuedTrains.includes(id),
+      }));
+  }
+  // Ordering only needs a depot to exist. A busy one does not refuse the sale
+  // — the train is built and queues in the shed, and rolls out when the mouth
+  // clears (Transport Fever's rule: a full depot delays the departure, not the
+  // purchase).
+  get canBuyTrain(): boolean {
+    return this.game.depotTiles.length > 0;
+  }
+  get buyTitle(): string {
+    return this.canBuyTrain
+      ? "Order another train, in service on the line you are editing"
+      : "This board has no depot to build a train in";
+  }
+  buyTrain(): void {
+    const stops = this.editingTrainId
+      ? (this.game.trainLines[this.editingTrainId] ?? [])
+      : [];
+    // Prefer a depot that is free right now, so an order that CAN leave at
+    // once does; otherwise it joins the queue at the first one.
+    const free = this.game.depotTiles.find(id => !this.game.occupied[id]);
+    const def = this.game.buyTrain(stops, free);
+    if (!def) return;
+    // The board draws from the provided roster, so a bought train needs its
+    // TrainObject here or it would run invisibly — the sim would move a train
+    // with no sprite. (It did, until this was noticed.)
+    this.trains[def.id] = {
+      id: def.id,
+      x: def.x,
+      y: def.y,
+      status: TrainStatus.LeavingDepot,
+      type: def.type,
+      wagons: def.wagonIds.map(id => ({ id, type: def.type })),
+      ...(stops.length ? { line: [...stops] } : {}),
+    };
+    // A train ordered with no line yet is the one you will want to route next.
+    if (stops.length === 0) this.editingTrainId = def.id;
+  }
+  // Trains ordered but still in the shed, waiting their turn on the metals.
+  get queuedTrainIds(): string[] {
+    return this.game.queuedTrains;
+  }
+  toggleEditLine(trainId: string): void {
+    this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
+  }
+  // A click on a station while a line is being drawn: append it, or remove it
+  // if it is already a stop. Order is click order, which is the order the
+  // train will call at them.
+  editLineAt(tileId: string): void {
+    const id = this.editingTrainId;
+    if (!id) return;
+    const stops = [...(this.game.trainLines[id] ?? [])];
+    const at = stops.indexOf(tileId);
+    if (at >= 0) stops.splice(at, 1);
+    else stops.push(tileId);
+    this.game.setLine(id, stops);
+  }
+  // One click handler for the board, so the armed tool decides what a click
+  // means: bulldoze, edit a line, or nothing.
+  onTileClicked(tileId: string): void {
+    if (this.panning) return;
+    if (this.lineEditing && this.isStationTile(tileId)) {
+      this.editLineAt(tileId);
+      return;
+    }
+    this.onTileRaze(tileId);
+  }
+
   // Whether a click here would actually remove something — drives the hover
   // affordance, so the player can see which tiles are theirs to take back
   // before clicking. Cheap: it reads the level, not the sim's reservations,
@@ -1551,6 +1744,46 @@ class PlayView extends Vue {
 
   get levelComplete(): boolean {
     return this.totalTrains > 0 && this.delivered >= this.totalTrains;
+  }
+
+  // Whether the player may throw the points at all. `ModeControls.switches`
+  // has always described this ("a mode only gates whether the view exposes
+  // them") but nothing read it until the network mode needed it OFF: there the
+  // train decides where it goes, so a switch the player can flip is a control
+  // that fights the router. Every other mode passes true, exactly as before.
+  get switchesEnabled(): boolean {
+    return this.game.mode.controls.switches;
+  }
+
+  // --- passengers (network mode) ---------------------------------------------
+  // What the network mode steers by: people carried against the board's target,
+  // plus the fullest platform right now — the crowd IS the pressure, so it is
+  // shown live rather than only in the stars.
+  overcrowdLimit = OVERCROWD_LIMIT;
+  get passengersCarried(): number {
+    return this.game.objective.counters.passengersDelivered ?? 0;
+  }
+  get passengerTarget(): number {
+    return passengerTargetOf(this.level);
+  }
+  get passengersPct(): number {
+    return this.passengerTarget
+      ? Math.min(100, Math.round((this.passengersCarried / this.passengerTarget) * 100))
+      : 0;
+  }
+  get worstPlatform(): number {
+    let worst = 0;
+    for (const q of Object.values(this.game.stationQueues)) {
+      if (q > worst) worst = q;
+    }
+    return worst;
+  }
+  // Amber as the platform fills, red as it nears the overflow that ends the run.
+  get platformClass(): string {
+    const ratio = this.worstPlatform / OVERCROWD_LIMIT;
+    if (ratio >= 0.75) return "score-platform--critical";
+    if (ratio >= 0.5) return "score-platform--busy";
+    return "";
   }
 
   // Pop/glow the score card briefly whenever a new delivery lands.
@@ -2177,6 +2410,133 @@ export default toNative(PlayView);
 }
 .score-crossing--bad {
   color: #e2574c; // red when a car is stuck dangerously long
+}
+/* --- the service panel (network mode) ---
+   The player's whole verb set in this mode: which trains run which stops, and
+   ordering another when the service cannot keep up. Sits under the score card
+   in the same frosted-glass idiom as the rest of the HUD chrome. */
+.service-card {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 30;
+  min-width: 260px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(18, 22, 28, 0.82);
+  backdrop-filter: blur(6px);
+  color: #f3f5f7;
+  font-size: 13px;
+}
+.service-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.service-buy {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #34c759;
+  color: #08210f;
+}
+.service-buy:disabled {
+  background: #3a4048;
+  color: #8b939c;
+  cursor: not-allowed;
+}
+.service-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.service-livery {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+.service-id {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.service-stops {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 3px;
+}
+.service-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #2b3138;
+  font-size: 11px;
+  font-weight: 700;
+}
+/* The stop the train is actually heading for right now. */
+.service-stop--next {
+  background: #f0b429;
+  color: #221803;
+}
+.service-queued {
+  opacity: 0.75;
+  font-size: 11px;
+}
+.service-idle {
+  color: #8b939c;
+  font-style: italic;
+}
+.service-edit {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.service-edit--on {
+  background: #f0b429;
+  color: #221803;
+  border-color: transparent;
+  font-weight: 700;
+}
+.service-hint {
+  margin: 6px 0 0;
+  color: #b9c0c8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+/* A station you may click while drawing a line. */
+.level-tile--pickable {
+  cursor: pointer;
+  outline: 3px dashed rgba(240, 180, 41, 0.9);
+  outline-offset: -6px;
+  border-radius: 6px;
+}
+
+/* The busiest platform (network mode): the same three-step temperature the
+   crossing readout uses, because it is the same kind of pressure — something
+   is piling up and the player has a little time to act. */
+.score-platform {
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #8fd19e;
+  transition: color 0.3s ease;
+}
+.score-platform--busy {
+  color: #e6c34a;
+}
+.score-platform--critical {
+  color: #e2574c;
 }
 .score-stars {
   margin-top: 6px;

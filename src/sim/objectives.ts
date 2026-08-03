@@ -62,6 +62,10 @@ export interface Counters {
   // — the station layer's throughput. Optional like the other late counters so
   // hand-built Counters fixtures stay valid.
   passengersDelivered?: number;
+  // The fullest any platform has been this run (a high-water mark, like
+  // maxCarWaitSec): the crowd the player let build up. What the network mode's
+  // overcrowding fail and its "kept it calm" star read.
+  peakStationQueue?: number;
 }
 
 // A pure predicate over the counters; e.g. "no signal was ever overridden".
@@ -105,6 +109,11 @@ export function goalsOf(spec: ObjectiveSpec): GoalSpec[] {
 // lose" behaviour.
 export interface ObjectiveSpec {
   deliveriesRequired: number;
+  // A SECOND win target, for the network mode: carry this many passengers.
+  // Every stated target must be met to win, so a board asking only for
+  // passengers sets `deliveriesRequired: 0` and this — and a board that never
+  // mentions passengers behaves exactly as it always did.
+  passengersRequired?: number;
   timeLimitSec?: number;
   // Trains in play at t=0 (present without a spawn schedule). The live `active`
   // backlog counter starts here; spawned trains add to it, deliveries subtract.
@@ -122,6 +131,10 @@ export interface ObjectiveSpec {
     // play, undelivered) at once — the backlog the player let pile up. Off by
     // default so other modes never trip it.
     maxActiveTrains?: number;
+    // OVERCROWDING (network): lose when any platform holds more than this many
+    // waiting passengers — the Mini-Metro pressure, in station form. Off by
+    // default, and inert on any board without stations.
+    maxStationQueue?: number;
     // BANKRUPTCY (Tycoon): lose when an annual levy outruns the balance. Off by
     // default, and inert on any board with no calendar — no tax, no shortfall.
     // Note what it deliberately is NOT: "the balance reached zero". Being broke
@@ -171,6 +184,10 @@ export interface Observation {
   // Passengers whose ride ended this tick (station calls + matched arrivals).
   // A DELTA — assembled from the sim's dwell/arrived events like deliveries.
   passengersDeliveredDelta?: number;
+  // The fullest platform RIGHT NOW — an absolute, like maxCarWaitSec: the sim
+  // owns the queues, so re-deriving a peak from deltas would be a second source
+  // of truth. The tracker keeps the high-water mark.
+  maxStationQueue?: number;
 }
 
 export const emptyObservation: Observation = {
@@ -222,6 +239,7 @@ function zeroCounters(): Counters {
     unpaidTax: 0,
     tilesBuilt: 0,
     passengersDelivered: 0,
+    peakStationQueue: 0,
   };
 }
 
@@ -277,9 +295,20 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
         (counters.tilesBuilt ?? 0) + (obs.tilesBuiltDelta ?? 0);
       counters.passengersDelivered =
         (counters.passengersDelivered ?? 0) + (obs.passengersDeliveredDelta ?? 0);
+      if (obs.maxStationQueue !== undefined) {
+        counters.peakStationQueue = Math.max(
+          counters.peakStationQueue ?? 0,
+          obs.maxStationQueue
+        );
+      }
 
-      // Win takes priority over any same-tick fail.
-      if (counters.delivered >= spec.deliveriesRequired) {
+      // Win takes priority over any same-tick fail. EVERY stated target must be
+      // met: a board that never mentions passengers is unchanged, and one that
+      // asks only for passengers sets deliveriesRequired to 0.
+      const passengersMet =
+        spec.passengersRequired === undefined ||
+        (counters.passengersDelivered ?? 0) >= spec.passengersRequired;
+      if (counters.delivered >= spec.deliveriesRequired && passengersMet) {
         phase = "won";
         return;
       }
@@ -291,6 +320,16 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
         lostReason =
           "Bankrupt — the upkeep outgrew the railway. Deliver sooner, " +
           "or build leaner: every piece costs money every year you keep it.";
+        return;
+      }
+      if (
+        spec.fail?.maxStationQueue !== undefined &&
+        (counters.peakStationQueue ?? 0) > spec.fail.maxStationQueue
+      ) {
+        phase = "lost";
+        lostReason =
+          "A platform overflowed — the crowd outgrew the service. Call more " +
+          "often, or run longer trains.";
         return;
       }
       if (
