@@ -1011,6 +1011,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
       each for ~1.5s, which reads on screen as an occasional jaywalker rather
       than as broken geometry. Guarded by "nobody crosses the carriageway
       anywhere but the zebra" in `tests/unit/citizenWalking.spec.ts`.
+    · **A `side` is also spelled per TILE, so it must be TRANSLATED at every
+      seam** (2026-08-03). The reference frame is the tile's OWN through
+      movement, and that is only ever "whichever movement its lane list names
+      first": a corner authored `twoWay(Right, Bottom)` reads its outer bank as
+      +1 while the straight beside it authored `twoWay(Left, Right)` reads its
+      south bank as +1 — opposite banks, same number, both boards ordinary.
+      `walkMoves` therefore carries the BANK, not the sign, through
+      `sideAcross()` (footway.ts): compare the two tiles' bank normals on the
+      component perpendicular to the step. Carrying the raw number walked people
+      a road's width sideways at the seam with no crossing under them (0.44 of a
+      tile, on `citizenwalk`'s own corners).
+    · **A tile the route enters and leaves BY THE SAME EDGE must be RETRACED,
+      not walked through** (2026-08-03). It happens whenever the only zebra is
+      past the destination: down to the crossing, over, and back the way you
+      came, so the crossing tile's run has `prevTile === nextTile`. `buildSteps`
+      runs `t` 0 → 0.5 → 0 for it (`doubleBack`), and `pointOf` adds 180° to the
+      heading of any leg whose `t` descends. Walking on to the far edge instead
+      resumed the walk a whole tile back — the reported "he went left, and
+      suddenly appeared right", measured at 1.05 tiles.
+    · Both of the above are jumps, and a jump is the cheapest thing in this
+      module to TEST: sample every route on every citizen board each tick and
+      assert nobody moves further than a stride (~0.06 of a tile). A road is
+      0.44 wide and a tile is 1, so the two failure modes are unmissable and
+      need no per-case oracle. See "walks every route on every citizen board
+      without a single jump", and `/test/citizencrossback` for both in isolation.
     · Yielding needed NO new rule in the traffic model: a walker claims the tile
       and game.ts ORs it into the road sim's `closed` predicate — the same
       mechanism a level crossing uses for a train. Cars already know how to

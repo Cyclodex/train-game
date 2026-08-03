@@ -177,8 +177,11 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     t: number
   ): { x: number; y: number; headingDeg: number } {
     const { x, y } = parseCoordId(tileId);
-    // Defensive: a tile entered and left by the same edge has no crossing to
-    // follow. Treat it as a straight through so the walker still moves sanely.
+    // A tile entered and left by the same edge (the walker doubled back over the
+    // zebra — see `buildSteps`) is parameterised as the straight THROUGH it: the
+    // pavement runs edge to edge whichever way somebody happens to walk it, and
+    // the doubling back is expressed by running `t` back down again, not by
+    // bending the curve.
     const to = exit === entry ? oppositePort(entry) : exit;
     // A side is fixed to the street; this offset is relative to the walker's
     // direction of travel. Walking the street back the other way flips it — see
@@ -190,8 +193,13 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
 
   function pointOf(step: WalkStep, t: number): { x: number; y: number; headingDeg: number } {
     if (step.kind === "along") {
-      const tt = (step.tFrom as number) + ((step.tTo as number) - (step.tFrom as number)) * t;
-      return pavePoint(step.tileId, step.entry as Port, step.exit as Port, step.side, tt);
+      const from = step.tFrom as number;
+      const to = step.tTo as number;
+      const p = pavePoint(step.tileId, step.entry as Port, step.exit as Port, step.side, from + (to - from) * t);
+      // A leg that runs `t` BACKWARDS is the walker retracing the tile (the
+      // double-back at a zebra). They walk the same curve, so the point is
+      // right, but they face the other way along it.
+      return to < from ? { ...p, headingDeg: p.headingDeg + 180 } : p;
     }
     if (step.kind === "cross") {
       const a = pavePoint(step.tileId, step.entry as Port, step.exit as Port, step.side, 0.5);
@@ -262,9 +270,22 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
       } else if (entry === null) entry = oppositePort(exit as Port);
       else if (exit === null) exit = oppositePort(entry);
 
+      // DOUBLING BACK. The route comes onto this tile and leaves it by the SAME
+      // edge — which is what a walk to the other bank looks like whenever the
+      // nearest zebra is PAST the destination: down to the crossing, over, and
+      // back the way you came. The tile is then walked in to the middle and out
+      // AGAIN THROUGH THE ENTRY EDGE, so `t` runs 0 → 0.5 → 0, not 0 → 0.5 → 1.
+      //
+      // Carrying on to the far edge instead (what this did) walks the second
+      // half of the crossing tile in the wrong direction and then resumes on the
+      // PREVIOUS tile, a whole tile back: the walker steps off the zebra, strolls
+      // one way, and teleports a tile the other way. The reported symptom —
+      // "he went left, and suddenly appeared right" — measured at 1.05 tiles.
+      const doubleBack = prevTile !== null && prevTile === nextTile;
+
       // Half a tile where a driveway joins, a whole tile where the pavement runs on.
       const tStart = prevTile ? 0 : 0.5;
-      const tEnd = nextTile ? 1 : 0.5;
+      const tEnd = doubleBack ? 0 : nextTile ? 1 : 0.5;
 
       // Walking this tile means walking over the tracks. Only a leg that starts
       // at the tile BOUNDARY is marked: that is where the walker can stand and
