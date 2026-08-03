@@ -2523,7 +2523,16 @@ export function createGame(
   function setLine(trainId: string, stops: string[]): boolean {
     const def = defById[trainId];
     if (!def) return false;
-    if (sim.trains[trainId] && !sim.assignLine(trainId, stops)) return false;
+    if (sim.trains[trainId]) {
+      if (!sim.assignLine(trainId, stops)) return false;
+    } else if (stops.length) {
+      // Routing a train that is still in the shed. The LINE is created now,
+      // not when the train rolls out: a plan does not wait on a vehicle (D11),
+      // and the platforms are entitled to announce the service the player has
+      // just drawn. When the train is injected, `assignLine` finds this same
+      // line by its stops and puts it on it.
+      sim.createLine(stops);
+    }
     def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
     // The picture on the board is of THIS line; redraw it as it is edited.

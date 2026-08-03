@@ -465,9 +465,14 @@ describe("the service: buying trains and setting lines", () => {
     // The panel reads this — it must show the line straight away, not after
     // the train happens to leave.
     expect(game.trainLines[id]).toEqual(stops);
-    // And the platforms know a second service calls there.
+    // And the platforms know a second service calls there. The colour is the
+    // LINE's, not this train's livery: a service has to be identifiable on the
+    // platform before anything is running it, and two trains on one line must
+    // not paint it two colours (D11).
+    const line = game.lines.find(l => l.stops.join(">") === stops.join(">"));
+    expect(line).toBeDefined();
     for (const stop of stops) {
-      expect(game.stationLines[stop]).toContain(game.trainColors[id]);
+      expect(game.stationLines[stop]).toContain(line?.colour);
     }
 
     // Run until it rolls out: the line it was given while queued is the line
