@@ -608,6 +608,32 @@ lean — prune as much as you add. This file only stays useful if every task ten
   leaves a stale id in it: both the advance and the reservation release guard
   on `trains[id]` still existing.
 
+## ONE LEDGER: THE CITIZENS AND THE RAILWAY (9F, 2026-08-03)
+- A citizen joins the REAL platform queue under their own id
+  (`enqueuePassenger(tile, dest, tag)`) bound for the station THEY want, and
+  learns what happened from `DwellEvent.boardedTags` / `alightedTags`. The
+  shadow queue is gone, and with it the rider who kept a seat the rail sim had
+  already freed.
+- `TransitPort` is now `{enqueue(station, dest, tag): boolean, connects(a,b)}`.
+  `connects` is the D10 gate in `optionsFor`: transit is not even OFFERED unless
+  a service links the two ends.
+- `railPairFor` picks the platform PAIR by connectivity, not "nearest at each
+  end". A town between two railways has a nearest platform at each end that
+  never meet — the old code offered that journey and it could not be made.
+- `alightedAt` decides nothing any more: `stationId === trip.toStation` is an
+  arrival, anything else is a change the SIM already re-queued, so the citizen
+  layer must not queue them again.
+- Two balance facts that fell out, both worth knowing before touching this:
+  (1) a REFUSED trip now feeds the journey's own topic as well as `access`, and
+  costs the person part of the day (`stuckUntil`) — without that, D10 turned a
+  failed commute into a free afternoon of mood-restoring errands and the
+  citizens mode quietly lost its teeth. (2) On `threecities` only EASTFIELD
+  hollows out now; Westfield walks instead. What used to kill both towns was an
+  artefact — choosing a service that was never there and failing at it daily.
+- A lineless train no longer dumps its whole load at the next call. It carries
+  each rider to the station they named (`off = final`), because a stopper calls
+  everywhere it passes and can promise that. Only a RETIRING train dumps.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get
@@ -650,9 +676,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Initial queues are seeded AFTER the roster is built (`seedInitialQueues`) —
   at construction time there are no trains and no lines, so nothing is served
   and nobody would ever appear.
-- `enqueuePassenger(tile, dest)` queues ONE person with a known destination, for
-  a caller that has already decided (a citizen, a test). `addStationPassengers`
-  stays the anonymous-demand verb and still returns what it actually queued.
+- `enqueuePassenger(tile, dest, tag?)` queues ONE person with a known
+  destination, for a caller that has already decided (a citizen, a test).
+  `addStationPassengers` stays the anonymous-demand verb and still returns what
+  it actually queued.
+- LATENT DEMAND (`game.stationLatent`, the amber "N/min — no service" plate) is
+  the other half of D10: an unserved platform is empty, so something has to say
+  which places are still asking. Refreshed in `syncLines()`, NOT per frame — it
+  changes exactly when the services do, and a per-frame mirror is invisible to a
+  headless test. Never in a fail predicate.
+- It takes BOTH to leave a platform unserved, and each half is a rule:
+  scrapping the train is not enough (the LINE stands without it — D11), and
+  deleting the line is not enough (the train falls back to a stopper, which
+  calls everywhere it passes). A test that expects an unserved platform must do
+  both — two attempts at this one got it wrong.
+- Every mutation of the line registry MUST `touchLines()`; the graph is cached
+  behind it. `deleteLine` was missed and the graph went on serving a line that
+  no longer existed.
 
 ## A LINE IS AN OBJECT, NOT A FIELD ON A TRAIN (D11, 2026-08-03)
 - `SimLine {id, name, stops, pinned?}` in a registry; `SimTrain.lineId` points

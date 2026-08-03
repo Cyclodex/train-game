@@ -245,7 +245,7 @@ Not modelled: TRANSFERS — see phase 9.
 Still open beyond that: buses as passenger CARRIERS rather than feeders,
 buses as carriers rather than feeders, and rising demand over time.
 
-### Phase 9 — CHANGING TRAINS (planned 2026-08-03)
+### Phase 9 — CHANGING TRAINS — **SHIPPED 2026-08-03**
 
 **The problem, stated sharply.** Phase 8 boards a passenger only when the
 train's line calls at their FINAL destination (`serves.has(dest)` in
@@ -390,6 +390,25 @@ needs a train selected to show one.
 - **9G — the HUD.** Show a changing passenger as changing; the line list from
   9A; and on a citizen-less board the latent-demand readout. Read-only, never
   in the fail predicate.
+
+**What shipped, and what it cost.** All seven slices. Three things were learned
+the hard way and are worth carrying forward:
+
+- **A lineless train had to change too.** The plan said classic boards would be
+  byte-identical, with the one-hop rule kept for a train with no line. That was
+  wrong, and the citizen layer proved it: a stopper that dumps its whole load at
+  the next call leaves a person on a platform the sim never re-queued them on.
+  A stopper calls everywhere it passes, so it can carry someone to the station
+  they named — and now does. Only a RETIRING train dumps.
+- **D10 has a balance cost the plan did not price.** With transit refused rather
+  than attempted-and-abandoned, a failed commute became a free afternoon and the
+  citizens mode stopped hollowing out its towns. A refusal now feeds the
+  journey's own topic and costs part of the day. On `threecities` only the town
+  genuinely beyond walking range dies; the near one walks and merely suffers.
+  That is the honest model — what used to kill both was the artefact.
+- **The platform pair has to be chosen by connectivity.** "Nearest station to
+  home, nearest to work" is a journey nobody can make when a town sits between
+  two railways that never meet.
 
 **Traps to expect.** (1) A cycle in the line graph must not become an infinite
 transfer loop — the hop must strictly decrease distance-to-destination, or a

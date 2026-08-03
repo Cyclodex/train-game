@@ -47,7 +47,11 @@ export const transfer: TestScenario = {
     "5,1": expandKind("curve", 2), // ┐
 
     "1,2": stationNS("Weststadt"),
-    "5,2": expandKind("straight", 0),
+    // A platform NO line calls at. The trains run straight past it, nobody
+    // waits on it (they would be waiting for a service that does not exist),
+    // and it wears the "no service" hint instead — the one thing on the board
+    // that says which places are still asking for a connection.
+    "5,2": stationNS("Ostdorf"),
 
     // The two depot spurs: a T each, so a train can pull out either way.
     "1,3": {
@@ -81,6 +85,7 @@ export const transfer: TestScenario = {
     "0,1": town(),
     "0,2": town(),
     "6,1": town(),
+    "6,2": town(),
     "3,5": town(),
     "4,5": town(),
   },

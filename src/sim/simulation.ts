@@ -158,6 +158,17 @@ export interface SimTrain {
 export interface Rider {
   final: string;
   off: string;
+  // An opaque id the caller who queued this person gave them. The citizen layer
+  // puts its citizen id here, so the rail sim and the town keep ONE ledger
+  // instead of a shadow copy each guessing at the other's.
+  tag?: string;
+}
+
+// Someone standing on a platform: where they asked to go, and who they are to
+// whoever put them there.
+export interface Waiting {
+  dest: string;
+  tag?: string;
 }
 
 // A LINE: the plan, with an identity of its own. Trains are assigned to it —
@@ -230,6 +241,12 @@ export interface DwellEvent {
   // fixture written before transfers existed still compares equal. Only
   // `alighted - changing` are arrivals, which is what a score may count.
   changing?: number;
+  // WHO, for a caller that queued named people (`enqueuePassenger` with a tag).
+  // The citizen layer reads these instead of shadowing the sim's queue: one
+  // ledger, and no guessing about who the sim just moved. Absent when nobody
+  // aboard or waiting had a tag, so anonymous boards are unaffected.
+  boardedTags?: string[];
+  alightedTags?: string[];
 }
 
 // A retiring train reached a depot and was stabled: it is gone from the sim.
@@ -420,7 +437,14 @@ export interface Simulation {
   // or a test that needs an exact journey) rather than one asking the station
   // to invent one. False when the platform is at its cap or the pair is not
   // two different stations.
-  enqueuePassenger(tileId: string, dest: string): boolean;
+  enqueuePassenger(tileId: string, dest: string, tag?: string): boolean;
+  // Does any chain of SERVICES connect these two platforms? The question a
+  // person asks before setting out (D10) — and the reason nobody stands on a
+  // platform waiting for a train that was never going to come.
+  serves(fromStation: string, toStation: string): boolean;
+  // Every station a service reaches from here, in a stable order. Read-only —
+  // what a HUD showing latent demand would draw from.
+  servedFrom(tileId: string): string[];
   // Passengers currently riding this train.
   trainPassengers(id: string): number;
   // Total passengers whose ride ended (at a station call or a matched depot
@@ -506,7 +530,7 @@ export function createSimulation(config: SimConfig): Simulation {
   // Per station: WHO is waiting, as the tile id each of them asked for. A
   // count would have been enough while everybody got off at the next stop;
   // with destinations the queue has to remember what it wants.
-  const queues = new Map<string, string[]>();
+  const queues = new Map<string, Waiting[]>();
   const spawnClocks = new Map<string, number>();
   // Where the next person at each station will ask to go. A cursor walked in
   // order rather than an RNG draw: destinations must be deterministic like
@@ -549,10 +573,10 @@ export function createSimulation(config: SimConfig): Simulation {
   function seedInitialQueues(): void {
     for (const [tid, d] of Object.entries(stationDemand)) {
       const seed = Math.min(d.initial ?? 0, d.max);
-      const start: string[] = [];
+      const start: Waiting[] = [];
       for (let i = 0; i < seed; i++) {
         const dest = nextDestination(tid);
-        if (dest) start.push(dest);
+        if (dest) start.push({ dest });
       }
       queues.set(tid, start);
     }
@@ -567,7 +591,7 @@ export function createSimulation(config: SimConfig): Simulation {
         clock -= d.intervalSec;
         if (q.length < d.max) {
           const dest = nextDestination(tid);
-          if (dest) q.push(dest);
+          if (dest) q.push({ dest });
         }
       }
       spawnClocks.set(tid, clock);
@@ -1286,29 +1310,34 @@ export function createSimulation(config: SimConfig): Simulation {
       // for every board that never mentions a line. A retiring train does the
       // same: its riders are better off on a platform than in a shed.
       const stops = stopsOf(train);
-      const onelegged = !stops?.length || train.retiring;
+      // A RETIRING train sets everyone down here whatever they asked for: its
+      // riders are better off on a platform than in a shed. Anyone not at their
+      // destination is re-queued and carries on, exactly like a change.
+      const dumpAll = !!train.retiring;
       const staying: Rider[] = [];
-      const changing: string[] = [];
+      const changing: Waiting[] = [];
+      // WHO got off and who got on, for a caller that queued named people (the
+      // citizen layer). Anonymous demand contributes nothing here.
+      const alightedTags: string[] = [];
+      const boardedTags: string[] = [];
       let alighted = 0;
       for (const rider of train.manifest) {
-        if (!onelegged && rider.off !== tileId) {
+        if (!dumpAll && rider.off !== tileId) {
           staying.push(rider);
           continue;
         }
         alighted += 1;
+        if (rider.tag !== undefined) alightedTags.push(rider.tag);
         // A DELIVERY is arriving where you asked for, and nowhere else (D9):
         // counting a change as an arrival would score one person two or three
         // times and quietly inflate every objective built on the number.
-        //
-        // The one exception is the ONE-HOP service, and it is deliberate. A
-        // lineless train (and a retiring one) has no line to hand anyone on
-        // with, so it sets its riders down at its next call and that has always
-        // ended their trip. Making them change instead would re-queue and
-        // re-board the whole load at every platform, inflating dwell times and
-        // the balance of every board written before lines existed. Classic
-        // boards stay exactly as they were; changing is a LINE mechanism.
-        if (onelegged || rider.final === tileId) passengersDeliveredTotal += 1;
-        else changing.push(rider.final);
+        if (rider.final === tileId) passengersDeliveredTotal += 1;
+        else {
+          changing.push({
+            dest: rider.final,
+            ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
+          });
+        }
       }
       train.manifest = staying;
 
@@ -1325,16 +1354,21 @@ export function createSimulation(config: SimConfig): Simulation {
       queue.unshift(...changing);
       let boarded = 0;
       if (!train.retiring) {
-        const left: string[] = [];
-        for (const dest of queue) {
+        const left: Waiting[] = [];
+        for (const waiting of queue) {
           if (train.manifest.length >= train.capacity) {
-            left.push(dest);
+            left.push(waiting);
             continue;
           }
-          const off = onelegged ? dest : offFor(train, tileId, dest);
-          if (off === undefined) left.push(dest);
+          const off = offFor(train, tileId, waiting.dest);
+          if (off === undefined) left.push(waiting);
           else {
-            train.manifest.push({ final: dest, off });
+            train.manifest.push({
+              final: waiting.dest,
+              off,
+              ...(waiting.tag !== undefined ? { tag: waiting.tag } : {}),
+            });
+            if (waiting.tag !== undefined) boardedTags.push(waiting.tag);
             boarded += 1;
           }
         }
@@ -1363,6 +1397,8 @@ export function createSimulation(config: SimConfig): Simulation {
         boarded,
         alighted,
         ...(changing.length ? { changing: changing.length } : {}),
+        ...(boardedTags.length ? { boardedTags } : {}),
+        ...(alightedTags.length ? { alightedTags } : {}),
       });
       return;
     }
@@ -1648,6 +1684,7 @@ export function createSimulation(config: SimConfig): Simulation {
       delete lines[lineId];
       const at = lineOrder.indexOf(lineId);
       if (at >= 0) lineOrder.splice(at, 1);
+      touchLines();
       return true;
     },
     lineOf(trainId: string) {
@@ -1700,7 +1737,7 @@ export function createSimulation(config: SimConfig): Simulation {
       return queues.get(tileId)?.length ?? 0;
     },
     stationWaiting(tileId: string) {
-      return [...(queues.get(tileId) ?? [])];
+      return (queues.get(tileId) ?? []).map(w => w.dest);
     },
     addStationPassengers(tileId: string, count: number) {
       if (!isStationTile(tileId) || count <= 0) return 0;
@@ -1715,20 +1752,26 @@ export function createSimulation(config: SimConfig): Simulation {
         // the destination should use `enqueuePassenger` instead.
         const dest = nextDestination(tileId);
         if (!dest) break;
-        q.push(dest);
+        q.push({ dest });
         accepted += 1;
       }
       queues.set(tileId, q);
       return accepted;
     },
-    enqueuePassenger(tileId: string, dest: string) {
+    serves(fromStation: string, toStation: string) {
+      return lineNetwork().serves(fromStation, toStation);
+    },
+    servedFrom(tileId: string) {
+      return lineNetwork().reachableFrom(tileId);
+    },
+    enqueuePassenger(tileId: string, dest: string, tag?: string) {
       if (!isStationTile(tileId) || !isStationTile(dest) || dest === tileId) {
         return false;
       }
       const cap = stationDemand[tileId]?.max ?? STATION_QUEUE_HARD_CAP;
       const q = queues.get(tileId) ?? [];
       if (q.length >= cap) return false;
-      q.push(dest);
+      q.push({ dest, ...(tag !== undefined ? { tag } : {}) });
       queues.set(tileId, q);
       return true;
     },

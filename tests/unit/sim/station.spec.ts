@@ -413,20 +413,29 @@ describe("station passengers with destinations", () => {
     expect(sim.stationWaiting("2,2")).not.toContain("9,9");
   });
 
-  it("a train with NO line still runs the old one-hop service", () => {
+  it("a train with NO line carries people to what they asked for", () => {
     const sim = createSimulation({
       level: ring(),
       trains: [{ ...riderTrain([]), line: undefined }],
       stationDemand: { "2,2": { intervalSec: 100, max: 10, initial: 4 } },
     });
     const events: SimEvent[] = [];
-    for (let t = 0; t < 60; t += 0.05) events.push(...sim.step(0.05));
+    for (let t = 0; t < 90; t += 0.05) events.push(...sim.step(0.05));
     const calls = events.filter(
       (e): e is Extract<SimEvent, { type: "dwell" }> => e.type === "dwell"
     );
     // It took people at C…
     expect(calls[0]?.boarded ?? 0).toBeGreaterThan(0);
-    // …and set them all down at the very next call, wherever that was.
-    expect(calls[1]?.alighted ?? 0).toBe(calls[0]?.boarded ?? 0);
+    // …and carried each of them to the platform they named, rather than
+    // setting the whole load down at the next call. A stopper calls everywhere
+    // it passes, so it can promise that; the one-hop rule was an approximation
+    // from before passengers had destinations, and it read to a rider like a
+    // railway that never went anywhere.
+    expect(sim.stationWaiting("2,2")).toEqual([]);
+    expect(sim.passengersDelivered()).toBe(4);
+    // Nobody was set down anywhere they had not asked for.
+    for (const call of calls) {
+      expect(call.changing ?? 0).toBe(0);
+    }
   });
 });

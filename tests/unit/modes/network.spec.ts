@@ -305,6 +305,39 @@ describe("the service: buying trains and setting lines", () => {
     expect(game.removedTrains).not.toContain("circle");
   });
 
+  // 9G. Since D10 an unserved platform is EMPTY — which on a board with no
+  // citizen layer would leave the player nothing at all to tell them which
+  // places want a connection. The latent readout is that, and only that: it
+  // vanishes the moment a service reaches the platform, and no score reads it.
+  it("shows what an unserved platform would carry, and stops once served", () => {
+    const game = gameFor();
+    game.advance(0.2);
+    const stops = [...(networkmode.trains.circle.line ?? [])];
+    // Everything is on the authored line, so nothing is asking.
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
+
+    // It takes BOTH to leave a platform unserved, and each half is instructive.
+    // Scrapping the train is not enough — the LINE stands without it (D11), and
+    // a planned service is a service. Deleting the line is not enough either —
+    // the train falls back to a stopper, and a stopper calls everywhere it
+    // passes.
+    expect(game.scrapTrain("circle")).toBe(true);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
+
+    for (const line of [...game.lines]) game.deleteLine(line.id);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBeGreaterThan(0);
+
+    // Now DRAW a line and buy nothing. The platforms stop asking, because a
+    // planned service is a service (D11) — how often a train actually turns up
+    // is the player's problem, and the queue that grows is how they hear about
+    // it.
+    game.createLine(stops);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
+  });
+
   it("setLine re-routes a train in service, and [] takes it out", () => {
     const game = gameFor();
     const one = [game.stationTiles[0]];

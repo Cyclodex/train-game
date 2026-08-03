@@ -426,6 +426,10 @@ export interface Game {
   stationQueues: Record<string, number>;
   // tileId -> the destination each of them asked for, in queue order.
   stationWaiting: Record<string, string[]>;
+  // tileId -> people per minute an UNSERVED platform would carry. Zero as soon
+  // as a line reaches it. The "build here" hint on a board with no citizen
+  // layer to be unhappy at you; never part of a score.
+  stationLatent: Record<string, number>;
   // The citizen layer (Citizens mode). Empty for every other mode, which is how
   // the HUD knows not to draw the city cards at all.
   cities: CityState[];
@@ -771,6 +775,9 @@ export function createGame(
   const stationLines = reactive({}) as Record<string, string[]>;
   // Every line, mirrored from the sim for the panel and the board.
   const lines = reactive([]) as LineView[];
+  // stationTileId -> people per minute this platform WOULD carry if anything
+  // called there. Zero once a service does. See `latentDemandAt`.
+  const stationLatent = reactive({}) as Record<string, number>;
   // Ids of trains ordered but still waiting in the shed, oldest first — the
   // panel shows them so a queue is visible rather than a button that seems to
   // have done nothing.
@@ -1116,9 +1123,15 @@ export function createGame(
         seed: citizenSetup.seed ?? colorSeed,
         tuning: citizenSetup.tuning,
         // The two things the citizen sim pushes back into the world: a person
-        // who chose the train becomes a passenger on a real platform, capped by
-        // the real platform...
-        transit: { enqueue: (stationId, n) => sim.addStationPassengers(stationId, n) },
+        // who chose the train becomes a passenger on a real platform, under
+        // their own name and bound for where THEY are going — the rail sim then
+        // carries them there, changing trains if it has to, and says on its
+        // dwell events who it moved. One ledger, not two.
+        transit: {
+          enqueue: (stationId, dest, tag) =>
+            sim.enqueuePassenger(stationId, dest, tag),
+          connects: (from, to) => sim.serves(from, to),
+        },
         // ...and a person who chose to drive becomes an actual car on the
         // actual street, subject to every queue, junction and level crossing on
         // the way. Their journey time is whatever the traffic gives them.
@@ -1572,6 +1585,15 @@ export function createGame(
     }
   }
 
+  // How many people an hour this platform's catchment would produce if a
+  // service ever called here. Derived from the same catchment the real spawn
+  // rate comes from, so the readout and the demand cannot disagree.
+  function latentDemandAt(tileId: string): number {
+    const d = stationDemandOf(level, tileId);
+    if (!Number.isFinite(d.intervalSec) || d.intervalSec <= 0) return 0;
+    return Math.max(1, Math.round(60 / d.intervalSec));
+  }
+
   // Mirror each station's live platform queue for the crowd render. Vue's
   // reactive set is a no-op while the count is unchanged, so this is cheap.
   function updateStationQueues() {
@@ -1876,6 +1898,23 @@ export function createGame(
         const at = (stationLines[stop] ??= []);
         if (!at.includes(line.colour)) at.push(line.colour);
       }
+    }
+    // LATENT DEMAND: what a platform would carry if it were served. Refreshed
+    // HERE rather than per frame, because it changes exactly when the services
+    // do — a player action, never a tick — and because a per-frame mirror is
+    // invisible to a headless test (the hidden-tab trap: `frame()` does not run
+    // without a browser, so a rule proved only there is not proved at all).
+    //
+    // On a board with a citizen layer an unhappy town says this better. A plain
+    // network board has no moods to read, and since D10 an unserved platform is
+    // EMPTY — so without this there is nothing at all to tell the player which
+    // places are waiting for a connection. Read-only, and deliberately not in
+    // any fail predicate: punishing someone for demand they were never given
+    // the chance to serve is the thing D10 exists to remove.
+    for (const id of Object.keys(level)) {
+      if (level[id]?.role !== "station") continue;
+      const want = sim.servedFrom(id).length > 0 ? 0 : latentDemandAt(id);
+      if (stationLatent[id] !== want) stationLatent[id] = want;
     }
   }
   for (const def of trainDefs) syncLine(def.id);
@@ -2657,6 +2696,7 @@ export function createGame(
     occupied,
     stationQueues,
     stationWaiting,
+    stationLatent,
     cities,
     citizenStats,
     pedestrians,
@@ -2768,6 +2808,7 @@ export function createGame(
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
       for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+      for (const id of Object.keys(stationLatent)) delete stationLatent[id];
       // buildSims() made a fresh line registry from the train defs, so the view
       // copies have to come from the NEW sim or they would name dead line ids.
       clearLineOverlay();

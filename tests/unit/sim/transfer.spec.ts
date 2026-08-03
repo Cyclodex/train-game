@@ -268,7 +268,7 @@ describe("the transfer scenario", () => {
         entryPort: Position.Center,
         color: board.colors?.trainColors?.[t.id] ?? "green",
         type: t.type,
-        wagonCount: t.wagons.length,
+        wagonCount: t.wagons?.length ?? 1,
         speed: 1.4,
         ...(t.line ? { line: t.line } : {}),
       })),
