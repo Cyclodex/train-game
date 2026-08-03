@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createGame, TrainDef } from "@/game";
-import { citizensMode } from "@/modes/citizens";
+import { citizensMode, citizensModeWith } from "@/modes/citizens";
 import { sandboxMode } from "@/modes/sandbox";
 import { threecities } from "@/levels/test/scenarios/threecities";
 
@@ -20,6 +20,14 @@ function defsOf() {
     wagonIds: (t.wagons ?? []).map(w => w.id),
   }));
 }
+
+// A DAY-COMPRESSED mode for the tests below that are about what happens over
+// several days — growth, emigration, an equilibrium. The shipped day is 1800
+// board seconds (calibrated so a cross-map commute reads as about an hour of
+// the in-game clock), and at that length "five days" would be nine thousand
+// seconds of simulation. Compressing it is stated out loud here rather than the
+// shipped calibration being bent to keep the suite fast.
+const fiveDayMode = citizensModeWith({ secPerDay: 300 });
 
 function newGame(mode = citizensMode) {
   return createGame(
@@ -81,8 +89,8 @@ describe("three cities: the citizens commute on the real railway", () => {
   });
 
   it("carries the majority of journeys by rail once the towns are out of walking reach", () => {
-    const game = newGame();
-    run(game, 1500); // five in-game days
+    const game = newGame(fiveDayMode);
+    run(game, 1500); // five in-game days, at the compressed day length
     const s = game.citizenStats;
     // The headline number of the whole mode: most journeys on this board are
     // made by train, because the jobs are genuinely out of walking reach of the
@@ -102,7 +110,7 @@ describe("three cities: the citizens commute on the real railway", () => {
       threecities.level,
       [], // no trains
       200,
-      citizensMode,
+      fiveDayMode, // same compressed clock as its pair above
       1,
       threecities.colors,
       undefined,
