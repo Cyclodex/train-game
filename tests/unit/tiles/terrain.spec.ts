@@ -15,6 +15,10 @@ import {
   terrainOf,
   fieldPlanAt,
   edgeStyleOf,
+  terraceBanks,
+  heightTint,
+  Elevation,
+  HeightNeighbours,
   FOOT,
   TERRAIN_BUILD_FACTOR,
   URBAN_SMALLEST_REACH,
@@ -952,6 +956,203 @@ describe("terrain", () => {
       );
       const big = (ws: number[]) => (ws.length ? Math.max(...ws) : 0);
       expect(big(beside)).toBeLessThan(big(open));
+    });
+  });
+
+  // WHERE the terrace of an elevated cell goes. It used to be composed by the
+  // VIEW — terrace fragment, then terrain fragment — which is why raising
+  // anything but grass showed nothing at all: every other kind paints an opaque
+  // patch straight over it. It belongs INSIDE the ground build.
+  describe("elevated ground", () => {
+    beforeEach(() => _clearTerrainCache());
+
+    const flat: HeightNeighbours = {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      topLeft: 0,
+      topRight: 0,
+      bottomRight: 0,
+      bottomLeft: 0,
+    };
+    const up = (height: number): Elevation => ({ height, around: flat });
+    const allSides = (h: number) => ({ top: h, right: h, bottom: h, left: h });
+
+    // The bank's own half-width in tiles/terrain.ts. Buildings are placed by
+    // their centre and sized to the room measured there, so what the keep-out
+    // guarantees is that nothing REACHES across it.
+    const BANK_HALF = 7;
+    const coords = Array.from({ length: 20 }, (_, i) => `${i},4`);
+    // How far west each building actually reaches: its centre less its own
+    // radius (`reach` in `building` — hypot of the roof's sides, halved, which
+    // is what makes the bound hold whatever angle it was turned to).
+    const westEdges = (svg: string) =>
+      svg
+        .split('<g transform="translate(')
+        .slice(1)
+        .map(g => {
+          const x = Number(g.slice(0, g.indexOf(" ")));
+          const dim = (attr: string) =>
+            Math.max(
+              ...[...g.matchAll(new RegExp(`${attr}="([\\d.]+)"`, "g"))].map(m =>
+                Number(m[1]),
+              ),
+              0,
+            );
+          return x - Math.hypot(dim("width"), dim("height")) / 2;
+        });
+
+    it("lays the terrace OVER the ground's own fill", () => {
+      // The bug, at its smallest: a raised wood that looks exactly like the flat
+      // wood beside it.
+      const wood = tileGroundSvg("forest", "2,2", around("forest"), 9);
+      const hill = tileGroundSvg("forest", "2,2", around("forest"), 9, [], up(2));
+      expect(hill).not.toEqual(wood);
+      // The forest's own fill is still there, UNDER the terrace — a flat
+      // neighbour has to meet that colour at the foot of the slope.
+      const base = wood.match(/fill="(hsl\([^"]+)"\/>/)![1];
+      const [h, s] = heightTint(2, "meadow", "forest");
+      expect(hill.indexOf(base)).toBeGreaterThanOrEqual(0);
+      expect(hill.indexOf(base)).toBeLessThan(hill.indexOf(`hsl(${h} ${s}%`));
+    });
+
+    it("keeps the ground's detail ON the step, not under it", () => {
+      // The whole reason the terrace is spliced mid-build rather than layered
+      // by the view: a terraced field still has its furrows, a raised town its
+      // paving, a raised rock field its scree.
+      const field = tileGroundSvg("farmland", "2,2", around("farmland"), 9, [], up(2));
+      const [h, s] = heightTint(2, "meadow", "farmland");
+      // The furrows are the one group clipped to the patch, so they name it.
+      expect(field.indexOf(`hsl(${h} ${s}%`)).toBeLessThan(field.indexOf("<g clip-path="));
+    });
+
+    it("draws nothing extra at ground level", () => {
+      expect(tileGroundSvg("rock", "2,2", around("rock"), 9, [], up(0))).toEqual(
+        tileGroundSvg("rock", "2,2", around("rock"), 9),
+      );
+    });
+
+    it("leaves flat grass exactly as it was", () => {
+      // Grass is the compatibility case: it paints no fill, so its terrace goes
+      // FIRST, exactly where the view used to put it.
+      const meadow = tileGroundSvg("grass", "2,2", around("grass"), 9);
+      const knoll = tileGroundSvg("grass", "2,2", around("grass"), 9, [], up(1));
+      expect(knoll.endsWith(meadow)).toBe(true);
+    });
+
+    it("stands no building on a terrace bank", () => {
+      // A retaining wall is not somewhere you put a house. A block dropped
+      // across a step came out half on the upper bench and half on the lower
+      // one, hanging over its own cut.
+      //
+      // The bank here is the WEST boundary: this cell stands at 2, the ground
+      // to the west at 1. Buildings are placed by their centre and sized to the
+      // room measured there, so the invariant is a clear strip along the bank.
+      const dropsWest: Elevation = { height: 2, around: { ...flat, left: 1 } };
+      for (const c of coords) {
+        for (const edge of westEdges(
+          tileScatterSvg("urban", c, around("urban"), 11, [], dropsWest),
+        )) {
+          expect(edge).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+
+      // …and that strip is real estate somebody would otherwise have built on,
+      // so the assertion above is not vacuous.
+      const before = coords.flatMap(c =>
+        westEdges(tileScatterSvg("urban", c, around("urban"), 11)).filter(
+          e => e <= BANK_HALF - 1,
+        ),
+      );
+      expect(before.length).toBeGreaterThan(0);
+    });
+
+    it("keeps a town off the foot of the NEXT tile's wall", () => {
+      // The half that is easy to miss: the first step off a summit is drawn on
+      // the shared boundary by the UPPER tile, and a building down here
+      // overhangs the tile edge (TOWN_OVERHANG) — so it hangs over a drop it
+      // cannot see. Each side reads the same boundary from its own neighbour
+      // heights, so both keep off it.
+      const underCliff: Elevation = { height: 0, around: { ...flat, left: 2 } };
+      for (const c of coords) {
+        for (const edge of westEdges(
+          tileScatterSvg("urban", c, around("urban"), 11, [], underCliff),
+        )) {
+          expect(edge).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+    });
+
+    it("fences a corner the ground only steps at DIAGONALLY", () => {
+      // The case with no edge to hang a keep-out on: three cells stand level
+      // and the fourth does not, so nothing stops at any boundary this tile
+      // shares. The break belongs to the two tiles either side of the odd one
+      // out, and both of their banks run through the corner all four meet at —
+      // which a building reaching past its own tile edge can crowd without ever
+      // crossing an edge this tile fences.
+      const nwDrops: Elevation = { height: 1, around: { ...flat, ...allSides(1), topLeft: 0 } };
+      // How close each building gets to the top-left corner: centre distance
+      // less its own radius.
+      const cornerGaps = (svg: string) =>
+        svg
+          .split('<g transform="translate(')
+          .slice(1)
+          .map(g => {
+            const [x, y] = g.slice(0, g.indexOf(")")).split(" ").map(Number);
+            const dim = (attr: string) =>
+              Math.max(
+                ...[...g.matchAll(new RegExp(`${attr}="([\\d.]+)"`, "g"))].map(m =>
+                  Number(m[1]),
+                ),
+                0,
+              );
+            return Math.hypot(x, y) - Math.hypot(dim("width"), dim("height")) / 2;
+          });
+
+      // The fence itself, which is the part worth pinning: a degenerate
+      // one-point corridor on the corner, and only where the diagonal steps.
+      const corner = (e: Elevation) =>
+        terraceBanks("2,2", 11, "urban", e).filter(
+          c => c.pts.length === 2 && c.pts[0].x === 0 && c.pts[0].y === 0,
+        );
+      const level: Elevation = { height: 1, around: { ...flat, ...allSides(1), topLeft: 1 } };
+      expect(corner(nwDrops)).toHaveLength(1);
+      expect(corner(level)).toHaveLength(0);
+      // A diagonal that stands HIGHER is a break too — the foot of its wall.
+      expect(corner({ ...nwDrops, around: { ...nwDrops.around, topLeft: 2 } })).toHaveLength(1);
+
+      // …and no building crosses it. NOTE this holds with room to spare today:
+      // the urban band (26..74) plus the overhang cap already keep a roof ~18
+      // units off any tile corner, so the disc never actually binds. It is a
+      // guard, not a fix for something visible — which is exactly why the
+      // corridor above is asserted directly rather than through the picture.
+      for (const c of coords) {
+        for (const gap of cornerGaps(
+          tileScatterSvg("urban", c, around("urban"), 11, [], nwDrops),
+        )) {
+          expect(gap).toBeGreaterThan(BANK_HALF - 1);
+        }
+      }
+    });
+
+    it("leaves trees and boulders on the slope", () => {
+      // Buildings only. A wood that stepped back from every contour would be a
+      // wood full of bald rings, and a boulder field is nothing but slopes.
+      const drops: Elevation = { height: 2, around: { ...flat, left: 1 } };
+      for (const kind of ["forest", "rock"] as const) {
+        expect(tileScatterSvg(kind, "3,4", around(kind), 11, [], drops)).toEqual(
+          tileScatterSvg(kind, "3,4", around(kind), 11),
+        );
+      }
+    });
+
+    it("keys the memo on the elevation", () => {
+      // Two cells alike in every way the old key knew about, one of them a hill.
+      const hill = tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(2));
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9)).not.toEqual(hill);
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(1))).not.toEqual(hill);
+      expect(tileGroundSvg("rock", "3,3", around("rock"), 9, [], up(2))).toEqual(hill);
     });
   });
 });

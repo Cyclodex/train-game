@@ -34,6 +34,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either end. Page padding cannot do this: it made the page taller than the window
   AND still pinned a big world's edge hard against the viewport, with nothing to
   push the outer row of tiles off the frame's vignette.
+- CLEARANCE FROM THE HUD IS THE CAMERA'S JOB TOO (2026-08-03): `.world` is
+  FULL-BLEED (no padding) and the fixed chrome floats over it; `CHROME_INSETS`
+  (top 180 / sides 24 / bottom 128, the old `.world` padding) is passed to
+  `createCameraController`'s 3rd arg by PlayView + EditorView. `clampCamera`
+  centres a small world in the INSET strip and lets a big one be panned until
+  its last row clears the dock; `fitZoom` fits inside the strip. Padding on the
+  wrapper could not do either: it shrank the camera's window, so the world's
+  ground stopped short of the screen in a dead border, and the bottom rows could
+  only ever be dragged as far as the dock. TestStage passes no insets (its
+  controls are in flow, not over the board) and is unchanged.
 - `/test` IS EXACTLY ONE SCREEN AND NEVER SCROLLS. `.test-view` is a `100vh` flex
   column; `.test-stage` fills its parent (`flex:1; min-height:0`) — it used to be
   `100vh` ITSELF, below a breadcrumb and a description, so the page was ~160px
@@ -446,15 +456,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   as a straight; `expandKind("station", rot)` authors one; `toggleStation`
   (editOps) is the editor verb and hands back the SAME cell reference on a
   refusal, so callers can tell "no-op" from "changed".
-- The stop line is INSIDE the tile: `STATION_STOP_PROGRESS` (0.5) of the head
-  segment, not a tile boundary. `clearDistanceAhead` early-returns the in-tile
-  remainder for a pending stop and cuts its look-ahead run mid-tile at a
-  station ahead; the braking cap then lands the head exactly on the line (same
-  finite-time clamp argument as signal stop lines).
 - A station IS a block boundary (`isBoundary`), exactly like a signal: the
-  approach reserves only up to the platform, and a dwelling train holds nothing
-  beyond its own tiles. Without this a 3 s dwell pins the route to the next
-  real signal for the whole stop.
+  approach reserves only up to the platform. (A train DRAWN UP at one does hold
+  the block past it — its loco is physically out there; see below.)
 - Dwell-once-per-pass is tracked by PATH INDEX (`dwelledAtIndex`), never tile
   id — a revisit is a higher index, so the train stops again (the bounce test
   proves 2 dwells). `bounceOutOfDepot` resets the path to index 0 and must
@@ -463,6 +467,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
   read as a dead board.
 - `/test/station` is the isolation scenario; sim behaviour in
   `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
+
+## DRAWING UP AT THE PLATFORM (2026-08-04) — a train is longer than its halt
+- A platform is ONE TILE. A loco and a people wagon are 100 px each on a 200 px
+  tile, so loco + 2 carriages = 1.54 tiles: nothing puts the whole train beside
+  the slab. The alignment is therefore on the CARRIAGES —
+  `platformStopDistance()` centres the block from the nose of unit 1 to the tail
+  of the last unit on `PLATFORM_CENTRE_PROGRESS` (0.5), which draws the loco
+  clear of the far end. A lone loco has no carriages, so its own body is the
+  block and it stops centred (the old behaviour, for that case only).
+- CONSEQUENCE: the stop line is usually PAST the station tile — for the standard
+  2-carriage train the head comes to rest ~0.53 into the NEXT tile. So the head
+  is not on the station when the train is standing at it. Anything that asked
+  "is the head on an unserved station?" is wrong; `pendingPlatformStop()` scans
+  BACK over the last `ceil(reach)+1` path segments instead and returns
+  `{index, remaining}`. The `departed` event must report `path[dwelledAtIndex]`,
+  not the head tile.
+- `clearDistanceAhead(train, stop)` takes that pending stop as a CAP, not an
+  answer: drawing up crosses a tile boundary, so the run is still cleared tile by
+  tile (mayCross/occupancy). A blocked approach holds the train short of the
+  platform, which is correct.
+- Because the loco crosses onto the next tile to draw up, a dwelling train DOES
+  reserve the block beyond the station. That is honest (it is standing there),
+  but it costs a little throughput versus the old in-tile stop.
+- FALLBACK, and it is load-bearing: if the train is brought to a stand short of
+  the line and cannot go on (buffers, red signal, train ahead) it dwells where it
+  stands, provided it has reached `MIN_PLATFORM_REACH` (the platform centre).
+  Without it a terminus platform — stop line past the end of the metals — is a
+  station no service ever calls at, and the line cursor never advances: deadlock.
+- `advance()` order matters: move → `crossBoundaries()` → dwell check. The dwell
+  used to run before the boundary walk; with the head now landing on a later
+  segment it must run after, and must re-check `trains[id]` + `state` because a
+  depot in that walk can park, bounce or RETIRE the train mid-tick.
+- Platform slabs are drawn edge to edge (`margin = 0` in `Tile.vue`): the
+  2-carriage block is 204 px, a shade longer than the tile, so an inset slab left
+  the ends of the train off the platform. Two station tiles side by side also
+  read as one long platform this way (they are still two separate stops).
+- Trains ordered into service are built with `SERVICE_TRAIN_WAGONS = 2`
+  (game.ts). Three overhung the platform at both ends. Raise it only alongside
+  real multi-tile platforms.
+- `/test/platformstop` is the isolation scenario (six-tile ring so the stop comes
+  round every few seconds).
 
 ## STATION PASSENGERS (phase 2 — queues & boarding, 2026-08-01)
 - Demand is a SCHEDULE handed to the sim (`SimConfig.stationDemand`: interval /
@@ -524,6 +569,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
   "next stop" pip froze on whatever it showed first. Anything the view watches
   must come from a reactive mirror refreshed in the frame loop
   (`trainNextStops`, `retiringTrains`), never from the sim.
+
+## STATION ARCHITECTURE — the building and its sign (2026-08-04)
+- `utils/stationArt.ts` draws the platform's BUILDING, the sister module to
+  `trainArt.ts`'s depot shed. Two sizes, `stationSizeFor(urban)`: ≥3 town tiles
+  in walking reach → Empfangsgebäude, else a halt shelter. DERIVED from
+  `stationCatchment`, never a field — same rule as the demand schedule, so
+  painting houses beside a halt promotes it on the next render.
+- The art's frame is x ALONG the platform, y AWAY from the track (y=0 street
+  side). `Tile.vue`'s `stationStrip`/`stationBuilding` drop it on the outer
+  strip with ONE transform about its top-left (`transform-origin: 0 0`):
+  unrotated for a left-right station, `rotate(-90deg)` for a top-bottom one.
+  `stationAxis` returns null for any other shape → no building, and the tile
+  degrades to plate + slabs rather than breaking.
+- The CSS box and `STATION_ART_BOX` are the same fractions of a 200px tile, and
+  MUST move together: the `<svg>` has the default `preserveAspectRatio`, so a
+  mismatched aspect letterboxes the art instead of stretching it.
+- The box reaches PAST the platform's inner edge (tileSize*0.22) on purpose —
+  the canopy belongs OVER the platform. It stops at *0.26, clear of the crowd
+  dots (which sit at the slab's mid-line ±5px), and is drawn last so anyone
+  underneath shows through the glazing.
+- WHAT MAKES IT READ, learned the expensive way: at 150x30px, LESS. A first cut
+  with hipped roofs, a taller concourse block, roof lights and two chimneys read
+  as three blue boxes in a row. What works is exactly what the town houses do —
+  one body, one gabled roof split lit/shade, a hard SE drop shadow — plus the
+  one railway note: a rafter-ribbed canopy on posts with a blue leading edge. A
+  pale untinted canopy is essential; tinting it the roof's blue merged house and
+  canopy into a single slab.
+- The name plate is mounted ON the building (`stationPlateStyle`) instead of
+  floating over the grass, and the serving-line colours moved INSIDE it as dots.
+  The old blue "S" shield is gone: with a building there, a second glyph saying
+  "this is a station" was three markers in three corners for one fact.
+- `/test/stationhouse` is the scenario: town station (left-right), the same
+  building quarter-turned (top-bottom), and a meadow halt. The halt needs a 5x5
+  clear of every urban tile or it promotes itself and the map stops making its
+  own point.
 
 ## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
 - The player's whole verb set in the network mode: `game.setLine(trainId,
@@ -916,6 +996,122 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **A PLOT-TO-PLOT STRAIGHT LINE IS NOT A JOURNEY** (`walkAccessTiles`,
+  2026-08-03). The real one goes down the driveway, along the pavement and up
+  the other driveway — MEASURED at a near-constant **2.5 tiles** whatever the
+  separation (2.64 at one tile apart, 2.39 at four), because it is two fixed end
+  legs and not a detour that scales. Leaving it out was a trap, not a rounding
+  error: the panel quoted a next-door commute at 4s, the walker took 15-20s, and
+  the citizen was scored against the same optimistic distance — so somebody
+  whose job was ONE TILE from their door took the maximum unhappiness penalty
+  twice a day and left town on the third. A yardstick nobody can reach is not an
+  expectation; it is a guaranteed failure.
+    · It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+      made people drive next door — measured, the walk share on
+      `/test/citizenwalk` fell from 89% to 46%. A driver walks to their car and
+      from their parking space too. Transit does not get it: its access and
+      egress legs are already modelled explicitly.
+    · The same allowance goes into `expectedSec`. That does NOT break "a bad
+      network must not grade itself" — a constant door-to-kerb term is not read
+      from the network, it is true of every journey on every map.
+- **THE DAY LENGTH IS MEASURED, NOT PICKED** (`secPerDay: 1800`, 2026-08-03).
+  Median door-to-door over 2000 board seconds on the reference boards: a local
+  walk 18s, a local drive 13s, a city-to-city rail commute 105s. Read against
+  what each obviously IS in a real town (12 min / 10 min / 60-90 min) that fixes
+  the exchange rate at ~30 real seconds per board second, so a 24-hour day is
+  ~1800 board seconds. At the old 300 the same commute read as EIGHT AND A HALF
+  in-game HOURS — people left at 07:00 and arrived after dark — which is what
+  the three-hour departure window in `considerTrips` was quietly papering over.
+  The cost is a 30-minute real day at 1x, which is what 2x/4x are for.
+- **BOARDS OPEN AT 07:00** (`startHour`). A citizen board that starts at midnight
+  shows an empty town for seven in-game hours before anyone leaves the house,
+  and whoever opened it sits through that every single time. The morning peak is
+  the thing the mode is about, so it is the thing you see first.
+- **A TEST THAT NEEDS DAYS SAYS SO** (`citizensModeWith`). The shipped day is
+  calibrated for playing; a test watching growth or emigration would need nine
+  thousand seconds of simulation. Compress the clock explicitly in the test
+  rather than bending the shipped calibration to keep the suite fast.
+- **"THINKING OF LEAVING" WITH NO REASON IS THE LEAST USEFUL THING A PANEL CAN
+  SAY.** A player cannot act on a mood, only on the journey that caused it, so
+  every scored trip is remembered (`Citizen.recent`, `TripOutcome`) with its two
+  numbers and rendered as a sentence: "The trip to work took 2m 14s — far longer
+  than they expected (1m 15s)."
+- **A GETTER THAT READS THE `markRaw` SIMS HAS NO REACTIVE DEPENDENCY**, so Vue
+  evaluates it ONCE and caches the answer for ever (2026-08-03). This is the
+  price of the `markRaw(game)` rule, and it is invisible until something is
+  meant to move: the person pin appeared in exactly the right place and then
+  never budged, measured at 0px of travel in 4 seconds. `game.renderTick` is a
+  `ref` bumped once per drawn frame — touch `game.renderTick.value` at the top
+  of any getter that samples the sims on demand (`locatePerson`, `inspectPlot`,
+  `inspectPerson`, `compareModes`). Anything that does NOT touch it stays as
+  cheap as it was, which is the point of a heartbeat over mirroring a whole
+  population into reactive state to serve one open panel.
+- **THE PIN FOLLOWS A PERSON THROUGH FIVE DIFFERENT SAMPLERS** (`locatePerson`).
+  On foot → the walker's live position; in a car → the car's (the road sim's
+  trip id IS the car id, so it is a lookup); on a train → the loco; on a
+  platform or indoors → the tile centre. A pin that only knew about walkers
+  would silently stick to a doorway for half the population, since roughly half
+  of all journeys are driven.
+    · Rail geometry is measured off an SVG path (`getPointAtLength`), so the
+      exact loco position needs a `document`. Headless it falls back to the
+      loco's TILE CENTRE — coarser by half a tile, still tracks the train across
+      the map, and testable. Do not pretend the pure path exists.
+    · The pin lives inside the camera-scaled world, so it must COUNTER-SCALE
+      (`1 / zoom`, capped at 1) or it shrinks to a speck at the 40% a whole town
+      is viewed at — the exact zoom at which a "find this person" marker is most
+      needed.
+    · The pinned id belongs to the VIEW, not the panel: you pin somebody
+      precisely so you can close the card and watch them.
+- **THE INSPECTOR MUST NOT RE-DERIVE THE DECISION** (`CitizenSim.quoteFor`,
+  `game.compareModes`, `CitizenInspector.vue`, 2026-08-03). Click a house → its
+  roll call; click a person or a figure on the pavement → their day plus every
+  way they could make the journey, priced. The table is the very list
+  `chooseMode` compares (`quoteModes` has exactly two callers, the chooser and
+  the panel) — a panel that recomputed "what would they have done" drifts from
+  the decision the moment either side is touched, and is then worse than no
+  panel, because it is confidently wrong.
+    · TWO numbers per row, and the gap is the point: `estimateSec` is the honest
+      door-to-door estimate, `cost` is the same journey after that person's
+      habits. A mode winning on `cost` while losing on `estimateSec` is somebody
+      choosing against their own stopwatch.
+    · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
+      "too far to walk"). "Why not" is half of what a planner came to find out,
+      and a silently short table answers none of it.
+    · **ONE CLOCK ON THE CARD.** Journey times print on the town's own clock
+      ("14 min", "1h 24m"), the same clock the times of day use.
+      This was board seconds first, and getting it wrong twice is the lesson:
+      seconds were chosen because at `secPerDay: 300` a cross-city commute
+      converted to EIGHT AND A HALF in-game hours, so the in-game clock was
+      nonsense and seconds were the only honest unit. That was a *symptom of a
+      broken calibration being read as a display decision*. Fixing the day
+      length removed the reason and left the real fault exposed: the card mixed
+      two units, and "leaves at 07:08" plus "took 1m 23s" do not compose — a
+      player cannot work out when she arrives. Raw board seconds survive as a
+      tooltip (`boardDuration`), which is the one you can check with a
+      stopwatch. When a display unit looks wrong, ask whether the MODEL is wrong
+      before inventing a unit to hide it.
+    · `inGameDuration(sec, secPerDay)` is the pure formatter; `game.durationLabel`
+      binds this game's day length, so a view never has to know it — and a test
+      compressing the clock gets labels that match its own day, not the shipped
+      one.
+    · Zero winners is a legal, meaningful outcome: the model REFUSING the
+      journey. Say so in the panel; an empty table explains the one case that
+      most needs explaining.
+    · A person's NAME is a hash of their id, never an RNG draw — a panel that
+      renames somebody between two frames is a panel nobody trusts.
+    · A transit trip's first timed leg is the approach to the platform. Calling
+      it "walking to work" while the chosen mode says Train reads as the panel
+      contradicting itself; say "walking to the station".
+- **THE 6-NEAREST JOB DRAW BEATS CAPACITY** (`assignJob`). A newcomer picks at
+  random from the six nearest OPEN workplaces, so what spreads a town across its
+  job clusters is how MANY plots each cluster has, not how big they are — a work
+  plot holds twelve, so two of them swallowed a whole town on the first draft of
+  `/test/citizenchoice` and the far cluster stayed empty.
+- **A STATION CATCHMENT IS 2 TILES, SO STOPS 6 APART LEAVE GAPS**
+  (`WALK_RADIUS_TILES`). With stops at 3, 9 and 15, columns 6 and 12 have no
+  station in reach at all: a carless resident there whose job is out of walking
+  range cannot travel by ANY means and the trip is refused. Fine to build on
+  purpose, a bad accident to ship — check plot columns against stop spacing.
 - **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
   graph's node is `(tile, SIDE)`, and the only move that changes side is at a
   zebra. Drop that and a pavement is two networks drawn beside each other with
@@ -1086,8 +1282,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   unclipped (half a stroke of the patch's colour, spilled onto the neighbour) —
   lifted over the trains it washes a consist in mountain grey ten units before
   the portal. A COPY, not a lift, so that fringe is still laid below everything
-  by the original. (The roof copy drops the height terrace — it renders under an
-  opaque patch, and duplicating it would duplicate its clipPath id.)
+  by the original. (The roof copy CARRIES the height terrace, since 2026-08-03:
+  the terrace lives inside the ground fragment now, and a bored ridge that
+  terraced below the trains and not above them showed a step at every portal.
+  It duplicates the terrace's clipPath id, which is harmless for the same reason
+  the patch's own `terrain-clip` already was: both copies define the identical
+  geometry, so `url(#id)` resolving to the first is the right answer.)
 - THE PORTAL IS SIZED AGAINST THE ROCK FACE, which is the tile edge: a patch
   keeps to its own tile (`54b7391`), so the arch springs at the edge, its crown
   lands on it, and the gallery stands entirely on open ground — 16u out, not the
@@ -1143,8 +1343,8 @@ lean — prune as much as you add. This file only stays useful if every task ten
   shows " h<N>". /test scenario: `grades` (light shuttle vs heavy freight
   racing the same hill — the gap on the ramps is the mechanic).
 - HYPSOMETRIC TERRACES (`tileHeightSvg`, 2026-07-31): a cell with height > 0
-  lays a fused patch fill UNDER its terrain patch on the ground layer, lighter
-  and warmer per step. THE TINT IS THEME-ANCHORED (`heightTint(h, theme)`,
+  lays a fused patch fill on the ground layer, lighter and warmer per step. ON
+  GRASS the tint is THEME-ANCHORED (`heightTint(h, theme)`,
   `TERRACE_BASE`): "higher" only exists relative to the ground the theme
   paints — a fixed table read as a hollow on the bright meadow board and as a
   glowing patch on the dark debug flat. One base per theme + one step formula
@@ -1188,6 +1388,66 @@ lean — prune as much as you add. This file only stays useful if every task ten
     it) is skipped: that is the plateau interior, i.e. most cells of a big hill.
   · Pinned in `tests/unit/tiles/heightTerraces.spec.ts`; `/test/terraces` is the
     side-by-side (stepped hill vs 3-step mesa) — the contrast IS the test.
+- EVERY GROUND TERRACES, IN ITS OWN COLOUR (2026-08-03). The terrace was the
+  meadow's green whatever the cell carried AND the view composed it BEFORE the
+  terrain fragment — so every kind that paints an opaque patch covered it, and
+  raising a wood/rock/massif/town changed the data, the grade and the chevrons
+  and not one pixel of the ground. Only grass (which paints no fill) ever looked
+  higher. Three parts, all in `tiles/terrain.ts`:
+  · `heightTint(h, theme, kind)` anchors to `GROUND[kind]` when the kind paints
+    its own ground, and only then falls back to the theme's `TERRACE_BASE`.
+    Hue is untouched (hue is what says "wood" or "slate"); lightness climbs and
+    saturation drops a little (aerial perspective). THE STEP IS A SHARE OF THE
+    HEADROOM to white (13%, clamped 4..9 points), NOT a flat lift: 7 points flat
+    was invisible on the forest's 30% and bleached the town's 68% tan to paper
+    by step 3 — a hill town whiter than a depot roof.
+  · The terrace is DRAWN THE WAY ITS GROUND IS (`edgeStyleOf(kind)`): organic
+    contours for forest/rock/mountain/water, SURVEYED straight banks for
+    farmland/urban/industry — weather shapes a hillside, people cut a bench.
+    That needed `corners()` to stop returning early for surveyed ground BEFORE
+    applying `bandInsets`, or a surveyed multi-step drop stacked every band on
+    the same tile edge and showed one.
+  · NO SOFT FRINGE except on grass. The fringe is a halo of the band's colour
+    spilled downhill; over the backdrop it is a falloff, over an opaque patch it
+    is a pale bar along the LOW side of every step — the light back to front.
+  · COMPOSITION MOVED INTO THE GROUND BUILD (`Elevation` → `tileGroundSvg`,
+    keyed into the memo by `elevationKey`): the terrace is spliced right after
+    the patch fill and BEFORE the detail, so a raised field keeps its furrows, a
+    raised rock field its scree and a raised town its paving — all ON the
+    lighter step. Grass puts it first (it has no fill), which is byte-for-byte
+    what the view used to emit, so every grass board renders unchanged.
+  · NOTHING BUILDS ON A BANK (`terraceBanks`). Where a terrace stops, the
+    ground breaks — a slope face on a hillside, a cut retaining wall in a town —
+    and a block dropped across a step came out half on the upper bench and half
+    on the lower one. The banks are pushed onto the SAME `blockers` list that
+    keeps buildings off rails and roads, so the existing gate does the work: a
+    block near a step shrinks to what fits the bench and one that fits nothing
+    is dropped. BUILDINGS ONLY (urban/industry) — a wood that stepped back from
+    every contour would be a wood full of bald rings.
+    · TWO SOURCES, and the second is the trap: the first step off a summit lands
+      on the SHARED boundary and is drawn by the UPPER tile alone, so the tile
+      at the foot of that wall (whose buildings overhang the tile edge by
+      TOWN_OVERHANG) knows nothing about it. Each side reads the same boundary
+      from its own `HeightNeighbours` — mine falls to yours / yours rises above
+      mine — so neither needs the other's neighbours. THAT is why a FLAT cell
+      gets an `Elevation` too (`TileGround.elevation` no longer bails at h0).
+    · The elevation must reach `tileScatterSvg`/`tileCanopySvg` as well, not
+      just `tileGroundSvg`: scatter is built by its own call with its own memo
+      entry, and threading it into the ground alone left the banks nowhere near
+      the placement that needed them (they silently did nothing).
+    · A DIAGONAL drop has no edge to fence: three cells level and the fourth
+      not means nothing stops at any boundary this tile shares — the break
+      belongs to the two tiles either side of the odd one out, and both banks
+      run through the corner all four meet at. Fenced with a degenerate
+      one-point corridor on that corner. IT DOES NOT BIND TODAY and the test
+      says so: the urban band (26..74) plus the overhang cap already hold a roof
+      ~18u off any tile corner, against a 7u disc. It is a guard for when those
+      numbers move, which is why the test asserts the CORRIDOR rather than the
+      picture. (The EDGE fences are the opposite — they genuinely move
+      buildings, and the non-vacuity assertion beside them proves it.)
+  · Pinned in `heightTerraces.spec.ts` ("terraces on terrain") +
+    `terrain.spec.ts` ("elevated ground"); `/test/hillsides` is the picture —
+    one slope, eight grounds, the grass row in the middle as the control.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
@@ -2289,6 +2549,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.
+- EDITOR HAND-OFF IS UNGATED (2026-08-03): "Play this" is never disabled and
+  `playThis()` has no `canPlay` check — depot pairs and validation issues are
+  REPORTED in the drawer status, not enforced. A board with no depot pair simply
+  starts with no trains. It pushes `/play?mode=sandbox` EXPLICITLY: /play
+  otherwise reopens the last-used mode, and a board-GENERATING one (Daily derives
+  its map from the date and ignores the context board) threw the level away.
+  Pinned by the "plays a board with no depots at all" editor e2e.
 
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:

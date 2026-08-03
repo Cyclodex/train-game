@@ -9,6 +9,7 @@ import {
   MIN_ZOOM,
   MAX_ZOOM,
   WORLD_MARGIN,
+  CHROME_INSETS,
 } from "@/camera";
 
 const world = { width: 4000, height: 3000 }; // a 20x15 board at 200px tiles
@@ -99,6 +100,55 @@ describe("fit", () => {
   it("produces a camera that is already clamped", () => {
     const cam = fitCamera(world, viewport);
     expect(cam).toEqual(clampCamera(cam, world, viewport));
+  });
+});
+
+// The board is full-bleed (the viewport is the whole window) and the HUD floats
+// over it, so the clearance the `.world` padding used to give is now an inset on
+// the CONTENT: the camera keeps the world clear of the chrome without shrinking
+// the board's own area.
+describe("chrome insets", () => {
+  const insets = { top: 180, right: 24, bottom: 128, left: 24 };
+
+  it("centres a small world in the usable strip, not in the whole viewport", () => {
+    const small = { width: 600, height: 400 };
+    const cam = clampCamera({ x: 0, y: 0, zoom: 1 }, small, viewport, WORLD_MARGIN, insets);
+    // Screen position of the world's top-left corner = -cam * zoom.
+    const topEdge = -cam.y;
+    const bottomEdge = topEdge + small.height;
+    expect(topEdge).toBeGreaterThanOrEqual(insets.top);
+    expect(bottomEdge).toBeLessThanOrEqual(viewport.height - insets.bottom);
+    // ...and it sits midway between them rather than in the window's middle.
+    expect(topEdge - insets.top).toBeCloseTo(viewport.height - insets.bottom - bottomEdge, 6);
+  });
+
+  it("lets a big world be panned until its last row clears the dock", () => {
+    const far = clampCamera({ x: 0, y: 99999, zoom: 1 }, world, viewport, WORLD_MARGIN, insets);
+    // The world's bottom edge on screen, at the furthest scroll.
+    const bottomEdge = -far.y + world.height;
+    // Without the inset it stopped at the window's bottom — i.e. behind the
+    // dock, with the last row unreachable.
+    expect(bottomEdge).toBeLessThanOrEqual(viewport.height - insets.bottom - WORLD_MARGIN);
+  });
+
+  it("fits the whole world inside the chrome", () => {
+    const z = fitZoom(world, viewport, WORLD_MARGIN * 2, insets);
+    expect(world.width * z).toBeLessThanOrEqual(viewport.width - insets.left - insets.right);
+    expect(world.height * z).toBeLessThanOrEqual(viewport.height - insets.top - insets.bottom);
+    const cam = fitCamera(world, viewport, WORLD_MARGIN * 2, insets);
+    expect(cam).toEqual(clampCamera(cam, world, viewport, WORLD_MARGIN, insets));
+  });
+
+  it("defaults to no insets, so a stage without chrome is unaffected", () => {
+    expect(clampCamera({ x: 0, y: 0, zoom: 1 }, world, viewport)).toEqual(
+      clampCamera({ x: 0, y: 0, zoom: 1 }, world, viewport, WORLD_MARGIN, {
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+      }),
+    );
+    expect(CHROME_INSETS).toEqual(insets);
   });
 });
 

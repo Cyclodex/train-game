@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createGame, TrainDef } from "@/game";
-import { citizensMode } from "@/modes/citizens";
+import { citizensMode, citizensModeWith } from "@/modes/citizens";
 import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizenzebra, CROSSING_X } from "@/levels/test/scenarios/citizenzebra";
@@ -17,12 +17,15 @@ import { roadEntries } from "@/sim/road";
 // Walking people, end to end. Like the driving spec, everything here runs
 // through `game.advance()` — the headless world step — so a figure on the
 // pavement is provable without a browser.
-function newGame(scenario = citizenwalk) {
+// The shipped mode by default; `tuning` for tests that need to see the daily
+// rhythm or several days pass inside a few hundred board seconds. See the same
+// note in citizenDriving.spec.ts.
+function newGame(scenario = citizenwalk, tuning?: Parameters<typeof citizensModeWith>[0]) {
   return createGame(
     scenario.level,
     [],
     200,
-    citizensMode,
+    tuning ? citizensModeWith(tuning) : citizensMode,
     1,
     scenario.colors,
     undefined,
@@ -247,7 +250,9 @@ describe("citizens walk where you can see them", () => {
   });
 
   it("turns walking citizens into figures on the pavement", () => {
-    const game = newGame();
+    // A compressed day so a few hundred board seconds cover several of them:
+    // this is about the population's whole daily traffic, not one journey.
+    const game = newGame(citizenwalk, { secPerDay: 300 });
     let peakOnFoot = 0;
     let peakDots = 0;
     run(game, 1200, () => {
@@ -263,7 +268,9 @@ describe("citizens walk where you can see them", () => {
   });
 
   it("nobody is on the pavement at 3am", () => {
-    const game = newGame();
+    // The daily rhythm, so it sets its own clock — see the driving spec's
+    // matching test. The shipped mode opens at 07:00 on purpose.
+    const game = newGame(citizenwalk, { secPerDay: 300, startHour: 0 });
     run(game, 50);
     expect(game.pedestrians.length).toBe(0);
     let peak = 0;

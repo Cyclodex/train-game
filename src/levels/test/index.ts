@@ -4,6 +4,8 @@ import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
 import { station } from "@/levels/test/scenarios/station";
 import { transfer } from "@/levels/test/scenarios/transfer";
+import { platformstop } from "@/levels/test/scenarios/platformstop";
+import { stationhouse } from "@/levels/test/scenarios/stationhouse";
 import { boarding } from "@/levels/test/scenarios/boarding";
 import { catchment } from "@/levels/test/scenarios/catchment";
 import { parkandride } from "@/levels/test/scenarios/parkandride";
@@ -13,6 +15,7 @@ import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
 import { citizenrail } from "@/levels/test/scenarios/citizenrail";
+import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -102,6 +105,7 @@ import { flyover } from "@/levels/test/scenarios/flyover";
 import { grades } from "@/levels/test/scenarios/grades";
 import { mountainpass } from "@/levels/test/scenarios/mountainpass";
 import { terraces } from "@/levels/test/scenarios/terraces";
+import { hillsides } from "@/levels/test/scenarios/hillsides";
 import { industry } from "@/levels/test/scenarios/industry";
 import { clearing } from "@/levels/test/scenarios/clearing";
 import { forestworld } from "@/levels/test/scenarios/forestworld";
@@ -156,8 +160,8 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
-      { id: "grades", label: "Grades", scenarios: [grades, terraces, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail] },
+      { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice] },
       {
         id: "crossings",
         label: "Crossings",

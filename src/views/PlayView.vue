@@ -363,6 +363,15 @@
       @wheel.prevent="onViewportWheel"
     >
     <CityPanel />
+    <!-- Click a house or a walker: who they are, and why they travel the way
+         they do. Renders nothing outside the citizen layer. -->
+    <CitizenInspector
+      :plot-id="inspectPlotId"
+      :focus-id="inspectPersonId"
+      :pinned="pinnedPersonId"
+      @close="closeInspector"
+      @pin="setPinned"
+    />
     <div class="world-zoom" v-if="worldOverflows()">
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
@@ -521,7 +530,11 @@
         :key="p.id"
         :class="['pedestrian', { 'pedestrian--waiting': p.waiting }]"
         :style="{ transform: `translate(-50%, -50%) translate(${p.x}px, ${p.y}px)` }"
+        @click.stop="onWalkerClick(p.id)"
       />
+      <!-- The pin over a pinned person. Absolutely positioned like the cars and
+           the walkers, so it is not a grid ITEM (KNOWHOW → RENDER LAYOUT). -->
+      <PersonPin v-if="pinnedPersonId" :person-id="pinnedPersonId" :zoom="camera.zoom" />
       <CarRouteOverlay
         v-if="config.debug && carRoute"
         :segments="carRoute.segments"
@@ -735,10 +748,12 @@ import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
 import CityPanel from "@/components/CityPanel.vue";
+import CitizenInspector from "@/components/CitizenInspector.vue";
+import PersonPin from "@/components/PersonPin.vue";
 import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
 import { levelBounds } from "@/tiles/bounds";
-import { type Camera, type Size } from "@/camera";
+import { CHROME_INSETS, type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
 import { createCameraController, type CameraController } from "@/cameraController";
 
@@ -815,7 +830,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel } })
+@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -1156,6 +1171,9 @@ class PlayView extends Vue {
       createCameraController(
         () => this.worldSize,
         () => this.viewportSize(),
+        // The board is full-bleed; the score card, drawer and dock float over
+        // it. These keep the BOARD clear of them (see camera.ts).
+        () => CHROME_INSETS,
       ),
     );
     this.routeCtrl = markRaw(
@@ -1497,7 +1515,46 @@ class PlayView extends Vue {
       this.editLineAt(tileId);
       return;
     }
+    // The inspector is LAST in the chain, and only when no tool is armed: a
+    // click while building is a build, not a question about who lives there.
+    if (!this.buildArmed && !this.razeArmed && this.game.citizenStats.enabled) {
+      this.onPlotClick(tileId);
+      return;
+    }
     this.onTileRaze(tileId);
+  }
+
+  // --- the citizen inspector -------------------------------------------------
+  // Click a plot to see who lives or works there; click a figure on the pavement
+  // to jump straight to that person. Inert on every board without a citizen
+  // layer, where `inspectPlot` returns null and the panel never renders.
+  inspectPlotId: string | null = null;
+  inspectPersonId: string | null = null;
+
+  onPlotClick(coordId: string): void {
+    this.inspectPersonId = null;
+    this.inspectPlotId = this.inspectPlotId === coordId ? null : coordId;
+  }
+
+  onWalkerClick(walkerId: string): void {
+    const id = this.game.personWalking(walkerId);
+    if (!id) return;
+    this.inspectPlotId = null;
+    this.inspectPersonId = id;
+  }
+
+  // The pinned person: a big marker on the board that follows them, kept by the
+  // VIEW rather than the panel so it survives the card being closed — you pin
+  // somebody precisely so you can put the card away and watch them.
+  pinnedPersonId: string | null = null;
+
+  setPinned(id: string | null): void {
+    this.pinnedPersonId = id;
+  }
+
+  closeInspector(): void {
+    this.inspectPlotId = null;
+    this.inspectPersonId = null;
   }
 
   // Whether a click here would actually remove something — drives the hover

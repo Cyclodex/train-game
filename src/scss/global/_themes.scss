@@ -5,13 +5,20 @@
 // Adding a theme: append an entry in `src/themes.ts` and one `.theme-<id>`
 // block here (plus its `.theme-<id> .level` framing).
 
-// The wrapper around the board grid. Fills the screen behind the fixed menus,
-// leaving room for the score-card (top) and the tool dock (bottom).
+// The wrapper around the board grid. FULL-BLEED: the world reaches every screen
+// edge and the fixed menus float over it.
+//
+// It used to carry `padding: 180px 24px 128px` to keep the board clear of the
+// score-card and the dock, but padding here is padding around the WORLD — it
+// shrank the camera's window, so the ground stopped short of the screen in a
+// dead border and the chrome hovered over nothing. The clearance belongs to the
+// CONTENT instead and is now the camera's `CHROME_INSETS` (see camera.ts): the
+// fit centres the board inside the chrome, and a pan can still bring any tile
+// out from under it.
 .world {
   height: 100vh;
   box-sizing: border-box;
   display: flex;
-  padding: 180px 24px 128px;
 }
 
 // The camera's window onto the board. Worlds are sized by their content now, so
