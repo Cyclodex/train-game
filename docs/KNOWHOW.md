@@ -1216,6 +1216,25 @@ lean — prune as much as you add. This file only stays useful if every task ten
     raised rock field its scree and a raised town its paving — all ON the
     lighter step. Grass puts it first (it has no fill), which is byte-for-byte
     what the view used to emit, so every grass board renders unchanged.
+  · NOTHING BUILDS ON A BANK (`terraceBanks`). Where a terrace stops, the
+    ground breaks — a slope face on a hillside, a cut retaining wall in a town —
+    and a block dropped across a step came out half on the upper bench and half
+    on the lower one. The banks are pushed onto the SAME `blockers` list that
+    keeps buildings off rails and roads, so the existing gate does the work: a
+    block near a step shrinks to what fits the bench and one that fits nothing
+    is dropped. BUILDINGS ONLY (urban/industry) — a wood that stepped back from
+    every contour would be a wood full of bald rings.
+    · TWO SOURCES, and the second is the trap: the first step off a summit lands
+      on the SHARED boundary and is drawn by the UPPER tile alone, so the tile
+      at the foot of that wall (whose buildings overhang the tile edge by
+      TOWN_OVERHANG) knows nothing about it. Each side reads the same boundary
+      from its own `HeightNeighbours` — mine falls to yours / yours rises above
+      mine — so neither needs the other's neighbours. THAT is why a FLAT cell
+      gets an `Elevation` too (`TileGround.elevation` no longer bails at h0).
+    · The elevation must reach `tileScatterSvg`/`tileCanopySvg` as well, not
+      just `tileGroundSvg`: scatter is built by its own call with its own memo
+      entry, and threading it into the ground alone left the banks nowhere near
+      the placement that needed them (they silently did nothing).
   · Pinned in `heightTerraces.spec.ts` ("terraces on terrain") +
     `terrain.spec.ts` ("elevated ground"); `/test/hillsides` is the picture —
     one slope, eight grounds, the grass row in the middle as the control.
