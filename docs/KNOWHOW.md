@@ -570,6 +570,34 @@ lean — prune as much as you add. This file only stays useful if every task ten
   must come from a reactive mirror refreshed in the frame loop
   (`trainNextStops`, `retiringTrains`), never from the sim.
 
+## THE ROSTER AND THE SHED — buying and routing trains (2026-08-04)
+Three bugs, one shape: the panel's whole verb set assumed a train is either in
+the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
+- `trainColors` is `reactive()` and a COPY. Its key set IS the roster — the
+  service panel's rows are a computed over `Object.keys(game.trainColors)` —
+  and `game` is markRaw, so a plain record gave that computed nothing to track:
+  it cached its first answer and a bought train NEVER appeared. On a board that
+  starts with no trains the list stayed empty for ever. REACTIVITY TRAP, third
+  time; the rule is now "every view source on the game is `reactive()`", and
+  `tests/unit/modes/network.spec.ts` asserts it through a real `computed` —
+  reading `game.trainColors` directly passes while the panel is frozen.
+  The copy matters too: `buyTrain` writes into this record, and `colors` may be
+  a scenario's shared object, so proxying the original leaked bought trains
+  from one run into the next.
+- A QUEUED train has a def, a livery and DOM, but no sim entry. So `setLine`
+  tests `defById`, not `sim.trains`, for "does this train exist", and only
+  calls `sim.assignLine` for one actually on the metals. Before this, every
+  station click on a freshly-bought train was refused SILENTLY — and buying
+  into a busy shed is the normal case, not the edge one.
+- `syncLine` reads the sim for a running train and `def.line` for a queued one;
+  `buyTrain` syncs in BOTH branches, not just the inject one. Otherwise a train
+  ordered onto a line reads "no line" until it rolls out, which is exactly what
+  "your click did nothing" looks like. `trainInit` carries `def.line` over when
+  it finally leaves, so the definition is the honest owner until then.
+- Verifying this in a browser: a hidden automation tab pauses rAF, so a queued
+  train never rolls out there. Assert the roll-out in a unit test and use the
+  browser only for the panel's DOM.
+
 ## STATION ARCHITECTURE — the building and its sign (2026-08-04)
 - `utils/stationArt.ts` draws the platform's BUILDING, the sister module to
   `trainArt.ts`'s depot shed. Two sizes, `stationSizeFor(urban)`: ≥3 town tiles

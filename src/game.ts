@@ -1041,8 +1041,23 @@ export function createGame(
   // logic and the rendered colours always agree. A seeded RNG keeps the
   // assignment deterministic, and `assignColors` guarantees every train has a
   // reachable matching depot (see colorAssignment.ts).
-  const { depotColors, trainColors } =
+  const assignedColors =
     colors ?? assignColors(level, trainDefs, makeRng(colorSeed));
+  const depotColors = assignedColors.depotColors;
+  // The train roster is REACTIVE, and a COPY. Reactive because `trainColors`
+  // is not just paint — its key set IS the list of trains that exist, which is
+  // what the service panel iterates to draw its rows. `game` is provided
+  // markRaw, so a plain record here gives that computed nothing to track: it
+  // caches its first answer and a bought train never appears in the panel. On
+  // a board that starts with no trains the list then stays empty for ever.
+  // (Same trap as `trainNextStops`/`retiringTrains` — see docs/KNOWHOW.md.)
+  // A copy because `buyTrain` writes into this record, and `colors` may be a
+  // scenario's own object shared across runs — proxying and mutating it would
+  // leak bought trains from one game into the next.
+  const trainColors = reactive({ ...assignedColors.trainColors }) as Record<
+    string,
+    string
+  >;
 
   // Road traffic geometry (deterministic from the level): grid extents.
   let roadW = 0;
@@ -2273,10 +2288,17 @@ export function createGame(
   for (const def of trainDefs) defById[def.id] = def;
 
   // --- the service: lines, and buying the trains to run them -----------------
-  // Refresh the view copy of a train's line from the sim (the owner of it).
+  // Refresh the view copy of a train's line from whoever owns it right now: the
+  // SIM for a train on the metals, its DEFINITION for one still queued in the
+  // shed. A queued train has no sim entry at all (see `pendingTrains`), so
+  // asking the sim alone reports "no line" for a train the player has just
+  // routed — and `trainInit` carries `def.line` over when it finally rolls out,
+  // so the definition is the honest answer until then.
   function syncLine(trainId: string): void {
-    const stops = sim.trainLine(trainId);
-    if (stops.length) trainLines[trainId] = stops;
+    const stops = sim.trains[trainId]
+      ? sim.trainLine(trainId)
+      : (defById[trainId]?.line ?? []);
+    if (stops.length) trainLines[trainId] = [...stops];
     else delete trainLines[trainId];
     syncLines();
   }
@@ -2441,8 +2463,13 @@ export function createGame(
       queuedTrains.push(def.id);
     } else {
       injectTrain(def);
-      syncLine(def.id);
     }
+    // Mirror the line either way. A train ordered ONTO a line while the shed is
+    // busy still has that line — it is in `def` — and the panel and the
+    // platforms have to say so now, not when it eventually rolls out. Syncing
+    // only in the inject branch made an order placed into a busy depot read
+    // "no line", which is the state that says "your click did nothing".
+    syncLine(def.id);
     return def;
   }
 
@@ -2483,10 +2510,21 @@ export function createGame(
 
   // Put a train onto a line (or take it out of service with []). Thin wrapper
   // over the sim verb that keeps the view copy honest.
+  //
+  // A train QUEUED IN THE SHED can be routed too, and must be: `buyTrain`
+  // queues every order made while the depot mouth is busy, which is the normal
+  // case right after you buy one — and the sim has no entry for it yet, so
+  // deferring to `sim.assignLine` alone refused the assignment and every click
+  // on a station vanished silently. Its line waits on the definition, which
+  // `trainInit` reads when the train finally rolls out.
+  //
+  // The DEFINITION is therefore the test for "does this train exist" — not the
+  // sim, which only knows the ones already on the metals.
   function setLine(trainId: string, stops: string[]): boolean {
-    if (!sim.assignLine(trainId, stops)) return false;
     const def = defById[trainId];
-    if (def) def.line = stops.length ? [...stops] : undefined;
+    if (!def) return false;
+    if (sim.trains[trainId] && !sim.assignLine(trainId, stops)) return false;
+    def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
     // The picture on the board is of THIS line; redraw it as it is edited.
     if (lineOverlay.trainId === trainId) setLineOverlay({ trainId });
