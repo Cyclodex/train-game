@@ -101,6 +101,41 @@ export interface TileCell {
   // park's AISLES are ordinary `road` lanes, so the router drives its rows for
   // free; `parking` only ever adds the stalls beside them.
   parking?: ParkingCell;
+  // PAVEMENT (Fussweg / Trottoir): the footway alongside this cell's road.
+  //
+  // Absent means BOTH sides, which is what a street is — so every board written
+  // before footways existed grows them for free, and the field is only ever an
+  // OPT-OUT ("none" for a motorway, a service road, a runway). That is
+  // deliberate: a pavement you have to remember to add is a pavement most
+  // streets will not have.
+  //
+  // NOT a `Lane`, and the difference matters. A pavement is bidirectional on one
+  // strip where a lane is directed; it sits OUTSIDE the kerb where lanes are
+  // positioned within the carriageway; and its users may overlap, which every
+  // gate in the road sim exists to prevent. Pedestrians therefore get their own
+  // small simulation (`sim/pedestrians.ts`) over the same tile graph, not a seat
+  // in the traffic model. See tiles/footway.ts.
+  footway?: "both" | "none";
+  // A PEDESTRIAN CROSSING on this road tile — the zebra.
+  //
+  // The one place people may cross the carriageway, and therefore the player's
+  // decision: without one, somebody whose work is on the far pavement has to
+  // walk to the nearest crossing and back, which costs them time and costs you
+  // their mood. With one, the traffic stops for them. Where the crossings go is
+  // the same kind of choice as where a signal goes.
+  //
+  // A crossing CLOSES its tile to traffic while somebody is on it — the road
+  // sim already knows how to do that, because it is exactly what a level
+  // crossing does to a car when a train is coming (`CrossingClosed`). See
+  // tiles/footway.ts and sim/pedestrians.ts.
+  footCrossing?: boolean;
+  // Which CITY this ground belongs to. Optional, and normally absent: cities are
+  // derived by clustering connected urban/industry ground (`tiles/cities.ts`),
+  // so every board written before cities existed has them for free. The tag is
+  // the escape hatch for two towns that happen to touch — a flood fill would
+  // read those as one place — and for naming a town explicitly. Ignored on any
+  // cell that is not plot ground.
+  city?: string;
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
   // Street-junction traffic signals (ROAD / cars only). When present and not

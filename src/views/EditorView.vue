@@ -203,6 +203,10 @@
         @mouseenter="onTerrainEnter($event, cell.key); onFacilityEnter($event, cell.key); onHeightEnter($event, cell.key)"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Driveways and pavements, above EVERY tile's ground patch so a
+             neighbour's jittered patch cannot chew a notch out of them at the
+             seam. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="paving" />
         <!-- Which car park this tile belongs to. Read straight off the cell, not
              through facilitiesOf: while a stroke is in progress the level is
              mid-edit and a derived grouping would lag a tile behind the cursor. -->

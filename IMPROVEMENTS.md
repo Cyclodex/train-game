@@ -103,7 +103,14 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    **Planned (2026-07-31):** the phased Bahnhof/intermodal plan — station tile →
    queues → terrain catchment → bus stops + P+R → Transport-Fever-like mode —
    is `docs/superpowers/specs/2026-07-31-bahnhof-stations-intermodal-design.md`;
-   its phase 1 is buildable now.
+   phases 1-4 shipped 2026-08-01.
+   **Its phase 5 — the mode — now exists: CITIZENS (2026-08-01).** Towns of
+   people who live in one place, work in another, choose how to travel from what
+   the map actually offers, time the journey and move house when you fail them.
+   `docs/superpowers/specs/2026-08-01-citizens-and-cities-design.md` is the
+   design, the model and the measured results; `/#/test/threecities` is the
+   board. Phase A (the model, the mode, the city cards) is built; phase B is
+   real cars for driving citizens and buses as carriers.
 4. **Deadlock resolution.** Interlocking prevents collisions, but two trains can
    still reserve into a mutual wait. Needs cycle detection over the reservation
    graph plus a backout rule. `src/sim/simulation.ts`, `src/sim/network.ts`.

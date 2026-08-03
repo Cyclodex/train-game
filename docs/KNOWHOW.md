@@ -578,6 +578,15 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The crowd is drawn from `game.stationWaiting` (tileId → destinations) with a
   colour hashed from the destination id, so a queue nobody serves reads as one
   colour piling up. `stationQueue` still returns the count.
+- The CITIZEN layer reaches a platform through the same door:
+  `transit.enqueue(stationId, n)` is `addStationPassengers`, and it returns what
+  it ACTUALLY queued — 0 means "platform full, keep waiting", which is how
+  `boardOrWait` in `sim/citizens.ts` knows to keep the clock running. Since
+  destinations came in, a station with nowhere reachable to go also returns 0,
+  so a citizen board needs TWO platforms or its people wait forever and the town
+  scores you for it (`threecities` has three). The two layers do not yet agree
+  on WHERE a citizen wanted to go — the sim picks the destination round-robin,
+  the citizen tracks their own — which is the seam the transfer work opens up.
 
 ## WITHDRAWING A TRAIN (2026-08-03)
 - Two verbs, deliberately not one. `retireTrain` is a JOURNEY: the train drops
@@ -679,6 +688,214 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `prevStalls` resets with the game or a retry double-transfers.
 - `/test/parkandride` (kerb bays by the station) and `/test/busfeeder` (an
   in-lane halt: crowd jumps by busloads, cars queue behind the bus).
+
+## CITIZENS & CITIES (the Transport-Fever mode, 2026-08-01)
+- Split on the terrain-blindness line: `tiles/cities.ts` READS the map (plots,
+  city clustering, road components, station reach) and hands the sim a
+  `CitizenWorld`; `sim/citizens.ts` owns the people and never sees a TileCell.
+  Enabled per MODE via `ModeSetup.citizens` — absent for every other mode, so
+  nothing else on the board changes.
+- **The map says WHERE, the sim says HOW MANY.** `terrain: urban|industry` is
+  the zoning (level data); `density` + residents are live sim state. Growth
+  fills plots, then upgrades density, then raises `wantsRoom` — there is no
+  auto-sprawl onto grass.
+- A city is a flood fill (8-neighbour) over plot ground; `TileCell.city` tags
+  override it for towns that touch. A tile carrying rail/road/parking is NOT a
+  plot — a street is not a house.
+- **Driving needs one road NETWORK, not two roads.** `roadComponents()` gives
+  each plot a component id and a car trip needs both ends to match. This is the
+  lever the whole mode turns on: two towns with their own streets and nothing
+  between them can only be linked by rail.
+- **THREE NUMBERS DECIDE WHETHER A BOARD IS ABOUT TRANSPORT AT ALL**, and all
+  three fail silently — the board just quietly becomes a walking simulator:
+    1. `walkMaxTiles`. At 6 the reference board's nearest factory was EXACTLY 6
+       tiles from the nearest house: rail carried 1% of journeys. The mode sets 4.
+    2. Shop capacity [2,4,8,16] vs works [12,24,48,96]. Shops as big as factories
+       meant everyone worked on their own street.
+    3. Town spacing must EXCEED `walkMaxTiles`. The gaps on `threecities` are
+       level design, not scenery.
+  Check the mode-share bar first when a citizen board feels inert.
+- **A citizen stays in their seat until their station comes up.** The rail sim's
+  passengers ride one hop and are set down at the next call; mirroring that
+  literally made a shuttle take 16 people aboard, run to the depot, bounce, and
+  put all 16 back on the SAME platform as a 'transfer' — 83% of rail attempts
+  abandoned on a working railway. Cost of the fix: a through-rider holds a seat
+  the sim already freed (boarding is still capacity-gated, which is the part
+  that must be true).
+- **A bounce is not an arrival.** A colour-mismatched train emits
+  `arrived{matched:false}` and reverses out WITH its riders. Only act on
+  `matched` arrivals, or every passenger fails twice a lap.
+- **The platform cap is not a difficulty dial.** With no `stationDemand` entry a
+  station falls back to `STATION_QUEUE_HARD_CAP` (16), which a morning peak
+  exceeds — and someone who cannot JOIN the queue waits until they give up. The
+  citizen layer supplies an entry with `intervalSec: Infinity` (spawns nobody)
+  and a generous `max` (a cap and nothing else).
+- Citizens tick in `game.advance()` on the SAME `SimEvent[]` the railway just
+  emitted — never in the render mirror. `tests/unit/citizenCommute.spec.ts`
+  drives 1500 headless seconds and asserts the pair that IS the mode: trains
+  running → 56% of journeys by rail, population 111→153; no trains → the two
+  commuter towns halve while the walkable works town holds.
+- `/test/threecities` (mode `citizens`), city cards in `CityPanel.vue`.
+- **A DRIVING CITIZEN IS A CAR** (2026-08-02). `roadSim.requestTrip(fromTile,
+  toTile)` dispatches a real vehicle, routed by `planRouteToGoals` (the same
+  goal-directed BFS parking uses) and DESPAWNED on arrival instead of driving
+  off the map. `Car.tripGoal` marks such a car; `settleRequestedTrips()` retires
+  it at headProgress >= 0.5 on the goal tile. The citizen's driving leg then has
+  NO clock — it ends when the car arrives, so congestion costs the commuter real
+  time and real mood.
+    · `requestTrip` returns null when it cannot dispatch, and the citizen falls
+      back to the timer. A saturated road must slow people, never strand them.
+    · Requested cars have their own cap (MAX_REQUESTED_CARS), separate from the
+      ambient density slider — the slider is a scenery dial, commuters are not
+      scenery.
+    · `blankCar()` exists so a new `Car` field breaks all three construction
+      sites at compile time. That is the point; do not relax it to a partial.
+- **A CLOSED RING ROAD SPAWNS NOTHING.** `roadEntries` only finds an entry where
+  a road OPENS (off-grid, or a stub with nothing beyond). A ring has neither, so
+  ambient traffic cannot spawn — which is what makes `/test/citizencars` able to
+  claim that every car on it is a citizen, and `roadRequestTrip.spec.ts` asserts
+  the empty entry list directly. Reach for this whenever a scenario needs traffic
+  it fully controls.
+- **A STREET RUNS THROUGH A TOWN, not beside it.** Put the town's `terrain` on
+  the road tiles: the keep-out corridors already step every roof back from a
+  carriageway, so the built-up ground stays continuous and the ring of meadow
+  between houses and tarmac disappears. Two predicates make this safe, and the
+  difference between them IS the feature:
+    · `isTownGround` — terrain only. What the city flood fill WALKS OVER, so a
+      road laid through a town bridges its halves instead of severing them.
+    · `isPlotGround` — town ground with nothing built across it. What holds
+      PEOPLE. Nobody lives on the carriageway.
+  Before the split, a street through a town read as two towns.
+- **FOOTWAYS (2026-08-02).** `TileCell.footway?: "both" | "none"` is the fifth
+  tile axis and only ever an OPT-OUT — every street has pavements unless it says
+  "none", so boards written before footways existed grew them for free.
+    · NOT a Lane, and do not be tempted: a pavement is bidirectional on ONE
+      strip (a Lane is directed), it sits OUTSIDE the kerb (laneOffset positions
+      lanes within the carriageway), and its users MAY OVERLAP — which every
+      following/swept-body/conflict gate in road.ts exists to forbid.
+    · Pavement art reuses the road's OWN kerb geometry (`roadKerbEdge` /
+      `roadCurveKerbEdge`) at a bigger offset, so it follows every bend exactly.
+      A hand-rolled parallel line drifts on curves.
+    · Paint ONE band per side per movement, deduplicated: `twoWay` is two lanes
+      over the same ground and painting per lane stacks two bands and shows a
+      seam at every tile edge.
+    · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
+      and pavements, above EVERY tile's ground patch and not just their own. A
+      terrain patch's corners are jittered OFF the tile grid on purpose, so a
+      plot's ground legitimately spills a few units into the road tile beside
+      it; painted in the same z band, DOM order decides and the later tile wins,
+      chewing a notch out of the pavement at every seam. Same class of bug the
+      scatter split fixed, same fix. Reported as "the sidewalks are not
+      connected" and as "the sidewalk is drawn on top of the people" — the
+      second was the notch cutting past a walker, NOT a z-order problem: paving
+      is z1 and `.pedestrian` is z6, and a pixel probe over the rendered board
+      confirms nothing paints over a walker (the only near-misses are two
+      walkers 3px apart, which the model allows on purpose).
+    · Verify layer bugs with PIXELS, not `elementsFromPoint`: every tile layer is
+      `pointer-events: none`, so hit-testing cannot see them at all. And PAUSE
+      the board first (`__game.paused.value = true`) — a rect read one frame and
+      a screenshot taken the next catch a walker several pixels apart, which
+      reads as "something is covering them" when nothing is.
+- **PEDESTRIANS ARE THEIR OWN SIM** (`sim/pedestrians.ts`): a route of tile ids,
+  a distance along it, a side of the street. Positions come out in TILE units so
+  a headless test reads them and the renderer only multiplies; `game.pedestrians`
+  is filled in `advance()`, not the render mirror.
+    · **A walker follows the pavement's own CURVE**: positions come from
+      `laneSegmentPointAt` (the sampler the cars use) at the pavement offset.
+      Lerping between tile CENTRES is right on a straight and wrong everywhere
+      else — on a corner the walker cuts across the inside of the bend, leaves
+      the drawn band and turns through a sharp V.
+- **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
+  graph's node is `(tile, SIDE)`, and the only move that changes side is at a
+  zebra. Drop that and a pavement is two networks drawn beside each other with
+  people teleporting over the tarmac.
+    · `sideOfPlot` must use the SAME sign convention as `pavementOffsets`, or
+      routing and paint disagree and walkers land on the wrong kerb.
+    · **A `side` is fixed to the STREET; a sampler offset is relative to the
+      DIRECTION OF TRAVEL.** They are not the same number. `sideOfPlot` decides
+      the side against the tile's own through movement, so a walk that runs
+      AGAINST that movement must flip the sign before handing it to
+      `laneSegmentPointAt` — that is `pavementOffsetFor(cell, side, entry, exit)`,
+      and nothing may reach for `pavementOffsets(...)[0] * side` directly. Using
+      the raw sign put everyone walking "backwards" on the opposite bank, and the
+      driveway at the far end then hauled them straight over the carriageway:
+      on `citizenzebra` (canonical eastbound, jobs reached by walking west from
+      the zebra) that was 125 people crossing the road anywhere but the crossing,
+      each for ~1.5s, which reads on screen as an occasional jaywalker rather
+      than as broken geometry. Guarded by "nobody crosses the carriageway
+      anywhere but the zebra" in `tests/unit/citizenWalking.spec.ts`.
+    · Yielding needed NO new rule in the traffic model: a walker claims the tile
+      and game.ts ORs it into the road sim's `closed` predicate — the same
+      mechanism a level crossing uses for a train. Cars already know how to
+      brake for a closed tile.
+    · The wait terminates BY CONSTRUCTION: the claim stops anything new
+      entering, so the walker only ever waits for what was already there.
+    · Snap `progress` to 0 on ENTERING a cross step. Carrying the remainder of
+      the last stride means a walker is essentially never at exactly 0 there, so
+      the wait never fires and they stroll into the traffic.
+    · **A footway step's entry/exit are the ROAD's ports, NEVER the plot's.** A
+      house south of an east-west street is reached by walking ALONG the street
+      and turning up the driveway. Take the ports from the plot and the
+      "pavement" runs across the carriageway: people step onto the zebra and
+      come back out of the middle of the road. A tile adjoining a plot is only
+      HALF walked (t 0..0.5 or 0.5..1) — the driveway meets it at the middle.
+    · **THE RAILWAY CROSSING IS THE ZEBRA'S OPPOSITE**, not its sibling
+      (`hasRailCrossing`, 2026-08-03). A pavement plus rails on one tile IS a
+      pedestrian level crossing — derived, so every board's existing crossings
+      became one for free. At a zebra the walker CLAIMS the tile and the traffic
+      gives way; at the tracks the train has absolute priority, the walker waits
+      (`railBusy`, the same reserved/occupied predicate the cars brake for), and
+      NOTHING the walker does reaches the railway. That is why it needs no
+      `CROSS_WAIT_MAX` backstop: with only one side waiting there is nothing to
+      deadlock, and "go anyway after 8s" would mean stepping in front of a train.
+      Hold only at a leg starting on the tile BOUNDARY — a leg starting mid-tile
+      begins ON the rails, and freezing somebody there is the opposite of safe.
+    · **The claim must be no wider than the kerb.** Claiming from a step earlier,
+      to give cars more warning, holds the tile almost continuously once a town
+      shares one zebra: measured a 589-second queue. Cars brake for a closed tile
+      from wherever they are, so the kerb is early enough.
+    · **A car held AT a closed tile still has a body point ON it.** So "wait
+      while any car touches the crossing" deadlocks: the walker waits for a car
+      that is waiting for the walker (measured 1078 seconds). Count only bodies
+      WELL inside the tile (t 0.15..0.85), and keep `CROSS_WAIT_MAX` as a
+      backstop — a pedestrian frozen at a kerb holds the crossing closed and
+      takes the whole road down with it.
+    · **Zebra stripes run ALONG the road and repeat ACROSS it** — a driver sees
+      them side by side, a pedestrian steps over one after another. Square to
+      the road (repeating along it) reads as a stack of stop lines.
+    · The zebra art needs its own `markings` layer at z2: the road surface is
+      drawn ABOVE the ground layer, so paint on the ground is buried under the
+      carriageway it is painted on.
+    · A walk route is `[plot, street…, plot]` — ADDRESSES ARE NEVER
+      THROUGH-ROUTES. Let people walk freely across plots and a short trip cuts
+      through gardens and never touches a pavement, which is the whole thing the
+      feature exists to show.
+    · `planWalk` returns null when no pavement joins the ends, and the citizen's
+      leg stays on its clock. A board with no roads (threecities) is unaffected.
+    · Step the walkers BEFORE the citizens in advance(), or every arrival is
+      reported a tick late.
+    · `citizenStats.onFoot` is the headless-visible count — same reason as
+      `driving`: the renderer's list does not exist in a test.
+- **LOCAL ACCESS IS DERIVED, never drawn** (`tiles/access.ts`). A plot within
+  `ROAD_ACCESS_TILES` of a street gets its driveway/apron rendered from the tile
+  centre out to that edge. No level data, nothing to keep in sync, re-derived
+  the moment a street is laid or bulldozed — and it is the pedestrian graph when
+  walking people arrive. Do NOT auto-generate road TILES inside a town: they
+  land in the level data, become editable and bulldozable, and must be
+  regenerated on every growth step.
+    · `accessPortOf` is O(1) per tile because the RENDERER asks per tile per
+      frame; `localAccessOf` (whole board) would be quadratic there.
+    · It is a METHOD in TileGround, not a getter — a vue-facing-decorator getter
+      is a cached computed, and a street laid in play would never grow paths.
+    · Draw it as a WEDGE flaring to the kerb, in a tone LIGHTER than the ground
+      (hard-standing). A constant-width darker quad reads as a timber plank.
+- **`game.roadCars` is a RENDER mirror** (updated in `frame()`, not `advance()`),
+  so it is EMPTY in a headless test — measuring cars with it reads 0 while ten
+  are driving. `citizenStats.driving` is the headless-visible count.
+- A town with only roads does not shrink, it CHURNS: the car-less are refused,
+  leave, and are replaced by people who may also lack cars. Population holds
+  steady while the town self-selects for drivers, so `access` shows the failure
+  only as a DIP — assert on the minimum over a run, never the end state.
 
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE

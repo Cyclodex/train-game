@@ -1,4 +1,4 @@
-import { reactive, ref, Ref } from "vue";
+import { markRaw, reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
 import { stationDemandOf, parkAndRideTargets } from "@/tiles/catchment";
@@ -16,6 +16,14 @@ import {
   BlockReason,
 } from "@/sim/simulation";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
+import { buildCitizenWorld } from "@/tiles/cities";
+import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
+import {
+  CityState,
+  CitizenSim,
+  TravelMode,
+  createCitizenSim,
+} from "@/sim/citizens";
 import { facilityOf, rowFor } from "@/tiles/parking";
 import { JunctionSignal } from "@/sim/junctionSignal";
 import {
@@ -395,6 +403,13 @@ export interface Game {
   stationQueues: Record<string, number>;
   // tileId -> the destination each of them asked for, in queue order.
   stationWaiting: Record<string, string[]>;
+  // The citizen layer (Citizens mode). Empty for every other mode, which is how
+  // the HUD knows not to draw the city cards at all.
+  cities: CityState[];
+  citizenStats: CitizenHud;
+  // People on the pavements, sampled to world PIXELS each frame for rendering.
+  // Empty for every mode without a citizen layer.
+  pedestrians: PedestrianDot[];
   // trainId -> the stops it serves (the service panel's model). A view copy of
   // what the SIM owns; changes only on a player action.
   trainLines: Record<string, string[]>;
@@ -591,6 +606,41 @@ export interface Game {
   // two-phase+bus → round-robin → round-robin+bus → off). No-op off a road junction.
   cycleRoadSignal(tileId: string): void;
 }
+
+// The whole-board citizen readout: the numbers the HUD shows above the per-city
+// cards. `enabled` is the one flag a view needs — false means this mode has no
+// citizen layer and the panel should not exist.
+export interface CitizenHud {
+  enabled: boolean;
+  population: number;
+  travelling: number;
+  // How many of this board's people are a car on the road at this instant.
+  driving: number;
+  // ...and how many are a figure on a pavement.
+  onFoot: number;
+  tripsCompleted: number;
+  tripsRefused: number;
+  tripsAbandoned: number;
+  clock: string; // "07:35" — the citizens' day, not the calendar's year
+  day: number;
+  modeShare: Record<TravelMode, number>;
+}
+
+// One walking person, positioned for the renderer.
+export interface PedestrianDot {
+  id: string;
+  x: number; // world px
+  y: number;
+  // Held at a kerb waiting for the road to clear. The view dims them, so a queue
+  // at a crossing reads as a queue.
+  waiting: boolean;
+}
+
+// How many people a platform holds under the citizen layer. Generous on
+// purpose: this is a physical cap on the CROWD, not a difficulty dial, and the
+// interesting pressure is meant to come from the train's seats and its
+// timetable — not from a queue that silently refuses to form.
+const CITIZEN_PLATFORM_CAP = 60;
 
 export function createGame(
   level: Level,
@@ -795,6 +845,11 @@ export function createGame(
   // reservation/occupancy on that tile — no new interlocking.
   let sim!: Simulation;
   let roadSim!: ReturnType<typeof createRoadSim>;
+  // Resolved BEFORE the sims are built, because what the mode asks for changes
+  // how they are built: a mode that populates the board with citizens supplies
+  // its own passengers, so the synthetic per-station schedule must not also run.
+  const setup = mode.setup({ level, trains: trainDefs, levelId });
+  const citizenSetup = setup.citizens;
   // The TrainInit for a def, with the colour + real sprite lengths resolved here
   // (the single place those are known). Used both to seed the sim at init and to
   // inject a scheduled train mid-run, so a spawned train is byte-for-byte the
@@ -835,11 +890,37 @@ export function createGame(
       // platform; a lonely halt sees a trickle. The sim only executes the
       // schedule it is handed — it stays terrain-blind. Snapshotted at sim
       // creation, so a station built mid-run queues nobody until reset.
-      stationDemand: Object.fromEntries(
-        Object.entries(level)
-          .filter(([, cell]) => cell.role === "station")
-          .map(([id]) => [id, stationDemandOf(level, id)])
-      ),
+      //
+      // Under the citizen layer the SPAWNER is off — the people on the platform
+      // are actual citizens with homes, jobs and a stopwatch running, and a
+      // second synthetic source would both double-count the crowd and let the
+      // shadow queue drift out of step with the real one (design doc §10).
+      //
+      // But the entry is still supplied, because `max` is also what caps the
+      // platform: without one, every station falls back to
+      // STATION_QUEUE_HARD_CAP (16), which a morning peak in a town of forty
+      // exceeds — and a commuter who cannot even JOIN the queue stands there
+      // until they give up, which reads as a broken railway when the railway is
+      // fine. An infinite interval spawns nobody (`advanceDemand`'s loop never
+      // runs), so this is a cap and nothing else.
+      stationDemand: citizenSetup
+        ? Object.fromEntries(
+            Object.entries(level)
+              .filter(([, cell]) => cell.role === "station")
+              .map(([id]) => [
+                id,
+                {
+                  intervalSec: Number.POSITIVE_INFINITY,
+                  max: CITIZEN_PLATFORM_CAP,
+                  initial: 0,
+                },
+              ])
+          )
+        : Object.fromEntries(
+            Object.entries(level)
+              .filter(([, cell]) => cell.role === "station")
+              .map(([id]) => [id, stationDemandOf(level, id)])
+          ),
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.
       waitForDispatch: mode.controls.dispatch,
@@ -912,6 +993,137 @@ export function createGame(
     const fid = facilityOf(cell, tileId);
     if (fid && !parkingSignTiles.has(fid)) parkingSignTiles.set(fid, tileId);
   }
+
+  // --- the citizen layer -------------------------------------------------------
+  //
+  // Present only when the mode asked for it (`ModeSetup.citizens`), so every
+  // existing mode and every /test scenario keeps the board it had. When it IS
+  // present, the people standing on the platforms are the town's own residents
+  // on their way to work, and the trains they are waiting for are yours.
+  //
+  // Built here rather than inside `buildSims()` for one reason: it must be
+  // rebuilt on reset the same way the sims are, and it needs the level as it
+  // stands then. `rebuildCitizens()` below is what reset() calls.
+  let citizenSim: CitizenSim | null = null;
+  let pedestrianSim: PedestrianSim | null = null;
+  // Tiles a car body is on, refreshed each tick. Read by the pedestrian sim to
+  // decide whether a zebra is clear to step onto.
+  const carTiles = new Set<string>();
+  // Tiles somebody has claimed a crossing on. Fed into the ROAD sim's `closed`
+  // predicate — the identical mechanism a level crossing uses when a train is
+  // coming, so cars brake, queue and resume with no new traffic rule at all.
+  let pedestrianClaims: string[] = [];
+  const pedestrians = reactive([]) as PedestrianDot[];
+  const cities = reactive([]) as CityState[];
+  const citizenStats = reactive({
+    enabled: false,
+    population: 0,
+    travelling: 0,
+    driving: 0,
+    onFoot: 0,
+    tripsCompleted: 0,
+    tripsRefused: 0,
+    tripsAbandoned: 0,
+    clock: "00:00",
+    day: 0,
+    modeShare: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+  }) as CitizenHud;
+
+  function rebuildCitizens() {
+    if (!citizenSetup) {
+      citizenSim = null;
+      pedestrianSim = null;
+      return;
+    }
+    pedestrians.splice(0, pedestrians.length);
+    pedestrianClaims = [];
+    carTiles.clear();
+    // The people ON the pavements. Its own little sim, NOT part of the road
+    // model: a pedestrian has no following distance, claims no junction and may
+    // share a doorway, all of which road.ts exists to forbid.
+    pedestrianSim = markRaw(
+      createPedestrianSim({
+        level,
+        seed: citizenSetup.seed ?? colorSeed,
+        // The same walking speed the citizen model scores journeys at, so the
+        // person on screen and the person in the model arrive together.
+        speed: citizenSetup.tuning?.walkSpeed,
+        // Is a vehicle physically on this tile? A walker claims the zebra (see
+        // the closed predicate in advance()) and then waits for whatever was
+        // already on it to drive clear — which is what makes the wait finite.
+        roadBusy: (tileId: string) => carTiles.has(tileId),
+        // And the RAILWAY half of it. The very same predicate the road sim gets
+        // for a level crossing — a train reserving or standing on the tile —
+        // handed to the people on the pavement, so the booms that stop the cars
+        // stop the pedestrians too. One-way, unlike the zebra: this reads the
+        // railway and never writes to it, because a train does not wait.
+        railBusy: (tileId: string) => !!(sim.reservedBy(tileId) || sim.occupiedBy(tileId)),
+      })
+    );
+    citizenSim = markRaw(
+      createCitizenSim({
+        world: buildCitizenWorld(level, citizenSetup.seed ?? colorSeed),
+        seed: citizenSetup.seed ?? colorSeed,
+        tuning: citizenSetup.tuning,
+        // The two things the citizen sim pushes back into the world: a person
+        // who chose the train becomes a passenger on a real platform, capped by
+        // the real platform...
+        transit: { enqueue: (stationId, n) => sim.addStationPassengers(stationId, n) },
+        // ...and a person who chose to drive becomes an actual car on the
+        // actual street, subject to every queue, junction and level crossing on
+        // the way. Their journey time is whatever the traffic gives them.
+        driving: {
+          request: (fromTileId, toTileId) => roadSim.requestTrip(fromTileId, toTileId),
+          status: tripId => roadSim.tripStatus(tripId),
+          release: tripId => roadSim.clearFinishedTrip(tripId),
+        },
+        // ...and a person who walks becomes an actual figure on the pavement.
+        walking: {
+          request: (from, to) => pedestrianSim?.request(from, to) ?? null,
+          status: id => pedestrianSim?.status(id) ?? "arrived",
+          release: id => pedestrianSim?.release(id),
+        },
+      })
+    );
+    citizenStats.enabled = true;
+    refreshCitizens();
+  }
+
+  function refreshCitizens() {
+    if (!citizenSim) return;
+    const next = citizenSim.cities();
+    cities.splice(0, cities.length, ...next);
+    const s = citizenSim.stats();
+    citizenStats.population = s.population;
+    citizenStats.travelling = s.travelling;
+    citizenStats.driving = s.driving;
+    citizenStats.onFoot = s.onFoot;
+    citizenStats.tripsCompleted = s.tripsCompleted;
+    citizenStats.tripsRefused = s.tripsRefused;
+    citizenStats.tripsAbandoned = s.tripsAbandoned;
+    citizenStats.clock = s.clock;
+    citizenStats.day = s.day;
+    citizenStats.modeShare = s.modeShare;
+  }
+
+  // Sampled in `advance()` rather than in the render mirror, for the same
+  // reason the park & ride transfer is: a headless test must be able to see
+  // where people are.
+  function updatePedestrians() {
+    const next = pedestrianSim?.sample() ?? [];
+    pedestrians.length = next.length;
+    for (let i = 0; i < next.length; i++) {
+      const w: WalkerSample = next[i];
+      const cur = pedestrians[i];
+      const x = w.x * tileSize;
+      const y = w.y * tileSize;
+      if (cur && cur.id === w.id && cur.x === x && cur.y === y && cur.waiting === w.waiting)
+        continue;
+      pedestrians[i] = { id: w.id, x, y, waiting: w.waiting };
+    }
+  }
+
+  rebuildCitizens();
 
   // Park & ride: the station (if any) within walking reach of each tile,
   // computed once — stations and stalls are both level data. When a stall goes
@@ -1481,7 +1693,6 @@ export function createGame(
   let clock = 0; // accumulated sim time in seconds
 
   // The objective tracker for the active mode, driven by the per-tick observation.
-  const setup = mode.setup({ level, trains: trainDefs, levelId });
   const tracker = mode.createObjective(setup);
   const goals = goalsOf(setup.objective);
   const spawner = mode.createSpawner?.(setup);
@@ -1850,10 +2061,48 @@ export function createGame(
       // accrues on a level the player has not started.
       collectTax();
     }
-    const obs = handleEvents(sim.step(scaled));
+    const simEvents = sim.step(scaled);
+    const obs = handleEvents(simEvents);
     obs.spawnedDelta = spawnedDelta;
-    // A crossing is closed while a train reserves or sits on that tile.
-    roadSim.step(scaled, id => !!(sim.reservedBy(id) || sim.occupiedBy(id)));
+    // The citizens' day, advanced on the SAME events the railway just emitted:
+    // a dwell says exactly who boarded and who got off, which is how a waiting
+    // person becomes a rider and a rider becomes someone who arrived (or who
+    // has to change trains). Headless, so a unit test can drive it.
+    if (citizenSim) {
+      // Walkers first: a citizen's leg ends on the walker having arrived, so
+      // stepping the pavement after the people would report every arrival one
+      // tick late.
+      pedestrianSim?.step(scaled);
+      pedestrianClaims = pedestrianSim?.claimedCrossings() ?? [];
+      citizenSim.step(scaled, simEvents);
+      refreshCitizens();
+      updatePedestrians();
+    }
+    // A crossing is closed while a train reserves or sits on that tile — and,
+    // now, while somebody is crossing the road on a zebra there. One predicate,
+    // two reasons: the road sim already knows how to brake for a closed tile, so
+    // yielding to a pedestrian needed no new rule in the traffic model.
+    const claimed = pedestrianClaims;
+    roadSim.step(
+      scaled,
+      id => !!(sim.reservedBy(id) || sim.occupiedBy(id)) || claimed.includes(id)
+    );
+    // Where the cars ended up, for the walkers waiting at a kerb.
+    //
+    // Only bodies WELL INSIDE a tile count. A car held at a closed crossing
+    // stops at its entry edge, and its nose still registers a body point on that
+    // tile — so counting every point deadlocked the pair of them: the walker
+    // waited for a car that was waiting for the walker, and the road never moved
+    // again (measured: a 1078-second queue). The margin is what tells "stopped
+    // at the kerb giving way" from "actually on the crossing".
+    if (pedestrianSim) {
+      carTiles.clear();
+      for (const body of roadSim.bodies()) {
+        for (const pt of body.points) {
+          if (pt.t > 0.15 && pt.t < 0.85) carTiles.add(pt.tileId);
+        }
+      }
+    }
     // Park & ride: whoever just pulled into a stall within walking reach of a
     // station is now standing on its platform.
     transferParkedArrivals();
@@ -2296,6 +2545,9 @@ export function createGame(
     occupied,
     stationQueues,
     stationWaiting,
+    cities,
+    citizenStats,
+    pedestrians,
     trainLines,
     stationLines,
     queuedTrains,
@@ -2398,6 +2650,8 @@ export function createGame(
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
       for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+      // The town starts over too: same seed, same people, same jobs.
+      rebuildCitizens();
       prevStalls = new Set();
       roadCars.splice(0, roadCars.length);
       roadFrame.maxCarWaitSec = 0;
