@@ -45,7 +45,9 @@ export interface TrainInit {
   unitLengths?: number[];
   // Gap between coupled units, in tiles. Defaults to DEFAULT_COUPLING.
   coupling?: number;
-  // The station tile ids this train serves, in order (see SimTrain.line).
+  // The station tile ids this train serves, in order. Authoring sugar: the sim
+  // creates a LINE with these stops and assigns the train to it, so a board can
+  // still be written as "this train serves A, B, C" without naming a line.
   line?: string[];
   // Passenger seats. Defaults to PASSENGERS_PER_WAGON per wagon for "people"
   // trains and 0 for "fraight" — a goods train calls at stations but boards
@@ -128,13 +130,15 @@ export interface SimTrain {
   // anyone and sets them down at its next call (the old one-hop service).
   capacity: number;
   manifest: string[];
-  // LINE (the network mode): the station tile ids this train serves, in order,
-  // cycling forever. A train with a line drives ITSELF — it plans a route to
-  // its next stop and prefers that route at every tile boundary, instead of
-  // going wherever the points happen to be set. Absent = the classic train,
-  // which follows the switches exactly as before.
-  line?: string[];
-  // Which stop of `line` the train is currently heading for.
+  // LINE (the network mode): which line this train is assigned to. The stops
+  // live on the LINE, not here — a line is a plan that outlives the vehicles
+  // running it, so drawing one, running six trains on it, or running none, are
+  // all expressible. A train on a line drives ITSELF: it plans a route to its
+  // next stop and prefers that route at every tile boundary, instead of going
+  // wherever the points happen to be set. Absent = the classic train, which
+  // follows the switches exactly as before.
+  lineId?: string;
+  // Which stop of its line the train is currently heading for.
   lineIndex: number;
   // The route being driven right now (this leg only). Recomputed at every call,
   // so a level edited mid-run is routed over on the very next leg.
@@ -143,6 +147,18 @@ export interface SimTrain {
   // stops-worth of passengers to the end of the leg but takes no new ones, and
   // it is removed from the sim the moment it reaches the shed.
   retiring?: boolean;
+}
+
+// A LINE: the plan, with an identity of its own. Trains are assigned to it —
+// many, or none. `pinned` marks one the player drew deliberately (`createLine`)
+// rather than one inferred from assigning stops to a train; an unpinned line is
+// swept up when its last train leaves, a pinned one stands empty for as long as
+// the player wants it to.
+export interface SimLine {
+  id: string;
+  name: string;
+  stops: string[];
+  pinned?: boolean;
 }
 
 export interface ArrivedEvent {
@@ -336,11 +352,29 @@ export interface Simulation {
   trainLine(id: string): string[];
   // The stop it is heading for right now, or undefined without a line.
   trainNextStop(id: string): string | undefined;
-  // Put a train into service on a line (or take it out again with []). The
-  // route to the first stop is planned immediately, so the train turns toward
-  // it on the next tick — this is the verb a "assign train to line" UI calls.
-  // Returns false for an unknown train.
+  // Put a train into service on a line with these stops (or take it out again
+  // with []). Train-centric sugar over the line registry: it finds or creates
+  // the line carrying exactly these stops, so two trains given the same stops
+  // end up on the SAME line. Returns false for an unknown train.
   assignLine(id: string, stops: string[]): boolean;
+  // Every line, in the order they were created.
+  lines(): SimLine[];
+  // Draw a line without any train on it — the player's verb. Returns its id;
+  // an existing line with exactly these stops is reused (and pinned).
+  createLine(stops: string[], name?: string): string;
+  // Re-stop a line. Every train running it restarts from the new first stop.
+  setLineStops(lineId: string, stops: string[]): boolean;
+  renameLine(lineId: string, name: string): boolean;
+  // Delete a line. Its trains are not deleted — they fall back to the classic
+  // lineless service.
+  deleteLine(lineId: string): boolean;
+  // Which line a train is running, if any.
+  lineOf(trainId: string): string | undefined;
+  // Put a train onto an existing line, or take it off with null.
+  assignTrain(trainId: string, lineId: string | null): boolean;
+  // The trains currently running a line (empty for a line nothing serves —
+  // which is a legitimate state, not an error).
+  trainsOnLine(lineId: string): string[];
   // WITHDRAW a train from service the orderly way: it finishes nothing, takes
   // no new passengers, and runs to the nearest depot, where it is stabled and
   // leaves the sim (a `retired` event says when). False for an unknown train
@@ -504,6 +538,83 @@ export function createSimulation(config: SimConfig): Simulation {
     }
   }
 
+  // --- Lines: the plan, which outlives the vehicles running it -----------------
+  //
+  // A LINE is a first-class object: an ordered list of stops with an identity.
+  // Trains are ASSIGNED to one (many trains to a line, or none at all). This is
+  // the difference between "I have planned a service here" and "a vehicle is
+  // running it right now", and the two have to be separable: a passenger goes to
+  // the platform because a LINE connects them to where they are going, while how
+  // often a train actually turns up is the player's problem. Hanging the stops
+  // off the train made those the same fact and made a plan die with its last
+  // vehicle.
+  const lines: Record<string, SimLine> = {};
+  const lineOrder: string[] = [];
+  let lineSeq = 0;
+
+  function stopsOf(train: SimTrain): string[] | undefined {
+    return train.lineId ? lines[train.lineId]?.stops : undefined;
+  }
+
+  function addLine(stops: string[], name?: string): SimLine {
+    lineSeq += 1;
+    const id = `line-${lineSeq}`;
+    const line: SimLine = { id, name: name ?? `L${lineSeq}`, stops: [...stops] };
+    lines[id] = line;
+    lineOrder.push(id);
+    return line;
+  }
+
+  // Find-or-create the line with exactly these stops. Two trains authored with
+  // the same stop list, or a player who draws the same route twice, mean the
+  // same SERVICE — not two lines that happen to look alike. Lines made this way
+  // are unpinned: they are a by-product of assigning a train, so they are swept
+  // up when their last train leaves. A line the player drew deliberately
+  // (`createLine`) is pinned and stays, trainless or not — that is the whole
+  // point of D11.
+  function lineForStops(stops: string[], pinned = false): SimLine {
+    const key = stops.join(">");
+    for (const id of lineOrder) {
+      const line = lines[id];
+      if (line && line.stops.join(">") === key) {
+        if (pinned) line.pinned = true;
+        return line;
+      }
+    }
+    const made = addLine(stops);
+    if (pinned) made.pinned = true;
+    return made;
+  }
+
+  // Drop a line nobody drew on purpose once its last train has left it.
+  function pruneLine(lineId: string | undefined): void {
+    if (!lineId) return;
+    const line = lines[lineId];
+    if (!line || line.pinned) return;
+    if (trainsOn(lineId).length > 0) return;
+    delete lines[lineId];
+    const at = lineOrder.indexOf(lineId);
+    if (at >= 0) lineOrder.splice(at, 1);
+  }
+
+  function trainsOn(lineId: string): SimTrain[] {
+    return Object.keys(trains)
+      .map(id => trains[id])
+      .filter(t => t?.lineId === lineId);
+  }
+
+  // Point a train at the start of its line (or at nothing) and plan the leg. The
+  // one place that resets the cursor, so re-stopping a line and re-assigning a
+  // train cannot drift apart.
+  function restartOnLine(train: SimTrain): void {
+    train.lineIndex = 0;
+    if (!stopsOf(train)?.length) {
+      train.plan = undefined;
+      return;
+    }
+    planLeg(train);
+  }
+
   // --- Lines: a train that drives itself ---------------------------------------
   //
   // A planned route names an EXIT PORT; the sim's one seam for "which way at
@@ -549,8 +660,9 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // The stop this train is heading for, or undefined when it has no line.
   function currentStop(train: SimTrain): string | undefined {
-    if (!train.line?.length) return undefined;
-    return train.line[train.lineIndex % train.line.length];
+    const stops = stopsOf(train);
+    if (!stops?.length) return undefined;
+    return stops[train.lineIndex % stops.length];
   }
 
   // Plan the leg to the current stop from where the head is now. Called on
@@ -572,8 +684,9 @@ export function createSimulation(config: SimConfig): Simulation {
   // CYCLE: past the last stop it wraps to the first, which is what makes a
   // two-stop line a shuttle and a multi-stop line a circular service.
   function advanceLine(train: SimTrain): void {
-    if (!train.line?.length) return;
-    train.lineIndex = (train.lineIndex + 1) % train.line.length;
+    const stops = stopsOf(train);
+    if (!stops?.length) return;
+    train.lineIndex = (train.lineIndex + 1) % stops.length;
     planLeg(train);
   }
 
@@ -586,8 +699,9 @@ export function createSimulation(config: SimConfig): Simulation {
   // which is the classic service every older board expects.
   function callsAt(train: SimTrain, tileId: string): boolean {
     if (!isStationTile(tileId)) return false;
-    if (!train.line?.length) return true;
-    return train.line.includes(tileId);
+    const stops = stopsOf(train);
+    if (!stops?.length) return true;
+    return stops.includes(tileId);
   }
 
   function stationStopPending(train: SimTrain): boolean {
@@ -644,7 +758,7 @@ export function createSimulation(config: SimConfig): Simulation {
       dwelledAtIndex: -1,
       capacity,
       manifest: [],
-      ...(init.line?.length ? { line: [...init.line] } : {}),
+      ...(init.line?.length ? { lineId: lineForStops(init.line).id } : {}),
       lineIndex: 0,
     };
   }
@@ -656,7 +770,7 @@ export function createSimulation(config: SimConfig): Simulation {
   // Trains on a line set off toward their first stop. Done after the roster is
   // built so a plan is always derived from the finished level.
   for (const train of Object.values(trains)) {
-    if (train.line?.length) planLeg(train);
+    if (stopsOf(train)?.length) planLeg(train);
   }
 
   // The set of CLAIM KEYS a train's body currently covers (head back to tail).
@@ -771,7 +885,7 @@ export function createSimulation(config: SimConfig): Simulation {
     // The old plan started from the far side of the depot; a train that has
     // just turned round needs the route to its stop re-derived from here, or
     // it would carry a plan whose tiles it will never enter again.
-    if (train.line?.length) planLeg(train);
+    if (stopsOf(train)?.length) planLeg(train);
   }
 
   // The other train responsible for a claim not being free for `selfId`: its
@@ -1079,7 +1193,8 @@ export function createSimulation(config: SimConfig): Simulation {
       // everyone down at its next call — the old one-hop behaviour, unchanged
       // for every board that never mentions a line. A retiring train does the
       // same: its riders are better off on a platform than in a shed.
-      const onelegged = !train.line?.length || train.retiring;
+      const stops = stopsOf(train);
+      const onelegged = !stops?.length || train.retiring;
       const staying: string[] = [];
       let alighted = 0;
       for (const dest of train.manifest) {
@@ -1094,14 +1209,14 @@ export function createSimulation(config: SimConfig): Simulation {
       // which is the whole reason a line's SHAPE matters. A lineless train
       // takes anyone (it is going to set them down next stop regardless).
       const queue = queues.get(tileId) ?? [];
-      const serves = new Set(train.line ?? []);
+      const serves = new Set(stops ?? []);
       let boarded = 0;
       if (!train.retiring) {
         const left: string[] = [];
         for (const dest of queue) {
           const canTake =
             train.manifest.length < train.capacity &&
-            (!train.line?.length || serves.has(dest));
+            (!stops?.length || serves.has(dest));
           if (canTake) {
             train.manifest.push(dest);
             boarded += 1;
@@ -1116,10 +1231,10 @@ export function createSimulation(config: SimConfig): Simulation {
       // arriving early at a later stop (a loop can bring one up sooner than the
       // cursor expects) should still count as having served it, or the train
       // would come back for a platform it just worked.
-      if (train.line?.length) {
-        const at = train.line.indexOf(tileId);
+      if (stops?.length) {
+        const at = stops.indexOf(tileId);
         if (at >= 0) {
-          train.lineIndex = (at + 1) % train.line.length;
+          train.lineIndex = (at + 1) % stops.length;
           planLeg(train);
         }
       }
@@ -1150,7 +1265,7 @@ export function createSimulation(config: SimConfig): Simulation {
             dropTrain(train.id);
             return;
           }
-          const matched = !train.line?.length && depotColors[tileId] === train.color;
+          const matched = !stopsOf(train)?.length && depotColors[tileId] === train.color;
           const alighted = matched ? train.manifest.length : 0;
           if (alighted > 0) {
             train.manifest = [];
@@ -1347,7 +1462,8 @@ export function createSimulation(config: SimConfig): Simulation {
       return blockStates.get(id);
     },
     trainLine(id: string) {
-      return trains[id]?.line ? [...trains[id].line!] : [];
+      const train = trains[id];
+      return train ? [...(stopsOf(train) ?? [])] : [];
     },
     trainNextStop(id: string) {
       const train = trains[id];
@@ -1356,16 +1472,74 @@ export function createSimulation(config: SimConfig): Simulation {
     assignLine(id: string, stops: string[]) {
       const train = trains[id];
       if (!train) return false;
+      const had = train.lineId;
       if (stops.length === 0) {
-        delete train.line;
-        train.plan = undefined;
-        train.lineIndex = 0;
+        delete train.lineId;
+        restartOnLine(train);
+        pruneLine(had);
         return true;
       }
-      train.line = [...stops];
-      train.lineIndex = 0;
-      planLeg(train);
+      train.lineId = lineForStops(stops).id;
+      restartOnLine(train);
+      if (had !== train.lineId) pruneLine(had);
       return true;
+    },
+    lines() {
+      return lineOrder
+        .map(id => lines[id])
+        .filter(Boolean)
+        .map(l => ({ ...l, stops: [...l.stops] }));
+    },
+    createLine(stops: string[], name?: string) {
+      const line = lineForStops(stops, true);
+      if (name !== undefined) line.name = name;
+      return line.id;
+    },
+    setLineStops(lineId: string, stops: string[]) {
+      const line = lines[lineId];
+      if (!line) return false;
+      line.stops = [...stops];
+      // Everyone running it starts the new route from their next stop, not from
+      // wherever the old cursor happened to point — an index into a list that
+      // just changed length means nothing.
+      for (const train of trainsOn(lineId)) restartOnLine(train);
+      return true;
+    },
+    renameLine(lineId: string, name: string) {
+      const line = lines[lineId];
+      if (!line) return false;
+      line.name = name;
+      return true;
+    },
+    deleteLine(lineId: string) {
+      if (!lines[lineId]) return false;
+      // Its trains do not vanish with it: they fall back to the classic
+      // lineless service, which is what an unassigned train has always been.
+      for (const train of trainsOn(lineId)) {
+        delete train.lineId;
+        restartOnLine(train);
+      }
+      delete lines[lineId];
+      const at = lineOrder.indexOf(lineId);
+      if (at >= 0) lineOrder.splice(at, 1);
+      return true;
+    },
+    lineOf(trainId: string) {
+      return trains[trainId]?.lineId;
+    },
+    assignTrain(trainId: string, lineId: string | null) {
+      const train = trains[trainId];
+      if (!train) return false;
+      if (lineId !== null && !lines[lineId]) return false;
+      const had = train.lineId;
+      if (lineId === null) delete train.lineId;
+      else train.lineId = lineId;
+      restartOnLine(train);
+      if (had !== train.lineId) pruneLine(had);
+      return true;
+    },
+    trainsOnLine(lineId: string) {
+      return Object.keys(trains).filter(id => trains[id]?.lineId === lineId);
     },
     retireTrain(id: string) {
       const train = trains[id];
@@ -1377,10 +1551,15 @@ export function createSimulation(config: SimConfig): Simulation {
         depotTiles()
       );
       if (!plan) return false; // nowhere to stable it; scrap is the way out
-      delete train.line;
+      // It leaves the LINE, not the other way round: the line is a plan that
+      // stands whether or not anything is running it (D11), so withdrawing the
+      // last train must not delete the service everyone planned around.
+      const had = train.lineId;
+      delete train.lineId;
       train.lineIndex = 0;
       train.plan = plan;
       train.retiring = true;
+      pruneLine(had);
       return true;
     },
     isRetiring(id: string) {

@@ -249,10 +249,60 @@ describe("the service: buying trains and setting lines", () => {
     const game = gameFor();
     const stops = networkmode.trains.circle.line ?? [];
     expect(game.trainLines.circle).toEqual(stops);
-    // Every stop knows the livery calling there.
+    // The authored stops became a LINE, and the train was put onto it.
+    const line = game.lines.find(l => l.trains.includes("circle"));
+    expect(line?.stops).toEqual(stops);
+    // Every stop knows the colour of the LINE calling there — not the livery
+    // of whatever happens to run it, which may be nothing at all (D11).
     for (const stop of stops) {
-      expect(game.stationLines[stop]).toContain(game.trainColors.circle);
+      expect(game.stationLines[stop]).toContain(line?.colour);
     }
+  });
+
+  // D11: the plan and the vehicles running it are separate facts. You can draw
+  // a service before you own anything to run it, and withdrawing the last train
+  // must not delete the service everyone planned around.
+  it("draws a line with nothing running it, and keeps it when trains leave", () => {
+    const game = gameFor();
+    const stops = game.stationTiles.slice(0, 2);
+    const id = game.createLine(stops, "Nordbahn");
+    const drawn = game.lines.find(l => l.id === id);
+    expect(drawn?.name).toBe("Nordbahn");
+    expect(drawn?.stops).toEqual(stops);
+    expect(drawn?.trains).toEqual([]);
+    // An unserved line still tells the platforms it calls there — a passenger
+    // is entitled to plan around a service that exists on paper.
+    for (const stop of stops) {
+      expect(game.stationLines[stop]).toContain(drawn?.colour);
+    }
+
+    expect(game.assignTrain("circle", id)).toBe(true);
+    expect(game.trainLines.circle).toEqual(stops);
+    expect(game.lines.find(l => l.id === id)?.trains).toEqual(["circle"]);
+
+    expect(game.assignTrain("circle", null)).toBe(true);
+    expect(game.lines.map(l => l.id)).toContain(id);
+    expect(game.trainLines.circle).toBeUndefined();
+  });
+
+  it("re-stopping a line moves every train on it; deleting frees them", () => {
+    const game = gameFor();
+    const id = game.createLine(game.stationTiles.slice(0, 2));
+    game.assignTrain("circle", id);
+
+    const three = game.stationTiles.slice(0, 3);
+    expect(game.setLineStops(id, three)).toBe(true);
+    expect(game.trainLines.circle).toEqual(three);
+    expect(game.sim.trainNextStop("circle")).toBe(three[0]);
+
+    expect(game.renameLine(id, "Ringbahn")).toBe(true);
+    expect(game.lines.find(l => l.id === id)?.name).toBe("Ringbahn");
+
+    expect(game.deleteLine(id)).toBe(true);
+    expect(game.lines.map(l => l.id)).not.toContain(id);
+    // The train is not deleted with its line — it falls back to a stopper.
+    expect(game.trainLines.circle).toBeUndefined();
+    expect(game.removedTrains).not.toContain("circle");
   });
 
   it("setLine re-routes a train in service, and [] takes it out", () => {
@@ -458,7 +508,7 @@ describe("the line overlay", () => {
 
   it("numbers the stops in call order and draws the metals between them", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     const stops = networkmode.trains.circle.line ?? [];
     stops.forEach((id, i) => {
       expect(game.lineOverlay.order[id]).toBe(i + 1);
@@ -472,7 +522,7 @@ describe("the line overlay", () => {
 
   it("never lights an arm the line does not take — the depot spur stays dark", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     // 1,3 is the T where the shed joins the ring: the line runs THROUGH it
     // (north-south) and never turns into the depot.
     const atJunction = game.lineOverlay.path["1,3"] ?? [];
@@ -486,7 +536,7 @@ describe("the line overlay", () => {
 
   it("redraws as the line is edited, and clears on null", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     const before = Object.keys(game.lineOverlay.path).length;
 
     game.setLine("circle", game.stationTiles.slice(0, 2));

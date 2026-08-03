@@ -608,6 +608,31 @@ lean — prune as much as you add. This file only stays useful if every task ten
   leaves a stale id in it: both the advance and the reservation release guard
   on `trains[id]` still existing.
 
+## A LINE IS AN OBJECT, NOT A FIELD ON A TRAIN (D11, 2026-08-03)
+- `SimLine {id, name, stops, pinned?}` in a registry; `SimTrain.lineId` points
+  at one. `stopsOf(train)` is the only reader — never reach for a train's stops
+  directly. Before this the stops hung off the train, so "a service is planned
+  here" and "a vehicle is running it" were ONE fact: you could not draw a line
+  before buying a train, and withdrawing the last train silently deleted the
+  service every waiting passenger had planned around.
+- Trains are ASSIGNED (`assignTrain`), many to a line or none. A trainless line
+  is legitimate and is the state a player is in until they buy something.
+  `retireTrain` drops the train's `lineId`, never the line.
+- `pinned` is the difference between the two ways a line is born.
+  `createLine` = the player drew it: kept for ever, empty or not.
+  `assignLine(trainId, stops)` = train-centric sugar (and how authored
+  `init.line` boards load): it finds-or-creates by stop list, so two trains with
+  the same stops land on the SAME line, and the line is swept up (`pruneLine`)
+  when its last train leaves. Without that distinction every line edit would
+  litter the registry with orphans.
+- `setLineStops` restarts every train on the line (`restartOnLine`): an index
+  into a list that just changed length means nothing.
+- The COLOUR belongs to the line, not to a train's livery — `stationLines` (what
+  a platform shows) is derived from lines, so an unserved line still announces
+  itself, and two trains on one line cannot paint it two colours.
+- `lineOverlay` takes `{lineId}` or `{trainId}`; a line is drawable with nothing
+  running it. PlayView edits `editingLineId`, not a train.
+
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
   graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
@@ -622,7 +647,7 @@ lean — prune as much as you add. This file only stays useful if every task ten
   That is what keeps `exitAt` unambiguous (a shortest path never repeats a
   `(tile, entry)` node) and what makes track laid mid-run usable next leg.
 - A train IN SERVICE never terminates at a depot, whatever the colours say —
-  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  `matched` is gated on `!stopsOf(train)?.length`. Depots are where trains are
   ordered and stabled; on a line they are turn-backs, not destinations.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each

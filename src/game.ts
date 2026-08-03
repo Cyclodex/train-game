@@ -89,6 +89,29 @@ export interface TrainDef {
   line?: string[];
 }
 
+// A line as the VIEW needs it: the sim's plan plus who is running it and what
+// colour it wears. The colour belongs to the LINE, not to a train's livery —
+// a service has to be identifiable on the platform before anything is running
+// it, and two trains on one line must not paint it two colours.
+export interface LineView {
+  id: string;
+  name: string;
+  stops: string[];
+  trains: string[];
+  colour: string;
+}
+
+// Strong, well-separated hues that read against ballast and grass alike. Not
+// the depot/train palette (`Colors`), which includes grey and white.
+const LINE_COLOURS = [
+  "#f0b429",
+  "#2f9e44",
+  "#1c7ed6",
+  "#e03131",
+  "#9c36b5",
+  "#0ca678",
+];
+
 const ALL_ARMS = [
   ActiveIntersection.Left,
   ActiveIntersection.Straight,
@@ -448,12 +471,24 @@ export interface Game {
   // The line currently being shown on the board (call-order badges + the route
   // along the metals), or a cleared one. Set by the view via setLineOverlay.
   lineOverlay: {
+    lineId: string | null;
     trainId: string | null;
     colour: string;
     order: Record<string, number>;
     path: Record<string, [Port, Port][]>;
   };
-  setLineOverlay(trainId: string | null): void;
+  setLineOverlay(what: { lineId?: string; trainId?: string } | null): void;
+  // Every line on the board, in creation order — the plans, independent of the
+  // trains running them. A line with `trains: []` is drawn but unserved.
+  lines: LineView[];
+  // Draw a line before buying anything; returns its id.
+  createLine(stops: string[], name?: string): string;
+  setLineStops(lineId: string, stops: string[]): boolean;
+  renameLine(lineId: string, name: string): boolean;
+  // Delete a line. Its trains survive as classic lineless services.
+  deleteLine(lineId: string): boolean;
+  // Put a train onto an existing line, or take it off with null.
+  assignTrain(trainId: string, lineId: string | null): boolean;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -729,9 +764,13 @@ export function createGame(
   // renders reactively. The SIM owns the line; this is a view copy, refreshed
   // whenever a line changes (it changes on player action, not per frame).
   const trainLines = reactive({}) as Record<string, string[]>;
-  // stationTileId -> the liveries of the services calling there. Derived from
-  // `trainLines`; the board reads this so a platform can show its services.
+  // stationTileId -> the COLOURS of the lines calling there. Derived from the
+  // lines, not from the trains running them: a line the player has drawn but
+  // not yet bought a train for still serves this platform, and a passenger
+  // planning around it is entitled to see it (D11).
   const stationLines = reactive({}) as Record<string, string[]>;
+  // Every line, mirrored from the sim for the panel and the board.
+  const lines = reactive([]) as LineView[];
   // Ids of trains ordered but still waiting in the shed, oldest first — the
   // panel shows them so a queue is visible rather than a button that seems to
   // have done nothing.
@@ -756,6 +795,12 @@ export function createGame(
   // the ROUTE has to be planned (the same router the trains use), and that is
   // engine work, not rendering.
   const lineOverlay = reactive({
+    // A LINE is what is drawn, not a train's copy of one — so the picture is
+    // available for a service nothing is running yet, which is the state a
+    // player is in for as long as it takes them to buy the first train.
+    lineId: null as string | null,
+    // The train whose panel row opened it, when one did. Only used to keep the
+    // row highlighted; the drawing itself never needs it.
     trainId: null as string | null,
     colour: "",
     // stationTileId -> its 1-based place in the line.
@@ -767,19 +812,24 @@ export function createGame(
   });
 
   function clearLineOverlay(): void {
+    lineOverlay.lineId = null;
     lineOverlay.trainId = null;
     lineOverlay.colour = "";
     for (const k of Object.keys(lineOverlay.order)) delete lineOverlay.order[k];
     for (const k of Object.keys(lineOverlay.path)) delete lineOverlay.path[k];
   }
 
-  // Show (or re-show, after an edit) the line a train runs. Null clears it.
-  function setLineOverlay(trainId: string | null): void {
+  // Show (or re-show, after an edit) a line on the board. Null clears it.
+  // Either name the line directly, or name a train and get whatever it runs.
+  function setLineOverlay(what: { lineId?: string; trainId?: string } | null): void {
     clearLineOverlay();
-    if (!trainId) return;
-    lineOverlay.trainId = trainId;
-    lineOverlay.colour = trainColors[trainId] ?? "#f0b429";
-    const stops = trainLines[trainId] ?? [];
+    if (!what) return;
+    const lineId = what.lineId ?? (what.trainId ? sim.lineOf(what.trainId) : undefined);
+    if (!lineId) return;
+    lineOverlay.lineId = lineId;
+    lineOverlay.trainId = what.trainId ?? null;
+    lineOverlay.colour = lines.find(l => l.id === lineId)?.colour ?? "#f0b429";
+    const stops = sim.lines().find(l => l.id === lineId)?.stops ?? [];
     stops.forEach((id, i) => {
       // A stop listed twice keeps its FIRST place — the badge says when the
       // train first calls there, which is what a reader wants.
@@ -1802,23 +1852,85 @@ export function createGame(
     const stops = sim.trainLine(trainId);
     if (stops.length) trainLines[trainId] = stops;
     else delete trainLines[trainId];
-    syncStationLines();
+    syncLines();
   }
 
-  // The reverse index the BOARD needs: which liveries call at each station, so
-  // a platform shows the services that serve it without the tile having to
-  // know anything about trains.
-  function syncStationLines(): void {
+  // Mirror the whole line registry, and with it the reverse index the BOARD
+  // needs: which services call at each station. Both are derived from the LINES
+  // so that a line with no train on it is still a service the platform shows —
+  // the plan exists whether or not anything is running it yet.
+  function syncLines(): void {
+    lines.splice(0, lines.length);
+    for (const [i, line] of sim.lines().entries()) {
+      lines.push({
+        id: line.id,
+        name: line.name,
+        stops: [...line.stops],
+        trains: sim.trainsOnLine(line.id),
+        colour: LINE_COLOURS[i % LINE_COLOURS.length],
+      });
+    }
     for (const id of Object.keys(stationLines)) delete stationLines[id];
-    for (const [trainId, stops] of Object.entries(trainLines)) {
-      for (const stop of stops) {
+    for (const line of lines) {
+      for (const stop of line.stops) {
         const at = (stationLines[stop] ??= []);
-        const colour = trainColors[trainId];
-        if (colour && !at.includes(colour)) at.push(colour);
+        if (!at.includes(line.colour)) at.push(line.colour);
       }
     }
   }
   for (const def of trainDefs) syncLine(def.id);
+
+  // Draw a line without buying anything: the plan first, the vehicles after.
+  function createLine(stops: string[], name?: string): string {
+    const id = sim.createLine(stops, name);
+    syncLines();
+    return id;
+  }
+
+  function setLineStops(lineId: string, stops: string[]): boolean {
+    if (!sim.setLineStops(lineId, stops)) return false;
+    // Every train running it now serves the new stops; their view copies and
+    // their defs (which a reset re-seeds from) have to follow.
+    for (const trainId of sim.trainsOnLine(lineId)) {
+      const def = defById[trainId];
+      if (def) def.line = stops.length ? [...stops] : undefined;
+      syncLine(trainId);
+    }
+    syncLines();
+    if (lineOverlay.lineId === lineId) setLineOverlay({ lineId });
+    return true;
+  }
+
+  function renameLine(lineId: string, name: string): boolean {
+    if (!sim.renameLine(lineId, name)) return false;
+    syncLines();
+    return true;
+  }
+
+  function deleteLine(lineId: string): boolean {
+    const running = sim.trainsOnLine(lineId);
+    if (!sim.deleteLine(lineId)) return false;
+    for (const trainId of running) {
+      const def = defById[trainId];
+      if (def) def.line = undefined;
+      syncLine(trainId);
+    }
+    syncLines();
+    if (lineOverlay.lineId === lineId) setLineOverlay(null);
+    return true;
+  }
+
+  // Put a train onto an existing line, or take it off with null.
+  function assignTrain(trainId: string, lineId: string | null): boolean {
+    if (!sim.assignTrain(trainId, lineId)) return false;
+    const def = defById[trainId];
+    if (def) {
+      const stops = sim.trainLine(trainId);
+      def.line = stops.length ? [...stops] : undefined;
+    }
+    syncLine(trainId);
+    return true;
+  }
 
   // Where a train can be ordered: every depot on the board, in a stable order.
   const depotTiles = Object.keys(level)
@@ -1901,7 +2013,7 @@ export function createGame(
     const pendingAt = pendingTrains.findIndex(d => d.id === trainId);
     if (pendingAt >= 0) pendingTrains.splice(pendingAt, 1);
     if (!removedTrains.includes(trainId)) removedTrains.push(trainId);
-    syncStationLines();
+    syncLines();
   }
 
   function retireTrain(trainId: string): boolean {
@@ -1931,7 +2043,7 @@ export function createGame(
     if (def) def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
     // The picture on the board is of THIS line; redraw it as it is edited.
-    if (lineOverlay.trainId === trainId) setLineOverlay(trainId);
+    if (lineOverlay.trainId === trainId) setLineOverlay({ trainId });
     return true;
   }
   const objective = reactive(tracker.state()) as ObjectiveState;
@@ -2563,6 +2675,12 @@ export function createGame(
     stationLabels,
     lineOverlay,
     setLineOverlay,
+    lines,
+    createLine,
+    setLineStops,
+    renameLine,
+    deleteLine,
+    assignTrain,
     roadCars,
     carJunctions,
     carDestinations,
@@ -2650,6 +2768,11 @@ export function createGame(
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
       for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+      // buildSims() made a fresh line registry from the train defs, so the view
+      // copies have to come from the NEW sim or they would name dead line ids.
+      clearLineOverlay();
+      for (const def of trainDefs) syncLine(def.id);
+      syncLines();
       // The town starts over too: same seed, same people, same jobs.
       rebuildCitizens();
       prevStalls = new Set();
