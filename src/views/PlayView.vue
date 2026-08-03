@@ -120,6 +120,9 @@
                like it did nothing. -->
           <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
         </span>
+        <!-- The stops as PLACES, not numbers: a line reads "A → C → D", and
+             the one the train is heading for is lit. Hovering gives the tile
+             for anyone debugging a board. -->
         <span class="service-stops">
           <template v-if="t.stops.length">
             <span
@@ -127,7 +130,8 @@
               :key="s + i"
               class="service-stop"
               :class="{ 'service-stop--next': s === t.nextStop }"
-              >{{ i + 1 }}</span
+              :title="`stop ${i + 1}: ${s}`"
+              >{{ stationLabel(s) }}</span
             >
           </template>
           <span v-else class="service-idle">no line</span>
@@ -138,6 +142,21 @@
           @click="toggleEditLine(t.id)"
         >
           {{ editingTrainId === t.id ? "Done" : "Edit" }}
+        </button>
+        <!-- Withdraw: the ORDERLY verb. The train drops its line and runs to
+             the nearest depot, where it is stabled. Shift-click scraps it
+             where it stands — the emergency, and deliberately awkward. -->
+        <button
+          class="service-retire"
+          :class="{ 'service-retire--on': t.retiring }"
+          :title="
+            t.retiring
+              ? 'Running to the depot to be stabled — shift-click to scrap it now'
+              : 'Withdraw: run to the nearest depot and stable it (shift-click to scrap where it stands)'
+          "
+          @click="retireTrain(t.id, $event)"
+        >
+          {{ t.retiring ? "↩" : "✕" }}
         </button>
       </div>
       <p v-if="editingTrainId" class="service-hint">
@@ -1292,15 +1311,20 @@ class PlayView extends Vue {
     stops: string[];
     nextStop?: string;
     queued: boolean;
+    retiring: boolean;
   }[] {
     return Object.keys(this.game.trainColors)
+      .filter(id => !this.game.removedTrains.includes(id))
       .sort()
       .map(id => ({
         id,
         color: this.game.trainColors[id],
         stops: this.game.trainLines[id] ?? [],
-        nextStop: this.game.sim.trainNextStop(id),
+        // From the reactive mirrors, NOT the sim: the sim is markRaw, so a
+        // getter reading it never re-runs and the panel freezes.
+        nextStop: this.game.trainNextStops[id],
         queued: this.game.queuedTrains.includes(id),
+        retiring: this.game.retiringTrains.includes(id),
       }));
   }
   // Ordering only needs a depot to exist. A busy one does not refuse the sale
@@ -1337,14 +1361,47 @@ class PlayView extends Vue {
       ...(stops.length ? { line: [...stops] } : {}),
     };
     // A train ordered with no line yet is the one you will want to route next.
-    if (stops.length === 0) this.editingTrainId = def.id;
+    if (stops.length === 0) {
+      this.editingTrainId = def.id;
+      this.game.setLineOverlay(def.id);
+    }
   }
   // Trains ordered but still in the shed, waiting their turn on the metals.
   get queuedTrainIds(): string[] {
     return this.game.queuedTrains;
   }
+  // Withdrawing a train. The DEFAULT is orderly: it drops its line and runs to
+  // the nearest depot to be stabled, which is what a railway actually does and
+  // takes as long as the journey takes. Shift-click is the emergency: gone
+  // where it stands. Both are on one control because they are the same
+  // intention at two urgencies, and the modifier keeps the drastic one out of
+  // reach of an ordinary mis-click.
+  retireTrain(trainId: string, ev: MouseEvent): void {
+    if (ev.shiftKey) {
+      this.game.scrapTrain(trainId);
+      if (this.editingTrainId === trainId) this.stopEditingLine();
+      return;
+    }
+    if (!this.game.retireTrain(trainId)) {
+      // No depot it can reach — the orderly verb has nowhere to send it, so
+      // say so rather than appearing to do nothing.
+      this.game.scrapTrain(trainId);
+    }
+    if (this.editingTrainId === trainId) this.stopEditingLine();
+  }
+
+  stopEditingLine(): void {
+    this.editingTrainId = null;
+    this.game.setLineOverlay(null);
+  }
+  stationLabel(tileId: string): string {
+    return this.game.stationLabels[tileId] ?? tileId;
+  }
   toggleEditLine(trainId: string): void {
     this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
+    // Draw (or clear) the line on the board: big call-order numbers on the
+    // stops and the route along the metals.
+    this.game.setLineOverlay(this.editingTrainId);
   }
   // A click on a station while a line is being drawn: append it, or remove it
   // if it is already a stop. Order is click order, which is the order the
@@ -2465,6 +2522,7 @@ export default toNative(PlayView);
   position: absolute;
   top: 16px;
   right: 16px;
+  max-width: 340px;
   z-index: 30;
   min-width: 260px;
   padding: 10px 12px;
@@ -2514,23 +2572,39 @@ export default toNative(PlayView);
 .service-stops {
   flex: 1 1 auto;
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
 }
+/* A stop is a PLACE, so its chip sizes to the name rather than being a disc
+   with a word crushed into it. */
 .service-stop {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
+  padding: 1px 7px;
+  border-radius: 999px;
   background: #2b3138;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 /* The stop the train is actually heading for right now. */
 .service-stop--next {
   background: #f0b429;
   color: #221803;
+}
+.service-retire {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: #d98b84;
+  padding: 2px 8px;
+  cursor: pointer;
+  line-height: 1.1;
+}
+.service-retire--on {
+  color: #221803;
+  background: #d98b84;
+  border-color: transparent;
 }
 .service-queued {
   opacity: 0.75;

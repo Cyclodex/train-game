@@ -4,13 +4,15 @@ import { TileCell } from "@/tiles/model";
 import { TestScenario, mkLineTrain } from "@/levels/test/scenario";
 
 const town = (): TileCell => ({ connections: [], terrain: "urban" });
-const stationEW = (): TileCell => ({
+const stationEW = (name: string): TileCell => ({
   connections: [[Position.Left, Position.Right]],
   role: "station",
+  stationName: name,
 });
-const stationNS = (): TileCell => ({
+const stationNS = (name: string): TileCell => ({
   connections: [[Position.Top, Position.Bottom]],
   role: "station",
+  stationName: name,
 });
 
 // THE NETWORK MODE: a RING through four town stations, served by one train
@@ -43,12 +45,12 @@ export const networkmode: TestScenario = {
   level: {
     // --- the ring -----------------------------------------------------------
     "1,1": expandKind("curve", 1), // ┌
-    "2,1": stationEW(), // North station
+    "2,1": stationEW("Nordstadt"),
     "3,1": expandKind("straight", 1),
     "4,1": expandKind("curve", 2), // ┐
 
-    "1,2": stationNS(), // West station
-    "4,2": stationNS(), // East station
+    "1,2": stationNS("Weststadt"),
+    "4,2": stationNS("Ostmarkt"),
 
     // Where the depot spur meets the ring: a T, so a train can pull out of the
     // shed and turn either way onto the line.
@@ -62,7 +64,7 @@ export const networkmode: TestScenario = {
     "4,3": expandKind("straight", 0),
 
     "1,4": expandKind("curve", 0), // └
-    "2,4": stationEW(), // South station
+    "2,4": stationEW("Südhafen"),
     "3,4": expandKind("straight", 1),
     "4,4": expandKind("curve", 3), // ┘
 

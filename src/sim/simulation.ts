@@ -15,7 +15,7 @@ import {
   traverse,
   routeToNextSignal,
 } from "./network";
-import { RailPlan, planRailRoute } from "./railRouter";
+import { RailPlan, planRailRoute, reachableStations } from "./railRouter";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentLength } from "./pathGeometry";
 import { gradeSpeedFactor, trainDynamics } from "./physics";
@@ -121,10 +121,13 @@ export interface SimTrain {
   // (a revisit is a new, higher path index).
   dwellRemaining: number;
   dwelledAtIndex: number;
-  // Passengers: seats on this train and the count currently riding. One-hop
-  // model — whoever is aboard alights at the next call.
+  // Passengers: seats on this train, and WHERE each rider is going (one entry
+  // per person, the tile id of the station they asked for). A rider gets off
+  // when the train calls at their destination — not at the next stop — which
+  // is what makes the shape of a line matter. A train with no line carries
+  // anyone and sets them down at its next call (the old one-hop service).
   capacity: number;
-  passengers: number;
+  manifest: string[];
   // LINE (the network mode): the station tile ids this train serves, in order,
   // cycling forever. A train with a line drives ITSELF — it plans a route to
   // its next stop and prefers that route at every tile boundary, instead of
@@ -136,6 +139,10 @@ export interface SimTrain {
   // The route being driven right now (this leg only). Recomputed at every call,
   // so a level edited mid-run is routed over on the very next leg.
   plan?: RailPlan;
+  // Withdrawn from service and running to a depot to be stabled. It keeps its
+  // stops-worth of passengers to the end of the leg but takes no new ones, and
+  // it is removed from the sim the moment it reaches the shed.
+  retiring?: boolean;
 }
 
 export interface ArrivedEvent {
@@ -192,6 +199,13 @@ export interface DwellEvent {
   alighted: number;
 }
 
+// A retiring train reached a depot and was stabled: it is gone from the sim.
+export interface RetiredEvent {
+  type: "retired";
+  trainId: string;
+  tileId: string;
+}
+
 // A dwelling train's stop time elapsed and it pulled away from the platform.
 export interface DepartedEvent {
   type: "departed";
@@ -205,7 +219,8 @@ export type SimEvent =
   | BlockedEvent
   | ProceedingEvent
   | DwellEvent
-  | DepartedEvent;
+  | DepartedEvent
+  | RetiredEvent;
 
 // Internal record of why a train is currently held, used to edge-trigger the
 // blocked/proceeding events (only emit on a change of state).
@@ -326,8 +341,23 @@ export interface Simulation {
   // it on the next tick — this is the verb a "assign train to line" UI calls.
   // Returns false for an unknown train.
   assignLine(id: string, stops: string[]): boolean;
+  // WITHDRAW a train from service the orderly way: it finishes nothing, takes
+  // no new passengers, and runs to the nearest depot, where it is stabled and
+  // leaves the sim (a `retired` event says when). False for an unknown train
+  // or when no depot is reachable from where it stands — the caller can then
+  // offer the emergency verb instead.
+  retireTrain(id: string): boolean;
+  // True while a train is on its way to be stabled.
+  isRetiring(id: string): boolean;
+  // SCRAP a train where it stands: gone this instant, its reservations
+  // released. The emergency verb — nothing about it is realistic, which is
+  // exactly why it is separate from `retireTrain`.
+  removeTrain(id: string): boolean;
   // Passengers waiting on the platform at a station tile (0 for any other id).
   stationQueue(tileId: string): number;
+  // WHERE each of them is going, in queue order — what the platform draws so
+  // a player can see which service a crowd is actually waiting for.
+  stationWaiting(tileId: string): string[];
   // Inject passengers ONTO a station's platform outside the schedule — the
   // park-and-ride edge (game.ts adds one per car that parks within walking
   // reach). Capped at the station's schedule `max` (or STATION_QUEUE_HARD_CAP
@@ -416,10 +446,44 @@ export function createSimulation(config: SimConfig): Simulation {
   const stationDemand: Record<string, StationDemand> = {
     ...(config.stationDemand ?? {}),
   };
-  const queues = new Map<string, number>();
+  // Per station: WHO is waiting, as the tile id each of them asked for. A
+  // count would have been enough while everybody got off at the next stop;
+  // with destinations the queue has to remember what it wants.
+  const queues = new Map<string, string[]>();
   const spawnClocks = new Map<string, number>();
+  // Where the next person at each station will ask to go. A cursor walked in
+  // order rather than an RNG draw: destinations must be deterministic like
+  // everything else in here, and a round robin also spreads demand evenly
+  // instead of clumping the way random would.
+  const destCursors = new Map<string, number>();
+  // The stations each station can be reached from BY RAIL, computed once. A
+  // person only ever asks for somewhere the railway could take them — asking
+  // for an island would be a passenger nothing can ever clear, and the
+  // platform cap would turn that into a slow, unavoidable loss.
+  const destChoices = new Map<string, string[]>();
+  for (const tid of Object.keys(stationDemand)) {
+    destChoices.set(
+      tid,
+      reachableStations(level, tid).filter(id => id !== tid)
+    );
+  }
+  // The next destination for someone starting at `tid`, or null when the
+  // railway connects this platform to nowhere.
+  function nextDestination(tid: string): string | null {
+    const choices = destChoices.get(tid) ?? [];
+    if (choices.length === 0) return null;
+    const at = destCursors.get(tid) ?? 0;
+    destCursors.set(tid, at + 1);
+    return choices[at % choices.length];
+  }
   for (const [tid, d] of Object.entries(stationDemand)) {
-    queues.set(tid, Math.min(d.initial ?? 0, d.max));
+    const seed = Math.min(d.initial ?? 0, d.max);
+    const start: string[] = [];
+    for (let i = 0; i < seed; i++) {
+      const dest = nextDestination(tid);
+      if (dest) start.push(dest);
+    }
+    queues.set(tid, start);
     spawnClocks.set(tid, 0);
   }
   let passengersDeliveredTotal = 0;
@@ -427,10 +491,13 @@ export function createSimulation(config: SimConfig): Simulation {
   function advanceDemand(dt: number): void {
     for (const [tid, d] of Object.entries(stationDemand)) {
       let clock = (spawnClocks.get(tid) ?? 0) + dt;
-      let q = queues.get(tid) ?? 0;
+      const q = queues.get(tid) ?? [];
       while (clock >= d.intervalSec) {
         clock -= d.intervalSec;
-        if (q < d.max) q += 1;
+        if (q.length < d.max) {
+          const dest = nextDestination(tid);
+          if (dest) q.push(dest);
+        }
       }
       spawnClocks.set(tid, clock);
       queues.set(tid, q);
@@ -465,6 +532,21 @@ export function createSimulation(config: SimConfig): Simulation {
     };
   }
 
+  // Every depot on the board — where a withdrawn train can be stabled.
+  // Derived from the LEVEL each time, so a depot built mid-run counts.
+  function depotTiles(): string[] {
+    return Object.keys(level).filter(id => level[id]?.role === "depot");
+  }
+
+  // Take a train out of the sim entirely and release everything it held.
+  function dropTrain(id: string): void {
+    delete trains[id];
+    for (const [key, owner] of reservations) {
+      if (owner === id) reservations.delete(key);
+    }
+    blockStates.delete(id);
+  }
+
   // The stop this train is heading for, or undefined when it has no line.
   function currentStop(train: SimTrain): string | undefined {
     if (!train.line?.length) return undefined;
@@ -497,10 +579,21 @@ export function createSimulation(config: SimConfig): Simulation {
 
   // True when this train still owes a stop at its current (station) segment:
   // the head is on a station tile it has not yet dwelled at this pass.
+  // Does this train CALL at that station, or run past it? A train on a line
+  // serves its OWN stops and nothing else — that is what makes an express
+  // express, and without it a line is only a suggestion about the order in
+  // which a train visits everything. A train with no line stops everywhere,
+  // which is the classic service every older board expects.
+  function callsAt(train: SimTrain, tileId: string): boolean {
+    if (!isStationTile(tileId)) return false;
+    if (!train.line?.length) return true;
+    return train.line.includes(tileId);
+  }
+
   function stationStopPending(train: SimTrain): boolean {
     const head = train.path[train.headIndex];
     return (
-      isStationTile(getCoordinatesId(head.coord)) &&
+      callsAt(train, getCoordinatesId(head.coord)) &&
       train.dwelledAtIndex !== train.headIndex
     );
   }
@@ -550,7 +643,7 @@ export function createSimulation(config: SimConfig): Simulation {
       dwellRemaining: 0,
       dwelledAtIndex: -1,
       capacity,
-      passengers: 0,
+      manifest: [],
       ...(init.line?.length ? { line: [...init.line] } : {}),
       lineIndex: 0,
     };
@@ -848,8 +941,9 @@ export function createSimulation(config: SimConfig): Simulation {
       head = { coord: t.next.coord, entryPort: t.next.entryPort };
       // A station ahead ends the clear run at its platform, part-way into that
       // tile (tiles ahead of the head are always unserved — the dwell marker
-      // only ever points at a segment the head has reached).
-      if (isStationTile(getCoordinatesId(head.coord))) {
+      // only ever points at a segment the head has reached). One this train
+      // runs PAST is not a stop line at all, so it must not brake for it.
+      if (callsAt(train, getCoordinatesId(head.coord))) {
         dist += STATION_STOP_PROGRESS;
         return Math.min(dist, train.lookAhead);
       }
@@ -980,23 +1074,55 @@ export function createSimulation(config: SimConfig): Simulation {
       // next call), then board from the platform queue into the free seats.
       // Each boarding passenger stretches the stop a little, so a crowded
       // platform visibly costs time.
-      const alighted = train.passengers;
-      train.passengers = 0;
+      // ALIGHT: whoever asked for THIS station is here. A train with no line
+      // (the classic service) has no future stops to promise, so it sets
+      // everyone down at its next call — the old one-hop behaviour, unchanged
+      // for every board that never mentions a line. A retiring train does the
+      // same: its riders are better off on a platform than in a shed.
+      const onelegged = !train.line?.length || train.retiring;
+      const staying: string[] = [];
+      let alighted = 0;
+      for (const dest of train.manifest) {
+        if (onelegged || dest === tileId) alighted += 1;
+        else staying.push(dest);
+      }
+      train.manifest = staying;
       passengersDeliveredTotal += alighted;
-      const queue = queues.get(tileId) ?? 0;
-      const boarded = Math.min(queue, train.capacity);
-      if (boarded > 0) {
-        queues.set(tileId, queue - boarded);
-        train.passengers = boarded;
+
+      // BOARD: only people this train can actually take — its line has to call
+      // at where they are going. Everyone else waits for a service that does,
+      // which is the whole reason a line's SHAPE matters. A lineless train
+      // takes anyone (it is going to set them down next stop regardless).
+      const queue = queues.get(tileId) ?? [];
+      const serves = new Set(train.line ?? []);
+      let boarded = 0;
+      if (!train.retiring) {
+        const left: string[] = [];
+        for (const dest of queue) {
+          const canTake =
+            train.manifest.length < train.capacity &&
+            (!train.line?.length || serves.has(dest));
+          if (canTake) {
+            train.manifest.push(dest);
+            boarded += 1;
+          } else left.push(dest);
+        }
+        queues.set(tileId, left);
       }
       train.dwellRemaining =
         STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
-      // On a line: if this is the stop we were heading for, the leg is done —
-      // move to the next stop and plan the route to it while we stand here.
-      // (Any OTHER station we happen to pass is still served: the train calls,
-      // works the platform, and carries on to the stop it is actually bound
-      // for, which is what a real service does at an intermediate station.)
-      if (currentStop(train) === tileId) advanceLine(train);
+      // On a line, calling anywhere on it moves the cursor PAST that stop —
+      // not just at the one we were bound for. A line is an order to visit, and
+      // arriving early at a later stop (a loop can bring one up sooner than the
+      // cursor expects) should still count as having served it, or the train
+      // would come back for a platform it just worked.
+      if (train.line?.length) {
+        const at = train.line.indexOf(tileId);
+        if (at >= 0) {
+          train.lineIndex = (at + 1) % train.line.length;
+          planLeg(train);
+        }
+      }
       events.push({ type: "dwell", trainId: train.id, tileId, boarded, alighted });
       return;
     }
@@ -1017,10 +1143,17 @@ export function createSimulation(config: SimConfig): Simulation {
           // not a destination, so reaching one is a turn-back. (Transport
           // Fever's shape, and the reason a network board needs only ONE
           // depot.) Without a line, the classic colour-match rule stands.
+          // A RETIRING train's journey ends here whatever the colours say: it
+          // was sent to be stabled, and the shed is where it leaves the game.
+          if (train.retiring) {
+            events.push({ type: "retired", trainId: train.id, tileId });
+            dropTrain(train.id);
+            return;
+          }
           const matched = !train.line?.length && depotColors[tileId] === train.color;
-          const alighted = matched ? train.passengers : 0;
+          const alighted = matched ? train.manifest.length : 0;
           if (alighted > 0) {
-            train.passengers = 0;
+            train.manifest = [];
             passengersDeliveredTotal += alighted;
           }
           events.push({
@@ -1121,8 +1254,12 @@ export function createSimulation(config: SimConfig): Simulation {
       advanceDemand(dt);
       // Deterministic order so tile reservation between trains is stable.
       for (const id of Object.keys(trains).sort()) {
-        advance(trains[id], dt, events);
-        releaseStaleReservations(trains[id]);
+        // A train can RETIRE inside advance() and leave the roster, so the
+        // snapshot this loop walks may name one that no longer exists.
+        const train = trains[id];
+        if (!train) continue;
+        advance(train, dt, events);
+        if (trains[id]) releaseStaleReservations(train);
       }
       return events;
     },
@@ -1230,19 +1367,65 @@ export function createSimulation(config: SimConfig): Simulation {
       planLeg(train);
       return true;
     },
+    retireTrain(id: string) {
+      const train = trains[id];
+      if (!train) return false;
+      const head = train.path[train.headIndex];
+      const plan = planRailRoute(
+        level,
+        { coord: head.coord, entryPort: head.entryPort },
+        depotTiles()
+      );
+      if (!plan) return false; // nowhere to stable it; scrap is the way out
+      delete train.line;
+      train.lineIndex = 0;
+      train.plan = plan;
+      train.retiring = true;
+      return true;
+    },
+    isRetiring(id: string) {
+      return trains[id]?.retiring === true;
+    },
+    removeTrain(id: string) {
+      if (!trains[id]) return false;
+      dropTrain(id);
+      return true;
+    },
     stationQueue(tileId: string) {
-      return queues.get(tileId) ?? 0;
+      return queues.get(tileId)?.length ?? 0;
+    },
+    stationWaiting(tileId: string) {
+      return [...(queues.get(tileId) ?? [])];
     },
     addStationPassengers(tileId: string, count: number) {
       if (!isStationTile(tileId) || count <= 0) return 0;
       const cap = stationDemand[tileId]?.max ?? STATION_QUEUE_HARD_CAP;
-      const cur = queues.get(tileId) ?? 0;
-      const accepted = Math.max(0, Math.min(count, cap - cur));
-      if (accepted > 0) queues.set(tileId, cur + accepted);
+      const q = queues.get(tileId) ?? [];
+      const room = Math.max(0, Math.min(count, cap - q.length));
+      let accepted = 0;
+      for (let i = 0; i < room; i++) {
+        // Someone who arrived by car or bus wants somewhere too. A station
+        // with no schedule of its own has no destination cursor, so derive
+        // the choices on demand for it.
+        if (!destChoices.has(tileId)) {
+          destChoices.set(
+            tileId,
+            reachableStations(level, tileId).filter(id => id !== tileId)
+          );
+        }
+        // Nobody travels from a platform the railway connects to nothing —
+        // there is nowhere to ask for. So the walker simply does not appear,
+        // and the count says so.
+        const dest = nextDestination(tileId);
+        if (!dest) break;
+        q.push(dest);
+        accepted += 1;
+      }
+      queues.set(tileId, q);
       return accepted;
     },
     trainPassengers(id: string) {
-      return trains[id]?.passengers ?? 0;
+      return trains[id]?.manifest.length ?? 0;
     },
     passengersDelivered() {
       return passengersDeliveredTotal;

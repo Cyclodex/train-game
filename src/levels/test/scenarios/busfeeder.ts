@@ -32,6 +32,9 @@ export const busfeeder: TestScenario = {
     // One depot, on a spur: where the train came from, never where it is going.
     ...railRing(1, 0, 4, 1),
     "2,1": { connections: [[Position.Left, Position.Right]], role: "station" },
+    // The OTHER end of the journey. Passengers ask for a destination now, so a
+    // one-station board is one nobody travels from — there is nowhere to go.
+    "3,0": { connections: [[Position.Left, Position.Right]], role: "station" },
     "0,1": expandKind("depot", 1),
     "1,1": {
       connections: [
@@ -56,7 +59,7 @@ export const busfeeder: TestScenario = {
     "4,2": street(),
   },
   trains: {
-    train1: mkLineTrain("train1", 0, 1, "people", 2, ["2,1"]),
+    train1: mkLineTrain("train1", 0, 1, "people", 2, ["2,1", "3,0"]),
   },
   colors: {
     depotColors: { "0,1": "blue" },
