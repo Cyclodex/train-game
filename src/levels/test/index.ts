@@ -21,6 +21,7 @@ import { switchDefault } from "@/levels/test/scenarios/switch-default";
 import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
+import { crossinglanes } from "@/levels/test/scenarios/crossinglanes";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
@@ -163,7 +164,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "crossings",
         label: "Crossings",
-        scenarios: [crossing, keepcrossingclear, crossingkeeper],
+        scenarios: [crossing, crossinglanes, keepcrossingclear, crossingkeeper],
       },
     ],
   },

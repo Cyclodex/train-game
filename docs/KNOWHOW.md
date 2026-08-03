@@ -2618,6 +2618,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   lanes sit on the wider band. Keep paint (`junctionArmPaintTotal`) and positioning
   (`seamPositioningBand`) in lockstep for stacked junctions.
 
+## LEVEL-CROSSING FURNITURE (2026-08-04)
+- THE BOOMS ARE DERIVED FROM THE ROAD, NOT FROM THE TILE. `tiles/crossingFurniture.ts`
+  (pure, unit-tested) returns the span of painted tarmac and the boom/sign positions;
+  `Crossing.vue` is a view over it. The old geometry was fixed CSS percentages (post
+  at 30%, arm 30%→70%), which is only ever right on a 1+1-lane street: on a 3+3 the
+  tarmac is 168px of a 200px tile, so the post stood IN the carriageway and the arm
+  covered the two inner lanes. Same lesson as the pavement offset in `footway.ts` —
+  road width is data, so anything beside a road must read it.
+- ONE HALF-BARRIER PER APPROACH, ON OPPOSITE VERGES. Traffic keeps right, so the
+  down carriageway is the local −x half and its bar hinges on the −x verge; the up
+  carriageway's hinges on +x. Each arm is HALF the road long and they meet at the
+  centreline — the diagonal pair a real Bahnübergang uses, and the only arrangement
+  that scales (a single full-width arm on a 6-lane road is absurd). ONE-WAY roads get
+  ONE full-width barrier on the approach side instead: no oncoming half to leave
+  clear, and a bar behind the crossing guards nothing.
+- THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
+  CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
+  (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the
+  RIGHT→LEFT movement, and `roadPorts` must return `{down: Right, up: Left}`. Getting
+  this backwards puts both bars on the departure side and only shows up in ONE
+  orientation — always check both (`/test/crossinglanes` has both plus a one-way).
+- MIRROR ABOUT THE HINGE. The right-hand bar is the left one under `scaleX(-1)`;
+  `.boom` therefore needs `transform-origin: left center`, because `left` is placed
+  at the hinge and the default centre origin slides the whole barrier one arm length
+  sideways.
+- The span mirrors `Tile.vue roadPaths` (the authority on painted width) at MID-tile,
+  where the rails run: two-way = centred band, averaged over its two seam totals
+  (`roadSeamPaintTotal`); one-way = kerb-anchored to `roadOneWayRunMax`. If the paint
+  rules change, this follows.
+
 ## ROADS
 - NO MIN-2 PAINT FLOOR on a curve. `Tile.vue roadPaths` used `max(selfAt, 2)` in
   the curve branch — a leftover from when a 1-lane one-way road was itself drawn 2
