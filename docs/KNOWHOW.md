@@ -966,14 +966,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
     · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
       "too far to walk"). "Why not" is half of what a planner came to find out,
       and a silently short table answers none of it.
-    · **Journey times are BOARD SECONDS, not in-game minutes.** The citizens'
-      day is `secPerDay` sim seconds wide (300 in Citizens mode), so 1 sim second
-      is 4.8 in-game minutes and a cross-town rail commute converts to EIGHT
-      HOURS — internally consistent and useless to plan with. Board seconds are
-      what a stopwatch on the running board reads. Times of DAY stay on the
-      in-game clock, because that is the clock the HUD shows. (The underlying
-      mismatch — journeys are a large fraction of the modelled day — is a real
-      tuning question, not a display bug.)
+    · **ONE CLOCK ON THE CARD.** Journey times print on the town's own clock
+      ("14 min", "1h 24m"), the same clock the times of day use.
+      This was board seconds first, and getting it wrong twice is the lesson:
+      seconds were chosen because at `secPerDay: 300` a cross-city commute
+      converted to EIGHT AND A HALF in-game hours, so the in-game clock was
+      nonsense and seconds were the only honest unit. That was a *symptom of a
+      broken calibration being read as a display decision*. Fixing the day
+      length removed the reason and left the real fault exposed: the card mixed
+      two units, and "leaves at 07:08" plus "took 1m 23s" do not compose — a
+      player cannot work out when she arrives. Raw board seconds survive as a
+      tooltip (`boardDuration`), which is the one you can check with a
+      stopwatch. When a display unit looks wrong, ask whether the MODEL is wrong
+      before inventing a unit to hide it.
+    · `inGameDuration(sec, secPerDay)` is the pure formatter; `game.durationLabel`
+      binds this game's day length, so a view never has to know it — and a test
+      compressing the clock gets labels that match its own day, not the shipped
+      one.
     · Zero winners is a legal, meaningful outcome: the model REFUSING the
       journey. Say so in the panel; an empty table explains the one case that
       most needs explaining.
