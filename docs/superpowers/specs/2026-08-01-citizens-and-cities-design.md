@@ -628,8 +628,39 @@ Four things went wrong on the way and are worth keeping written down:
   the conversion is a function, not a multiplication, and it belongs next to the
   definition.
 
-Still to build: a crossing where a footway meets the RAILWAY (the pedestrian half
-of a level crossing), and signalised crossings with a button.
+### 9.1.1 The pedestrian level crossing (BUILT 2026-08-03)
+
+The other crossing, and it is the zebra's **opposite** rather than its sibling.
+That asymmetry is the design:
+
+|  | zebra (`footCrossing`) | railway (`hasRailCrossing`) |
+|---|---|---|
+| who yields | the traffic yields to the walker | the walker yields to the train |
+| the claim | walker CLAIMS the tile; `game.ts` ORs it into the road sim's `closed` predicate | nothing — the walker reads the railway and never writes to it |
+| deadlock | possible (two mutual waits), so it needs `CROSS_WAIT_MAX` | impossible by construction, so it needs no backstop |
+| authored | yes — `TileCell.footCrossing`, a decision the player makes | **derived** — a pavement plus rails on one tile |
+
+Derived is the important half. A level crossing already carries a road and a
+railway, so it already carries a pavement over the tracks; every crossing on
+every board that exists became a pedestrian crossing with nothing to author,
+exactly the way every street got a pavement for free. And the gate is the same
+predicate the cars already brake for (`sim.reservedBy(id) || sim.occupiedBy(id)`),
+handed to `createPedestrianSim` as `railBusy` — so the booms that stop the
+traffic stop the crowd, and the two queues build together.
+
+One rule earns its keep: a walker is held only at a leg that starts on the tile
+BOUNDARY. A leg starting half way across the crossing tile (a driveway joining
+the crossing itself) begins ON the rails, and holding somebody there would be
+the opposite of safe, so they walk on. Pathological layout, safe failure.
+
+`/test/citizenrail` is the board: a town cut in half by the line, houses west,
+jobs east, one crossing, and a shuttle that keeps it busy. Measured there:
+population 41, 104 journeys, 48% on foot, and people visibly held at the tracks
+during both the morning and evening peaks.
+
+Still to build: a footpath that crosses the railway with **no road** at all
+(footways are derived from `road` today, so a pure footpath needs the axis to
+stand on its own), and signalised crossings with a button.
 
 **What shipped**, exactly as designed above:
 

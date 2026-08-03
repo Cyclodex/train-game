@@ -8,6 +8,7 @@ import {
   hasFootway,
   pavementOffsets,
   pavementOffsetFor,
+  hasRailCrossing,
   pavementPaths,
   planWalk,
   roadHalfUnits,
@@ -184,5 +185,57 @@ describe("which bank of the street a walker is on", () => {
     const [half] = pavementOffsets(bend);
     expect(pavementOffsetFor(bend, 1, Position.Top, Position.Right)).toBeCloseTo(half);
     expect(pavementOffsetFor(bend, 1, Position.Right, Position.Top)).toBeCloseTo(-half);
+  });
+});
+
+describe("the pavement reaches the tile boundary", () => {
+  // "Not connected to each other" was the report, and it was true: a plot's
+  // ground patch is jittered OFF the tile grid on purpose and so spills into
+  // the road tile beside it, and both were painted in the same z band. The
+  // renderer fix is a layer of its own (TileGround → .tile-paving); this is the
+  // geometry half of the contract, so a band can never be authored short.
+  it("starts on one edge and ends on the other, on a straight", () => {
+    const d = pavementPaths(street(), 100);
+    // Every band on a straight runs the full width of the tile.
+    const ends = [...d.matchAll(/d="M (-?[\d.]+) (-?[\d.]+) L (-?[\d.]+) (-?[\d.]+)"/g)];
+    expect(ends.length).toBe(2);
+    for (const [, x0, , x1] of ends) {
+      expect(Number(x0)).toBe(0);
+      expect(Number(x1)).toBe(100);
+    }
+  });
+
+  it("meets the tile edge on a bend too, on both sides", () => {
+    const bend: TileCell = { connections: [], road: twoWay(Position.Left, Position.Bottom) };
+    const ds = [...pavementPaths(bend, 100).matchAll(/ d="([^"]+)"/g)].map(m => m[1]);
+    expect(ds.length).toBe(2);
+    for (const d of ds) {
+      const pts = [...d.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map(m => [Number(m[1]), Number(m[2])]);
+      const [first] = pts;
+      const last = pts[pts.length - 1];
+      // A bend enters on one edge and leaves on another: both ends sit exactly
+      // on a boundary (x or y at 0 or 100).
+      for (const p of [first, last]) {
+        expect(p[0] === 0 || p[0] === 100 || p[1] === 0 || p[1] === 100).toBe(true);
+      }
+    }
+  });
+});
+
+describe("walking over the railway", () => {
+  it("is a crossing wherever a pavement and the rails share a tile", () => {
+    // Derived, not authored — so every level crossing on every board that
+    // already exists is a pedestrian crossing with nothing to change.
+    const levelCrossing: TileCell = {
+      ...expandKind("straight", 0), // vertical rail
+      road: twoWay(Position.Left, Position.Right),
+    };
+    expect(hasRailCrossing(levelCrossing)).toBe(true);
+    // Rails alone are not: nobody walks there, there is no pavement.
+    expect(hasRailCrossing(expandKind("straight", 0))).toBe(false);
+    // A plain street is not either — that is what a `footCrossing` is for.
+    expect(hasRailCrossing(street())).toBe(false);
+    // ...and a crossing whose street opted out of its pavement is not one.
+    expect(hasRailCrossing({ ...levelCrossing, footway: "none" })).toBe(false);
   });
 });

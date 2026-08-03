@@ -4,7 +4,14 @@ import { parseCoordId } from "@/tiles/model";
 import { makeRng } from "@/utils/globalHelpers";
 import { laneSegmentPointAt } from "@/sim/pathGeometry";
 import { oppositePort } from "@/sim/topology";
-import { hasFootway, pavementOffsetFor, planWalk, roadThrough, sideOfPlot } from "@/tiles/footway";
+import {
+  hasFootway,
+  hasRailCrossing,
+  pavementOffsetFor,
+  planWalk,
+  roadThrough,
+  sideOfPlot,
+} from "@/tiles/footway";
 
 // PEOPLE ON THE PAVEMENT — the walking half of the citizen layer.
 //
@@ -54,6 +61,9 @@ interface WalkStep {
   // stub: the two ends, in world tile units.
   from?: { x: number; y: number };
   to?: { x: number; y: number };
+  // This step walks over the RAILWAY. Nobody steps onto it while a train has
+  // the tile; see `hasRailCrossing`.
+  railCross?: true;
 }
 
 export interface Walker {
@@ -108,6 +118,14 @@ export interface PedestrianSimConfig {
   // it to clear before stepping out. Omitted → the road is always clear, which
   // is right for a headless test with no traffic in it.
   roadBusy?: (tileId: string) => boolean;
+  // Has a train got this tile — reserved or standing on it? A walker holds at
+  // the boundary of a rail crossing until it lets go.
+  //
+  // The mirror image of `roadBusy` and deliberately NOT symmetrical with it: a
+  // walker claims a zebra and the cars give way, but nothing about a walker
+  // reaches the railway. The train never knows they are there. Omitted → the
+  // line is always clear, which is right for a board with no trains on it.
+  railBusy?: (tileId: string) => boolean;
 }
 
 // How many people may be on the pavements at once. Walkers are cheap (no
@@ -143,6 +161,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
   const { level } = config;
   const baseSpeed = config.speed ?? 0.25;
   const roadBusy = config.roadBusy ?? (() => false);
+  const railBusy = config.railBusy ?? (() => false);
   const rng = makeRng(config.seed ?? 1);
 
   const walkers = new Map<string, Walker>();
@@ -247,6 +266,15 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
       const tStart = prevTile ? 0 : 0.5;
       const tEnd = nextTile ? 1 : 0.5;
 
+      // Walking this tile means walking over the tracks. Only a leg that starts
+      // at the tile BOUNDARY is marked: that is where the walker can stand and
+      // wait, on the near side of the line. A leg that starts half way across
+      // the tile (a driveway joins the crossing tile itself) begins ON the
+      // rails, and holding somebody there would be the opposite of safe — so
+      // they walk on. A plot whose only street access is a level crossing is a
+      // pathological layout, not a case to freeze people in.
+      const overRails = hasRailCrossing(level[run.tileId]);
+
       const along = (from: number, to: number, side: 1 | -1) => {
         if (from === to) return; // a zero-length leg is not a step
         steps.push({
@@ -259,6 +287,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
           exit: exit as Port,
           tFrom: from,
           tTo: to,
+          ...(overRails && from === 0 ? { railCross: true as const } : {}),
         });
       };
 
@@ -326,7 +355,16 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
 
   const onCrossing = atCrossing;
 
+  // Held at the near side of the RAILWAY. No backstop and no claim, unlike the
+  // zebra: a walker cannot hold a train up, so nothing here can deadlock and
+  // "go anyway after 8 seconds" would only mean stepping in front of it.
+  function heldByRails(w: Walker): boolean {
+    const here = w.steps[w.index];
+    return !!here?.railCross && w.progress === 0 && railBusy(here.tileId);
+  }
+
   function isWaiting(w: Walker): boolean {
+    if (heldByRails(w)) return true;
     const s = onCrossing(w);
     return (
       !!s && w.progress === 0 && w.waitedSec < CROSS_WAIT_MAX && roadBusy(s.tileId)
@@ -371,11 +409,13 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
             walkers.delete(w.id);
             break;
           }
-          // Arriving at a zebra STOPS you at the kerb: progress snaps to 0
-          // rather than carrying the remainder of the last stride over. Without
-          // this a walker is essentially never at exactly 0 on the crossing
-          // step, so `isWaiting` never fires and they stroll into the traffic.
-          if (w.steps[w.index].kind === "cross") {
+          // Arriving at a zebra — or at the tracks — STOPS you at the edge:
+          // progress snaps to 0 rather than carrying the remainder of the last
+          // stride over. Without this a walker is essentially never at exactly
+          // 0 on the step that is gated, so the wait never fires and they
+          // stroll out in front of whatever is coming.
+          const next = w.steps[w.index];
+          if (next.kind === "cross" || next.railCross) {
             w.progress = 0;
             w.waitedSec = 0;
             break;

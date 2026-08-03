@@ -906,6 +906,12 @@ export function createGame(
         // the closed predicate in advance()) and then waits for whatever was
         // already on it to drive clear — which is what makes the wait finite.
         roadBusy: (tileId: string) => carTiles.has(tileId),
+        // And the RAILWAY half of it. The very same predicate the road sim gets
+        // for a level crossing — a train reserving or standing on the tile —
+        // handed to the people on the pavement, so the booms that stop the cars
+        // stop the pedestrians too. One-way, unlike the zebra: this reads the
+        // railway and never writes to it, because a train does not wait.
+        railBusy: (tileId: string) => !!(sim.reservedBy(tileId) || sim.occupiedBy(tileId)),
       })
     );
     citizenSim = markRaw(

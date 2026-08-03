@@ -47,16 +47,25 @@ import { crossingPaths, pavementPaths } from "@/tiles/footway";
 // somewhere. The view already renders a `.level-tile` box for every cell in the
 // bounds — occupied or not — so that box is exactly the right place for it.
 //
-// THREE layers, chosen by the `layer` prop, and views mount one of each per
-// cell:
+// LAYERS, chosen by the `layer` prop, and views mount one of each per cell:
 //  - "ground" (default): the flat patch, rim and ground marks — under
 //    everything (z0).
+//  - "paving": the man-made hard standing — the driveway between a plot and its
+//    street, and the pavement beside the street — at z1, ABOVE every tile's
+//    patch fill. Same reason the scatter split exists, and it took the same
+//    bug to find: a patch's corners are jittered OFF the tile grid on purpose,
+//    so a plot's ground legitimately spills a few units into the road tile
+//    beside it. Painted in the same z band as that road tile's pavement, DOM
+//    order decides — and the later tile won, chewing a notch out of the
+//    pavement at EVERY tile seam. A pavement that stops short of the boundary
+//    is not a pavement; it is a row of paving slabs.
 //  - "scatter": the standing objects (trees, buildings, boulders, ridges) at
 //    z1, ABOVE every tile's patch fill. The split exists because tiles render
 //    in DOM order: a later tile's opaque patch used to decapitate any canopy
 //    that legitimately overhung the seam. With all patches below all scatter,
 //    an overhanging crown survives — which is also what lets deep-forest trees
 //    stand right on a shared seam. Still under roads/rails (later DOM, z>=1).
+//  - "markings": paint ON the tarmac (the zebra), above the road surface (z2).
 //  - "canopy": forest crowns overhanging a corridor, above the trains (z5).
 //
 // Cosmetic only: nothing here feeds the simulation. See tiles/terrain.ts.
@@ -69,7 +78,8 @@ class TileGround extends Vue {
   // THEME paints, so the height layer needs to know which world it stands in.
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ type: String, required: true }) coordId!: string;
-  @Prop({ type: String, default: "ground" }) layer!: "ground" | "scatter" | "canopy" | "markings";
+  @Prop({ type: String, default: "ground" })
+  layer!: "ground" | "paving" | "scatter" | "canopy" | "markings";
 
   units = GROUND_UNITS;
 
@@ -162,8 +172,15 @@ class TileGround extends Vue {
   // and those kinds paint an opaque patch that covers the whole tile. A bore
   // hand-authored onto grass would have no roof, and its train would drive over
   // the top in plain sight — which is the right way for invalid data to read.
+  // Only the two layers that draw the mountain itself get a roof copy — those
+  // are also the only two the `.tile-roof` rules give a z-index to. Paving and
+  // markings carry no terrain art, and a roof copy of them would re-draw the
+  // whole ridge at their z instead.
   get overBore(): boolean {
-    return this.layer !== "canopy" && this.level[this.coordId]?.tunnel === true;
+    return (
+      (this.layer === "ground" || this.layer === "scatter") &&
+      this.level[this.coordId]?.tunnel === true
+    );
   }
 
   // The tile's own art for this layer, WITHOUT the height terrace: the terrace
@@ -185,21 +202,15 @@ class TileGround extends Vue {
     // road surface is drawn above the ground, so a crossing on the ground layer
     // would be buried under the carriageway it is painted on.
     if (this.layer === "markings") return crossingPaths(this.level[this.coordId], this.units);
+    // The hard standing: the driveway first, then the pavement it runs into, so
+    // the kerb reads as the edge of the street rather than of the drive. Above
+    // every tile's patch (see the layer notes), below the road surface and the
+    // buildings, and a long way below the people walking on it.
+    if (this.layer === "paving")
+      return this.accessHtml() + pavementPaths(this.level[this.coordId], this.units);
     // Everything but the ground layer is just the tile's own art.
     if (this.layer !== "ground") return this.baseHtml;
-    // Order on the ground: the height terrace, the terrain patch, the driveway
-    // across it, then the pavement beside the street. Roads and buildings are
-    // later layers, so both sit on top and all of this reads as ground.
-    //
-    // The bore ROOF copy deliberately uses `baseHtml` instead, so a mountain
-    // over a tunnel is re-drawn above the trains without a second driveway or a
-    // second pavement painted on top of them.
-    return (
-      this.heightHtml +
-      this.baseHtml +
-      this.accessHtml() +
-      pavementPaths(this.level[this.coordId], this.units)
-    );
+    return this.heightHtml + this.baseHtml;
   }
 }
 export default toNative(TileGround);
@@ -207,6 +218,7 @@ export default toNative(TileGround);
 
 <style lang="scss" scoped>
 .tile-ground,
+.tile-paving,
 .tile-scatter,
 .tile-canopy,
 .tile-markings {
@@ -228,6 +240,12 @@ export default toNative(TileGround);
   // can never cover a neighbour's standing objects. Clicks belong to the cell
   // underneath (the editor listens there).
   z-index: 0;
+}
+.tile-paving {
+  // Above EVERY tile's patch, not just its own — that is the whole point of the
+  // layer, and it is what makes a pavement continuous across a seam. Mounted
+  // before the scatter, so within a cell a building still stands on its drive.
+  z-index: 1;
 }
 .tile-scatter {
   // Above every tile's patch (z0), below the rails (z2). Same z as a road

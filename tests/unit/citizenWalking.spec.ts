@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { createGame } from "@/game";
+import { createGame, TrainDef } from "@/game";
 import { citizensMode } from "@/modes/citizens";
 import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizenzebra, CROSSING_X } from "@/levels/test/scenarios/citizenzebra";
+import {
+  citizenrail,
+  CROSSING_X as RAIL_X,
+  STREET_Y as RAIL_Y,
+} from "@/levels/test/scenarios/citizenrail";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { createPedestrianSim } from "@/sim/pedestrians";
 import { pavementOffsets, roadHalfUnits } from "@/tiles/footway";
@@ -23,6 +28,17 @@ function newGame(scenario = citizenwalk) {
     undefined,
     scenario.id
   );
+}
+
+function trainDefs(trains: typeof citizenrail.trains): TrainDef[] {
+  return Object.values(trains).map<TrainDef>(t => ({
+    id: t.id,
+    x: t.x,
+    y: t.y,
+    type: t.type,
+    wagonIds: (t.wagons ?? []).map(w => w.id),
+    destinations: (t.routeDestinations ?? []).map(d => d.to),
+  }));
 }
 
 function run(game: ReturnType<typeof createGame>, seconds: number, onTick?: () => void) {
@@ -378,5 +394,103 @@ describe("a zebra on a busy road", () => {
     // this board — canonical direction eastbound, jobs reached by walking west
     // from the zebra — that was 125 people strolling across the traffic.
     expect([...offenders]).toEqual([]);
+  }, 90000);
+});
+
+describe("a level crossing is a pedestrian crossing too", () => {
+  // The railway half of the mechanic, and the OPPOSITE of the zebra: at a zebra
+  // the walker claims the tile and the traffic gives way; at the tracks the
+  // train has absolute priority, the walker waits, and nothing they do reaches
+  // the railway at all.
+  it("holds a walker at the tracks while a train has the tile, then lets them over", () => {
+    let train = true;
+    const sim = createPedestrianSim({
+      level: citizenrail.level,
+      seed: 1,
+      speed: 0.25,
+      railBusy: id => train && id === `${RAIL_X},${RAIL_Y}`,
+    });
+    // A house west of the line to a job east of it: the only way is over.
+    const id = sim.request(`1,${RAIL_Y - 1}`, `7,${RAIL_Y - 1}`) as string;
+    expect(id).toBeTruthy();
+
+    let held = false;
+    for (let t = 0; t < 40; t += 0.1) {
+      sim.step(0.1);
+      if (sim.waitingCount() > 0) held = true;
+    }
+    // They reached the line and stopped at it — on the near side, never on it.
+    expect(held).toBe(true);
+    expect(sim.status(id)).toBe("walking");
+    const [w] = sim.sample();
+    expect(w.waiting).toBe(true);
+    // At the EDGE of the crossing tile, not on it: the rails run down its
+    // middle (x = RAIL_X + 0.5), and the near boundary is RAIL_X. Somebody held
+    // on the track would be the whole bug this rule exists to prevent.
+    expect(w.x).toBeCloseTo(RAIL_X, 2);
+
+    // ...and there is NO backstop here. A zebra has one, because a walker can
+    // hold the traffic up and two mutual waits deadlock. This cannot: the train
+    // never waits, so the wait ends when the train does.
+    for (let t = 0; t < 60; t += 0.1) sim.step(0.1);
+    expect(sim.status(id)).toBe("walking");
+
+    // The train goes; they cross and arrive.
+    train = false;
+    let arrived = false;
+    for (let t = 0; t < 200; t += 0.1) {
+      sim.step(0.1);
+      if (sim.status(id) === "arrived") {
+        arrived = true;
+        break;
+      }
+    }
+    expect(arrived).toBe(true);
+  });
+
+  it("never claims the railway — a train is not something you can stop", () => {
+    const sim = createPedestrianSim({
+      level: citizenrail.level,
+      seed: 1,
+      speed: 0.25,
+      railBusy: () => false,
+    });
+    sim.request(`1,${RAIL_Y - 1}`, `7,${RAIL_Y - 1}`);
+    for (let t = 0; t < 120; t += 0.1) {
+      sim.step(0.1);
+      // The zebra claim is what closes a tile to traffic. A pedestrian walking
+      // over the RAILS must never produce one, or a queue of people would hold
+      // a train at a signal.
+      expect(sim.claimedCrossings()).toEqual([]);
+      if (sim.count() === 0) break;
+    }
+  });
+
+  it("gets the whole town to work across a running railway", () => {
+    const game = createGame(
+      citizenrail.level,
+      trainDefs(citizenrail.trains),
+      200,
+      citizensMode,
+      1,
+      citizenrail.colors,
+      citizenrail.traffic,
+      "citizenrail"
+    );
+    let sawHeld = false;
+    let sawTrainOnCrossing = false;
+    run(game, 900, () => {
+      if (game.pedestrians.some(p => p.waiting)) sawHeld = true;
+      if (game.roadFrame.maxCarWaitSec > 1) sawTrainOnCrossing = true;
+    });
+    // People really do wait at the line...
+    expect(sawHeld).toBe(true);
+    // ...the cars wait on the same predicate...
+    expect(sawTrainOnCrossing).toBe(true);
+    // ...and the town still functions: the crossing is a cost, not a wall.
+    expect(game.citizenStats.tripsCompleted).toBeGreaterThan(20);
+    expect(game.citizenStats.tripsAbandoned).toBeLessThan(
+      game.citizenStats.tripsCompleted / 4
+    );
   }, 90000);
 });

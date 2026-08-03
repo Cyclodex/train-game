@@ -62,6 +62,25 @@ export function hasFootCrossing(cell: TileCell | undefined): boolean {
   return hasFootway(cell) && cell?.footCrossing === true;
 }
 
+/**
+ * Is walking over this cell walking over the RAILWAY — a pedestrian level
+ * crossing?
+ *
+ * Derived, like everything else here, and derived from what is already on the
+ * tile: a pavement plus rails means the footway crosses the track. Every level
+ * crossing on every board that exists is therefore one already, with nothing to
+ * author — the same trick that gave every street a pavement for free.
+ *
+ * NOT a `footCrossing`, and the difference is the whole mechanic. A zebra is a
+ * negotiation: the pedestrian claims it and the traffic gives way. A railway is
+ * not. The train has absolute priority, the walker waits, and nothing the
+ * walker does can hold the train up. That asymmetry is also what makes it safe
+ * — there is no mutual wait to deadlock, so it needs no "go anyway" backstop.
+ */
+export function hasRailCrossing(cell: TileCell | undefined): boolean {
+  return hasFootway(cell) && (cell?.connections?.length ?? 0) > 0;
+}
+
 /** Does this cell carry a pavement? Any road, unless it opted out. */
 export function hasFootway(cell: TileCell | undefined): boolean {
   if (!cell?.road || cell.road.length === 0) return false;

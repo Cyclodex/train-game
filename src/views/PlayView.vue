@@ -240,6 +240,10 @@
         @click="onTileRaze(cell.key)"
       >
         <TileGround :coord-id="cell.key" />
+        <!-- Driveways and pavements, above EVERY tile's ground patch so a
+             neighbour's jittered patch cannot chew a notch out of them at the
+             seam. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="paving" />
         <!-- Standing scenery on its own layer above every patch fill, so a
              canopy overhanging the seam isn't cut by the next tile. -->
         <TileGround :coord-id="cell.key" layer="scatter" />

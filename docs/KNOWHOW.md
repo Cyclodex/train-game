@@ -607,6 +607,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
     · Paint ONE band per side per movement, deduplicated: `twoWay` is two lanes
       over the same ground and painting per lane stacks two bands and shows a
       seam at every tile edge.
+    · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
+      and pavements, above EVERY tile's ground patch and not just their own. A
+      terrain patch's corners are jittered OFF the tile grid on purpose, so a
+      plot's ground legitimately spills a few units into the road tile beside
+      it; painted in the same z band, DOM order decides and the later tile wins,
+      chewing a notch out of the pavement at every seam. Same class of bug the
+      scatter split fixed, same fix. Reported as "the sidewalks are not
+      connected" and as "the sidewalk is drawn on top of the people" — the
+      second was the notch cutting past a walker, NOT a z-order problem: paving
+      is z1 and `.pedestrian` is z6, and a pixel probe over the rendered board
+      confirms nothing paints over a walker (the only near-misses are two
+      walkers 3px apart, which the model allows on purpose).
+    · Verify layer bugs with PIXELS, not `elementsFromPoint`: every tile layer is
+      `pointer-events: none`, so hit-testing cannot see them at all. And PAUSE
+      the board first (`__game.paused.value = true`) — a rect read one frame and
+      a screenshot taken the next catch a walker several pixels apart, which
+      reads as "something is covering them" when nothing is.
 - **PEDESTRIANS ARE THEIR OWN SIM** (`sim/pedestrians.ts`): a route of tile ids,
   a distance along it, a side of the street. Positions come out in TILE units so
   a headless test reads them and the renderer only multiplies; `game.pedestrians`
@@ -650,6 +667,17 @@ lean — prune as much as you add. This file only stays useful if every task ten
       "pavement" runs across the carriageway: people step onto the zebra and
       come back out of the middle of the road. A tile adjoining a plot is only
       HALF walked (t 0..0.5 or 0.5..1) — the driveway meets it at the middle.
+    · **THE RAILWAY CROSSING IS THE ZEBRA'S OPPOSITE**, not its sibling
+      (`hasRailCrossing`, 2026-08-03). A pavement plus rails on one tile IS a
+      pedestrian level crossing — derived, so every board's existing crossings
+      became one for free. At a zebra the walker CLAIMS the tile and the traffic
+      gives way; at the tracks the train has absolute priority, the walker waits
+      (`railBusy`, the same reserved/occupied predicate the cars brake for), and
+      NOTHING the walker does reaches the railway. That is why it needs no
+      `CROSS_WAIT_MAX` backstop: with only one side waiting there is nothing to
+      deadlock, and "go anyway after 8s" would mean stepping in front of a train.
+      Hold only at a leg starting on the tile BOUNDARY — a leg starting mid-tile
+      begins ON the rails, and freezing somebody there is the opposite of safe.
     · **The claim must be no wider than the kerb.** Claiming from a step earlier,
       to give cars more warning, holds the tile almost continuously once a town
       shares one zebra: measured a 589-second queue. Cars brake for a closed tile
