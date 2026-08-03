@@ -805,6 +805,113 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **A PLOT-TO-PLOT STRAIGHT LINE IS NOT A JOURNEY** (`walkAccessTiles`,
+  2026-08-03). The real one goes down the driveway, along the pavement and up
+  the other driveway — MEASURED at a near-constant **2.5 tiles** whatever the
+  separation (2.64 at one tile apart, 2.39 at four), because it is two fixed end
+  legs and not a detour that scales. Leaving it out was a trap, not a rounding
+  error: the panel quoted a next-door commute at 4s, the walker took 15-20s, and
+  the citizen was scored against the same optimistic distance — so somebody
+  whose job was ONE TILE from their door took the maximum unhappiness penalty
+  twice a day and left town on the third. A yardstick nobody can reach is not an
+  expectation; it is a guaranteed failure.
+    · It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+      made people drive next door — measured, the walk share on
+      `/test/citizenwalk` fell from 89% to 46%. A driver walks to their car and
+      from their parking space too. Transit does not get it: its access and
+      egress legs are already modelled explicitly.
+    · The same allowance goes into `expectedSec`. That does NOT break "a bad
+      network must not grade itself" — a constant door-to-kerb term is not read
+      from the network, it is true of every journey on every map.
+- **THE DAY LENGTH IS MEASURED, NOT PICKED** (`secPerDay: 1800`, 2026-08-03).
+  Median door-to-door over 2000 board seconds on the reference boards: a local
+  walk 18s, a local drive 13s, a city-to-city rail commute 105s. Read against
+  what each obviously IS in a real town (12 min / 10 min / 60-90 min) that fixes
+  the exchange rate at ~30 real seconds per board second, so a 24-hour day is
+  ~1800 board seconds. At the old 300 the same commute read as EIGHT AND A HALF
+  in-game HOURS — people left at 07:00 and arrived after dark — which is what
+  the three-hour departure window in `considerTrips` was quietly papering over.
+  The cost is a 30-minute real day at 1x, which is what 2x/4x are for.
+- **BOARDS OPEN AT 07:00** (`startHour`). A citizen board that starts at midnight
+  shows an empty town for seven in-game hours before anyone leaves the house,
+  and whoever opened it sits through that every single time. The morning peak is
+  the thing the mode is about, so it is the thing you see first.
+- **A TEST THAT NEEDS DAYS SAYS SO** (`citizensModeWith`). The shipped day is
+  calibrated for playing; a test watching growth or emigration would need nine
+  thousand seconds of simulation. Compress the clock explicitly in the test
+  rather than bending the shipped calibration to keep the suite fast.
+- **"THINKING OF LEAVING" WITH NO REASON IS THE LEAST USEFUL THING A PANEL CAN
+  SAY.** A player cannot act on a mood, only on the journey that caused it, so
+  every scored trip is remembered (`Citizen.recent`, `TripOutcome`) with its two
+  numbers and rendered as a sentence: "The trip to work took 2m 14s — far longer
+  than they expected (1m 15s)."
+- **A GETTER THAT READS THE `markRaw` SIMS HAS NO REACTIVE DEPENDENCY**, so Vue
+  evaluates it ONCE and caches the answer for ever (2026-08-03). This is the
+  price of the `markRaw(game)` rule, and it is invisible until something is
+  meant to move: the person pin appeared in exactly the right place and then
+  never budged, measured at 0px of travel in 4 seconds. `game.renderTick` is a
+  `ref` bumped once per drawn frame — touch `game.renderTick.value` at the top
+  of any getter that samples the sims on demand (`locatePerson`, `inspectPlot`,
+  `inspectPerson`, `compareModes`). Anything that does NOT touch it stays as
+  cheap as it was, which is the point of a heartbeat over mirroring a whole
+  population into reactive state to serve one open panel.
+- **THE PIN FOLLOWS A PERSON THROUGH FIVE DIFFERENT SAMPLERS** (`locatePerson`).
+  On foot → the walker's live position; in a car → the car's (the road sim's
+  trip id IS the car id, so it is a lookup); on a train → the loco; on a
+  platform or indoors → the tile centre. A pin that only knew about walkers
+  would silently stick to a doorway for half the population, since roughly half
+  of all journeys are driven.
+    · Rail geometry is measured off an SVG path (`getPointAtLength`), so the
+      exact loco position needs a `document`. Headless it falls back to the
+      loco's TILE CENTRE — coarser by half a tile, still tracks the train across
+      the map, and testable. Do not pretend the pure path exists.
+    · The pin lives inside the camera-scaled world, so it must COUNTER-SCALE
+      (`1 / zoom`, capped at 1) or it shrinks to a speck at the 40% a whole town
+      is viewed at — the exact zoom at which a "find this person" marker is most
+      needed.
+    · The pinned id belongs to the VIEW, not the panel: you pin somebody
+      precisely so you can close the card and watch them.
+- **THE INSPECTOR MUST NOT RE-DERIVE THE DECISION** (`CitizenSim.quoteFor`,
+  `game.compareModes`, `CitizenInspector.vue`, 2026-08-03). Click a house → its
+  roll call; click a person or a figure on the pavement → their day plus every
+  way they could make the journey, priced. The table is the very list
+  `chooseMode` compares (`quoteModes` has exactly two callers, the chooser and
+  the panel) — a panel that recomputed "what would they have done" drifts from
+  the decision the moment either side is touched, and is then worse than no
+  panel, because it is confidently wrong.
+    · TWO numbers per row, and the gap is the point: `estimateSec` is the honest
+      door-to-door estimate, `cost` is the same journey after that person's
+      habits. A mode winning on `cost` while losing on `estimateSec` is somebody
+      choosing against their own stopwatch.
+    · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
+      "too far to walk"). "Why not" is half of what a planner came to find out,
+      and a silently short table answers none of it.
+    · **Journey times are BOARD SECONDS, not in-game minutes.** The citizens'
+      day is `secPerDay` sim seconds wide (300 in Citizens mode), so 1 sim second
+      is 4.8 in-game minutes and a cross-town rail commute converts to EIGHT
+      HOURS — internally consistent and useless to plan with. Board seconds are
+      what a stopwatch on the running board reads. Times of DAY stay on the
+      in-game clock, because that is the clock the HUD shows. (The underlying
+      mismatch — journeys are a large fraction of the modelled day — is a real
+      tuning question, not a display bug.)
+    · Zero winners is a legal, meaningful outcome: the model REFUSING the
+      journey. Say so in the panel; an empty table explains the one case that
+      most needs explaining.
+    · A person's NAME is a hash of their id, never an RNG draw — a panel that
+      renames somebody between two frames is a panel nobody trusts.
+    · A transit trip's first timed leg is the approach to the platform. Calling
+      it "walking to work" while the chosen mode says Train reads as the panel
+      contradicting itself; say "walking to the station".
+- **THE 6-NEAREST JOB DRAW BEATS CAPACITY** (`assignJob`). A newcomer picks at
+  random from the six nearest OPEN workplaces, so what spreads a town across its
+  job clusters is how MANY plots each cluster has, not how big they are — a work
+  plot holds twelve, so two of them swallowed a whole town on the first draft of
+  `/test/citizenchoice` and the far cluster stayed empty.
+- **A STATION CATCHMENT IS 2 TILES, SO STOPS 6 APART LEAVE GAPS**
+  (`WALK_RADIUS_TILES`). With stops at 3, 9 and 15, columns 6 and 12 have no
+  station in reach at all: a carless resident there whose job is out of walking
+  range cannot travel by ANY means and the trip is refused. Fine to build on
+  purpose, a bad accident to ship — check plot columns against stop spacing.
 - **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
   graph's node is `(tile, SIDE)`, and the only move that changes side is at a
   zebra. Drop that and a pavement is two networks drawn beside each other with

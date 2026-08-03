@@ -76,7 +76,70 @@ export interface Trip {
   // two ends. Same contract as `carTrip`: while it is set the leg ends when the
   // WALKER arrives, not when a clock runs out.
   walkTrip: string | null;
+  // The train they are sitting on, while they are sitting on one. Bookkeeping
+  // for the INSPECTOR rather than the model — `riders` already knows who is on
+  // which train, but only the other way round, and a pin following one named
+  // person needs the arrow pointing this way.
+  trainId: string | null;
 }
+
+/** Why a mode is not on offer for a particular journey. */
+export type ModeRefusal =
+  | "too-far"
+  | "no-car"
+  | "no-road-link"
+  | "no-railway"
+  | "no-station-in-reach"
+  | "no-park-and-ride"
+  | "same-station";
+
+/**
+ * One mode, priced for one person on one journey — the row the inspector panel
+ * draws, and the row `chooseMode` actually compares.
+ *
+ * TWO numbers, and the gap between them is the interesting part:
+ *  · `estimateSec` is the honest door-to-door estimate. What a stopwatch says.
+ *  · `cost` is the same journey after this person's habits are applied — the
+ *    walk inflated past their patience, the car scaled by how much they like
+ *    driving, the train by how much they trust it. This is what decides.
+ * A mode that wins on `cost` while losing on `estimateSec` is somebody choosing
+ * against their own interest, which is exactly the thing a planner wants to see.
+ */
+export interface ModeQuote {
+  mode: TravelMode;
+  estimateSec: number;
+  cost: number;
+  /** The station a transit-ish trip starts from. */
+  station: string | null;
+  /** Seconds of timed leg before the platform (walk to it, or drive to it). */
+  approachSec: number;
+  /** True on the one the model picked. */
+  chosen: boolean;
+  /** Set when this mode is not on offer at all; `estimateSec` is then Infinity. */
+  unavailable?: ModeRefusal;
+}
+
+/**
+ * One scored journey, kept so the inspector can say WHY somebody is unhappy.
+ *
+ * "Thinking of leaving" with no reason beside it is the least useful thing a
+ * panel can say: the player cannot act on a mood, only on the journey that
+ * caused it. This is the evidence.
+ */
+export interface TripOutcome {
+  purpose: TripPurpose;
+  mode: TravelMode | null;
+  /** How long it took, and how long they thought it should. Board seconds. */
+  actualSec: number;
+  expectedSec: number;
+  /** What it did to their mood. Negative is a grievance. */
+  delta: number;
+  /** Set when the journey never happened at all. */
+  failed: "refused" | "abandoned" | null;
+}
+
+/** How many scored journeys a person remembers. Enough to see a pattern. */
+export const RECENT_TRIPS = 5;
 
 export interface Citizen {
   id: string;
@@ -95,6 +158,8 @@ export interface Citizen {
   lastShopDay: number;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
+  // The last few scored journeys, newest first: the evidence behind the mood.
+  recent: TripOutcome[];
 }
 
 export interface PlotState {
@@ -131,6 +196,13 @@ export interface CitizenTuning {
   // How long an in-game day lasts, in sim seconds. THE genre dial: short makes a
   // twitchy throughput game, long a planning one.
   secPerDay: number;
+  // What time it is when the board opens.
+  //
+  // 07:00 by default, and not midnight: a board that starts at 00:00 shows you
+  // an empty town for seven in-game hours before anybody leaves the house, and
+  // whoever opened it has to sit through that every single time. Opening at the
+  // morning peak means the first thing you see is the thing the mode is about.
+  startHour: number;
   // Door-to-door speeds in tiles/sec, used to SCORE a mode before it is taken.
   walkSpeed: number;
   carSpeed: number;
@@ -148,6 +220,27 @@ export interface CitizenTuning {
   assumedHeadwaySec: number;
   // What parking costs a driver, in seconds of perceived time.
   parkPenaltySec: number;
+  // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
+  //
+  // A plot-to-plot straight line is not a journey. The real one goes down the
+  // driveway, along the pavement and up the other driveway, and
+  // `sim/pedestrians` walks exactly that — measured at a near-constant 2.5
+  // tiles of extra walking whatever the separation (2.39 at four tiles apart,
+  // 2.64 at one), because it is two fixed end legs and not a detour that scales.
+  //
+  // Leaving it out was not a rounding error, it was a trap: the panel quoted a
+  // next-door commute at 4s, the walker took 15-20s, and the citizen was scored
+  // against the same optimistic distance — so somebody whose job was ONE TILE
+  // from their door took the maximum unhappiness penalty twice a day and left
+  // town on the third. A yardstick nobody can reach is not an expectation.
+  //
+  // It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+  // made people drive next door — measured: the walk share on `/test/citizenwalk`
+  // fell from 89% to 46% — which is absurd, and the reason is obvious once
+  // stated: a driver walks to their car and from their parking space too.
+  // Transit does not get it, because its access and egress legs are already
+  // modelled explicitly.
+  walkAccessTiles: number;
   // Nobody walks further than this, whatever their patience. Past it, a trip
   // with no other mode available is REFUSED — which is the signal that the
   // network has failed someone completely, and the only thing `access` counts.
@@ -177,6 +270,7 @@ export interface CitizenTuning {
 //   >8 tiles      rail, and rail is the ONLY option between unconnected towns
 export const DEFAULT_TUNING: CitizenTuning = {
   secPerDay: 120,
+  startHour: 7,
   walkSpeed: 0.25,
   carSpeed: 0.6,
   trainSpeed: 0.45, // the sim's 0.5, minus what dwells cost on the way
@@ -187,6 +281,7 @@ export const DEFAULT_TUNING: CitizenTuning = {
   refSpeed: 0.22,
   assumedHeadwaySec: 12,
   parkPenaltySec: 8,
+  walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
   maxWaitSec: 45,
@@ -263,6 +358,17 @@ export interface CitizenSim {
   cities(): CityState[];
   plots(): PlotState[];
   citizens(): Citizen[];
+  /** One person by id, for the inspector. Null once they have left town. */
+  citizen(id: string): Citizen | null;
+  /** Everyone whose home OR workplace is this plot — the plot's roll call. */
+  citizensOf(plotId: string): Citizen[];
+  /**
+   * Price every mode for one person on one journey: what the model compares
+   * when it decides, exposed so the panel can show it rather than guess it.
+   * Defaults to the commute (home → work). Null for an unknown person, or when
+   * they have no journey to price.
+   */
+  quoteFor(citizenId: string, fromId?: string, toId?: string): ModeQuote[] | null;
   stats(): CitizenStats;
   // Sim seconds elapsed, and the day/hour derived from it.
   now(): number;
@@ -361,6 +467,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const riders = new Map<string, string[]>(); // train id → citizen ids aboard
 
   let clock = 0;
+  // How far into the first day t=0 sits. See `startHour`.
+  const dayOffsetSec = (tuning.startHour / 24) * tuning.secPerDay;
   let dayIndex = 0;
   let tripsCompleted = 0;
   let tripsRefused = 0;
@@ -430,6 +538,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       lastBackDay: -1,
       lastShopDay: -1,
       unhappyDays: 0,
+      recent: [],
     };
     people.set(c.id, c);
     return c;
@@ -520,102 +629,139 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   // --- mode choice -------------------------------------------------------------
 
-  interface ModeOption {
-    mode: TravelMode;
-    cost: number;
-    // The station a transit-ish trip starts from.
-    station: string | null;
-    // Seconds of timed leg before the platform (walk to it, or drive to it).
-    approachSec: number;
-  }
-
-  function optionsFor(c: Citizen, fromId: string, toId: string): ModeOption[] {
+  // Quote EVERY mode, including the ones that are not on offer and why.
+  //
+  // One function, two callers: `chooseMode` (which drops the unavailable ones
+  // and takes the cheapest `cost`) and `quote()` (which hands the whole list to
+  // the inspector panel). Deliberately not two — a panel that re-derives "what
+  // this person would have done" drifts from the decision the moment either
+  // side is touched, and then it is worse than no panel, because it is
+  // confidently wrong. What the player reads IS what the model compared.
+  //
+  // The four modes are always considered in the same order, so a panel can
+  // render them in a stable layout whatever the map does.
+  function quoteModes(c: Citizen, fromId: string, toId: string): ModeQuote[] {
     const from = plotOf(fromId);
     const to = plotOf(toId);
-    const out: ModeOption[] = [];
-    if (!from || !to) return out;
+    if (!from || !to) return [];
     const d = manhattan(from, to);
+    const out: ModeQuote[] = [];
 
-    // Walking is available to anyone for any distance up to the hard maximum.
-    // Past their own patience it is priced as the slog it is, so a car or a
-    // train wins as soon as one is on offer — but it stays possible, because in
-    // a real town a short walk is never impossible.
-    if (d <= tuning.walkMaxTiles) {
-      const sec = d / tuning.walkSpeed;
-      const slog = 1 + Math.max(0, d - c.profile.walkPatience) * tuning.walkImpatience;
-      out.push({ mode: "walk", cost: sec * slog, station: null, approachSec: sec });
-    }
-
-    // Driving needs ONE road network reaching both ends. Two towns with their
-    // own streets and nothing between them cannot be driven between, and that
-    // is what makes the railway the answer rather than a nicety.
-    if (
-      c.profile.carOwner &&
-      from.roadComponent !== null &&
-      from.roadComponent === to.roadComponent
-    ) {
-      const drive = (d * tuning.roadDetour) / tuning.carSpeed + tuning.parkPenaltySec;
+    // The two numbers every quote carries:
+    //  · `sec` — the honest door-to-door estimate. What a stopwatch would say.
+    //  · `cost` — what this person's habits make it FEEL like. What decides.
+    // They differ by exactly the preferences, which is the whole point of
+    // showing both: a car winning on `cost` while losing on `sec` is a person
+    // choosing badly, and that is a fact about the town worth seeing.
+    const offer = (mode: TravelMode, sec: number, cost: number, station: string | null) =>
+      out.push({ mode, estimateSec: sec, cost, station, approachSec: sec, chosen: false });
+    const refuse = (mode: TravelMode, why: ModeRefusal) =>
       out.push({
-        mode: "car",
-        cost: drive * c.profile.carAffinity,
+        mode,
+        estimateSec: Infinity,
+        cost: Infinity,
         station: null,
-        approachSec: drive,
+        approachSec: 0,
+        chosen: false,
+        unavailable: why,
+      });
+
+    // WALK. Available to anyone for any distance up to the hard maximum. Past
+    // their own patience it is priced as the slog it is, so a car or a train
+    // wins as soon as one is on offer — but it stays possible, because in a
+    // real town a short walk is never impossible.
+    // Door to door, not centre to centre. The two end legs are most of a short
+    // journey and the panel used to pretend they did not exist. Walked at
+    // walking pace whichever mode is taken — you walk to your car as well.
+    const accessSec = tuning.walkAccessTiles / tuning.walkSpeed;
+    const walkSec = d / tuning.walkSpeed + accessSec;
+    if (d <= tuning.walkMaxTiles) {
+      const slog = 1 + Math.max(0, d - c.profile.walkPatience) * tuning.walkImpatience;
+      offer("walk", walkSec, walkSec * slog, null);
+    } else refuse("walk", "too-far");
+
+    // CAR. Needs ONE road network reaching both ends. Two towns with their own
+    // streets and nothing between them cannot be driven between, and that is
+    // what makes the railway the answer rather than a nicety.
+    const driveSec =
+      (d * tuning.roadDetour) / tuning.carSpeed + tuning.parkPenaltySec + accessSec;
+    if (!c.profile.carOwner) refuse("car", "no-car");
+    else if (from.roadComponent === null || from.roadComponent !== to.roadComponent)
+      refuse("car", "no-road-link");
+    else offer("car", driveSec, driveSec * c.profile.carAffinity, null);
+
+    const board = transit ? nearestStation(from) : null;
+    const alight = transit ? nearestStation(to) : null;
+
+    // TRANSIT. The assumed headway is in here because a rider comparing modes
+    // does not know the timetable — they know roughly how often trains come.
+    if (!transit) refuse("transit", "no-railway");
+    else if (!board || !alight) refuse("transit", "no-station-in-reach");
+    else if (board === alight) refuse("transit", "same-station");
+    else {
+      const access = walkToStation(from, board) / tuning.walkSpeed;
+      const egress = walkToStation(to, alight) / tuning.walkSpeed;
+      const ride =
+        manhattan(
+          stationCoord.get(board) as { x: number; y: number },
+          stationCoord.get(alight) as { x: number; y: number }
+        ) / tuning.trainSpeed;
+      const sec = access + tuning.assumedHeadwaySec + ride + egress;
+      out.push({
+        mode: "transit",
+        estimateSec: sec,
+        cost: sec * c.profile.transitAffinity,
+        station: board,
+        approachSec: access,
+        chosen: false,
       });
     }
 
-    if (transit) {
-      const board = nearestStation(from);
-      const alight = nearestStation(to);
-      if (board && alight && board !== alight) {
-        const access = walkToStation(from, board) / tuning.walkSpeed;
-        const egress = walkToStation(to, alight) / tuning.walkSpeed;
-        const ride =
-          manhattan(
-            stationCoord.get(board) as { x: number; y: number },
-            stationCoord.get(alight) as { x: number; y: number }
-          ) / tuning.trainSpeed;
-        out.push({
-          mode: "transit",
-          cost:
-            (access + tuning.assumedHeadwaySec + ride + egress) * c.profile.transitAffinity,
-          station: board,
-          approachSec: access,
-        });
-      }
-
-      // Park & ride: drive to a station that has parking, ride in, walk out.
-      // Only worth offering when the destination end is served by rail and the
-      // driving leg is not the whole trip anyway.
-      if (c.profile.carOwner && from.roadComponent !== null && alight) {
-        const pr = nearestParkAndRide(from);
-        if (pr && pr.station !== alight) {
-          const prCoord = stationCoord.get(pr.station) as { x: number; y: number };
-          const drive =
-            (manhattan(from, prCoord) * tuning.roadDetour) / tuning.carSpeed +
-            tuning.parkPenaltySec;
-          const egress = walkToStation(to, alight) / tuning.walkSpeed;
-          const ride =
-            manhattan(prCoord, stationCoord.get(alight) as { x: number; y: number }) /
-            tuning.trainSpeed;
-          out.push({
-            mode: "parkAndRide",
-            cost:
-              (drive + tuning.assumedHeadwaySec + ride + egress) *
-              ((c.profile.transitAffinity + c.profile.carAffinity) / 2),
-            station: pr.station,
-            approachSec: drive,
-          });
-        }
-      }
+    // PARK & RIDE. Drive to a station that has parking, ride in, walk out.
+    // Only worth offering when the destination end is served by rail.
+    const pr = transit && c.profile.carOwner ? nearestParkAndRide(from) : null;
+    if (!transit || !alight) refuse("parkAndRide", "no-railway");
+    else if (!c.profile.carOwner) refuse("parkAndRide", "no-car");
+    else if (from.roadComponent === null || !pr) refuse("parkAndRide", "no-park-and-ride");
+    else if (pr.station === alight) refuse("parkAndRide", "same-station");
+    else {
+      const prCoord = stationCoord.get(pr.station) as { x: number; y: number };
+      const drive =
+        (manhattan(from, prCoord) * tuning.roadDetour) / tuning.carSpeed +
+        tuning.parkPenaltySec +
+        accessSec;
+      const egress = walkToStation(to, alight) / tuning.walkSpeed;
+      const ride =
+        manhattan(prCoord, stationCoord.get(alight) as { x: number; y: number }) /
+        tuning.trainSpeed;
+      const sec = drive + tuning.assumedHeadwaySec + ride + egress;
+      out.push({
+        mode: "parkAndRide",
+        estimateSec: sec,
+        cost: sec * ((c.profile.transitAffinity + c.profile.carAffinity) / 2),
+        station: pr.station,
+        approachSec: drive,
+        chosen: false,
+      });
     }
 
     return out;
   }
 
-  function chooseMode(c: Citizen, fromId: string, toId: string): ModeOption | null {
-    const opts = optionsFor(c, fromId, toId);
-    if (opts.length === 0) return null;
-    return opts.reduce((a, b) => (b.cost < a.cost ? b : a));
+  // The quotes with the winner flagged — the panel's whole model, and the
+  // decision itself, from one call.
+  function quote(c: Citizen, fromId: string, toId: string): ModeQuote[] {
+    const quotes = quoteModes(c, fromId, toId);
+    const best = quotes.reduce<ModeQuote | null>(
+      (a, b) => (b.unavailable || (a && a.cost <= b.cost) ? a : b),
+      null
+    );
+    if (best) best.chosen = true;
+    return quotes;
+  }
+
+  function chooseMode(c: Citizen, fromId: string, toId: string): ModeQuote | null {
+    return quote(c, fromId, toId).find(q => q.chosen) ?? null;
   }
 
   // --- trips -------------------------------------------------------------------
@@ -634,6 +780,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // Refused: no way to make this journey at all. The single strongest
       // signal in the model, and it lands on `access`.
       tripsRefused += 1;
+      remember(c, {
+        purpose,
+        mode: null,
+        actualSec: 0,
+        expectedSec: 0,
+        delta: -0.3,
+        failed: "refused",
+      });
       c.mood = clamp01(c.mood - 0.3);
       if (cityId) feedTopic(cityId, "access", 0, FAILURE_WEIGHT);
       return;
@@ -647,7 +801,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       to: toId,
       mode: option.mode,
       startedAt: clock,
-      expectedSec: Math.max(4, dist / tuning.refSpeed),
+      // The same door-to-kerb allowance as the quote. `refSpeed` is deliberately
+      // slower than any single mode BECAUSE it is a door-to-door expectation,
+      // but it was being applied to a centre-to-centre distance — so on a short
+      // trip the yardstick was shorter than the walk anybody could physically
+      // make. Still a straight line, still nothing to do with the network: a bad
+      // network cannot grade itself.
+      expectedSec: Math.max(4, (dist + tuning.walkAccessTiles) / tuning.refSpeed),
       leg: option.mode === "walk" ? "walking" : option.mode === "car" ? "driving" : option.mode === "parkAndRide" ? "driving" : "walking",
       legRemaining: option.approachSec,
       station: option.station,
@@ -657,6 +817,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       carTrip: null,
       carSec: 0,
       walkTrip: null,
+      trainId: null,
     };
     // A driving leg becomes an ACTUAL CAR on the board whenever the road sim can
     // dispatch one: this person is now a vehicle in traffic, and their journey
@@ -683,6 +844,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
   }
 
+  function remember(c: Citizen, o: TripOutcome): void {
+    c.recent.unshift(o);
+    if (c.recent.length > RECENT_TRIPS) c.recent.length = RECENT_TRIPS;
+  }
+
   function finishTrip(c: Citizen, ok: boolean): void {
     const t = c.trip;
     if (!t) return;
@@ -690,6 +856,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const cityId = plotOf(c.home)?.city;
     if (!ok) {
       tripsAbandoned += 1;
+      remember(c, {
+        purpose: t.purpose,
+        mode: t.mode,
+        actualSec: clock - t.startedAt,
+        expectedSec: t.expectedSec,
+        delta: -0.3,
+        failed: "abandoned",
+      });
       c.mood = clamp01(c.mood - 0.3);
       if (cityId) {
         feedTopic(cityId, t.topic, 0, FAILURE_WEIGHT);
@@ -705,6 +879,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // Better than expected nudges up a little; much worse pulls down hard. A
     // good commute is normal, a bad one is an event.
     const delta = Math.max(-0.35, Math.min(0.12, 1.4 - ratio));
+    remember(c, {
+      purpose: t.purpose,
+      mode: t.mode,
+      actualSec: actual,
+      expectedSec: t.expectedSec,
+      delta,
+      failed: null,
+    });
     c.mood = clamp01(c.mood + delta);
     tripsCompleted += 1;
     modeTotals[t.mode] += 1;
@@ -882,6 +1064,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         if (!c?.trip) continue;
         c.trip.leg = "riding";
         c.trip.onPlatform = false;
+        c.trip.trainId = e.trainId;
         staying.push(id);
       }
       riders.set(e.trainId, staying);
@@ -929,8 +1112,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   // --- the day -----------------------------------------------------------------
 
+  // The clock runs from `startHour`, so t=0 is the morning rather than midnight.
+  // Everything downstream (`considerTrips`, the day roll-over, the HUD) reads
+  // this one function, so the offset lands everywhere at once.
   function hourNow(): number {
-    return ((clock % tuning.secPerDay) / tuning.secPerDay) * 24;
+    return (((clock + dayOffsetSec) % tuning.secPerDay) / tuning.secPerDay) * 24;
   }
 
   function considerTrips(c: Citizen): void {
@@ -1137,7 +1323,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       else considerTrips(c);
     }
 
-    const day = Math.floor(clock / tuning.secPerDay);
+    const day = Math.floor((clock + dayOffsetSec) / tuning.secPerDay);
     if (day !== dayIndex) {
       dayIndex = day;
       reviewDay();
@@ -1201,6 +1387,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       })),
     plots: () => [...plots.values()].map(p => ({ ...p })),
     citizens: () => [...people.values()],
+    citizen: (id: string) => people.get(id) ?? null,
+    citizensOf(plotId: string) {
+      const out: Citizen[] = [];
+      for (const c of people.values()) if (c.home === plotId || c.work === plotId) out.push(c);
+      return out;
+    },
+    quoteFor(citizenId: string, fromId?: string, toId?: string) {
+      const c = people.get(citizenId);
+      if (!c) return null;
+      // Default to the journey that defines them: home to work. Somebody with
+      // no job has no commute to price, so the caller must name the ends.
+      const a = fromId ?? c.home;
+      const b = toId ?? c.work;
+      if (!b || a === b) return null;
+      return quote(c, a, b);
+    },
     stats,
     now: () => clock,
     day: () => dayIndex,
