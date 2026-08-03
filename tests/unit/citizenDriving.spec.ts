@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createGame } from "@/game";
-import { citizensMode } from "@/modes/citizens";
+import { citizensMode, citizensModeWith } from "@/modes/citizens";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { threecities } from "@/levels/test/scenarios/threecities";
 
@@ -8,12 +8,17 @@ import { threecities } from "@/levels/test/scenarios/threecities";
 // happens to be labelled "car". The distinction is observable: `driving` counts
 // people who are, at this instant, an actual vehicle in the actual traffic
 // model, and their journey ends when that vehicle arrives.
-function newGame(scenario = citizencars) {
+// The shipped mode by default. `tuning` is for the two kinds of test the
+// calibrated clock does not suit: one that needs to watch the daily RHYTHM
+// (which wants a short day and a midnight start), and one that needs several
+// DAYS to pass (growth, emigration). A test that compresses the clock says so
+// rather than the shipped calibration being bent to keep the suite fast.
+function newGame(scenario = citizencars, tuning?: Parameters<typeof citizensModeWith>[0]) {
   return createGame(
     scenario.level,
     [],
     200,
-    citizensMode,
+    tuning ? citizensModeWith(tuning) : citizensMode,
     1,
     scenario.colors,
     undefined,
@@ -43,8 +48,11 @@ describe("citizens drive real cars", () => {
   });
 
   it("nobody is driving at 3am — the road fills when people leave for work", () => {
-    const game = newGame();
-    // The mode's day is 300s, so the small hours are the first ~60 seconds.
+    // About the daily RHYTHM, so it sets its own clock: a 300s day starting at
+    // midnight, which puts the small hours in the first ~60 seconds. The
+    // shipped mode opens at 07:00 precisely so a player never has to wait
+    // through the quiet part — which is the part this test is checking.
+    const game = newGame(citizencars, { secPerDay: 300, startHour: 0 });
     run(game, 50);
     expect(game.citizenStats.driving).toBe(0);
     let peakMorning = 0;
@@ -77,7 +85,10 @@ describe("citizens drive real cars", () => {
     // So `access` is measured as the DIP, never the end state: at equilibrium
     // the survivors' access reads fine and the refusal count is the only thing
     // still telling the truth.
-    const game = newGame();
+    // Several DAYS of churn, so the clock is compressed: at the shipped 1800s
+    // day, 1200 board seconds is two thirds of one day and the equilibrium this
+    // test is about has not happened yet.
+    const game = newGame(citizencars, { secPerDay: 300 });
     let worstAccess = 1;
     run(game, 1200, () => {
       const brookfield = game.cities.find(c => c.name === "Brookfield");

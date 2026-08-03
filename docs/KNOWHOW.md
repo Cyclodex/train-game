@@ -34,6 +34,16 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either end. Page padding cannot do this: it made the page taller than the window
   AND still pinned a big world's edge hard against the viewport, with nothing to
   push the outer row of tiles off the frame's vignette.
+- CLEARANCE FROM THE HUD IS THE CAMERA'S JOB TOO (2026-08-03): `.world` is
+  FULL-BLEED (no padding) and the fixed chrome floats over it; `CHROME_INSETS`
+  (top 180 / sides 24 / bottom 128, the old `.world` padding) is passed to
+  `createCameraController`'s 3rd arg by PlayView + EditorView. `clampCamera`
+  centres a small world in the INSET strip and lets a big one be panned until
+  its last row clears the dock; `fitZoom` fits inside the strip. Padding on the
+  wrapper could not do either: it shrank the camera's window, so the world's
+  ground stopped short of the screen in a dead border, and the bottom rows could
+  only ever be dragged as far as the dock. TestStage passes no insets (its
+  controls are in flow, not over the board) and is unchanged.
 - `/test` IS EXACTLY ONE SCREEN AND NEVER SCROLLS. `.test-view` is a `100vh` flex
   column; `.test-stage` fills its parent (`flex:1; min-height:0`) — it used to be
   `100vh` ITSELF, below a breadcrumb and a description, so the page was ~160px
@@ -446,15 +456,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
   as a straight; `expandKind("station", rot)` authors one; `toggleStation`
   (editOps) is the editor verb and hands back the SAME cell reference on a
   refusal, so callers can tell "no-op" from "changed".
-- The stop line is INSIDE the tile: `STATION_STOP_PROGRESS` (0.5) of the head
-  segment, not a tile boundary. `clearDistanceAhead` early-returns the in-tile
-  remainder for a pending stop and cuts its look-ahead run mid-tile at a
-  station ahead; the braking cap then lands the head exactly on the line (same
-  finite-time clamp argument as signal stop lines).
 - A station IS a block boundary (`isBoundary`), exactly like a signal: the
-  approach reserves only up to the platform, and a dwelling train holds nothing
-  beyond its own tiles. Without this a 3 s dwell pins the route to the next
-  real signal for the whole stop.
+  approach reserves only up to the platform. (A train DRAWN UP at one does hold
+  the block past it — its loco is physically out there; see below.)
 - Dwell-once-per-pass is tracked by PATH INDEX (`dwelledAtIndex`), never tile
   id — a revisit is a higher index, so the train stops again (the bounce test
   proves 2 dwells). `bounceOutOfDepot` resets the path to index 0 and must
@@ -463,6 +467,47 @@ lean — prune as much as you add. This file only stays useful if every task ten
   read as a dead board.
 - `/test/station` is the isolation scenario; sim behaviour in
   `tests/unit/sim/station.spec.ts`, tile rules in `tests/unit/tiles/station.spec.ts`.
+
+## DRAWING UP AT THE PLATFORM (2026-08-04) — a train is longer than its halt
+- A platform is ONE TILE. A loco and a people wagon are 100 px each on a 200 px
+  tile, so loco + 2 carriages = 1.54 tiles: nothing puts the whole train beside
+  the slab. The alignment is therefore on the CARRIAGES —
+  `platformStopDistance()` centres the block from the nose of unit 1 to the tail
+  of the last unit on `PLATFORM_CENTRE_PROGRESS` (0.5), which draws the loco
+  clear of the far end. A lone loco has no carriages, so its own body is the
+  block and it stops centred (the old behaviour, for that case only).
+- CONSEQUENCE: the stop line is usually PAST the station tile — for the standard
+  2-carriage train the head comes to rest ~0.53 into the NEXT tile. So the head
+  is not on the station when the train is standing at it. Anything that asked
+  "is the head on an unserved station?" is wrong; `pendingPlatformStop()` scans
+  BACK over the last `ceil(reach)+1` path segments instead and returns
+  `{index, remaining}`. The `departed` event must report `path[dwelledAtIndex]`,
+  not the head tile.
+- `clearDistanceAhead(train, stop)` takes that pending stop as a CAP, not an
+  answer: drawing up crosses a tile boundary, so the run is still cleared tile by
+  tile (mayCross/occupancy). A blocked approach holds the train short of the
+  platform, which is correct.
+- Because the loco crosses onto the next tile to draw up, a dwelling train DOES
+  reserve the block beyond the station. That is honest (it is standing there),
+  but it costs a little throughput versus the old in-tile stop.
+- FALLBACK, and it is load-bearing: if the train is brought to a stand short of
+  the line and cannot go on (buffers, red signal, train ahead) it dwells where it
+  stands, provided it has reached `MIN_PLATFORM_REACH` (the platform centre).
+  Without it a terminus platform — stop line past the end of the metals — is a
+  station no service ever calls at, and the line cursor never advances: deadlock.
+- `advance()` order matters: move → `crossBoundaries()` → dwell check. The dwell
+  used to run before the boundary walk; with the head now landing on a later
+  segment it must run after, and must re-check `trains[id]` + `state` because a
+  depot in that walk can park, bounce or RETIRE the train mid-tick.
+- Platform slabs are drawn edge to edge (`margin = 0` in `Tile.vue`): the
+  2-carriage block is 204 px, a shade longer than the tile, so an inset slab left
+  the ends of the train off the platform. Two station tiles side by side also
+  read as one long platform this way (they are still two separate stops).
+- Trains ordered into service are built with `SERVICE_TRAIN_WAGONS = 2`
+  (game.ts). Three overhung the platform at both ends. Raise it only alongside
+  real multi-tile platforms.
+- `/test/platformstop` is the isolation scenario (six-tile ring so the stop comes
+  round every few seconds).
 
 ## STATION PASSENGERS (phase 2 — queues & boarding, 2026-08-01)
 - Demand is a SCHEDULE handed to the sim (`SimConfig.stationDemand`: interval /
@@ -840,6 +885,113 @@ lean — prune as much as you add. This file only stays useful if every task ten
       Lerping between tile CENTRES is right on a straight and wrong everywhere
       else — on a corner the walker cuts across the inside of the bend, leaves
       the drawn band and turns through a sharp V.
+- **A PLOT-TO-PLOT STRAIGHT LINE IS NOT A JOURNEY** (`walkAccessTiles`,
+  2026-08-03). The real one goes down the driveway, along the pavement and up
+  the other driveway — MEASURED at a near-constant **2.5 tiles** whatever the
+  separation (2.64 at one tile apart, 2.39 at four), because it is two fixed end
+  legs and not a detour that scales. Leaving it out was a trap, not a rounding
+  error: the panel quoted a next-door commute at 4s, the walker took 15-20s, and
+  the citizen was scored against the same optimistic distance — so somebody
+  whose job was ONE TILE from their door took the maximum unhappiness penalty
+  twice a day and left town on the third. A yardstick nobody can reach is not an
+  expectation; it is a guaranteed failure.
+    · It belongs to the JOURNEY, not to walking. Charging it to the walk alone
+      made people drive next door — measured, the walk share on
+      `/test/citizenwalk` fell from 89% to 46%. A driver walks to their car and
+      from their parking space too. Transit does not get it: its access and
+      egress legs are already modelled explicitly.
+    · The same allowance goes into `expectedSec`. That does NOT break "a bad
+      network must not grade itself" — a constant door-to-kerb term is not read
+      from the network, it is true of every journey on every map.
+- **THE DAY LENGTH IS MEASURED, NOT PICKED** (`secPerDay: 1800`, 2026-08-03).
+  Median door-to-door over 2000 board seconds on the reference boards: a local
+  walk 18s, a local drive 13s, a city-to-city rail commute 105s. Read against
+  what each obviously IS in a real town (12 min / 10 min / 60-90 min) that fixes
+  the exchange rate at ~30 real seconds per board second, so a 24-hour day is
+  ~1800 board seconds. At the old 300 the same commute read as EIGHT AND A HALF
+  in-game HOURS — people left at 07:00 and arrived after dark — which is what
+  the three-hour departure window in `considerTrips` was quietly papering over.
+  The cost is a 30-minute real day at 1x, which is what 2x/4x are for.
+- **BOARDS OPEN AT 07:00** (`startHour`). A citizen board that starts at midnight
+  shows an empty town for seven in-game hours before anyone leaves the house,
+  and whoever opened it sits through that every single time. The morning peak is
+  the thing the mode is about, so it is the thing you see first.
+- **A TEST THAT NEEDS DAYS SAYS SO** (`citizensModeWith`). The shipped day is
+  calibrated for playing; a test watching growth or emigration would need nine
+  thousand seconds of simulation. Compress the clock explicitly in the test
+  rather than bending the shipped calibration to keep the suite fast.
+- **"THINKING OF LEAVING" WITH NO REASON IS THE LEAST USEFUL THING A PANEL CAN
+  SAY.** A player cannot act on a mood, only on the journey that caused it, so
+  every scored trip is remembered (`Citizen.recent`, `TripOutcome`) with its two
+  numbers and rendered as a sentence: "The trip to work took 2m 14s — far longer
+  than they expected (1m 15s)."
+- **A GETTER THAT READS THE `markRaw` SIMS HAS NO REACTIVE DEPENDENCY**, so Vue
+  evaluates it ONCE and caches the answer for ever (2026-08-03). This is the
+  price of the `markRaw(game)` rule, and it is invisible until something is
+  meant to move: the person pin appeared in exactly the right place and then
+  never budged, measured at 0px of travel in 4 seconds. `game.renderTick` is a
+  `ref` bumped once per drawn frame — touch `game.renderTick.value` at the top
+  of any getter that samples the sims on demand (`locatePerson`, `inspectPlot`,
+  `inspectPerson`, `compareModes`). Anything that does NOT touch it stays as
+  cheap as it was, which is the point of a heartbeat over mirroring a whole
+  population into reactive state to serve one open panel.
+- **THE PIN FOLLOWS A PERSON THROUGH FIVE DIFFERENT SAMPLERS** (`locatePerson`).
+  On foot → the walker's live position; in a car → the car's (the road sim's
+  trip id IS the car id, so it is a lookup); on a train → the loco; on a
+  platform or indoors → the tile centre. A pin that only knew about walkers
+  would silently stick to a doorway for half the population, since roughly half
+  of all journeys are driven.
+    · Rail geometry is measured off an SVG path (`getPointAtLength`), so the
+      exact loco position needs a `document`. Headless it falls back to the
+      loco's TILE CENTRE — coarser by half a tile, still tracks the train across
+      the map, and testable. Do not pretend the pure path exists.
+    · The pin lives inside the camera-scaled world, so it must COUNTER-SCALE
+      (`1 / zoom`, capped at 1) or it shrinks to a speck at the 40% a whole town
+      is viewed at — the exact zoom at which a "find this person" marker is most
+      needed.
+    · The pinned id belongs to the VIEW, not the panel: you pin somebody
+      precisely so you can close the card and watch them.
+- **THE INSPECTOR MUST NOT RE-DERIVE THE DECISION** (`CitizenSim.quoteFor`,
+  `game.compareModes`, `CitizenInspector.vue`, 2026-08-03). Click a house → its
+  roll call; click a person or a figure on the pavement → their day plus every
+  way they could make the journey, priced. The table is the very list
+  `chooseMode` compares (`quoteModes` has exactly two callers, the chooser and
+  the panel) — a panel that recomputed "what would they have done" drifts from
+  the decision the moment either side is touched, and is then worse than no
+  panel, because it is confidently wrong.
+    · TWO numbers per row, and the gap is the point: `estimateSec` is the honest
+      door-to-door estimate, `cost` is the same journey after that person's
+      habits. A mode winning on `cost` while losing on `estimateSec` is somebody
+      choosing against their own stopwatch.
+    · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
+      "too far to walk"). "Why not" is half of what a planner came to find out,
+      and a silently short table answers none of it.
+    · **Journey times are BOARD SECONDS, not in-game minutes.** The citizens'
+      day is `secPerDay` sim seconds wide (300 in Citizens mode), so 1 sim second
+      is 4.8 in-game minutes and a cross-town rail commute converts to EIGHT
+      HOURS — internally consistent and useless to plan with. Board seconds are
+      what a stopwatch on the running board reads. Times of DAY stay on the
+      in-game clock, because that is the clock the HUD shows. (The underlying
+      mismatch — journeys are a large fraction of the modelled day — is a real
+      tuning question, not a display bug.)
+    · Zero winners is a legal, meaningful outcome: the model REFUSING the
+      journey. Say so in the panel; an empty table explains the one case that
+      most needs explaining.
+    · A person's NAME is a hash of their id, never an RNG draw — a panel that
+      renames somebody between two frames is a panel nobody trusts.
+    · A transit trip's first timed leg is the approach to the platform. Calling
+      it "walking to work" while the chosen mode says Train reads as the panel
+      contradicting itself; say "walking to the station".
+- **THE 6-NEAREST JOB DRAW BEATS CAPACITY** (`assignJob`). A newcomer picks at
+  random from the six nearest OPEN workplaces, so what spreads a town across its
+  job clusters is how MANY plots each cluster has, not how big they are — a work
+  plot holds twelve, so two of them swallowed a whole town on the first draft of
+  `/test/citizenchoice` and the far cluster stayed empty.
+- **A STATION CATCHMENT IS 2 TILES, SO STOPS 6 APART LEAVE GAPS**
+  (`WALK_RADIUS_TILES`). With stops at 3, 9 and 15, columns 6 and 12 have no
+  station in reach at all: a carless resident there whose job is out of walking
+  range cannot travel by ANY means and the trip is refused. Fine to build on
+  purpose, a bad accident to ship — check plot columns against stop spacing.
 - **THE CROSSING IS THE MECHANIC** (`footCrossing`, 2026-08-02). The walking
   graph's node is `(tile, SIDE)`, and the only move that changes side is at a
   zebra. Drop that and a pavement is two networks drawn beside each other with
@@ -2213,6 +2365,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - Editor: `commit()` tests `isBlankCell`, not "no connections/signals/road" — a
   terrain-only cell is REAL and the old test deleted lake tiles as they were painted.
   Painting grass back over a bare cell removes it, so repainting can't grow bounds.
+- EDITOR HAND-OFF IS UNGATED (2026-08-03): "Play this" is never disabled and
+  `playThis()` has no `canPlay` check — depot pairs and validation issues are
+  REPORTED in the drawer status, not enforced. A board with no depot pair simply
+  starts with no trains. It pushes `/play?mode=sandbox` EXPLICITLY: /play
+  otherwise reopens the last-used mode, and a board-GENERATING one (Daily derives
+  its map from the date and ignores the context board) threw the level away.
+  Pinned by the "plays a board with no depots at all" editor e2e.
 
 ## INVARIANTS
 - Tiles are DATA, single source of truth. Rails: `connections: PortPair[]`. Roads:

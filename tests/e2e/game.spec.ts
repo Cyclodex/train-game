@@ -1043,6 +1043,30 @@ test.describe("Level editor", () => {
     await expect(cell(page, "2,2").locator(".signal")).toHaveCount(1);
   });
 
+  // Starting is the USER's call: the editor no longer refuses to hand a board
+  // over because it has no depot pair or trips a validation rule. A stub of
+  // track with nothing on it is a perfectly good thing to go and look at.
+  test("plays a board with no depots at all", async ({ page }) => {
+    const consoleErrors: string[] = [];
+    page.on("console", msg => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
+    page.on("pageerror", err => consoleErrors.push(err.message));
+
+    await page.goto("/#/editor");
+    for (const c of ["1,1", "2,1", "3,1"]) await drawWestEast(page, c);
+    // Dangling ends, no depots — the drawer says so, and Play still works.
+    await expect(page.locator(".drawer-status")).not.toHaveText(/depots/);
+    const play = page.getByRole("button", { name: /Play this/ });
+    await expect(play).toBeEnabled();
+    await play.click();
+
+    // Our three tiles, and no trains — the board is the point, not the run.
+    await expect(page.locator(".tile")).toHaveCount(3);
+    await expect(page.locator(".train-locomotive")).toHaveCount(0);
+    expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
+  });
+
   test("random map generates a valid playable level", async ({ page }) => {
     await page.goto("/#/editor");
     await page.getByRole("button", { name: /Random/ }).click();

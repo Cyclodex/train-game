@@ -3,7 +3,7 @@ import {
   createSimulation,
   SimEvent,
   STATION_DWELL_SEC,
-  STATION_STOP_PROGRESS,
+  PLATFORM_CENTRE_PROGRESS,
   STATION_QUEUE_HARD_CAP,
 } from "@/sim/simulation";
 import { Position } from "@/types";
@@ -39,26 +39,43 @@ function run(sim: ReturnType<typeof createSimulation>, seconds: number): SimEven
   return events;
 }
 
+// Run until the named train opens its doors (or give up).
+function runToDwell(
+  sim: ReturnType<typeof createSimulation>,
+  id: string,
+  limit = 20
+): void {
+  const dt = 0.05;
+  let elapsed = 0;
+  while (sim.trainState(id) !== "dwelling" && elapsed < limit) {
+    sim.step(dt);
+    elapsed += dt;
+  }
+}
+
 describe("station dwell", () => {
-  it("brakes to a stand at the platform, dwells, then continues to its depot", () => {
+  it("brakes to a stand with its CARRIAGE at the platform, dwells, then continues to its depot", () => {
     const sim = createSimulation({
       level: stationLine(),
       trains: [TRAIN],
       depotColors: { "0,0": "blue", "4,0": "green" },
     });
 
-    // Step until the train is dwelling; it must stop ON the station tile at
-    // the platform's stop line.
-    const dt = 0.05;
-    let elapsed = 0;
-    while (sim.trainState("t1") !== "dwelling" && elapsed < 20) {
-      sim.step(dt);
-      elapsed += dt;
-    }
+    // Step until the train is dwelling. A platform is one tile long and a train
+    // is longer, so drawing up puts the CARRIAGE beside the slab and takes the
+    // loco past the far end of it — onto 3,0.
+    runToDwell(sim, "t1");
     expect(sim.trainState("t1")).toBe("dwelling");
-    expect(sim.trainTileId("t1")).toBe("2,0");
-    expect(sim.trainProgress("t1")).toBeCloseTo(STATION_STOP_PROGRESS, 5);
+    expect(sim.trainTileId("t1")).toBe("3,0");
     expect(sim.trainVelocity("t1")).toBe(0);
+
+    // The wagon (unit 1) is the one at the platform, centred on it.
+    const units = sim.sampleTrain("t1");
+    const wagon = units[1];
+    expect(wagon.front.coord).toEqual({ x: 2, y: 0 });
+    expect(wagon.rear.coord).toEqual({ x: 2, y: 0 });
+    const wagonMiddle = (wagon.front.t + wagon.rear.t) / 2;
+    expect(wagonMiddle).toBeCloseTo(PLATFORM_CENTRE_PROGRESS, 2);
 
     // It stays put for the dwell, then pulls away and parks at the far depot.
     const midDwell = sim.step(STATION_DWELL_SEC / 2);
@@ -86,24 +103,47 @@ describe("station dwell", () => {
     expect(kinds).toEqual(["dwell@2,0", "departed@2,0"]);
   });
 
-  it("bounds the reserved block at the station: nothing beyond it is claimed on approach", () => {
+  it("bounds the reserved block at the station: nothing beyond it is claimed on the approach", () => {
     const sim = createSimulation({
       level: stationLine(),
       trains: [TRAIN],
       depotColors: { "0,0": "blue", "4,0": "green" },
     });
-    // Drive up to the dwell. At every tick on the way, the tiles BEYOND the
-    // station must never be reserved — the station is a block boundary, so the
-    // approach claims at most up to 2,0.
+    // Drive up to the platform. While the train is still short of the station
+    // the tiles beyond it must never be reserved — a station is a block
+    // boundary, so the approach claims at most up to 2,0. Only when the train
+    // actually draws up (the loco crosses onto 3,0) does it claim onward.
     const dt = 0.05;
     let elapsed = 0;
     while (sim.trainState("t1") !== "dwelling" && elapsed < 20) {
       sim.step(dt);
-      expect(sim.reservedBy("3,0")).toBeUndefined();
-      expect(sim.reservedBy("4,0")).toBeUndefined();
+      if (sim.trainTileId("t1") !== "3,0") {
+        expect(sim.reservedBy("3,0")).toBeUndefined();
+        expect(sim.reservedBy("4,0")).toBeUndefined();
+      }
       elapsed += dt;
     }
     expect(sim.trainState("t1")).toBe("dwelling");
+  });
+
+  it("serves a platform at the buffers, where there is nowhere to draw up to", () => {
+    // depot → station → nothing. The stop line lies past the end of the metals,
+    // so the train can never align; it must still open its doors, or a terminus
+    // platform would be a station no service ever calls at.
+    const sim = createSimulation({
+      level: {
+        "0,0": expandKind("depot", 1),
+        "1,0": expandKind("station", 1),
+      },
+      trains: [TRAIN],
+      depotColors: { "0,0": "blue" },
+      stationDemand: { "1,0": { intervalSec: 100, max: 8, initial: 2 } },
+    });
+    runToDwell(sim, "t1");
+    expect(sim.trainState("t1")).toBe("dwelling");
+    expect(sim.trainTileId("t1")).toBe("1,0");
+    // It stopped at the buffers, not half a tile short of them.
+    expect(sim.trainProgress("t1")).toBeCloseTo(1, 5);
   });
 
   it("holds a following train behind the platform and releases it after the dwell", () => {

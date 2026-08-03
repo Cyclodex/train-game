@@ -19,9 +19,11 @@ import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road
 import { buildCitizenWorld } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
+  Citizen,
   CityState,
   CitizenSim,
   TravelMode,
+  TripOutcome,
   createCitizenSim,
 } from "@/sim/citizens";
 import { facilityOf, rowFor } from "@/tiles/parking";
@@ -41,6 +43,13 @@ import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
 import { unitLengths, couplingTiles } from "@/sim/trainDimensions";
+// How many carriages a train ordered into service is built with. A PLATFORM IS
+// ONE TILE LONG and a carriage is half of one, so two is what actually stands
+// beside the slab when the train draws up (see platformStopDistance in
+// sim/simulation.ts). Three overhung the platform at both ends: passengers
+// boarded a carriage parked on plain track. Raise this only alongside longer
+// (multi-tile) platforms.
+export const SERVICE_TRAIN_WAGONS = 2;
 import { Colors, makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
@@ -410,6 +419,23 @@ export interface Game {
   // People on the pavements, sampled to world PIXELS each frame for rendering.
   // Empty for every mode without a citizen layer.
   pedestrians: PedestrianDot[];
+  // THE INSPECTOR. All built on demand — nothing is stepped or stored, so a
+  // closed panel costs nothing. Null/empty on every mode without citizens.
+  inspectPlot(plotId: string): PlotCard | null;
+  inspectPerson(id: string): PersonCard | null;
+  compareModes(id: string): ModeCompare[];
+  // Ticks once per drawn frame. Read it from any getter that samples the sims
+  // on demand, or Vue will cache the first answer for ever — see the note where
+  // it is declared.
+  renderTick: Ref<number>;
+  // Where somebody is on the board right now, for the PIN that follows them.
+  // Null when they no longer exist. Sampled from the SIMS, not read off the
+  // DOM, so the pin is right on its first frame and a headless test can prove
+  // it tracks a moving person.
+  locatePerson(id: string): PersonFix | null;
+  // The person behind a figure on the pavement / behind a car on the road.
+  personWalking(walkerId: string): string | null;
+  personDriving(carTripId: string): string | null;
   // trainId -> the stops it serves (the service panel's model). A view copy of
   // what the SIM owns; changes only on a player action.
   trainLines: Record<string, string[]>;
@@ -625,6 +651,121 @@ export interface CitizenHud {
   day: number;
   modeShare: Record<TravelMode, number>;
 }
+
+// THE INSPECTOR — one person's day, and the choice behind it.
+//
+// A view model, built on demand: nothing here is stepped, stored or reactive,
+// so opening a panel costs a click and closing it costs nothing. The numbers
+// come straight from `CitizenSim.quoteFor`, which is the same call the model
+// makes when it decides — a panel that re-derived the comparison would drift
+// from the decision and be confidently wrong.
+//
+// JOURNEY TIMES ARE BOARD SECONDS, not in-game minutes, and that is deliberate.
+// The citizens' day is `secPerDay` sim seconds wide (300 in Citizens mode), so
+// converting a journey to the in-game clock makes a cross-town rail commute read
+// as EIGHT HOURS — internally consistent, and useless to plan with. Board
+// seconds are what a player can check against a stopwatch while they watch, and
+// the comparison between modes is what the panel is for. Times of DAY (when
+// somebody leaves, when they come back) stay on the in-game clock, because that
+// is the clock the HUD shows and they are read against it.
+
+/** One person, as the panel shows them. */
+export interface PersonCard {
+  id: string;
+  name: string;
+  home: string;
+  work: string | null;
+  mood: number;
+  carOwner: boolean;
+  // Their fixed daily times, on the in-game clock. Rolled once when they move
+  // in and never re-rolled — the schedule is a clock, not a planner.
+  leavesAt: string;
+  returnsAt: string;
+  shopsAt: string;
+  // Right now.
+  at: string;
+  doing: string;
+  travellingTo: string | null;
+  mode: TravelMode | null;
+  // How long the journey in progress has run, and how long they think it OUGHT
+  // to take — the two numbers their mood is about to be scored on. The
+  // expectation is a straight-line yardstick, never what the network offers, so
+  // a bad network cannot grade itself. Board seconds.
+  elapsedSec: number | null;
+  expectedSec: number | null;
+  unhappyDays: number;
+  /**
+   * WHY they feel that way: their last few journeys, newest first, already put
+   * into words. "Thinking of leaving" with nothing beside it is the least
+   * useful thing a panel can say — a player cannot act on a mood, only on the
+   * journey that caused it.
+   */
+  recent: TripNote[];
+}
+
+/** One remembered journey, as a line the panel prints. */
+export interface TripNote {
+  text: string;
+  /** Negative for a grievance, positive for a journey that went well. */
+  delta: number;
+  good: boolean;
+}
+
+/** Where a pinned person is right now, in world pixels, and what they are on. */
+export interface PersonFix {
+  id: string;
+  x: number;
+  y: number;
+  /** What is carrying them — the pin labels itself with this. */
+  on: "foot" | "car" | "train" | "platform" | "indoors";
+}
+
+/** One row of the "what would each way take?" table. */
+export interface ModeCompare {
+  mode: TravelMode;
+  /** The honest door-to-door estimate in board seconds. Null when not on offer. */
+  seconds: number | null;
+  /** "1m 35s" — the same number, ready to render. */
+  label: string;
+  /**
+   * The same journey after this person's habits: the walk inflated past their
+   * patience, the car scaled by how much they like driving, the train by how
+   * much they trust it. THIS is what decides, and the gap between it and
+   * `seconds` is a person choosing against their own stopwatch.
+   */
+  perceivedSeconds: number | null;
+  chosen: boolean;
+  /** Plain-English reason it is not on offer, or null when it is. */
+  why: string | null;
+}
+
+/** "1m 35s" / "42s" — a board duration, as the panel prints it. */
+export function durationLabel(sec: number): string {
+  if (!isFinite(sec)) return "—";
+  const s = Math.round(sec);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/** Everything the panel needs for one plot: what it is, and who is on it. */
+export interface PlotCard {
+  id: string;
+  city: string;
+  kind: "home" | "work" | "shop";
+  density: number;
+  people: number;
+  capacity: number;
+  residents: PersonCard[];
+}
+
+const REFUSAL_TEXT: Record<string, string> = {
+  "too-far": "too far to walk",
+  "no-car": "no car",
+  "no-road-link": "no road joins the two ends",
+  "no-railway": "no railway",
+  "no-station-in-reach": "no station within reach",
+  "no-park-and-ride": "no park & ride in reach",
+  "same-station": "same station both ends",
+};
 
 // One walking person, positioned for the renderer.
 export interface PedestrianDot {
@@ -1104,6 +1245,232 @@ export function createGame(
     citizenStats.clock = s.clock;
     citizenStats.day = s.day;
     citizenStats.modeShare = s.modeShare;
+  }
+
+  // --- the inspector ----------------------------------------------------------
+
+  function clockOf(hour: number): string {
+    const h = Math.floor(hour) % 24;
+    const m = Math.floor((hour - Math.floor(hour)) * 60);
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  // A name, so a row reads as a person and not as a row. Deterministic from the
+  // id — no RNG, because two calls a frame apart must not rename anybody.
+  const FIRST_NAMES = [
+    "Anna", "Bruno", "Clara", "Dario", "Elin", "Felix", "Greta", "Hugo",
+    "Ida", "Jonas", "Kata", "Liam", "Mira", "Noah", "Olga", "Piet",
+    "Rosa", "Samu", "Tilda", "Uwe", "Vera", "Wim", "Yara", "Zeno",
+  ];
+  function nameOf(id: string): string {
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+    return FIRST_NAMES[(h >>> 0) % FIRST_NAMES.length];
+  }
+
+  function doingOf(c: Citizen): string {
+    if (!c.trip) {
+      if (c.at === c.home) return "at home";
+      if (c.work && c.at === c.work) return "at work";
+      return "out";
+    }
+    const dest =
+      c.trip.purpose === "home"
+        ? "home"
+        : c.trip.purpose === "work"
+          ? "to work"
+          : "to the shops";
+    // On a transit trip the first timed leg is the APPROACH to the platform, not
+    // the journey. Calling it "walking to work" while the chosen mode is the
+    // train reads as the panel contradicting itself.
+    const rail = c.trip.mode === "transit" || c.trip.mode === "parkAndRide";
+    switch (c.trip.leg) {
+      case "walking":
+        return rail ? "walking to the station" : `walking ${dest}`;
+      case "driving":
+        return rail ? "driving to the station" : `driving ${dest}`;
+      case "waiting":
+        return "waiting on the platform";
+      case "riding":
+        return "on the train";
+      case "egress":
+        return `walking ${dest} from the station`;
+      default:
+        return `travelling ${dest}`;
+    }
+  }
+
+  function personCard(c: Citizen): PersonCard {
+    const now = citizenSim?.now() ?? 0;
+    return {
+      id: c.id,
+      name: nameOf(c.id),
+      home: c.home,
+      work: c.work,
+      mood: c.mood,
+      carOwner: c.profile.carOwner,
+      leavesAt: clockOf(c.outHour),
+      returnsAt: clockOf(c.backHour),
+      shopsAt: clockOf(c.shopHour),
+      at: c.at,
+      doing: doingOf(c),
+      travellingTo: c.trip?.to ?? null,
+      mode: c.trip?.mode ?? null,
+      elapsedSec: c.trip ? now - c.trip.startedAt : null,
+      expectedSec: c.trip ? c.trip.expectedSec : null,
+      unhappyDays: c.unhappyDays,
+      recent: c.recent.map(noteOf),
+    };
+  }
+
+  const PURPOSE_TEXT: Record<string, string> = {
+    work: "The trip to work",
+    home: "The trip home",
+    shop: "The errand",
+  };
+
+  // One remembered journey, in words. The two numbers ARE the verdict — how
+  // long it took against how long they thought it should — so the sentence
+  // leads with them rather than with an adjective.
+  function noteOf(o: TripOutcome): TripNote {
+    const what = PURPOSE_TEXT[o.purpose] ?? "A trip";
+    if (o.failed === "refused")
+      return { text: `${what} was impossible — no way to make it at all.`, delta: o.delta, good: false };
+    if (o.failed === "abandoned")
+      return { text: `${what} was given up on after ${durationLabel(o.actualSec)}.`, delta: o.delta, good: false };
+    const over = o.actualSec / Math.max(o.expectedSec, 0.001);
+    const verdict =
+      over > 1.6 ? "far longer than they expected" : over > 1.05 ? "longer than they expected" : "about as expected";
+    return {
+      text: `${what} took ${durationLabel(o.actualSec)} — ${verdict} (${durationLabel(o.expectedSec)}).`,
+      delta: o.delta,
+      good: o.delta >= 0,
+    };
+  }
+
+  // Everyone who lives or works on a plot. The panel's way in from the board:
+  // click a house, see the household.
+  function inspectPlot(plotId: string): PlotCard | null {
+    if (!citizenSim) return null;
+    const plot = citizenSim.plots().find(p => p.id === plotId);
+    if (!plot) return null;
+    return {
+      id: plot.id,
+      city: plot.city,
+      kind: plot.kind,
+      density: plot.density,
+      people: plot.people,
+      capacity: plot.capacity,
+      residents: citizenSim.citizensOf(plotId).map(personCard),
+    };
+  }
+
+  function inspectPerson(id: string): PersonCard | null {
+    const c = citizenSim?.citizen(id);
+    return c ? personCard(c) : null;
+  }
+
+  // The comparison table: what each way of making this journey would take.
+  // Defaults to their commute; while they are actually travelling it prices the
+  // journey they are ON, so the panel answers "and what else could they have
+  // done?" about the trip in front of you.
+  function compareModes(id: string): ModeCompare[] {
+    const c = citizenSim?.citizen(id);
+    if (!c || !citizenSim) return [];
+    const quotes = c.trip
+      ? citizenSim.quoteFor(id, c.trip.from, c.trip.to)
+      : citizenSim.quoteFor(id);
+    return (quotes ?? []).map(q => ({
+      mode: q.mode,
+      seconds: q.unavailable ? null : q.estimateSec,
+      label: q.unavailable ? "—" : durationLabel(q.estimateSec),
+      perceivedSeconds: q.unavailable ? null : q.cost,
+      chosen: q.chosen,
+      why: q.unavailable ? (REFUSAL_TEXT[q.unavailable] ?? q.unavailable) : null,
+    }));
+  }
+
+  // WHERE IS THIS PERSON? One answer per leg, every one of them sampled from a
+  // simulation rather than read off the render mirror — a pin built from
+  // `roadCars` would be a frame late and empty in a headless test.
+  //
+  // A person is only ever in one of five places, and the pin says which:
+  //  · on foot     — the walker's live position on the pavement
+  //  · in a car    — the car's live position (the trip id IS the car id, see
+  //                  road.ts `trips.set(id, "driving")`, so this is a lookup)
+  //  · on a train  — the loco of the train they boarded
+  //  · on a platform / indoors — the middle of the tile they are standing in,
+  //    which is as precise as the model gets and precise enough to point at.
+  function locatePerson(id: string): PersonFix | null {
+    const c = citizenSim?.citizen(id);
+    if (!c) return null;
+    const centreOf = (tileId: string) => {
+      const { x, y } = parseCoordId(tileId);
+      return { x: (x + 0.5) * tileSize, y: (y + 0.5) * tileSize };
+    };
+    const trip = c.trip;
+
+    if (trip?.walkTrip) {
+      const w = pedestrianSim?.sample().find(sample => sample.id === trip.walkTrip);
+      if (w) return { id, x: w.x * tileSize, y: w.y * tileSize, on: "foot" };
+    }
+    if (trip?.carTrip) {
+      for (const car of roadSim.sample()) {
+        if (car.id !== trip.carTrip) continue;
+        const unit = car.units[0];
+        if (!unit) break;
+        const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
+        const p = positionRoadUnit(
+          unit,
+          unit.front.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.front, car.laneIndex, cls),
+          unit.rear.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.rear, car.laneIndex, cls)
+        );
+        return { id, x: p.x, y: p.y, on: "car" };
+      }
+    }
+    if (trip?.trainId && sim.trains[trip.trainId]) {
+      const units = sim.sampleTrain(trip.trainId);
+      if (units.length) {
+        // The one sampler here that is NOT pure: rail geometry is measured off
+        // an SVG path (`getPointAtLength`), so the exact loco position needs a
+        // document. In the browser that is always true and the pin rides the
+        // engine. Headless, fall back to the tile the loco is on — coarser by
+        // half a tile, still tracks the train across the map, and testable.
+        if (typeof document !== "undefined") {
+          const { x, y } = positionUnit(units[0]);
+          return { id, x, y, on: "train" };
+        }
+        const { x: cx, y: cy } = units[0].front.coord;
+        return {
+          id,
+          x: (cx + 0.5) * tileSize,
+          y: (cy + 0.5) * tileSize,
+          on: "train",
+        };
+      }
+    }
+    if (trip?.leg === "waiting" && trip.station)
+      return { id, ...centreOf(trip.station), on: "platform" };
+    // Not moving, or on a leg with no body on the board yet: they are at an
+    // address. `at` stays their home while they travel home, which is exactly
+    // where the pin belongs for somebody who has not set off.
+    return { id, ...centreOf(c.at), on: "indoors" };
+  }
+
+  // The person behind a figure on the pavement — so clicking a dot on the board
+  // opens their day. `walkTrip` is the pedestrian sim's own id, which is what
+  // `PedestrianDot.id` carries, so this is a lookup and not a guess.
+  function personWalking(walkerId: string): string | null {
+    for (const c of citizenSim?.citizens() ?? [])
+      if (c.trip?.walkTrip === walkerId) return c.id;
+    return null;
+  }
+
+  // ...and the person behind a car. Same contract via `carTrip`.
+  function personDriving(carTripId: string): string | null {
+    for (const c of citizenSim?.citizens() ?? [])
+      if (c.trip?.carTrip === carTripId) return c.id;
+    return null;
   }
 
   // Sampled in `advance()` rather than in the render mirror, for the same
@@ -1865,7 +2232,10 @@ export function createGame(
       x,
       y,
       type: "people",
-      wagonIds: [`${id}w1`, `${id}w2`, `${id}w3`],
+      wagonIds: Array.from(
+        { length: SERVICE_TRAIN_WAGONS },
+        (_, i) => `${id}w${i + 1}`
+      ),
       ...(stops.length ? { line: [...stops] } : {}),
     };
     // The renderer draws from `trainDefs`/`unitIds`, so the roster has to learn
@@ -2029,6 +2399,15 @@ export function createGame(
 
   const paused = ref(false);
   const speed = ref(1);
+  // A reactive heartbeat for views that read the SIMS on demand rather than a
+  // mirrored array. `locatePerson` (the pin) and the inspector panel both walk
+  // the markRaw'd simulations directly — which is right, because mirroring a
+  // whole population per frame to serve one open panel would be absurd — but it
+  // means Vue sees no dependency and caches the computed for ever. The pin
+  // appeared in the correct place and then never moved again. Touch this and a
+  // getter re-runs each drawn frame; anything that does NOT touch it stays as
+  // cheap as it was.
+  const renderTick = ref(0);
   const deliveries = ref(0);
   let raf = 0;
   let last = 0;
@@ -2146,6 +2525,9 @@ export function createGame(
     updateReservations();
     updateStationQueues();
     updateTrainStatus();
+    // LAST: a getter woken by the heartbeat must see a fully-mirrored frame,
+    // not one halfway through being updated.
+    renderTick.value += 1;
     raf = requestAnimationFrame(frame);
   }
 
@@ -2548,6 +2930,13 @@ export function createGame(
     cities,
     citizenStats,
     pedestrians,
+    inspectPlot,
+    inspectPerson,
+    compareModes,
+    renderTick,
+    locatePerson,
+    personWalking,
+    personDriving,
     trainLines,
     stationLines,
     queuedTrains,
