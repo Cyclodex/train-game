@@ -208,6 +208,18 @@ Small enough to read, complete enough that every stage has somewhere to go.
 **What it proves:** the population counter for "travelling" stops being two
 spikes. That is the whole feature, and it is visible on the HUD.
 
+**Measured on that board** — the busiest "travelling" count in each in-game hour,
+one full day, same map and same seed, only the stage mix changed:
+
+| hour | 06 | 07 | 08 | 09 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| all workers | 0 | 26 | 30 | 30 | 14 | 10 | 8 | 3 | **0** | **0** | 26 | 32 | 34 | 33 | 27 | 7 |
+| life stages | 6 | 18 | 25 | 27 | 16 | 12 | 14 | 17 | 17 | 14 | 25 | 32 | 31 | 21 | 14 | 13 |
+
+Trough-to-peak goes from **0.00 to 0.19**: two spikes with a hole in the middle
+become a day. Note the peaks barely move — this is not more people, it is the
+same people spread over the hours they would really use.
+
 ### 5.2 `/test/hinterland` — the big world
 
 36×24 (864 tiles, ~3× demoworld). Composed from the same `rect`/loop helpers
