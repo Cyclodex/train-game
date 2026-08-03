@@ -240,12 +240,99 @@ was decoration.
   colour piling up.
 - Authoring consequence: a ONE-station board has no journeys on it.
 
-Not modelled: TRANSFERS. A passenger only ever travels on a direct service, so
-two lines that meet do not yet hand passengers over. That is the next real
-step for this thread.
+Not modelled: TRANSFERS — see phase 9.
 
 Still open beyond that: buses as passenger CARRIERS rather than feeders,
 buses as carriers rather than feeders, and rising demand over time.
+
+### Phase 9 — CHANGING TRAINS (planned 2026-08-03)
+
+**The problem, stated sharply.** Phase 8 boards a passenger only when the
+train's line calls at their FINAL destination (`serves.has(dest)` in
+`simulation.ts`). On a network of two lines meeting at an interchange, someone
+whose destination is served only by line B, standing at a line-A station, never
+boards ANY train. They sit until the platform cap and count against you. So the
+game today makes a two-line network strictly worse than one enormous line — the
+exact opposite of what a Transport-Fever-like mode should reward. Transfers are
+not a nicety on top of phase 8; they are the bug phase 8 created.
+
+The citizen layer (merged from #69) has the same hole from the other side, and
+its own comment says so: `alightAt` in `sim/citizens.ts` keeps a rider in their
+seat until a station within walking reach of their destination comes up, because
+mirroring the sim's one-hop rule "was catastrophic on a shuttle". It therefore
+runs a `shadowQueue` beside the sim's real queue and knowingly under-reads the
+sim's passenger count on a multi-hop journey. Both layers are working around the
+same missing concept.
+
+**The concept: a LINE GRAPH, separate from the track graph.** `railRouter.ts`
+answers "can a train physically get there". The new question is "can a
+PASSENGER get there on the services that exist" — nodes are stations, and two
+stations are adjacent when some line calls at both. Shortest path over that
+graph gives the change points.
+
+**D7 — decide the hop at BOARDING time, never store a plan.** A rider carries
+`{ final, off }` where `off` is chosen when they step aboard: the station on
+THIS train's line from which their `final` is still reachable, closest to it.
+Nothing is cached on a waiting passenger, so a player who redraws a line
+mid-journey cannot strand anyone holding a stale plan — the next dwell simply
+re-decides. The line graph itself is memoised behind a version counter bumped by
+`setLine`; lines change only on a player action, so this is nearly free.
+
+**D8 — a transfer is a re-queue, and it never fails.** At `off`, a rider with
+`off !== final` goes back onto that platform's queue with their unchanged
+`final`. Transfers BYPASS the platform cap: a passenger already travelling must
+never be deleted mid-journey by a queue that happens to be full — that would be
+an invisible loss the player cannot even see happen. They go to the FRONT of the
+queue (they have already waited once).
+
+**D9 — delivered counts once, at `final`.** `passengersDeliveredTotal` currently
+counts everyone who steps off. With transfers that would score the same person
+two or three times and quietly inflate every objective. Only `off === final`
+is a delivery; a transfer is its own event, so the HUD can show "changing" as
+distinct from "arrived".
+
+**D10 — demand stays TRACK-reachable, not SERVICE-reachable.** The tempting move
+is to only create passengers a line can actually carry. Rejected: at the start
+of a level there are no lines, so no demand would ever appear and the player
+would face an empty board with nothing to respond to. Demand is what the town
+WANTS (unchanged from phase 8: round-robin over track-reachable stations); the
+line graph decides what gets carried. A destination nothing serves shows up as
+one colour piling up on the platform — the existing signal, now with a precise
+meaning: "no service goes there". The overcrowd fail predicate stays the
+mode's difficulty knob.
+
+**Slices** (each its own PR, each headless-testable):
+
+- **9A — the line graph** (`src/sim/lineGraph.ts`, pure). Build from the current
+  line assignments; `nextHopFor(at, final, line)` → the station to get off at,
+  or null when this train does not help. Unit spec: direct service prefers no
+  change; a two-line network routes via the interchange; a disconnected
+  destination returns null rather than a wrong hop.
+- **9B — the sim uses it.** Manifest entries become `{ final, off }`; boarding
+  asks the line graph instead of `serves.has(dest)`; alighting re-queues on a
+  transfer; delivered counts only at `final`. A lineless train keeps its exact
+  one-hop behaviour, so every classic board stays byte-identical.
+- **9C — the test world.** A `transfer` scenario: two lines, one interchange,
+  a passenger who cannot arrive without changing. Plus the regression that
+  matters — the same board with ONE line through everything must not produce a
+  single transfer.
+- **9D — the citizen handover.** Queue entries gain an opaque tag; the dwell
+  event carries boarded/alighted TAGS, not just counts. `transit.enqueue` takes
+  the citizen's real destination station (`nearestStation(to)` — already
+  computed in `optionsFor`). Then `shadowQueue`, the seat a through-rider holds
+  after the sim freed it, and the `maxTransfers` guess all go away, and the two
+  layers keep ONE ledger.
+- **9E — the HUD.** Show a changing passenger as changing (the platform crowd
+  already colours by destination); a "no service to X" hint is the natural
+  follow-up but is not required for the mechanic.
+
+**Traps to expect.** (1) A cycle in the line graph must not become an infinite
+transfer loop — the hop must strictly decrease distance-to-destination, or a
+rider can be handed round a triangle for ever. (2) Re-queueing at the front is
+invisible in a count-only queue, so 9D's tags are what make it observable. (3)
+`STATION_QUEUE_HARD_CAP` counts a transferring rider once they are on the
+platform, so a busy interchange can lock itself; the cap needs to be a spawn
+gate, not a queue-length invariant.
 
 #### The original sketch (for reference)
 
