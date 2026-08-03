@@ -315,53 +315,86 @@ topic (`tripsRefused`, `FAILURE_WEIGHT`). A town that wants a railway tells you
 by being unhappy about its commute, not by piling figures onto a platform you
 never connected.
 
-That leaves one real gap, which 9E owns: on a NETWORK-mode board without the
-citizen layer, synthetic demand is all there is, so a fresh level with no lines
-would be silent — no crowds, no complaints, no hint of which pairs of towns
-want each other. The fix is a latent-demand readout (a station badge, or the
-town card: "N people would travel to Weststadt"), which is what TF2 shows for
-an unserved connection. It is a HUD job, not a queue job — and it must not feed
-the fail predicate, because failing a player for demand they were never given
-the chance to serve is the punishment D10 exists to remove.
+On a NETWORK-mode board without the citizen layer there are no moods to read,
+so a latent-demand readout (a station badge, or the town card: "N people would
+travel to Weststadt") is the substitute — a HUD job, never a queue job, and it
+must not feed the fail predicate. But it is a convenience, not the design: the
+signal this mode is built on is an unhappy town, not a pile of figures you must
+clear. Passengers accumulating on a platform until you serve them is MINI
+METRO's loop, and it is explicitly not the one we are building.
+
+**D11 — A LINE EXISTS WITHOUT A TRAIN ON IT.** This is what D10 actually
+demands, and the code cannot express it today. `setLine(trainId, stops)` hangs
+the stops off a TRAIN: no train, no line. So "I have planned a service here"
+and "a vehicle is currently running it" are the same fact, and they must not be.
+
+The rule is: a person goes to the station because a LINE connects them to where
+they are going. Whether a train is on that line right now, whether it is one
+train an hour or six, is the PLAYER'S problem — and the queue that grows while
+they under-serve it is the honest complaint from D10's first category. That is
+TF2's arrangement: you draw a line, then you assign vehicles to it, and an
+under-served line is a visible, fixable failure rather than an invisible one.
+
+So the line becomes a first-class object — `{ id, name, stops[] }` in the sim,
+with trains ASSIGNED to it (many trains, one line; a train on no line is the
+classic lineless service, unchanged). The line graph is then built from LINES,
+not from the trains that happen to exist, which is also what makes it stable:
+retiring the last train off a line must not delete the line and strand everyone
+who planned around it.
+
+Consequences to expect: the service panel grows a line list beside its train
+list (create/name/edit a line, then assign); `stationLines` derives from lines
+rather than from `trainLines`; the line overlay draws a LINE, so it no longer
+needs a train selected to show one.
 
 **Slices** (each its own PR, each headless-testable):
 
-- **9A — the line graph** (`src/sim/lineGraph.ts`, pure). Build from the current
-  line assignments; `nextHopFor(at, final, line)` → the station to get off at,
-  or null when this train does not help. Unit spec: direct service prefers no
-  change; a two-line network routes via the interchange; a disconnected
-  destination returns null rather than a wrong hop.
-- **9B — the sim uses it.** Manifest entries become `{ final, off }`; boarding
+- **9A — the line becomes a thing (D11).** `{ id, name, stops[] }` in the sim,
+  trains assigned to it rather than owning it. `setLine(trainId, stops)` becomes
+  create-line + assign-train; `stationLines` derives from lines; retiring the
+  last train off a line leaves the line standing. The service panel grows a line
+  list beside its train list. Nothing about routing changes yet — this slice is
+  purely "a plan can outlive the vehicle running it", and every existing test
+  should survive it.
+- **9B — the line graph** (`src/sim/lineGraph.ts`, pure). Built from the LINES;
+  `nextHopFor(at, final, line)` → the station to get off at, or null when this
+  line does not help. Unit spec: direct service prefers no change; a two-line
+  network routes via the interchange; a disconnected destination returns null
+  rather than a wrong hop.
+- **9C — the sim uses it.** Manifest entries become `{ final, off }`; boarding
   asks the line graph instead of `serves.has(dest)`; alighting re-queues on a
   transfer; delivered counts only at `final`. A lineless train keeps its exact
   one-hop behaviour, so every classic board stays byte-identical.
-- **9B′ — spawn behind the line graph (D10).** `addStationPassengers` draws its
-  destination round-robin over SERVED stations, not track-reachable ones, and
-  queues nobody when nothing is served — it already returns what it actually
-  queued, so both callers handle 0 today. Watch the ordering: the round-robin
-  cursor must stay deterministic as the served set changes under it, or a run
-  stops being replayable.
-- **9C — the test world.** A `transfer` scenario: two lines, one interchange,
-  a passenger who cannot arrive without changing. Plus the two regressions that
-  matter — the same board with ONE line through everything must not produce a
-  single transfer, and a board with NO line must not produce a single waiting
-  passenger.
-- **9D — the citizen handover.** Queue entries gain an opaque tag; the dwell
+- **9D — spawn behind the line graph (D10).** `addStationPassengers` draws its
+  destination round-robin over stations a LINE serves, not track-reachable ones,
+  and queues nobody when nothing is served — it already returns what it actually
+  queued, so both callers handle 0 today. Note what D11 buys here: demand
+  appears the moment the line is DRAWN, before any train is bought, which is the
+  order a player actually works in. Watch the round-robin cursor: it must stay
+  deterministic as the served set changes under it, or a run stops being
+  replayable.
+- **9E — the test world.** A `transfer` scenario: two lines, one interchange,
+  a passenger who cannot arrive without changing. Plus the three regressions
+  that matter — ONE line through everything produces no transfer at all; NO line
+  produces no waiting passenger at all; and a line with no train assigned still
+  gathers a queue (the under-served case, which must look like a complaint and
+  not like a bug).
+- **9F — the citizen handover.** Queue entries gain an opaque tag; the dwell
   event carries boarded/alighted TAGS, not just counts. `transit.enqueue` takes
   the citizen's real destination station (`nearestStation(to)` — already
-  computed in `optionsFor`). Then `shadowQueue`, the seat a through-rider holds
-  after the sim freed it, and the `maxTransfers` guess all go away, and the two
-  layers keep ONE ledger.
-- **9E — the HUD, and LATENT demand.** Show a changing passenger as changing.
-  And, because D10 empties the platforms of everyone you have not connected,
-  show what a station WOULD carry if you served it — the readout that replaces
-  the crowd as the "build here" signal on a citizen-less board. Read-only: it
-  never feeds the fail predicate.
+  computed in `optionsFor`), and `optionsFor` only offers transit when a line
+  connects the two ends, so an unconnected citizen falls back to car/walk or
+  refuses — D10, arriving where it belongs. Then `shadowQueue`, the seat a
+  through-rider holds after the sim freed it, and the `maxTransfers` guess all
+  go away, and the two layers keep ONE ledger.
+- **9G — the HUD.** Show a changing passenger as changing; the line list from
+  9A; and on a citizen-less board the latent-demand readout. Read-only, never
+  in the fail predicate.
 
 **Traps to expect.** (1) A cycle in the line graph must not become an infinite
 transfer loop — the hop must strictly decrease distance-to-destination, or a
 rider can be handed round a triangle for ever. (2) Re-queueing at the front is
-invisible in a count-only queue, so 9D's tags are what make it observable. (3)
+invisible in a count-only queue, so 9F's tags are what make it observable. (3)
 `STATION_QUEUE_HARD_CAP` counts a transferring rider once they are on the
 platform, so a busy interchange can lock itself; the cap needs to be a spawn
 gate, not a queue-length invariant. (4) D10 changes the BALANCE of every
