@@ -3379,6 +3379,16 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- A GREEN LOCAL SUITE PROVES NOTHING ABOUT A PR WHOSE BASE MOVED (2026-08-03).
+  Actions checks out your head MERGED WITH THE CURRENT BASE, so it runs code
+  pairs that exist nowhere on your machine. Phase 9 went red on a test another
+  session had landed minutes earlier: the merge itself was CLEAN, and the two
+  changes were still incompatible (their test read a platform's colour as a
+  train livery; D11 had moved it to the line). Before calling a PR done, fetch
+  master and re-run — a conflict check is not enough, because this class of
+  break has no conflict to find.
+- And when it does break: the fix is usually in YOUR code, not their test. Ask
+  what the other session's assertion was trying to say, and make that true.
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
   BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
   one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
