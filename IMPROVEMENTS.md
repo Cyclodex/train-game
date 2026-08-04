@@ -205,6 +205,27 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `tariff` sits beside it. The work is deciding what the player DOES with the
     money — a fee nobody chooses to set is a number on a sign, not a mechanic.
     Files: `src/tiles/parking.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
+    Since 2026-08-04 there is a second, sharper reason to want it: commuters now
+    hold a real bay all day, so a tariff is the one dial that pushes a driver
+    onto the train rather than merely annoying them.
+13. **Derive staff parking for whatever board the mode is handed.**
+    `deriveWorkplaceParking` runs in a board's own data today, because
+    `createGame` takes the level it is given and never the one `setup()` returns
+    (TestStage hands it `scenario.level` directly). Make `createGame` honour
+    `setup.level` and the citizens mode can grow staff parking on ANY board —
+    including one the player just drew. The pass is already idempotent for it.
+    Files: `src/game.ts`, `src/views/TestStage.vue`, `src/modes/citizens.ts`.
+14. **Walk from the bay to the desk on an actual pavement.** The last leg of a
+    driven commute is charged as TIME (`walkFromBaySec`) but nobody is drawn
+    doing it. Handing it to `pedestrianSim` is what would make a car park
+    visibly feed a stream of people into a factory — and it is the same
+    plumbing `citizenwalk` already has.
+    Files: `src/sim/citizens.ts`, `src/sim/pedestrians.ts`.
+15. **Park & ride should hold a real bay too.** A P+R car still evaporates at
+    the station and pays the flat penalty. The blocker is the return half: you
+    come back to a different platform and have to reach the car you left at the
+    first one, which the trip model has no way to express yet.
+    Files: `src/sim/citizens.ts`.
 
 ## Architecture / code health
 

@@ -8,7 +8,7 @@ const { Top, Right, Bottom, Left } = Position;
 
 // WORKPLACE PARKING — where the commuter's car actually goes.
 //
-// A one-way ring road, houses down the west side, and a works on the east that
+// A one-way ring road, houses down the east side, and a works on the west that
 // nobody can walk to. Everybody who owns a car drives, and — this is the new
 // part — every one of those cars has to STOP somewhere when it gets there and
 // stay stopped until its owner goes home.
@@ -26,7 +26,7 @@ const { Top, Right, Bottom, Left } = Position;
 // claim checkable rather than merely plausible.
 //
 // What to watch:
-//  1. **07:00.** Cars pull off the west kerb one at a time and drive clockwise
+//  1. **07:00.** Cars pull off the east kerb one at a time and drive clockwise
 //     round to the works.
 //  2. **The first three arrivals park.** They swing into the bays outside the
 //     gate and STAY there — sprites on the board, not deleted on arrival. The
@@ -58,7 +58,7 @@ const home = (): TileCell => ({
 const works = (): TileCell => ({
   connections: [],
   terrain: "industry",
-  city: "eastworks",
+  city: "westworks",
 });
 
 // The ring: x 1..9, y 1..6, clockwise.
@@ -69,29 +69,36 @@ const Y1 = 6;
 
 const base: Record<string, TileCell> = {};
 
-base[`${X0},${Y0}`] = street(Bottom, Right); // NW corner
-base[`${X1},${Y0}`] = street(Left, Bottom, "industry"); // NE
-base[`${X1},${Y1}`] = street(Top, Left, "industry"); // SE
-base[`${X0},${Y1}`] = street(Right, Top); // SW
+base[`${X0},${Y0}`] = street(Bottom, Right, "industry"); // NW corner
+base[`${X1},${Y0}`] = street(Left, Bottom); // NE
+base[`${X1},${Y1}`] = street(Top, Left); // SE
+base[`${X0},${Y1}`] = street(Right, Top, "industry"); // SW
 for (let x = X0 + 1; x < X1; x++) {
   base[`${x},${Y0}`] = street(Left, Right); // top run, eastbound
   base[`${x},${Y1}`] = street(Right, Left); // bottom run, westbound
 }
 for (let y = Y0 + 1; y < Y1; y++) {
-  base[`${X0},${y}`] = street(Bottom, Top); // left run, northbound
-  base[`${X1},${y}`] = street(Top, Bottom, "industry"); // right run, southbound
+  // The west side of the ring serves the works, so it stands on works ground.
+  base[`${X0},${y}`] = street(Bottom, Top, "industry"); // left run, northbound
+  base[`${X1},${y}`] = street(Top, Bottom); // right run, southbound
 }
 
-// The houses: the whole west kerb, plus the inside of the ring's top run — one
+// The houses: the whole east kerb, plus the inside of the ring's top run — one
 // tile from the carriageway, which is what `ROAD_ACCESS_TILES` asks for.
-for (let y = Y0; y <= Y1; y++) base[`0,${y}`] = home();
+for (let y = Y0; y <= Y1; y++) base[`${X1 + 1},${y}`] = home();
 for (let x = X0 + 1; x < X1; x++) base[`${x},${Y0 + 1}`] = home();
 
 // THE WORKS IS ONE BUILDING, not a column of them, and that is the whole
-// design of the board: a works spread down the east kerb would derive a rank
+// design of the board: a works spread down the west kerb would derive a rank
 // of bays on every tile beside it and there would be room for everybody. One
 // gate, one kerb, three spaces.
-base[`${X1 + 1},3`] = works();
+//
+// It sits on the FAR bank of a one-way street, which is legal precisely because
+// the street is one-way — there is no oncoming stream to cross to reach it. That
+// is the case that made the derivation support `side: "left"` at all: on a board
+// built round a one-way loop, half the workplaces are on the wrong kerb and
+// would otherwise get no forecourt.
+base[`0,3`] = works();
 
 // The staff parking is DERIVED, not drawn: `terrain: "industry"` beside a
 // straight one-way street is all the map has to say. Applied here, in the
@@ -107,5 +114,5 @@ export const workparking: TestScenario = {
   modeId: "citizens",
   level,
   trains: {},
-  size: { cols: 12, rows: 8 },
+  size: { cols: 11, rows: 8 },
 };
