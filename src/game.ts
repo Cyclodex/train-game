@@ -1356,7 +1356,14 @@ export function createGame(
   function scheduleOf(c: Citizen): ScheduleLine[] {
     return c.routine.map(a => ({
       at: clockOf(a.hour),
-      what: ACTIVITY_TEXT[a.target] ?? "goes out",
+      // A trip to work that does NOT start at home is a tradesperson coming back
+      // between call-outs. "Leaves for work" at half eleven and again at four
+      // reads as a person with three jobs; what they are doing is returning to
+      // the yard, and the routine already says so — the activity has no `from`.
+      what:
+        a.target === "work" && a.from !== "home"
+          ? "back to the yard"
+          : (ACTIVITY_TEXT[a.target] ?? "goes out"),
       daily: a.everyNDays <= 1,
     }));
   }
