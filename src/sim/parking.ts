@@ -50,9 +50,13 @@ export function vehicleCanPark(kind: VehicleKind): boolean {
 // delivery bay are the same size and serve different traffic, and a bus stop is
 // for coaches only however much room a lorry would have had. Size is a
 // CONSEQUENCE of the class (see `needsBigBay`); admission is the rule.
-export type BayClass = "car" | "lorry" | "bus" | "delivery" | "permit";
+export type BayClass = "car" | "lorry" | "bus" | "delivery" | "permit" | "resident";
 
 export function bayClassOf(row: ParkingRow): BayClass {
+  // SOMEBODY'S DRIVE, and that beats every other reading of the row. A private
+  // space is private whatever shape it is — the garage under a block of flats
+  // and the hardstanding in front of a bungalow are both "not yours".
+  if (row.resident) return "resident";
   // A GARAGE is a car park whatever its capacity: an underground one has a height
   // barrier, and a lorry or a coach does not go down the ramp. Its slots are not
   // on the map, so nothing about its geometry would ever have said so.
@@ -96,7 +100,27 @@ export function bayAdmits(kind: VehicleKind, cls: BayClass): boolean {
     // makes a car park look like a real one rather than 100% usable.
     case "permit":
       return false;
+    // A DRIVE. The kind gate says only a car goes on one (a lorry does not live
+    // at a house); WHOSE drive it is cannot be answered from the kind at all, so
+    // it is asked separately — `stallAdmits`, with the driver's address.
+    case "resident":
+      return kind === "car";
   }
+}
+
+// Does this row belong to somebody, and is `permit` that somebody?
+//
+// The second gate a private drive needs, and it is deliberately NOT part of
+// `bayAdmits`: that table answers "what sort of vehicle", which is a property of
+// the pair (kind, class) and nothing else. Ownership is a property of the
+// specific ROW and the specific DRIVER, and folding it into the kind table would
+// have meant either a class per address or a table that quietly returned true.
+//
+// A `permit` is a home plot's coordinate id — the address the driver lives at.
+// Absent (ambient traffic, a visitor, a delivery) it opens nothing private.
+export function permitAdmits(row: ParkingRow, permit?: string | null): boolean {
+  if (!row.resident) return true; // public parking admits everyone its class does
+  return !!permit && row.resident === permit;
 }
 
 // Can a vehicle of `kind` use a stall in `row`?
@@ -123,9 +147,14 @@ export function stallFits(
   row: ParkingRow,
   carLength: number,
   tileSize = 200,
+  // The driver's address, for a row that is somebody's DRIVE. Omitted, private
+  // rows are closed — which is the right default for every caller that has no
+  // driver in hand at all (the capacity probes, ambient traffic, a test).
+  permit?: string | null,
 ): boolean {
   if (!vehicleCanPark(kind)) return false;
   if (!bayAdmits(kind, bayClassOf(row))) return false;
+  if (!permitAdmits(row, permit)) return false;
   const bodyPx = specLength(vehicleSpec(kind, carLength)) * tileSize;
   // 2% margin so a body that exactly fills its bay still reads as parked rather
   // than as bursting out of it.
@@ -180,9 +209,16 @@ export interface ParkingRegistry {
   // Every facility that still has a stall this vehicle kind could take. The
   // router picks from these, so a full car park is avoided BEFORE a car sets off
   // rather than discovered on arrival.
-  openFacilities(kind: VehicleKind): ParkingFacility[];
-  capacity(facilityId: string, kind?: VehicleKind): number;
-  freeCount(facilityId: string, kind?: VehicleKind): number;
+  //
+  // `permit` is the driver's ADDRESS, and it is what opens a private drive to
+  // the household that owns it and to nobody else. Every one of these counting
+  // questions takes it, because the answer genuinely differs by who is asking:
+  // a street of houses is a full car park to a stranger and an empty one to the
+  // residents, and a router that could not tell them apart would send every
+  // passing car to park on somebody's hardstanding.
+  openFacilities(kind: VehicleKind, permit?: string | null): ParkingFacility[];
+  capacity(facilityId: string, kind?: VehicleKind, permit?: string | null): number;
+  freeCount(facilityId: string, kind?: VehicleKind, permit?: string | null): number;
   info(ref: StallRef): StallInfo | undefined;
   // Take a stall for `carId`. False when someone got there first — the caller
   // then keeps driving, which is exactly what a real driver does.
@@ -208,6 +244,7 @@ export interface ParkingRegistry {
     kind: VehicleKind,
     carId: string,
     minT?: number,
+    permit?: string | null,
   ): StallRef | null;
   // The manoeuvre curve for a stall, in TILE units (size 1). `laneOff` is the
   // car's lateral lane offset in tile units; `tStart` anchors the curve at the
@@ -261,7 +298,7 @@ export interface ParkingRegistry {
   // leaves the map.
   aim(facilityId: string, carId: string): void;
   unaim(carId: string): void;
-  availableFor(facilityId: string, kind: VehicleKind): number;
+  availableFor(facilityId: string, kind: VehicleKind, permit?: string | null): number;
   aimedAt(facilityId: string): number;
 
   // The dwell range this facility's cars draw from, in seconds. Authored per
@@ -329,7 +366,11 @@ export function createParkingRegistry(
     return infos.get(stallId(ref));
   }
 
-  function fitsKind(ref: StallRef, kind: VehicleKind | undefined): boolean {
+  function fitsKind(
+    ref: StallRef,
+    kind: VehicleKind | undefined,
+    permit?: string | null,
+  ): boolean {
     const info = infoOf(ref);
     if (!info) return false;
     // With no kind named the question is "could ANY vehicle use this?" — which a
@@ -339,17 +380,22 @@ export function createParkingRegistry(
     // takes this branch: it always names the kind it is routing (`availableFor`),
     // so a car is still never sent to a car park that only has lorry space.
     if (kind === undefined) {
-      return CAPACITY_PROBES.some(k => stallFits(k, info.row, carLength, tileSize));
+      return CAPACITY_PROBES.some(k => stallFits(k, info.row, carLength, tileSize, permit));
     }
-    return stallFits(kind, info.row, carLength, tileSize);
+    return stallFits(kind, info.row, carLength, tileSize, permit);
   }
 
-  function count(facilityId: string, kind: VehicleKind | undefined, freeOnly: boolean): number {
+  function count(
+    facilityId: string,
+    kind: VehicleKind | undefined,
+    freeOnly: boolean,
+    permit?: string | null,
+  ): number {
     const f = byId.get(facilityId);
     if (!f) return 0;
     let n = 0;
     for (const ref of f.stalls) {
-      if (!fitsKind(ref, kind)) continue;
+      if (!fitsKind(ref, kind, permit)) continue;
       if (freeOnly && occupants.has(stallId(ref))) continue;
       n++;
     }
@@ -362,15 +408,15 @@ export function createParkingRegistry(
     facilityOfTile: tileId => facilityByTile.get(tileId) ?? null,
     any: () => facilities.length > 0,
 
-    openFacilities(kind) {
+    openFacilities(kind, permit) {
       // "Open" means a space that is free AND not already spoken for — the whole
       // point of the aim token. A car park with two spaces and two cars on their
       // way to it is full as far as a third driver is concerned.
-      return facilities.filter(f => this.availableFor(f.id, kind) > 0);
+      return facilities.filter(f => this.availableFor(f.id, kind, permit) > 0);
     },
 
-    capacity: (facilityId, kind) => count(facilityId, kind, false),
-    freeCount: (facilityId, kind) => count(facilityId, kind, true),
+    capacity: (facilityId, kind, permit) => count(facilityId, kind, false, permit),
+    freeCount: (facilityId, kind, permit) => count(facilityId, kind, true, permit),
 
     info: infoOf,
 
@@ -394,8 +440,8 @@ export function createParkingRegistry(
       for (const target of aims.values()) if (target === facilityId) n++;
       return n;
     },
-    availableFor(facilityId, kind) {
-      return Math.max(0, count(facilityId, kind, true) - this.aimedAt(facilityId));
+    availableFor(facilityId, kind, permit) {
+      return Math.max(0, count(facilityId, kind, true, permit) - this.aimedAt(facilityId));
     },
     dwellOf(facilityId) {
       return dwells.get(facilityId);
@@ -406,14 +452,14 @@ export function createParkingRegistry(
     },
 
 
-    pickStallOn(tileId, from, kind, carId, minT = 0) {
+    pickStallOn(tileId, from, kind, carId, minT = 0, permit) {
       const cell = level[tileId];
       if (!cell?.parking?.rows?.length) return null;
       const free: StallRef[] = [];
       for (const row of cell.parking.rows) {
         if (row.from !== from || row.count <= 0) continue;
         const side = rowSide(row);
-        if (!stallFits(kind, row, carLength, tileSize)) continue;
+        if (!stallFits(kind, row, carLength, tileSize, permit)) continue;
         for (let i = 0; i < row.count; i++) {
           const ref: StallRef = { tileId, from: row.from, side, index: i };
           if (occupants.has(stallId(ref))) continue;

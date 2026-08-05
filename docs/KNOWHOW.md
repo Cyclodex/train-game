@@ -2526,8 +2526,8 @@ Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
   bays on the road tile a work/shop plot's driveway joins, on the kerb facing the
   plot. Three against a works employing 12–96 — the shortfall IS the mechanic,
   and three is also what fits (60px pitch on a 200px tile).
-  · HOMES GET NOTHING, and that is a rule and not an omission — see the overnight
-    trap below.
+  · HOMES GET NO *FORECOURT* — they get a private DRIVE instead, from a separate
+    pass. See HOME PARKING below.
   · `side: "left"` is offered ONLY on a one-way straight, matching
     `validateParking`'s own rule. Leaving it out costs half the workplaces on any
     board built round a one-way loop: their gate is on the far kerb, and the near
@@ -2549,17 +2549,14 @@ Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
   here rather than cars on the grass. Rejected on any kind but `parallel`: an
   unpainted echelon rank reads as a car park nobody finished.
   `/test/streetparking` is the two side by side.
-- **A RELEASED CAR RE-PARKS ITSELF UNLESS YOU SAY OTHERWISE** (`trips.released`).
-  It keeps `phase === "parked"` while it waits in its bay for a gap (leaving a bay
-  buys no right of way), so `settleRequestedTrips` fires again on the very next
-  tick and resets the hold to another full hour. Symptom: commuters ended their
-  journey HOME "parked".
-- **GOING HOME MUST NOT TAKE A PUBLIC SPACE** (`purpose !== "home"` in
-  `startTrip`). A house has a driveway — which is exactly why no forecourt is
-  derived outside one. Left in, it is CORRECT behaviour that breaks the board:
-  residents park overnight on the works' own kerb, measured at 12 of 12 bays held
-  at 03:00 by people asleep in their beds, rising to the cap over four days, after
-  which no commuter can ever park again.
+- **A RELEASED CAR RE-PARKS ITSELF UNLESS YOU SAY OTHERWISE**
+  (`trips.releasedFrom`). It keeps `phase === "parked"` while it waits in its bay
+  for a gap (leaving a bay buys no right of way), so `settleRequestedTrips` fires
+  again on the very next tick and resets the hold to another full hour. Symptom:
+  commuters ended their journey HOME "parked".
+  · Record WHICH STALL it was let out of, not a boolean. A flag reads "released"
+    for the rest of the journey, so the car that reaches its own drive at 18:00 is
+    never recorded as parked there — which is the whole evening commute.
 - **A CAR STILL HUNTING FOR A SPACE IS NEVER SETTLED BY THE ADDRESS TEST**
   (`parkTarget !== null` gate in `settleRequestedTrips`). Staff bays sit on the
   workplace's OWN street, so the address IS the car park's tile and the trip would
@@ -2581,6 +2578,70 @@ Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
   The model-side observable is `citizenStats.carsParked`, counted in `advance()`.
 - `/test/workparking` is the demo: a closed one-way ring (so every car is a named
   citizen), one works, three bays, two dozen drivers.
+
+## HOME PARKING (where the car sleeps, 2026-08-05)
+Design: `docs/superpowers/specs/2026-08-05-home-parking-design.md`. The night half
+of the above; read that section first.
+- **`ParkingRow.resident` = the ADDRESS a row belongs to** — somebody's drive, not
+  public parking near a house. `bayClassOf` → `"resident"`, and the gate is
+  `permitAdmits(row, permit)` where the permit is the driver's home plot id.
+  · NOT a `StallReservation`. That axis is painted vehicle CLASS (disabled,
+    delivery, loading) — "what may stop here". Ownership is "whose tarmac", which
+    no paint decides, and per-ROW is what lets two houses face the SAME road tile
+    and each keep their own (a facility-level permit cannot tell them apart).
+  · THE PERMIT MUST REACH EVERY COUNTING QUESTION — `openFacilities`, `capacity`,
+    `freeCount`, `availableFor`, `pickStallOn`. A street of houses is genuinely
+    FULL to a stranger and EMPTY to the residents; a router blind to that either
+    parks every passing car on a drive or drives the residents past their own.
+- **TWO SPACES, FIXED, WHILE THE HOUSEHOLD GROWS 4 → 32** (`tiles/homeParking.ts`,
+  `DRIVE_SPACES`). Nobody authored the gradient: a building grows taller on ground
+  that does not grow wider, which is also why terraced streets are the ones lined
+  with parked cars. Do NOT scale the drive with density — the map only opens plots
+  at 0–2 (the sim owns growth), so there would be no gradient at setup, and a
+  drive that grows with the building is never short.
+- **IDEMPOTENT PER ADDRESS, NOT PER KERB.** A corner house whose first-choice
+  frontage is occupied — by its own drive from the previous run — walks on to the
+  next street it touches and lays a SECOND one. Bays grew one drive per run.
+- `perpendicular` + `marking: "none"`: nose-in off the carriageway, no white
+  lines. `validateParking` allows unmarked non-kerbside rows ONLY for a private
+  drive (nobody paints bay lines on their own hardstanding). A 90° bay is 48px
+  deep, so it lands inside the tile beside a 2-lane street (kerb 28px) and
+  OVERHANGS beside a 2+2 arterial (56px) — houses on a main road get no drive, and
+  their residents park on the road, which is what living on one is like.
+- **THE DRIVE HOME IS A PARKING TRIP AND CANNOT BE PLANNED WHEN IT IS ASKED FOR.**
+  The evening leg starts with the car already in a bay outside the office, so the
+  route out is built later by `resumeFromStall`. `Car.parkWish` records the wish
+  at `releaseTrip` and that is where it is honoured. Miss it and the drive home is
+  the one leg of the day that still deletes the vehicle: drives empty all night.
+- **A CAR PARKED AT HOME MUST NOT FOLLOW ITS OWNER.** The send-the-car-after-them
+  rule is right at a WORKPLACE (a held public bay with nobody coming back is dead
+  space) and inverts at home — every resident who walks to the shops would send
+  their car off after them, emptying the town's drives and filling its streets
+  with cars going nowhere. Exempt `parkedCar.at === c.home` in all three places
+  (`startTrip` dispatch, refused journeys, abandoned trips).
+- **THE REQUESTED-CAR CAP MUST NOT COUNT PARKED CARS.** Counting them was right
+  while only commuters parked (gone by evening, so the cap turned over). Once the
+  car comes home too, a car owner's vehicle is on the board for good and all 60
+  slots go to whoever commuted first — the fleet ossifies and nobody else is ever
+  dispatched a car. Still bounded, physically: a car counts as parked only while it
+  HOLDS A REAL STALL, so parked cars are capped by the board's spaces.
+- **RESIDENTS DO TAKE PUBLIC KERB, and that is the point** — it is the player's
+  lever, and a street with no drives really does look like that. What stops the
+  2026-08-04 ratchet (12/12 bays held at 03:00, rising to the cap over four days)
+  is not abstinence but `homeParkTiles: 2`: nobody walks six tiles from their own
+  front door every night. Measured on `/test/workparking`: ~11 held overnight,
+  ~0–1 by mid-morning, 490+ journeys completed. A cycle, not a ratchet.
+- **A FACILITY WITH NO PUBLIC CAPACITY DRAWS NO SIGN** (`parkingStatus()` filters
+  `capacity > 0`). `capacity` counts what the public could use, so an all-private
+  facility came back zero and the chip read "P VOLL" — a car park, standing empty,
+  announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
+  with their public number.
+- `citizenStats.carsAtHome` vs `carsParked` is the DAY/NIGHT observable; one
+  number cannot show the cycle because it reads the same at both ends of the day.
+- `TestScenario.mode` (a mode OBJECT, beating `modeId`) exists for boards whose
+  subject is a cycle: the citizens day is 30 real minutes, so at the default clock
+  a visitor to `/test/homeparking` sees one hour of one morning and concludes
+  nothing happens. That board runs a 4-minute day.
 
 ## BUILD IN PLAY (Tycoon phase 2, 2026-07-26)
 - `game.buildRoute(steps)` = canAfford gate → `applyEdits` → `spend`, IN THAT
