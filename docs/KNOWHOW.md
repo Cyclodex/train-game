@@ -716,6 +716,117 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   leaves a stale id in it: both the advance and the reservation release guard
   on `trains[id]` still existing.
 
+## ONE LEDGER: THE CITIZENS AND THE RAILWAY (9F, 2026-08-03)
+- A citizen joins the REAL platform queue under their own id
+  (`enqueuePassenger(tile, dest, tag)`) bound for the station THEY want, and
+  learns what happened from `DwellEvent.boardedTags` / `alightedTags`. The
+  shadow queue is gone, and with it the rider who kept a seat the rail sim had
+  already freed.
+- `TransitPort` is now `{enqueue(station, dest, tag): boolean, connects(a,b)}`.
+  `connects` is the D10 gate in `optionsFor`: transit is not even OFFERED unless
+  a service links the two ends.
+- `railPairFor` picks the platform PAIR by connectivity, not "nearest at each
+  end". A town between two railways has a nearest platform at each end that
+  never meet — the old code offered that journey and it could not be made.
+- `alightedAt` decides nothing any more: `stationId === trip.toStation` is an
+  arrival, anything else is a change the SIM already re-queued, so the citizen
+  layer must not queue them again.
+- Two balance facts that fell out, both worth knowing before touching this:
+  (1) a REFUSED trip now feeds the journey's own topic as well as `access`, and
+  costs the person part of the day (`stuckUntil`) — without that, D10 turned a
+  failed commute into a free afternoon of mood-restoring errands and the
+  citizens mode quietly lost its teeth. (2) On `threecities` only EASTFIELD
+  hollows out now; Westfield walks instead. What used to kill both towns was an
+  artefact — choosing a service that was never there and failing at it daily.
+- A lineless train no longer dumps its whole load at the next call. It carries
+  each rider to the station they named (`off = final`), because a stopper calls
+  everywhere it passes and can promise that. Only a RETIRING train dumps.
+
+## CHANGING TRAINS (phase 9, 2026-08-03)
+- `sim/lineGraph.ts` is a SECOND router and answers a different question from
+  `railRouter`: not "can a train physically get there" but "can a PASSENGER get
+  there on the services that exist". Stations are nodes; two are adjacent when
+  some line calls at both. BFS depth = number of RIDES, so depth-1 = changes.
+- `alightFor(lineId, at, to)`: the destination when the line goes there, else
+  the stop on it that leaves the shortest onward journey. The candidate must be
+  **strictly** closer than staying put — with `<=` a triangle of lines hands a
+  rider round for ever. A line is treated as a CYCLE, so direction never matters.
+- The hop is decided at BOARDING (`offFor`) and never stored on a waiting
+  passenger. That is what makes redrawing a line mid-run safe: there is no plan
+  to go stale, the next boarding just re-decides.
+- A `Rider` is `{final, off}`. At `off`: `final === off` is a DELIVERY, anything
+  else is a CHANGE — back onto the platform, at the FRONT and **past the cap**.
+  Refusing a change would delete someone mid-journey, invisibly.
+- A LINELESS train keeps the exact one-hop service: everyone down at the next
+  call, all counted delivered. Deliberate — making them change instead would
+  re-queue and re-board the whole load at every platform, inflating dwell times
+  and the balance of every board written before lines existed.
+- `DwellEvent.changing` is how a score tells the two apart: arrivals are
+  `alighted - changing`.
+
+## NOBODY WALKS TO A STATION THAT CANNOT TAKE THEM (D10, 2026-08-03)
+- A passenger's destination is drawn from `lineNetwork().reachableFrom(here)` —
+  what a SERVICE reaches, not what the metals reach. Phase 8 used the metals, so
+  people queued for journeys nothing could make, stood there for ever and drove
+  the overcrowd predicate: a punishment for demand the player was never given the
+  chance to serve.
+- The payoff: a platform queue now means ONE thing, and a fixable one — the
+  service is too thin. It used to mix that with "no service goes there", which
+  nothing the queue itself suggests could fix.
+- A train with NO line counts as a synthetic line over `reachableStations` from
+  where it stands: a stopper calls everywhere it passes, so it IS the network on
+  a board where nobody has drawn anything. Without that, every classic board and
+  half the specs would spawn nobody. It affects the GRAPH only — boarding and
+  alighting for a lineless train are untouched.
+- Consequence for specs: `trains: []` + `stationDemand` now yields an EMPTY
+  platform. Several phase-2 tests needed a train adding for that reason. If a
+  queue you expect is empty, ask what service was supposed to serve it.
+- Initial queues are seeded AFTER the roster is built (`seedInitialQueues`) —
+  at construction time there are no trains and no lines, so nothing is served
+  and nobody would ever appear.
+- `enqueuePassenger(tile, dest, tag?)` queues ONE person with a known
+  destination, for a caller that has already decided (a citizen, a test).
+  `addStationPassengers` stays the anonymous-demand verb and still returns what
+  it actually queued.
+- LATENT DEMAND (`game.stationLatent`, the amber "N/min — no service" plate) is
+  the other half of D10: an unserved platform is empty, so something has to say
+  which places are still asking. Refreshed in `syncLines()`, NOT per frame — it
+  changes exactly when the services do, and a per-frame mirror is invisible to a
+  headless test. Never in a fail predicate.
+- It takes BOTH to leave a platform unserved, and each half is a rule:
+  scrapping the train is not enough (the LINE stands without it — D11), and
+  deleting the line is not enough (the train falls back to a stopper, which
+  calls everywhere it passes). A test that expects an unserved platform must do
+  both — two attempts at this one got it wrong.
+- Every mutation of the line registry MUST `touchLines()`; the graph is cached
+  behind it. `deleteLine` was missed and the graph went on serving a line that
+  no longer existed.
+
+## A LINE IS AN OBJECT, NOT A FIELD ON A TRAIN (D11, 2026-08-03)
+- `SimLine {id, name, stops, pinned?}` in a registry; `SimTrain.lineId` points
+  at one. `stopsOf(train)` is the only reader — never reach for a train's stops
+  directly. Before this the stops hung off the train, so "a service is planned
+  here" and "a vehicle is running it" were ONE fact: you could not draw a line
+  before buying a train, and withdrawing the last train silently deleted the
+  service every waiting passenger had planned around.
+- Trains are ASSIGNED (`assignTrain`), many to a line or none. A trainless line
+  is legitimate and is the state a player is in until they buy something.
+  `retireTrain` drops the train's `lineId`, never the line.
+- `pinned` is the difference between the two ways a line is born.
+  `createLine` = the player drew it: kept for ever, empty or not.
+  `assignLine(trainId, stops)` = train-centric sugar (and how authored
+  `init.line` boards load): it finds-or-creates by stop list, so two trains with
+  the same stops land on the SAME line, and the line is swept up (`pruneLine`)
+  when its last train leaves. Without that distinction every line edit would
+  litter the registry with orphans.
+- `setLineStops` restarts every train on the line (`restartOnLine`): an index
+  into a list that just changed length means nothing.
+- The COLOUR belongs to the line, not to a train's livery — `stationLines` (what
+  a platform shows) is derived from lines, so an unserved line still announces
+  itself, and two trains on one line cannot paint it two colours.
+- `lineOverlay` takes `{lineId}` or `{trainId}`; a line is drawable with nothing
+  running it. PlayView edits `editingLineId`, not a train.
+
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
   graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
@@ -730,7 +841,7 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   That is what keeps `exitAt` unambiguous (a shortest path never repeats a
   `(tile, entry)` node) and what makes track laid mid-run usable next leg.
 - A train IN SERVICE never terminates at a depot, whatever the colours say —
-  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  `matched` is gated on `!stopsOf(train)?.length`. Depots are where trains are
   ordered and stabled; on a line they are turn-backs, not destinations.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each
@@ -3341,6 +3452,16 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- A GREEN LOCAL SUITE PROVES NOTHING ABOUT A PR WHOSE BASE MOVED (2026-08-03).
+  Actions checks out your head MERGED WITH THE CURRENT BASE, so it runs code
+  pairs that exist nowhere on your machine. Phase 9 went red on a test another
+  session had landed minutes earlier: the merge itself was CLEAN, and the two
+  changes were still incompatible (their test read a platform's colour as a
+  train livery; D11 had moved it to the line). Before calling a PR done, fetch
+  master and re-run — a conflict check is not enough, because this class of
+  break has no conflict to find.
+- And when it does break: the fix is usually in YOUR code, not their test. Ask
+  what the other session's assertion was trying to say, and make that true.
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
   BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
   one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor

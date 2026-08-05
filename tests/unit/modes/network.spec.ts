@@ -250,10 +250,93 @@ describe("the service: buying trains and setting lines", () => {
     const game = gameFor();
     const stops = networkmode.trains.circle.line ?? [];
     expect(game.trainLines.circle).toEqual(stops);
-    // Every stop knows the livery calling there.
+    // The authored stops became a LINE, and the train was put onto it.
+    const line = game.lines.find(l => l.trains.includes("circle"));
+    expect(line?.stops).toEqual(stops);
+    // Every stop knows the colour of the LINE calling there — not the livery
+    // of whatever happens to run it, which may be nothing at all (D11).
     for (const stop of stops) {
-      expect(game.stationLines[stop]).toContain(game.trainColors.circle);
+      expect(game.stationLines[stop]).toContain(line?.colour);
     }
+  });
+
+  // D11: the plan and the vehicles running it are separate facts. You can draw
+  // a service before you own anything to run it, and withdrawing the last train
+  // must not delete the service everyone planned around.
+  it("draws a line with nothing running it, and keeps it when trains leave", () => {
+    const game = gameFor();
+    const stops = game.stationTiles.slice(0, 2);
+    const id = game.createLine(stops, "Nordbahn");
+    const drawn = game.lines.find(l => l.id === id);
+    expect(drawn?.name).toBe("Nordbahn");
+    expect(drawn?.stops).toEqual(stops);
+    expect(drawn?.trains).toEqual([]);
+    // An unserved line still tells the platforms it calls there — a passenger
+    // is entitled to plan around a service that exists on paper.
+    for (const stop of stops) {
+      expect(game.stationLines[stop]).toContain(drawn?.colour);
+    }
+
+    expect(game.assignTrain("circle", id)).toBe(true);
+    expect(game.trainLines.circle).toEqual(stops);
+    expect(game.lines.find(l => l.id === id)?.trains).toEqual(["circle"]);
+
+    expect(game.assignTrain("circle", null)).toBe(true);
+    expect(game.lines.map(l => l.id)).toContain(id);
+    expect(game.trainLines.circle).toBeUndefined();
+  });
+
+  it("re-stopping a line moves every train on it; deleting frees them", () => {
+    const game = gameFor();
+    const id = game.createLine(game.stationTiles.slice(0, 2));
+    game.assignTrain("circle", id);
+
+    const three = game.stationTiles.slice(0, 3);
+    expect(game.setLineStops(id, three)).toBe(true);
+    expect(game.trainLines.circle).toEqual(three);
+    expect(game.sim.trainNextStop("circle")).toBe(three[0]);
+
+    expect(game.renameLine(id, "Ringbahn")).toBe(true);
+    expect(game.lines.find(l => l.id === id)?.name).toBe("Ringbahn");
+
+    expect(game.deleteLine(id)).toBe(true);
+    expect(game.lines.map(l => l.id)).not.toContain(id);
+    // The train is not deleted with its line — it falls back to a stopper.
+    expect(game.trainLines.circle).toBeUndefined();
+    expect(game.removedTrains).not.toContain("circle");
+  });
+
+  // 9G. Since D10 an unserved platform is EMPTY — which on a board with no
+  // citizen layer would leave the player nothing at all to tell them which
+  // places want a connection. The latent readout is that, and only that: it
+  // vanishes the moment a service reaches the platform, and no score reads it.
+  it("shows what an unserved platform would carry, and stops once served", () => {
+    const game = gameFor();
+    game.advance(0.2);
+    const stops = [...(networkmode.trains.circle.line ?? [])];
+    // Everything is on the authored line, so nothing is asking.
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
+
+    // It takes BOTH to leave a platform unserved, and each half is instructive.
+    // Scrapping the train is not enough — the LINE stands without it (D11), and
+    // a planned service is a service. Deleting the line is not enough either —
+    // the train falls back to a stopper, and a stopper calls everywhere it
+    // passes.
+    expect(game.scrapTrain("circle")).toBe(true);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
+
+    for (const line of [...game.lines]) game.deleteLine(line.id);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBeGreaterThan(0);
+
+    // Now DRAW a line and buy nothing. The platforms stop asking, because a
+    // planned service is a service (D11) — how often a train actually turns up
+    // is the player's problem, and the queue that grows is how they hear about
+    // it.
+    game.createLine(stops);
+    game.advance(0.2);
+    for (const id of stops) expect(game.stationLatent[id] ?? 0).toBe(0);
   });
 
   it("setLine re-routes a train in service, and [] takes it out", () => {
@@ -382,9 +465,14 @@ describe("the service: buying trains and setting lines", () => {
     // The panel reads this — it must show the line straight away, not after
     // the train happens to leave.
     expect(game.trainLines[id]).toEqual(stops);
-    // And the platforms know a second service calls there.
+    // And the platforms know a second service calls there. The colour is the
+    // LINE's, not this train's livery: a service has to be identifiable on the
+    // platform before anything is running it, and two trains on one line must
+    // not paint it two colours (D11).
+    const line = game.lines.find(l => l.stops.join(">") === stops.join(">"));
+    expect(line).toBeDefined();
     for (const stop of stops) {
-      expect(game.stationLines[stop]).toContain(game.trainColors[id]);
+      expect(game.stationLines[stop]).toContain(line?.colour);
     }
 
     // Run until it rolls out: the line it was given while queued is the line
@@ -537,7 +625,7 @@ describe("the line overlay", () => {
 
   it("numbers the stops in call order and draws the metals between them", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     const stops = networkmode.trains.circle.line ?? [];
     stops.forEach((id, i) => {
       expect(game.lineOverlay.order[id]).toBe(i + 1);
@@ -551,7 +639,7 @@ describe("the line overlay", () => {
 
   it("never lights an arm the line does not take — the depot spur stays dark", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     // 1,3 is the T where the shed joins the ring: the line runs THROUGH it
     // (north-south) and never turns into the depot.
     const atJunction = game.lineOverlay.path["1,3"] ?? [];
@@ -565,7 +653,7 @@ describe("the line overlay", () => {
 
   it("redraws as the line is edited, and clears on null", () => {
     const game = gameFor();
-    game.setLineOverlay("circle");
+    game.setLineOverlay({ trainId: "circle" });
     const before = Object.keys(game.lineOverlay.path).length;
 
     game.setLine("circle", game.stationTiles.slice(0, 2));

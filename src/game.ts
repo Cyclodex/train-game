@@ -99,6 +99,29 @@ export interface TrainDef {
   line?: string[];
 }
 
+// A line as the VIEW needs it: the sim's plan plus who is running it and what
+// colour it wears. The colour belongs to the LINE, not to a train's livery —
+// a service has to be identifiable on the platform before anything is running
+// it, and two trains on one line must not paint it two colours.
+export interface LineView {
+  id: string;
+  name: string;
+  stops: string[];
+  trains: string[];
+  colour: string;
+}
+
+// Strong, well-separated hues that read against ballast and grass alike. Not
+// the depot/train palette (`Colors`), which includes grey and white.
+const LINE_COLOURS = [
+  "#f0b429",
+  "#2f9e44",
+  "#1c7ed6",
+  "#e03131",
+  "#9c36b5",
+  "#0ca678",
+];
+
 const ALL_ARMS = [
   ActiveIntersection.Left,
   ActiveIntersection.Straight,
@@ -413,6 +436,10 @@ export interface Game {
   stationQueues: Record<string, number>;
   // tileId -> the destination each of them asked for, in queue order.
   stationWaiting: Record<string, string[]>;
+  // tileId -> people per minute an UNSERVED platform would carry. Zero as soon
+  // as a line reaches it. The "build here" hint on a board with no citizen
+  // layer to be unhappy at you; never part of a score.
+  stationLatent: Record<string, number>;
   // The citizen layer (Citizens mode). Empty for every other mode, which is how
   // the HUD knows not to draw the city cards at all.
   cities: CityState[];
@@ -478,12 +505,24 @@ export interface Game {
   // The line currently being shown on the board (call-order badges + the route
   // along the metals), or a cleared one. Set by the view via setLineOverlay.
   lineOverlay: {
+    lineId: string | null;
     trainId: string | null;
     colour: string;
     order: Record<string, number>;
     path: Record<string, [Port, Port][]>;
   };
-  setLineOverlay(trainId: string | null): void;
+  setLineOverlay(what: { lineId?: string; trainId?: string } | null): void;
+  // Every line on the board, in creation order — the plans, independent of the
+  // trains running them. A line with `trains: []` is drawn but unserved.
+  lines: LineView[];
+  // Draw a line before buying anything; returns its id.
+  createLine(stops: string[], name?: string): string;
+  setLineStops(lineId: string, stops: string[]): boolean;
+  renameLine(lineId: string, name: string): boolean;
+  // Delete a line. Its trains survive as classic lineless services.
+  deleteLine(lineId: string): boolean;
+  // Put a train onto an existing line, or take it off with null.
+  assignTrain(trainId: string, lineId: string | null): boolean;
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -898,9 +937,16 @@ export function createGame(
   // renders reactively. The SIM owns the line; this is a view copy, refreshed
   // whenever a line changes (it changes on player action, not per frame).
   const trainLines = reactive({}) as Record<string, string[]>;
-  // stationTileId -> the liveries of the services calling there. Derived from
-  // `trainLines`; the board reads this so a platform can show its services.
+  // stationTileId -> the COLOURS of the lines calling there. Derived from the
+  // lines, not from the trains running them: a line the player has drawn but
+  // not yet bought a train for still serves this platform, and a passenger
+  // planning around it is entitled to see it (D11).
   const stationLines = reactive({}) as Record<string, string[]>;
+  // Every line, mirrored from the sim for the panel and the board.
+  const lines = reactive([]) as LineView[];
+  // stationTileId -> people per minute this platform WOULD carry if anything
+  // called there. Zero once a service does. See `latentDemandAt`.
+  const stationLatent = reactive({}) as Record<string, number>;
   // Ids of trains ordered but still waiting in the shed, oldest first — the
   // panel shows them so a queue is visible rather than a button that seems to
   // have done nothing.
@@ -925,6 +971,12 @@ export function createGame(
   // the ROUTE has to be planned (the same router the trains use), and that is
   // engine work, not rendering.
   const lineOverlay = reactive({
+    // A LINE is what is drawn, not a train's copy of one — so the picture is
+    // available for a service nothing is running yet, which is the state a
+    // player is in for as long as it takes them to buy the first train.
+    lineId: null as string | null,
+    // The train whose panel row opened it, when one did. Only used to keep the
+    // row highlighted; the drawing itself never needs it.
     trainId: null as string | null,
     colour: "",
     // stationTileId -> its 1-based place in the line.
@@ -936,19 +988,24 @@ export function createGame(
   });
 
   function clearLineOverlay(): void {
+    lineOverlay.lineId = null;
     lineOverlay.trainId = null;
     lineOverlay.colour = "";
     for (const k of Object.keys(lineOverlay.order)) delete lineOverlay.order[k];
     for (const k of Object.keys(lineOverlay.path)) delete lineOverlay.path[k];
   }
 
-  // Show (or re-show, after an edit) the line a train runs. Null clears it.
-  function setLineOverlay(trainId: string | null): void {
+  // Show (or re-show, after an edit) a line on the board. Null clears it.
+  // Either name the line directly, or name a train and get whatever it runs.
+  function setLineOverlay(what: { lineId?: string; trainId?: string } | null): void {
     clearLineOverlay();
-    if (!trainId) return;
-    lineOverlay.trainId = trainId;
-    lineOverlay.colour = trainColors[trainId] ?? "#f0b429";
-    const stops = trainLines[trainId] ?? [];
+    if (!what) return;
+    const lineId = what.lineId ?? (what.trainId ? sim.lineOf(what.trainId) : undefined);
+    if (!lineId) return;
+    lineOverlay.lineId = lineId;
+    lineOverlay.trainId = what.trainId ?? null;
+    lineOverlay.colour = lines.find(l => l.id === lineId)?.colour ?? "#f0b429";
+    const stops = sim.lines().find(l => l.id === lineId)?.stops ?? [];
     stops.forEach((id, i) => {
       // A stop listed twice keeps its FIRST place — the badge says when the
       // train first calls there, which is what a reader wants.
@@ -1250,9 +1307,15 @@ export function createGame(
         seed: citizenSetup.seed ?? colorSeed,
         tuning: citizenSetup.tuning,
         // The two things the citizen sim pushes back into the world: a person
-        // who chose the train becomes a passenger on a real platform, capped by
-        // the real platform...
-        transit: { enqueue: (stationId, n) => sim.addStationPassengers(stationId, n) },
+        // who chose the train becomes a passenger on a real platform, under
+        // their own name and bound for where THEY are going — the rail sim then
+        // carries them there, changing trains if it has to, and says on its
+        // dwell events who it moved. One ledger, not two.
+        transit: {
+          enqueue: (stationId, dest, tag) =>
+            sim.enqueuePassenger(stationId, dest, tag),
+          connects: (from, to) => sim.serves(from, to),
+        },
         // ...and a person who chose to drive becomes an actual car on the
         // actual street, subject to every queue, junction and level crossing on
         // the way. Their journey time is whatever the traffic gives them.
@@ -1941,6 +2004,15 @@ export function createGame(
     }
   }
 
+  // How many people an hour this platform's catchment would produce if a
+  // service ever called here. Derived from the same catchment the real spawn
+  // rate comes from, so the readout and the demand cannot disagree.
+  function latentDemandAt(tileId: string): number {
+    const d = stationDemandOf(level, tileId);
+    if (!Number.isFinite(d.intervalSec) || d.intervalSec <= 0) return 0;
+    return Math.max(1, Math.round(60 / d.intervalSec));
+  }
+
   // Mirror each station's live platform queue for the crowd render. Vue's
   // reactive set is a no-op while the count is unchanged, so this is cheap.
   function updateStationQueues() {
@@ -2228,23 +2300,102 @@ export function createGame(
       : (defById[trainId]?.line ?? []);
     if (stops.length) trainLines[trainId] = [...stops];
     else delete trainLines[trainId];
-    syncStationLines();
+    syncLines();
   }
 
-  // The reverse index the BOARD needs: which liveries call at each station, so
-  // a platform shows the services that serve it without the tile having to
-  // know anything about trains.
-  function syncStationLines(): void {
+  // Mirror the whole line registry, and with it the reverse index the BOARD
+  // needs: which services call at each station. Both are derived from the LINES
+  // so that a line with no train on it is still a service the platform shows —
+  // the plan exists whether or not anything is running it yet.
+  function syncLines(): void {
+    lines.splice(0, lines.length);
+    for (const [i, line] of sim.lines().entries()) {
+      lines.push({
+        id: line.id,
+        name: line.name,
+        stops: [...line.stops],
+        trains: sim.trainsOnLine(line.id),
+        colour: LINE_COLOURS[i % LINE_COLOURS.length],
+      });
+    }
     for (const id of Object.keys(stationLines)) delete stationLines[id];
-    for (const [trainId, stops] of Object.entries(trainLines)) {
-      for (const stop of stops) {
+    for (const line of lines) {
+      for (const stop of line.stops) {
         const at = (stationLines[stop] ??= []);
-        const colour = trainColors[trainId];
-        if (colour && !at.includes(colour)) at.push(colour);
+        if (!at.includes(line.colour)) at.push(line.colour);
       }
+    }
+    // LATENT DEMAND: what a platform would carry if it were served. Refreshed
+    // HERE rather than per frame, because it changes exactly when the services
+    // do — a player action, never a tick — and because a per-frame mirror is
+    // invisible to a headless test (the hidden-tab trap: `frame()` does not run
+    // without a browser, so a rule proved only there is not proved at all).
+    //
+    // On a board with a citizen layer an unhappy town says this better. A plain
+    // network board has no moods to read, and since D10 an unserved platform is
+    // EMPTY — so without this there is nothing at all to tell the player which
+    // places are waiting for a connection. Read-only, and deliberately not in
+    // any fail predicate: punishing someone for demand they were never given
+    // the chance to serve is the thing D10 exists to remove.
+    for (const id of Object.keys(level)) {
+      if (level[id]?.role !== "station") continue;
+      const want = sim.servedFrom(id).length > 0 ? 0 : latentDemandAt(id);
+      if (stationLatent[id] !== want) stationLatent[id] = want;
     }
   }
   for (const def of trainDefs) syncLine(def.id);
+
+  // Draw a line without buying anything: the plan first, the vehicles after.
+  function createLine(stops: string[], name?: string): string {
+    const id = sim.createLine(stops, name);
+    syncLines();
+    return id;
+  }
+
+  function setLineStops(lineId: string, stops: string[]): boolean {
+    if (!sim.setLineStops(lineId, stops)) return false;
+    // Every train running it now serves the new stops; their view copies and
+    // their defs (which a reset re-seeds from) have to follow.
+    for (const trainId of sim.trainsOnLine(lineId)) {
+      const def = defById[trainId];
+      if (def) def.line = stops.length ? [...stops] : undefined;
+      syncLine(trainId);
+    }
+    syncLines();
+    if (lineOverlay.lineId === lineId) setLineOverlay({ lineId });
+    return true;
+  }
+
+  function renameLine(lineId: string, name: string): boolean {
+    if (!sim.renameLine(lineId, name)) return false;
+    syncLines();
+    return true;
+  }
+
+  function deleteLine(lineId: string): boolean {
+    const running = sim.trainsOnLine(lineId);
+    if (!sim.deleteLine(lineId)) return false;
+    for (const trainId of running) {
+      const def = defById[trainId];
+      if (def) def.line = undefined;
+      syncLine(trainId);
+    }
+    syncLines();
+    if (lineOverlay.lineId === lineId) setLineOverlay(null);
+    return true;
+  }
+
+  // Put a train onto an existing line, or take it off with null.
+  function assignTrain(trainId: string, lineId: string | null): boolean {
+    if (!sim.assignTrain(trainId, lineId)) return false;
+    const def = defById[trainId];
+    if (def) {
+      const stops = sim.trainLine(trainId);
+      def.line = stops.length ? [...stops] : undefined;
+    }
+    syncLine(trainId);
+    return true;
+  }
 
   // Where a train can be ordered: every depot on the board, in a stable order.
   const depotTiles = Object.keys(level)
@@ -2335,7 +2486,7 @@ export function createGame(
     const pendingAt = pendingTrains.findIndex(d => d.id === trainId);
     if (pendingAt >= 0) pendingTrains.splice(pendingAt, 1);
     if (!removedTrains.includes(trainId)) removedTrains.push(trainId);
-    syncStationLines();
+    syncLines();
   }
 
   function retireTrain(trainId: string): boolean {
@@ -2372,11 +2523,20 @@ export function createGame(
   function setLine(trainId: string, stops: string[]): boolean {
     const def = defById[trainId];
     if (!def) return false;
-    if (sim.trains[trainId] && !sim.assignLine(trainId, stops)) return false;
+    if (sim.trains[trainId]) {
+      if (!sim.assignLine(trainId, stops)) return false;
+    } else if (stops.length) {
+      // Routing a train that is still in the shed. The LINE is created now,
+      // not when the train rolls out: a plan does not wait on a vehicle (D11),
+      // and the platforms are entitled to announce the service the player has
+      // just drawn. When the train is injected, `assignLine` finds this same
+      // line by its stops and puts it on it.
+      sim.createLine(stops);
+    }
     def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
     // The picture on the board is of THIS line; redraw it as it is edited.
-    if (lineOverlay.trainId === trainId) setLineOverlay(trainId);
+    if (lineOverlay.trainId === trainId) setLineOverlay({ trainId });
     return true;
   }
   const objective = reactive(tracker.state()) as ObjectiveState;
@@ -3002,6 +3162,7 @@ export function createGame(
     occupied,
     stationQueues,
     stationWaiting,
+    stationLatent,
     cities,
     citizenStats,
     pedestrians,
@@ -3028,6 +3189,12 @@ export function createGame(
     stationLabels,
     lineOverlay,
     setLineOverlay,
+    lines,
+    createLine,
+    setLineStops,
+    renameLine,
+    deleteLine,
+    assignTrain,
     roadCars,
     carJunctions,
     carDestinations,
@@ -3115,6 +3282,12 @@ export function createGame(
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
       for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+      for (const id of Object.keys(stationLatent)) delete stationLatent[id];
+      // buildSims() made a fresh line registry from the train defs, so the view
+      // copies have to come from the NEW sim or they would name dead line ids.
+      clearLineOverlay();
+      for (const def of trainDefs) syncLine(def.id);
+      syncLines();
       // The town starts over too: same seed, same people, same jobs.
       rebuildCitizens();
       prevStalls = new Set();
