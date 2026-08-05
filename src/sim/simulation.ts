@@ -19,6 +19,7 @@ import { RailPlan, planRailRoute, reachableStations } from "./railRouter";
 import {
   Rider,
   SimLine,
+  StationDemand,
   StopperService,
   TransitLayer,
   createTransit,
@@ -95,17 +96,15 @@ const MIN_PLATFORM_REACH = PLATFORM_CENTRE_PROGRESS;
 export const PASSENGERS_PER_WAGON = 6;
 export const BOARDING_SEC_PER_PASSENGER = 0.4;
 
-// Deterministic per-station passenger demand: every `intervalSec` of sim time
-// one passenger joins the queue, holding at `max` waiting (a full platform
-// pauses the schedule rather than banking a backlog); `initial` seeds the
-// queue at t=0. A pure schedule — no randomness — so replays and tests are
-// exact. WHAT the rates should be is the mode layer's business (and later the
-// terrain catchment's); the sim only executes the schedule it is handed.
-export interface StationDemand {
-  intervalSec: number;
-  max: number;
-  initial?: number;
-}
+// Deterministic per-stop passenger demand: every `intervalSec` of sim time one
+// passenger joins the queue, holding at `max` waiting (a full platform pauses
+// the schedule rather than banking a backlog); `initial` seeds the queue at
+// t=0. A pure schedule — no randomness — so replays and tests are exact. WHAT
+// the rates should be is the mode layer's business (and the terrain
+// catchment's); the sim only executes the schedule it is handed.
+//
+// Defined in `transit.ts`, because a BUS STOP has one too.
+export type { StationDemand } from "./transit";
 
 // The most a platform holds when passengers are INJECTED (park & ride) at a
 // station with no demand schedule of its own — the schedule's `max` caps a

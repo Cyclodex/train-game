@@ -64,6 +64,10 @@ export interface StopDemand {
   initial?: number;
 }
 
+// The name the station work used, kept so the tiles/ helpers that derive a
+// schedule from the map read the same either way.
+export type StationDemand = StopDemand;
+
 // The result of a vehicle calling somewhere: what changed hands, in the shape a
 // dwell event reports.
 export interface Exchange {

@@ -97,3 +97,36 @@ export function stationDemandOf(level: Level, coordId: string): StationDemand {
     initial: Math.min(2 + Math.floor(urban / 2), 8),
   };
 }
+
+// Every BUS STOP on the board, in a stable order: a tile whose parking carries
+// a `busstop` row (`tiles/parking.ts` — a halt ON the carriageway, as against a
+// lay-by the bus pulls into).
+//
+// A stop is a place a passenger can WAIT, which is the whole reason this list
+// exists: since #90 a bus is planned like a train, so a stop is a node of the
+// transit network exactly as a platform is, with its own queue and its own
+// catchment-derived demand. The rule that it is derived from the MAP and never
+// stored is the same one that governs a station.
+export function busStopTiles(level: Level): string[] {
+  return Object.keys(level)
+    .filter(id => level[id]?.parking?.rows?.some(r => r.kind === "busstop"))
+    .sort();
+}
+
+export function isBusStop(level: Level, coordId: string): boolean {
+  return !!level[coordId]?.parking?.rows?.some(r => r.kind === "busstop");
+}
+
+// A bus stop's demand, from the same catchment rule a platform uses — but
+// THINNER. A kerb serves the houses immediately around it, while a station
+// gathers a district and holds a crowd; giving a stop a platform's numbers
+// makes the bus the main line and the railway an afterthought, which is
+// backwards for a board where the bus is the feeder.
+export function busStopDemandOf(level: Level, coordId: string): StationDemand {
+  const full = stationDemandOf(level, coordId);
+  return {
+    intervalSec: full.intervalSec * 2,
+    max: Math.max(3, Math.round(full.max / 2)),
+    initial: Math.min(2, full.initial ?? 0),
+  };
+}

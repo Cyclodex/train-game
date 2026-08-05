@@ -1,7 +1,12 @@
 import { markRaw, reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
-import { stationDemandOf, parkAndRideTargets } from "@/tiles/catchment";
+import {
+  stationDemandOf,
+  busStopDemandOf,
+  busStopTiles,
+  parkAndRideTargets,
+} from "@/tiles/catchment";
 import { stationNames } from "@/tiles/stationNames";
 import { planRailRoute } from "@/sim/railRouter";
 import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
@@ -15,6 +20,7 @@ import {
   TrainState,
   BlockReason,
 } from "@/sim/simulation";
+import { StationDemand, TransitLayer, createTransit } from "@/sim/transit";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { buildCitizenWorld } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
@@ -1117,7 +1123,56 @@ export function createGame(
   // later by the spawner at its spawnAtSec.
   const isScheduled = (def: TrainDef) => (def.spawnAtSec ?? 0) > 0;
 
+  // Every place a passenger can WAIT: rail platforms and bus stops alike. Since
+  // #90 a bus is planned like a train, so a stop is a node of the same network —
+  // which is why this is one list and not two, and why the transit layer below
+  // is handed it rather than reading tiles itself.
+  const busStops = busStopTiles(level);
+  const transitStops = new Set<string>([
+    ...Object.keys(level).filter(id => level[id]?.role === "station"),
+    ...busStops,
+  ]);
+
+  // Who turns up where. DERIVED from the ground within walking reach
+  // (tiles/catchment.ts): a town nearby means faster arrivals and a fuller
+  // platform; a lonely halt sees a trickle. The sim only executes the schedule
+  // it is handed — it stays terrain-blind. Snapshotted at construction, so a
+  // stop built mid-run queues nobody until reset.
+  //
+  // Under the citizen layer the SPAWNER is off — the people waiting are actual
+  // citizens with homes, jobs and a stopwatch running, and a second synthetic
+  // source would double-count the crowd. But the entry is still supplied,
+  // because `max` is also what CAPS the queue: without one every stop falls
+  // back to the hard cap (16), which a morning peak in a town of forty exceeds
+  // — and a commuter who cannot even JOIN the queue stands there until they
+  // give up, which reads as a broken railway when the railway is fine. An
+  // infinite interval spawns nobody, so it is a cap and nothing else.
+  function demandFor(id: string): StationDemand {
+    if (citizenSetup) {
+      return {
+        intervalSec: Number.POSITIVE_INFINITY,
+        max: CITIZEN_PLATFORM_CAP,
+        initial: 0,
+      };
+    }
+    // A kerb serves the houses around it; a station gathers a district. Giving
+    // a stop a platform's numbers makes the bus the main line and the railway
+    // an afterthought, which is backwards for a board where it is the feeder.
+    return level[id]?.role === "station"
+      ? stationDemandOf(level, id)
+      : busStopDemandOf(level, id);
+  }
+
+  // Rebuilt with the sims, never before them: a Retry has to give back the same
+  // empty platforms and the same lines the board opened with, and a layer that
+  // survived the rebuild would hand the new sim the old crowd.
+  let transit!: TransitLayer;
+
   function buildSims() {
+    transit = createTransit({
+      demand: Object.fromEntries([...transitStops].map(id => [id, demandFor(id)])),
+      isStop: (tileId: string) => transitStops.has(tileId),
+    });
     sim = createSimulation({
       level,
       depotColors,
@@ -1144,24 +1199,11 @@ export function createGame(
       // until they give up, which reads as a broken railway when the railway is
       // fine. An infinite interval spawns nobody (`advanceDemand`'s loop never
       // runs), so this is a cap and nothing else.
-      stationDemand: citizenSetup
-        ? Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [
-                id,
-                {
-                  intervalSec: Number.POSITIVE_INFINITY,
-                  max: CITIZEN_PLATFORM_CAP,
-                  initial: 0,
-                },
-              ])
-          )
-        : Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [id, stationDemandOf(level, id)])
-          ),
+      // THE SHARED TRANSIT LAYER (sim/transit.ts). Made here, not inside the
+      // sim, because the ROAD sim needs the same one: a bus is planned like a
+      // train and a bus-then-train journey is ONE journey, so it must run
+      // against one set of queues and one line registry (#90).
+      transit,
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.
       waitForDispatch: mode.controls.dispatch,
