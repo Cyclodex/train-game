@@ -243,9 +243,14 @@ export function createParkingPhases(deps: ParkingDeps) {
     cls: VehicleClass,
     target: Coordinates,
     maxTiles: number,
+    // The driver's address, so their own drive counts as somewhere to park and
+    // everybody else's does not. Without it a resident going home would look
+    // straight past their own hardstanding at a street of drives it reads as
+    // full — which is exactly what a stranger sees, and they are not a stranger.
+    permit?: string | null,
   ): { turns: RouteTurn[]; facilityId: string } | null {
     const near = parking
-      .openFacilities(kind)
+      .openFacilities(kind, permit)
       .map(f => ({ f, d: facilityDistance(f, target) }))
       .filter(e => e.d <= maxTiles)
       // Nearest first, ties by id so a board dispatches identically every run.
@@ -254,7 +259,15 @@ export function createParkingPhases(deps: ParkingDeps) {
     // cannot be reached from here, a fourth one further away is not the answer.
     for (const { f } of near.slice(0, 3)) {
       const goals: RouteGoal[] = f.access.filter(
-        a => parking.pickStallOn(getCoordinatesId(a.coord), a.entryPort, kind, "probe") !== null,
+        a =>
+          parking.pickStallOn(
+            getCoordinatesId(a.coord),
+            a.entryPort,
+            kind,
+            "probe",
+            0,
+            permit,
+          ) !== null,
       );
       if (goals.length === 0) continue;
       const plan = planRouteToGoals(level, coord, entry, goals, cls);
@@ -298,7 +311,14 @@ export function createParkingPhases(deps: ParkingDeps) {
     // Only bays still ahead of the nose: the car has just crossed onto this tile,
     // so that is normally all of them, but a car that SPAWNED mid-tile must not be
     // handed a space it has already driven past.
-    const ref = parking.pickStallOn(tileId, entry, car.kind, car.id, car.headProgress);
+    const ref = parking.pickStallOn(
+      tileId,
+      entry,
+      car.kind,
+      car.id,
+      car.headProgress,
+      car.parkPermit,
+    );
     if (!ref) return;
     if (!parking.claim(ref, car.id)) return;
     car.stall = ref;
@@ -778,23 +798,53 @@ export function createParkingPhases(deps: ParkingDeps) {
     // Pinning the port the outbound leg happened to use would refuse perfectly
     // good routes home.
     const goal = car.tripGoal;
-    const homeward = goal
-      ? planRouteToGoals(level, head.coord, entryPort, approachGoals(goal.tileId, cls), cls)
-      : null;
-    const replan =
-      homeward?.goal
+    // AND IS IT GOING SOMEWHERE TO PARK? `parkWish` is the evening commute: the
+    // owner is not driving home to the kerb outside their house, they are
+    // driving home to put the car on the drive. The plan has to be made HERE
+    // rather than when the journey was asked for, because it starts from
+    // wherever this bay is — which is the whole reason the wish is a field on
+    // the car and not an argument to `releaseTrip`.
+    //
+    // The permit is what makes it worth planning at all: the driver's own drive
+    // is invisible to everybody else, so without it this search sees a street of
+    // full houses and gives up.
+    const parkPlan =
+      goal && car.parkWish !== null
+        ? planParkingTripNear(
+            head.coord,
+            entryPort,
+            car.kind,
+            cls,
+            parseCoordId(goal.tileId),
+            car.parkWish,
+            car.parkPermit,
+          )
+        : null;
+    const homeward =
+      !parkPlan && goal
+        ? planRouteToGoals(level, head.coord, entryPort, approachGoals(goal.tileId, cls), cls)
+        : null;
+    const replan = parkPlan
+      ? { turns: parkPlan.turns, destination: null }
+      : homeward?.goal
         ? { turns: homeward.turns, destination: null }
         : planRoute(level, head.coord, entryPort, allMapExits, routeRng, cls);
     // Record which approach the route actually settles on, so the arrival test
     // (`settleRequestedTrips`) is asking about the way this car is really coming.
-    if (goal && homeward?.goal) goal.entryPort = homeward.goal.entryPort;
+    // A PARKING plan pins nothing: the address is only the fallback it drives to
+    // if it gives up looking, and it may reach that from any direction.
+    if (goal) goal.entryPort = parkPlan ? null : (homeward?.goal?.entryPort ?? goal.entryPort);
     car.path = [{ coord: head.coord, entryPort, exitPort: exit }];
     car.headIndex = 0;
     car.headProgress = Math.max(0, Math.min(0.999, startT));
     car.routePlan = replan.turns;
     car.routeStep = 0;
     car.destination = replan.destination;
-    car.parkTarget = null;
+    car.parkTarget = parkPlan?.facilityId ?? null;
+    // The wish is spent — granted or not. Leaving it set would make the car
+    // re-plan for a space every time it stopped anywhere for the rest of the run.
+    car.parkWish = null;
+    if (parkPlan) parking.aim(parkPlan.facilityId, car.id);
     car.enteredTarget = false;
     car.lanePivot = null;
     car.pendingExitLane = null;

@@ -22,7 +22,7 @@ import {
   type ParkingRegistry,
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
-import { manoeuvreAt, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
+import { manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -427,6 +427,26 @@ export interface Car {
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
+  // HOW FAR from `tripGoal` this car will look for a space when it NEXT plans a
+  // route, or null for a car that is simply driving to an address.
+  //
+  // It exists because the drive home is a parking trip too, and it cannot be
+  // planned when it is asked for. `requestTrip` plans from a standing start, but
+  // the evening leg begins with the car already in a bay outside the office: the
+  // route out of that bay is built later, by `resumeFromStall`, from wherever
+  // the car actually is. So the WISH is recorded here at release time and
+  // honoured then. Without it the owner drove home and their car evaporated at
+  // the kerb — the one leg of the day that still deleted the vehicle, and the
+  // reason the drives stood empty all night while the works' bays filled.
+  parkWish: number | null;
+  // THE DRIVER'S ADDRESS — a home plot's coordinate id — for a car that may use
+  // that household's own drive. Null for every other car on the board, which is
+  // most of them: ambient traffic, deliveries, and anybody's commute TO work.
+  //
+  // It is carried on the car rather than looked up per claim because the claim
+  // happens tiles and seconds away from the dispatch that granted it, and the
+  // registry has no idea who is driving.
+  parkPermit: string | null;
   // The stall the car has claimed. Claiming IS the reservation — set the moment
   // the car reaches a tile with a free bay, cleared once it is fully back on the
   // road — so two cars can never aim for the same space.
@@ -686,6 +706,11 @@ export interface TripRequest {
   // How far from the destination a bay may be and still be worth taking, in
   // tiles. Default PARK_SEARCH_TILES.
   parkSearchTiles?: number;
+  // The driver's ADDRESS — a home plot's coordinate id — which unlocks that
+  // household's own drive and nothing else (`tiles/parking.ts` → `ParkingRow
+  // .resident`). Somebody driving home carries it; the same person driving to
+  // work does not, because their drive is not at work.
+  permit?: string;
 }
 
 export interface RoadSim {
@@ -718,7 +743,10 @@ export interface RoadSim {
   //
   // False when there is no such parked trip (already gone, never parked); the
   // caller then falls back to its own clock, exactly as when a dispatch fails.
-  releaseTrip(tripId: string, toTileId: string): boolean;
+  //
+  // `req` makes the return leg a PARKING trip in its own right — the evening
+  // commute, which ends on the driver's own drive rather than at the kerb.
+  releaseTrip(tripId: string, toTileId: string, req?: TripRequest): boolean;
   // Take the car off the board, wherever it is. For a caller that has lost the
   // owner: a bay held by nobody is a bay nobody can ever use again.
   abandonTrip(tripId: string): void;
@@ -3050,6 +3078,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkWish: null,
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3083,7 +3113,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // was nowhere to park" apart from "nobody parks on this board", and charge for
   // only the first. Without it, every board that has no parking at all would
   // start punishing its drivers for failing to use parking that does not exist.
-  const trips = new Map<string, { status: TripStatus; wantedSpace: boolean; released: boolean }>();
+  const trips = new Map<
+    string,
+    { status: TripStatus; wantedSpace: boolean; releasedFrom: string | null }
+  >();
 
   // How far from the destination a commuter will take a space. Six tiles is
   // already a long walk in this world (`walkMaxTiles` on the citizens mode is
@@ -3098,14 +3131,31 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // far longer than any working day the mode runs and short enough to self-heal.
   const HELD_DWELL_SEC = 3600;
 
-  // Requested cars, INCLUDING the ones standing in a bay all day. Counting only
-  // the moving ones would let parked commuters accumulate without limit, which
-  // is the one thing the cap exists to stop. `trips` is the register of every
-  // dispatched journey and its entry outlives the car, so the count is taken
-  // over the live fleet.
+  // Requested cars that are TRAFFIC — everything except the ones standing in a
+  // bay. The cap bounds how many named journeys may be under way at once, and a
+  // parked car is not a journey under way: it is not routed, not followed and
+  // not in anybody's lane.
+  //
+  // Counting parked cars too was right while only COMMUTERS parked: their cars
+  // stood in a bay for the working day and were gone by evening, so the cap
+  // still turned over. It stopped being right the moment the car came home to
+  // its own drive as well (`ParkingRow.resident`), because then a car owner's
+  // vehicle is on the board for good — parked at work by day, parked at home by
+  // night — and every slot would be taken by the first sixty drivers, after
+  // which nobody else on the map could ever be dispatched a car again. The
+  // fleet would ossify around whoever happened to commute first.
+  //
+  // Nothing is unbounded as a result, and the reason is physical rather than
+  // arithmetic: a car only counts as parked while it HOLDS A REAL STALL
+  // (`settleRequestedTrips` sets the status from `phase === "parked" && stall`),
+  // so parked cars are bounded by the number of spaces the board actually has.
+  // A caller that forgets one is covered separately, by `HELD_DWELL_SEC`.
   function requestedCarCount(): number {
     let n = 0;
-    for (const c of cars) if (trips.has(c.id)) n++;
+    for (const c of cars) {
+      const t = trips.get(c.id);
+      if (t && t.status !== "parked") n++;
+    }
     return n;
   }
 
@@ -3157,7 +3207,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // outside a works are usually ON the works' own street, and settling the
       // trip there would delete the car half a tile before it parked.
       const parkPlan = wantsPark
-        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles)
+        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles, req.permit)
         : null;
       let turns: RouteTurn[];
       let goalPort: Port | null;
@@ -3206,8 +3256,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
       car.tripGoal = { tileId: toTileId, entryPort: goalPort };
       car.parkTarget = parkPlan?.facilityId ?? null;
+      car.parkPermit = req.permit ?? null;
       cars.push(car);
-      trips.set(id, { status: "driving", wantedSpace: wantsPark, released: false });
+      trips.set(id, { status: "driving", wantedSpace: wantsPark, releasedFrom: null });
       // THE TOKEN COMES AFTER `cars.push`, and not one line earlier. Every
       // bail-out above can fire — a blocked street most of all — and a token for
       // a car that was never created can never be released, so car parks would
@@ -3249,16 +3300,24 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (!trips.has(c.id)) continue;
       if (c.phase === "parked" && c.stall) {
         const t = trips.get(c.id);
-        // ...unless the owner has ALREADY come back for it. A released car keeps
-        // phase `parked` while it waits in its bay for a gap in the traffic
-        // (leaving a bay buys no right of way), so without `released` this test
-        // fires again on the very next tick, re-parks the trip and resets the
-        // hold to another full hour. The symptom was subtle and the diagnosis
-        // was not: commuters ended their journey HOME "parked", so a car sat
-        // outside its owner's house holding a bay all night, and the works'
-        // own kerb slowly filled with residents until no commuter could park.
-        if (t && t.status === "driving" && !t.released) {
+        // ...unless it is STILL IN THE BAY ITS OWNER JUST LET IT OUT OF. A
+        // released car keeps phase `parked` while it waits for a gap in the
+        // traffic (leaving a bay buys no right of way), so a test that only
+        // asked "is it parked?" fired again on the very next tick, re-parked the
+        // trip and reset the hold to another full hour. The symptom was subtle
+        // and the diagnosis was not: commuters ended their journey HOME
+        // "parked", so a car sat outside its owner's house holding a public bay
+        // all night, and the works' kerb filled with residents until no
+        // commuter could park.
+        //
+        // Comparing the STALL rather than carrying a "released" flag is what
+        // lets the evening leg park again at the other end. The flag said
+        // "released" for the rest of the journey, so the car that pulled onto
+        // its own drive at 18:00 was never recorded as standing on it.
+        const here = stallId(c.stall);
+        if (t && t.status === "driving" && t.releasedFrom !== here) {
           t.status = "parked";
+          t.releasedFrom = null;
           c.dwellLeft = HELD_DWELL_SEC;
         }
         continue;
@@ -3280,17 +3339,33 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // The owner is back for the car. It gives up the bay — `advanceParking` only
   // lets it out on a genuine gap, so this is a request and not a teleport — and
   // then drives to `toTileId`, where `settleRequestedTrips` retires it.
-  function releaseTrip(tripId: string, toTileId: string): boolean {
+  //
+  // ...unless `req.park`, in which case the far end is a SPACE near `toTileId`
+  // rather than the address itself, and the trip reads "parked" again when the
+  // car gets there. That is the evening commute: you do not drive home and
+  // vanish, you drive home and put the car on the drive. The plan cannot be made
+  // here — the car is still in a bay and the route out of it is built at the
+  // moment it leaves — so the wish is recorded and `resumeFromStall` honours it.
+  function releaseTrip(tripId: string, toTileId: string, req: TripRequest = {}): boolean {
     if (trips.get(tripId)?.status !== "parked") return false;
     const car = cars.find(c => c.id === tripId);
     if (!car || car.phase !== "parked") return false;
     if (!level[toTileId]?.road?.length) return false;
     car.tripGoal = { tileId: toTileId, entryPort: null };
     car.dwellLeft = 0;
+    const wantsPark = !!req.park && parking.any() && vehicleCanPark(car.kind);
+    car.parkWish = wantsPark ? (req.parkSearchTiles ?? PARK_SEARCH_TILES) : null;
+    car.parkPermit = req.permit ?? null;
     const t = trips.get(tripId);
     if (t) {
       t.status = "driving";
-      t.released = true;
+      // The bay it is being let out of, so the settle test can tell "still
+      // waiting in the space I was released from" (do nothing) from "has driven
+      // away and taken a different one" (park again). A boolean could not: it
+      // said "released" for ever, so the car that reached its own drive at the
+      // end of the day was never recorded as parked there.
+      t.releasedFrom = car.stall ? stallId(car.stall) : null;
+      if (wantsPark) t.wantedSpace = true;
     }
     return true;
   }
@@ -3388,6 +3463,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkWish: null,
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3502,6 +3579,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null, // ambient traffic: it drives off the map, not to an address
       parkTarget,
+      parkWish: null,
+      // Ambient traffic never holds a permit — nobody merely passing through has
+      // a drive on this street — so every private row stays invisible to it.
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3860,13 +3941,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       for (const c of cars) {
         if (c.parkTarget) inbound.set(c.parkTarget, (inbound.get(c.parkTarget) ?? 0) + 1);
       }
-      return parking.facilities().map(f => ({
-        id: f.id,
-        label: f.label,
-        capacity: parking.capacity(f.id),
-        free: parking.freeCount(f.id),
-        inbound: inbound.get(f.id) ?? 0,
-      }));
+      return (
+        parking
+          .facilities()
+          .map(f => ({
+            id: f.id,
+            label: f.label,
+            capacity: parking.capacity(f.id),
+            free: parking.freeCount(f.id),
+            inbound: inbound.get(f.id) ?? 0,
+          }))
+          // NO PUBLIC SPACES, NO SIGN. `capacity` counts what a member of the
+          // public could use, so a facility that is nothing but private drives —
+          // or nothing but disabled bays — comes back as zero, and the renderer's
+          // sign then read "P VOLL": a car park, standing empty, announcing that
+          // it is full. Nobody puts a P sign on their own driveway.
+          //
+          // The mixed case still signs correctly and is the reason this is a
+          // filter on the total rather than a flag on the row: a tile carrying
+          // three kerb bays AND a drive is a public car park of three, and that
+          // is exactly the number `capacity` already gives.
+          .filter(s => s.capacity > 0)
+      );
     },
     parkingFrame() {
       let parked = 0;

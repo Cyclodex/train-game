@@ -244,6 +244,18 @@ export interface CitizenTuning {
   // the driver actually went looking on a board that HAS parking — a board with
   // none has no parking problem, it has no parking.
   parkSearchSec: number;
+  // How far from HOME a resident will take a space, in tiles.
+  //
+  // Much shorter than the commuter's radius, and the reason is not politeness —
+  // it is what somebody will actually do. A bay six tiles from the office is a
+  // walk you make once and grumble about; six tiles from your own front door,
+  // every night, with the shopping, is not parking at home at all. Your street
+  // and the next one is the whole of it.
+  //
+  // It is also the fence that keeps residents out of the workplace forecourts
+  // across town — see the dispatch rule in `startTrip`, which is where the
+  // measured 12-of-12-bays-at-03:00 failure came from.
+  homeParkTiles: number;
   // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
   //
   // A plot-to-plot straight line is not a journey. The real one goes down the
@@ -309,6 +321,9 @@ export const DEFAULT_TUNING: CitizenTuning = {
   // makes a full street read as a failure rather than as a rounding error, and
   // it is the one a player fixes with a car park.
   parkSearchSec: 24,
+  // Your own drive is one tile away (it is on the road tile your house fronts
+  // onto), so 2 is "my drive, or the kerb at the end of the road".
+  homeParkTiles: 2,
   walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
@@ -350,7 +365,20 @@ export interface DrivingPort {
   // of evaporating at the address. The status then goes "parked" rather than
   // "arrived", and the car is still there — outside the works, in the way of
   // everybody else looking for a space — until `resume` sends it home.
-  request(fromTileId: string, toTileId: string, park?: boolean): string | null;
+  //
+  // `park.permit` is the driver's own ADDRESS, and it is the key to that
+  // household's drive (`tiles/homeParking.ts`). Somebody driving home carries
+  // it and nobody else does, which is the whole difference between a drive and
+  // a car park: a stranger cannot take it however empty it is.
+  //
+  // `park.searchTiles` bounds how far from the destination a space is still
+  // worth having. It is deliberately much shorter going home than going to work
+  // — see `HOME_PARK_TILES`.
+  request(
+    fromTileId: string,
+    toTileId: string,
+    park?: { permit?: string; searchTiles?: number },
+  ): string | null;
   // Is that car still going? "parked" means the driving leg is over and the
   // vehicle is standing in a bay waiting for its owner.
   status(tripId: string): "driving" | "parked" | "arrived";
@@ -363,7 +391,16 @@ export interface DrivingPort {
   // The owner is back: give up the bay and drive to `toTileId`. False when
   // there is no such parked car any more, and the caller falls back to
   // dispatching a fresh one.
-  resume(tripId: string, toTileId: string): boolean;
+  //
+  // `park` makes the return leg a parking trip in its own right, on the same
+  // terms as `request` — which is what the evening commute is. Omitted, the car
+  // is retired at the address, which is right for the cases where nobody is
+  // coming back for it (an emigrant's car, a journey abandoned).
+  resume(
+    tripId: string,
+    toTileId: string,
+    park?: { permit?: string; searchTiles?: number },
+  ): boolean;
   // Nobody is coming back for this car: take it off the board and hand its bay
   // back. Releasing the TRIP alone would leave the vehicle standing there.
   abandon(tripId: string): void;
@@ -386,6 +423,12 @@ export interface CitizenStats {
   // every other driver. The observable that says commuter parking is happening
   // at all — from outside a headless run there is no other way to see it.
   carsParked: number;
+  // ...and how many of those are standing AT HOME rather than out at a
+  // workplace. The two numbers trade places over a day — the town's cars are on
+  // its drives at 03:00 and at its workplaces at 11:00 — and separating them is
+  // the only way to see that cycle from a headless run. One number could not:
+  // it reads the same at both ends of the day.
+  carsAtHome: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -841,7 +884,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // leaving it in the bay is how a board slowly turns every space into a
       // permanent obstacle — one per refused commute, and refusals are exactly
       // what happens on a network the player has not finished.
-      if (c.parkedCar && c.parkedCar.at === fromId) {
+      //
+      // Refused AT HOME is the case that needs no rescuing: the car is on its
+      // own drive, where it is supposed to be, and shifting it would evict a
+      // household from its own hardstanding for the crime of not being able to
+      // get to work.
+      if (c.parkedCar && c.parkedCar.at === fromId && c.parkedCar.at !== c.home) {
         sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
       }
       remember(c, {
@@ -900,36 +948,61 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // outside this morning and drive it away. Same vehicle, same id, and the
       // bay it was holding is handed back to the next driver looking for one.
       const mine = c.parkedCar;
-      if (mine && mine.at === fromId && target && driving.resume(mine.tripId, target)) {
+      const parkAtEnd =
+        trip.mode === "car" && purpose === "home"
+          ? { permit: c.home, searchTiles: tuning.homeParkTiles }
+          : trip.mode === "car"
+            ? {}
+            : undefined;
+      if (mine && mine.at === fromId && target && driving.resume(mine.tripId, target, parkAtEnd)) {
         trip.carTrip = mine.tripId;
         c.parkedCar = null;
       } else if (origin && target && origin !== target) {
         // WHO COMPETES FOR A SPACE, and it is not everybody.
         //  · Going to WORK or to the SHOPS: yes. That is the whole feature —
         //    a handful of bays at the gate against everyone who drove there.
-        //  · Going HOME: no. A house has a driveway (which is exactly why homes
-        //    get no forecourt derived outside them), so arriving home does not
-        //    consume a public space. Left in, it broke the board rather than
-        //    enriching it: residents parked overnight on the works' own kerb —
-        //    correct behaviour, and it silently converted every bay on the map
-        //    into permanent resident parking, so no commuter could ever park
-        //    again. Measured on `/test/workparking`: 12 of 12 bays held at 03:00
-        //    by people asleep in their beds, rising to the cap over four days.
+        //  · Going HOME: yes, but to THEIR OWN DRIVE first. A house has off-street
+        //    parking and now the board actually has it (`tiles/homeParking.ts`),
+        //    so a resident arriving home takes their own hardstanding, which no
+        //    passing driver could have taken from them. Only the overspill — the
+        //    third car at a two-space drive, and every car at a block of flats —
+        //    competes for public kerb, and it does so within a couple of tiles of
+        //    home rather than across the whole town.
+        //
+        //    THIS IS THE FENCE THAT KEEPS THE OLD BUG OUT. Letting residents park
+        //    anywhere at night, on a board where the only bays were the works'
+        //    own forecourt, silently converted every space on the map into
+        //    permanent resident parking: 12 of 12 held at 03:00 on
+        //    `/test/workparking`, rising to the cap over four days, after which
+        //    no commuter could park again. Two things stop that now and both are
+        //    needed — most cars go somewhere PRIVATE, and the ones that cannot
+        //    are looking `HOME_PARK_TILES` from their own front door rather than
+        //    `PARK_SEARCH_TILES` from anywhere.
         //  · PARK & RIDE: no, it still pays the flat penalty. Its car is left at
         //    a station, and a HELD bay there needs the return half too — you come
         //    back to a different platform and have to reach the car you left at
         //    the first one.
-        trip.carTrip = driving.request(
-          origin,
-          target,
-          trip.mode === "car" && purpose !== "home",
-        );
+        trip.carTrip = driving.request(origin, target, parkAtEnd);
       }
     }
     // Departing from where the car is by any OTHER means still moves the car:
-    // left behind, it would hold its bay until the backstop dwell expired and
-    // then drive to a stale address. Send it after them.
-    if (c.parkedCar && c.parkedCar.at === fromId && trip.carTrip !== c.parkedCar.tripId) {
+    // left behind at a WORKPLACE it would hold a public bay somebody else needs
+    // until the backstop dwell expired, and then drive to a stale address. Send
+    // it after them.
+    //
+    // EXCEPT AT HOME, which is the whole point of a drive. A car parked at its
+    // owner's own address is not squatting a space, it is standing where it
+    // lives, and it stays there while they walk to the shops or take the train —
+    // exactly as the real one on your own drive does. Without this exemption the
+    // feature inverts itself: every resident who walked anywhere would send their
+    // car driving off after them, so a town of pedestrians would empty its own
+    // drives and fill its streets with cars going nowhere.
+    if (
+      c.parkedCar &&
+      c.parkedCar.at === fromId &&
+      c.parkedCar.at !== c.home &&
+      trip.carTrip !== c.parkedCar.tripId
+    ) {
       sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
     }
     // A walking leg becomes an ACTUAL PERSON on the pavement whenever a footway
@@ -1505,12 +1578,16 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let drivingNow = 0;
     let walkingNow = 0;
     let parkedNow = 0;
+    let atHomeNow = 0;
     for (const c of people.values()) {
       population += 1;
       if (c.trip) travelling += 1;
       if (c.trip?.carTrip) drivingNow += 1;
       if (c.trip?.walkTrip) walkingNow += 1;
-      if (c.parkedCar) parkedNow += 1;
+      if (c.parkedCar) {
+        parkedNow += 1;
+        if (c.parkedCar.at === c.home) atHomeNow += 1;
+      }
     }
     const total =
       modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
@@ -1524,6 +1601,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       driving: drivingNow,
       onFoot: walkingNow,
       carsParked: parkedNow,
+      carsAtHome: atHomeNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,

@@ -124,6 +124,7 @@ import { parkechelon } from "@/levels/test/scenarios/parkechelon";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { workparking } from "@/levels/test/scenarios/workparking";
 import { streetparking } from "@/levels/test/scenarios/streetparking";
+import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -221,7 +222,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, busstops, buslayby],
       },
     ],
   },

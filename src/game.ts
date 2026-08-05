@@ -651,6 +651,9 @@ export interface CitizenHud {
   // ...and how many have a car standing in a bay right now, holding it against
   // everyone else. The observable that says commuter parking is happening.
   carsParked: number;
+  // ...and how many of those are on their own drive at home rather than out at
+  // a workplace. The two swap over across a day, which is the cycle itself.
+  carsAtHome: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -1209,6 +1212,7 @@ export function createGame(
     driving: 0,
     onFoot: 0,
     carsParked: 0,
+    carsAtHome: 0,
     tripsCompleted: 0,
     tripsRefused: 0,
     tripsAbandoned: 0,
@@ -1262,11 +1266,24 @@ export function createGame(
         // the way. Their journey time is whatever the traffic gives them.
         driving: {
           request: (fromTileId, toTileId, park) =>
-            roadSim.requestTrip(fromTileId, toTileId, "car", { park }),
+            roadSim.requestTrip(fromTileId, toTileId, "car", {
+              // The PRESENCE of the object is the ask. A commuter going to work
+              // passes `{}` — park anywhere near the office; somebody going home
+              // passes their address and a short radius, which is what opens
+              // their own drive to them and closes everyone else's.
+              park: !!park,
+              permit: park?.permit,
+              parkSearchTiles: park?.searchTiles,
+            }),
           status: tripId => roadSim.tripStatus(tripId),
           parkedAt: tripId => roadSim.tripParkedAt(tripId),
           wantedSpace: tripId => roadSim.tripWantedSpace(tripId),
-          resume: (tripId, toTileId) => roadSim.releaseTrip(tripId, toTileId),
+          resume: (tripId, toTileId, park) =>
+            roadSim.releaseTrip(tripId, toTileId, {
+              park: !!park,
+              permit: park?.permit,
+              parkSearchTiles: park?.searchTiles,
+            }),
           abandon: tripId => roadSim.abandonTrip(tripId),
           release: tripId => roadSim.clearFinishedTrip(tripId),
         },
@@ -1292,6 +1309,7 @@ export function createGame(
     citizenStats.driving = s.driving;
     citizenStats.onFoot = s.onFoot;
     citizenStats.carsParked = s.carsParked;
+    citizenStats.carsAtHome = s.carsAtHome;
     citizenStats.tripsCompleted = s.tripsCompleted;
     citizenStats.tripsRefused = s.tripsRefused;
     citizenStats.tripsAbandoned = s.tripsAbandoned;

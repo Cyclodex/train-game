@@ -4,6 +4,7 @@ import { TrainObject, TrainsDefinition, TrainStatus } from "@/types";
 import { ColorAssignment } from "@/utils/colorAssignment";
 import { TrainRoute } from "@/tiles/validate";
 import { TrafficConfig } from "@/sim/road";
+import type { GameMode } from "@/modes/types";
 
 // A single, self-contained feature demo for the /test world. Each scenario is a
 // tiny map that shows exactly one mechanic; see the registry in `index.ts`.
@@ -26,6 +27,15 @@ export interface TestScenario {
   // Sandbox. Needed for mechanics that only exist in a mode — e.g. Time Attack's
   // scheduled spawner. Omitted → Sandbox (the free-play default for demos).
   modeId?: string;
+  // ...or a mode OBJECT, when the scenario needs one with its dials turned.
+  // Takes precedence over `modeId`.
+  //
+  // What this is for, concretely: a board whose subject is a CYCLE rather than a
+  // state. The citizens mode runs a day in half an hour of real time, which is
+  // right for a session and useless for a demonstration — `/test/homeparking` is
+  // about cars being at home at night and at work by day, and at the default
+  // clock a visitor sees one hour of one morning and nothing ever changes.
+  mode?: GameMode;
   // This board is DELIBERATELY incomplete: it opens with a gap the player buys
   // track across in play (Train Valley M3 — `buildgap`, `lakevalley-open`).
   // The registry test (tests/unit/levels/testScenarios.spec.ts) normally fails

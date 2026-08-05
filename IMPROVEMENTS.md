@@ -212,8 +212,9 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `deriveWorkplaceParking` runs in a board's own data today, because
     `createGame` takes the level it is given and never the one `setup()` returns
     (TestStage hands it `scenario.level` directly). Make `createGame` honour
-    `setup.level` and the citizens mode can grow staff parking on ANY board —
-    including one the player just drew. The pass is already idempotent for it.
+    `setup.level` and the citizens mode can grow staff parking — and home drives
+    (`deriveHomeParking`, 2026-08-05) — on ANY board, including one the player
+    just drew. Both passes are already idempotent for it.
     Files: `src/game.ts`, `src/views/TestStage.vue`, `src/modes/citizens.ts`.
 14. **Walk from the bay to the desk on an actual pavement.** The last leg of a
     driven commute is charged as TIME (`walkFromBaySec`) but nobody is drawn
@@ -226,6 +227,22 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     come back to a different platform and have to reach the car you left at the
     first one, which the trip model has no way to express yet.
     Files: `src/sim/citizens.ts`.
+16. **A garage under the block, not just a drive in front of the house.**
+    `StallKind: "garage"` already exists — the car glides into a ramp mouth and
+    is not drawn, and `count` is simply the building's capacity — and it is the
+    obvious flavour for a block of flats. It would also hand the DENSEST plots
+    the lever they currently lack: today a block's residents get the same
+    two-space drive a bungalow does and everything above that spills onto the
+    street with no way to build out of it. Wants `deriveHomeParking` to pick a
+    kind from density, which in turn wants item 13 (see below) so density at
+    derive time is the live one rather than the map's opening roll.
+    Files: `src/tiles/homeParking.ts`, `src/tiles/parking.ts`.
+17. **Re-derive parking when the board changes.** Both passes
+    (`deriveWorkplaceParking`, `deriveHomeParking`) run once, at setup, so a
+    house or a road built in play never grows parking. Both are idempotent
+    precisely so they can be re-run from `applyEdits`; the work is deciding when,
+    and making sure a re-derive never yanks a bay out from under a parked car.
+    Files: `src/game.ts`, `src/tiles/homeParking.ts`, `src/tiles/workplaceParking.ts`.
 
 ## Architecture / code health
 
