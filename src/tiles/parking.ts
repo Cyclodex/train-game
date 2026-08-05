@@ -306,6 +306,22 @@ export interface ParkingRow {
   // widths (a pavement, a verge, a service strip). Default 0.
   gap?: number;
   reserved?: StallReservation;
+  // Is the parking edge PAINTED into individual bays, or is it just kerb you
+  // stop against? Default "bays".
+  //
+  // "none" is the American wide street: the carriageway keeps all of its own
+  // markings and the parking edge has no white boxes at all — you pull in
+  // wherever you fit. Everything else about the row is unchanged (depth, pitch,
+  // manoeuvre, exit style), which is exactly why this is a property of PAINT and
+  // not a new `StallKind`: an unmarked kerb and a marked one are the same
+  // parking, drawn differently. The apron and the outer kerb line stay, so the
+  // street reads as WIDER along the run rather than as a slab beside it — which
+  // is what a wide street with kerb parking is.
+  //
+  // Only meaningful on a kerbside (`parallel`) row: a 90° or echelon rank
+  // without its bay lines is not an unmarked street, it is a car park nobody
+  // finished painting.
+  marking?: "bays" | "none";
 }
 
 // The parking layer of one cell.
@@ -1484,6 +1500,13 @@ export function validateParking(
         stallDepthPx(row.kind, tileSize, big) < 0.5 * LANE_WIDTH_FRAC * tileSize
       ) {
         add(tileId, `${row.kind} bays are too shallow to keep a parked car clear of the lane`);
+      }
+      // An UNMARKED rank only means something on a kerbside row: a street you
+      // park along. Strip the bay lines off an echelon or 90° rank and it does
+      // not read as an unmarked street, it reads as a car park nobody finished
+      // painting — the cars sit in a herringbone with no lines to explain why.
+      if (row.marking === "none" && row.kind !== "parallel") {
+        add(tileId, `an unmarked parking row only reads as a street on "parallel" bays, not "${row.kind}"`);
       }
     }
   }

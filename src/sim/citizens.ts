@@ -35,7 +35,12 @@ export type Topic = "commute" | "errands" | "access";
 // The legs a trip passes through. Timed legs (`walking`, `driving`) run down a
 // clock; `waiting` and `riding` are driven by what the RAIL simulation actually
 // does, which is what makes a bad timetable cost real time.
-type Leg = "walking" | "driving" | "waiting" | "riding" | "egress";
+// "parking" is the walk from the space to the door. It is its own leg and not
+// part of "walking" because of what ENDS it: an ordinary walking leg either
+// finishes the journey or delivers somebody to a platform, and this one always
+// finishes a car journey — but only after the car has stopped being traffic and
+// started being a parked vehicle holding a real bay.
+type Leg = "walking" | "driving" | "parking" | "waiting" | "riding" | "egress";
 
 export interface TravelProfile {
   carOwner: boolean;
@@ -173,6 +178,16 @@ export interface Citizen {
   lastOutDay: number;
   lastBackDay: number;
   lastShopDay: number;
+  // THEIR CAR, standing in a bay somewhere while they are not in it. This is
+  // what makes a commuter's car a thing that occupies the world for a whole
+  // working day rather than a sprite that is deleted on arrival: the space is
+  // held against every other driver looking for one, and the same vehicle is
+  // the one that drives home at going-home time.
+  parkedCar: {
+    tripId: string; // the road sim's trip (which is also the car's id)
+    at: string; // the plot they parked FOR — where they will come back from
+    tileId: string; // the road tile the car is standing on
+  } | null;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
   // Sim-time until which this person is not going anywhere: a journey they
@@ -239,8 +254,17 @@ export interface CitizenTuning {
   // The wait a rider assumes when comparing modes (they do not know the
   // timetable; they know roughly how often trains come).
   assumedHeadwaySec: number;
-  // What parking costs a driver, in seconds of perceived time.
+  // What parking costs a driver, in seconds of perceived time, when they are
+  // COMPARING modes. Still an estimate and still flat, because that is what a
+  // driver knows before they set off — what it actually costs them is measured
+  // afterwards from where the car really stopped (`walkFromBaySec`). The gap
+  // between the two is what makes somebody unhappy about their commute.
   parkPenaltySec: number;
+  // What it costs to arrive somewhere with nowhere to park: the circling, and
+  // then leaving it further away than anybody would choose. Charged only when
+  // the driver actually went looking on a board that HAS parking — a board with
+  // none has no parking problem, it has no parking.
+  parkSearchSec: number;
   // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
   //
   // A plot-to-plot straight line is not a journey. The real one goes down the
@@ -302,6 +326,10 @@ export const DEFAULT_TUNING: CitizenTuning = {
   refSpeed: 0.22,
   assumedHeadwaySec: 12,
   parkPenaltySec: 8,
+  // Three times the quoted penalty. Deliberately a lot: this is the number that
+  // makes a full street read as a failure rather than as a rounding error, and
+  // it is the one a player fixes with a car park.
+  parkSearchSec: 24,
   walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
@@ -345,9 +373,28 @@ export interface DrivingPort {
   // when no car could be dispatched — no route, the street outside blocked, the
   // road full. A null is not a failed journey: the citizen simply drives
   // "off-screen" on a timer instead, so a saturated road never strands anyone.
-  request(fromTileId: string, toTileId: string): string | null;
-  // Is that car still going?
-  status(tripId: string): "driving" | "arrived";
+  //
+  // `park` asks for the car to TAKE A SPACE at the far end and hold it, instead
+  // of evaporating at the address. The status then goes "parked" rather than
+  // "arrived", and the car is still there — outside the works, in the way of
+  // everybody else looking for a space — until `resume` sends it home.
+  request(fromTileId: string, toTileId: string, park?: boolean): string | null;
+  // Is that car still going? "parked" means the driving leg is over and the
+  // vehicle is standing in a bay waiting for its owner.
+  status(tripId: string): "driving" | "parked" | "arrived";
+  // The tile a parked car is standing on — how far its owner has to walk.
+  parkedAt(tripId: string): string | null;
+  // Did this trip set off looking for a space on a board that has spaces? True
+  // and finished WITHOUT one means the driver circled and found nothing, which
+  // is the thing a player can fix by building a car park.
+  wantedSpace(tripId: string): boolean;
+  // The owner is back: give up the bay and drive to `toTileId`. False when
+  // there is no such parked car any more, and the caller falls back to
+  // dispatching a fresh one.
+  resume(tripId: string, toTileId: string): boolean;
+  // Nobody is coming back for this car: take it off the board and hand its bay
+  // back. Releasing the TRIP alone would leave the vehicle standing there.
+  abandon(tripId: string): void;
   // The caller has read the result and will not ask again.
   release(tripId: string): void;
 }
@@ -363,6 +410,10 @@ export interface CitizenStats {
   driving: number;
   // ...and the same for people on an actual pavement.
   onFoot: number;
+  // Citizens whose car is standing in a real bay right now, holding it against
+  // every other driver. The observable that says commuter parking is happening
+  // at all — from outside a headless run there is no other way to see it.
+  carsParked: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -565,6 +616,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       lastOutDay: -1,
       lastBackDay: -1,
       lastShopDay: -1,
+      parkedCar: null,
       unhappyDays: 0,
       stuckUntil: 0,
       recent: [],
@@ -590,6 +642,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // Somebody who leaves town mid-journey does not leave a ghost behind.
     if (c.trip?.carTrip) driving?.release(c.trip.carTrip);
     if (c.trip?.walkTrip) walking?.release(c.trip.walkTrip);
+    // ...nor a car parked outside the works for ever. A held bay whose owner has
+    // emigrated is a space that can never be used again, and on a board people
+    // are leaving that is one lost space per lost commuter.
+    sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
     people.delete(c.id);
   }
 
@@ -849,6 +905,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // Refused: no way to make this journey at all. The single strongest
       // signal in the model, and it lands on `access`.
       tripsRefused += 1;
+      // A refused journey still moves the car. Somebody who cannot get home
+      // from work is standing next to the vehicle they drove there in, and
+      // leaving it in the bay is how a board slowly turns every space into a
+      // permanent obstacle — one per refused commute, and refusals are exactly
+      // what happens on a network the player has not finished.
+      if (c.parkedCar && c.parkedCar.at === fromId) {
+        sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
+      }
       remember(c, {
         purpose,
         mode: null,
@@ -914,9 +978,42 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         trip.mode === "car"
           ? (plotOf(toId)?.roadTile ?? null)
           : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
-      if (origin && target && origin !== target) {
-        trip.carTrip = driving.request(origin, target);
+      // THEIR OWN CAR IS ALREADY HERE. Somebody leaving work does not have a
+      // second car materialise on the driveway — they walk to the one they left
+      // outside this morning and drive it away. Same vehicle, same id, and the
+      // bay it was holding is handed back to the next driver looking for one.
+      const mine = c.parkedCar;
+      if (mine && mine.at === fromId && target && driving.resume(mine.tripId, target)) {
+        trip.carTrip = mine.tripId;
+        c.parkedCar = null;
+      } else if (origin && target && origin !== target) {
+        // WHO COMPETES FOR A SPACE, and it is not everybody.
+        //  · Going to WORK or to the SHOPS: yes. That is the whole feature —
+        //    a handful of bays at the gate against everyone who drove there.
+        //  · Going HOME: no. A house has a driveway (which is exactly why homes
+        //    get no forecourt derived outside them), so arriving home does not
+        //    consume a public space. Left in, it broke the board rather than
+        //    enriching it: residents parked overnight on the works' own kerb —
+        //    correct behaviour, and it silently converted every bay on the map
+        //    into permanent resident parking, so no commuter could ever park
+        //    again. Measured on `/test/workparking`: 12 of 12 bays held at 03:00
+        //    by people asleep in their beds, rising to the cap over four days.
+        //  · PARK & RIDE: no, it still pays the flat penalty. Its car is left at
+        //    a station, and a HELD bay there needs the return half too — you come
+        //    back to a different platform and have to reach the car you left at
+        //    the first one.
+        trip.carTrip = driving.request(
+          origin,
+          target,
+          trip.mode === "car" && purpose !== "home",
+        );
       }
+    }
+    // Departing from where the car is by any OTHER means still moves the car:
+    // left behind, it would hold its bay until the backstop dwell expired and
+    // then drive to a stale address. Send it after them.
+    if (c.parkedCar && c.parkedCar.at === fromId && trip.carTrip !== c.parkedCar.tripId) {
+      sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
     }
     // A walking leg becomes an ACTUAL PERSON on the pavement whenever a footway
     // route joins the two ends. The whole trip for a walk; the approach to the
@@ -925,6 +1022,20 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const target = trip.mode === "walk" ? toId : (trip.station ?? "");
       if (target) trip.walkTrip = walking.request(fromId, target);
     }
+  }
+
+  // Let a car go without its owner in it. Not a cosmetic tidy-up: a bay held by
+  // a citizen who is never coming back is a space nobody can ever use again, and
+  // one per lost commuter drains a car park over a run.
+  function sendCarAway(c: Citizen, toTile: string | null): void {
+    const mine = c.parkedCar;
+    if (!mine) return;
+    c.parkedCar = null;
+    if (!driving) return;
+    if (toTile && driving.resume(mine.tripId, toTile)) return;
+    // Nowhere to send it, so it does not just get forgotten about — forgetting
+    // the TRIP would leave the CAR parked, holding a space for ever.
+    driving.abandon(mine.tripId);
   }
 
   function remember(c: Citizen, o: TripOutcome): void {
@@ -954,6 +1065,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       }
       // They go home rather than vanish — an abandoned trip still ends somewhere.
       c.at = c.home;
+      // And the car they left at the other end comes home too. Without this, an
+      // abandoned journey strands a bay AND the person would ask for a second
+      // car the next morning.
+      if (c.parkedCar && c.parkedCar.at !== c.home) {
+        sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
+      }
       return;
     }
     c.at = t.to;
@@ -1014,10 +1131,35 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         // and a closed level crossing are now paid for in this person's journey
         // time, and therefore in their mood.
         if (t.carTrip) {
+          const carTrip = t.carTrip;
           t.carSec += dt;
-          if (driving?.status(t.carTrip) === "arrived") {
-            driving.release(t.carTrip);
+          const status = driving?.status(carTrip);
+          // THE CAR FOUND A SPACE. The driving leg is over, but the journey is
+          // not: they are in a bay, not at their desk. Where the bay is decides
+          // what happens next, and that is the whole point of modelling it —
+          // the space at the gate costs a few seconds, the one two streets away
+          // costs a walk the driver never budgeted for.
+          if (status === "parked") {
+            const tileId = driving?.parkedAt(carTrip) ?? null;
+
+            c.parkedCar = tileId ? { tripId: carTrip, at: t.to, tileId } : null;
             t.carTrip = null;
+            t.leg = "parking";
+            t.legRemaining = walkFromBaySec(tileId, t.to);
+            return;
+          }
+          if (status === "arrived") {
+            driving?.release(carTrip);
+            t.carTrip = null;
+            // No bay was to be had anywhere near, so the car was retired at the
+            // address — the driver "found something down the road". They still
+            // pay for the hunt, because that is what circling a full street IS,
+            // and it is the number a player can act on by building a car park.
+            if (t.mode === "car" && driving?.wantedSpace(carTrip)) {
+              t.leg = "parking";
+              t.legRemaining = tuning.parkSearchSec;
+              return;
+            }
             arriveFromDrive(c, t);
             return;
           }
@@ -1059,6 +1201,15 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         boardOrWait(c);
         return;
       }
+      case "parking": {
+        // The last stretch on foot, from the space to the door — or the time
+        // spent hunting for one that was never there. Either way it is the
+        // journey, so it lands on the same stopwatch the citizen is judged by,
+        // and a player who builds a car park at the gate can watch it shrink.
+        t.legRemaining -= dt;
+        if (t.legRemaining <= 0) arriveFromDrive(c, t);
+        return;
+      }
       case "waiting": {
         t.waitedSec += dt;
         boardOrWait(c);
@@ -1076,6 +1227,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       case "riding":
         return; // driven by the rail sim's events, not by a clock
     }
+  }
+
+  // From the bay to the door, in seconds. Measured from where the car ACTUALLY
+  // stopped, which is the number the whole feature turns on: the space at the
+  // gate is a few seconds and the one two streets away is most of a minute, and
+  // nothing else in the model can tell the player those apart.
+  //
+  // The half-tile floor is the walk across the forecourt. A bay on the
+  // workplace's own street is zero tiles away by coordinate and is still not
+  // inside the building.
+  function walkFromBaySec(tileId: string | null, toPlotId: string): number {
+    if (!tileId) return tuning.parkPenaltySec;
+    const bay = parseCoordId(tileId);
+    const dest = parseCoordId(toPlotId);
+    const tiles = Math.max(0.5, manhattan(bay, dest));
+    return tiles / tuning.walkSpeed;
   }
 
   // The driving leg is over. For a car trip that IS the journey; for park & ride
@@ -1409,11 +1576,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let population = 0;
     let drivingNow = 0;
     let walkingNow = 0;
+    let parkedNow = 0;
     for (const c of people.values()) {
       population += 1;
       if (c.trip) travelling += 1;
       if (c.trip?.carTrip) drivingNow += 1;
       if (c.trip?.walkTrip) walkingNow += 1;
+      if (c.parkedCar) parkedNow += 1;
     }
     const total =
       modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
@@ -1426,6 +1595,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       travelling,
       driving: drivingNow,
       onFoot: walkingNow,
+      carsParked: parkedNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,

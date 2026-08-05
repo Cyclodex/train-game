@@ -687,6 +687,9 @@ export interface CitizenHud {
   driving: number;
   // ...and how many are a figure on a pavement.
   onFoot: number;
+  // ...and how many have a car standing in a bay right now, holding it against
+  // everyone else. The observable that says commuter parking is happening.
+  carsParked: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -1262,6 +1265,7 @@ export function createGame(
     travelling: 0,
     driving: 0,
     onFoot: 0,
+    carsParked: 0,
     tripsCompleted: 0,
     tripsRefused: 0,
     tripsAbandoned: 0,
@@ -1320,8 +1324,13 @@ export function createGame(
         // actual street, subject to every queue, junction and level crossing on
         // the way. Their journey time is whatever the traffic gives them.
         driving: {
-          request: (fromTileId, toTileId) => roadSim.requestTrip(fromTileId, toTileId),
+          request: (fromTileId, toTileId, park) =>
+            roadSim.requestTrip(fromTileId, toTileId, "car", { park }),
           status: tripId => roadSim.tripStatus(tripId),
+          parkedAt: tripId => roadSim.tripParkedAt(tripId),
+          wantedSpace: tripId => roadSim.tripWantedSpace(tripId),
+          resume: (tripId, toTileId) => roadSim.releaseTrip(tripId, toTileId),
+          abandon: tripId => roadSim.abandonTrip(tripId),
           release: tripId => roadSim.clearFinishedTrip(tripId),
         },
         // ...and a person who walks becomes an actual figure on the pavement.
@@ -1345,6 +1354,7 @@ export function createGame(
     citizenStats.travelling = s.travelling;
     citizenStats.driving = s.driving;
     citizenStats.onFoot = s.onFoot;
+    citizenStats.carsParked = s.carsParked;
     citizenStats.tripsCompleted = s.tripsCompleted;
     citizenStats.tripsRefused = s.tripsRefused;
     citizenStats.tripsAbandoned = s.tripsAbandoned;

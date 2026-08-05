@@ -2514,6 +2514,74 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   parked cars AND unit-less samples (a garaged car has `units: []`).
   Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
 
+## WORKPLACE PARKING (the commuter's car stops somewhere, 2026-08-04)
+Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
+- **A DRIVING CITIZEN'S CAR USED TO BE DELETED ON ARRIVAL**, so the town had a
+  rush hour with nothing at stake and `parkPenaltySec: 8` stood in for a fact the
+  board never checked. `requestTrip(from, to, kind, { park: true })` sends it to
+  the nearest facility with a free bay instead, and it HOLDS that bay until
+  `releaseTrip`. Three trip states now (`TripStatus`): driving | parked | arrived.
+- **STAFF PARKING IS DERIVED FROM THE ZONING** (`tiles/workplaceParking.ts`).
+  `terrain: "industry"` already says "a works"; the pass lays THREE `parallel`
+  bays on the road tile a work/shop plot's driveway joins, on the kerb facing the
+  plot. Three against a works employing 12–96 — the shortfall IS the mechanic,
+  and three is also what fits (60px pitch on a 200px tile).
+  · HOMES GET NOTHING, and that is a rule and not an omission — see the overnight
+    trap below.
+  · `side: "left"` is offered ONLY on a one-way straight, matching
+    `validateParking`'s own rule. Leaving it out costs half the workplaces on any
+    board built round a one-way loop: their gate is on the far kerb, and the near
+    kerb faces the middle of the ring.
+  · IT VALIDATES AND BACKS OUT. Every derived row goes through `validateParking`
+    and any the validator objects to is DROPPED, because the objections are not
+    local: bays on a dead-end stub turn that stub into a car park with no way out,
+    which is a property of a flood fill. Idempotent, so a second pass is a no-op.
+  · APPLIED IN THE SCENARIO'S OWN DATA, not in `citizensMode.setup`. `PlayView`
+    uses `setup.level`, but **TestStage passes `scenario.level` straight to
+    `createGame`** and `createGame` never reads `setup.level` either — so a
+    mode-setup transform reaches the play board and NOTHING in `/test` or in any
+    unit test. Wiring it into the mode needs that fixed first.
+- **`ParkingRow.marking: "none"` IS THE AMERICAN WIDE STREET**: carriageway keeps
+  every one of its own markings, the parking edge has no white boxes. PAINT, not a
+  new `StallKind` — depth/pitch/manoeuvre/exit are identical to `parallel`, and
+  forking them would mean keeping two of everything in step for ever. The apron
+  and the outer kerb line still draw, so the run reads as a street that is WIDER
+  here rather than cars on the grass. Rejected on any kind but `parallel`: an
+  unpainted echelon rank reads as a car park nobody finished.
+  `/test/streetparking` is the two side by side.
+- **A RELEASED CAR RE-PARKS ITSELF UNLESS YOU SAY OTHERWISE** (`trips.released`).
+  It keeps `phase === "parked"` while it waits in its bay for a gap (leaving a bay
+  buys no right of way), so `settleRequestedTrips` fires again on the very next
+  tick and resets the hold to another full hour. Symptom: commuters ended their
+  journey HOME "parked".
+- **GOING HOME MUST NOT TAKE A PUBLIC SPACE** (`purpose !== "home"` in
+  `startTrip`). A house has a driveway — which is exactly why no forecourt is
+  derived outside one. Left in, it is CORRECT behaviour that breaks the board:
+  residents park overnight on the works' own kerb, measured at 12 of 12 bays held
+  at 03:00 by people asleep in their beds, rising to the cap over four days, after
+  which no commuter can ever park again.
+- **A CAR STILL HUNTING FOR A SPACE IS NEVER SETTLED BY THE ADDRESS TEST**
+  (`parkTarget !== null` gate in `settleRequestedTrips`). Staff bays sit on the
+  workplace's OWN street, so the address IS the car park's tile and the trip would
+  be deleted half a tile before it parked. Once `giveUpAndReplan` clears
+  `parkTarget` the address test applies again, and that is the graceful fallback —
+  they found something down the road, and pay `parkSearchSec`.
+- `tripGoal.entryPort: null` = ANY approach counts as arrived. A parking trip
+  cannot know which way round the block the driver comes back, and the route home
+  is planned fresh from the stall.
+- `resumeFromStall` plans to `car.tripGoal` when there is one and to a map exit
+  otherwise. Ambient traffic leaves the map; a commuter's car has an address. Get
+  this wrong on a CLOSED RING and there is no map edge to despawn at — the car
+  circles for the rest of the run.
+- `abandonTrip(id)` exists for the caller that has LOST the owner (emigration, a
+  refused journey home). Releasing the trip alone leaves the CAR parked: a bay
+  held by nobody is a bay nobody can use again, one per lost commuter.
+- **`game.parkingOccupancy` IS A RENDER MIRROR** — filled in `frame()`, so it is
+  empty for ever in a headless run and a test written against it passes vacuously.
+  The model-side observable is `citizenStats.carsParked`, counted in `advance()`.
+- `/test/workparking` is the demo: a closed one-way ring (so every car is a named
+  citizen), one works, three bays, two dozen drivers.
+
 ## BUILD IN PLAY (Tycoon phase 2, 2026-07-26)
 - `game.buildRoute(steps)` = canAfford gate → `applyEdits` → `spend`, IN THAT
   ORDER: a refused edit (a train moved onto a route tile after the preview)
