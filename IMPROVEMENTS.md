@@ -206,6 +206,20 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     money — a fee nobody chooses to set is a number on a sign, not a mechanic.
     Files: `src/tiles/parking.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
 
+13. **Bicycles** (planned 2026-08-05, spec:
+    `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md`). The
+    missing middle of the citizen mode choice and the road layer's first
+    genuinely slow vehicle. Phased: (A) `VehicleKind "bike"` in mixed traffic —
+    slow, cars queue behind it; (B) `LaneKind "cycle"` + bikes in bus lanes —
+    the player's remedy for that queue; (C) bike racks (`StallKind "bikerack"`,
+    the busstop precedent mirrored) + bike-and-ride at stations; (C′)
+    `TravelMode "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's
+    reserved "phase C"; (D) shared foot/bike paths, queued behind the
+    standalone-footpath axis. A+B ship together (friction and remedy in one PR).
+    Files: `src/sim/road.ts`, `src/tiles/lanes.ts`, `src/tiles/parking.ts`,
+    `src/sim/citizens.ts`; scenarios `bikemix`/`cyclelane`/`bikerack`/
+    `bikeandride`/`citizenbike`.
+
 ## Architecture / code health
 
 12. **Sass `@use` migration.** Stylesheets still use `@import` (deprecation is

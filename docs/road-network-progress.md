@@ -18,6 +18,7 @@ lanes, turn rules, vehicle classes, and (eventually) lateral lane changes.
 | E | Lane attributes / vehicle classes (bus lanes) | ✅ **Done & merged** (enforced + rendered + scenario) |
 | F | Route planner v2 (lane- + restriction-aware; car destinations) | ✅ **Done & merged** — cars sort into the turn lane their route needs; routes target off-map exits (one-way networks route) |
 | G | Lane switching (overtake, pre-turn positioning, lateral changes) | ✅ **Done & merged** — continuous lane position, gap-accepted lane changes, merge before a lane drop |
+| H | Bicycles (slow vehicle kind, cycle lanes, racks, citizen travel mode) | 📝 **Planned** — successor to E's class model; spec: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` |
 
 ## Where we stand
 
