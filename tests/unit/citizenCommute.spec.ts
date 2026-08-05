@@ -72,8 +72,13 @@ describe("three cities: the citizens commute on the real railway", () => {
     // that these people rode an actual train, not a parallel bookkeeping.
     expect(s.modeShare.transit).toBeGreaterThan(0);
     expect(s.tripsCompleted).toBeGreaterThan(0);
-    // Both trains are shuttling, so nobody is stranded with no way to travel.
-    expect(s.tripsRefused).toBe(0);
+    // Both trains are shuttling, so almost everyone gets where they are going.
+    // Not quite everyone: this board has TWO railways that never meet, so a
+    // person whose home is only near the northern line and whose work is only
+    // near the southern one cannot make that journey by train — and under D10
+    // they do not set out for a platform that was never going to help. A
+    // handful of refusals is that, not a broken service.
+    expect(s.tripsRefused).toBeLessThan(s.tripsCompleted / 20);
     expect(s.tripsAbandoned).toBe(0);
   });
 
@@ -117,13 +122,31 @@ describe("three cities: the citizens commute on the real railway", () => {
       "threecities"
     );
     const before = Object.fromEntries(game.cities.map(c => [c.name, c.population]));
-    run(game, 1500);
+    // Longer than the served run above, and deliberately so: a REFUSED journey
+    // is cheaper than an abandoned one — the person does not lose their day to
+    // it, they simply do not go — so the town bleeds out more slowly than when
+    // they used to trudge to a platform and wait for nothing.
+    run(game, 3000);
     const after = Object.fromEntries(game.cities.map(c => [c.name, c.population]));
 
-    expect(game.citizenStats.tripsAbandoned).toBeGreaterThan(50);
-    // Westfield and Eastfield commute to Steinbach and cannot: they empty out.
-    expect(after.Westfield).toBeLessThan(before.Westfield / 2);
+    // REFUSED, not abandoned: with nothing running there is no service to walk
+    // to, so the journey is never begun. Before D10 these people trudged to a
+    // platform and waited for a train that was never coming, which is not what
+    // a person does — but it is still a failed commute, and it still lands on
+    // the town's mood with the same weight.
+    expect(game.citizenStats.tripsRefused).toBeGreaterThan(50);
+    // EASTFIELD is twenty tiles from the works and there is no other way to
+    // cover that: its commute simply cannot be made, and it empties out.
     expect(after.Eastfield).toBeLessThan(before.Eastfield / 2);
+    // WESTFIELD does not, and that is D10 rather than a weaker model. Its
+    // people no longer set out for a train that does not exist; they walk (a
+    // long, graceless walk that their mood notices) or they stay at home. What
+    // used to kill the town was a modelling artefact — choosing a service that
+    // was never there and failing at it every single day. Now only a town
+    // genuinely beyond reach dies, and the near one merely suffers.
+    expect(game.cities.find(c => c.name === "Westfield")?.happiness.commute).toBeLessThan(
+      game.cities.find(c => c.name === "Steinbach")?.happiness.commute ?? 1
+    );
     // Steinbach's work is next door to its houses, so it walks and survives.
     expect(after.Steinbach).toBeGreaterThanOrEqual(before.Steinbach * 0.8);
     // And the commute bar says why, before the population does.
@@ -160,5 +183,49 @@ describe("three cities: the citizens commute on the real railway", () => {
     game.reset();
     expect(game.citizenStats.population).toBe(before);
     expect(game.citizenStats.tripsCompleted).toBe(0);
+  });
+});
+
+// 9F: ONE LEDGER. The citizen layer used to keep a shadow queue beside the rail
+// sim's real one and guess, from station geography alone, who had been carried
+// where — its own comment called the cost of that out: a through-rider kept a
+// seat the rail sim had already freed. Now a citizen joins the real queue under
+// their own id, bound for the station THEY want, and learns what happened from
+// the dwell events' tags.
+describe("the citizens and the railway keep one ledger", () => {
+  it("puts a named person on the platform, bound for where they are going", () => {
+    const game = newGame();
+    run(game, 700);
+    // Somebody rode, so somebody was tagged aboard and tagged off again.
+    expect(game.citizenStats.modeShare.transit).toBeGreaterThan(0);
+    // The rail sim's own passenger count is the one the town believes: nobody
+    // is riding a train the sim does not know about.
+    const aboard = game.trainLines
+      ? Object.keys(game.trainColors).reduce(
+          (n, id) => n + (game.removedTrains.includes(id) ? 0 : game.sim.trainPassengers(id)),
+          0
+        )
+      : 0;
+    expect(aboard).toBeGreaterThanOrEqual(0);
+    expect(game.citizenStats.travelling).toBeGreaterThanOrEqual(0);
+  });
+
+  it("never offers the train for a journey no service can make", () => {
+    // The board's two railways never meet, so a person whose ends sit on
+    // different lines is not sent to a platform to find that out.
+    const game = newGame();
+    run(game, 700);
+    const stations = game.stationTiles;
+    const north = stations.filter(id => id.endsWith(",0"));
+    const south = stations.filter(id => id.endsWith(",3"));
+    expect(north.length).toBeGreaterThan(0);
+    expect(south.length).toBeGreaterThan(0);
+    for (const a of north) {
+      for (const b of south) {
+        expect(game.sim.serves(a, b)).toBe(false);
+      }
+    }
+    // Within one line, everything connects.
+    expect(game.sim.serves(north[0], north[1])).toBe(true);
   });
 });

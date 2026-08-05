@@ -511,6 +511,20 @@
       />
     </div>
 
+    <!-- LATENT DEMAND: what this platform would carry if anything called here.
+         Only ever shown for a platform NO line reaches — since D10 such a
+         platform is empty, so without this there is nothing on the board to
+         say which places are waiting for a connection. It is a hint, not a
+         score: nothing reads it but the eye. -->
+    <div
+      v-if="isStation && latentDemand > 0"
+      class="station-latent"
+      :style="stationLatentStyle"
+    >
+      <span class="station-latent-icon">🧍</span>
+      {{ latentDemand }}/min — no service
+    </div>
+
     <!-- Car destination marker (debug): a car is currently heading to this tile. -->
     <div v-if="config.debug && carDestinationId" class="car-destination-marker">
       <span class="car-destination-label">→{{ carDestinationId }}</span>
@@ -855,10 +869,23 @@ class Tile extends Vue {
           transform: "translateX(-50%)",
         };
   }
+  // The "no service" hint, placed just BELOW the name plate wherever that
+  // landed — a fixed offset would have floated free the moment master moved
+  // the plate onto the station building.
+  get stationLatentStyle(): Record<string, string> {
+    const plate = this.stationPlateStyle;
+    const top = Number.parseFloat(plate.top ?? "0") || 0;
+    return { ...plate, top: `${top + 20}px` };
+  }
   catchmentRadiusTiles = WALK_RADIUS_TILES;
   // What to call this platform.
   get stationLabel(): string {
     return this.game.stationLabels?.[this.coordId] ?? "S";
+  }
+  // People per minute this platform would carry if a line ever reached it.
+  // Zero (and therefore hidden) the moment one does.
+  get latentDemand(): number {
+    return this.game.stationLatent?.[this.coordId] ?? 0;
   }
   // While a line is being drawn: this station's place in it, or a hollow
   // marker when it is one you could still add.
@@ -2514,6 +2541,31 @@ export default toNative(Tile);
 .station-order--off text {
   fill: #fff;
   font-size: 20px;
+}
+/* The "nothing calls here" hint, under the name plate. Amber rather than red:
+   it is an opportunity, not a failure — the player has not done anything
+   wrong, there is simply a town here that would like a train. Positioned by
+   `stationLatentStyle`, which follows the name plate down onto the building. */
+.station-latent {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  /* top/left/transform above are the fallback; `stationLatentStyle` overrides
+     them so the hint follows the name plate. */
+  z-index: 5;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(40, 30, 8, 0.78);
+  color: #f0b429;
+  font-family: sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.station-latent-icon {
+  font-size: 10px;
 }
 /* The name plate on the building's front, in the HUD's own chrome (MenuDrawer /
    ToolDock): a small dark tag, so a place name on the board and a place name in

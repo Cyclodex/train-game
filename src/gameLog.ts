@@ -34,8 +34,15 @@ function describe(e: SimEvent): string {
         ? `delivered at ${e.tileId} ✓`
         : `bounced off ${e.tileId}`;
     case "dwell": {
+      // "off" is arrivals only. Someone CHANGING here has not arrived anywhere
+      // — they are back on the platform waiting for the service that finishes
+      // the job — and reading it as an arrival is exactly the confusion the
+      // separate count exists to prevent.
+      const changing = e.changing ?? 0;
+      const arrived = e.alighted - changing;
       const moves = [
-        ...(e.alighted > 0 ? [`${e.alighted} off`] : []),
+        ...(arrived > 0 ? [`${arrived} off`] : []),
+        ...(changing > 0 ? [`${changing} changing`] : []),
         ...(e.boarded > 0 ? [`${e.boarded} on`] : []),
       ];
       return `calling at ${e.tileId}${moves.length ? ` (${moves.join(", ")})` : ""}`;

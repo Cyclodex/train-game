@@ -3,6 +3,7 @@ import { straight } from "@/levels/test/scenarios/straight";
 import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
 import { station } from "@/levels/test/scenarios/station";
+import { transfer } from "@/levels/test/scenarios/transfer";
 import { platformstop } from "@/levels/test/scenarios/platformstop";
 import { stationhouse } from "@/levels/test/scenarios/stationhouse";
 import { boarding } from "@/levels/test/scenarios/boarding";
@@ -23,13 +24,16 @@ import { switchDefault } from "@/levels/test/scenarios/switch-default";
 import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
+import { crossinglanes } from "@/levels/test/scenarios/crossinglanes";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
 import { carscurve } from "@/levels/test/scenarios/carscurve";
 import { roadcurveloops } from "@/levels/test/scenarios/roadcurveloops";
 import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
+import { curvelanechange } from "@/levels/test/scenarios/curvelanechange";
 import { curvepace } from "@/levels/test/scenarios/curvepace";
+import { footwaywidth } from "@/levels/test/scenarios/footwaywidth";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
 import { roadlanemerge } from "@/levels/test/scenarios/roadlanemerge";
@@ -120,6 +124,8 @@ import { buslayby } from "@/levels/test/scenarios/buslayby";
 import { parkvariants } from "@/levels/test/scenarios/parkvariants";
 import { parkechelon } from "@/levels/test/scenarios/parkechelon";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
+import { workparking } from "@/levels/test/scenarios/workparking";
+import { streetparking } from "@/levels/test/scenarios/streetparking";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -161,11 +167,11 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
       {
         id: "crossings",
         label: "Crossings",
-        scenarios: [crossing, keepcrossingclear, crossingkeeper],
+        scenarios: [crossing, crossinglanes, keepcrossingclear, crossingkeeper],
       },
     ],
   },
@@ -178,11 +184,11 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Driving basics",
         scenarios: [carfollowing, carqueue, carcircle, carscurve],
       },
-      { id: "curves", label: "Curves", scenarios: [roadcurveloops, roadcurvetraffic, curvepace] },
+      { id: "curves", label: "Curves", scenarios: [roadcurveloops, roadcurvetraffic, curvelanechange, curvepace] },
       {
         id: "lanes",
         label: "One-way & lanes",
-        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, lanedrop, roadonewaylanes, lanechangegap, crosslanes],
+        scenarios: [roadoneway, roadstraightlanes, roadlanemerge, lanedrop, roadonewaylanes, lanechangegap, crosslanes, footwaywidth],
       },
       {
         id: "crosses",
@@ -217,7 +223,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, busstops, buslayby],
       },
     ],
   },

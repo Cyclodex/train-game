@@ -716,6 +716,117 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   leaves a stale id in it: both the advance and the reservation release guard
   on `trains[id]` still existing.
 
+## ONE LEDGER: THE CITIZENS AND THE RAILWAY (9F, 2026-08-03)
+- A citizen joins the REAL platform queue under their own id
+  (`enqueuePassenger(tile, dest, tag)`) bound for the station THEY want, and
+  learns what happened from `DwellEvent.boardedTags` / `alightedTags`. The
+  shadow queue is gone, and with it the rider who kept a seat the rail sim had
+  already freed.
+- `TransitPort` is now `{enqueue(station, dest, tag): boolean, connects(a,b)}`.
+  `connects` is the D10 gate in `optionsFor`: transit is not even OFFERED unless
+  a service links the two ends.
+- `railPairFor` picks the platform PAIR by connectivity, not "nearest at each
+  end". A town between two railways has a nearest platform at each end that
+  never meet — the old code offered that journey and it could not be made.
+- `alightedAt` decides nothing any more: `stationId === trip.toStation` is an
+  arrival, anything else is a change the SIM already re-queued, so the citizen
+  layer must not queue them again.
+- Two balance facts that fell out, both worth knowing before touching this:
+  (1) a REFUSED trip now feeds the journey's own topic as well as `access`, and
+  costs the person part of the day (`stuckUntil`) — without that, D10 turned a
+  failed commute into a free afternoon of mood-restoring errands and the
+  citizens mode quietly lost its teeth. (2) On `threecities` only EASTFIELD
+  hollows out now; Westfield walks instead. What used to kill both towns was an
+  artefact — choosing a service that was never there and failing at it daily.
+- A lineless train no longer dumps its whole load at the next call. It carries
+  each rider to the station they named (`off = final`), because a stopper calls
+  everywhere it passes and can promise that. Only a RETIRING train dumps.
+
+## CHANGING TRAINS (phase 9, 2026-08-03)
+- `sim/lineGraph.ts` is a SECOND router and answers a different question from
+  `railRouter`: not "can a train physically get there" but "can a PASSENGER get
+  there on the services that exist". Stations are nodes; two are adjacent when
+  some line calls at both. BFS depth = number of RIDES, so depth-1 = changes.
+- `alightFor(lineId, at, to)`: the destination when the line goes there, else
+  the stop on it that leaves the shortest onward journey. The candidate must be
+  **strictly** closer than staying put — with `<=` a triangle of lines hands a
+  rider round for ever. A line is treated as a CYCLE, so direction never matters.
+- The hop is decided at BOARDING (`offFor`) and never stored on a waiting
+  passenger. That is what makes redrawing a line mid-run safe: there is no plan
+  to go stale, the next boarding just re-decides.
+- A `Rider` is `{final, off}`. At `off`: `final === off` is a DELIVERY, anything
+  else is a CHANGE — back onto the platform, at the FRONT and **past the cap**.
+  Refusing a change would delete someone mid-journey, invisibly.
+- A LINELESS train keeps the exact one-hop service: everyone down at the next
+  call, all counted delivered. Deliberate — making them change instead would
+  re-queue and re-board the whole load at every platform, inflating dwell times
+  and the balance of every board written before lines existed.
+- `DwellEvent.changing` is how a score tells the two apart: arrivals are
+  `alighted - changing`.
+
+## NOBODY WALKS TO A STATION THAT CANNOT TAKE THEM (D10, 2026-08-03)
+- A passenger's destination is drawn from `lineNetwork().reachableFrom(here)` —
+  what a SERVICE reaches, not what the metals reach. Phase 8 used the metals, so
+  people queued for journeys nothing could make, stood there for ever and drove
+  the overcrowd predicate: a punishment for demand the player was never given the
+  chance to serve.
+- The payoff: a platform queue now means ONE thing, and a fixable one — the
+  service is too thin. It used to mix that with "no service goes there", which
+  nothing the queue itself suggests could fix.
+- A train with NO line counts as a synthetic line over `reachableStations` from
+  where it stands: a stopper calls everywhere it passes, so it IS the network on
+  a board where nobody has drawn anything. Without that, every classic board and
+  half the specs would spawn nobody. It affects the GRAPH only — boarding and
+  alighting for a lineless train are untouched.
+- Consequence for specs: `trains: []` + `stationDemand` now yields an EMPTY
+  platform. Several phase-2 tests needed a train adding for that reason. If a
+  queue you expect is empty, ask what service was supposed to serve it.
+- Initial queues are seeded AFTER the roster is built (`seedInitialQueues`) —
+  at construction time there are no trains and no lines, so nothing is served
+  and nobody would ever appear.
+- `enqueuePassenger(tile, dest, tag?)` queues ONE person with a known
+  destination, for a caller that has already decided (a citizen, a test).
+  `addStationPassengers` stays the anonymous-demand verb and still returns what
+  it actually queued.
+- LATENT DEMAND (`game.stationLatent`, the amber "N/min — no service" plate) is
+  the other half of D10: an unserved platform is empty, so something has to say
+  which places are still asking. Refreshed in `syncLines()`, NOT per frame — it
+  changes exactly when the services do, and a per-frame mirror is invisible to a
+  headless test. Never in a fail predicate.
+- It takes BOTH to leave a platform unserved, and each half is a rule:
+  scrapping the train is not enough (the LINE stands without it — D11), and
+  deleting the line is not enough (the train falls back to a stopper, which
+  calls everywhere it passes). A test that expects an unserved platform must do
+  both — two attempts at this one got it wrong.
+- Every mutation of the line registry MUST `touchLines()`; the graph is cached
+  behind it. `deleteLine` was missed and the graph went on serving a line that
+  no longer existed.
+
+## A LINE IS AN OBJECT, NOT A FIELD ON A TRAIN (D11, 2026-08-03)
+- `SimLine {id, name, stops, pinned?}` in a registry; `SimTrain.lineId` points
+  at one. `stopsOf(train)` is the only reader — never reach for a train's stops
+  directly. Before this the stops hung off the train, so "a service is planned
+  here" and "a vehicle is running it" were ONE fact: you could not draw a line
+  before buying a train, and withdrawing the last train silently deleted the
+  service every waiting passenger had planned around.
+- Trains are ASSIGNED (`assignTrain`), many to a line or none. A trainless line
+  is legitimate and is the state a player is in until they buy something.
+  `retireTrain` drops the train's `lineId`, never the line.
+- `pinned` is the difference between the two ways a line is born.
+  `createLine` = the player drew it: kept for ever, empty or not.
+  `assignLine(trainId, stops)` = train-centric sugar (and how authored
+  `init.line` boards load): it finds-or-creates by stop list, so two trains with
+  the same stops land on the SAME line, and the line is swept up (`pruneLine`)
+  when its last train leaves. Without that distinction every line edit would
+  litter the registry with orphans.
+- `setLineStops` restarts every train on the line (`restartOnLine`): an index
+  into a list that just changed length means nothing.
+- The COLOUR belongs to the line, not to a train's livery — `stationLines` (what
+  a platform shows) is derived from lines, so an unserved line still announces
+  itself, and two trains on one line cannot paint it two colours.
+- `lineOverlay` takes `{lineId}` or `{trainId}`; a line is drawable with nothing
+  running it. PlayView edits `editingLineId`, not a train.
+
 ## LINES — A TRAIN THAT DRIVES ITSELF (2026-08-02)
 - `sim/railRouter.ts` `planRailRoute()`: BFS over `(tile, entryPort)` — the same
   graph the editor's `tiles/routePlanner.ts` searches, the same output shape the
@@ -730,7 +841,7 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   That is what keeps `exitAt` unambiguous (a shortest path never repeats a
   `(tile, entry)` node) and what makes track laid mid-run usable next leg.
 - A train IN SERVICE never terminates at a depot, whatever the colours say —
-  `matched` is gated on `!train.line?.length`. Depots are where trains are
+  `matched` is gated on `!stopsOf(train)?.length`. Depots are where trains are
   ordered and stabled; on a line they are turn-backs, not destinations.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each
@@ -887,6 +998,33 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
     · Paint ONE band per side per movement, deduplicated: `twoWay` is two lanes
       over the same ground and painting per lane stacks two bands and shows a
       seam at every tile edge.
+    · **MEASURE THE ROAD WITH `laneCountAt`, NEVER `laneCount(p) +
+      laneCount(oppositePort(p))`** (2026-08-04). A CURVE (and a junction) carries
+      no lanes on the port opposite an arm, so the two-term sum collapses every
+      bend to the 2-lane minimum — `roadHalfUnits` did exactly that and laid a
+      2-lanes-each-way street's band 28 units inside its own kerb, i.e. UNDER the
+      tarmac that is painted over it. The pavement VANISHED for the length of
+      every bend (reported as "eine Lücke in den Trottoirs"); `/test/roadcurveloops`
+      showed two of its three rings with no pavement at all. `tiles/lanes.ts`
+      already documents `laneCountAt` as the helper for "when the tile is a curve
+      or junction" — believe it.
+    · **NO min-2 FLOOR on the pavement either**, same reason `Tile.vue`'s paint
+      width dropped one: since the run-max kerb anchor a 1-lane one-way street is
+      drawn its true ONE lane wide, so flooring at two floats the band half a lane
+      out with a strip of bare ground behind the kerb (`/test/citizencars`).
+    · **The band is seam-matched PER END, not per tile** (`pavementPaths` takes the
+      LEVEL, not just the cell). The tarmac meets its neighbour flush —
+      `roadSeamPaintTotal` narrows a road toward a narrower neighbour and
+      `junctionArmPaintTotal` makes a junction arm adopt the street it opens onto
+      — so a pavement measured from the tile alone jogs sideways at exactly the
+      seams the kerb it follows does not. Use `roadKerbEdge` / `roadCurveKerbEdgeTapered`
+      with SIGNED per-end offsets and `side = 1`; both taper for free.
+    · **A ONE-WAY street is the one road not symmetric about its centreline.** It
+      kerb-anchors the run's widest lane count, so lanes open and close on the
+      CENTRE side while the kerb runs dead straight — each pavement has to follow
+      its OWN edge (`kerb + pad` / `inner − pad`), and a centred ±half puts the
+      kerb-side band on the tarmac. `/test/footwaywidth` is the isolation board
+      for all of this: a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
     · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
       and pavements, above EVERY tile's ground patch and not just their own. A
       terrain patch's corners are jittered OFF the tile grid on purpose, so a
@@ -2376,6 +2514,74 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   parked cars AND unit-less samples (a garaged car has `units: []`).
   Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
 
+## WORKPLACE PARKING (the commuter's car stops somewhere, 2026-08-04)
+Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
+- **A DRIVING CITIZEN'S CAR USED TO BE DELETED ON ARRIVAL**, so the town had a
+  rush hour with nothing at stake and `parkPenaltySec: 8` stood in for a fact the
+  board never checked. `requestTrip(from, to, kind, { park: true })` sends it to
+  the nearest facility with a free bay instead, and it HOLDS that bay until
+  `releaseTrip`. Three trip states now (`TripStatus`): driving | parked | arrived.
+- **STAFF PARKING IS DERIVED FROM THE ZONING** (`tiles/workplaceParking.ts`).
+  `terrain: "industry"` already says "a works"; the pass lays THREE `parallel`
+  bays on the road tile a work/shop plot's driveway joins, on the kerb facing the
+  plot. Three against a works employing 12–96 — the shortfall IS the mechanic,
+  and three is also what fits (60px pitch on a 200px tile).
+  · HOMES GET NOTHING, and that is a rule and not an omission — see the overnight
+    trap below.
+  · `side: "left"` is offered ONLY on a one-way straight, matching
+    `validateParking`'s own rule. Leaving it out costs half the workplaces on any
+    board built round a one-way loop: their gate is on the far kerb, and the near
+    kerb faces the middle of the ring.
+  · IT VALIDATES AND BACKS OUT. Every derived row goes through `validateParking`
+    and any the validator objects to is DROPPED, because the objections are not
+    local: bays on a dead-end stub turn that stub into a car park with no way out,
+    which is a property of a flood fill. Idempotent, so a second pass is a no-op.
+  · APPLIED IN THE SCENARIO'S OWN DATA, not in `citizensMode.setup`. `PlayView`
+    uses `setup.level`, but **TestStage passes `scenario.level` straight to
+    `createGame`** and `createGame` never reads `setup.level` either — so a
+    mode-setup transform reaches the play board and NOTHING in `/test` or in any
+    unit test. Wiring it into the mode needs that fixed first.
+- **`ParkingRow.marking: "none"` IS THE AMERICAN WIDE STREET**: carriageway keeps
+  every one of its own markings, the parking edge has no white boxes. PAINT, not a
+  new `StallKind` — depth/pitch/manoeuvre/exit are identical to `parallel`, and
+  forking them would mean keeping two of everything in step for ever. The apron
+  and the outer kerb line still draw, so the run reads as a street that is WIDER
+  here rather than cars on the grass. Rejected on any kind but `parallel`: an
+  unpainted echelon rank reads as a car park nobody finished.
+  `/test/streetparking` is the two side by side.
+- **A RELEASED CAR RE-PARKS ITSELF UNLESS YOU SAY OTHERWISE** (`trips.released`).
+  It keeps `phase === "parked"` while it waits in its bay for a gap (leaving a bay
+  buys no right of way), so `settleRequestedTrips` fires again on the very next
+  tick and resets the hold to another full hour. Symptom: commuters ended their
+  journey HOME "parked".
+- **GOING HOME MUST NOT TAKE A PUBLIC SPACE** (`purpose !== "home"` in
+  `startTrip`). A house has a driveway — which is exactly why no forecourt is
+  derived outside one. Left in, it is CORRECT behaviour that breaks the board:
+  residents park overnight on the works' own kerb, measured at 12 of 12 bays held
+  at 03:00 by people asleep in their beds, rising to the cap over four days, after
+  which no commuter can ever park again.
+- **A CAR STILL HUNTING FOR A SPACE IS NEVER SETTLED BY THE ADDRESS TEST**
+  (`parkTarget !== null` gate in `settleRequestedTrips`). Staff bays sit on the
+  workplace's OWN street, so the address IS the car park's tile and the trip would
+  be deleted half a tile before it parked. Once `giveUpAndReplan` clears
+  `parkTarget` the address test applies again, and that is the graceful fallback —
+  they found something down the road, and pay `parkSearchSec`.
+- `tripGoal.entryPort: null` = ANY approach counts as arrived. A parking trip
+  cannot know which way round the block the driver comes back, and the route home
+  is planned fresh from the stall.
+- `resumeFromStall` plans to `car.tripGoal` when there is one and to a map exit
+  otherwise. Ambient traffic leaves the map; a commuter's car has an address. Get
+  this wrong on a CLOSED RING and there is no map edge to despawn at — the car
+  circles for the rest of the run.
+- `abandonTrip(id)` exists for the caller that has LOST the owner (emigration, a
+  refused journey home). Releasing the trip alone leaves the CAR parked: a bay
+  held by nobody is a bay nobody can use again, one per lost commuter.
+- **`game.parkingOccupancy` IS A RENDER MIRROR** — filled in `frame()`, so it is
+  empty for ever in a headless run and a test written against it passes vacuously.
+  The model-side observable is `citizenStats.carsParked`, counted in `advance()`.
+- `/test/workparking` is the demo: a closed one-way ring (so every car is a named
+  citizen), one works, three bays, two dozen drivers.
+
 ## BUILD IN PLAY (Tycoon phase 2, 2026-07-26)
 - `game.buildRoute(steps)` = canAfford gate → `applyEdits` → `spend`, IN THAT
   ORDER: a refused edit (a train moved onto a route tile after the preview)
@@ -2700,6 +2906,27 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   band between "driving" and "teleporting" is wide and unambiguous. Reach for it
   first whenever a car "swerves for no reason": it names the scenario, tile, ports
   and lane.
+  · AND IT ONLY CATCHES WHAT THE REGISTRY DRIVES. Every 2-lane bend in the gallery
+    had a 2-tile approach, so a car had always SETTLED into its lane before the
+    corner and the fractional-lane case was never swept at all (2026-08-05: found
+    by hand-lengthening `roadcurvetraffic`, not by the suite). A scenario is
+    coverage — when a bug needs a longer road/a busier tile to appear, the fix
+    ships the map that keeps driving it (`/test/curvelanechange`, 6-tile approach
+    + overtaking up).
+- A FRACTIONAL LANE MUST GET A FRACTIONAL OFFSET, EVERYWHERE. `lanePos` is
+  CONTINUOUS (0.49 = mid-change), and `junctionExitLane` is a map between lane
+  INDICES — so every caller that feeds it a live lane has to decide what to do
+  with the fraction, and ROUNDING IS A STEP FUNCTION. `junctionExitOffsetPx` did
+  (`Math.round(entryLane)`): the tick a car's lane crossed .5 inside a bend its
+  whole exit offset flipped a lane, and the drawn point snapped `t · laneWidth`
+  sideways — up to a third of a lane, mid-curve, with nothing in the sim having
+  moved. It now interpolates between the answers for `floor` and `ceil`, which is
+  identical at whole lanes (converging lanes stay converged, so a 3→1 merge does
+  not gain a phantom in-between position). Fixed 2026-08-05.
+  · The DECISION callers are the opposite case and correctly keep the round:
+    `turnLandsOnBusLane` (arrow colour), `road.ts laneOf`/`turnShift` (an integer
+    lane shift preserves the fraction it is added to). Rounding is wrong only
+    where the result is a POSITION drawn every tick.
 - STACKED junctions (a junction directly above another, no road tile between —
   `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
   min. A junction's exit-port `laneCountAt` counts only the straight-through
@@ -2714,6 +2941,74 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   paints half a lane narrow and the SOLID kerb lands on the lane CENTRE while the
   lanes sit on the wider band. Keep paint (`junctionArmPaintTotal`) and positioning
   (`seamPositioningBand`) in lockstep for stacked junctions.
+
+## LEVEL-CROSSING FURNITURE (2026-08-04)
+- THE BOOMS ARE DERIVED FROM THE ROAD, NOT FROM THE TILE. `tiles/crossingFurniture.ts`
+  (pure, unit-tested) returns the span of painted tarmac and the boom/sign positions;
+  `Crossing.vue` is a view over it. The old geometry was fixed CSS percentages (post
+  at 30%, arm 30%→70%), which is only ever right on a 1+1-lane street: on a 3+3 the
+  tarmac is 168px of a 200px tile, so the post stood IN the carriageway and the arm
+  covered the two inner lanes. Same lesson as the pavement offset in `footway.ts` —
+  road width is data, so anything beside a road must read it.
+- A BIG STREET HAS FOUR BARS: both sides of the rails × both verges
+  (`BIG_STREET_LANES = 2`, i.e. anything wider than 1+1). Each row is closed by its
+  own pair meeting at the centreline, so NO arm is ever longer than half the road —
+  reaching the far verge on a 6-lane street would swing an arm right across the
+  oncoming lanes. A narrow 1+1 street keeps the classic diagonal PAIR: one bar per
+  row, on the approaching driver's right verge (traffic keeps right, so the down
+  carriageway is the local −x half and its bar hinges on −x).
+- A SIGNAL ON EVERY MAST — one per BAR, not one per row (four on a big two-way
+  street, at the tile's four corners). That is the Swiss arrangement (a barrier and
+  a Blinklichtsignal on each side of the road) and it is also what makes a closed
+  crossing read as a PAIR of barriers per side rather than one long bar. ONE-WAY
+  roads are guarded on the approach side ONLY (a bar behind the crossing guards
+  nothing): one row, one bar if narrow / a verge pair if big.
+- THE CENTRE GAP (`CENTRE_GAP_FRAC = 0.045`) is the other half of that. Two arms
+  meeting exactly on the centreline draw as one unbroken bar — the "looks like a
+  single barrier" report. Every arm whose tip is the MEETING POINT stops short by
+  the gap; an arm ending at a KERB (a narrow one-way street's full barrier) does
+  not, since nothing meets it. The gap stays well under a car's width (0.14 tile)
+  so the road still reads as closed.
+- THE SIGNAL ART: a RED-BORDERED triangular panel — red rim, white ring, black face
+  — carrying two red lights side by side AT THE SAME HEIGHT, alternating, on a
+  red/white banded mast (matched to the reference photo, 2026-08-05; the earlier art
+  was the same panel with the red border missing, and the one before that a red-and-
+  white warning triangle with the lamps hanging BELOW it, which is not a signal any
+  country uses). At 26px the red border is what makes the sign READABLE on the board:
+  a white-rimmed black triangle on grey tarmac is a dark speck until you zoom in.
+  The unlit lens is dark red (#6b3030), not black: on a black panel a black lens
+  disappears and the signal reads as having only one light.
+- THREE CONCENTRIC RINGS FROM ONE PATH (`PANEL_TRIANGLE`, `.xing-rim/-edge/-face`).
+  A round-joined stroke grows a shape OUTWARD by half its width, so painting one
+  triangle three times with shrinking stroke-widths (5.8 red / 2.0 white / fill-only
+  black) gives three nested rounded-corner triangles — the ring THICKNESSES are the
+  differences of the half-widths (1.9 and 1.0). `clip-path: polygon()` cannot do this:
+  no corner radius, and every ring needs its own hand-inset triangle. Inset the path
+  from the viewBox by the widest HALF-stroke (2.9) or the red silhouette overflows.
+  The lamps stay OUTSIDE the `<svg>` (siblings in the `.xing-panel` wrapper) for the
+  same reason they were outside the old clip-path: an svg clips to its viewBox and
+  would eat the outer edge of a lens sitting near the triangle's edge.
+- A SIGN IS PLACED IN THE LOCAL FRAME BUT DRAWN IN THE SCREEN FRAME. The booms are
+  road furniture and turn with `.crossing-rot`; the panel is a GLYPH, and the same
+  quarter turn laid it on its side (triangle pointing at the verge, mast horizontal)
+  on every horizontal road. `signStyle` cancels it with `rotate(-90deg)` — safe after
+  `translate(-50%, -50%)`, because that has already put the element's CENTRE on the
+  layout point and rotation is about the centre. Only `/test/crossinglanes` shows
+  this; the vertical-road `/test/crossing` looks perfect either way.
+- THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
+  CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
+  (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the
+  RIGHT→LEFT movement, and `roadPorts` must return `{down: Right, up: Left}`. Getting
+  this backwards puts both bars on the departure side and only shows up in ONE
+  orientation — always check both (`/test/crossinglanes` has both plus a one-way).
+- MIRROR ABOUT THE HINGE. The right-hand bar is the left one under `scaleX(-1)`;
+  `.boom` therefore needs `transform-origin: left center`, because `left` is placed
+  at the hinge and the default centre origin slides the whole barrier one arm length
+  sideways.
+- The span mirrors `Tile.vue roadPaths` (the authority on painted width) at MID-tile,
+  where the rails run: two-way = centred band, averaged over its two seam totals
+  (`roadSeamPaintTotal`); one-way = kerb-anchored to `roadOneWayRunMax`. If the paint
+  rules change, this follows.
 
 ## ROADS
 - NO MIN-2 PAINT FLOOR on a curve. `Tile.vue roadPaths` used `max(selfAt, 2)` in
@@ -3293,6 +3588,16 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   (design doc §8): goals on the Ready card, the last sliver of M9.
 
 ## WORKFLOW
+- A GREEN LOCAL SUITE PROVES NOTHING ABOUT A PR WHOSE BASE MOVED (2026-08-03).
+  Actions checks out your head MERGED WITH THE CURRENT BASE, so it runs code
+  pairs that exist nowhere on your machine. Phase 9 went red on a test another
+  session had landed minutes earlier: the merge itself was CLEAN, and the two
+  changes were still incompatible (their test read a platform's colour as a
+  train livery; D11 had moved it to the line). Before calling a PR done, fetch
+  master and re-run — a conflict check is not enough, because this class of
+  break has no conflict to find.
+- And when it does break: the fix is usually in YOUR code, not their test. Ask
+  what the other session's assertion was trying to say, and make that true.
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
   BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
   one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
