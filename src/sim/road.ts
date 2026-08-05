@@ -418,7 +418,12 @@ export interface Car {
   // off the edge of the world; a requested car is somebody going somewhere, and
   // it stops when it gets there. Null for ambient traffic — which is every car
   // that existed before the citizen layer.
-  tripGoal: { tileId: string; entryPort: Port } | null;
+  // `entryPort: null` means ANY approach counts as having arrived. A trip that
+  // ends at a car park does not know which way round the block the driver will
+  // come back to the address on, and after giving up on a space the route home
+  // is planned fresh — pinning the port the outbound BFS happened to choose
+  // would leave the car circling an address it is standing on.
+  tripGoal: { tileId: string; entryPort: Port | null } | null;
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
@@ -656,10 +661,32 @@ export interface RoadSimConfig {
   dwell?: { min: number; max: number };
 }
 
-// A journey requested from outside: still going, or finished. There is no
-// "failed" — a car that could not be dispatched never produced a trip id at all
-// (`requestTrip` returns null), and one that got lost still ends up somewhere.
-export type TripStatus = "driving" | "arrived";
+// A journey requested from outside. There is no "failed" — a car that could not
+// be dispatched never produced a trip id at all (`requestTrip` returns null),
+// and one that got lost still ends up somewhere.
+//
+// "parked" is the state a COMMUTER'S car spends the working day in: the driving
+// leg is over, the vehicle is standing in a real bay holding it against everyone
+// else, and the trip is not finished — its owner will come back for it. It ends
+// when the caller says so (`releaseTrip`), not when a dwell timer runs out.
+export type TripStatus = "driving" | "parked" | "arrived";
+
+// How a requested trip ENDS.
+export interface TripRequest {
+  kind?: VehicleKind;
+  // Park at the far end instead of evaporating at the address. The car aims at
+  // the nearest car park with a free bay (`parkSearchTiles` of the destination),
+  // takes a real space and holds it until `releaseTrip`.
+  //
+  // When nothing open is within reach the trip falls back to driving to the
+  // address itself and retiring there — the driver "found something down the
+  // road". Canon: a saturated network must SLOW people, never strand them, and
+  // the caller can see which happened (`tripParkedAt`) and charge for it.
+  park?: boolean;
+  // How far from the destination a bay may be and still be worth taking, in
+  // tiles. Default PARK_SEARCH_TILES.
+  parkSearchTiles?: number;
+}
 
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
@@ -668,10 +695,33 @@ export interface RoadSim {
   // when no car could be dispatched — no road, no route, the street outside
   // blocked, or the requested-trip cap reached. The car is ordinary traffic in
   // every other respect: same lanes, same junctions, same queues.
-  requestTrip(fromTileId: string, toTileId: string, kind?: VehicleKind): string | null;
+  requestTrip(
+    fromTileId: string,
+    toTileId: string,
+    kind?: VehicleKind,
+    req?: TripRequest,
+  ): string | null;
   // Is that journey still going? Unknown ids read "arrived" so a caller can
   // never wait for ever on a trip that no longer exists.
   tripStatus(tripId: string): TripStatus;
+  // Did this trip set off LOOKING for a space, on a board that has spaces? The
+  // difference between "there was nowhere to park" — which is a thing the player
+  // can fix — and "nobody parks on this board", which is not a complaint.
+  tripWantedSpace(tripId: string): boolean;
+  // The tile a parked trip's car is standing on, or null if it is not parked.
+  // This is how far the driver has to WALK, and charging that walk is the whole
+  // reason a car park two streets away is worse than the space at the gate.
+  tripParkedAt(tripId: string): string | null;
+  // The owner is back. The car gives up its bay — waiting in it, with no road
+  // body and no right of way, until the traffic genuinely leaves a gap — and
+  // then drives to `toTileId`, where the trip finally reads "arrived".
+  //
+  // False when there is no such parked trip (already gone, never parked); the
+  // caller then falls back to its own clock, exactly as when a dispatch fails.
+  releaseTrip(tripId: string, toTileId: string): boolean;
+  // Take the car off the board, wherever it is. For a caller that has lost the
+  // owner: a bay held by nobody is a bay nobody can ever use again.
+  abandonTrip(tripId: string): void;
   // Forget a finished trip (the caller has read the result).
   clearFinishedTrip(tripId: string): void;
   // The crossing-flow snapshot for the objective layer (see RoadFrame).
@@ -3028,11 +3078,34 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // Live requested trips: car id → whether it is still going. An entry survives
   // the car's despawn so the caller can ask "did they get there?" on a later
   // tick; it is dropped once read as finished.
-  const trips = new Map<string, "driving" | "arrived">();
+  // Live requested trips. `wantedSpace` records that the caller asked for a bay
+  // AND this board has bays to offer — which is what lets a caller tell "there
+  // was nowhere to park" apart from "nobody parks on this board", and charge for
+  // only the first. Without it, every board that has no parking at all would
+  // start punishing its drivers for failing to use parking that does not exist.
+  const trips = new Map<string, { status: TripStatus; wantedSpace: boolean; released: boolean }>();
 
+  // How far from the destination a commuter will take a space. Six tiles is
+  // already a long walk in this world (`walkMaxTiles` on the citizens mode is
+  // FOUR for a whole journey), so anything beyond it is not "parking at work",
+  // it is a different trip.
+  const PARK_SEARCH_TILES = 6;
+
+  // How long a car HOLDS a bay for its owner, when nobody ever comes back for
+  // it. Not Infinity, deliberately: a citizen who emigrates, or a caller that
+  // simply forgets, would otherwise strand a space for the rest of the run and
+  // the car park would drain one bay per lost commuter. An hour of board time is
+  // far longer than any working day the mode runs and short enough to self-heal.
+  const HELD_DWELL_SEC = 3600;
+
+  // Requested cars, INCLUDING the ones standing in a bay all day. Counting only
+  // the moving ones would let parked commuters accumulate without limit, which
+  // is the one thing the cap exists to stop. `trips` is the register of every
+  // dispatched journey and its entry outlives the car, so the count is taken
+  // over the live fleet.
   function requestedCarCount(): number {
     let n = 0;
-    for (const c of cars) if (c.tripGoal) n++;
+    for (const c of cars) if (trips.has(c.id)) n++;
     return n;
   }
 
@@ -3051,7 +3124,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function requestTrip(
     fromTileId: string,
     toTileId: string,
-    kind: VehicleKind = "car"
+    kind: VehicleKind = "car",
+    req: TripRequest = {},
   ): string | null {
     if (fromTileId === toTileId) return null;
     if (requestedCarCount() >= MAX_REQUESTED_CARS) return null;
@@ -3068,17 +3142,38 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       entryPort,
     }));
     if (goals.length === 0) return null;
+    const wantsPark = !!req.park && parking.any() && vehicleCanPark(kind);
+    const searchTiles = req.parkSearchTiles ?? PARK_SEARCH_TILES;
 
     // The driver pulls out of their street onto whichever approach actually
     // leads there. Ports are tried in a fixed order so a given board dispatches
     // the same way every run.
     for (const startPort of approachPorts(fromTileId, cls).sort((a, b) => a - b)) {
-      const plan = planRouteToGoals(level, from, startPort, goals, cls);
-      if (!plan.goal) continue;
+      // A PARKING trip aims at the nearest car park to the address, not at the
+      // address. It still carries the address as its `tripGoal`: that is what
+      // the trip falls back to if the driver gives up on finding a space and
+      // replans (`giveUpAndReplan`), and it is why the goal test below is
+      // suppressed while a space is still being aimed for — the staff bays
+      // outside a works are usually ON the works' own street, and settling the
+      // trip there would delete the car half a tile before it parked.
+      const parkPlan = wantsPark
+        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles)
+        : null;
+      let turns: RouteTurn[];
+      let goalPort: Port | null;
+      if (parkPlan) {
+        turns = parkPlan.turns;
+        goalPort = null; // any approach of the address will do after a give-up
+      } else {
+        const plan = planRouteToGoals(level, from, startPort, goals, cls);
+        if (!plan.goal) continue;
+        turns = plan.turns;
+        goalPort = plan.goal.entryPort;
+      }
 
       const usable = usableLaneIndices(fromRoad, startPort, cls);
       if (usable.length === 0) continue;
-      const exit = routeAwareExitForSpawn(from, startPort, plan.turns, cls);
+      const exit = routeAwareExitForSpawn(from, startPort, turns, cls);
       const length = specLength(vehicleSpec(kind, carLength));
       const probe = blankCar("", kind, { coord: from, entryPort: startPort, exitPort: exit });
       // A closed crossing must not stop somebody LEAVING THEIR HOUSE — it is
@@ -3103,35 +3198,129 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.velocity = 0;
       car.accel = DEFAULT_CAR_ACCEL;
       car.brake = DEFAULT_CAR_BRAKE;
-      car.routePlan = plan.turns;
+      car.routePlan = turns;
       car.laneIndex = chosen;
       car.targetLane = chosen;
       car.laneAnchor = chosen;
       car.overtakeHomeLane = chosen;
       car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
-      car.tripGoal = { tileId: toTileId, entryPort: plan.goal.entryPort };
+      car.tripGoal = { tileId: toTileId, entryPort: goalPort };
+      car.parkTarget = parkPlan?.facilityId ?? null;
       cars.push(car);
-      trips.set(id, "driving");
+      trips.set(id, { status: "driving", wantedSpace: wantsPark, released: false });
+      // THE TOKEN COMES AFTER `cars.push`, and not one line earlier. Every
+      // bail-out above can fire — a blocked street most of all — and a token for
+      // a car that was never created can never be released, so car parks would
+      // drain to empty and stay there. Same trap, same rule, as `trySpawn`.
+      if (parkPlan) {
+        parking.aim(parkPlan.facilityId, id);
+        // A commuter can set off from the very tile the bays are on (the staff
+        // rank outside their own works, on a short street). The tile-crossing
+        // hook would never fire for that car, so claim here too — otherwise it
+        // drives straight past the space it was dispatched to take.
+        if (parking.facilityOfTile(fromTileId) === parkPlan.facilityId) {
+          car.enteredTarget = true;
+          claimStallHere(car, fromTileId, startPort);
+        }
+      }
       return id;
     }
     return null;
   }
 
-  // Requested cars that have reached their destination: they stop being traffic
-  // and the trip is marked arrived for whoever asked for it.
+  // Requested cars that have reached the end of their journey.
+  //
+  // TWO endings, and which one applies is the whole parking feature:
+  //  · PARKED — the car took a bay. It stops being traffic without leaving the
+  //    map: the trip reads "parked", the bay is HELD (the dwell is stretched to
+  //    an hour, far past any working day), and it stays that way until
+  //    `releaseTrip`. This is a commuter's car sitting outside the works.
+  //  · ARRIVED — it is standing on the address. The car is retired.
+  //
+  // A car still aiming for a space is NEVER settled by the address test, even
+  // while standing on the address: staff bays are normally on the workplace's
+  // own street, so the address IS the car park's tile and the trip would be
+  // deleted half a tile before it could park. Once the driver gives up
+  // (`giveUpAndReplan` clears `parkTarget`), the address test applies again and
+  // is the graceful fallback — they found something down the road.
   function settleRequestedTrips(): void {
     for (let i = cars.length - 1; i >= 0; i--) {
       const c = cars[i];
+      if (!trips.has(c.id)) continue;
+      if (c.phase === "parked" && c.stall) {
+        const t = trips.get(c.id);
+        // ...unless the owner has ALREADY come back for it. A released car keeps
+        // phase `parked` while it waits in its bay for a gap in the traffic
+        // (leaving a bay buys no right of way), so without `released` this test
+        // fires again on the very next tick, re-parks the trip and resets the
+        // hold to another full hour. The symptom was subtle and the diagnosis
+        // was not: commuters ended their journey HOME "parked", so a car sat
+        // outside its owner's house holding a bay all night, and the works'
+        // own kerb slowly filled with residents until no commuter could park.
+        if (t && t.status === "driving" && !t.released) {
+          t.status = "parked";
+          c.dwellLeft = HELD_DWELL_SEC;
+        }
+        continue;
+      }
       const goal = c.tripGoal;
       if (!goal || c.phase !== "driving") continue;
+      if (c.parkTarget !== null) continue; // still looking for a space
       if (tileIdOf(c) !== goal.tileId) continue;
       // Half way across the destination tile reads as "pulled up at the address"
       // rather than "clipped the corner of the street".
-      if (c.path[c.headIndex].entryPort !== goal.entryPort || c.headProgress < 0.5) continue;
-      trips.set(c.id, "arrived");
+      if (goal.entryPort !== null && c.path[c.headIndex].entryPort !== goal.entryPort) continue;
+      if (c.headProgress < 0.5) continue;
+      setTripStatus(c.id, "arrived");
       releaseStall(c);
       cars.splice(i, 1);
     }
+  }
+
+  // The owner is back for the car. It gives up the bay — `advanceParking` only
+  // lets it out on a genuine gap, so this is a request and not a teleport — and
+  // then drives to `toTileId`, where `settleRequestedTrips` retires it.
+  function releaseTrip(tripId: string, toTileId: string): boolean {
+    if (trips.get(tripId)?.status !== "parked") return false;
+    const car = cars.find(c => c.id === tripId);
+    if (!car || car.phase !== "parked") return false;
+    if (!level[toTileId]?.road?.length) return false;
+    car.tripGoal = { tileId: toTileId, entryPort: null };
+    car.dwellLeft = 0;
+    const t = trips.get(tripId);
+    if (t) {
+      t.status = "driving";
+      t.released = true;
+    }
+    return true;
+  }
+
+  function tripParkedAt(tripId: string): string | null {
+    if (trips.get(tripId)?.status !== "parked") return null;
+    const car = cars.find(c => c.id === tripId);
+    return car?.stall?.tileId ?? null;
+  }
+
+  // Take the car off the board outright, wherever it is. The caller has decided
+  // it has no owner any more — somebody emigrated, or gave up on the journey and
+  // there is nowhere left to send it.
+  //
+  // The alternative is worse than untidy. A car left parked with nobody to
+  // release it holds its bay until the backstop dwell expires, then pulls out
+  // and drives a stale route — and on a closed ring road, with no map edge to
+  // despawn at, it circles for the rest of the run.
+  function abandonTrip(tripId: string): void {
+    const i = cars.findIndex(c => c.id === tripId);
+    if (i >= 0) {
+      releaseStall(cars[i]);
+      cars.splice(i, 1);
+    }
+    trips.delete(tripId);
+  }
+
+  function setTripStatus(tripId: string, status: TripStatus): void {
+    const t = trips.get(tripId);
+    if (t) t.status = status;
   }
 
   function trySpawn(closed: CrossingClosed): boolean {
@@ -3511,7 +3700,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           // A REQUESTED car that leaves the map never reached its address (its
           // route should have ended on it). Close the trip anyway rather than
           // leave whoever asked for it waiting for ever.
-          if (cars[i].tripGoal) trips.set(cars[i].id, "arrived");
+          // (`trips`, not `tripGoal`: a car dispatched to PARK carries no
+          // address to settle on while it is still hunting for a space, so
+          // testing the goal would leave that citizen waiting for ever.)
+          if (trips.has(cars[i].id)) setTripStatus(cars[i].id, "arrived");
           // Hand the bay back on the way out. A claim that outlives its car would
           // strand that space for the rest of the run — the road-layer version of
           // "a parked train occupies its depot tile forever".
@@ -3524,8 +3716,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     },
     requestTrip,
     tripStatus(tripId: string) {
-      return trips.get(tripId) ?? "arrived";
+      return trips.get(tripId)?.status ?? "arrived";
     },
+    tripWantedSpace(tripId: string) {
+      return trips.get(tripId)?.wantedSpace ?? false;
+    },
+    tripParkedAt,
+    releaseTrip,
+    abandonTrip,
     clearFinishedTrip(tripId: string) {
       trips.delete(tripId);
     },

@@ -22,13 +22,19 @@
 //   THIS FILE         — what a car DOES about them (the phases)
 
 import { Coordinates } from "@/types";
-import { Level } from "@/tiles/model";
-import { nearestUsableLaneIndex, usableLaneIndices, type VehicleClass } from "@/tiles/lanes";
+import { Level, parseCoordId } from "@/tiles/model";
+import {
+  laneUsableBy,
+  nearestUsableLaneIndex,
+  usableLaneIndices,
+  type VehicleClass,
+} from "@/tiles/lanes";
 import { Port, neighborCoord } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { planRoute, planRouteToGoals, RouteTurn, RouteGoal } from "./roadRouter";
 import type { LaneGeometry } from "./laneGeometry";
 import type { ParkingRegistry } from "./parking";
+import type { ParkingFacility } from "@/tiles/parking";
 import {
   clampToDirectionChange,
   manoeuvreLength,
@@ -215,6 +221,69 @@ export function createParkingPhases(deps: ParkingDeps) {
       if (plan.goal) return { turns: plan.turns, facilityId: chosen.id };
     }
     return null;
+  }
+
+  // Plan a trip that ends at a car park AS NEAR AS POSSIBLE TO A GIVEN ADDRESS.
+  //
+  // The sibling of `planParkingTrip`, and the difference is the whole point:
+  // ambient traffic is going to *a* car park (weighted by how much room it has,
+  // because that is what makes a city's traffic distribute), while a COMMUTER is
+  // going to work and wants the nearest space to the gate. Somebody who drives
+  // to the far side of town because that car park is bigger is not a commuter.
+  //
+  // `maxTiles` is what stops "the nearest space" turning into "any space at
+  // all": a bay six tiles from the office is a walk, a bay twenty tiles away is
+  // a different journey and the driver would have gone somewhere else. Null when
+  // nothing open is within reach, and the caller falls back to driving to the
+  // address itself.
+  function planParkingTripNear(
+    coord: Coordinates,
+    entry: Port,
+    kind: VehicleKind,
+    cls: VehicleClass,
+    target: Coordinates,
+    maxTiles: number,
+  ): { turns: RouteTurn[]; facilityId: string } | null {
+    const near = parking
+      .openFacilities(kind)
+      .map(f => ({ f, d: facilityDistance(f, target) }))
+      .filter(e => e.d <= maxTiles)
+      // Nearest first, ties by id so a board dispatches identically every run.
+      .sort((a, b) => a.d - b.d || (a.f.id < b.f.id ? -1 : 1));
+    // Only the closest few are worth a BFS each: if the three nearest car parks
+    // cannot be reached from here, a fourth one further away is not the answer.
+    for (const { f } of near.slice(0, 3)) {
+      const goals: RouteGoal[] = f.access.filter(
+        a => parking.pickStallOn(getCoordinatesId(a.coord), a.entryPort, kind, "probe") !== null,
+      );
+      if (goals.length === 0) continue;
+      const plan = planRouteToGoals(level, coord, entry, goals, cls);
+      if (plan.goal) return { turns: plan.turns, facilityId: f.id };
+    }
+    return null;
+  }
+
+  // Every approach of a tile, as router goals. "Standing on that tile" is the
+  // destination; which way in is the router's business.
+  function approachGoals(tileId: string, cls: VehicleClass): RouteGoal[] {
+    const coord = parseCoordId(tileId);
+    const ports = new Set<Port>();
+    for (const lane of level[tileId]?.road ?? []) {
+      if (laneUsableBy(lane, cls)) ports.add(lane.from);
+    }
+    return [...ports].sort((a, b) => a - b).map(entryPort => ({ coord, entryPort }));
+  }
+
+  // How far a facility is from an address, in tiles — the shortest Chebyshev
+  // distance from any tile it occupies. Chebyshev rather than a driven route
+  // because this is the WALK at the far end, and a pedestrian cuts corners.
+  function facilityDistance(f: ParkingFacility, target: Coordinates): number {
+    let best = Infinity;
+    for (const id of f.tileIds) {
+      const { x, y } = parseCoordId(id);
+      best = Math.min(best, Math.max(Math.abs(x - target.x), Math.abs(y - target.y)));
+    }
+    return best;
   }
 
   // Try to take a free bay on the tile the car has just reached. Claiming is the
@@ -696,7 +765,29 @@ export function createParkingPhases(deps: ParkingDeps) {
     const entryPort = head.entryPort;
     const startT = car.headProgress;
     const exit = roadExitPort(level, head.coord, entryPort, cls);
-    const replan = planRoute(level, head.coord, entryPort, allMapExits, routeRng, cls);
+    // WHERE DOES IT GO NOW? Ambient traffic leaves the map — a parked car is a
+    // stage of a through trip and the far map edge is the rest of it. A
+    // REQUESTED car has an address: it was left here by somebody who has now
+    // come back for it, and `tripGoal` is where they are going (home, usually).
+    // Planning that one to a map exit instead would drive a commuter's car off
+    // the edge of the world at going-home time, and the journey the citizen
+    // layer is waiting on would never arrive.
+    //
+    // EVERY approach of the address is a goal, exactly as `requestTrip` does it:
+    // the journey ends when the car is standing there, whichever way it came in.
+    // Pinning the port the outbound leg happened to use would refuse perfectly
+    // good routes home.
+    const goal = car.tripGoal;
+    const homeward = goal
+      ? planRouteToGoals(level, head.coord, entryPort, approachGoals(goal.tileId, cls), cls)
+      : null;
+    const replan =
+      homeward?.goal
+        ? { turns: homeward.turns, destination: null }
+        : planRoute(level, head.coord, entryPort, allMapExits, routeRng, cls);
+    // Record which approach the route actually settles on, so the arrival test
+    // (`settleRequestedTrips`) is asking about the way this car is really coming.
+    if (goal && homeward?.goal) goal.entryPort = homeward.goal.entryPort;
     car.path = [{ coord: head.coord, entryPort, exitPort: exit }];
     car.headIndex = 0;
     car.headProgress = Math.max(0, Math.min(0.999, startT));
@@ -946,6 +1037,7 @@ export function createParkingPhases(deps: ParkingDeps) {
 
   return {
     planParkingTrip,
+    planParkingTripNear,
     giveUpAndReplan,
     claimStallHere,
     releaseStall,
