@@ -24,9 +24,10 @@
         <div class="boom-post"></div>
       </div>
 
-      <!-- Blinklichtsignal — one on EVERY barrier mast, the Swiss arrangement: a
-      black triangular panel carrying two red lights side by side at the same
-      height, alternating while the crossing is closed. -->
+      <!-- Blinklichtsignal — one on EVERY barrier mast: a red-bordered triangular
+      panel, white inside the red, with a black face carrying two red lights side
+      by side at the same height, alternating while the crossing is closed. The
+      mast is banded red/white like the barrier arm it stands on. -->
       <div
         v-for="(s, i) in layout.signs"
         :key="'sign' + i"
@@ -35,6 +36,18 @@
         :style="signStyle(s)"
       >
         <div class="xing-panel">
+          <!-- ONE triangle painted three times. A round-joined stroke grows the
+          silhouette outward by half its width, so a wide red stroke, a narrow
+          white one and the bare fill give three CONCENTRIC rounded-corner rings
+          from a single path — which `clip-path` polygons cannot do (they have no
+          radius, and each ring would need its own hand-inset triangle). The
+          viewBox is 1:1 with the panel's pixels, so the lamp offsets in the CSS
+          below can be read straight against these coordinates. -->
+          <svg class="xing-plate" viewBox="0 0 26 22" width="26" height="22">
+            <path class="xing-rim" :d="panelTri" />
+            <path class="xing-edge" :d="panelTri" />
+            <path class="xing-face" :d="panelTri" />
+          </svg>
           <span class="xing-lamp xing-lamp--a"></span>
           <span class="xing-lamp xing-lamp--b"></span>
         </div>
@@ -60,6 +73,11 @@ import {
 } from "@/tiles/crossingFurniture";
 import type { Game } from "@/game";
 
+// The signal panel's triangle, in its own 26x22 viewBox. Inset from every edge by
+// the WIDEST half-stroke it is painted with (2.9, the red rim), so the outermost
+// silhouette lands exactly on the panel's bounds instead of overflowing them.
+const PANEL_TRIANGLE = "M13 2.9 L23.1 19.1 L2.9 19.1 Z";
+
 // The crossing furniture is a pure view over the tile's gate state — no movement
 // logic lives here. Booms/lamps animate purely off `closed`, which the game
 // derives from the train reservation/occupancy on this tile.
@@ -72,6 +90,10 @@ class Crossing extends Vue {
 
   get size(): number {
     return this.config.tileSize;
+  }
+
+  get panelTri(): string {
+    return PANEL_TRIANGLE;
   }
 
   // Grid position of the tile -> pixel offset inside `.level`.
@@ -147,8 +169,21 @@ class Crossing extends Vue {
     };
   }
 
+  // A sign is PLACED in the local frame (so it follows the road like the booms
+  // do) but DRAWN in the screen frame: the panel is a triangle read as a glyph,
+  // and the quarter turn `.crossing-rot` applies for a horizontal road would lay
+  // it on its side, pointing at the verge with its mast sticking out sideways.
+  // Cancelling the turn keeps every crossing signal upright, whichever way the
+  // road runs. The rotation is about the element's centre, which `translate` has
+  // already put on the layout point, so undoing it does not move the sign.
   signStyle(s: CrossingSign) {
-    return { left: `${this.size / 2 + s.x}px`, top: `${s.y}px` };
+    return {
+      left: `${this.size / 2 + s.x}px`,
+      top: `${s.y}px`,
+      transform: this.horizontalRoad
+        ? "translate(-50%, -50%) rotate(-90deg)"
+        : undefined,
+    };
   }
 
   // CLOSED while a train has reserved or is sitting on the crossing tile.
@@ -225,8 +260,9 @@ geometry below is written once for a rightward sweep. */
   transform: rotate(0deg); /* lowered across the road */
 }
 
-/* Blinklichtsignal (CH): a white-rimmed BLACK triangular panel carrying two red
-lights side by side at the same height, on a short mast. One per barrier mast. */
+/* Blinklichtsignal: a RED-bordered triangular panel — red rim, white inside it,
+black face — carrying two red lights side by side at the same height, on a short
+red/white banded mast. One per barrier mast. */
 .xing-signal {
   position: absolute;
   z-index: 8;
@@ -235,55 +271,73 @@ lights side by side at the same height, on a short mast. One per barrier mast. *
   align-items: center;
   transform: translate(-50%, -50%);
 }
-/* The panel itself is the two pseudo-elements (rim + face); the lamps are real
-children of the UNCLIPPED wrapper, because a clip-path clips its descendants and
-would eat the lights sitting near the triangle's edges. */
+/* The panel is the <svg> plate; the lamps are real children of the UNCLIPPED
+wrapper beside it, because an <svg> clips to its viewBox and would eat the lights
+sitting near the triangle's edges. */
 .xing-panel {
   position: relative;
-  width: 24px;
-  height: 20px;
+  width: 26px;
+  height: 22px;
 }
-.xing-panel::before,
-.xing-panel::after {
-  content: "";
+.xing-plate {
   position: absolute;
-  clip-path: polygon(50% 0, 100% 100%, 0 100%);
-}
-.xing-panel::before {
   inset: 0;
-  background: #f2f2f2; /* the rim */
+  overflow: visible;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
 }
-.xing-panel::after {
-  left: 1.5px;
-  right: 1.5px;
-  top: 2px;
-  bottom: 1px;
-  background: #1d1d1d; /* the panel face */
+/* Three rings from one path: each stroke is painted UNDER the next, and a stroke
+grows the shape outward by half its width — so the widths are the ring radii, and
+their DIFFERENCES are the visible ring thicknesses (red 1.9, white 1.0). */
+.xing-rim,
+.xing-edge,
+.xing-face {
+  stroke-linejoin: round;
 }
+.xing-rim {
+  fill: #d81f26;
+  stroke: #d81f26;
+  stroke-width: 5.8;
+}
+.xing-edge {
+  fill: #f2f2f2;
+  stroke: #f2f2f2;
+  stroke-width: 2;
+}
+.xing-face {
+  fill: #1d1d1d;
+  stroke: none;
+}
+/* The mast is banded like the barrier arm it stands beside; the hairline keeps a
+white band from vanishing into a light road marking. */
 .xing-post {
-  width: 3px;
-  height: 13px;
-  background: #555;
+  width: 4px;
+  height: 14px;
   border-radius: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    #e23b3b 0 3.5px,
+    #f6f6f6 3.5px 7px
+  );
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35);
 }
-/* The two lenses sit low on the panel, where the triangle is widest. Dark red
-when off — a lens, not a hole — so the signal still reads as TWO lights while
-only one of them is lit. */
+/* The two lenses sit low on the panel, where the triangle is widest — centred on
+(8.6, 15.6) and (17.4, 15.6) of the viewBox above, which keeps a 6px circle clear
+of the white ring. Dark red when off — a lens, not a hole — so the signal still
+reads as TWO lights while only one of them is lit. */
 .xing-lamp {
   position: absolute;
   z-index: 1;
-  bottom: 2px;
-  width: 5px;
-  height: 5px;
+  top: 12.6px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #6b3030;
 }
 .xing-lamp--a {
-  left: 5.5px;
+  left: 5.6px;
 }
 .xing-lamp--b {
-  right: 5.5px;
+  left: 14.4px;
 }
 .xing-signal.active .xing-lamp--a {
   animation: lamp-blink 1s steps(1) infinite;
