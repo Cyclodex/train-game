@@ -411,6 +411,41 @@ describe("junctionExitOffsetPx (turn-glide target offset)", () => {
     expect(bus).toBeCloseTo(28, 6);
     expect(bus).toBeGreaterThan(car); // bus sits further toward the kerb
   });
+
+  // A vehicle mid-lane-change sits at a FRACTIONAL lane, and the offset must be
+  // continuous in it: it is the position the renderer draws every tick. Picking
+  // the target with `Math.round(entryLane)` made it a step function — the tick a
+  // car's lane crossed .5 inside a bend, its exit offset jumped a whole lane and
+  // the drawn point snapped sideways (see /test/curvelanechange, and the
+  // registry-wide bound in tests/unit/sim/laneContinuity.spec.ts).
+  it("is CONTINUOUS in a fractional approach lane (a car mid-change)", () => {
+    const j = approach(2);
+    const exit = nWayLanes(T, B, 2); // 2 lanes each way → centred band 2
+    const at = (lane: number) => junctionExitOffsetPx(j, B, lane, T, exit, B, 2, 200, "car");
+    // The two whole lanes are one lane width apart...
+    expect(at(0) - at(1)).toBeCloseTo(28, 6);
+    // ...and a car straddling them sits proportionally between the two, with no
+    // step anywhere across the interval — least of all at the .5 midpoint.
+    for (const f of [0, 0.25, 0.49, 0.5, 0.51, 0.75, 1]) {
+      expect(at(f)).toBeCloseTo(at(0) + (at(1) - at(0)) * f, 6);
+    }
+    let prev = at(0);
+    for (let f = 0.01; f <= 1.0001; f += 0.01) {
+      const here = at(f);
+      expect(Math.abs(here - prev)).toBeLessThan(1); // ≪ a 28px lane, every step
+      prev = here;
+    }
+  });
+
+  it("converging lanes stay converged at fractional positions too", () => {
+    // 3 approach lanes onto a 1-lane arm: every whole lane targets the same
+    // offset, so every fraction between them must target it as well — the
+    // interpolation must not invent a position the merge does not have.
+    const j = approach(3);
+    const at = (lane: number) =>
+      junctionExitOffsetPx(j, B, lane, T, nWayLanes(T, B, 1), B, 1, 200, "car");
+    for (const f of [0, 0.3, 0.5, 1.4, 1.9, 2]) expect(at(f)).toBeCloseTo(14, 6);
+  });
 });
 
 describe("busTo: bus-only exits on a shared lane", () => {

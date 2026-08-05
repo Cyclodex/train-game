@@ -291,6 +291,17 @@ export function junctionExitLane(
 // real exit-arm lane across the junction tile instead of holding the approach
 // offset and snapping at the boundary (a turn onto a narrower arm used to end
 // outside its only lane). Pure: the renderer supplies both roads + the exit band.
+//
+// `entryLane` is CONTINUOUS — a vehicle mid-lane-change sits at 0.49 — so the
+// offset must be continuous in it too. `junctionExitLane` is a map between lane
+// INDICES and can only answer for whole lanes, so this interpolates between the
+// answers for the two lanes the vehicle is straddling. Rounding to the nearer one
+// (what this did) makes the target a STEP function: a car still changing lanes as
+// it reached a bend flipped its whole exit offset the tick its fractional lane
+// crossed .5, and the drawn point snapped sideways by `t · laneWidth` — up to a
+// third of a lane in one tick, mid-curve, with nothing in the sim having moved
+// (`laneContinuity.spec.ts`, roadcurvetraffic-long). At an integer `entryLane`
+// this is exactly the old value, so nothing that was already continuous moves.
 export function junctionExitOffsetPx(
   junctionRoad: Lane[] | undefined,
   entryPort: Port,
@@ -302,16 +313,17 @@ export function junctionExitOffsetPx(
   tileSize: number,
   cls: VehicleClass,
 ): number {
-  const target = junctionExitLane(
-    junctionRoad,
-    entryPort,
-    Math.round(entryLane),
-    exitPort,
-    exitRoad,
-    exitApproach,
-    cls,
-  );
-  return laneOffsetConstPx(target, exitBand, tileSize);
+  const offsetForLane = (lane: number) =>
+    laneOffsetConstPx(
+      junctionExitLane(junctionRoad, entryPort, lane, exitPort, exitRoad, exitApproach, cls),
+      exitBand,
+      tileSize,
+    );
+  const lo = Math.floor(entryLane);
+  const hi = Math.ceil(entryLane);
+  const offLo = offsetForLane(lo);
+  if (hi === lo) return offLo;
+  return offLo + (offsetForLane(hi) - offLo) * (entryLane - lo);
 }
 
 // Does a class-`cls` vehicle in approach lane `entryLane` LAND on a bus lane on the

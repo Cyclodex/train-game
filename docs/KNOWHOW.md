@@ -2700,6 +2700,27 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   band between "driving" and "teleporting" is wide and unambiguous. Reach for it
   first whenever a car "swerves for no reason": it names the scenario, tile, ports
   and lane.
+  · AND IT ONLY CATCHES WHAT THE REGISTRY DRIVES. Every 2-lane bend in the gallery
+    had a 2-tile approach, so a car had always SETTLED into its lane before the
+    corner and the fractional-lane case was never swept at all (2026-08-05: found
+    by hand-lengthening `roadcurvetraffic`, not by the suite). A scenario is
+    coverage — when a bug needs a longer road/a busier tile to appear, the fix
+    ships the map that keeps driving it (`/test/curvelanechange`, 6-tile approach
+    + overtaking up).
+- A FRACTIONAL LANE MUST GET A FRACTIONAL OFFSET, EVERYWHERE. `lanePos` is
+  CONTINUOUS (0.49 = mid-change), and `junctionExitLane` is a map between lane
+  INDICES — so every caller that feeds it a live lane has to decide what to do
+  with the fraction, and ROUNDING IS A STEP FUNCTION. `junctionExitOffsetPx` did
+  (`Math.round(entryLane)`): the tick a car's lane crossed .5 inside a bend its
+  whole exit offset flipped a lane, and the drawn point snapped `t · laneWidth`
+  sideways — up to a third of a lane, mid-curve, with nothing in the sim having
+  moved. It now interpolates between the answers for `floor` and `ceil`, which is
+  identical at whole lanes (converging lanes stay converged, so a 3→1 merge does
+  not gain a phantom in-between position). Fixed 2026-08-05.
+  · The DECISION callers are the opposite case and correctly keep the round:
+    `turnLandsOnBusLane` (arrow colour), `road.ts laneOf`/`turnShift` (an integer
+    lane shift preserves the fraction it is added to). Rounding is wrong only
+    where the result is a POSITION drawn every tick.
 - STACKED junctions (a junction directly above another, no road tile between —
   `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
   min. A junction's exit-port `laneCountAt` counts only the straight-through
