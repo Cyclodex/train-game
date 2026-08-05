@@ -3,6 +3,7 @@ import { straight } from "@/levels/test/scenarios/straight";
 import { curve } from "@/levels/test/scenarios/curve";
 import { depot } from "@/levels/test/scenarios/depot";
 import { station } from "@/levels/test/scenarios/station";
+import { transfer } from "@/levels/test/scenarios/transfer";
 import { platformstop } from "@/levels/test/scenarios/platformstop";
 import { stationhouse } from "@/levels/test/scenarios/stationhouse";
 import { boarding } from "@/levels/test/scenarios/boarding";
@@ -23,6 +24,7 @@ import { switchDefault } from "@/levels/test/scenarios/switch-default";
 import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
+import { crossinglanes } from "@/levels/test/scenarios/crossinglanes";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
@@ -166,11 +168,11 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
       {
         id: "crossings",
         label: "Crossings",
-        scenarios: [crossing, keepcrossingclear, crossingkeeper],
+        scenarios: [crossing, crossinglanes, keepcrossingclear, crossingkeeper],
       },
     ],
   },

@@ -102,6 +102,9 @@
     <div v-if="hud.passengers" class="service-card">
       <div class="service-head">
         <span>🚉 Service</span>
+        <button class="service-buy" title="Draw a new line" @click="newLine">
+          + Line
+        </button>
         <button
           class="service-buy"
           :disabled="!canBuyTrain"
@@ -109,6 +112,50 @@
           @click="buyTrain"
         >
           + Train
+        </button>
+      </div>
+      <!-- THE LINES. A line is a plan and stands on its own: you draw it
+           before you own anything to run it, and it survives the last train
+           leaving it. `0 trains` is a legitimate state, and deliberately
+           reads as a warning rather than an error. -->
+      <div v-for="l in game.lines" :key="l.id" class="service-line">
+        <span class="service-livery" :style="{ background: l.colour }" />
+        <span class="service-id">{{ l.name }}</span>
+        <span class="service-stops">
+          <template v-if="l.stops.length">
+            <span
+              v-for="(s, i) in l.stops"
+              :key="s + i"
+              class="service-stop"
+              :title="`stop ${i + 1}: ${s}`"
+              >{{ stationLabel(s) }}</span
+            >
+          </template>
+          <span v-else class="service-idle">no stops yet</span>
+        </span>
+        <span
+          class="service-runners"
+          :class="{ 'service-runners--none': l.trains.length === 0 }"
+          :title="
+            l.trains.length
+              ? `${l.trains.length} train(s) running this line`
+              : 'Nothing is running this line — people will wait for it'
+          "
+          >{{ l.trains.length }}🚆</span
+        >
+        <button
+          class="service-edit"
+          :class="{ 'service-edit--on': editingLineId === l.id }"
+          @click="toggleEditLine(l.id)"
+        >
+          {{ editingLineId === l.id ? "Done" : "Edit" }}
+        </button>
+        <button
+          class="service-retire"
+          title="Delete this line (its trains keep running as stoppers)"
+          @click="deleteLine(l.id)"
+        >
+          ✕
         </button>
       </div>
       <div v-for="t in serviceTrains" :key="t.id" class="service-line">
@@ -136,13 +183,19 @@
           </template>
           <span v-else class="service-idle">no line</span>
         </span>
-        <button
-          class="service-edit"
-          :class="{ 'service-edit--on': editingTrainId === t.id }"
-          @click="toggleEditLine(t.id)"
+        <!-- Which line this train runs. Assigning is the verb now: the plan
+             exists on its own, and a train is put onto it. -->
+        <select
+          class="service-assign"
+          :value="game.trainLines[t.id] ? lineIdOf(t.id) : ''"
+          title="Put this train onto a line"
+          @change="assignTrain(t.id, $event)"
         >
-          {{ editingTrainId === t.id ? "Done" : "Edit" }}
-        </button>
+          <option value="">— no line —</option>
+          <option v-for="l in game.lines" :key="l.id" :value="l.id">
+            {{ l.name }}
+          </option>
+        </select>
         <!-- Withdraw: the ORDERLY verb. The train drops its line and runs to
              the nearest depot, where it is stabled. Shift-click scraps it
              where it stands — the emergency, and deliberately awkward. -->
@@ -159,9 +212,9 @@
           {{ t.retiring ? "↩" : "✕" }}
         </button>
       </div>
-      <p v-if="editingTrainId" class="service-hint">
-        Click stations on the board to build the line for
-        <b>{{ editingTrainId }}</b> — click a stop again to remove it.
+      <p v-if="editingLineId" class="service-hint">
+        Click stations on the board to build <b>{{ editingLineName }}</b> —
+        click a stop again to remove it.
       </p>
     </div>
 
@@ -1310,13 +1363,20 @@ class PlayView extends Vue {
   }
 
   // --- the service: lines and rolling stock (network mode) -------------------
-  // Which train's line the player is currently drawing, if any. While this is
-  // set, a click on a station tile edits that line instead of doing whatever
-  // the board would otherwise do.
-  editingTrainId: string | null = null;
+  // Which LINE the player is currently drawing, if any. While this is set, a
+  // click on a station tile edits that line instead of doing whatever the board
+  // would otherwise do. It is the line, not a train's copy of one: you draw the
+  // plan first and buy something to run it after.
+  editingLineId: string | null = null;
 
   get lineEditing(): boolean {
-    return this.editingTrainId !== null;
+    return this.editingLineId !== null;
+  }
+  get editingLineName(): string {
+    return this.game.lines.find(l => l.id === this.editingLineId)?.name ?? "";
+  }
+  lineIdOf(trainId: string): string {
+    return this.game.lines.find(l => l.trains.includes(trainId))?.id ?? "";
   }
   isStationTile(tileId: string): boolean {
     return this.level[tileId]?.role === "station";
@@ -1358,8 +1418,10 @@ class PlayView extends Vue {
       : "This board has no depot to build a train in";
   }
   buyTrain(): void {
-    const stops = this.editingTrainId
-      ? (this.game.trainLines[this.editingTrainId] ?? [])
+    // A train bought while a line is open goes straight onto it — the common
+    // case, since the reason you are buying is usually that line.
+    const stops = this.editingLineId
+      ? (this.game.lines.find(l => l.id === this.editingLineId)?.stops ?? [])
       : [];
     // Prefer a depot that is free right now, so an order that CAN leave at
     // once does; otherwise it joins the queue at the first one.
@@ -1378,11 +1440,23 @@ class PlayView extends Vue {
       wagons: def.wagonIds.map(id => ({ id, type: def.type })),
       ...(stops.length ? { line: [...stops] } : {}),
     };
-    // A train ordered with no line yet is the one you will want to route next.
-    if (stops.length === 0) {
-      this.editingTrainId = def.id;
-      this.game.setLineOverlay(def.id);
-    }
+    // Bought with no line open: there is nothing to draw, and the train waits
+    // on the roster until it is assigned to one.
+  }
+  // Draw a new, empty line and start editing it. The plan comes first — you do
+  // not need to own anything to plan a service.
+  newLine(): void {
+    const id = this.game.createLine([]);
+    this.editingLineId = id;
+    this.game.setLineOverlay({ lineId: id });
+  }
+  deleteLine(lineId: string): void {
+    if (this.editingLineId === lineId) this.stopEditingLine();
+    this.game.deleteLine(lineId);
+  }
+  assignTrain(trainId: string, ev: Event): void {
+    const lineId = (ev.target as HTMLSelectElement).value;
+    this.game.assignTrain(trainId, lineId === "" ? null : lineId);
   }
   // Trains ordered but still in the shed, waiting their turn on the metals.
   get queuedTrainIds(): string[] {
@@ -1397,7 +1471,6 @@ class PlayView extends Vue {
   retireTrain(trainId: string, ev: MouseEvent): void {
     if (ev.shiftKey) {
       this.game.scrapTrain(trainId);
-      if (this.editingTrainId === trainId) this.stopEditingLine();
       return;
     }
     if (!this.game.retireTrain(trainId)) {
@@ -1405,33 +1478,34 @@ class PlayView extends Vue {
       // say so rather than appearing to do nothing.
       this.game.scrapTrain(trainId);
     }
-    if (this.editingTrainId === trainId) this.stopEditingLine();
   }
 
   stopEditingLine(): void {
-    this.editingTrainId = null;
+    this.editingLineId = null;
     this.game.setLineOverlay(null);
   }
   stationLabel(tileId: string): string {
     return this.game.stationLabels[tileId] ?? tileId;
   }
-  toggleEditLine(trainId: string): void {
-    this.editingTrainId = this.editingTrainId === trainId ? null : trainId;
+  toggleEditLine(lineId: string): void {
+    this.editingLineId = this.editingLineId === lineId ? null : lineId;
     // Draw (or clear) the line on the board: big call-order numbers on the
     // stops and the route along the metals.
-    this.game.setLineOverlay(this.editingTrainId);
+    this.game.setLineOverlay(
+      this.editingLineId ? { lineId: this.editingLineId } : null
+    );
   }
   // A click on a station while a line is being drawn: append it, or remove it
   // if it is already a stop. Order is click order, which is the order the
-  // train will call at them.
+  // trains on it will call at them.
   editLineAt(tileId: string): void {
-    const id = this.editingTrainId;
+    const id = this.editingLineId;
     if (!id) return;
-    const stops = [...(this.game.trainLines[id] ?? [])];
+    const stops = [...(this.game.lines.find(l => l.id === id)?.stops ?? [])];
     const at = stops.indexOf(tileId);
     if (at >= 0) stops.splice(at, 1);
     else stops.push(tileId);
-    this.game.setLine(id, stops);
+    this.game.setLineStops(id, stops);
   }
   // One click handler for the board, so the armed tool decides what a click
   // means: bulldoze, edit a line, or nothing.
@@ -2684,6 +2758,29 @@ export default toNative(PlayView);
   color: #221803;
   border-color: transparent;
   font-weight: 700;
+}
+/* How many trains run a line. Zero is a legitimate state — the plan stands
+   whether or not anything serves it — but it is the thing to fix, so it is
+   coloured as a warning rather than left to look like any other number. */
+.service-runners {
+  font-size: 11px;
+  color: #b9c0c8;
+  white-space: nowrap;
+}
+.service-runners--none {
+  color: #e8a33d;
+  font-weight: 700;
+}
+.service-assign {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  max-width: 110px;
 }
 .service-hint {
   margin: 6px 0 0;

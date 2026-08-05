@@ -61,6 +61,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   platformstop: "🛑",
   stationhouse: "🏛️",
   boarding: "🧍",
+  transfer: "🔁",
   catchment: "🏘️",
   parkandride: "🅿️",
   busfeeder: "🚏",

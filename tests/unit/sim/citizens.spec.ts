@@ -33,20 +33,60 @@ function twoTownLevel(): Level {
 
 // A shuttle that calls at one platform, then the other, forever: the smallest
 // possible "the trains are running". Returns the events for this tick.
-function makeShuttle(stations: string[], periodSec: number, capacity = 8) {
+// A stand-in for the rail sim: a platform per station holding NAMED people, and
+// a shuttle that calls at each in turn. It speaks the same contract the real one
+// does — a dwell event carrying WHO boarded and WHO got off — because that is
+// what the citizen layer reads now; before tags it kept a shadow queue here and
+// guessed.
+function makePlatforms() {
+  const waiting = new Map<string, { dest: string; tag: string }[]>();
+  return {
+    port: {
+      enqueue(stationId: string, dest: string, tag: string) {
+        const q = waiting.get(stationId) ?? [];
+        q.push({ dest, tag });
+        waiting.set(stationId, q);
+        return true;
+      },
+      // The fake network connects everything it has a platform for.
+      connects: () => true,
+    } as TransitPort,
+    waiting,
+  };
+}
+
+function makeShuttle(
+  stations: string[],
+  periodSec: number,
+  capacity: number,
+  waiting: Map<string, { dest: string; tag: string }[]>
+) {
   let t = 0;
   let next = 0;
-  let aboard = 0;
+  let aboard: string[] = [];
   return {
-    tick(dt: number, queueAt: (id: string) => number): SimEvent[] {
+    tick(dt: number): SimEvent[] {
       t += dt;
       if (t < next) return [];
       next = t + periodSec;
       const tileId = stations[Math.floor(t / periodSec) % stations.length];
-      const alighted = aboard;
-      const boarded = Math.min(capacity, queueAt(tileId));
-      aboard = boarded;
-      return [{ type: "dwell", trainId: "shuttle", tileId, boarded, alighted }];
+      // One hop: everyone aboard gets off here (the classic service).
+      const alightedTags = aboard;
+      const q = waiting.get(tileId) ?? [];
+      const on = q.splice(0, Math.min(capacity, q.length));
+      waiting.set(tileId, q);
+      aboard = on.map(w => w.tag);
+      return [
+        {
+          type: "dwell",
+          trainId: "shuttle",
+          tileId,
+          boarded: on.length,
+          alighted: alightedTags.length,
+          ...(on.length ? { boardedTags: aboard } : {}),
+          ...(alightedTags.length ? { alightedTags } : {}),
+        },
+      ];
     },
   };
 }
@@ -138,22 +178,10 @@ describe("citizens: mode choice", () => {
 
   it("with trains running, people ride them — and the trip completes", () => {
     const world = buildCitizenWorld(twoTownLevel());
-    const platform = new Map<string, number>();
-    const transit: TransitPort = {
-      enqueue(stationId, n) {
-        platform.set(stationId, (platform.get(stationId) ?? 0) + n);
-        return n;
-      },
-    };
-    const sim = createCitizenSim({ world, seed: 5, transit });
-    const shuttle = makeShuttle(["2,1", "9,1"], 8, 12);
-    run(sim, 400, dt =>
-      shuttle.tick(dt, id => {
-        const q = sim.waitingAt(id);
-        platform.set(id, Math.max(0, (platform.get(id) ?? 0) - q));
-        return q;
-      })
-    );
+    const { port, waiting } = makePlatforms();
+    const sim = createCitizenSim({ world, seed: 5, transit: port });
+    const shuttle = makeShuttle(["2,1", "9,1"], 8, 12, waiting);
+    run(sim, 400, dt => shuttle.tick(dt));
     const s = sim.stats();
     expect(s.modeShare.transit).toBeGreaterThan(0);
     expect(s.tripsCompleted).toBeGreaterThan(0);
