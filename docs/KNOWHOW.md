@@ -2901,14 +2901,32 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   the gap; an arm ending at a KERB (a narrow one-way street's full barrier) does
   not, since nothing meets it. The gap stays well under a car's width (0.14 tile)
   so the road still reads as closed.
-- THE SIGNAL ART IS SWISS, not German (checked against the SSV / Wikipedia
-  descriptions, 2026-08-04): a white-rimmed BLACK triangular panel carrying two red
-  lights side by side AT THE SAME HEIGHT, alternating. The old art was a red-and-
-  white warning triangle with the lamps hanging below it, which is not a signal any
-  country uses. The lamps are children of an UNCLIPPED wrapper — `clip-path` clips
-  descendants, so lamps inside the triangle element get their outer edges eaten.
+- THE SIGNAL ART: a RED-BORDERED triangular panel — red rim, white ring, black face
+  — carrying two red lights side by side AT THE SAME HEIGHT, alternating, on a
+  red/white banded mast (matched to the reference photo, 2026-08-05; the earlier art
+  was the same panel with the red border missing, and the one before that a red-and-
+  white warning triangle with the lamps hanging BELOW it, which is not a signal any
+  country uses). At 26px the red border is what makes the sign READABLE on the board:
+  a white-rimmed black triangle on grey tarmac is a dark speck until you zoom in.
   The unlit lens is dark red (#6b3030), not black: on a black panel a black lens
   disappears and the signal reads as having only one light.
+- THREE CONCENTRIC RINGS FROM ONE PATH (`PANEL_TRIANGLE`, `.xing-rim/-edge/-face`).
+  A round-joined stroke grows a shape OUTWARD by half its width, so painting one
+  triangle three times with shrinking stroke-widths (5.8 red / 2.0 white / fill-only
+  black) gives three nested rounded-corner triangles — the ring THICKNESSES are the
+  differences of the half-widths (1.9 and 1.0). `clip-path: polygon()` cannot do this:
+  no corner radius, and every ring needs its own hand-inset triangle. Inset the path
+  from the viewBox by the widest HALF-stroke (2.9) or the red silhouette overflows.
+  The lamps stay OUTSIDE the `<svg>` (siblings in the `.xing-panel` wrapper) for the
+  same reason they were outside the old clip-path: an svg clips to its viewBox and
+  would eat the outer edge of a lens sitting near the triangle's edge.
+- A SIGN IS PLACED IN THE LOCAL FRAME BUT DRAWN IN THE SCREEN FRAME. The booms are
+  road furniture and turn with `.crossing-rot`; the panel is a GLYPH, and the same
+  quarter turn laid it on its side (triangle pointing at the verge, mast horizontal)
+  on every horizontal road. `signStyle` cancels it with `rotate(-90deg)` — safe after
+  `translate(-50%, -50%)`, because that has already put the element's CENTRE on the
+  layout point and rotation is about the centre. Only `/test/crossinglanes` shows
+  this; the vertical-road `/test/crossing` looks perfect either way.
 - THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
   CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
   (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the
