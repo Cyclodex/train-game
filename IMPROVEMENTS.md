@@ -233,19 +233,20 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     Files: `src/sim/citizens.ts`.
     Tracked: [#94](https://github.com/Cyclodex/train-game/issues/94).
 
-13. **Bicycles** (planned 2026-08-05, spec:
+13. **Bicycles** (spec:
     `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md`). The
     missing middle of the citizen mode choice and the road layer's first
-    genuinely slow vehicle. Phased: (A) `VehicleKind "bike"` in mixed traffic —
-    slow, cars queue behind it; (B) `LaneKind "cycle"` + bikes in bus lanes —
-    the player's remedy for that queue; (C) bike racks (`StallKind "bikerack"`,
-    the busstop precedent mirrored) + bike-and-ride at stations; (C′)
-    `TravelMode "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's
-    reserved "phase C"; (D) shared foot/bike paths, queued behind the
-    standalone-footpath axis. A+B ship together (friction and remedy in one PR).
-    Files: `src/sim/road.ts`, `src/tiles/lanes.ts`, `src/tiles/parking.ts`,
-    `src/sim/citizens.ts`; scenarios `bikemix`/`cyclelane`/`bikerack`/
-    `bikeandride`/`citizenbike`.
+    genuinely slow vehicle. **Phases A+B SHIPPED 2026-08-05**: `VehicleKind
+    "bike"` in mixed traffic (0.45× cruise, cars queue behind it — deliberate)
+    and `LaneKind "cycle"` + bikes-in-bus-lanes via the `laneUsableBy` access
+    matrix — the player's remedy for that queue; editor lane tool cycles
+    normal → bus → cycle; scenarios `bikemix`/`bikeovertake`/`cyclelane`.
+    Remaining: (C) bike racks (`StallKind "bikerack"`, the busstop precedent
+    mirrored) + bike-and-ride at stations; (C′) `TravelMode
+    "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's reserved
+    "phase C"; (D) shared foot/bike paths, queued behind the standalone-footpath
+    axis. Files remaining: `src/tiles/parking.ts`, `src/sim/citizens.ts`;
+    scenarios `bikerack`/`bikeandride`/`citizenbike`.
 
 ## Architecture / code health
 

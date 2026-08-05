@@ -1,6 +1,11 @@
 # Bicycles — a travel mode, a vehicle, a lane kind, designed
 
-_Status: plan (2026-08-05). Nothing here is built. This is the impact survey and
+_Status: phases A+B BUILT (2026-08-05) — the bike vehicle kind, the per-kind
+speed factor, the cycle lane and the access matrix, the editor's three-state
+lane tool, and the three `/test` scenarios (`bikemix`, `bikeovertake`,
+`cyclelane`; sim pins in `tests/unit/sim/roadBikes.spec.ts`). Phases C
+(racks/bike-and-ride), C′ (citizen travel mode) and D (shared paths) remain
+plans. The rest of this document is the impact survey and
 phased design for bringing bicycles into the game: on the carriageway, in their
 own lanes, at the station, in the citizen's mode choice. It is the "phase C"
 that `2026-08-01-citizens-and-cities-design.md` §9 promised in one parenthesis
@@ -127,7 +132,13 @@ introduce a per-kind speed factor at the two places speed is drawn:
   cost in the whole plan, and phase A deliberately skips it — queue or change
   lane, like a law-abiding driver. Revisit only if boards feel wrong.
 - Oncoming-lane overtaking stays deferred (IMPROVEMENTS road item 8); bikes
-  raise its value but do not change its design.
+  raise its value but do not change its design. If playtesting shows the
+  single-lane queue reading as broken rather than as pressure, the designated
+  fast-follow is that existing §3b spec **scoped to bikes first** — "pass a
+  bike on a straight, oncoming lane clear". The huge speed differential makes
+  it the cheapest version of the feature: short pass window, forgiving
+  feasibility math, and the bike's kerb hug means the car barely leaves its
+  lane. Not part of the initial build.
 
 ### 3.3 Spawning, mix, determinism
 

@@ -46,13 +46,14 @@
       <!-- Parking APRON: under the road's own kerb line and markings, so the two
            read as one surface. See TileParking.vue for all three layers. -->
       <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="apron" />
-      <!-- Bus-lane tint: a gold strip over just the bus lane(s), not the whole
-           ribbon, laterally aligned with the lane's cars/arrows. -->
+      <!-- Restricted-lane tint: a strip over just the bus lane(s) (gold) or
+           cycle lane(s) (green), not the whole ribbon, laterally aligned with
+           the lane's cars/arrows. -->
       <path
-        v-for="(b, bi) in busLaneBands"
-        :key="'bus' + bi"
-        :d="b"
-        class="road-bus-band"
+        v-for="(b, bi) in restrictedLaneBands"
+        :key="'rl' + bi"
+        :d="b.d"
+        :class="b.kind === 'bus' ? 'road-bus-band' : 'road-cycle-band'"
       />
       <!-- Road edge line where the tarmac meets the grass (per outer kerb).
            On a junction the real kerbs are SOLID corner fillets tracing the
@@ -149,8 +150,8 @@
       :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
     >
       <template v-for="(m, mi) in laneGraphOverlay" :key="'lg' + mi">
-        <path :d="m.shaft" class="lg-shaft" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
-        <path :d="m.head" class="lg-head" :class="m.isBus ? 'lg-bus' : 'lg-car'" />
+        <path :d="m.shaft" class="lg-shaft" :class="m.isBus ? 'lg-bus' : m.isCycle ? 'lg-cycle' : 'lg-car'" />
+        <path :d="m.head" class="lg-head" :class="m.isBus ? 'lg-bus' : m.isCycle ? 'lg-cycle' : 'lg-car'" />
       </template>
     </svg>
 
@@ -1566,20 +1567,21 @@ class Tile extends Vue {
     return this.config.roads && rowsOf(this.tile).length > 0;
   }
 
-  // Tinted strips for bus lanes: one filled band per bus lane, laterally aligned
-  // with that lane exactly like the debug arrows and the cars (positioningBand +
-  // the per-lane offset), so only the bus lane is gold — not the whole ribbon.
-  // Straight movements only (bus lanes are authored on straight road for now).
-  // Always on (not debug-gated) — it marks a real road feature.
-  get busLaneBands(): string[] {
+  // Tinted strips for restricted lanes: one filled band per bus/cycle lane,
+  // laterally aligned with that lane exactly like the debug arrows and the cars
+  // (positioningBand + the per-lane offset), so only the restricted lane is
+  // tinted — not the whole ribbon (gold = bus, green = cycle).
+  // Straight movements only (restricted lanes are authored on straight road for
+  // now). Always on (not debug-gated) — it marks a real road feature.
+  get restrictedLaneBands(): { d: string; kind: "bus" | "cycle" }[] {
     const road = this.tile.road;
     if (!this.config.roads || !road?.length) return [];
     const size = this.config.tileSize;
     const half = 0.5 * LANE_WIDTH_PX_FRAC * size;
-    const out: string[] = [];
+    const out: { d: string; kind: "bus" | "cycle" }[] = [];
     const coord = parseCoordId(this.coordId);
     for (const lane of road) {
-      if (lane.kind !== "bus") continue;
+      if (lane.kind !== "bus" && lane.kind !== "cycle") continue;
       // The JUNCTION-aware band, exactly like the cars and the markings: on a
       // junction tile the raw per-port lane counts are skewed by turn-only
       // movements, which shifted one direction's gold band off its lane (the
@@ -1588,7 +1590,7 @@ class Tile extends Vue {
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
-        out.push(roadLaneBandPath(lane.from, to, size, off, half));
+        out.push({ d: roadLaneBandPath(lane.from, to, size, off, half), kind: lane.kind });
       }
     }
     return out;
@@ -1740,15 +1742,18 @@ class Tile extends Vue {
     return out;
   }
 
-  get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean }[] {
+  get laneGraphOverlay(): { shaft: string; head: string; isBus: boolean; isCycle: boolean }[] {
     if (!this.config.debug || !this.tile.road?.length) return [];
     const size = this.config.tileSize;
     const road = this.tile.road;
     const coord = parseCoordId(this.coordId);
-    const out: { shaft: string; head: string; isBus: boolean }[] = [];
+    const out: { shaft: string; head: string; isBus: boolean; isCycle: boolean }[] = [];
 
     for (const lane of road) {
       const isBus = lane.kind === "bus";
+      // A cycle lane's arrows go green. No junction-fan refinement like the bus
+      // branch below: cycle lanes are straight-authored for now.
+      const isCycle = lane.kind === "cycle";
       // Lateral offset (px) right-of-travel for this lane, identical to the car
       // renderer (game.ts): a lane `index` of an approach with `count` lanes sits
       // at (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.
@@ -1772,7 +1777,7 @@ class Tile extends Vue {
         ...(lane.busTo ?? []).map(to => ({ to, busOnly: true })),
       ];
       for (const { to, busOnly } of moves) {
-        const cls = isBus || busOnly ? "bus" : "car";
+        const cls = isBus || busOnly ? "bus" : isCycle ? "bike" : "car";
         // Colour a movement amber only when it actually LANDS on a bus lane on the
         // exit arm. Through a junction a bus lane can fan onto a car-only arm (a
         // median bus turning right onto a kerb car lane); the sim drives it on that
@@ -1813,7 +1818,7 @@ class Tile extends Vue {
             const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
             const offEntry = oneWayLaneOffsetPx(entryLane, R, size);
             const offExit = oneWayLaneOffsetPx(exitLane, R, size);
-            out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus });
+            out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus, isCycle });
             continue;
           }
           // Bidirectional straight on a tapering tile: clamp each end inward so the
@@ -1825,7 +1830,7 @@ class Tile extends Vue {
           const bandExit = this.positioningBandAt(coord, to);
           const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
           const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
-          out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus });
+          out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus, isCycle });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the
           // lane the vehicle lands in on the EXIT arm (game.roadTurnExitOffsetPx,
@@ -1838,7 +1843,7 @@ class Tile extends Vue {
           const entryBand = this.positioningBandAt(coord, lane.from);
           const offEntry = (entryBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
           const offExit = this.game.roadTurnExitOffsetPx(coord, lane.from, to, lane.index, cls);
-          out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus: moveIsBus });
+          out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit ?? offEntry), isBus: moveIsBus, isCycle });
         }
       }
     }
@@ -2635,6 +2640,13 @@ export default toNative(Tile);
   fill: #5a4a00;
   stroke: none;
 }
+.road-cycle-band {
+  // Green tint for a cycle lane — the painted-lane convention (DE/US green),
+  // clearly apart from the bus lane's gold and the mismatch red. Same paint
+  // order as the bus band.
+  fill: #2e5233;
+  stroke: none;
+}
 
 /* --- lane graph debug overlay --- */
 .lane-graph-layer {
@@ -2658,6 +2670,9 @@ export default toNative(Tile);
 }
 .lg-bus {
   stroke: #ff9800;
+}
+.lg-cycle {
+  stroke: #66d97a;
 }
 .road-marking-centre {
   fill: none;

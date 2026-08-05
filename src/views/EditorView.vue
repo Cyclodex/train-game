@@ -274,7 +274,7 @@
               :key="'lh' + i"
               :d="hl.d"
               class="lane-hit"
-              :class="{ 'lane-hit--bus': hl.isBus }"
+              :class="{ 'lane-hit--bus': hl.isBus, 'lane-hit--cycle': hl.isCycle }"
               @click.stop="onLaneClick($event, cell.key, hl.from, hl.index)"
             />
           </template>
@@ -554,7 +554,7 @@ const DOCK_GROUPS: DockGroup[] = [
     label: "Road",
     items: [
       { key: "road", icon: "🛣️", label: "Road", tool: "road" },
-      { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
+      { key: "buslane", icon: "🚌", label: "Bus/cycle lane", tool: "buslane" },
       { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
     ],
   },
@@ -633,7 +633,7 @@ const HINTS: Record<Tool, string> = {
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
   buslane:
-    "Click a lane to flip it between BUS-only and normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Ctrl+click toggles just that one tile's lane.",
+    "Click a lane to cycle it normal → BUS-only → CYCLE-only → normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Buses use bus lanes, bikes use bus AND cycle lanes, cars neither. Ctrl+click toggles just that one tile's lane.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
@@ -1323,11 +1323,11 @@ class EditorView extends Vue {
   // right lane; an exact-geometry trace isn't needed for hit-testing. Junction
   // tiles are excluded — a run never paints through one, so their lanes aren't
   // individually clickable here (Ctrl-click a straight/curve lane instead).
-  laneHits(id: string): { d: string; from: Port; index: number; isBus: boolean }[] {
+  laneHits(id: string): { d: string; from: Port; index: number; isBus: boolean; isCycle: boolean }[] {
     const tile = this.level[id];
     if (!tile?.road?.length || isRoadJunction(tile.road)) return [];
     const size = this.config.tileSize;
-    const out: { d: string; from: Port; index: number; isBus: boolean }[] = [];
+    const out: { d: string; from: Port; index: number; isBus: boolean; isCycle: boolean }[] = [];
     const seen = new Set<string>();
     for (const lane of tile.road) {
       // One hit path per physical lane (its single through exit). A lane with
@@ -1348,6 +1348,7 @@ class EditorView extends Vue {
         from: lane.from,
         index: lane.index,
         isBus: lane.kind === "bus",
+        isCycle: lane.kind === "cycle",
       });
     }
     return out;
@@ -1949,6 +1950,9 @@ export default toNative(EditorView);
 }
 .lane-hit--bus {
   stroke: rgba(255, 179, 0, 0.22);
+}
+.lane-hit--cycle {
+  stroke: rgba(102, 217, 122, 0.25);
 }
 .lane-hit:hover {
   stroke: rgba(255, 179, 0, 0.55);

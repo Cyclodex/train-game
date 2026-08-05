@@ -21,7 +21,7 @@ import {
   parseCoordId,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
-import { isRoadJunction, isOneWayStraight, lanesFrom, turnKind } from "@/tiles/lanes";
+import { isRoadJunction, isOneWayStraight, lanesFrom, laneUsableBy, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
 import { needsBridge, needsTunnel } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -299,12 +299,12 @@ function upsertMovement(road: Lane[], from: Port, to: Port): Lane[] {
 // just lane 0 (the bug that left higher lanes unable to turn). Bus lanes keep
 // their own indices and are left untouched.
 function addJunctionMovement(road: Lane[], from: Port, to: Port, count: number): Lane[] {
-  const carLanes = road.filter(l => l.from === from && l.kind !== "bus");
+  const carLanes = road.filter(l => l.from === from && laneUsableBy(l, "car"));
   const maxIdx = carLanes.length ? Math.max(...carLanes.map(l => l.index)) : -1;
   const target = Math.max(count, maxIdx + 1); // never shrink an existing approach
   // Add the exit to existing car lanes of this approach.
   let out = road.map(l =>
-    l.from === from && l.kind !== "bus" && !l.to.includes(to)
+    l.from === from && laneUsableBy(l, "car") && !l.to.includes(to)
       ? { ...l, to: [...l.to, to] }
       : l,
   );
@@ -389,18 +389,18 @@ export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
 }
 
-// Toggle a single lane's BUS designation: flip its `kind` between "bus" and
-// normal (undefined), identified by its approach `from` and physical `index`
-// (0 = kerb). This is the editor's "mark a lane as a bus lane" tool — it changes
-// only the lane's access class, keeping its geometry and movements, so a normal
-// 2-lane road becomes "1 car + 1 bus" without re-laying it (and back). No-op if
-// the cell has no such lane.
+// Cycle a single lane's restriction: normal → bus → cycle → normal, identified
+// by its approach `from` and physical `index` (0 = kerb). This is the editor's
+// "mark a lane" tool — it changes only the lane's access class, keeping its
+// geometry and movements, so a normal 2-lane road becomes "1 car + 1 bus" (or
+// "1 car + 1 cycle") without re-laying it. No-op if the cell has no such lane.
 export function toggleLaneKind(cell: TileCell, from: Port, index: number): TileCell {
   const road = cell.road;
   if (!road || !road.some(l => l.from === from && l.index === index)) return cell;
   const next = road.map(l => {
     if (l.from !== from || l.index !== index) return l;
-    if (l.kind === "bus") return { from: l.from, to: l.to, index: l.index }; // → normal
+    if (l.kind === "cycle") return { from: l.from, to: l.to, index: l.index }; // → normal
+    if (l.kind === "bus") return { ...l, kind: "cycle" as LaneKind };
     return { ...l, kind: "bus" as LaneKind };
   });
   return { ...cell, road: next };
@@ -578,7 +578,7 @@ export function streetRunLanes(
 }
 
 // Paint a whole street run to one uniform lane kind: from the CLICKED lane decide
-// the target (a bus lane becomes normal, anything else becomes bus), then SET that
+// the target (the three-state cycle normal → bus → cycle → normal), then SET that
 // kind on every lane of the run. Returns the cells that changed, keyed by id, as
 // fresh TileCells — the editor commits them in one go. A half-painted street
 // therefore becomes uniform in a single click instead of inverting tile by tile.
@@ -592,7 +592,8 @@ export function setLaneKindRun(
   const clicked = seed && !isRoadJunction(seed.road)
     ? lanesFrom(seed.road, from).find(l => l.index === index)
     : undefined;
-  const target: LaneKind | undefined = clicked?.kind === "bus" ? undefined : "bus";
+  const target: LaneKind | undefined =
+    clicked?.kind === "bus" ? "cycle" : clicked?.kind === "cycle" ? undefined : "bus";
   const run = streetRunLanes(level, id, from, index);
   const out: Record<string, TileCell> = {};
   for (const ref of run) {
@@ -623,7 +624,7 @@ function armAdmitsCars(n: TileCell | undefined, seamPort: Port): boolean {
   if (!n?.road?.length) return true;
   const entering = lanesFrom(n.road, seamPort);
   if (entering.length === 0) return true; // no lanes face the seam: not a bus street
-  return entering.some(l => l.kind !== "bus");
+  return entering.some(l => laneUsableBy(l, "car")); // bus AND cycle lanes bar cars
 }
 
 // Recompute one junction cell's bus gates from its current neighbours. Returns
@@ -699,7 +700,7 @@ export function syncJunctionBusGatesAround(
 
 function carLanesFrom(road: Lane[], from: Port): Lane[] {
   return road
-    .filter(l => l.from === from && l.kind !== "bus")
+    .filter(l => l.from === from && laneUsableBy(l, "car"))
     .sort((a, b) => a.index - b.index); // 0 = kerb side
 }
 
@@ -710,13 +711,13 @@ function receivingCarCapacity(level: Level, id: string, exit: Port): number {
   if (n?.road?.length) {
     const receiving = lanesFrom(n.road, oppositePort(exit));
     if (receiving.length > 0) {
-      const cars = receiving.filter(l => l.kind !== "bus").length;
+      const cars = receiving.filter(l => laneUsableBy(l, "car")).length;
       return cars > 0 ? cars : receiving.length; // bus-only arm: gate sync demotes after
     }
   }
   // No neighbour street (map edge): the junction's own opposing approach is
   // the best width estimate; a one-way outbound arm has none, assume 1.
-  const own = (level[id]?.road ?? []).filter(l => l.from === exit && l.kind !== "bus").length;
+  const own = (level[id]?.road ?? []).filter(l => l.from === exit && laneUsableBy(l, "car")).length;
   return own > 0 ? own : 1;
 }
 
@@ -735,7 +736,7 @@ export function deriveJunctionCarLanes(
   if (!cell?.road || !isRoadJunction(cell.road)) return cell;
   let changed = false;
   const next: Lane[] = [];
-  for (const lane of cell.road) if (lane.kind === "bus") next.push(lane);
+  for (const lane of cell.road) if (!laneUsableBy(lane, "car")) next.push(lane); // bus + cycle lanes kept as-is
   const armPorts = new Set<Port>();
   if (allArms) {
     for (const l of cell.road) {

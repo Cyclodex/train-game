@@ -3208,6 +3208,40 @@ Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
+## BICYCLES (phase A+B — the slow kind and the cycle lane, 2026-08-05)
+Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phases
+C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT built).
+- `VehicleKind "bike"` is the FIRST kind with its own pace: `KIND_SPEED`
+  (road.ts, bike 0.45) scales the cruise draw at BOTH spawn sites; before it,
+  every kind drew from the same `carSpeed ± spread` band and only length
+  differed. `KIND_ACCEL`/`KIND_BRAKE` scale the dynamics the same way.
+- ACCESS IS ONE MATRIX: `laneUsableBy` (tiles/lanes.ts) — car: all-lanes only;
+  bus: + bus lanes; bike: + bus AND cycle lanes (`LaneKind "cycle"`). Every
+  "which lanes may X use" question routes through it — the junction-derivation
+  filters in editOps.ts ask `laneUsableBy(l, "car")` now, NOT `kind !== "bus"`
+  (a cycle lane must not count as car capacity). `laneExits` gives `busTo`
+  movements to `cls !== "car"` (a bus gate admits cyclists).
+- A bike QUEUES CARS on a 1-lane road ON PURPOSE (no same-lane squeezing —
+  width is one global CLIP_LANES) — the incentive to paint a cycle lane, which
+  is the remedy: bikes spawn onto / drift to it (`cycleLaneIndices`, the
+  bus-lane twin) and cars flow. Multi-lane overtaking of bikes needed ZERO new
+  code (the trigger is pure speed-differential); bikes themselves NEVER
+  overtake (the bus rule) and spawn KERB-MOST, not rotating — a bike entering
+  on the inner lane has to be walked back by keep-right, so don't.
+- DETERMINISM: "bike" carries no default mix weight, so `pickKind`'s draw
+  sequence is unchanged on every pre-bike seeded board (pinned in
+  roadBikes.spec.ts). Bikes appear only where `traffic.mix` opts in.
+- `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
+  SIZE gate would pass a bike into any car bay — the class gate is the only
+  fence. Racks are phase C; until then a bike on a parking trip could only fail.
+- Editor lane tool is a THREE-state cycle now: normal → bus → cycle → normal
+  (`toggleLaneKind`/`setLaneKindRun`).
+- Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
+  head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
+  Cycle lane tint green (`road-cycle-band`), debug arrows `lg-cycle` green.
+- `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
+  `/test/bikeovertake` (2-lane passing); sim pins in `roadBikes.spec.ts`.
+
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
   and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled

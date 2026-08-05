@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing, parseCoordId } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, cycleLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -43,17 +43,21 @@ export { isRoadJunction } from "@/tiles/lanes";
 // loco + wagon). Everything downstream (following distance, lane occupancy,
 // rendering) is derived from the spec, so adding a kind is a one-row change.
 
-export type VehicleKind = "car" | "truck" | "semi" | "bus";
+export type VehicleKind = "car" | "truck" | "semi" | "bus" | "bike";
 
 export interface VehicleSegment {
   length: number; // rendered box length, in tiles
-  part: "car" | "truck" | "cab" | "trailer" | "bus"; // render style hint for the view
+  part: "car" | "truck" | "cab" | "trailer" | "bus" | "bike"; // render style hint for the view
 }
 
 // The lane-access class of a vehicle kind: a bus may use bus lanes (and prefers
-// them); every other kind is a general "car" confined to non-bus lanes.
+// them); a bike may use bus AND cycle lanes (and prefers cycle lanes); every
+// other kind is a general "car" confined to unrestricted lanes. The matrix
+// itself lives in `laneUsableBy` (tiles/lanes.ts).
 export function vehicleClassOf(kind: VehicleKind): VehicleClass {
-  return kind === "bus" ? "bus" : "car";
+  if (kind === "bus") return "bus";
+  if (kind === "bike") return "bike";
+  return "car";
 }
 
 export interface VehicleSpec {
@@ -70,6 +74,24 @@ const SEMI_GAP = 0.12;
 // reads as a passenger coach rather than a cargo hauler (the renderer's `bus`
 // part then paints a long side window-band so it looks distinct from a truck).
 const BUS_LEN = 1.45;
+// A bicycle is a sliver of a vehicle — under half a car's length. Its width is
+// the renderer's business (an 8px capsule); the sim keeps one shared lane-band
+// width for every kind, so a bike occupies its lane like anything else and a
+// car queues behind it rather than squeezing past. (Same-lane passing needs
+// per-vehicle width AND borrowing the oncoming lane — the deferred §3b work.)
+const BIKE_LEN = 0.45;
+
+// Per-kind cruise-speed factor over the sim's carSpeed. The bike is the first
+// genuinely slow kind: under half car pace, which is what makes a car queue
+// behind it on a single-lane road — and what trips the speed-differential
+// overtake trigger the moment a second lane exists. Every motor kind keeps the
+// shared band (per-kind truck/bus pacing would slot in here too).
+const KIND_SPEED: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.45 };
+// A bike also pulls away and brakes more gently than a motor vehicle. The
+// softer brake feeds vSafe = sqrt(2·brake·clear), so a bike naturally keeps a
+// slightly longer headway for its speed.
+const KIND_ACCEL: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.55 };
+const KIND_BRAKE: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.8 };
 
 export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
   switch (kind) {
@@ -77,6 +99,8 @@ export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
       return { segments: [{ length: base * TRUCK_LEN, part: "truck" }], gap: 0 };
     case "bus":
       return { segments: [{ length: base * BUS_LEN, part: "bus" }], gap: 0 };
+    case "bike":
+      return { segments: [{ length: base * BIKE_LEN, part: "bike" }], gap: 0 };
     case "semi":
       return {
         segments: [
@@ -99,7 +123,7 @@ export function specLength(spec: VehicleSpec): number {
 
 // Relative spawn weights per kind. Omitted/zero kinds never spawn; `{ car: 1 }`
 // (the default) reproduces the original all-cars behaviour.
-export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number };
+export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number; bike?: number };
 
 // Per-level road-traffic settings: how busy the roads are and what mix of
 // vehicles drives them. All optional; each overlays the sim's defaults.
@@ -1134,7 +1158,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // stay deterministic. Kinds with no/zero weight never appear; an empty mix
   // falls back to a car.
   function pickKind(): VehicleKind {
-    const weighted = (["car", "truck", "semi", "bus"] as VehicleKind[])
+    // "bike" carries no default weight, so every board seeded before bikes
+    // existed draws the identical kind sequence — bikes appear only where a
+    // level's mix opts in.
+    const weighted = (["car", "truck", "semi", "bus", "bike"] as VehicleKind[])
       .map(k => [k, Math.max(0, mix[k] ?? 0)] as const)
       .filter(([, w]) => w > 0);
     const total = weighted.reduce((s, [, w]) => s + w, 0);
@@ -1417,12 +1444,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // turn from a bus lane too, so this can include one; a car never can.
         const allow = lanesAllowingExitFor(jTile.road, ahead.entry, myExit, cls);
         if (allow.length > 0) {
-          // A bus prefers a bus lane among the permitted lanes; otherwise pick the
-          // nearest permitted lane to where we already are.
+          // A bus prefers a bus lane — and a bike a cycle lane — among the
+          // permitted lanes; otherwise pick by turn discipline below.
           const busAllowed = allow.filter(l =>
             busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
-          const pool = cls === "bus" && busAllowed.length > 0 ? busAllowed : allow;
+          const cycleAllowed = allow.filter(l =>
+            cycleLaneIndices(jTile.road, ahead.entry).includes(l),
+          );
+          const pool =
+            cls === "bus" && busAllowed.length > 0
+              ? busAllowed
+              : cls === "bike" && cycleAllowed.length > 0
+                ? cycleAllowed
+                : allow;
           // Turn-direction lane discipline: among the permitted lanes, a LEFT turn
           // takes the innermost (highest index), a RIGHT turn or STRAIGHT takes the
           // kerb-most (lowest index, keep-right). This holds whether the junction has
@@ -1451,12 +1486,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // A bus with no turn to sort for prefers the bus lane on its current approach:
     // ease to the nearest bus lane (an empty list — no bus lane here — leaves it
     // in place). This is what makes a bus drift onto and ride the bus lane.
-    if (cls === "bus") {
-      const busLanes = busLaneIndices(tile?.road, head.entryPort);
-      if (busLanes.length > 0) {
-        const nearest = busLanes.reduce(
+    // A bike does exactly the same with a cycle lane — the drift twin.
+    if (cls === "bus" || cls === "bike") {
+      const ownLanes =
+        cls === "bus"
+          ? busLaneIndices(tile?.road, head.entryPort)
+          : cycleLaneIndices(tile?.road, head.entryPort);
+      if (ownLanes.length > 0) {
+        const nearest = ownLanes.reduce(
           (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
-          busLanes[0],
+          ownLanes[0],
         );
         return clampLane(nearest, curCount);
       }
@@ -3192,18 +3231,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const id = `car${nextId++}`;
       const car = blankCar(id, kind, { coord: from, entryPort: startPort, exitPort: exit });
       car.length = length;
-      car.speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+      car.speed = carSpeed * KIND_SPEED[kind] * (1 - speedSpread + rng() * 2 * speedSpread);
       // From REST, unlike an ambient car: this one has just pulled off a
       // driveway, it has not been rolling in from off-screen.
       car.velocity = 0;
-      car.accel = DEFAULT_CAR_ACCEL;
-      car.brake = DEFAULT_CAR_BRAKE;
+      car.accel = DEFAULT_CAR_ACCEL * KIND_ACCEL[kind];
+      car.brake = DEFAULT_CAR_BRAKE * KIND_BRAKE[kind];
       car.routePlan = turns;
       car.laneIndex = chosen;
       car.targetLane = chosen;
       car.laneAnchor = chosen;
       car.overtakeHomeLane = chosen;
-      car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
+      car.overtaker = driverRng() < overtakeFraction && cls !== "bus" && cls !== "bike";
       car.tripGoal = { tileId: toTileId, entryPort: goalPort };
       car.parkTarget = parkPlan?.facilityId ?? null;
       cars.push(car);
@@ -3330,7 +3369,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // and buses can spawn there at all (previously such edges had no entry).
     const kind = pickKind();
     const cls = vehicleClassOf(kind);
-    const pool = cls === "bus" ? entries : entries.filter(e => !e.busOnly);
+    // A busOnly entry is a bus-gated street's open end — buses AND bikes may use
+    // it (the matrix in laneUsableBy); the general car class may not.
+    const pool = cls !== "car" ? entries : entries.filter(e => !e.busOnly);
     if (pool.length === 0) return false;
     const entry = pool[Math.floor(rng() * pool.length)];
     const id = getCoordinatesId(entry.coord);
@@ -3414,21 +3455,27 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
     }
     // Lane order to try at the entry, by class:
-    //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
-    //    then the remaining lanes from a rotating start.
+    //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane);
+    //    a bike its cycle lane(s) — then the remaining lanes from a rotating start.
     //  • A car uses the turn-lane preference (F) when its first junction has a
     //    dedicated turn lane, else fills its car lanes evenly from a rotating start.
     // Either way, spawn ONLY into a probed-clear lane; if all are blocked at the
     // edge skip the spawn (saturated — better than stacking cars).
     let order: number[];
-    if (cls === "bus") {
-      const busLanes = busLaneIndices(entryRoad, entry.entryPort);
-      const rest = usable.filter(l => !busLanes.includes(l));
-      const rotatedRest = Array.from(
-        { length: rest.length },
-        (_, k) => rest[(spawnLaneRot + k) % rest.length],
-      );
-      order = [...busLanes, ...rotatedRest];
+    if (cls === "bus" || cls === "bike") {
+      const ownLanes =
+        cls === "bus"
+          ? busLaneIndices(entryRoad, entry.entryPort)
+          : cycleLaneIndices(entryRoad, entry.entryPort);
+      const rest = usable.filter(l => !ownLanes.includes(l));
+      // A bus fills the rest from a rotating start (it uses any lane freely);
+      // a bike takes the KERB-most first — it never has business entering on an
+      // inner lane, and keep-right would only have to walk it back out.
+      const restOrder =
+        cls === "bike"
+          ? [...rest].sort((a, b) => a - b)
+          : Array.from({ length: rest.length }, (_, k) => rest[(spawnLaneRot + k) % rest.length]);
+      order = [...ownLanes, ...restOrder];
     } else {
       const preferred = preferredSpawnLane(entry.coord, entry.entryPort, exit, routePlan, usable.length);
       order =
@@ -3446,9 +3493,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
     if (chosenLane < 0) return false; // preferred/all lanes blocked — wait, don't stack
     spawnLaneRot++;
-    // Buses never overtake (they ride their lane, preferring the bus lane). Draw
-    // from the driver RNG regardless so its stream stays stable across mixes.
-    const overtaker = driverRng() < overtakeFraction && cls !== "bus";
+    // Buses and bikes never overtake (each rides its lane, preferring its own —
+    // the bus lane / the cycle lane). Draw from the driver RNG regardless so its
+    // stream stays stable across mixes.
+    const overtaker = driverRng() < overtakeFraction && cls !== "bus" && cls !== "bike";
     // A minority back into a 90° bay. Its OWN stream: a draw added to the driver
     // stream shifts every later draw on it, and two seeded overtaking tests failed
     // the moment it shared one. A new decision class gets a new stream — the same
@@ -3456,8 +3504,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const reverseParker = parkerRng() < PARKING.reverseFraction;
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
-    // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
-    const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+    // from the seeded RNG (per-car speed sequence stays reproducible for a seed),
+    // scaled by the kind's cruise factor (a bike rides at under half car pace).
+    const speed = carSpeed * KIND_SPEED[kind] * (1 - speedSpread + rng() * 2 * speedSpread);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan, cls);
     const carId = `car${nextId++}`;
     const spawned: Car = {
@@ -3471,8 +3520,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // caps the first step at the available room, so entering at speed can't make
       // it overrun a car just ahead.
       velocity: speed,
-      accel: DEFAULT_CAR_ACCEL,
-      brake: DEFAULT_CAR_BRAKE,
+      accel: DEFAULT_CAR_ACCEL * KIND_ACCEL[kind],
+      brake: DEFAULT_CAR_BRAKE * KIND_BRAKE[kind],
       length,
       path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: spawnExit }],
       headIndex: 0,

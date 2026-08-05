@@ -264,14 +264,16 @@ describe("toggleLaneKind", () => {
   const laneAt = (cell: TileCell, from: Position, index: number) =>
     cell.road!.find(l => l.from === from && l.index === index)!;
 
-  it("marks a normal lane as a bus lane and back, identified by from+index", () => {
+  it("cycles a lane normal → bus → cycle → normal, identified by from+index", () => {
     // A 2-lane one-way road L->R (index 0 kerb, index 1 inboard).
     let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
-    c = toggleLaneKind(c, Left, 0); // mark the kerb lane as bus
+    c = toggleLaneKind(c, Left, 0); // normal → bus
     expect(laneAt(c, Left, 0).kind).toBe("bus");
     expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the other lane is untouched
-    c = toggleLaneKind(c, Left, 0); // toggle back to normal
+    c = toggleLaneKind(c, Left, 0); // bus → cycle
+    expect(laneAt(c, Left, 0).kind).toBe("cycle");
+    c = toggleLaneKind(c, Left, 0); // cycle → normal
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
   });
 
@@ -431,7 +433,8 @@ describe("setLaneKind / setLaneKindRun", () => {
   it("paints a mixed-state run to one uniform kind in a single pass", () => {
     // 3-tile straight; the middle tile's eastbound lane is already a bus lane, the
     // ends are normal — a half-painted street. Clicking the bus tile makes the
-    // CLICKED lane decide the target: it is bus, so the whole run becomes NORMAL.
+    // CLICKED lane decide the target: it is bus, so the whole run becomes CYCLE
+    // (the three-state cycle normal → bus → cycle → normal).
     const lvl: Level = {
       "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
@@ -440,8 +443,22 @@ describe("setLaneKind / setLaneKindRun", () => {
     // Make the middle eastbound lane a bus lane.
     lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "bus");
     const changed = setLaneKindRun(lvl, "1,0", Left, 0);
-    // Every tile's eastbound lane is now normal (clicked lane was bus → target normal).
+    // Every tile's eastbound lane is now a cycle lane (clicked was bus → cycle).
     for (const id of ["0,0", "1,0", "2,0"]) {
+      const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
+      expect(lane.kind).toBe("cycle");
+    }
+  });
+
+  it("clicking a cycle lane paints the run back to normal", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    lvl["0,0"] = setLaneKind(lvl["0,0"], Left, 0, "cycle");
+    lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "cycle");
+    const changed = setLaneKindRun(lvl, "0,0", Left, 0);
+    for (const id of ["0,0", "1,0"]) {
       const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
       expect(lane.kind).toBeUndefined();
     }

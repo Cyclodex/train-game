@@ -1544,7 +1544,8 @@ export function createGame(
         if (car.id !== trip.carTrip) continue;
         const unit = car.units[0];
         if (!unit) break;
-        const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
+        const cls: VehicleClass =
+          unit.part === "bus" ? "bus" : unit.part === "bike" ? "bike" : "car";
         const p = positionRoadUnit(
           unit,
           unit.front.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.front, car.laneIndex, cls),
@@ -2113,7 +2114,8 @@ export function createGame(
         // a lane change the rear coupler's position lags the front's, so the body
         // angles into the new lane (the lean) instead of sliding flat. The sim eases
         // the lane positions for merges/turns; off-change they're equal.
-        const cls: VehicleClass = unit.part === "bus" ? "bus" : "car";
+        const cls: VehicleClass =
+          unit.part === "bus" ? "bus" : unit.part === "bike" ? "bike" : "car";
         // A posed coupler ignores lane offsets entirely, and asking for them is
         // not merely wasted work: `couplerOffsets` returns 0/0 for a tile whose
         // road has no lanes from that entry, which would read as a meaningful
