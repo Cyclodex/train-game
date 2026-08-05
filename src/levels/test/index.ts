@@ -16,6 +16,7 @@ import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
 import { citizenrail } from "@/levels/test/scenarios/citizenrail";
 import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
+import { citizencrossback } from "@/levels/test/scenarios/citizencrossback";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -29,6 +30,7 @@ import { carcircle } from "@/levels/test/scenarios/carcircle";
 import { carscurve } from "@/levels/test/scenarios/carscurve";
 import { roadcurveloops } from "@/levels/test/scenarios/roadcurveloops";
 import { roadcurvetraffic } from "@/levels/test/scenarios/roadcurvetraffic";
+import { curvelanechange } from "@/levels/test/scenarios/curvelanechange";
 import { curvepace } from "@/levels/test/scenarios/curvepace";
 import { roadoneway } from "@/levels/test/scenarios/roadoneway";
 import { roadstraightlanes } from "@/levels/test/scenarios/roadstraightlanes";
@@ -161,7 +163,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
       {
         id: "crossings",
         label: "Crossings",
@@ -178,7 +180,7 @@ export const DOMAINS: ScenarioDomain[] = [
         label: "Driving basics",
         scenarios: [carfollowing, carqueue, carcircle, carscurve],
       },
-      { id: "curves", label: "Curves", scenarios: [roadcurveloops, roadcurvetraffic, curvepace] },
+      { id: "curves", label: "Curves", scenarios: [roadcurveloops, roadcurvetraffic, curvelanechange, curvepace] },
       {
         id: "lanes",
         label: "One-way & lanes",

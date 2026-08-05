@@ -1159,6 +1159,31 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       each for ~1.5s, which reads on screen as an occasional jaywalker rather
       than as broken geometry. Guarded by "nobody crosses the carriageway
       anywhere but the zebra" in `tests/unit/citizenWalking.spec.ts`.
+    · **A `side` is also spelled per TILE, so it must be TRANSLATED at every
+      seam** (2026-08-03). The reference frame is the tile's OWN through
+      movement, and that is only ever "whichever movement its lane list names
+      first": a corner authored `twoWay(Right, Bottom)` reads its outer bank as
+      +1 while the straight beside it authored `twoWay(Left, Right)` reads its
+      south bank as +1 — opposite banks, same number, both boards ordinary.
+      `walkMoves` therefore carries the BANK, not the sign, through
+      `sideAcross()` (footway.ts): compare the two tiles' bank normals on the
+      component perpendicular to the step. Carrying the raw number walked people
+      a road's width sideways at the seam with no crossing under them (0.44 of a
+      tile, on `citizenwalk`'s own corners).
+    · **A tile the route enters and leaves BY THE SAME EDGE must be RETRACED,
+      not walked through** (2026-08-03). It happens whenever the only zebra is
+      past the destination: down to the crossing, over, and back the way you
+      came, so the crossing tile's run has `prevTile === nextTile`. `buildSteps`
+      runs `t` 0 → 0.5 → 0 for it (`doubleBack`), and `pointOf` adds 180° to the
+      heading of any leg whose `t` descends. Walking on to the far edge instead
+      resumed the walk a whole tile back — the reported "he went left, and
+      suddenly appeared right", measured at 1.05 tiles.
+    · Both of the above are jumps, and a jump is the cheapest thing in this
+      module to TEST: sample every route on every citizen board each tick and
+      assert nobody moves further than a stride (~0.06 of a tile). A road is
+      0.44 wide and a tile is 1, so the two failure modes are unmissable and
+      need no per-case oracle. See "walks every route on every citizen board
+      without a single jump", and `/test/citizencrossback` for both in isolation.
     · Yielding needed NO new rule in the traffic model: a walker claims the tile
       and game.ts ORs it into the road sim's `closed` predicate — the same
       mechanism a level crossing uses for a train. Cars already know how to
@@ -2786,6 +2811,27 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   band between "driving" and "teleporting" is wide and unambiguous. Reach for it
   first whenever a car "swerves for no reason": it names the scenario, tile, ports
   and lane.
+  · AND IT ONLY CATCHES WHAT THE REGISTRY DRIVES. Every 2-lane bend in the gallery
+    had a 2-tile approach, so a car had always SETTLED into its lane before the
+    corner and the fractional-lane case was never swept at all (2026-08-05: found
+    by hand-lengthening `roadcurvetraffic`, not by the suite). A scenario is
+    coverage — when a bug needs a longer road/a busier tile to appear, the fix
+    ships the map that keeps driving it (`/test/curvelanechange`, 6-tile approach
+    + overtaking up).
+- A FRACTIONAL LANE MUST GET A FRACTIONAL OFFSET, EVERYWHERE. `lanePos` is
+  CONTINUOUS (0.49 = mid-change), and `junctionExitLane` is a map between lane
+  INDICES — so every caller that feeds it a live lane has to decide what to do
+  with the fraction, and ROUNDING IS A STEP FUNCTION. `junctionExitOffsetPx` did
+  (`Math.round(entryLane)`): the tick a car's lane crossed .5 inside a bend its
+  whole exit offset flipped a lane, and the drawn point snapped `t · laneWidth`
+  sideways — up to a third of a lane, mid-curve, with nothing in the sim having
+  moved. It now interpolates between the answers for `floor` and `ceil`, which is
+  identical at whole lanes (converging lanes stay converged, so a 3→1 merge does
+  not gain a phantom in-between position). Fixed 2026-08-05.
+  · The DECISION callers are the opposite case and correctly keep the round:
+    `turnLandsOnBusLane` (arrow colour), `road.ts laneOf`/`turnShift` (an integer
+    lane shift preserves the fraction it is added to). Rounding is wrong only
+    where the result is a POSITION drawn every tick.
 - STACKED junctions (a junction directly above another, no road tile between —
   `turnfan`, the user's level): `seamPositioningBand` junction↔junction = MAX, NOT
   min. A junction's exit-port `laneCountAt` counts only the straight-through

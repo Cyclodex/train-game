@@ -197,6 +197,58 @@ export function walkNodeKey(n: WalkNode): string {
 }
 
 /**
+ * Which way, in world space, pavement `side` lies from this cell's carriageway.
+ * The reference frame every `side` in this module is measured in: right of the
+ * tile's own through movement is +1 (see `sideOfPlot`, `pavementOffsetFor`).
+ *
+ * On a bend the normal is diagonal — a corner's outer bank is north of its east
+ * arm AND west of its south arm — which is exactly right, because only the
+ * component ACROSS the arm you are walking matters at that arm's edge.
+ */
+function bankNormal(cell: TileCell | undefined, side: 1 | -1): { x: number; y: number } | null {
+  const through = roadThrough(cell);
+  if (!through) return null;
+  const n = travelNormal(through.from, through.to);
+  return { x: n.x * side, y: n.y * side };
+}
+
+/**
+ * Carry a pavement side from one tile onto its neighbour: KEEP THE BANK, NOT
+ * THE NUMBER.
+ *
+ * A `side` is measured against THAT TILE'S OWN through direction, and a tile's
+ * through direction is only ever "whichever movement its lane list happens to
+ * name first". Neighbours can therefore disagree about which bank +1 is: on
+ * `/test/citizenwalk` the corner authored `twoWay(Right, Bottom)` reads its
+ * OUTER bank as +1, while the straight beside it authored `twoWay(Left, Right)`
+ * reads its SOUTH bank as +1. Those are opposite banks of the same street.
+ *
+ * Carrying the raw number across the seam therefore steps somebody over the
+ * carriageway with no crossing under them — measured at 0.44 tiles, the exact
+ * width of a road, in the middle of an otherwise ordinary walk. Which bank you
+ * are on is the walker's real state; the sign is just how each tile spells it.
+ */
+export function sideAcross(
+  level: Level,
+  fromId: string,
+  toId: string,
+  side: 1 | -1
+): 1 | -1 {
+  const a = bankNormal(level[fromId], side);
+  const b = bankNormal(level[toId], side);
+  if (!a || !b) return side;
+  const from = parseCoordId(fromId);
+  const to = parseCoordId(toId);
+  // The shared edge runs across the step, so the component that decides which
+  // bank you meet it on is the one perpendicular to the way you stepped.
+  const across: "x" | "y" = to.x === from.x ? "x" : "y";
+  // Square to the seam (a bank that neither leads nor trails at this edge) is
+  // ambiguous — there is nothing to match, so leave the sign alone.
+  if (a[across] === 0 || b[across] === 0) return side;
+  return (a[across] * b[across] < 0 ? -side : side) as 1 | -1;
+}
+
+/**
  * A walking route from one PLOT to another: out of the door, along the
  * pavements — crossing the road only where there is a crossing — and in at the
  * far end.
@@ -267,7 +319,9 @@ export function walkMoves(level: Level, from: WalkNode): WalkNode[] {
   if (!hasFootway(level[from.tileId])) return [];
   const out: WalkNode[] = walkNeighbours(level, from.tileId).map(tileId => ({
     tileId,
-    side: from.side,
+    // Not `from.side` — the same bank can be spelled with the other sign on the
+    // next tile. See `sideAcross`.
+    side: sideAcross(level, from.tileId, tileId, from.side),
   }));
   // The crossing. This one line is the whole mechanic: take it away and a
   // pavement is two separate networks that happen to be drawn beside each other.
