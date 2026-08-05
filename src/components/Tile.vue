@@ -276,8 +276,8 @@
     </svg>
 
     <!-- Station: platform slabs flanking the through-track, each with a bright
-         edge line on the track side, plus a halt sign. Geometry only exists for
-         a straight station (the standard); any other shape gets the sign alone. -->
+         edge line on the track side. Geometry only exists for a straight
+         station (the standard); any other shape gets the name plate alone. -->
     <svg
       v-if="isStation"
       class="station-layer"
@@ -291,22 +291,6 @@
           :x2="p.edge.x2"
           :y2="p.edge.y2"
           class="station-platform-edge"
-        />
-      </g>
-      <g class="station-sign" :transform="`translate(${stationSignPos.x} ${stationSignPos.y})`">
-        <rect x="-9" y="-9" width="18" height="18" rx="3.5" />
-        <text x="0" y="4.5" text-anchor="middle">S</text>
-        <!-- The services that call here: one pip per line livery, hung under
-             the station shield. A platform nobody serves shows none, which is
-             exactly the thing a player needs to spot. -->
-        <circle
-          v-for="(c, li) in servingLines"
-          :key="'sl' + li"
-          :cx="-6 + li * 6"
-          :cy="15"
-          r="2.6"
-          class="station-line-pip"
-          :style="{ fill: c }"
         />
       </g>
       <!-- LINE EDITING: this platform's place in the line being drawn, big
@@ -349,6 +333,19 @@
         <title>{{ p.title }}</title>
       </circle>
     </svg>
+
+    <!-- The station BUILDING: a shelter or an Empfangsgebäude (which, is the
+         walking catchment's call — see utils/stationArt.ts) standing in the
+         strip between the outer platform and the tile edge, facing the track.
+         Its own <svg> rather than a <g> in the layer above, because it is
+         placed and rotated in TILE pixels while its art has a box of its own. -->
+    <svg
+      v-if="stationBuilding"
+      class="station-building"
+      :viewBox="stationBuilding.viewBox"
+      :style="stationBuilding.style"
+      v-html="stationBuilding.art"
+    />
 
     <!-- Signals (straights only) -->
     <svg
@@ -498,10 +495,21 @@
          is the one parking layer that lives outside the road SVG. -->
     <TileParking v-if="hasParking" :tile="tile" :coord-id="coordId" layer="sign" />
 
-    <!-- The station's NAME. HTML rather than SVG text because a plate has to
-         size itself to a word — "Nordstadt" does not fit in a fixed shield,
-         which is what the first cut tried. -->
-    <div v-if="isStation" class="station-nameplate">{{ stationLabel }}</div>
+    <!-- The station's NAME, mounted on the building's street front. HTML rather
+         than SVG text because a plate has to size itself to a word — "Nordstadt"
+         does not fit in a fixed shield, which is what the first cut tried.
+         The services calling here ride INSIDE the plate as colour dots: name +
+         who stops = one thing to read, instead of a plate, a shield and a row
+         of pips scattered over three corners of the tile. -->
+    <div v-if="isStation" class="station-nameplate" :style="stationPlateStyle">
+      <span class="station-nameplate-text">{{ stationLabel }}</span>
+      <span
+        v-for="(c, li) in servingLines"
+        :key="'sl' + li"
+        class="station-line-pip"
+        :style="{ background: c }"
+      />
+    </div>
 
     <!-- Car destination marker (debug): a car is currently heading to this tile. -->
     <div v-if="config.debug && carDestinationId" class="car-destination-marker">
@@ -590,7 +598,13 @@ import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { seamPositioningBand, laneSeamOffsetPx, oneWayLaneOffsetPx } from "@/sim/laneOffset";
 import { depotSvg, depotViewBox } from "@/utils/trainArt";
-import { WALK_RADIUS_TILES } from "@/tiles/catchment";
+import {
+  stationBuildingSvg,
+  stationSizeFor,
+  stationViewBox,
+  type StationSize,
+} from "@/utils/stationArt";
+import { WALK_RADIUS_TILES, stationCatchment } from "@/tiles/catchment";
 
 // A stable colour per DESTINATION tile, so a waiting passenger's dot says
 // where they are going and the same platform is the same colour everywhere on
@@ -759,10 +773,87 @@ class Tile extends Vue {
     }
     return out;
   }
-  // The halt sign sits in the tile corner, out of the way of track and slabs.
-  get stationSignPos(): { x: number; y: number } {
+  // Which way the platform faces, from the through-connection the slabs were
+  // derived from: "h" = track runs left-right (platforms above and below,
+  // building in the TOP strip), "v" = track runs top-bottom (building in the
+  // LEFT strip). Any other shape → null, and the tile shows plate and platforms
+  // only, exactly as an unusual authoring choice should degrade.
+  get stationAxis(): "h" | "v" | null {
+    if (!this.isStation) return null;
+    const has = (p: Position, q: Position) =>
+      this.tile.connections.some(
+        ([a, b]) => (a === p && b === q) || (a === q && b === p)
+      );
+    if (has(Position.Left, Position.Right)) return "h";
+    if (has(Position.Top, Position.Bottom)) return "v";
+    return null;
+  }
+  // Where the building sits, in tile px measured from the tile's outer edge.
+  // `outer` is its street-side edge (and where the name plate hangs); the box
+  // reaches from there PAST the platform's inner edge at tileSize * 0.22 (the
+  // same centre − inner − depth `stationPlatforms` uses), because the canopy
+  // belongs over the platform. The art is authored at these numbers for a 200px
+  // tile, so the fractions here and STATION_ART_BOX must move together.
+  get stationStrip(): { outer: number; w: number; d: number } | null {
+    if (!this.stationAxis) return null;
     const size = this.config.tileSize;
-    return { x: size * 0.1, y: size * 0.1 };
+    const big = this.stationSize === "station";
+    return {
+      outer: size * 0.03,
+      d: size * (big ? 0.23 : 0.19),
+      w: size * (big ? 0.75 : 0.4),
+    };
+  }
+  // Halt or Empfangsgebäude — derived from the town in walking reach, never
+  // stored (tiles/catchment.ts). Build houses beside a halt and it grows up on
+  // the next render; there is no field to drift out of step with the map.
+  get stationSize(): StationSize {
+    return stationSizeFor(stationCatchment(this.level, this.coordId).urban);
+  }
+  // The building, placed onto the tile. The art is authored in its own frame
+  // (x along the platform, y away from the track) and dropped on the strip with
+  // one transform about its top-left corner: unrotated for a left-right
+  // station, a quarter turn for a top-bottom one, which puts its platform side
+  // against the rails either way.
+  get stationBuilding(): {
+    art: string;
+    viewBox: string;
+    style: Record<string, string>;
+  } | null {
+    const strip = this.stationStrip;
+    if (!strip) return null;
+    const size = this.config.tileSize;
+    const kind = this.stationSize;
+    const { outer, w, d } = strip;
+    const transform =
+      this.stationAxis === "h"
+        ? `translate(${(size - w) / 2}px, ${outer}px)`
+        : `translate(${outer}px, ${(size + w) / 2}px) rotate(-90deg)`;
+    return {
+      art: stationBuildingSvg(kind),
+      viewBox: stationViewBox(kind),
+      style: {
+        width: `${w}px`,
+        height: `${d}px`,
+        transform,
+      },
+    };
+  }
+  // The name plate hangs on the building's street front: centred on its outer
+  // edge for a left-right station (half on the roof, half on the grass, the way
+  // a sign stands at a building's front), and at the head of the building for a
+  // top-bottom one, where a horizontal plate laid across a rotated roof would
+  // spill into the neighbouring tile.
+  get stationPlateStyle(): Record<string, string> {
+    const strip = this.stationStrip;
+    if (!strip) return { top: "4px", left: "50%", transform: "translateX(-50%)" };
+    return this.stationAxis === "h"
+      ? { top: `${strip.outer}px`, left: "50%", transform: "translate(-50%, -50%)" }
+      : {
+          top: "3px",
+          left: `${strip.outer + strip.d / 2}px`,
+          transform: "translateX(-50%)",
+        };
   }
   catchmentRadiusTiles = WALK_RADIUS_TILES;
   // What to call this platform.
@@ -2369,16 +2460,20 @@ export default toNative(Tile);
   stroke-width: 2.5;
   stroke-linecap: round;
 }
-.station-sign rect {
-  fill: #1c5bd8; // the classic blue station shield
-  stroke: #fff;
-  stroke-width: 1.5;
-}
-.station-sign text {
-  fill: #fff;
-  font-family: sans-serif;
-  font-size: 13px;
-  font-weight: 700;
+/* The building, on the strip between the outer platform and the tile edge.
+   Same z as the platforms it belongs to and declared after them, so it paints
+   over the slab's outer edge where the canopy reaches across it; under the
+   trains, which have a layer of their own. `transform-origin` is the art's own
+   top-left corner, because `stationBuilding` reasons in that frame. */
+.station-building {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  transform-origin: 0 0;
+  pointer-events: none;
+  overflow: visible;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28));
 }
 .station-passenger {
   fill: #8a5a3b; // warm coats against the pale paving
@@ -2420,13 +2515,20 @@ export default toNative(Tile);
   fill: #fff;
   font-size: 20px;
 }
-/* The name plate, above the platform and legible across the board. */
+/* The name plate on the building's front, in the HUD's own chrome (MenuDrawer /
+   ToolDock): a small dark tag, so a place name on the board and a place name in
+   the panel are visibly the same kind of label. Placed by `stationPlateStyle` —
+   the `top`/`left`/`transform` here are only the fallback for a station on a
+   shape that has no platform strip. */
 .station-nameplate {
   position: absolute;
   top: 4px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   max-width: 96%;
   padding: 2px 7px;
   border-radius: 6px;
@@ -2436,13 +2538,20 @@ export default toNative(Tile);
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   pointer-events: none;
 }
+.station-nameplate-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The services that call here, one dot per line livery, riding in the plate. A
+   platform nobody serves shows none — exactly the thing a player needs to spot. */
 .station-line-pip {
-  stroke: #fff;
-  stroke-width: 1;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
 }
 .station-passenger--alt {
   fill: #4a6d8c; // a second coat colour so the crowd isn't a uniform string

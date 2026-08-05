@@ -19,6 +19,7 @@ import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road
 import { buildCitizenWorld } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
+  DEFAULT_TUNING,
   Citizen,
   CityState,
   CitizenSim,
@@ -424,6 +425,9 @@ export interface Game {
   inspectPlot(plotId: string): PlotCard | null;
   inspectPerson(id: string): PersonCard | null;
   compareModes(id: string): ModeCompare[];
+  // A journey length on the town's clock ("14 min", "1h 24m"), using THIS
+  // game's day length — so a view never has to know `secPerDay`.
+  durationLabel(sec: number): string;
   // Ticks once per drawn frame. Read it from any getter that samples the sims
   // on demand, or Vue will cache the first answer for ever — see the note where
   // it is declared.
@@ -725,8 +729,10 @@ export interface ModeCompare {
   mode: TravelMode;
   /** The honest door-to-door estimate in board seconds. Null when not on offer. */
   seconds: number | null;
-  /** "1m 35s" — the same number, ready to render. */
+  /** "14 min" / "1h 24m" — the same number on the town's clock, ready to render. */
   label: string;
+  /** The same journey in raw board seconds. A tooltip, not the headline. */
+  boardLabel: string;
   /**
    * The same journey after this person's habits: the walk inflated past their
    * patience, the car scaled by how much they like driving, the train by how
@@ -739,8 +745,30 @@ export interface ModeCompare {
   why: string | null;
 }
 
-/** "1m 35s" / "42s" — a board duration, as the panel prints it. */
-export function durationLabel(sec: number): string {
+/**
+ * A journey length on the TOWN'S OWN CLOCK: "14 min", "1h 24m".
+ *
+ * Board seconds were the wrong unit and it took fixing the day length to see
+ * why. They were chosen when a day was 300 board seconds, which made a
+ * cross-city commute convert to eight and a half in-game hours — so the
+ * in-game clock was nonsense and seconds were the only honest thing to print.
+ * Calibrating the day (`secPerDay`, measured) removed that problem, and left
+ * the real one exposed: the card MIXED TWO UNITS. "Leaves at 07:08" and "took
+ * 1m 23s" do not compose — a player cannot work out when she gets there. One
+ * clock, and the arithmetic works.
+ */
+export function inGameDuration(sec: number, secPerDay: number): string {
+  if (!isFinite(sec)) return "—";
+  const mins = Math.round((sec / secPerDay) * 24 * 60);
+  if (mins < 1) return "<1 min";
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
+/** "1m 35s" / "42s" — raw board seconds, for debugging and tooltips. */
+export function boardDuration(sec: number): string {
   if (!isFinite(sec)) return "—";
   const s = Math.round(sec);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
@@ -956,8 +984,23 @@ export function createGame(
   // logic and the rendered colours always agree. A seeded RNG keeps the
   // assignment deterministic, and `assignColors` guarantees every train has a
   // reachable matching depot (see colorAssignment.ts).
-  const { depotColors, trainColors } =
+  const assignedColors =
     colors ?? assignColors(level, trainDefs, makeRng(colorSeed));
+  const depotColors = assignedColors.depotColors;
+  // The train roster is REACTIVE, and a COPY. Reactive because `trainColors`
+  // is not just paint — its key set IS the list of trains that exist, which is
+  // what the service panel iterates to draw its rows. `game` is provided
+  // markRaw, so a plain record here gives that computed nothing to track: it
+  // caches its first answer and a bought train never appears in the panel. On
+  // a board that starts with no trains the list then stays empty for ever.
+  // (Same trap as `trainNextStops`/`retiringTrains` — see docs/KNOWHOW.md.)
+  // A copy because `buyTrain` writes into this record, and `colors` may be a
+  // scenario's own object shared across runs — proxying and mutating it would
+  // leak bought trains from one game into the next.
+  const trainColors = reactive({ ...assignedColors.trainColors }) as Record<
+    string,
+    string
+  >;
 
   // Road traffic geometry (deterministic from the level): grid extents.
   let roadW = 0;
@@ -1249,6 +1292,12 @@ export function createGame(
 
   // --- the inspector ----------------------------------------------------------
 
+  // Journey lengths, on the same clock the times of day use. Bound to this
+  // game's day length so a caller never has to know it.
+  function durationLabel(sec: number): string {
+    return inGameDuration(sec, citizenSetup?.tuning?.secPerDay ?? DEFAULT_TUNING.secPerDay);
+  }
+
   function clockOf(hour: number): string {
     const h = Math.floor(hour) % 24;
     const m = Math.floor((hour - Math.floor(hour)) * 60);
@@ -1384,6 +1433,9 @@ export function createGame(
       mode: q.mode,
       seconds: q.unavailable ? null : q.estimateSec,
       label: q.unavailable ? "—" : durationLabel(q.estimateSec),
+      // The raw board seconds, for a tooltip: the town's clock is the honest
+      // unit to read, and this is the one you can check with a stopwatch.
+      boardLabel: q.unavailable ? "—" : boardDuration(q.estimateSec),
       perceivedSeconds: q.unavailable ? null : q.cost,
       chosen: q.chosen,
       why: q.unavailable ? (REFUSAL_TEXT[q.unavailable] ?? q.unavailable) : null,
@@ -2164,10 +2216,17 @@ export function createGame(
   for (const def of trainDefs) defById[def.id] = def;
 
   // --- the service: lines, and buying the trains to run them -----------------
-  // Refresh the view copy of a train's line from the sim (the owner of it).
+  // Refresh the view copy of a train's line from whoever owns it right now: the
+  // SIM for a train on the metals, its DEFINITION for one still queued in the
+  // shed. A queued train has no sim entry at all (see `pendingTrains`), so
+  // asking the sim alone reports "no line" for a train the player has just
+  // routed — and `trainInit` carries `def.line` over when it finally rolls out,
+  // so the definition is the honest answer until then.
   function syncLine(trainId: string): void {
-    const stops = sim.trainLine(trainId);
-    if (stops.length) trainLines[trainId] = stops;
+    const stops = sim.trains[trainId]
+      ? sim.trainLine(trainId)
+      : (defById[trainId]?.line ?? []);
+    if (stops.length) trainLines[trainId] = [...stops];
     else delete trainLines[trainId];
     syncStationLines();
   }
@@ -2253,8 +2312,13 @@ export function createGame(
       queuedTrains.push(def.id);
     } else {
       injectTrain(def);
-      syncLine(def.id);
     }
+    // Mirror the line either way. A train ordered ONTO a line while the shed is
+    // busy still has that line — it is in `def` — and the panel and the
+    // platforms have to say so now, not when it eventually rolls out. Syncing
+    // only in the inject branch made an order placed into a busy depot read
+    // "no line", which is the state that says "your click did nothing".
+    syncLine(def.id);
     return def;
   }
 
@@ -2295,10 +2359,21 @@ export function createGame(
 
   // Put a train onto a line (or take it out of service with []). Thin wrapper
   // over the sim verb that keeps the view copy honest.
+  //
+  // A train QUEUED IN THE SHED can be routed too, and must be: `buyTrain`
+  // queues every order made while the depot mouth is busy, which is the normal
+  // case right after you buy one — and the sim has no entry for it yet, so
+  // deferring to `sim.assignLine` alone refused the assignment and every click
+  // on a station vanished silently. Its line waits on the definition, which
+  // `trainInit` reads when the train finally rolls out.
+  //
+  // The DEFINITION is therefore the test for "does this train exist" — not the
+  // sim, which only knows the ones already on the metals.
   function setLine(trainId: string, stops: string[]): boolean {
-    if (!sim.assignLine(trainId, stops)) return false;
     const def = defById[trainId];
-    if (def) def.line = stops.length ? [...stops] : undefined;
+    if (!def) return false;
+    if (sim.trains[trainId] && !sim.assignLine(trainId, stops)) return false;
+    def.line = stops.length ? [...stops] : undefined;
     syncLine(trainId);
     // The picture on the board is of THIS line; redraw it as it is edited.
     if (lineOverlay.trainId === trainId) setLineOverlay(trainId);
@@ -2933,6 +3008,7 @@ export function createGame(
     inspectPlot,
     inspectPerson,
     compareModes,
+    durationLabel,
     renderTick,
     locatePerson,
     personWalking,

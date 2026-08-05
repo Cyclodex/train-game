@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createGame, PersonCard, TrainDef, durationLabel } from "@/game";
+import { boardDuration, createGame, inGameDuration, PersonCard, TrainDef } from "@/game";
 import { citizensMode, citizensModeWith } from "@/modes/citizens";
 import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
 import { threecities } from "@/levels/test/scenarios/threecities";
@@ -123,7 +123,7 @@ describe("the citizen inspector", () => {
             expect(r.label).toBe("—");
           } else {
             expect(r.seconds).not.toBeNull();
-            expect(r.label).toMatch(/^\d/);
+            expect(r.label).toMatch(/^(<1 min|\d+ min|\d+h)/);
           }
         }
         // The winner is the cheapest PERCEIVED, which is not always the fastest
@@ -364,11 +364,32 @@ describe("the citizen inspector", () => {
     expect(game.citizenStats.clock).toBe("07:00");
   });
 
-  it("prints a duration a person can read", () => {
-    expect(durationLabel(8)).toBe("8s");
-    expect(durationLabel(59.4)).toBe("59s");
-    expect(durationLabel(83)).toBe("1m 23s");
-    expect(durationLabel(600)).toBe("10m 00s");
-    expect(durationLabel(Infinity)).toBe("—");
+  it("prints a journey on the town's own clock, not in board seconds", () => {
+    // ONE clock on the card. "Leaves at 07:08" and "took 1m 23s" do not
+    // compose — a player cannot work out when she gets there — and board
+    // seconds were only ever chosen because the day length made the in-game
+    // clock nonsense. It does not any more.
+    const DAY = 1800; // the shipped calibration
+    expect(inGameDuration(18, DAY)).toBe("14 min"); // a local walk
+    expect(inGameDuration(13, DAY)).toBe("10 min"); // a local drive
+    expect(inGameDuration(105, DAY)).toBe("1h 24m"); // a city-to-city commute
+    expect(inGameDuration(1800, DAY)).toBe("24h");
+    expect(inGameDuration(0.1, DAY)).toBe("<1 min");
+    expect(inGameDuration(Infinity, DAY)).toBe("—");
+
+    // The raw board seconds survive as a tooltip: it is the one you can check
+    // with a stopwatch, and it is what a debug session wants.
+    expect(boardDuration(8)).toBe("8s");
+    expect(boardDuration(83)).toBe("1m 23s");
+    expect(boardDuration(Infinity)).toBe("—");
+  });
+
+  it("binds the day length, so a view never has to know it", () => {
+    const fast = newGame(citizenchoice, { secPerDay: 300 });
+    const shipped = newGame(citizenchoice);
+    // The same board seconds mean six times as much of a 300s day as of an
+    // 1800s one — which is exactly why the label cannot be a free function.
+    expect(fast.durationLabel(105)).toBe("8h 24m");
+    expect(shipped.durationLabel(105)).toBe("1h 24m");
   });
 });

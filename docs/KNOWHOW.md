@@ -570,6 +570,69 @@ lean — prune as much as you add. This file only stays useful if every task ten
   must come from a reactive mirror refreshed in the frame loop
   (`trainNextStops`, `retiringTrains`), never from the sim.
 
+## THE ROSTER AND THE SHED — buying and routing trains (2026-08-04)
+Three bugs, one shape: the panel's whole verb set assumed a train is either in
+the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
+- `trainColors` is `reactive()` and a COPY. Its key set IS the roster — the
+  service panel's rows are a computed over `Object.keys(game.trainColors)` —
+  and `game` is markRaw, so a plain record gave that computed nothing to track:
+  it cached its first answer and a bought train NEVER appeared. On a board that
+  starts with no trains the list stayed empty for ever. REACTIVITY TRAP, third
+  time; the rule is now "every view source on the game is `reactive()`", and
+  `tests/unit/modes/network.spec.ts` asserts it through a real `computed` —
+  reading `game.trainColors` directly passes while the panel is frozen.
+  The copy matters too: `buyTrain` writes into this record, and `colors` may be
+  a scenario's shared object, so proxying the original leaked bought trains
+  from one run into the next.
+- A QUEUED train has a def, a livery and DOM, but no sim entry. So `setLine`
+  tests `defById`, not `sim.trains`, for "does this train exist", and only
+  calls `sim.assignLine` for one actually on the metals. Before this, every
+  station click on a freshly-bought train was refused SILENTLY — and buying
+  into a busy shed is the normal case, not the edge one.
+- `syncLine` reads the sim for a running train and `def.line` for a queued one;
+  `buyTrain` syncs in BOTH branches, not just the inject one. Otherwise a train
+  ordered onto a line reads "no line" until it rolls out, which is exactly what
+  "your click did nothing" looks like. `trainInit` carries `def.line` over when
+  it finally leaves, so the definition is the honest owner until then.
+- Verifying this in a browser: a hidden automation tab pauses rAF, so a queued
+  train never rolls out there. Assert the roll-out in a unit test and use the
+  browser only for the panel's DOM.
+
+## STATION ARCHITECTURE — the building and its sign (2026-08-04)
+- `utils/stationArt.ts` draws the platform's BUILDING, the sister module to
+  `trainArt.ts`'s depot shed. Two sizes, `stationSizeFor(urban)`: ≥3 town tiles
+  in walking reach → Empfangsgebäude, else a halt shelter. DERIVED from
+  `stationCatchment`, never a field — same rule as the demand schedule, so
+  painting houses beside a halt promotes it on the next render.
+- The art's frame is x ALONG the platform, y AWAY from the track (y=0 street
+  side). `Tile.vue`'s `stationStrip`/`stationBuilding` drop it on the outer
+  strip with ONE transform about its top-left (`transform-origin: 0 0`):
+  unrotated for a left-right station, `rotate(-90deg)` for a top-bottom one.
+  `stationAxis` returns null for any other shape → no building, and the tile
+  degrades to plate + slabs rather than breaking.
+- The CSS box and `STATION_ART_BOX` are the same fractions of a 200px tile, and
+  MUST move together: the `<svg>` has the default `preserveAspectRatio`, so a
+  mismatched aspect letterboxes the art instead of stretching it.
+- The box reaches PAST the platform's inner edge (tileSize*0.22) on purpose —
+  the canopy belongs OVER the platform. It stops at *0.26, clear of the crowd
+  dots (which sit at the slab's mid-line ±5px), and is drawn last so anyone
+  underneath shows through the glazing.
+- WHAT MAKES IT READ, learned the expensive way: at 150x30px, LESS. A first cut
+  with hipped roofs, a taller concourse block, roof lights and two chimneys read
+  as three blue boxes in a row. What works is exactly what the town houses do —
+  one body, one gabled roof split lit/shade, a hard SE drop shadow — plus the
+  one railway note: a rafter-ribbed canopy on posts with a blue leading edge. A
+  pale untinted canopy is essential; tinting it the roof's blue merged house and
+  canopy into a single slab.
+- The name plate is mounted ON the building (`stationPlateStyle`) instead of
+  floating over the grass, and the serving-line colours moved INSIDE it as dots.
+  The old blue "S" shield is gone: with a building there, a second glyph saying
+  "this is a station" was three markers in three corners for one fact.
+- `/test/stationhouse` is the scenario: town station (left-right), the same
+  building quarter-turned (top-bottom), and a meadow halt. The halt needs a 5x5
+  clear of every urban tile or it promotes itself and the map stops making its
+  own point.
+
 ## THE SERVICE PANEL — buying trains, drawing lines (2026-08-02)
 - The player's whole verb set in the network mode: `game.setLine(trainId,
   stops)` and `game.buyTrain(stops, depotId?)`, both on the GAME (not the
@@ -931,14 +994,23 @@ lean — prune as much as you add. This file only stays useful if every task ten
     · Unavailable modes are LISTED, with a reason ("no road joins the two ends",
       "too far to walk"). "Why not" is half of what a planner came to find out,
       and a silently short table answers none of it.
-    · **Journey times are BOARD SECONDS, not in-game minutes.** The citizens'
-      day is `secPerDay` sim seconds wide (300 in Citizens mode), so 1 sim second
-      is 4.8 in-game minutes and a cross-town rail commute converts to EIGHT
-      HOURS — internally consistent and useless to plan with. Board seconds are
-      what a stopwatch on the running board reads. Times of DAY stay on the
-      in-game clock, because that is the clock the HUD shows. (The underlying
-      mismatch — journeys are a large fraction of the modelled day — is a real
-      tuning question, not a display bug.)
+    · **ONE CLOCK ON THE CARD.** Journey times print on the town's own clock
+      ("14 min", "1h 24m"), the same clock the times of day use.
+      This was board seconds first, and getting it wrong twice is the lesson:
+      seconds were chosen because at `secPerDay: 300` a cross-city commute
+      converted to EIGHT AND A HALF in-game hours, so the in-game clock was
+      nonsense and seconds were the only honest unit. That was a *symptom of a
+      broken calibration being read as a display decision*. Fixing the day
+      length removed the reason and left the real fault exposed: the card mixed
+      two units, and "leaves at 07:08" plus "took 1m 23s" do not compose — a
+      player cannot work out when she arrives. Raw board seconds survive as a
+      tooltip (`boardDuration`), which is the one you can check with a
+      stopwatch. When a display unit looks wrong, ask whether the MODEL is wrong
+      before inventing a unit to hide it.
+    · `inGameDuration(sec, secPerDay)` is the pure formatter; `game.durationLabel`
+      binds this game's day length, so a view never has to know it — and a test
+      compressing the clock gets labels that match its own day, not the shipped
+      one.
     · Zero winners is a legal, meaningful outcome: the model REFUSING the
       journey. Say so in the panel; an empty table explains the one case that
       most needs explaining.
