@@ -887,6 +887,33 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
     · Paint ONE band per side per movement, deduplicated: `twoWay` is two lanes
       over the same ground and painting per lane stacks two bands and shows a
       seam at every tile edge.
+    · **MEASURE THE ROAD WITH `laneCountAt`, NEVER `laneCount(p) +
+      laneCount(oppositePort(p))`** (2026-08-04). A CURVE (and a junction) carries
+      no lanes on the port opposite an arm, so the two-term sum collapses every
+      bend to the 2-lane minimum — `roadHalfUnits` did exactly that and laid a
+      2-lanes-each-way street's band 28 units inside its own kerb, i.e. UNDER the
+      tarmac that is painted over it. The pavement VANISHED for the length of
+      every bend (reported as "eine Lücke in den Trottoirs"); `/test/roadcurveloops`
+      showed two of its three rings with no pavement at all. `tiles/lanes.ts`
+      already documents `laneCountAt` as the helper for "when the tile is a curve
+      or junction" — believe it.
+    · **NO min-2 FLOOR on the pavement either**, same reason `Tile.vue`'s paint
+      width dropped one: since the run-max kerb anchor a 1-lane one-way street is
+      drawn its true ONE lane wide, so flooring at two floats the band half a lane
+      out with a strip of bare ground behind the kerb (`/test/citizencars`).
+    · **The band is seam-matched PER END, not per tile** (`pavementPaths` takes the
+      LEVEL, not just the cell). The tarmac meets its neighbour flush —
+      `roadSeamPaintTotal` narrows a road toward a narrower neighbour and
+      `junctionArmPaintTotal` makes a junction arm adopt the street it opens onto
+      — so a pavement measured from the tile alone jogs sideways at exactly the
+      seams the kerb it follows does not. Use `roadKerbEdge` / `roadCurveKerbEdgeTapered`
+      with SIGNED per-end offsets and `side = 1`; both taper for free.
+    · **A ONE-WAY street is the one road not symmetric about its centreline.** It
+      kerb-anchors the run's widest lane count, so lanes open and close on the
+      CENTRE side while the kerb runs dead straight — each pavement has to follow
+      its OWN edge (`kerb + pad` / `inner − pad`), and a centred ±half puts the
+      kerb-side band on the tarmac. `/test/footwaywidth` is the isolation board
+      for all of this: a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
     · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
       and pavements, above EVERY tile's ground patch and not just their own. A
       terrain patch's corners are jittered OFF the tile grid on purpose, so a
