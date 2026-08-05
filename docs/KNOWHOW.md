@@ -742,6 +742,27 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   each rider to the station they named (`off = final`), because a stopper calls
   everywhere it passes and can promise that. Only a RETIRING train dumps.
 
+## THE TRANSIT LAYER — ONE FOR BOTH SIMS (2026-08-05)
+- `sim/transit.ts` owns the LINE registry, the line-graph memo, the QUEUES, the
+  spawn demand and the boarding EXCHANGE. All of it used to be private to
+  `createSimulation`, which was fine while "vehicle that carries passengers"
+  meant a train. A bus is planned the same way (#90) and a bus-then-train
+  journey is ONE journey — two copies would be the shadow-queue mistake again.
+- `createSimulation` takes an optional `transit`; without one it makes its own,
+  so every unit test and every road-less board is unchanged. `game.ts` will make
+  one and hand it to both sims.
+- The layer never learns what a stop IS. `isStop` is injected, and each sim
+  contributes its unassigned vehicles through `setStoppers(source, fn)` — keyed
+  by source, so rail and road contribute independently and neither can clobber
+  the other.
+- A matched DEPOT arrival is NOT an exchange. "Everyone home" ends every ride
+  aboard and counts them all, whatever they asked for; routing it through
+  `exchange` read them as CHANGING at a depot and re-queued them somewhere no
+  service will ever call — 3 delivered became 0. It calls `transit.deliver(n)`.
+- `exchange` MUTATES the manifest array it is given (the caller owns it) and
+  returns the counts a dwell event reports. Boarding asks the NETWORK, never a
+  single line's stop list.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get
