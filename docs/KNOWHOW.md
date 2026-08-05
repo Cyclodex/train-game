@@ -2874,6 +2874,56 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   lanes sit on the wider band. Keep paint (`junctionArmPaintTotal`) and positioning
   (`seamPositioningBand`) in lockstep for stacked junctions.
 
+## LEVEL-CROSSING FURNITURE (2026-08-04)
+- THE BOOMS ARE DERIVED FROM THE ROAD, NOT FROM THE TILE. `tiles/crossingFurniture.ts`
+  (pure, unit-tested) returns the span of painted tarmac and the boom/sign positions;
+  `Crossing.vue` is a view over it. The old geometry was fixed CSS percentages (post
+  at 30%, arm 30%→70%), which is only ever right on a 1+1-lane street: on a 3+3 the
+  tarmac is 168px of a 200px tile, so the post stood IN the carriageway and the arm
+  covered the two inner lanes. Same lesson as the pavement offset in `footway.ts` —
+  road width is data, so anything beside a road must read it.
+- A BIG STREET HAS FOUR BARS: both sides of the rails × both verges
+  (`BIG_STREET_LANES = 2`, i.e. anything wider than 1+1). Each row is closed by its
+  own pair meeting at the centreline, so NO arm is ever longer than half the road —
+  reaching the far verge on a 6-lane street would swing an arm right across the
+  oncoming lanes. A narrow 1+1 street keeps the classic diagonal PAIR: one bar per
+  row, on the approaching driver's right verge (traffic keeps right, so the down
+  carriageway is the local −x half and its bar hinges on −x).
+- A SIGNAL ON EVERY MAST — one per BAR, not one per row (four on a big two-way
+  street, at the tile's four corners). That is the Swiss arrangement (a barrier and
+  a Blinklichtsignal on each side of the road) and it is also what makes a closed
+  crossing read as a PAIR of barriers per side rather than one long bar. ONE-WAY
+  roads are guarded on the approach side ONLY (a bar behind the crossing guards
+  nothing): one row, one bar if narrow / a verge pair if big.
+- THE CENTRE GAP (`CENTRE_GAP_FRAC = 0.045`) is the other half of that. Two arms
+  meeting exactly on the centreline draw as one unbroken bar — the "looks like a
+  single barrier" report. Every arm whose tip is the MEETING POINT stops short by
+  the gap; an arm ending at a KERB (a narrow one-way street's full barrier) does
+  not, since nothing meets it. The gap stays well under a car's width (0.14 tile)
+  so the road still reads as closed.
+- THE SIGNAL ART IS SWISS, not German (checked against the SSV / Wikipedia
+  descriptions, 2026-08-04): a white-rimmed BLACK triangular panel carrying two red
+  lights side by side AT THE SAME HEIGHT, alternating. The old art was a red-and-
+  white warning triangle with the lamps hanging below it, which is not a signal any
+  country uses. The lamps are children of an UNCLIPPED wrapper — `clip-path` clips
+  descendants, so lamps inside the triangle element get their outer edges eaten.
+  The unlit lens is dark red (#6b3030), not black: on a black panel a black lens
+  disappears and the signal reads as having only one light.
+- THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
+  CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
+  (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the
+  RIGHT→LEFT movement, and `roadPorts` must return `{down: Right, up: Left}`. Getting
+  this backwards puts both bars on the departure side and only shows up in ONE
+  orientation — always check both (`/test/crossinglanes` has both plus a one-way).
+- MIRROR ABOUT THE HINGE. The right-hand bar is the left one under `scaleX(-1)`;
+  `.boom` therefore needs `transform-origin: left center`, because `left` is placed
+  at the hinge and the default centre origin slides the whole barrier one arm length
+  sideways.
+- The span mirrors `Tile.vue roadPaths` (the authority on painted width) at MID-tile,
+  where the rails run: two-way = centred band, averaged over its two seam totals
+  (`roadSeamPaintTotal`); one-way = kerb-anchored to `roadOneWayRunMax`. If the paint
+  rules change, this follows.
+
 ## ROADS
 - NO MIN-2 PAINT FLOOR on a curve. `Tile.vue roadPaths` used `max(selfAt, 2)` in
   the curve branch — a leftover from when a 1-lane one-way road was itself drawn 2

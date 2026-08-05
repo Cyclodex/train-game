@@ -1,34 +1,40 @@
 <template>
-  <!-- Level-crossing (Bahnübergang) furniture overlay: boom barriers, warning
-  lights and roadside triangle signals. The road surface is drawn by the tile's
-  road layer and the cars by the road simulation; this component only adds the
-  crossing furniture and reads the gate state (CLOSED while a train reserves or
-  occupies the tile). -->
+  <!-- Level-crossing (Bahnübergang) furniture overlay: boom barriers and their
+  Blinklichtsignale. The road surface is drawn by the tile's road layer and the
+  cars by the road simulation; this component only adds the crossing furniture
+  and reads the gate state (CLOSED while a train reserves or occupies the tile).
+
+  Everything is POSITIONED FROM THE ROAD, not from tile percentages: see
+  tiles/crossingFurniture.ts. A BIG street is guarded on both sides of the rails
+  and from both verges — four bars, each hinged outside its own kerb — instead of
+  one short bar parked on the tarmac. A narrow 1+1 street keeps the classic
+  diagonal pair. Every mast carries its own signal, and facing arms stop short of
+  each other, so a closed crossing reads as the pair of barriers it is. -->
   <div class="crossing" :style="overlayStyle">
     <div class="crossing-rot" :style="rotStyle">
-      <!-- two boom barriers guarding the rail; down (horizontal) when closed -->
-      <div class="boom boom--top" :class="{ closed }">
-        <div class="boom-arm"></div>
-        <div class="boom-post"></div>
-      </div>
-      <div class="boom boom--bottom" :class="{ closed }">
+      <!-- one boom per guarded approach; arm down (across the road) when closed -->
+      <div
+        v-for="(b, i) in layout.booms"
+        :key="'boom' + i"
+        class="boom"
+        :class="{ closed }"
+        :style="boomStyle(b)"
+      >
         <div class="boom-arm"></div>
         <div class="boom-post"></div>
       </div>
 
-      <!-- roadside crossing signals: a classic up-pointing warning triangle on a
-      post with two alternating red lamps, one guarding each approach. -->
-      <div class="xing-signal xing-signal--top" :class="{ active: closed }">
-        <div class="xing-tri"></div>
-        <div class="xing-lamps">
-          <span class="xing-lamp xing-lamp--a"></span>
-          <span class="xing-lamp xing-lamp--b"></span>
-        </div>
-        <div class="xing-post"></div>
-      </div>
-      <div class="xing-signal xing-signal--bottom" :class="{ active: closed }">
-        <div class="xing-tri"></div>
-        <div class="xing-lamps">
+      <!-- Blinklichtsignal — one on EVERY barrier mast, the Swiss arrangement: a
+      black triangular panel carrying two red lights side by side at the same
+      height, alternating while the crossing is closed. -->
+      <div
+        v-for="(s, i) in layout.signs"
+        :key="'sign' + i"
+        class="xing-signal"
+        :class="{ active: closed }"
+        :style="signStyle(s)"
+      >
+        <div class="xing-panel">
           <span class="xing-lamp xing-lamp--a"></span>
           <span class="xing-lamp xing-lamp--b"></span>
         </div>
@@ -42,8 +48,16 @@
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { Position } from "@/types";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
-import { TileCell, parseCoordId } from "@/tiles/model";
-import { roadPortsOf } from "@/tiles/lanes";
+import { TileCell, Port, parseCoordId } from "@/tiles/model";
+import { laneCount, roadPortsOf } from "@/tiles/lanes";
+import { neighborCoord, oppositePort } from "@/sim/topology";
+import {
+  CrossingBoom,
+  CrossingLayout,
+  CrossingSign,
+  crossingLayout,
+  crossingRoadSpan,
+} from "@/tiles/crossingFurniture";
 import type { Game } from "@/game";
 
 // The crossing furniture is a pure view over the tile's gate state — no movement
@@ -82,6 +96,61 @@ class Crossing extends Vue {
     return this.horizontalRoad ? { transform: "rotate(90deg)" } : {};
   }
 
+  // The two ports of the road, named by the LOCAL (upright) frame the furniture
+  // is drawn in: `down` is the port traffic enters from to travel local-down.
+  // CSS rotate(90deg) maps local +y to screen −x, so for a horizontal road
+  // "local down" is the Right→Left movement — hence Right, not Left.
+  get roadPorts(): { down: Port; up: Port } {
+    return this.horizontalRoad
+      ? { down: Position.Right, up: Position.Left }
+      : { down: Position.Top, up: Position.Bottom };
+  }
+
+  // Where the booms and signs stand, derived from the painted road width.
+  get layout(): CrossingLayout {
+    const road = this.cell.road;
+    const coord = parseCoordId(this.coordId);
+    const { down, up } = this.roadPorts;
+    const seam = (port: Port) => {
+      const n = neighborCoord(coord, port);
+      return {
+        cross: n ? this.game.roadLaneCountAt(n, oppositePort(port)) : 0,
+        junction: n ? this.game.roadIsJunctionAt(n) : false,
+      };
+    };
+    const d = seam(down);
+    const u = seam(up);
+    const downLanes = laneCount(road, down);
+    const upLanes = laneCount(road, up);
+    const span = crossingRoadSpan({
+      size: this.size,
+      downLanes,
+      upLanes,
+      crossDown: d.cross,
+      crossUp: u.cross,
+      downIsJunction: d.junction,
+      upIsJunction: u.junction,
+      runMax: this.game.roadOneWayRunMax(coord, downLanes > 0 ? down : up),
+    });
+    return crossingLayout(this.size, span);
+  }
+
+  // A boom is placed at its hinge and drawn as an arm reaching `length` px to
+  // the right; the arm that reaches the other way is the mirror image, so the
+  // one set of arm/post rules serves both.
+  boomStyle(b: CrossingBoom) {
+    return {
+      left: `${this.size / 2 + b.hinge}px`,
+      top: `${b.y}px`,
+      width: `${b.length}px`,
+      transform: b.dir === -1 ? "scaleX(-1)" : undefined,
+    };
+  }
+
+  signStyle(s: CrossingSign) {
+    return { left: `${this.size / 2 + s.x}px`, top: `${s.y}px` };
+  }
+
   // CLOSED while a train has reserved or is sitting on the crossing tile.
   get closed(): boolean {
     return (
@@ -112,28 +181,28 @@ export default toNative(Crossing);
   inset: 0;
 }
 
-/* boom barriers: an arm that pivots down across the road when closed */
+/* boom barriers: an arm that pivots down across the road when closed. The
+element is anchored at the HINGE (the post) and is `length` px wide; a barrier
+that sweeps the other way is the same element mirrored (scaleX(-1)), so the arm
+geometry below is written once for a rightward sweep. */
 .boom {
   position: absolute;
   z-index: 7; /* above the road surface, cars and the train */
-  left: 30%;
-  width: 40%;
   height: 0;
-}
-.boom--top {
-  top: 28%;
-}
-.boom--bottom {
-  top: 72%;
+  /* Mirror about the HINGE, not the element's middle: `left` is placed at the
+  hinge, so a centre-origin scaleX(-1) would slide the whole barrier one arm's
+  length sideways. */
+  transform-origin: left center;
 }
 .boom-post {
   position: absolute;
-  left: -6px;
+  left: -4px;
   top: -6px;
-  width: 6px;
+  width: 8px;
   height: 12px;
   background: #d23b3b;
   border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 .boom-arm {
   position: absolute;
@@ -156,57 +225,65 @@ export default toNative(Crossing);
   transform: rotate(0deg); /* lowered across the road */
 }
 
-/* roadside crossing signals: up-pointing warning triangle + alternating lamps */
+/* Blinklichtsignal (CH): a white-rimmed BLACK triangular panel carrying two red
+lights side by side at the same height, on a short mast. One per barrier mast. */
 .xing-signal {
   position: absolute;
   z-index: 8;
   display: flex;
   flex-direction: column;
   align-items: center;
+  transform: translate(-50%, -50%);
 }
-.xing-signal--top {
-  left: 20%;
-  top: 12%;
-}
-.xing-signal--bottom {
-  left: 72%;
-  top: 60%;
-}
-.xing-tri {
-  width: 0;
-  height: 0;
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
-  border-bottom: 16px solid #d23b3b;
+/* The panel itself is the two pseudo-elements (rim + face); the lamps are real
+children of the UNCLIPPED wrapper, because a clip-path clips its descendants and
+would eat the lights sitting near the triangle's edges. */
+.xing-panel {
   position: relative;
+  width: 24px;
+  height: 20px;
 }
-.xing-tri::after {
+.xing-panel::before,
+.xing-panel::after {
   content: "";
   position: absolute;
-  left: -5px;
-  top: 5px;
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 9px solid #f6f6f6;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
 }
-.xing-lamps {
-  display: flex;
-  gap: 4px;
-  margin-top: 1px;
+.xing-panel::before {
+  inset: 0;
+  background: #f2f2f2; /* the rim */
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+.xing-panel::after {
+  left: 1.5px;
+  right: 1.5px;
+  top: 2px;
+  bottom: 1px;
+  background: #1d1d1d; /* the panel face */
 }
 .xing-post {
   width: 3px;
-  height: 16px;
+  height: 13px;
   background: #555;
   border-radius: 1px;
 }
+/* The two lenses sit low on the panel, where the triangle is widest. Dark red
+when off — a lens, not a hole — so the signal still reads as TWO lights while
+only one of them is lit. */
 .xing-lamp {
-  width: 6px;
-  height: 6px;
+  position: absolute;
+  z-index: 1;
+  bottom: 2px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #5a2a2a;
+  background: #6b3030;
+}
+.xing-lamp--a {
+  left: 5.5px;
+}
+.xing-lamp--b {
+  right: 5.5px;
 }
 .xing-signal.active .xing-lamp--a {
   animation: lamp-blink 1s steps(1) infinite;
@@ -223,7 +300,7 @@ export default toNative(Crossing);
   }
   50.01%,
   100% {
-    background: #5a2a2a;
+    background: #6b3030;
     box-shadow: none;
   }
 }
