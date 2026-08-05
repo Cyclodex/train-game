@@ -419,6 +419,12 @@ export interface Car {
   // it stops when it gets there. Null for ambient traffic — which is every car
   // that existed before the citizen layer.
   tripGoal: { tileId: string; entryPort: Port } | null;
+  // A SERVICE vehicle: one running a line, which arrives and then carries on to
+  // the next stop. An ordinary requested trip ends with the vehicle removed —
+  // the citizen got home and stops being traffic — but a bus that vanished at
+  // every stop and reappeared would be a different bus each leg. This one stays
+  // on the board and waits to be re-targeted (`retarget`).
+  service?: boolean;
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
@@ -668,7 +674,24 @@ export interface RoadSim {
   // when no car could be dispatched — no road, no route, the street outside
   // blocked, or the requested-trip cap reached. The car is ordinary traffic in
   // every other respect: same lanes, same junctions, same queues.
-  requestTrip(fromTileId: string, toTileId: string, kind?: VehicleKind): string | null;
+  requestTrip(
+    fromTileId: string,
+    toTileId: string,
+    kind?: VehicleKind,
+    // A SERVICE vehicle stays on the board when it arrives instead of ceasing
+    // to be traffic — it is between legs of a line, not finished (#90).
+    service?: boolean
+  ): string | null;
+  // Send a service vehicle on to its next stop from where it stands. False when
+  // it is gone, or when nothing on the road reaches there from here.
+  retarget(carId: string, toTileId: string): boolean;
+  // Take a service vehicle off the board (withdrawn, or scrapped).
+  despawn(carId: string): boolean;
+  // Is this vehicle still on the board?
+  hasCar(carId: string): boolean;
+  // Which tile it is standing on, for a caller that needs to know where a
+  // service got to.
+  carTile(carId: string): string | undefined;
   // Is that journey still going? Unknown ids read "arrived" so a caller can
   // never wait for ever on a trip that no longer exists.
   tripStatus(tripId: string): TripStatus;
@@ -3051,7 +3074,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function requestTrip(
     fromTileId: string,
     toTileId: string,
-    kind: VehicleKind = "car"
+    kind: VehicleKind = "car",
+    service = false
   ): string | null {
     if (fromTileId === toTileId) return null;
     if (requestedCarCount() >= MAX_REQUESTED_CARS) return null;
@@ -3110,11 +3134,38 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.overtakeHomeLane = chosen;
       car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
       car.tripGoal = { tileId: toTileId, entryPort: plan.goal.entryPort };
+      if (service) car.service = true;
       cars.push(car);
       trips.set(id, "driving");
       return id;
     }
     return null;
+  }
+
+  // Send a SERVICE vehicle on to its next stop from wherever it is standing.
+  //
+  // Not a fresh `requestTrip`: that spawns a vehicle, and this one is already on
+  // the board with passengers aboard. It re-plans from the segment under its
+  // head, which is also why a line whose next stop is unreachable from here
+  // simply fails and the caller can try again next tick rather than the bus
+  // silently teleporting.
+  function retarget(carId: string, toTileId: string): boolean {
+    const car = cars.find(c => c.id === carId);
+    if (!car) return false;
+    const cls = vehicleClassOf(car.kind);
+    if (!level[toTileId]?.road?.length) return false;
+    const head = car.path[car.headIndex];
+    const goals = approachPorts(toTileId, cls).map(entryPort => ({
+      coord: parseCoordId(toTileId),
+      entryPort,
+    }));
+    if (goals.length === 0) return false;
+    const plan = planRouteToGoals(level, head.coord, head.entryPort, goals, cls);
+    if (!plan.goal) return false;
+    car.routePlan = plan.turns;
+    car.tripGoal = { tileId: toTileId, entryPort: plan.goal.entryPort };
+    trips.set(car.id, "driving");
+    return true;
   }
 
   // Requested cars that have reached their destination: they stop being traffic
@@ -3130,6 +3181,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       if (c.path[c.headIndex].entryPort !== goal.entryPort || c.headProgress < 0.5) continue;
       trips.set(c.id, "arrived");
       releaseStall(c);
+      // A service vehicle is not done, only between legs: it stands where it
+      // arrived until its owner tells it where to go next.
+      if (c.service) {
+        c.velocity = 0;
+        continue;
+      }
       cars.splice(i, 1);
     }
   }
@@ -3523,6 +3580,22 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       settleRequestedTrips();
     },
     requestTrip,
+    retarget,
+    despawn(carId: string) {
+      const at = cars.findIndex(c => c.id === carId);
+      if (at < 0) return false;
+      releaseStall(cars[at]);
+      cars.splice(at, 1);
+      trips.delete(carId);
+      return true;
+    },
+    hasCar(carId: string) {
+      return cars.some(c => c.id === carId);
+    },
+    carTile(carId: string) {
+      const car = cars.find(c => c.id === carId);
+      return car ? tileIdOf(car) : undefined;
+    },
     tripStatus(tripId: string) {
       return trips.get(tripId) ?? "arrived";
     },

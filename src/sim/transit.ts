@@ -464,7 +464,11 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
   // lines are drawn, which moves who gets picked next — still deterministic for
   // a given sequence of player actions, which is what replayability needs.
   function nextDestination(id: string): string | null {
-    const choices = network().reachableFrom(id);
+    // Only a real STOP is somewhere to ask for. A line's stop list is the
+    // player's, and nothing stops it naming a tile that is not a stop at all —
+    // the graph will happily carry that as a node, and then people queue for a
+    // patch of road nobody can wait at.
+    const choices = network().reachableFrom(id).filter(isStop);
     if (choices.length === 0) return null;
     const at = destCursors.get(id) ?? 0;
     destCursors.set(id, at + 1);
