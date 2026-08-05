@@ -5,6 +5,10 @@ import { citizenwalk } from "@/levels/test/scenarios/citizenwalk";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizenzebra, CROSSING_X } from "@/levels/test/scenarios/citizenzebra";
 import {
+  citizencrossback,
+  CROSSING_ID,
+} from "@/levels/test/scenarios/citizencrossback";
+import {
   citizenrail,
   CROSSING_X as RAIL_X,
   STREET_Y as RAIL_Y,
@@ -233,6 +237,126 @@ describe("the pedestrian simulation", () => {
     for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeLessThanOrEqual(ys[i - 1] + 1e-9);
     // ...and they really did get from one pavement to the other.
     expect(ys[0] - ys[ys.length - 1]).toBeGreaterThan(0.2);
+  });
+
+  // A WALK IS CONTINUOUS. Nobody teleports.
+  //
+  // The measuring stick for the three tests below: a stride is `speed * dt`
+  // (0.25 * 0.2 = 0.05 of a tile, plus the ±20% spread), a road is ~0.44 of a
+  // tile wide and a tile is 1. So anything over 0.15 in one tick is not walking
+  // — it is either a hop across the carriageway or a hop to another tile, and
+  // both were real.
+  const STRIDE_MAX = 0.15;
+
+  /** Every position a walk passes through, sampled each tick until they arrive. */
+  function walkSamples(level: typeof citizenwalk.level, from: string, to: string) {
+    const sim = createPedestrianSim({ level, seed: 1, speed: 0.25 });
+    const id = sim.request(from, to);
+    expect(id).toBeTruthy();
+    const path: { x: number; y: number }[] = [];
+    for (let t = 0; t < 400; t += 0.2) {
+      sim.step(0.2);
+      const [w] = sim.sample();
+      if (!w) break;
+      path.push({ x: w.x, y: w.y });
+    }
+    expect(sim.status(id as string)).toBe("arrived");
+    return path;
+  }
+
+  /** The longest single tick of a walk, and where it happened. */
+  function longestStride(path: { x: number; y: number }[]) {
+    let worst = 0;
+    let at = "";
+    for (let i = 1; i < path.length; i++) {
+      const d = Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+      if (d > worst) {
+        worst = d;
+        at = `${path[i - 1].x.toFixed(2)},${path[i - 1].y.toFixed(2)} -> ${path[i].x.toFixed(2)},${path[i].y.toFixed(2)}`;
+      }
+    }
+    return { worst, at };
+  }
+
+  it("does not jump a tile when the walk DOUBLES BACK over a zebra", () => {
+    // The reported bug, in one line: "he went left, and suddenly appeared
+    // right." When the only crossing is past the destination, the route reaches
+    // the crossing tile and leaves it BY THE SAME EDGE. That tile has to be
+    // retraced — walked in to the middle and back out the way you came. Walking
+    // on to the far edge instead put the walker a tile beyond where the next
+    // step resumed, so they snapped a whole tile backwards: measured at 1.05.
+    // The house and its works are on the SAME tile of street, opposite banks.
+    const path = walkSamples(citizencrossback.level, "3,2", "3,0");
+    expect(longestStride(path).worst).toBeLessThan(STRIDE_MAX);
+
+    // And the shape of the walk is the point: west to the zebra, over, then
+    // east again along the other bank to a door opposite the one they left.
+    const xs = path.map(p => p.x);
+    const turn = xs.indexOf(Math.min(...xs));
+    expect(turn).toBeGreaterThan(2); // they really did walk out to the crossing
+    expect(xs[0] - xs[turn]).toBeGreaterThan(0.8); // ...a tile west of the door
+    expect(xs[xs.length - 1] - xs[turn]).toBeGreaterThan(0.8); // ...and back east
+    // They changed banks exactly once, and only over the crossing tile.
+    const crossed = path.filter((p, i) => i > 0 && (p.y - 1.5) * (path[i - 1].y - 1.5) < 0);
+    expect(crossed).toHaveLength(1);
+    expect(Math.floor(crossed[0].x)).toBe(Number(CROSSING_ID.split(",")[0]));
+  });
+
+  it("keeps to one BANK round a corner that spells its sides the other way round", () => {
+    // A `side` is measured against each tile's OWN through direction, and a
+    // tile's through direction is whichever movement its lane list names first.
+    // `citizencrossback`'s bend is authored `twoWay(Right, Bottom)` and the
+    // straight beside it `twoWay(Left, Right)`, so +1 means the OUTER bank on
+    // one and the SOUTH bank on the other — opposite banks of the same street.
+    // Carrying the bare number over that seam walked somebody a road's width
+    // sideways, mid-stride, with no crossing under them (measured at 0.44).
+    // The works round the bend on the west arm: cross at the zebra, then turn
+    // the north-west corner onto the west arm's outer pavement.
+    const path = walkSamples(citizencrossback.level, "3,2", "0,2");
+    expect(longestStride(path).worst).toBeLessThan(STRIDE_MAX);
+
+    // Having crossed, they walk the top street on its OUTER (north) bank...
+    const afterZebra = path.filter(p => p.x > 2 && p.x < 3 && p.y < 1.5);
+    expect(afterZebra.length).toBeGreaterThan(2);
+    // ...and that is the bank the bend hands on, so they come down the west arm
+    // on ITS outer (west) pavement — the same side of the tarmac, spelled with
+    // the other sign. The bug put them on the far bank from the seam onwards,
+    // having crossed nothing.
+    const westArm = path.filter(p => p.x > 1 && p.x < 2 && p.y > 2 && p.y < 3);
+    expect(westArm.length).toBeGreaterThan(2);
+    for (const p of westArm) expect(p.x).toBeLessThan(1.5);
+  });
+
+  it("walks every route on every citizen board without a single jump", () => {
+    // The general form of both bugs above, and the guard that catches the next
+    // one: walk every pair of plots each board can route between and assert
+    // nobody ever moves further in one tick than a person can stride.
+    const jumps: string[] = [];
+    let walked = 0;
+    for (const scenario of [citizenwalk, citizenzebra, citizencrossback]) {
+      const plots = Object.keys(scenario.level).filter(id => !!scenario.level[id].city);
+      for (const from of plots) {
+        for (const to of plots) {
+          if (from === to) continue;
+          const sim = createPedestrianSim({ level: scenario.level, seed: 1, speed: 0.25 });
+          if (!sim.request(from, to)) continue;
+          walked += 1;
+          const path: { x: number; y: number }[] = [];
+          for (let t = 0; t < 400; t += 0.2) {
+            sim.step(0.2);
+            const [w] = sim.sample();
+            if (!w) break;
+            path.push({ x: w.x, y: w.y });
+          }
+          const { worst, at } = longestStride(path);
+          if (worst >= STRIDE_MAX) {
+            jumps.push(`${scenario.id} ${from}->${to}: ${worst.toFixed(2)} tiles, ${at}`);
+          }
+        }
+      }
+    }
+    expect(jumps).toEqual([]);
+    expect(walked).toBeGreaterThan(300);
   });
 
   it("refuses a walk it cannot make rather than inventing a walker", () => {
