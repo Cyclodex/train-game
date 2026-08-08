@@ -303,8 +303,69 @@ export function planWalk(
   const goalSide = sideOfPlot(level, toPlot, goal);
   if (startSide === null || goalSide === null) return null;
 
-  const from: WalkNode = { tileId: start, side: startSide };
-  const goalKey = walkNodeKey({ tileId: goal, side: goalSide });
+  return walkBetween(level, { tileId: start, side: startSide }, { tileId: goal, side: goalSide });
+}
+
+/**
+ * The pavement a walker who is standing at a KERB is on.
+ *
+ * The sibling of `sideOfPlot`, and it exists for the same reason that one does:
+ * a `side` is fixed to the TILE (which bank of the street), while everything
+ * downstream measures offsets against the DIRECTION OF TRAVEL. `sideOfPlot`
+ * answers the question for somebody standing in a building; this answers it for
+ * somebody who has just got out of a car parked against `bank`.
+ *
+ * `bank` is the port the parking row hugs (`bankOf` in `tiles/parking.ts`).
+ */
+export function sideOfBank(level: Level, roadTile: string, bank: Port): 1 | -1 | null {
+  const through = roadThrough(level[roadTile]);
+  if (!through) return null;
+  const { x: nx, y: ny } = travelNormal(through.from, through.to);
+  if (nx === 0 && ny === 0) return 1;
+  // The bank as a direction out of the tile's centre, against the same normal
+  // `sideOfPlot` compares a plot's offset to.
+  const v = portVector(bank);
+  const dot = v.x * nx + v.y * ny;
+  if (dot === 0) return 1;
+  return dot > 0 ? 1 : -1;
+}
+
+/**
+ * A walk from a stretch of KERB to a plot — the last leg of a driven journey,
+ * from the space the car actually stopped in to the door.
+ *
+ * Not `planWalk` with a fake plot: a plot resolves to `accessTileOf` (the road
+ * it fronts onto) and a side derived from where the building stands, and a
+ * parked car has neither. It is already ON the road tile, and which pavement it
+ * is beside is decided by the bank its bay hugs.
+ */
+export function planWalkFromKerb(
+  level: Level,
+  roadTile: string,
+  bank: Port,
+  toPlot: string
+): { tiles: string[]; sides: (1 | -1)[] } | null {
+  const goal = accessTileOf(level, toPlot);
+  if (!goal) return null;
+  if (!hasFootway(level[roadTile]) || !hasFootway(level[goal])) return null;
+  const startSide = sideOfBank(level, roadTile, bank);
+  const goalSide = sideOfPlot(level, toPlot, goal);
+  if (startSide === null || goalSide === null) return null;
+  return walkBetween(level, { tileId: roadTile, side: startSide }, { tileId: goal, side: goalSide });
+}
+
+// The shared breadth-first search over (tile, side). Both entry points above
+// differ only in how they work out where the walk STARTS; from there the graph,
+// the crossings and the route are identical, and duplicating this is how the two
+// would drift apart.
+function walkBetween(
+  level: Level,
+  from: WalkNode,
+  goalNode: WalkNode
+): { tiles: string[]; sides: (1 | -1)[] } | null {
+  const start = from.tileId;
+  const startSide = from.side;
+  const goalKey = walkNodeKey(goalNode);
   if (walkNodeKey(from) === goalKey) return { tiles: [start], sides: [startSide] };
 
   const prev = new Map<string, WalkNode | null>([[walkNodeKey(from), null]]);

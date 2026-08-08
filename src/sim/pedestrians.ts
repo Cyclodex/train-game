@@ -9,6 +9,7 @@ import {
   hasRailCrossing,
   pavementOffsetFor,
   planWalk,
+  planWalkFromKerb,
   roadThrough,
   sideOfPlot,
 } from "@/tiles/footway";
@@ -91,6 +92,14 @@ export interface PedestrianSim {
   // when there is no pavement route — the caller then falls back to its clock,
   // so a board with no footways behaves exactly as it did before they existed.
   request(fromPlot: string, toPlot: string): string | null;
+  // A walk that starts at a stretch of kerb rather than at a building — the last
+  // leg of a driven journey, from the space the car stopped in to the door.
+  requestFromKerb(
+    roadTile: string,
+    bank: Port,
+    toPlot: string,
+    at?: { x: number; y: number },
+  ): string | null;
   step(dt: number): void;
   status(id: string): "walking" | "arrived";
   release(id: string): void;
@@ -236,7 +245,12 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     fromPlot: string,
     toPlot: string,
     tiles: string[],
-    sides: (1 | -1)[]
+    sides: (1 | -1)[],
+    // Where the walk actually STARTS, in ground units, when it does not start at
+    // a building. Somebody getting out of a parked car begins at the car, not at
+    // the middle of a plot — and there is no plot at that end of the journey to
+    // take a centre from.
+    headAt?: { x: number; y: number }
   ): WalkStep[] | null {
     const steps: WalkStep[] = [];
     interface Run {
@@ -345,7 +359,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
       x: head.x,
       y: head.y,
       side: sides[0],
-      from: { x: head.x + 0.5, y: head.y + 0.5 },
+      from: headAt ?? { x: head.x + 0.5, y: head.y + 0.5 },
       to: pointOf(steps[0], 0),
     });
     steps.push({
@@ -392,23 +406,54 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     );
   }
 
+  // Turn a planned route into a walker on the pavement. Shared so the two ways
+  // of starting a walk cannot drift apart in speed, capacity or step building.
+  function admit(
+    fromId: string,
+    toPlot: string,
+    route: { tiles: string[]; sides: (1 | -1)[] },
+    headAt?: { x: number; y: number },
+  ): string | null {
+    if (walkers.size >= MAX_WALKERS) return null;
+    if (route.tiles.length === 0) return null;
+    const steps = buildSteps(fromId, toPlot, route.tiles, route.sides, headAt);
+    if (!steps) return null;
+    const id = `walk${nextId++}`;
+    walkers.set(id, {
+      id,
+      steps,
+      index: 0,
+      progress: 0,
+      speed: baseSpeed * (1 - SPEED_SPREAD + rng() * 2 * SPEED_SPREAD),
+      waitedSec: 0,
+    });
+    return id;
+  }
+
   return {
     request(fromPlot: string, toPlot: string): string | null {
-      if (walkers.size >= MAX_WALKERS) return null;
       const route = planWalk(level, fromPlot, toPlot);
-      if (!route || route.tiles.length === 0) return null;
-      const steps = buildSteps(fromPlot, toPlot, route.tiles, route.sides);
-      if (!steps) return null;
-      const id = `walk${nextId++}`;
-      walkers.set(id, {
-        id,
-        steps,
-        index: 0,
-        progress: 0,
-        speed: baseSpeed * (1 - SPEED_SPREAD + rng() * 2 * SPEED_SPREAD),
-        waitedSec: 0,
-      });
-      return id;
+      if (!route) return null;
+      return admit(fromPlot, toPlot, route);
+    },
+
+    // THE WALK FROM THE CAR. `roadTile`+`bank` say which stretch of kerb the
+    // driver is standing at (the bay their car is in); `at` is where the car
+    // actually stopped, so the figure appears beside it rather than snapping to
+    // the middle of the tile.
+    //
+    // Null — no pavement, no route, too many walkers — is not a failure: the
+    // caller charges the leg as time instead, exactly as it did before anybody
+    // was drawn doing it.
+    requestFromKerb(
+      roadTile: string,
+      bank: Port,
+      toPlot: string,
+      at?: { x: number; y: number },
+    ): string | null {
+      const route = planWalkFromKerb(level, roadTile, bank, toPlot);
+      if (!route) return null;
+      return admit(roadTile, toPlot, route, at);
     },
 
     step(dt: number) {

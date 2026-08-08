@@ -1353,6 +1353,14 @@ export function createGame(
         // ...and a person who walks becomes an actual figure on the pavement.
         walking: {
           request: (from, to) => pedestrianSim?.request(from, to) ?? null,
+          // The car's own trip names where its driver is standing. Resolving the
+          // kerb HERE — rather than handing the citizen layer a bank to carry —
+          // is what keeps bays and pavement sides on this side of the port.
+          requestFromKerb: (carTripId, toPlot) => {
+            const kerb = roadSim.tripParkedKerb(carTripId);
+            if (!kerb) return null;
+            return pedestrianSim?.requestFromKerb(kerb.tileId, kerb.bank, toPlot) ?? null;
+          },
           status: id => pedestrianSim?.status(id) ?? "arrived",
           release: id => pedestrianSim?.release(id),
         },

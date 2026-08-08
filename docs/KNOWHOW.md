@@ -2636,6 +2636,33 @@ of the above; read that section first.
   facility came back zero and the chip read "P VOLL" — a car park, standing empty,
   announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
   with their public number.
+## THE WALK FROM THE CAR (2026-08-05)
+- The bay-to-door leg (`Leg = "parking"`) was a pure COUNTDOWN of
+  `walkFromBaySec`: the cost was modelled and the person was not, so a car park
+  fed nobody into the building it served. It is a real walker now.
+- **A WALK CANNOT START AT A PLOT HERE, and that is why it needed a new entry
+  point.** `planWalk` resolves a plot to `accessTileOf` (the street it fronts
+  onto) plus `sideOfPlot` (which bank its BUILDING stands on). A parked car has
+  neither: it is already on the road tile, and which pavement it is beside is
+  decided by the bank its bay hugs. Hence `sideOfBank` + `planWalkFromKerb`
+  (`tiles/footway.ts`), and `pedestrians.requestFromKerb`.
+  · A street with a bay on EACH side has two banks, so the tile alone cannot
+    answer the question — pinned by a test that the two banks come back as
+    opposite pavements.
+  · `sideOfBank` and `sideOfPlot` must AGREE where a drive and its house share a
+    bank, or somebody walks across the road to reach the house their own car is
+    parked outside.
+- **THE PORT TAKES THE CAR'S TRIP ID, NOT A TILE** (`WalkingPort
+  .requestFromKerb(carTripId, toPlot)`). `game.ts` resolves it through
+  `roadSim.tripParkedKerb`, which keeps banks, sides and bay geometry entirely
+  out of the citizen layer — the same line terrain-blindness is drawn on.
+- The leg now ends when the WALKER arrives, with `legRemaining` kept as the
+  backstop (same rule as the `walking` leg): no pavement, no route, or a pavement
+  deleted underfoot falls back to the clock rather than stranding anybody.
+- Only ONE walk per journey is ever live: the `walking` leg sets `walkTrip` for
+  the approach to a platform, and the `parking` leg sets it for the last stretch.
+  They cannot overlap — a car trip has no platform approach.
+
 ## THE KERB (nowhere to park, 2026-08-05)
 - **A REQUESTED CAR IS DELETED WHEN IT REACHES ITS ADDRESS**
   (`settleRequestedTrips`, half a tile in). That is the generic "arrived"

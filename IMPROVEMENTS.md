@@ -223,13 +223,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     at setup too, so a house built in play grows none, and the same fix covers
     both. Whenever it lands, a re-derive must never yank a bay out from under a
     car parked in it.
-14. **Walk from the bay to the desk on an actual pavement.** The last leg of a
-    driven commute is charged as TIME (`walkFromBaySec`) but nobody is drawn
-    doing it. Handing it to `pedestrianSim` is what would make a car park
-    visibly feed a stream of people into a factory — and it is the same
-    plumbing `citizenwalk` already has.
-    Files: `src/sim/citizens.ts`, `src/sim/pedestrians.ts`.
-    Tracked: [#93](https://github.com/Cyclodex/train-game/issues/93).
+14. ~~**Walk from the bay to the desk on an actual pavement.**~~ SHIPPED
+    2026-08-05. The last leg of a driven commute was charged as TIME
+    (`walkFromBaySec`) with nobody drawn doing it. It is now a real figure on the
+    pavement: `planWalkFromKerb`/`sideOfBank` (`tiles/footway.ts`) start a walk at
+    the KERB a bay hugs rather than at a building, and the leg ends when the
+    walker arrives, with the old clock kept as the backstop for a board with no
+    pavements. Tracked: [#93](https://github.com/Cyclodex/train-game/issues/93).
+    What is still open there: the walk is charged from the STALL TILE, so a long
+    car park's own aisles cost nothing to cross.
 15. **Park & ride should hold a real bay too.** A P+R car still evaporates at
     the station and pays the flat penalty. The blocker is the return half: you
     come back to a different platform and have to reach the car you left at the

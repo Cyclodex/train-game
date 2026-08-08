@@ -22,7 +22,7 @@ import {
   type ParkingRegistry,
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
-import { manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
+import { bankOf, manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -743,6 +743,8 @@ export interface RoadSim {
   // This is how far the driver has to WALK, and charging that walk is the whole
   // reason a car park two streets away is worse than the space at the gate.
   tripParkedAt(tripId: string): string | null;
+  // ...and the kerb it is against, for actually WALKING that leg on a pavement.
+  tripParkedKerb(tripId: string): { tileId: string; bank: Port } | null;
   // The owner is back. The car gives up its bay — waiting in it, with no road
   // body and no right of way, until the traffic genuinely leaves a gap — and
   // then drives to `toTileId`, where the trip finally reads "arrived".
@@ -3401,6 +3403,18 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return car?.stall?.tileId ?? null;
   }
 
+  // WHERE THE DRIVER IS STANDING when they get out: the tile, and the kerb their
+  // bay hugs. The bank is what decides which pavement they are on, and it cannot
+  // be worked out from the tile alone — a street with a bay on each side has two.
+  function tripParkedKerb(tripId: string): { tileId: string; bank: Port } | null {
+    if (trips.get(tripId)?.status !== "parked") return null;
+    const car = cars.find(c => c.id === tripId);
+    if (!car?.stall) return null;
+    const row = parking.info(car.stall)?.row;
+    if (!row) return null;
+    return { tileId: car.stall.tileId, bank: bankOf(row) };
+  }
+
   // Take the car off the board outright, wherever it is. The caller has decided
   // it has no owner any more — somebody emigrated, or gave up on the journey and
   // there is nowhere left to send it.
@@ -3830,6 +3844,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       return trips.get(tripId)?.wantedSpace ?? false;
     },
     tripParkedAt,
+    tripParkedKerb,
     releaseTrip,
     abandonTrip,
     clearFinishedTrip(tripId: string) {
