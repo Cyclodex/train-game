@@ -1225,6 +1225,12 @@ class Tile extends Vue {
     return isRoadJunction(this.tile.road);
   }
 
+  // Kerb-side cycle lanes of one direction (0 or 1 in practice) — feeds the
+  // half-width cycle paint in roadLaneMarkingPaths.
+  private cycleLanesFrom(p: Position): number {
+    return (this.tile.road ?? []).filter(l => l.from === p && l.kind === "cycle").length;
+  }
+
   // A ONE-WAY junction has no arm carrying oncoming traffic: every port it
   // touches is EITHER an entry OR an exit, never both (a bidirectional arm makes
   // it a normal two-way junction). This gates the lane-anchored turn-off paint
@@ -1421,7 +1427,7 @@ class Tile extends Vue {
         // other's, like real intersection guide lines.
         const laneMarkings = this.tileIsRoadJunction
           ? this.junctionTurnGuides(coord, a, b, size)
-          : roadLaneMarkingPaths(a, b, size, selfA, selfB);
+          : roadLaneMarkingPaths(a, b, size, selfA, selfB, undefined, undefined, this.cycleLanesFrom(a), this.cycleLanesFrom(b));
         return {
           surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
           laneMarkings,
@@ -1552,7 +1558,7 @@ class Tile extends Vue {
       }
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2, this.cycleLanesFrom(a), this.cycleLanesFrom(b)),
         edges,
         mismatch: false,
         mismatchTip: "",
@@ -1577,11 +1583,16 @@ class Tile extends Vue {
     const road = this.tile.road;
     if (!this.config.roads || !road?.length) return [];
     const size = this.config.tileSize;
-    // A cycle lane's band is narrower than the lane itself (~70%) — real bike
-    // lanes are slimmer than car lanes, and the full-width tint read as heavy.
-    // Still centred on the lane, since that is where the bike actually rides.
+    // A cycle lane paints at HALF the lane width, KERB-ALIGNED — the real-world
+    // proportion (a bike lane is ~1.5m against a ~3m car lane, hugging the
+    // kerb). Its solid edge line (roadLaneMarkingPaths) sits on the band's
+    // inner boundary and the bike rides the band's centre (sim/laneGeometry's
+    // cycle-strip shift), so tint, line and rider agree. The slot's inner half
+    // reads as carriageway. Bus lanes keep the full-width gold band.
     const halfOf = (kind: "bus" | "cycle") =>
-      (kind === "cycle" ? 0.35 : 0.5) * LANE_WIDTH_PX_FRAC * size;
+      (kind === "cycle" ? 0.25 : 0.5) * LANE_WIDTH_PX_FRAC * size;
+    const shiftOf = (kind: "bus" | "cycle") =>
+      (kind === "cycle" ? 0.25 : 0) * LANE_WIDTH_PX_FRAC * size; // kerbward
     const out: { d: string; kind: "bus" | "cycle" }[] = [];
     const coord = parseCoordId(this.coordId);
     for (const lane of road) {
@@ -1591,7 +1602,8 @@ class Tile extends Vue {
       // movements, which shifted one direction's gold band off its lane (the
       // 3L T-junction bug: westbound band sat mid-road, eastbound was fine).
       const selfBand = this.positioningBandAt(coord, lane.from);
-      const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      const off =
+        (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size + shiftOf(lane.kind);
       for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
         out.push({ d: roadLaneBandPath(lane.from, to, size, off, halfOf(lane.kind)), kind: lane.kind });
@@ -1820,8 +1832,9 @@ class Tile extends Vue {
               !jExit && nExitFwd > 0 ? Math.min(localCount, nExitFwd) : localCount;
             const entryLane = Math.min(lane.index, Math.max(1, entrySeam) - 1);
             const exitLane = Math.min(lane.index, Math.max(1, exitSeam) - 1);
-            const offEntry = oneWayLaneOffsetPx(entryLane, R, size);
-            const offExit = oneWayLaneOffsetPx(exitLane, R, size);
+            const cShift = isCycle ? 0.25 * LANE_WIDTH_PX_FRAC * size : 0;
+            const offEntry = oneWayLaneOffsetPx(entryLane, R, size) + cShift;
+            const offExit = oneWayLaneOffsetPx(exitLane, R, size) + cShift;
             out.push({ ...this.laneArrow(lane.from, to, size, offEntry, offExit), isBus: moveIsBus, isCycle });
             continue;
           }
@@ -1832,8 +1845,11 @@ class Tile extends Vue {
           // positions on each adjoining road's real band.
           const bandEntry = this.positioningBandAt(coord, lane.from);
           const bandExit = this.positioningBandAt(coord, to);
-          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size);
-          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size);
+          // A cycle lane's arrow sits on the half-width green strip (a
+          // quarter-lane kerbward), matching the bike's ride line.
+          const cShift = isCycle ? 0.25 * LANE_WIDTH_PX_FRAC * size : 0;
+          const offA = laneSeamOffsetPx(lane.index, selfBand, bandEntry, size) + cShift;
+          const offB = laneSeamOffsetPx(lane.index, selfBand, bandExit, size) + cShift;
           out.push({ ...this.laneArrow(lane.from, to, size, offA, offB), isBus: moveIsBus, isCycle });
         } else {
           // Turn / junction movement: glide from this lane's approach offset to the

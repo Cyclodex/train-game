@@ -1348,7 +1348,10 @@ class EditorView extends Vue {
       // renderer/overlay — (band - 0.5 - index)·LANE·size, 0 = kerb. Using the
       // tile's own both-direction band keeps the path on the lane the car drives.
       const band = laneCountAt(tile.road, lane.from) / 2;
-      const off = (band - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
+      // A cycle lane's visible strip is half-width, kerb-aligned — put the hover
+      // highlight on the green, a quarter-lane kerbward of the slot centre.
+      const cycleShift = lane.kind === "cycle" ? 0.25 * LANE_WIDTH_PX_FRAC * size : 0;
+      const off = (band - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size + cycleShift;
       out.push({
         d: laneSegmentPathD(lane.from, to, size, off, off),
         from: lane.from,

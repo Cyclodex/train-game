@@ -3311,8 +3311,16 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   instead of losing its last lane; junctions are excluded (streets only).
 - Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
   head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
-  Cycle lane tint green (`road-cycle-band`) at 70% lane width (a slim strip,
-  centred — Tile.vue `restrictedLaneBands` halfOf), debug arrows `lg-cycle` green.
+  A cycle lane paints at HALF the lane width, KERB-ALIGNED (real-world
+  proportion), in three agreeing places: the green tint (Tile.vue
+  `restrictedLaneBands`, half=0.25·W shifted 0.25·W kerbward), a SOLID white
+  edge line replacing the full-slot dashed divider (`roadLaneMarkingPaths`
+  cycleA/cycleB — suppress divider `lanes-1`, emit `solid` inner at
+  `(lanes-0.5)·W`), and the bike's ride line (`laneGeometry.cycleStripShiftPx`,
+  +0.25·W kerbward scaled by lane-pos proximity so merges glide). The lane's
+  reserved SLOT is still a full lane in the sim/offset model — only paint and
+  ride line are half-width; a true half-width slot would rework the whole
+  band/seam/taper pipeline. Debug arrows `lg-cycle` green, shifted onto the strip.
 - `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
   `/test/bikeovertake` (2-lane passing), `/test/bikeleftturn` (kerb rule at a
   forced left); sim pins in `roadBikes.spec.ts`.
