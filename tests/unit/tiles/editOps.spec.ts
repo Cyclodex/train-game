@@ -342,7 +342,7 @@ describe("addStreetLane / removeStreetLane (the ➕/➖ tools)", () => {
   });
 
   it("➕ stops at the road tool's 3L ceiling", () => {
-    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 3) };
+    const c: TileCell = { connections: [], road: nWayLanes(Left, Right, 3) };
     expect(addStreetLane(c, Left)).toBe(c); // 3L street: no-op
     // A bus lane counts toward the carriageway cap (a 3L street with one lane
     // painted bus is still 3 carriageway lanes each way)...
