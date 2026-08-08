@@ -68,10 +68,15 @@ const TUNING: Partial<CitizenTuning> = {
 //
 // Design: docs/superpowers/specs/2026-08-01-citizens-and-cities-design.md
 //
-// What this mode does NOT do (deliberately, phase A): spawn a real car for
-// every driving citizen. Driving is a timer here; the road sim still runs its
-// own ambient traffic. Wiring the two together needs an origin/destination
-// spawn API on `road.ts` — design doc §9 phase B.
+// A driving citizen IS a real car (`roadSim.requestTrip`, 2026-08-02), and since
+// 2026-08-04 that car PARKS at the far end and holds a real bay for the working
+// day — so a full staff car park costs its owner a walk, and the player a mood.
+// See docs/superpowers/specs/2026-08-04-workplace-parking-design.md.
+//
+// What this mode does NOT do yet: derive staff parking for whatever board it is
+// handed. The pass (`tiles/workplaceParking.ts`) is applied in a board's OWN
+// data, because `createGame` takes the level it is given rather than the one
+// `setup()` returns — see KNOWHOW → WORKPLACE PARKING.
 export const citizensMode: GameMode = {
   id: "citizens",
   label: "Citizens",

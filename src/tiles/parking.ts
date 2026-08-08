@@ -306,6 +306,38 @@ export interface ParkingRow {
   // widths (a pavement, a verge, a service strip). Default 0.
   gap?: number;
   reserved?: StallReservation;
+  // Is the parking edge PAINTED into individual bays, or is it just kerb you
+  // stop against? Default "bays".
+  //
+  // "none" is the American wide street: the carriageway keeps all of its own
+  // markings and the parking edge has no white boxes at all — you pull in
+  // wherever you fit. Everything else about the row is unchanged (depth, pitch,
+  // manoeuvre, exit style), which is exactly why this is a property of PAINT and
+  // not a new `StallKind`: an unmarked kerb and a marked one are the same
+  // parking, drawn differently. The apron and the outer kerb line stay, so the
+  // street reads as WIDER along the run rather than as a slab beside it — which
+  // is what a wide street with kerb parking is.
+  //
+  // Only meaningful on a kerbside (`parallel`) row, or on a PRIVATE drive: a
+  // public 90° or echelon rank without its bay lines is not an unmarked street,
+  // it is a car park nobody finished painting. A drive is the other case — see
+  // `resident`.
+  marking?: "bays" | "none";
+  // WHOSE DRIVE THIS IS. Set to a home plot's coordinate id, this row stops
+  // being public parking and becomes that address's own off-street spaces: the
+  // driveway, the hardstanding, the garage in front of the house.
+  //
+  // It is not a `StallReservation`. A reservation is a painted class of bay in a
+  // PUBLIC facility — disabled, delivery, loading — and the question it answers
+  // is "what sort of vehicle may stop here". This one answers "who owns this
+  // tarmac", which no amount of paint decides: a stranger may not use your drive
+  // because it is yours, not because a sign says so. Keeping them apart is also
+  // what lets two neighbouring houses put two rows on ONE road tile and each
+  // keep their own — a facility-level permit could not tell them apart.
+  //
+  // Who may take one: `sim/parking.ts` (`bayClassOf` → "resident", and the
+  // `permit` argument that carries the driver's address).
+  resident?: string;
 }
 
 // The parking layer of one cell.
@@ -1484,6 +1516,25 @@ export function validateParking(
         stallDepthPx(row.kind, tileSize, big) < 0.5 * LANE_WIDTH_FRAC * tileSize
       ) {
         add(tileId, `${row.kind} bays are too shallow to keep a parked car clear of the lane`);
+      }
+      // An UNMARKED rank only means something on a kerbside row: a street you
+      // park along. Strip the bay lines off an echelon or 90° rank and it does
+      // not read as an unmarked street, it reads as a car park nobody finished
+      // painting — the cars sit in a herringbone with no lines to explain why.
+      //
+      // A PRIVATE DRIVE is the exception, and it is not a loophole: what makes
+      // an unmarked public rank unreadable is that nothing explains why the
+      // spaces are where they are, and a drive has the house standing behind it
+      // saying exactly that. Nobody paints bay lines on their own hardstanding.
+      if (row.marking === "none" && row.kind !== "parallel" && !row.resident) {
+        add(tileId, `an unmarked parking row only reads as a street on "parallel" bays, not "${row.kind}"`);
+      }
+      // A HALT CANNOT BE PRIVATE. A `busstop` is a length of the carriageway
+      // itself — the vehicle never leaves the lane — so "this stretch of road is
+      // that house's" is not a thing the model can mean, and the queue that
+      // forms behind a halted vehicle would be forming for a parked car.
+      if (row.resident && stallOnLane(row.kind)) {
+        add(tileId, `a private drive cannot be a "${row.kind}" — that is a halt on the carriageway`);
       }
     }
   }

@@ -2575,6 +2575,135 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   parked cars AND unit-less samples (a garaged car has `units: []`).
   Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
 
+## WORKPLACE PARKING (the commuter's car stops somewhere, 2026-08-04)
+Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
+- **A DRIVING CITIZEN'S CAR USED TO BE DELETED ON ARRIVAL**, so the town had a
+  rush hour with nothing at stake and `parkPenaltySec: 8` stood in for a fact the
+  board never checked. `requestTrip(from, to, kind, { park: true })` sends it to
+  the nearest facility with a free bay instead, and it HOLDS that bay until
+  `releaseTrip`. Three trip states now (`TripStatus`): driving | parked | arrived.
+- **STAFF PARKING IS DERIVED FROM THE ZONING** (`tiles/workplaceParking.ts`).
+  `terrain: "industry"` already says "a works"; the pass lays THREE `parallel`
+  bays on the road tile a work/shop plot's driveway joins, on the kerb facing the
+  plot. Three against a works employing 12–96 — the shortfall IS the mechanic,
+  and three is also what fits (60px pitch on a 200px tile).
+  · HOMES GET NO *FORECOURT* — they get a private DRIVE instead, from a separate
+    pass. See HOME PARKING below.
+  · `side: "left"` is offered ONLY on a one-way straight, matching
+    `validateParking`'s own rule. Leaving it out costs half the workplaces on any
+    board built round a one-way loop: their gate is on the far kerb, and the near
+    kerb faces the middle of the ring.
+  · IT VALIDATES AND BACKS OUT. Every derived row goes through `validateParking`
+    and any the validator objects to is DROPPED, because the objections are not
+    local: bays on a dead-end stub turn that stub into a car park with no way out,
+    which is a property of a flood fill. Idempotent, so a second pass is a no-op.
+  · APPLIED IN THE SCENARIO'S OWN DATA, not in `citizensMode.setup`. `PlayView`
+    uses `setup.level`, but **TestStage passes `scenario.level` straight to
+    `createGame`** and `createGame` never reads `setup.level` either — so a
+    mode-setup transform reaches the play board and NOTHING in `/test` or in any
+    unit test. Wiring it into the mode needs that fixed first.
+- **`ParkingRow.marking: "none"` IS THE AMERICAN WIDE STREET**: carriageway keeps
+  every one of its own markings, the parking edge has no white boxes. PAINT, not a
+  new `StallKind` — depth/pitch/manoeuvre/exit are identical to `parallel`, and
+  forking them would mean keeping two of everything in step for ever. The apron
+  and the outer kerb line still draw, so the run reads as a street that is WIDER
+  here rather than cars on the grass. Rejected on any kind but `parallel`: an
+  unpainted echelon rank reads as a car park nobody finished.
+  `/test/streetparking` is the two side by side.
+- **A RELEASED CAR RE-PARKS ITSELF UNLESS YOU SAY OTHERWISE**
+  (`trips.releasedFrom`). It keeps `phase === "parked"` while it waits in its bay
+  for a gap (leaving a bay buys no right of way), so `settleRequestedTrips` fires
+  again on the very next tick and resets the hold to another full hour. Symptom:
+  commuters ended their journey HOME "parked".
+  · Record WHICH STALL it was let out of, not a boolean. A flag reads "released"
+    for the rest of the journey, so the car that reaches its own drive at 18:00 is
+    never recorded as parked there — which is the whole evening commute.
+- **A CAR STILL HUNTING FOR A SPACE IS NEVER SETTLED BY THE ADDRESS TEST**
+  (`parkTarget !== null` gate in `settleRequestedTrips`). Staff bays sit on the
+  workplace's OWN street, so the address IS the car park's tile and the trip would
+  be deleted half a tile before it parked. Once `giveUpAndReplan` clears
+  `parkTarget` the address test applies again, and that is the graceful fallback —
+  they found something down the road, and pay `parkSearchSec`.
+- `tripGoal.entryPort: null` = ANY approach counts as arrived. A parking trip
+  cannot know which way round the block the driver comes back, and the route home
+  is planned fresh from the stall.
+- `resumeFromStall` plans to `car.tripGoal` when there is one and to a map exit
+  otherwise. Ambient traffic leaves the map; a commuter's car has an address. Get
+  this wrong on a CLOSED RING and there is no map edge to despawn at — the car
+  circles for the rest of the run.
+- `abandonTrip(id)` exists for the caller that has LOST the owner (emigration, a
+  refused journey home). Releasing the trip alone leaves the CAR parked: a bay
+  held by nobody is a bay nobody can use again, one per lost commuter.
+- **`game.parkingOccupancy` IS A RENDER MIRROR** — filled in `frame()`, so it is
+  empty for ever in a headless run and a test written against it passes vacuously.
+  The model-side observable is `citizenStats.carsParked`, counted in `advance()`.
+- `/test/workparking` is the demo: a closed one-way ring (so every car is a named
+  citizen), one works, three bays, two dozen drivers.
+
+## HOME PARKING (where the car sleeps, 2026-08-05)
+Design: `docs/superpowers/specs/2026-08-05-home-parking-design.md`. The night half
+of the above; read that section first.
+- **`ParkingRow.resident` = the ADDRESS a row belongs to** — somebody's drive, not
+  public parking near a house. `bayClassOf` → `"resident"`, and the gate is
+  `permitAdmits(row, permit)` where the permit is the driver's home plot id.
+  · NOT a `StallReservation`. That axis is painted vehicle CLASS (disabled,
+    delivery, loading) — "what may stop here". Ownership is "whose tarmac", which
+    no paint decides, and per-ROW is what lets two houses face the SAME road tile
+    and each keep their own (a facility-level permit cannot tell them apart).
+  · THE PERMIT MUST REACH EVERY COUNTING QUESTION — `openFacilities`, `capacity`,
+    `freeCount`, `availableFor`, `pickStallOn`. A street of houses is genuinely
+    FULL to a stranger and EMPTY to the residents; a router blind to that either
+    parks every passing car on a drive or drives the residents past their own.
+- **TWO SPACES, FIXED, WHILE THE HOUSEHOLD GROWS 4 → 32** (`tiles/homeParking.ts`,
+  `DRIVE_SPACES`). Nobody authored the gradient: a building grows taller on ground
+  that does not grow wider, which is also why terraced streets are the ones lined
+  with parked cars. Do NOT scale the drive with density — the map only opens plots
+  at 0–2 (the sim owns growth), so there would be no gradient at setup, and a
+  drive that grows with the building is never short.
+- **IDEMPOTENT PER ADDRESS, NOT PER KERB.** A corner house whose first-choice
+  frontage is occupied — by its own drive from the previous run — walks on to the
+  next street it touches and lays a SECOND one. Bays grew one drive per run.
+- `perpendicular` + `marking: "none"`: nose-in off the carriageway, no white
+  lines. `validateParking` allows unmarked non-kerbside rows ONLY for a private
+  drive (nobody paints bay lines on their own hardstanding). A 90° bay is 48px
+  deep, so it lands inside the tile beside a 2-lane street (kerb 28px) and
+  OVERHANGS beside a 2+2 arterial (56px) — houses on a main road get no drive, and
+  their residents park on the road, which is what living on one is like.
+- **THE DRIVE HOME IS A PARKING TRIP AND CANNOT BE PLANNED WHEN IT IS ASKED FOR.**
+  The evening leg starts with the car already in a bay outside the office, so the
+  route out is built later by `resumeFromStall`. `Car.parkWish` records the wish
+  at `releaseTrip` and that is where it is honoured. Miss it and the drive home is
+  the one leg of the day that still deletes the vehicle: drives empty all night.
+- **A CAR PARKED AT HOME MUST NOT FOLLOW ITS OWNER.** The send-the-car-after-them
+  rule is right at a WORKPLACE (a held public bay with nobody coming back is dead
+  space) and inverts at home — every resident who walks to the shops would send
+  their car off after them, emptying the town's drives and filling its streets
+  with cars going nowhere. Exempt `parkedCar.at === c.home` in all three places
+  (`startTrip` dispatch, refused journeys, abandoned trips).
+- **THE REQUESTED-CAR CAP MUST NOT COUNT PARKED CARS.** Counting them was right
+  while only commuters parked (gone by evening, so the cap turned over). Once the
+  car comes home too, a car owner's vehicle is on the board for good and all 60
+  slots go to whoever commuted first — the fleet ossifies and nobody else is ever
+  dispatched a car. Still bounded, physically: a car counts as parked only while it
+  HOLDS A REAL STALL, so parked cars are capped by the board's spaces.
+- **RESIDENTS DO TAKE PUBLIC KERB, and that is the point** — it is the player's
+  lever, and a street with no drives really does look like that. What stops the
+  2026-08-04 ratchet (12/12 bays held at 03:00, rising to the cap over four days)
+  is not abstinence but `homeParkTiles: 2`: nobody walks six tiles from their own
+  front door every night. Measured on `/test/workparking`: ~11 held overnight,
+  ~0–1 by mid-morning, 490+ journeys completed. A cycle, not a ratchet.
+- **A FACILITY WITH NO PUBLIC CAPACITY DRAWS NO SIGN** (`parkingStatus()` filters
+  `capacity > 0`). `capacity` counts what the public could use, so an all-private
+  facility came back zero and the chip read "P VOLL" — a car park, standing empty,
+  announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
+  with their public number.
+- `citizenStats.carsAtHome` vs `carsParked` is the DAY/NIGHT observable; one
+  number cannot show the cycle because it reads the same at both ends of the day.
+- `TestScenario.mode` (a mode OBJECT, beating `modeId`) exists for boards whose
+  subject is a cycle: the citizens day is 30 real minutes, so at the default clock
+  a visitor to `/test/homeparking` sees one hour of one morning and concludes
+  nothing happens. That board runs a 4-minute day.
+
 ## BUILD IN PLAY (Tycoon phase 2, 2026-07-26)
 - `game.buildRoute(steps)` = canAfford gate → `applyEdits` → `spend`, IN THAT
   ORDER: a refused edit (a train moved onto a route tile after the preview)
@@ -2934,6 +3063,74 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   paints half a lane narrow and the SOLID kerb lands on the lane CENTRE while the
   lanes sit on the wider band. Keep paint (`junctionArmPaintTotal`) and positioning
   (`seamPositioningBand`) in lockstep for stacked junctions.
+
+## LEVEL-CROSSING FURNITURE (2026-08-04)
+- THE BOOMS ARE DERIVED FROM THE ROAD, NOT FROM THE TILE. `tiles/crossingFurniture.ts`
+  (pure, unit-tested) returns the span of painted tarmac and the boom/sign positions;
+  `Crossing.vue` is a view over it. The old geometry was fixed CSS percentages (post
+  at 30%, arm 30%→70%), which is only ever right on a 1+1-lane street: on a 3+3 the
+  tarmac is 168px of a 200px tile, so the post stood IN the carriageway and the arm
+  covered the two inner lanes. Same lesson as the pavement offset in `footway.ts` —
+  road width is data, so anything beside a road must read it.
+- A BIG STREET HAS FOUR BARS: both sides of the rails × both verges
+  (`BIG_STREET_LANES = 2`, i.e. anything wider than 1+1). Each row is closed by its
+  own pair meeting at the centreline, so NO arm is ever longer than half the road —
+  reaching the far verge on a 6-lane street would swing an arm right across the
+  oncoming lanes. A narrow 1+1 street keeps the classic diagonal PAIR: one bar per
+  row, on the approaching driver's right verge (traffic keeps right, so the down
+  carriageway is the local −x half and its bar hinges on −x).
+- A SIGNAL ON EVERY MAST — one per BAR, not one per row (four on a big two-way
+  street, at the tile's four corners). That is the Swiss arrangement (a barrier and
+  a Blinklichtsignal on each side of the road) and it is also what makes a closed
+  crossing read as a PAIR of barriers per side rather than one long bar. ONE-WAY
+  roads are guarded on the approach side ONLY (a bar behind the crossing guards
+  nothing): one row, one bar if narrow / a verge pair if big.
+- THE CENTRE GAP (`CENTRE_GAP_FRAC = 0.045`) is the other half of that. Two arms
+  meeting exactly on the centreline draw as one unbroken bar — the "looks like a
+  single barrier" report. Every arm whose tip is the MEETING POINT stops short by
+  the gap; an arm ending at a KERB (a narrow one-way street's full barrier) does
+  not, since nothing meets it. The gap stays well under a car's width (0.14 tile)
+  so the road still reads as closed.
+- THE SIGNAL ART: a RED-BORDERED triangular panel — red rim, white ring, black face
+  — carrying two red lights side by side AT THE SAME HEIGHT, alternating, on a
+  red/white banded mast (matched to the reference photo, 2026-08-05; the earlier art
+  was the same panel with the red border missing, and the one before that a red-and-
+  white warning triangle with the lamps hanging BELOW it, which is not a signal any
+  country uses). At 26px the red border is what makes the sign READABLE on the board:
+  a white-rimmed black triangle on grey tarmac is a dark speck until you zoom in.
+  The unlit lens is dark red (#6b3030), not black: on a black panel a black lens
+  disappears and the signal reads as having only one light.
+- THREE CONCENTRIC RINGS FROM ONE PATH (`PANEL_TRIANGLE`, `.xing-rim/-edge/-face`).
+  A round-joined stroke grows a shape OUTWARD by half its width, so painting one
+  triangle three times with shrinking stroke-widths (5.8 red / 2.0 white / fill-only
+  black) gives three nested rounded-corner triangles — the ring THICKNESSES are the
+  differences of the half-widths (1.9 and 1.0). `clip-path: polygon()` cannot do this:
+  no corner radius, and every ring needs its own hand-inset triangle. Inset the path
+  from the viewBox by the widest HALF-stroke (2.9) or the red silhouette overflows.
+  The lamps stay OUTSIDE the `<svg>` (siblings in the `.xing-panel` wrapper) for the
+  same reason they were outside the old clip-path: an svg clips to its viewBox and
+  would eat the outer edge of a lens sitting near the triangle's edge.
+- A SIGN IS PLACED IN THE LOCAL FRAME BUT DRAWN IN THE SCREEN FRAME. The booms are
+  road furniture and turn with `.crossing-rot`; the panel is a GLYPH, and the same
+  quarter turn laid it on its side (triangle pointing at the verge, mast horizontal)
+  on every horizontal road. `signStyle` cancels it with `rotate(-90deg)` — safe after
+  `translate(-50%, -50%)`, because that has already put the element's CENTRE on the
+  layout point and rotation is about the centre. Only `/test/crossinglanes` shows
+  this; the vertical-road `/test/crossing` looks perfect either way.
+- THE LOCAL FRAME AND ITS ROTATION TRAP. `Crossing.vue` draws the upright layout and
+  CSS-`rotate(90deg)`s it for a horizontal road. That maps local (x,y) → screen
+  (−y, x), so local +y is screen-LEFT: for a horizontal road "local down" is the
+  RIGHT→LEFT movement, and `roadPorts` must return `{down: Right, up: Left}`. Getting
+  this backwards puts both bars on the departure side and only shows up in ONE
+  orientation — always check both (`/test/crossinglanes` has both plus a one-way).
+- MIRROR ABOUT THE HINGE. The right-hand bar is the left one under `scaleX(-1)`;
+  `.boom` therefore needs `transform-origin: left center`, because `left` is placed
+  at the hinge and the default centre origin slides the whole barrier one arm length
+  sideways.
+- The span mirrors `Tile.vue roadPaths` (the authority on painted width) at MID-tile,
+  where the rails run: two-way = centred band, averaged over its two seam totals
+  (`roadSeamPaintTotal`); one-way = kerb-anchored to `roadOneWayRunMax`. If the paint
+  rules change, this follows.
 
 ## ROADS
 - NO MIN-2 PAINT FLOOR on a curve. `Tile.vue roadPaths` used `max(selfAt, 2)` in

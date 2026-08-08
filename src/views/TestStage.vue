@@ -250,9 +250,11 @@ class TestStage extends Vue {
 
   // A scenario can name a mode (e.g. Time Attack for its scheduled spawner);
   // otherwise demos run in free-play Sandbox.
-  private mode = this.scenario.modeId
-    ? modeById(this.scenario.modeId)
-    : sandboxMode;
+  private mode = this.scenario.mode
+    ? this.scenario.mode
+    : this.scenario.modeId
+      ? modeById(this.scenario.modeId)
+      : sandboxMode;
 
   @Provide("game") game: Game = markRaw(
     createGame(

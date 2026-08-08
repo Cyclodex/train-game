@@ -205,6 +205,47 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     `tariff` sits beside it. The work is deciding what the player DOES with the
     money — a fee nobody chooses to set is a number on a sign, not a mechanic.
     Files: `src/tiles/parking.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
+    Since 2026-08-04 there is a second, sharper reason to want it: commuters now
+    hold a real bay all day, so a tariff is the one dial that pushes a driver
+    onto the train rather than merely annoying them.
+    Tracked: [#95](https://github.com/Cyclodex/train-game/issues/95).
+13. **Derive staff parking for whatever board the mode is handed.**
+    `deriveWorkplaceParking` runs in a board's own data today, because
+    `createGame` takes the level it is given and never the one `setup()` returns
+    (TestStage hands it `scenario.level` directly). Make `createGame` honour
+    `setup.level` and the citizens mode can grow staff parking — and home drives
+    (`deriveHomeParking`, 2026-08-05) — on ANY board, including one the player
+    just drew. Both passes are already idempotent for it.
+    Files: `src/game.ts`, `src/views/TestStage.vue`, `src/modes/citizens.ts`.
+    Tracked: [#92](https://github.com/Cyclodex/train-game/issues/92) — which also
+    carries the spec's other open end, re-deriving when a road is laid next to a
+    workplace mid-play. Home drives (2026-08-05) join that: they are derived once
+    at setup too, so a house built in play grows none, and the same fix covers
+    both. Whenever it lands, a re-derive must never yank a bay out from under a
+    car parked in it.
+14. **Walk from the bay to the desk on an actual pavement.** The last leg of a
+    driven commute is charged as TIME (`walkFromBaySec`) but nobody is drawn
+    doing it. Handing it to `pedestrianSim` is what would make a car park
+    visibly feed a stream of people into a factory — and it is the same
+    plumbing `citizenwalk` already has.
+    Files: `src/sim/citizens.ts`, `src/sim/pedestrians.ts`.
+    Tracked: [#93](https://github.com/Cyclodex/train-game/issues/93).
+15. **Park & ride should hold a real bay too.** A P+R car still evaporates at
+    the station and pays the flat penalty. The blocker is the return half: you
+    come back to a different platform and have to reach the car you left at the
+    first one, which the trip model has no way to express yet.
+    Files: `src/sim/citizens.ts`.
+    Tracked: [#94](https://github.com/Cyclodex/train-game/issues/94).
+16. **A garage under the block, not just a drive in front of the house.**
+    `StallKind: "garage"` already exists — the car glides into a ramp mouth and
+    is not drawn, and `count` is simply the building's capacity — and it is the
+    obvious flavour for a block of flats. It would also hand the DENSEST plots
+    the lever they currently lack: today a block's residents get the same
+    two-space drive a bungalow does and everything above that spills onto the
+    street with no way to build out of it. Wants `deriveHomeParking` to pick a
+    kind from density, which in turn wants item 13 so density at derive time is
+    the live one rather than the map's opening roll.
+    Files: `src/tiles/homeParking.ts`, `src/tiles/parking.ts`.
 
 ## Architecture / code health
 

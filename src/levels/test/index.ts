@@ -25,6 +25,7 @@ import { switchDefault } from "@/levels/test/scenarios/switch-default";
 import { switchFan } from "@/levels/test/scenarios/switch-fan";
 import { cross } from "@/levels/test/scenarios/cross";
 import { crossing } from "@/levels/test/scenarios/crossing";
+import { crossinglanes } from "@/levels/test/scenarios/crossinglanes";
 import { carfollowing } from "@/levels/test/scenarios/carfollowing";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { carcircle } from "@/levels/test/scenarios/carcircle";
@@ -124,6 +125,9 @@ import { buslayby } from "@/levels/test/scenarios/buslayby";
 import { parkvariants } from "@/levels/test/scenarios/parkvariants";
 import { parkechelon } from "@/levels/test/scenarios/parkechelon";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
+import { workparking } from "@/levels/test/scenarios/workparking";
+import { streetparking } from "@/levels/test/scenarios/streetparking";
+import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
 
 // Every scenario level passes through the same junction sync the editor runs
@@ -169,7 +173,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "crossings",
         label: "Crossings",
-        scenarios: [crossing, keepcrossingclear, crossingkeeper],
+        scenarios: [crossing, crossinglanes, keepcrossingclear, crossingkeeper],
       },
     ],
   },
@@ -221,7 +225,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, busstops, buslayby],
       },
     ],
   },
