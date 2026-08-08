@@ -6,9 +6,27 @@ import { buildCitizenWorld } from "@/tiles/cities";
 import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizensModeWith } from "@/modes/citizens";
-import { planWalkFromKerb, sideOfBank, sideOfPlot } from "@/tiles/footway";
+import {
+  planWalkFromKerb,
+  sideOfBank,
+  sideOfPlot,
+  pavementOffsetFor,
+  roadHalfUnits,
+  roadThrough,
+  PAVEMENT_WIDTH,
+} from "@/tiles/footway";
 import { accessTileOf } from "@/tiles/access";
-import { rowsOf, bankOf } from "@/tiles/parking";
+import {
+  rowsOf,
+  bankOf,
+  bankFor,
+  kerbOffsetAt,
+  stallDepthPx,
+  stallOnLane,
+  needsBigBay,
+} from "@/tiles/parking";
+import { twoWay } from "@/tiles/lanes";
+import { parseCoordId, type Level } from "@/tiles/model";
 import { Position } from "@/types";
 
 // THE LAST LEG ON FOOT — from the space the car stopped in to the door.
@@ -74,6 +92,98 @@ describe("a walk can start at a kerb, not just at a building", () => {
 
   it("gives up rather than guess where there is no footway", () => {
     expect(planWalkFromKerb(level, "nowhere", Position.Top, "0,0")).toBeNull();
+  });
+});
+
+describe("the pavement goes AROUND the parking, not through it", () => {
+  it("clears every bay on every parking tile", () => {
+    // Before this, both the paint and the people were offset from the
+    // CARRIAGEWAY alone — and a bay starts at that same kerb and reaches
+    // outward, so it swallowed the footway whole. Measured on this board:
+    // every parking tile overlapped by 8 units, which is the pavement's ENTIRE
+    // width. People walked over the bonnets.
+    const level = homeparking.level;
+    for (const [tileId, cell] of Object.entries(level)) {
+      const rows = rowsOf(cell);
+      if (rows.length === 0) continue;
+      const through = roadThrough(cell);
+      if (!through) continue;
+      const coord = parseCoordId(tileId);
+      for (const row of rows) {
+        if (stallOnLane(row.kind)) continue; // a halt is in the lane, not beside it
+        const bank = bankOf(row);
+        const side = sideOfBank(level, tileId, bank);
+        if (side === null) continue;
+        const centre = Math.abs(pavementOffsetFor(cell, side, through.from, through.to));
+        const pavementInner = centre - PAVEMENT_WIDTH / 2;
+        // The bay, in the same ground units (100 per tile against 200 px).
+        const bayOuter =
+          (kerbOffsetAt(level, coord, row.from, 200) +
+            stallDepthPx(row.kind, 200, needsBigBay(row.reserved))) /
+          2;
+        expect(
+          pavementInner,
+          `pavement runs through the ${row.kind} bay on ${tileId}`,
+        ).toBeGreaterThanOrEqual(bayOuter);
+      }
+    }
+  });
+
+  it("moves only the bank that HAS the parking", () => {
+    // A street with a drive on one side and nothing on the other has two
+    // pavements at two distances. Pushing both out by the wider of them would
+    // leave the empty side's band floating in the verge for no reason.
+    const level: Level = {
+      "0,1": { connections: [], road: twoWay(Position.Left, Position.Right), terrain: "urban" },
+      "2,1": { connections: [], road: twoWay(Position.Left, Position.Right), terrain: "urban" },
+      "1,2": { connections: [], terrain: "urban" },
+      "1,1": {
+        connections: [],
+        road: twoWay(Position.Left, Position.Right),
+        terrain: "urban",
+        parking: {
+          rows: [
+            {
+              from: Position.Left,
+              side: "right",
+              kind: "perpendicular",
+              count: 2,
+              marking: "none",
+              resident: "1,2",
+            },
+          ],
+        },
+      },
+    };
+    const cell = level["1,1"];
+    const plain = roadHalfUnits(cell) + 8; // gap + half the band
+    // Travelling east, "right" is the south bank — the one with the drive.
+    expect(bankFor(Position.Left, "right")).toBe(Position.Bottom);
+    expect(Math.abs(pavementOffsetFor(cell, 1, Position.Left, Position.Right))).toBeGreaterThan(
+      plain,
+    );
+    expect(Math.abs(pavementOffsetFor(cell, -1, Position.Left, Position.Right))).toBe(plain);
+  });
+
+  it("keeps the band on its own tile however deep the bay", () => {
+    // A lorry lay-by is 55 units deep on its own, which would put the pavement
+    // half a tile into the neighbour's ground.
+    const level: Level = {
+      "1,1": {
+        connections: [],
+        road: twoWay(Position.Left, Position.Right),
+        terrain: "urban",
+        parking: {
+          rows: [
+            { from: Position.Left, side: "right", kind: "parallel", count: 1, reserved: "long" },
+          ],
+        },
+      },
+    };
+    const off = Math.abs(
+      pavementOffsetFor(level["1,1"], 1, Position.Left, Position.Right),
+    );
+    expect(off + PAVEMENT_WIDTH / 2).toBeLessThanOrEqual(50);
   });
 });
 

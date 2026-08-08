@@ -16,6 +16,14 @@ import {
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { roadCurveKerbEdgeTapered, roadKerbEdge } from "@/tiles/roadGeometry";
 import { accessTileOf } from "@/tiles/access";
+import {
+  bankFor,
+  bankOf,
+  needsBigBay,
+  rowsOf,
+  stallDepthPx,
+  stallOnLane,
+} from "@/tiles/parking";
 
 // FOOTWAYS — the pavement (Fussweg / Trottoir) beside a street, and the graph
 // people walk on.
@@ -130,6 +138,50 @@ export function roadHalfUnits(cell: TileCell | undefined): number {
   return ((widest || 2) / 2) * LANE_W;
 }
 
+
+// The furthest out a pavement's CENTRELINE may run and still leave the band on
+// its own tile (a tile's half-width is 50 ground units).
+const MAX_PAVEMENT_OFFSET = 50 - PAVEMENT_WIDTH / 2;
+
+/**
+ * How much further out this bank's pavement has to run to clear PARKING, in
+ * ground units. Zero on a bank with no bays, which is nearly every bank.
+ *
+ * THE PAVEMENT GOES BEHIND THE PARKED CARS, NOT UNDER THEM. Before this, both
+ * the paint and the people were offset from the CARRIAGEWAY alone, so a bay —
+ * which starts at that same kerb and reaches outward — swallowed the footway
+ * whole. Measured on `/test/homeparking`, every single parking tile overlapped
+ * by 8 units, which is the pavement's entire width: a kerbside bay spans 14→27
+ * and a drive 14→38, against a band at 18→26. People walked over the bonnets.
+ *
+ * Both callers use this, and they must: `pavementPaths` draws the strip and
+ * `pavementOffsetFor` puts the walkers on it, and a board where those two
+ * disagree is one where people walk beside the pavement instead of on it.
+ */
+function bankOfSide(cell: TileCell | undefined, side: 1 | -1): Port | null {
+  const through = roadThrough(cell);
+  if (!through) return null;
+  // `side` is measured against the tile's OWN through movement (see
+  // `sideOfPlot`), and `bankFor` names the bank right/left of a movement — so
+  // the two are the same question, asked in the two vocabularies this file has
+  // to speak: pavements think in ±1, parking rows think in ports.
+  return bankFor(through.from, side === 1 ? "right" : "left");
+}
+
+function parkingOutsetUnits(cell: TileCell | undefined, bank: Port): number {
+  let out = 0;
+  for (const row of rowsOf(cell)) {
+    if (bankOf(row) !== bank) continue;
+    // A HALT is not a bay — the vehicle never leaves the carriageway, so there
+    // is nothing between the kerb and the pavement to walk around.
+    if (stallOnLane(row.kind)) continue;
+    // Ground units are half of tile pixels (100 per tile against 200).
+    const depth = stallDepthPx(row.kind, 200, needsBigBay(row.reserved)) / 2;
+    out = Math.max(out, depth + (row.gap ?? 0) * LANE_W);
+  }
+  return out;
+}
+
 /** The centreline offset of each pavement on this cell, in ground units. */
 export function pavementOffsets(cell: TileCell | undefined): [number, number] {
   const half = roadHalfUnits(cell) + PAVEMENT_GAP + PAVEMENT_WIDTH / 2;
@@ -168,7 +220,13 @@ export function pavementOffsetFor(
   entry: Port,
   exit: Port
 ): number {
-  const off = pavementOffsets(cell)[0] * side;
+  // Which bank this `side` names, so a pavement that has to clear parking
+  // clears the parking ON ITS OWN SIDE. A street with a drive on one bank and
+  // bare kerb on the other has two different pavements, and pushing both out by
+  // the wider of the two would leave one floating in the road's verge.
+  const bank = bankOfSide(cell, side);
+  const outset = bank === null ? 0 : parkingOutsetUnits(cell, bank);
+  const off = Math.min(pavementOffsets(cell)[0] + outset, MAX_PAVEMENT_OFFSET) * side;
   const through = roadThrough(cell);
   if (!through) return off;
   const a = travelNormal(entry, exit);
@@ -517,6 +575,7 @@ interface PavementBand {
  * TAPERS with the tarmac it follows and the two halves of a seam still meet.
  */
 function bandsFor(level: Level, coord: Coordinates, road: Lane[], from: Port, to: Port): PavementBand[] {
+  const cell = level[`${coord.x},${coord.y}`];
   // A ONE-WAY street is the one road that is not symmetric about its centreline:
   // it kerb-anchors the whole run's widest lane count (see `Tile.vue`'s one-way
   // branch and `sim/laneOffset.ts`), so lanes open and close on the CENTRE side
@@ -538,17 +597,45 @@ function bandsFor(level: Level, coord: Coordinates, road: Lane[], from: Port, to
     // surface it follows.
     const innerEntry = kerb - entryCount * LANE_W;
     const innerExit = kerb - Math.max(entryCount, exitCount) * LANE_W;
+    // The parking on each bank pushes that bank's band further out — see
+    // `parkingOutsetUnits`. Per BANK, not per tile: a street with a drive on one
+    // side and bare kerb on the other has two pavements at two distances.
+    const kOut = outsetOn(cell, from, "right");
+    const iOut = outsetOn(cell, from, "left");
     return [
-      { offEntry: kerb + PAVEMENT_PAD, offExit: kerb + PAVEMENT_PAD },
-      { offEntry: innerEntry - PAVEMENT_PAD, offExit: innerExit - PAVEMENT_PAD },
+      { offEntry: pave(kerb + kOut), offExit: pave(kerb + kOut) },
+      // The centre-side band is NOT the mirror of the kerb-side one on a one-way
+      // street — that is the whole reason this branch exists — so it is padded
+      // and outset INWARD from its own edge rather than negated.
+      { offEntry: paveInner(innerEntry, iOut), offExit: paveInner(innerExit, iOut) },
     ];
   }
   const halfEntry = paintedHalfAt(level, coord, road, from);
   const halfExit = paintedHalfAt(level, coord, road, to);
+  const rOut = outsetOn(cell, from, "right");
+  const lOut = outsetOn(cell, from, "left");
   return [
-    { offEntry: halfEntry + PAVEMENT_PAD, offExit: halfExit + PAVEMENT_PAD },
-    { offEntry: -(halfEntry + PAVEMENT_PAD), offExit: -(halfExit + PAVEMENT_PAD) },
+    { offEntry: pave(halfEntry + rOut), offExit: pave(halfExit + rOut) },
+    { offEntry: -pave(halfEntry + lOut), offExit: -pave(halfExit + lOut) },
   ];
+}
+
+// A pavement centreline at `half` units out from the road's centre, padded off
+// the tarmac and kept on its own tile.
+function pave(half: number): number {
+  return Math.min(half + PAVEMENT_PAD, MAX_PAVEMENT_OFFSET);
+}
+
+// ...and the same for a band that runs on the NEGATIVE side of the centreline
+// (the centre-side pavement of a one-way street), where "further out" means
+// further down, and the tile edge is at -MAX.
+function paveInner(edge: number, outset: number): number {
+  return Math.max(edge - PAVEMENT_PAD - outset, -MAX_PAVEMENT_OFFSET);
+}
+
+// The parking outset on the bank `side`-of-travel from `from`.
+function outsetOn(cell: TileCell | undefined, from: Port, side: "right" | "left"): number {
+  return parkingOutsetUnits(cell, bankFor(from, side));
 }
 
 /**

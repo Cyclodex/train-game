@@ -2636,6 +2636,27 @@ of the above; read that section first.
   facility came back zero and the chip read "P VOLL" — a car park, standing empty,
   announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
   with their public number.
+## THE PAVEMENT GOES ROUND THE PARKING (2026-08-05)
+- **A BAY STARTS AT THE KERB AND REACHES OUTWARD — WHICH IS WHERE THE PAVEMENT
+  WAS.** Both the paint (`pavementPaths` → `bandsFor`) and the people
+  (`pavementOffsetFor`) were offset from the CARRIAGEWAY alone
+  (`roadHalfUnits + PAVEMENT_PAD`), so the footway ran under the parked cars.
+  Measured on `/test/homeparking`: EVERY parking tile overlapped by 8 units,
+  which is the band's entire width (bay 14→27 kerbside, 14→38 for a drive,
+  against a pavement at 18→26). Now +4 clear on all of them.
+- `parkingOutsetUnits(cell, bank)` is the shared fix and BOTH callers must use
+  it: paint and people disagreeing is people walking beside the pavement.
+- **PER BANK, NOT PER TILE.** A street with a drive on one side and bare kerb on
+  the other has two pavements at two distances; pushing both by the wider leaves
+  the empty side's band floating in the verge. `bankOfSide` converts the walker
+  model's ±1 to the parking model's Port (`bankFor(through.from, "right"|"left")`).
+- Clamped to `MAX_PAVEMENT_OFFSET` (50 − half the band) or a lorry lay-by, at 55
+  units deep on its own, puts the pavement half a tile into the neighbour.
+- A `busstop` is exempt: the vehicle never leaves the carriageway, so there is
+  nothing between kerb and pavement to walk around.
+- Ground units are HALF of tile pixels (100 per tile against 200) — every
+  conversion between the parking geometry and this file crosses that factor.
+
 ## THE WALK FROM THE CAR (2026-08-05)
 - The bay-to-door leg (`Leg = "parking"`) was a pure COUNTDOWN of
   `walkFromBaySec`: the cost was modelled and the person was not, so a car park
