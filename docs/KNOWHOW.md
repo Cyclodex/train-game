@@ -3310,8 +3310,10 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   puts the centre marking through the middle of a lane (the sim would cope;
   the paint cannot). ➖ is therefore ALL-OR-NOTHING per tile (an approach at
   its last general lane blocks the tile) and never takes bus/cycle lanes; ➕
-  appends on the CENTRE side so kerb bus/cycle lanes stay put; re-ranking
-  keeps median bus lanes. One-way streets step their single direction.
+  appends on the CENTRE side so kerb bus/cycle lanes stay put, and stops at
+  the road tool's 3L ceiling (`MAX_STREET_LANES` — counts carriageway lanes,
+  general + bus; the half-width cycle add-on is exempt). Re-ranking keeps
+  median bus lanes. One-way streets step their single direction.
 - Editor has FOUR lane tools sharing one set of lane hit paths: 🚌 toggles a
   lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
   green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —

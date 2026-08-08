@@ -649,7 +649,7 @@ const HINTS: Record<Tool, string> = {
   bikelane:
     "Click a street to ADD a green bike lane along that direction's kerb — a NEW lane; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets). Click again — any lane of that direction, or the green lane itself — to remove it. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
   laneadd:
-    "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L, exactly like re-drawing with a bigger preset — a one-way street gains its one direction). Stops at junctions; no need to re-drag the road. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
+    "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L, exactly like re-drawing with a bigger preset — a one-way street gains its one direction). 3L is the ceiling, same as the road tool. Stops at junctions; no need to re-drag the road. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
   laneremove:
     "Click a street to remove the innermost car lane EACH WAY along the whole street (3L → 2L → 1L). Bus and bike lanes are never taken — use the 🚌 / 🚲 tools for those — and each direction keeps its last car lane (erase or redraw the road to remove it entirely). Ctrl+click changes just that one tile.",
   signalise:

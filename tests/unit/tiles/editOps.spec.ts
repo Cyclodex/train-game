@@ -341,6 +341,23 @@ describe("addStreetLane / removeStreetLane (the ➕/➖ tools)", () => {
     expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
   });
 
+  it("➕ stops at the road tool's 3L ceiling", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 3) };
+    expect(addStreetLane(c, Left)).toBe(c); // 3L street: no-op
+    // A bus lane counts toward the carriageway cap (a 3L street with one lane
+    // painted bus is still 3 carriageway lanes each way)...
+    let b: TileCell = { connections: [], road: nWayLanes(Left, Right, 3) };
+    b = toggleBusLane(b, Left, 0);
+    expect(addStreetLane(b, Left)).toBe(b);
+    // ...but the half-width cycle lane does not — a 3L street can still gain
+    // its bike lane, and a 2L street with a bike lane can still grow to 3L.
+    let d: TileCell = { connections: [], road: nWayLanes(Left, Right, 2) };
+    d = toggleCycleLane(d, Left); // 2 car + 1 cycle eastbound
+    const grown = addStreetLane(d, Left);
+    expect(grown).not.toBe(d);
+    expect(grown.road!.filter(l => l.from === Left && l.kind == null)).toHaveLength(3);
+  });
+
   it("adding keeps a kerb-side bus or cycle lane on the kerb", () => {
     let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
     c = toggleBusLane(c, Left, 0); // bus on the kerb slot

@@ -446,10 +446,22 @@ export function removeCycleLane(cell: TileCell, from: Port): TileCell {
 // copies its direction's movement. `from` is the clicked lane's approach; it
 // validates the click but the change is per-tile. No-op on a junction (its
 // lanes are movements, re-laid by the road tool).
+// The widest street the road tool lays is 3L — ➕ honours the same ceiling, so
+// the tools walk exactly the preset range 1L ↔ 2L ↔ 3L and no further. The cap
+// counts CARRIAGEWAY lanes (general + bus); the half-width cycle lane is an
+// add-on beside the carriageway and does not consume the budget.
+const MAX_STREET_LANES = 3;
+
 export function addStreetLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
   if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
   const froms = [...new Set(road.map(l => l.from))];
+  // All-or-nothing, like removal: an approach at the 3-lane cap blocks the tile
+  // (adding to the other direction alone would make the street asymmetric).
+  for (const f of froms) {
+    const carriageway = road.filter(l => l.from === f && l.kind !== "cycle").length;
+    if (carriageway >= MAX_STREET_LANES) return cell;
+  }
   const added: Lane[] = froms.map(f => {
     const top = road
       .filter(l => l.from === f)
