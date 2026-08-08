@@ -433,6 +433,45 @@ export function removeCycleLane(cell: TileCell, from: Port): TileCell {
   return { ...cell, road: next };
 }
 
+// The ADD-lane tool's single-tile action: one more GENERAL (car) lane for the
+// direction the clicked lane belongs to, appended on the CENTRE side (index
+// maxIndex+1) so the kerb-side structure — a bus lane on the kerb slot, the
+// half-width cycle lane against the kerb — stays exactly where it was. The new
+// lane copies the direction's movement. No-op on a junction (its lanes are
+// movements, re-laid by the road tool) or when the approach has no lanes.
+export function addStreetLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road || isRoadJunction(road)) return cell;
+  const approach = road.filter(l => l.from === from);
+  if (approach.length === 0) return cell;
+  const top = approach.reduce((b, l) => (l.index > b.index ? l : b));
+  return {
+    ...cell,
+    road: [...road, { from, to: [...top.to], index: top.index + 1 }],
+  };
+}
+
+// The REMOVE-lane tool's single-tile action: drop the direction's innermost
+// GENERAL lane. Bus and cycle lanes are never taken (they have their own
+// tools), and the direction always keeps at least one general lane — narrowing
+// a street to bus/cycle-only is a statement the bus tool makes explicitly, not
+// something a ➖ misclick should do. Remaining lanes re-rank to close the gap
+// (a median bus lane can sit above the removed lane). No-op on a junction.
+export function removeStreetLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road || isRoadJunction(road)) return cell;
+  const general = road.filter(l => l.from === from && l.kind == null);
+  if (general.length < 2) return cell;
+  const top = general.reduce((b, l) => (l.index > b.index ? l : b));
+  const remaining = road.filter(l => l !== top);
+  const ranked = remaining
+    .filter(l => l.from === from)
+    .sort((a, b) => a.index - b.index);
+  const rank = new Map(ranked.map((l, i) => [l, i]));
+  const next = remaining.map(l => (l.from === from ? { ...l, index: rank.get(l)! } : l));
+  return { ...cell, road: next };
+}
+
 // The BUS-lane tool's single-tile action: toggle a lane bus-only ↔ normal,
 // identified by its approach `from` and physical `index` (0 = kerb). An
 // in-place conversion — the lane keeps its geometry and movements, so a normal
@@ -663,6 +702,50 @@ export function setBusLaneRun(
   return out;
 }
 
+// The ADD-lane / REMOVE-lane tools' whole-street action: apply the single-tile
+// op along the clicked lane's street run, so a street changes its lane count in
+// one click instead of a re-drag of the whole road. The clicked lane names only
+// the DIRECTION. Returns the changed cells keyed by id, for one commit.
+export function addStreetLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  return mapStreetRun(level, id, from, index, addStreetLane);
+}
+
+export function removeStreetLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  return mapStreetRun(level, id, from, index, removeStreetLane);
+}
+
+// Shared run applicator: walk the street run from the clicked lane and apply a
+// per-direction cell op on every tile, building on already-changed cells so
+// several lanes of one tile all land.
+function mapStreetRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+  op: (cell: TileCell, from: Port) => TileCell,
+): Record<string, TileCell> {
+  const seed = level[id];
+  if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
+  const run = streetRunLanes(level, id, from, index);
+  const out: Record<string, TileCell> = {};
+  for (const ref of run) {
+    const base = out[ref.id] ?? level[ref.id];
+    if (!base) continue;
+    out[ref.id] = op(base, ref.from);
+  }
+  return out;
+}
+
 // The BIKE-lane tool's whole-street action: add or remove the cycle lane along
 // the clicked lane's street run. The SEED tile's approach decides the verb (it
 // has a cycle lane → remove everywhere; none → add everywhere), so a
@@ -678,14 +761,9 @@ export function toggleCycleLaneRun(
   const seed = level[id];
   if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
   const removing = seed.road.some(l => l.from === from && l.kind === "cycle");
-  const run = streetRunLanes(level, id, from, index);
-  const out: Record<string, TileCell> = {};
-  for (const ref of run) {
-    const base = out[ref.id] ?? level[ref.id];
-    if (!base) continue;
-    out[ref.id] = removing ? removeCycleLane(base, ref.from) : addCycleLane(base, ref.from);
-  }
-  return out;
+  return mapStreetRun(level, id, from, index, (cell, f) =>
+    removing ? removeCycleLane(cell, f) : addCycleLane(cell, f),
+  );
 }
 
 // --- Junction bus gates ---------------------------------------------------------

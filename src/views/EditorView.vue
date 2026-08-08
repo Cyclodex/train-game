@@ -268,7 +268,7 @@
                lane's real centreline, so the author clicks the exact lane they
                want (hover highlights it). This replaces the edge zones for the
                buslane tool — a lane, not a tile edge, is the thing being toggled. -->
-          <template v-if="(tool === 'buslane' || tool === 'bikelane') && cell.tile">
+          <template v-if="laneToolActive && cell.tile">
             <path
               v-for="(hl, i) in laneHits(cell.key)"
               :key="'lh' + i"
@@ -445,6 +445,10 @@ import {
   setBusLaneRun,
   toggleCycleLane,
   toggleCycleLaneRun,
+  addStreetLane,
+  addStreetLaneRun,
+  removeStreetLane,
+  removeStreetLaneRun,
   syncJunctionLanesAround,
   setTerrain,
   shiftHeight,
@@ -505,6 +509,8 @@ type Tool =
   | "road"
   | "buslane"
   | "bikelane"
+  | "laneadd"
+  | "laneremove"
   | "signalise"
   | "terrain"
   | "height"
@@ -557,6 +563,8 @@ const DOCK_GROUPS: DockGroup[] = [
     label: "Road",
     items: [
       { key: "road", icon: "🛣️", label: "Road", tool: "road" },
+      { key: "laneadd", icon: "➕", label: "Add lane", tool: "laneadd" },
+      { key: "laneremove", icon: "➖", label: "Remove lane", tool: "laneremove" },
       { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
       { key: "bikelane", icon: "🚲", label: "Bike lane", tool: "bikelane" },
       { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
@@ -640,6 +648,10 @@ const HINTS: Record<Tool, string> = {
     "Click a lane to toggle it BUS-only ↔ normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Green bike lanes are the 🚲 tool's. Ctrl+click toggles just that one tile's lane.",
   bikelane:
     "Click a street to ADD a green bike lane along that direction's kerb — a NEW lane; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets). Click again — any lane of that direction, or the green lane itself — to remove it. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
+  laneadd:
+    "Click a street to add one more car lane to that DIRECTION, along the whole street (stopping at junctions) — no need to re-drag the road. The lane is added on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click adds on just that one tile.",
+  laneremove:
+    "Click a street to remove that DIRECTION's innermost car lane, along the whole street (stopping at junctions). Bus and bike lanes are never taken — use the 🚌 / 🚲 tools for those — and the last car lane of a direction stays (erase or redraw the road to remove it entirely). Ctrl+click removes on just that one tile.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
@@ -1549,19 +1561,38 @@ class EditorView extends Vue {
     this.facilityId = m ? `${m[1]}${Number(m[2]) + 1}` : `${this.facilityId}2`;
   }
 
+  // The four lane tools share the per-lane hit paths.
+  get laneToolActive(): boolean {
+    return (
+      this.tool === "buslane" ||
+      this.tool === "bikelane" ||
+      this.tool === "laneadd" ||
+      this.tool === "laneremove"
+    );
+  }
+
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
-    // Two lane tools share the hit paths: 🚌 toggles bus ↔ normal in place;
-    // 🚲 adds/removes the direction's kerb-side green lane (the street widens
-    // or narrows). Ctrl/Meta acts on one tile, a plain click on the street run.
+    // Four lane tools share the hit paths: 🚌 toggles bus ↔ normal in place;
+    // 🚲 adds/removes the direction's kerb-side green lane; ➕/➖ change the
+    // direction's car-lane count. Ctrl/Meta acts on one tile, a plain click on
+    // the whole street run.
     const single = ev.ctrlKey || ev.metaKey;
     const changed =
       this.tool === "bikelane"
         ? single
           ? { [id]: toggleCycleLane(this.cellOf(id), from) }
           : toggleCycleLaneRun(this.level, id, from, index)
-        : single
-          ? { [id]: toggleBusLane(this.cellOf(id), from, index) }
-          : setBusLaneRun(this.level, id, from, index);
+        : this.tool === "laneadd"
+          ? single
+            ? { [id]: addStreetLane(this.cellOf(id), from) }
+            : addStreetLaneRun(this.level, id, from, index)
+          : this.tool === "laneremove"
+            ? single
+              ? { [id]: removeStreetLane(this.cellOf(id), from) }
+              : removeStreetLaneRun(this.level, id, from, index)
+            : single
+              ? { [id]: toggleBusLane(this.cellOf(id), from, index) }
+              : setBusLaneRun(this.level, id, from, index);
     // commit re-derives the adjoining junctions' busTo gates per tile.
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }

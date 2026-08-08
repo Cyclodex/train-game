@@ -3300,7 +3300,13 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
   discipline (outermost lane permitting the move; only a dedicated inner-lane
   turn pocket forces it in). Pinned by `/test/bikeleftturn` + roadBikes.spec.
-- Editor has TWO lane tools sharing one set of lane hit paths: 🚌 toggles a
+- Editor lane-count tools ➕/➖ (`addStreetLane`/`removeStreetLane` + run
+  variants via the shared `mapStreetRun` walker): change ONE direction's car
+  lanes along a street run without re-dragging the road. ➕ appends on the
+  CENTRE side so kerb bus/cycle lanes stay put; ➖ takes the innermost GENERAL
+  lane only (never bus/cycle, never the last car lane) and re-ranks to close
+  the gap (median bus lanes sit above it).
+- Editor has FOUR lane tools sharing one set of lane hit paths: 🚌 toggles a
   lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
   green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —
   `addCycleLane` inserts a NEW kerb lane (indices shift +1, the street widens)
