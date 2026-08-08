@@ -116,3 +116,69 @@ describe("a bus runs a line", () => {
     expect(game.sim.stationQueue("3,1")).toBe(0);
   });
 });
+
+// The scenario the /test gallery shows, run headlessly. A journey NO single
+// vehicle makes: the bus in to the interchange, the walk up to the platform,
+// the train on. If bus and rail were two networks rather than one, nobody would
+// ever set out — which is exactly what D10 would (correctly) enforce.
+describe("bus and train are one network", () => {
+  const ALT = "6,4"; // the halt out of walking reach of any platform
+  const KERB = "2,4"; // the halt under Hauptbahnhof
+  const HBF = "2,2";
+  const OST = "2,1";
+
+  async function board() {
+    const { busrail } = await import("@/levels/test/scenarios/busrail");
+    const defs: TrainDef[] = Object.values(busrail.trains ?? {}).map(t => ({
+      id: t.id,
+      x: t.x,
+      y: t.y,
+      type: t.type,
+      wagonIds: (t.wagons ?? []).map(w => w.id),
+      ...(t.line?.length ? { line: t.line } : {}),
+    }));
+    const game = createGame(
+      busrail.level,
+      defs,
+      200,
+      networkMode,
+      1,
+      busrail.colors,
+      busrail.traffic,
+      "busrail"
+    );
+    return { game, busrail };
+  }
+
+  it("cannot get from Altstadt to the railway without a bus", async () => {
+    const { game } = await board();
+    // The train alone: Altstadt is out of walking reach of every platform, so
+    // no chain of services connects it and nobody sets out (D10).
+    expect(game.sim.serves(ALT, OST)).toBe(false);
+    expect(game.sim.serves(ALT, HBF)).toBe(false);
+  });
+
+  it("joins the two the moment a bus line reaches the interchange", async () => {
+    const { game } = await board();
+    game.createLine([ALT, KERB]);
+    // The kerb is a short walk from Hauptbahnhof, so the walk link closes the
+    // gap and the whole railway becomes reachable from Altstadt.
+    expect(game.sim.serves(ALT, HBF)).toBe(true);
+    expect(game.sim.serves(ALT, OST)).toBe(true);
+  });
+
+  it("carries somebody the whole way: bus, walk, train", async () => {
+    const { game } = await board();
+    const busLine = game.createLine([ALT, KERB]);
+    game.buyBus(busLine);
+    // Somebody at Altstadt who wants Ostbahnhof — two vehicles and a walk away.
+    expect(game.sim.enqueuePassenger(ALT, OST)).toBe(true);
+
+    for (let t = 0; t < 400; t += 0.1) game.advance(0.1);
+
+    expect(game.sim.passengersDelivered()).toBeGreaterThan(0);
+    // Nobody is left stranded at the kerb: the walk moved them to the platform
+    // rather than leaving them waiting for a train that never calls at a road.
+    expect(game.sim.stationQueue(KERB)).toBeLessThan(4);
+  });
+});

@@ -172,6 +172,11 @@ export interface TransitConfig {
   // Is this tile a place a passenger can wait? Both sims contribute (a rail
   // platform, a bus stop), so the layer itself stays ignorant of tiles.
   isStop?: (tileId: string) => boolean;
+  // Pairs of stops a passenger can WALK between — a bus stop and the platform
+  // beside it. The intermodal edge (D5): without it a kerb and a platform are
+  // separate islands however close they are drawn, and a bus→train journey
+  // would be two unrelated journeys that nobody ever sets out on.
+  walkLinks?: [string, string][];
 }
 
 export const DEFAULT_QUEUE_HARD_CAP = 16;
@@ -197,6 +202,13 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
   const stopperSources = new Map<string, () => StopperService[]>();
   let graph: LineGraph | null = null;
 
+  // stop -> the stops you can walk to from it, both ways.
+  const walkTo = new Map<string, string[]>();
+  for (const [a, b] of config.walkLinks ?? []) {
+    walkTo.set(a, [...(walkTo.get(a) ?? []), b]);
+    walkTo.set(b, [...(walkTo.get(b) ?? []), a]);
+  }
+
   for (const id of Object.keys(demand)) {
     queues.set(id, []);
     spawnClocks.set(id, 0);
@@ -219,6 +231,14 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     // alights by its own sim's rule.
     for (const source of stopperSources.values()) {
       for (const s of source()) spec.push({ id: s.id, stops: s.stops });
+    }
+    // A walk is a connection like any other, so the graph gets it as a service
+    // calling at both ends. Nothing ever RUNS it — no vehicle carries this id —
+    // so it only ever affects what is reachable and where to change.
+    for (const [a, list] of walkTo) {
+      for (const b of list) {
+        if (a < b) spec.push({ id: `walk:${a}|${b}`, stops: [a, b] });
+      }
     }
     graph = buildLineGraph(spec);
     return graph;
@@ -384,7 +404,8 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     exchange(req: ExchangeRequest): Exchange {
       const { stopId, lineId, capacity, manifest } = req;
       const staying: Rider[] = [];
-      const changing: Waiting[] = [];
+      // Each with WHERE they will wait: here, or the far end of a walk.
+      const changing: (Waiting & { at: string })[] = [];
       const alightedTags: string[] = [];
       const boardedTags: string[] = [];
       let alighted = 0;
@@ -404,6 +425,12 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
           changing.push({
             dest: rider.final,
             ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
+            // WHERE they wait for the onward service. Normally right here — but
+            // if the next step of their journey is a WALK (off the bus, across
+            // to the platform), they take it now and wait at the far end. Left
+            // standing at the kerb they would wait for ever for a train that
+            // does not call there, which is the whole reason the walk exists.
+            at: walkOnward(stopId, rider.final),
           });
         }
       }
@@ -414,7 +441,12 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       // A CHANGE goes back onto the platform, at the FRONT and past the cap
       // (D8). They have waited once already, and deleting someone mid-journey
       // because a queue is full would be a loss the player cannot see happen.
-      q.unshift(...changing);
+      // Whoever walked on waits at the far end instead.
+      for (const c of changing) {
+        const { at, ...w } = c;
+        if (at === stopId) q.unshift(w);
+        else queues.set(at, [w, ...(queues.get(at) ?? [])]);
+      }
 
       let boarded = 0;
       if (req.noBoarding || req.dumpAll) {
@@ -463,6 +495,24 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
   // connects this stop to anywhere. The list the cursor indexes into changes as
   // lines are drawn, which moves who gets picked next — still deterministic for
   // a given sequence of player actions, which is what replayability needs.
+  // If the next step from `at` toward `final` is a WALK, the far end of it;
+  // otherwise `at` itself. Strictly closer, like every other hop — a walk that
+  // does not get you closer is not a step, it is a stroll.
+  function walkOnward(at: string, final: string): string {
+    const g = network();
+    const here = g.hops(at, final);
+    if (here === undefined) return at;
+    let best = at;
+    let bestDist = here;
+    for (const n of walkTo.get(at) ?? []) {
+      const d = n === final ? 0 : g.hops(n, final);
+      if (d === undefined || d >= bestDist) continue;
+      bestDist = d;
+      best = n;
+    }
+    return best;
+  }
+
   function nextDestination(id: string): string | null {
     // Only a real STOP is somewhere to ask for. A line's stop list is the
     // player's, and nothing stops it naming a tile that is not a stop at all —

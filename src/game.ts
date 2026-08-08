@@ -6,6 +6,7 @@ import {
   busStopDemandOf,
   busStopTiles,
   parkAndRideTargets,
+  walkLinksOf,
 } from "@/tiles/catchment";
 import { stationNames } from "@/tiles/stationNames";
 import { planRailRoute } from "@/sim/railRouter";
@@ -550,6 +551,9 @@ export interface Game {
   removeBus(busId: string): boolean;
   // Every bus, mirrored for the panel.
   busServices: BusView[];
+  // Every bus stop on the board. The panel offers a bus only where one could
+  // actually appear.
+  busStopTiles: string[];
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -1193,6 +1197,10 @@ export function createGame(
     transit = createTransit({
       demand: Object.fromEntries([...transitStops].map(id => [id, demandFor(id)])),
       isStop: (tileId: string) => transitStops.has(tileId),
+      // The intermodal edge: a bus stop and the platform beside it are one
+      // interchange, joined by a short walk (D5). Without it a kerb and a
+      // platform are separate islands however close they are drawn.
+      walkLinks: walkLinksOf(level),
     });
     sim = createSimulation({
       level,
@@ -3435,6 +3443,7 @@ export function createGame(
     assignBus,
     removeBus,
     busServices,
+    busStopTiles: busStops,
     createLine,
     setLineStops,
     renameLine,

@@ -130,3 +130,29 @@ export function busStopDemandOf(level: Level, coordId: string): StationDemand {
     initial: Math.min(2, full.initial ?? 0),
   };
 }
+
+// Where a passenger can WALK between two stops: every bus stop paired with the
+// stations within walking reach of it.
+//
+// This is the intermodal edge the design has called for since D5 — "a bus stop
+// and a platform connect when they are adjacent" — and it is what makes a
+// bus→train journey ONE journey rather than two unrelated ones. Without it the
+// network graph sees a kerb and a platform as separate islands, however close
+// together they are drawn, and nobody would ever set out.
+//
+// Derived from the map like everything else here. Chebyshev distance, the same
+// square ring `stationCatchment` uses, because that is how a neighbourhood
+// reads on a grid.
+export function walkLinksOf(level: Level): [string, string][] {
+  const stations = Object.keys(level).filter(id => level[id]?.role === "station");
+  const out: [string, string][] = [];
+  for (const stop of busStopTiles(level)) {
+    const a = parseCoordId(stop);
+    for (const station of stations) {
+      const b = parseCoordId(station);
+      const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+      if (d <= WALK_RADIUS_TILES) out.push([stop, station]);
+    }
+  }
+  return out;
+}
