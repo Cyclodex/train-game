@@ -433,42 +433,64 @@ export function removeCycleLane(cell: TileCell, from: Port): TileCell {
   return { ...cell, road: next };
 }
 
-// The ADD-lane tool's single-tile action: one more GENERAL (car) lane for the
-// direction the clicked lane belongs to, appended on the CENTRE side (index
-// maxIndex+1) so the kerb-side structure — a bus lane on the kerb slot, the
-// half-width cycle lane against the kerb — stays exactly where it was. The new
-// lane copies the direction's movement. No-op on a junction (its lanes are
-// movements, re-laid by the road tool) or when the approach has no lanes.
+// The ADD-lane tool's single-tile action: one more GENERAL (car) lane on EVERY
+// approach of the street tile — both directions of a two-way street step
+// together (1L → 2L → 3L, exactly what the road tool's presets lay), a one-way
+// street gains its single direction's lane. SYMMETRY IS LOAD-BEARING: the
+// renderer paints the yellow centreline at the ribbon middle and the dashed
+// dividers at whole-lane offsets from it, which is only right when the two
+// directions carry EQUAL lane counts — a 3+2 street would put the centreline
+// through the middle of a lane. Each new lane is appended on the CENTRE side
+// (index maxIndex+1) so the kerb-side structure — a bus lane on the kerb slot,
+// the half-width cycle lane against the kerb — stays exactly where it was, and
+// copies its direction's movement. `from` is the clicked lane's approach; it
+// validates the click but the change is per-tile. No-op on a junction (its
+// lanes are movements, re-laid by the road tool).
 export function addStreetLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
-  if (!road || isRoadJunction(road)) return cell;
-  const approach = road.filter(l => l.from === from);
-  if (approach.length === 0) return cell;
-  const top = approach.reduce((b, l) => (l.index > b.index ? l : b));
-  return {
-    ...cell,
-    road: [...road, { from, to: [...top.to], index: top.index + 1 }],
-  };
+  if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))];
+  const added: Lane[] = froms.map(f => {
+    const top = road
+      .filter(l => l.from === f)
+      .reduce((b, l) => (l.index > b.index ? l : b));
+    return { from: f, to: [...top.to], index: top.index + 1 };
+  });
+  return { ...cell, road: [...road, ...added] };
 }
 
-// The REMOVE-lane tool's single-tile action: drop the direction's innermost
-// GENERAL lane. Bus and cycle lanes are never taken (they have their own
-// tools), and the direction always keeps at least one general lane — narrowing
-// a street to bus/cycle-only is a statement the bus tool makes explicitly, not
-// something a ➖ misclick should do. Remaining lanes re-rank to close the gap
-// (a median bus lane can sit above the removed lane). No-op on a junction.
+// The REMOVE-lane tool's single-tile action: drop the innermost GENERAL lane of
+// EVERY approach that can spare one — the symmetric inverse of addStreetLane
+// (see the centreline note there). Bus and cycle lanes are never taken (they
+// have their own tools), and an approach always keeps at least one general
+// lane — narrowing a street to bus/cycle-only is a statement the bus tool makes
+// explicitly, not something a ➖ misclick should do. ALL-OR-NOTHING: if any
+// approach cannot spare a lane the whole tile is a no-op — removing from one
+// direction only would create the asymmetric street the centreline paint
+// cannot express. Remaining lanes re-rank to close the gap (a median bus lane
+// can sit above the removed lane). No-op on a junction.
 export function removeStreetLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
-  if (!road || isRoadJunction(road)) return cell;
-  const general = road.filter(l => l.from === from && l.kind == null);
-  if (general.length < 2) return cell;
-  const top = general.reduce((b, l) => (l.index > b.index ? l : b));
-  const remaining = road.filter(l => l !== top);
-  const ranked = remaining
-    .filter(l => l.from === from)
-    .sort((a, b) => a.index - b.index);
-  const rank = new Map(ranked.map((l, i) => [l, i]));
-  const next = remaining.map(l => (l.from === from ? { ...l, index: rank.get(l)! } : l));
+  if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))];
+  const removed = new Set<Lane>();
+  for (const f of froms) {
+    const general = road.filter(l => l.from === f && l.kind == null);
+    if (general.length < 2) return cell; // an approach at its last car lane blocks the tile
+    removed.add(general.reduce((b, l) => (l.index > b.index ? l : b)));
+  }
+  if (removed.size === 0) return cell;
+  const remaining = road.filter(l => !removed.has(l));
+  const next = remaining.map(l => l); // fresh array to re-rank per approach
+  for (const f of froms) {
+    const ranked = remaining
+      .filter(l => l.from === f)
+      .sort((a, b) => a.index - b.index);
+    ranked.forEach((lane, i) => {
+      const at = next.indexOf(lane);
+      next[at] = { ...lane, index: i };
+    });
+  }
   return { ...cell, road: next };
 }
 
@@ -704,8 +726,9 @@ export function setBusLaneRun(
 
 // The ADD-lane / REMOVE-lane tools' whole-street action: apply the single-tile
 // op along the clicked lane's street run, so a street changes its lane count in
-// one click instead of a re-drag of the whole road. The clicked lane names only
-// the DIRECTION. Returns the changed cells keyed by id, for one commit.
+// one click instead of a re-drag of the whole road. The change is SYMMETRIC per
+// tile (both directions step together — see addStreetLane); the clicked lane
+// only picks the street. Returns the changed cells keyed by id, for one commit.
 export function addStreetLaneRun(
   level: Level,
   id: string,

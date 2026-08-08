@@ -313,14 +313,32 @@ describe("addStreetLane / removeStreetLane (the ➕/➖ tools)", () => {
   const laneAt = (cell: TileCell, from: Position, index: number) =>
     cell.road!.find(l => l.from === from && l.index === index)!;
 
-  it("adds a car lane on the centre side, copying the direction's movement", () => {
+  it("adds a car lane EACH WAY — 1L becomes 2L, exactly like the road presets", () => {
+    // Symmetry is load-bearing: the centreline paints at the ribbon middle,
+    // which is only the direction divider when both ways carry equal lanes.
     let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
     c = addStreetLane(c, Left);
-    const east = c.road!.filter(l => l.from === Left);
-    expect(east).toHaveLength(2);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
+    expect(c.road!.filter(l => l.from === Right)).toHaveLength(2);
     expect(laneAt(c, Left, 1)).toMatchObject({ from: Left, to: [Right], index: 1 });
+    expect(laneAt(c, Right, 1)).toMatchObject({ from: Right, to: [Left], index: 1 });
     expect(laneAt(c, Left, 1).kind).toBeUndefined();
-    expect(c.road!.filter(l => l.from === Right)).toHaveLength(1); // other way untouched
+  });
+
+  it("➕ on a drawn 1L street yields exactly the road tool's 2L lane set", () => {
+    const grown = addStreetLane({ connections: [], road: nWayLanes(Left, Right, 1) }, Left);
+    const drawn = nWayLanes(Left, Right, 2);
+    const key = (l: { from: Position; index: number; to: Position[]; kind?: string }) =>
+      `${l.from}:${l.index}:${[...l.to].sort().join(",")}:${l.kind ?? ""}`;
+    expect(grown.road!.map(key).sort()).toEqual(drawn.map(key).sort());
+  });
+
+  it("a one-way street steps its single direction", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = addStreetLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(3);
+    c = removeStreetLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
   });
 
   it("adding keeps a kerb-side bus or cycle lane on the kerb", () => {
@@ -341,11 +359,13 @@ describe("addStreetLane / removeStreetLane (the ➕/➖ tools)", () => {
     expect(laneAt(c, Left, 1).kind).toBeUndefined();
   });
 
-  it("never removes the direction's last car lane", () => {
+  it("never removes a last car lane — a blocked approach blocks the whole tile", () => {
     const c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
     expect(removeStreetLane(c, Left)).toBe(c);
-    // Nor when the only other lane is a bus lane.
-    let b = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    // A 2-lane two-way street whose eastbound kerb lane became a bus lane:
+    // eastbound is at its last car lane, so the WHOLE tile is a no-op —
+    // removing westbound alone would make the street asymmetric.
+    let b: TileCell = { connections: [], road: nWayLanes(Left, Right, 2) };
     b = toggleBusLane(b, Left, 0);
     expect(removeStreetLane(b, Left)).toBe(b);
   });

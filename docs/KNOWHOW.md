@@ -3301,11 +3301,17 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   discipline (outermost lane permitting the move; only a dedicated inner-lane
   turn pocket forces it in). Pinned by `/test/bikeleftturn` + roadBikes.spec.
 - Editor lane-count tools ➕/➖ (`addStreetLane`/`removeStreetLane` + run
-  variants via the shared `mapStreetRun` walker): change ONE direction's car
-  lanes along a street run without re-dragging the road. ➕ appends on the
-  CENTRE side so kerb bus/cycle lanes stay put; ➖ takes the innermost GENERAL
-  lane only (never bus/cycle, never the last car lane) and re-ranks to close
-  the gap (median bus lanes sit above it).
+  variants via the shared `mapStreetRun` walker): step a street's car lanes
+  along a run without re-dragging the road — SYMMETRICALLY, both directions
+  together (1L ↔ 2L ↔ 3L, identical lane sets to the road tool's presets;
+  pinned by test). Symmetry is LOAD-BEARING: the yellow centreline paints at
+  the ribbon middle and dividers at whole-lane offsets, which only matches a
+  street whose directions carry EQUAL lane counts — an asymmetric 3+2 street
+  puts the centre marking through the middle of a lane (the sim would cope;
+  the paint cannot). ➖ is therefore ALL-OR-NOTHING per tile (an approach at
+  its last general lane blocks the tile) and never takes bus/cycle lanes; ➕
+  appends on the CENTRE side so kerb bus/cycle lanes stay put; re-ranking
+  keeps median bus lanes. One-way streets step their single direction.
 - Editor has FOUR lane tools sharing one set of lane hit paths: 🚌 toggles a
   lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
   green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —
