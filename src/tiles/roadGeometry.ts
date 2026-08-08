@@ -480,6 +480,15 @@ export function roadLaneBandPath(
 // `capHalfA` / `capHalfB` (px) clamp the maximum marking offset at each end
 // to the rendered surface half-width, so markings never escape the road when
 // the surface tapers to match a narrower neighbour.
+//
+// `cycleA` / `cycleB`: how many KERB-side cycle lanes each direction carries
+// (0 or 1 in practice — the editor adds at most one). A cycle lane paints at
+// HALF the lane width against the kerb, real-world proportion: its boundary is
+// a SOLID white line at half a lane in from the kerb, and the full-width dashed
+// divider that would bound the slot is suppressed (the slot's inner half reads
+// as part of the carriageway). The green tint (Tile.vue restrictedLaneBands)
+// and the bike's ride line (sim/laneGeometry cycle-strip shift) use the same
+// half-width kerb alignment, so paint, tint and rider agree.
 export function roadLaneMarkingPaths(
   entry: Port,
   exit: Port,
@@ -488,6 +497,8 @@ export function roadLaneMarkingPaths(
   lanesB: number,
   capHalfA?: number,
   capHalfB?: number,
+  cycleA = 0,
+  cycleB = 0,
 ): LaneMarkingPath[] {
   const LANE_W = size * 0.14;
   const out: LaneMarkingPath[] = [];
@@ -515,7 +526,16 @@ export function roadLaneMarkingPaths(
     const seamCountB = capHalfB !== undefined ? Math.max(1, Math.round((2 * capHalfB) / LANE_W)) : m;
     const off = (seamCount: number, k: number) => (seamCount / 2 - Math.min(k, seamCount)) * LANE_W;
     const dropFrom = Math.min(seamCountA, seamCountB); // dividers >= this one drop
+    // A kerb-side cycle lane on the one-way: its half-width solid edge replaces
+    // the full-slot divider. The kerb is right-of-travel, so its side — and the
+    // suppressed divider — depend on which direction the one-way runs: travel
+    // entry→exit puts the kerb on the positive side (lane 0's boundary is k=1),
+    // travel exit→entry mirrors it (boundary k = m-1, edge at k = m-0.5).
+    const cycle = lanesA > 0 ? cycleA : cycleB;
+    const skipK = cycle > 0 && m >= 2 ? (lanesA > 0 ? 1 : m - 1) : -1;
+    const edgeK = lanesA > 0 ? 0.5 : m - 0.5;
     for (let k = 1; k < m; k++) {
+      if (k === skipK) continue;
       out.push(
         isStraight
           ? {
@@ -524,6 +544,21 @@ export function roadLaneMarkingPaths(
               merge: k >= dropFrom,
             }
           : { d: curvedParallelPath(entry, exit, size, (m / 2 - k) * LANE_W), kind: "inner" },
+      );
+    }
+    if (cycle > 0 && m >= 2) {
+      out.push(
+        isStraight
+          ? {
+              d: taperedParallel(entry, exit, size, off(seamCountA, edgeK), off(seamCountB, edgeK)),
+              kind: "inner",
+              solid: true,
+            }
+          : {
+              d: curvedParallelPath(entry, exit, size, (m / 2 - edgeK) * LANE_W),
+              kind: "inner",
+              solid: true,
+            },
       );
     }
     return out;
@@ -552,30 +587,67 @@ export function roadLaneMarkingPaths(
         : Infinity;
     const isMerge = (i: number) => i >= lo || (tapered && i * LANE_W >= capNarrow);
 
+    // A direction with a kerb-side cycle lane swaps that lane's full-slot dashed
+    // boundary (divider i = lanes−1, the outermost) for a SOLID edge line half a
+    // lane in from the kerb — the real-world half-width cycle lane. The slot's
+    // inner half reads as carriageway.
+    const skipA = cycleA > 0 && lanesA >= 2 ? lanesA - 1 : -1;
+    const skipB = cycleB > 0 && lanesB >= 2 ? lanesB - 1 : -1;
+    const pushEdge = (d0: number) => {
+      const sgn = Math.sign(d0);
+      let fromD = d0;
+      let toD = d0;
+      if (capHalfA !== undefined) fromD = sgn > 0 ? Math.min(fromD, capHalfA) : Math.max(fromD, -capHalfA);
+      if (capHalfB !== undefined) toD = sgn > 0 ? Math.min(toD, capHalfB) : Math.max(toD, -capHalfB);
+      out.push({
+        d: taperedParallel(entry, exit, size, fromD, toD),
+        kind: "inner",
+        solid: true,
+        merge: tapered && Math.abs(d0) >= capNarrow,
+      });
+    };
+
     // Between same-direction lanes on the entry→exit side (positive offset).
     for (let i = 1; i < hi; i++) {
+      if (i === skipA) continue;
       let fromD = i * LANE_W;
       let toD = i < lo ? i * LANE_W : narrowKerb;
       if (capHalfA !== undefined) fromD = Math.min(fromD, capHalfA);
       if (capHalfB !== undefined) toD = Math.min(toD, capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
+    if (skipA > 0) pushEdge((lanesA - 0.5) * LANE_W);
     // Between same-direction lanes on the exit→entry side (negative offset).
     for (let i = 1; i < hi; i++) {
+      if (i === skipB) continue;
       let fromD = -i * LANE_W;
       let toD = i < lo ? -i * LANE_W : -narrowKerb;
       if (capHalfA !== undefined) fromD = Math.max(fromD, -capHalfA);
       if (capHalfB !== undefined) toD = Math.max(toD, -capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
+    if (skipB > 0) pushEdge(-(lanesB - 0.5) * LANE_W);
   } else {
     // Curved tile (adjacent ports): add offset Bézier inner dividers for each
     // same-direction lane boundary, using the entry→exit and exit→entry sides.
+    // The cycle-lane swap (solid half-width edge for the full-slot divider)
+    // applies on bends exactly as on straights, so a painted run stays coherent
+    // through a corner.
+    const skipA = cycleA > 0 && lanesA >= 2 ? lanesA - 1 : -1;
+    const skipB = cycleB > 0 && lanesB >= 2 ? lanesB - 1 : -1;
     for (let i = 1; i < lanesA; i++) {
+      if (i === skipA) continue;
       out.push({ d: curvedParallelPath(entry, exit, size, i * LANE_W), kind: "inner" });
     }
+    if (skipA > 0) {
+      out.push({ d: curvedParallelPath(entry, exit, size, (lanesA - 0.5) * LANE_W), kind: "inner", solid: true });
+    }
     for (let i = 1; i < lanesB; i++) {
+      if (i === skipB) continue;
       out.push({ d: curvedParallelPath(entry, exit, size, -i * LANE_W), kind: "inner" });
+    }
+    if (skipB > 0) {
+      out.push({ d: curvedParallelPath(entry, exit, size, -(lanesB - 0.5) * LANE_W), kind: "inner", solid: true });
     }
   }
 

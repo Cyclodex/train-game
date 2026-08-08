@@ -21,7 +21,7 @@ import {
   parseCoordId,
 } from "@/tiles/model";
 import type { Lane, LaneKind } from "@/tiles/lanes";
-import { isRoadJunction, isOneWayStraight, lanesFrom, turnKind } from "@/tiles/lanes";
+import { isRoadJunction, isOneWayStraight, lanesFrom, laneUsableBy, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
 import { needsBridge, needsTunnel } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -299,12 +299,12 @@ function upsertMovement(road: Lane[], from: Port, to: Port): Lane[] {
 // just lane 0 (the bug that left higher lanes unable to turn). Bus lanes keep
 // their own indices and are left untouched.
 function addJunctionMovement(road: Lane[], from: Port, to: Port, count: number): Lane[] {
-  const carLanes = road.filter(l => l.from === from && l.kind !== "bus");
+  const carLanes = road.filter(l => l.from === from && laneUsableBy(l, "car"));
   const maxIdx = carLanes.length ? Math.max(...carLanes.map(l => l.index)) : -1;
   const target = Math.max(count, maxIdx + 1); // never shrink an existing approach
   // Add the exit to existing car lanes of this approach.
   let out = road.map(l =>
-    l.from === from && l.kind !== "bus" && !l.to.includes(to)
+    l.from === from && laneUsableBy(l, "car") && !l.to.includes(to)
       ? { ...l, to: [...l.to, to] }
       : l,
   );
@@ -389,21 +389,136 @@ export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
 }
 
-// Toggle a single lane's BUS designation: flip its `kind` between "bus" and
-// normal (undefined), identified by its approach `from` and physical `index`
-// (0 = kerb). This is the editor's "mark a lane as a bus lane" tool — it changes
-// only the lane's access class, keeping its geometry and movements, so a normal
-// 2-lane road becomes "1 car + 1 bus" without re-laying it (and back). No-op if
-// the cell has no such lane.
-export function toggleLaneKind(cell: TileCell, from: Port, index: number): TileCell {
+// Add a cycle lane to one direction of a street: a NEW kerb-side lane (index 0,
+// kind "cycle") is inserted and the direction's existing lanes shift inboard by
+// one — the street WIDENS, keeping every car/bus lane it had. This is the
+// deliberate asymmetry with the bus lane (which converts a lane in place): a
+// cycle lane is an add-on beside the carriageway, not a car lane sacrificed.
+// No-op on a junction (cycle lanes are street-authored; they end at junctions),
+// when the approach has no lanes, or when it already has a cycle lane.
+export function addCycleLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
-  if (!road || !road.some(l => l.from === from && l.index === index)) return cell;
-  const next = road.map(l => {
-    if (l.from !== from || l.index !== index) return l;
-    if (l.kind === "bus") return { from: l.from, to: l.to, index: l.index }; // → normal
-    return { ...l, kind: "bus" as LaneKind };
-  });
+  if (!road || isRoadJunction(road)) return cell;
+  const approach = road.filter(l => l.from === from);
+  if (approach.length === 0 || approach.some(l => l.kind === "cycle")) return cell;
+  const kerb = approach.reduce((b, l) => (l.index < b.index ? l : b));
+  const next: Lane[] = road.map(l => (l.from === from ? { ...l, index: l.index + 1 } : l));
+  next.push({ from, to: [...kerb.to], index: 0, kind: "cycle" as LaneKind });
   return { ...cell, road: next };
+}
+
+// The inverse: strip one direction's cycle lane(s) and close the gap — the
+// remaining lanes of the approach are re-indexed by rank so the street narrows
+// back to its pre-cycle-lane width. When the cycle lane is the approach's ONLY
+// lane (a hand-authored bike path, or a legacy converted lane), removing it
+// would delete the direction outright — instead the lane reverts to a normal
+// lane, so the toggle always lands somewhere sane. No-op when the approach has
+// no cycle lane.
+export function removeCycleLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road || !road.some(l => l.from === from && l.kind === "cycle")) return cell;
+  const remaining = road.filter(l => !(l.from === from && l.kind === "cycle"));
+  if (!remaining.some(l => l.from === from)) {
+    // Cycle-only approach: strip the kind rather than the lane.
+    const next = road.map(l =>
+      l.from === from && l.kind === "cycle" ? { from: l.from, to: l.to, index: l.index } : l,
+    );
+    return { ...cell, road: next };
+  }
+  const ranked = remaining
+    .filter(l => l.from === from)
+    .sort((a, b) => a.index - b.index);
+  const rank = new Map(ranked.map((l, i) => [l, i]));
+  const next = remaining.map(l => (l.from === from ? { ...l, index: rank.get(l)! } : l));
+  return { ...cell, road: next };
+}
+
+// The ADD-lane tool's single-tile action: one more GENERAL (car) lane on EVERY
+// approach of the street tile — both directions of a two-way street step
+// together (1L → 2L → 3L, exactly what the road tool's presets lay), a one-way
+// street gains its single direction's lane. SYMMETRY IS LOAD-BEARING: the
+// renderer paints the yellow centreline at the ribbon middle and the dashed
+// dividers at whole-lane offsets from it, which is only right when the two
+// directions carry EQUAL lane counts — a 3+2 street would put the centreline
+// through the middle of a lane. Each new lane is appended on the CENTRE side
+// (index maxIndex+1) so the kerb-side structure — a bus lane on the kerb slot,
+// the half-width cycle lane against the kerb — stays exactly where it was, and
+// copies its direction's movement. `from` is the clicked lane's approach; it
+// validates the click but the change is per-tile. No-op on a junction (its
+// lanes are movements, re-laid by the road tool).
+export function addStreetLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))];
+  const added: Lane[] = froms.map(f => {
+    const top = road
+      .filter(l => l.from === f)
+      .reduce((b, l) => (l.index > b.index ? l : b));
+    return { from: f, to: [...top.to], index: top.index + 1 };
+  });
+  return { ...cell, road: [...road, ...added] };
+}
+
+// The REMOVE-lane tool's single-tile action: drop the innermost GENERAL lane of
+// EVERY approach that can spare one — the symmetric inverse of addStreetLane
+// (see the centreline note there). Bus and cycle lanes are never taken (they
+// have their own tools), and an approach always keeps at least one general
+// lane — narrowing a street to bus/cycle-only is a statement the bus tool makes
+// explicitly, not something a ➖ misclick should do. ALL-OR-NOTHING: if any
+// approach cannot spare a lane the whole tile is a no-op — removing from one
+// direction only would create the asymmetric street the centreline paint
+// cannot express. Remaining lanes re-rank to close the gap (a median bus lane
+// can sit above the removed lane). No-op on a junction.
+export function removeStreetLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))];
+  const removed = new Set<Lane>();
+  for (const f of froms) {
+    const general = road.filter(l => l.from === f && l.kind == null);
+    if (general.length < 2) return cell; // an approach at its last car lane blocks the tile
+    removed.add(general.reduce((b, l) => (l.index > b.index ? l : b)));
+  }
+  if (removed.size === 0) return cell;
+  const remaining = road.filter(l => !removed.has(l));
+  const next = remaining.map(l => l); // fresh array to re-rank per approach
+  for (const f of froms) {
+    const ranked = remaining
+      .filter(l => l.from === f)
+      .sort((a, b) => a.index - b.index);
+    ranked.forEach((lane, i) => {
+      const at = next.indexOf(lane);
+      next[at] = { ...lane, index: i };
+    });
+  }
+  return { ...cell, road: next };
+}
+
+// The BUS-lane tool's single-tile action: toggle a lane bus-only ↔ normal,
+// identified by its approach `from` and physical `index` (0 = kerb). An
+// in-place conversion — the lane keeps its geometry and movements, so a normal
+// 2-lane road becomes "1 car + 1 bus" without re-laying it. A CYCLE lane is
+// no-op'd: green lanes belong to the bike-lane tool (toggleCycleLane), the two
+// tools never convert into each other's kind. No-op if the cell has no such lane.
+export function toggleBusLane(cell: TileCell, from: Port, index: number): TileCell {
+  const road = cell.road;
+  const lane = road?.find(l => l.from === from && l.index === index);
+  if (!road || !lane || lane.kind === "cycle") return cell;
+  return setLaneKind(cell, from, index, lane.kind === "bus" ? undefined : ("bus" as LaneKind));
+}
+
+// The BIKE-lane tool's single-tile action: toggle the cycle lane of the
+// direction the clicked lane belongs to. The approach has one → remove it (the
+// street narrows back); it has none → add one (a NEW kerb-side green lane, the
+// street widens — see addCycleLane). The clicked lane only names the DIRECTION;
+// clicking a car lane, a bus lane or the green lane itself all toggle the same
+// thing, so the tool has no dead spots.
+export function toggleCycleLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road?.some(l => l.from === from)) return cell;
+  return road.some(l => l.from === from && l.kind === "cycle")
+    ? removeCycleLane(cell, from)
+    : addCycleLane(cell, from);
 }
 
 // Set a single lane's kind explicitly (rather than toggling): "bus" tags it as a
@@ -577,12 +692,14 @@ export function streetRunLanes(
   return out;
 }
 
-// Paint a whole street run to one uniform lane kind: from the CLICKED lane decide
-// the target (a bus lane becomes normal, anything else becomes bus), then SET that
-// kind on every lane of the run. Returns the cells that changed, keyed by id, as
-// fresh TileCells — the editor commits them in one go. A half-painted street
-// therefore becomes uniform in a single click instead of inverting tile by tile.
-export function setLaneKindRun(
+// The BUS-lane tool's whole-street action: toggle the clicked lane bus ↔ normal
+// along its street run. The CLICKED lane decides the target (bus → normal,
+// normal → bus), then that state is SET on every lane of the run, so a
+// half-painted street becomes uniform in a single click instead of inverting
+// tile by tile. A clicked cycle lane returns no changes (the bike-lane tool
+// owns green). Returns the changed cells keyed by id, as fresh TileCells — the
+// editor commits them in one go.
+export function setBusLaneRun(
   level: Level,
   id: string,
   from: Port,
@@ -592,6 +709,7 @@ export function setLaneKindRun(
   const clicked = seed && !isRoadJunction(seed.road)
     ? lanesFrom(seed.road, from).find(l => l.index === index)
     : undefined;
+  if (clicked?.kind === "cycle") return {};
   const target: LaneKind | undefined = clicked?.kind === "bus" ? undefined : "bus";
   const run = streetRunLanes(level, id, from, index);
   const out: Record<string, TileCell> = {};
@@ -604,6 +722,71 @@ export function setLaneKindRun(
     out[ref.id] = setLaneKind(base, ref.from, ref.index, target);
   }
   return out;
+}
+
+// The ADD-lane / REMOVE-lane tools' whole-street action: apply the single-tile
+// op along the clicked lane's street run, so a street changes its lane count in
+// one click instead of a re-drag of the whole road. The change is SYMMETRIC per
+// tile (both directions step together — see addStreetLane); the clicked lane
+// only picks the street. Returns the changed cells keyed by id, for one commit.
+export function addStreetLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  return mapStreetRun(level, id, from, index, addStreetLane);
+}
+
+export function removeStreetLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  return mapStreetRun(level, id, from, index, removeStreetLane);
+}
+
+// Shared run applicator: walk the street run from the clicked lane and apply a
+// per-direction cell op on every tile, building on already-changed cells so
+// several lanes of one tile all land.
+function mapStreetRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+  op: (cell: TileCell, from: Port) => TileCell,
+): Record<string, TileCell> {
+  const seed = level[id];
+  if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
+  const run = streetRunLanes(level, id, from, index);
+  const out: Record<string, TileCell> = {};
+  for (const ref of run) {
+    const base = out[ref.id] ?? level[ref.id];
+    if (!base) continue;
+    out[ref.id] = op(base, ref.from);
+  }
+  return out;
+}
+
+// The BIKE-lane tool's whole-street action: add or remove the cycle lane along
+// the clicked lane's street run. The SEED tile's approach decides the verb (it
+// has a cycle lane → remove everywhere; none → add everywhere), so a
+// half-equipped street becomes uniform in one click. The clicked lane names
+// only the direction — any lane of the approach works. Returns the changed
+// cells keyed by id, for the editor to commit in one go.
+export function toggleCycleLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  const seed = level[id];
+  if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
+  const removing = seed.road.some(l => l.from === from && l.kind === "cycle");
+  return mapStreetRun(level, id, from, index, (cell, f) =>
+    removing ? removeCycleLane(cell, f) : addCycleLane(cell, f),
+  );
 }
 
 // --- Junction bus gates ---------------------------------------------------------
@@ -623,7 +806,7 @@ function armAdmitsCars(n: TileCell | undefined, seamPort: Port): boolean {
   if (!n?.road?.length) return true;
   const entering = lanesFrom(n.road, seamPort);
   if (entering.length === 0) return true; // no lanes face the seam: not a bus street
-  return entering.some(l => l.kind !== "bus");
+  return entering.some(l => laneUsableBy(l, "car")); // bus AND cycle lanes bar cars
 }
 
 // Recompute one junction cell's bus gates from its current neighbours. Returns
@@ -699,7 +882,7 @@ export function syncJunctionBusGatesAround(
 
 function carLanesFrom(road: Lane[], from: Port): Lane[] {
   return road
-    .filter(l => l.from === from && l.kind !== "bus")
+    .filter(l => l.from === from && laneUsableBy(l, "car"))
     .sort((a, b) => a.index - b.index); // 0 = kerb side
 }
 
@@ -710,13 +893,13 @@ function receivingCarCapacity(level: Level, id: string, exit: Port): number {
   if (n?.road?.length) {
     const receiving = lanesFrom(n.road, oppositePort(exit));
     if (receiving.length > 0) {
-      const cars = receiving.filter(l => l.kind !== "bus").length;
+      const cars = receiving.filter(l => laneUsableBy(l, "car")).length;
       return cars > 0 ? cars : receiving.length; // bus-only arm: gate sync demotes after
     }
   }
   // No neighbour street (map edge): the junction's own opposing approach is
   // the best width estimate; a one-way outbound arm has none, assume 1.
-  const own = (level[id]?.road ?? []).filter(l => l.from === exit && l.kind !== "bus").length;
+  const own = (level[id]?.road ?? []).filter(l => l.from === exit && laneUsableBy(l, "car")).length;
   return own > 0 ? own : 1;
 }
 
@@ -735,7 +918,7 @@ export function deriveJunctionCarLanes(
   if (!cell?.road || !isRoadJunction(cell.road)) return cell;
   let changed = false;
   const next: Lane[] = [];
-  for (const lane of cell.road) if (lane.kind === "bus") next.push(lane);
+  for (const lane of cell.road) if (!laneUsableBy(lane, "car")) next.push(lane); // bus + cycle lanes kept as-is
   const armPorts = new Set<Port>();
   if (allArms) {
     for (const l of cell.road) {

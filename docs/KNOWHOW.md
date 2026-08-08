@@ -3269,6 +3269,74 @@ of the above; read that section first.
 - Vehicles are data (`vehicleSpec`): car/rigid truck/articulated semi (2 chords).
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
+## BICYCLES (phase A+B — the slow kind and the cycle lane, 2026-08-05)
+Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phases
+C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT built).
+- `VehicleKind "bike"` is the FIRST kind with its own pace: `KIND_SPEED`
+  (road.ts, bike 0.45) scales the cruise draw at BOTH spawn sites; before it,
+  every kind drew from the same `carSpeed ± spread` band and only length
+  differed. `KIND_ACCEL`/`KIND_BRAKE` scale the dynamics the same way.
+- ACCESS IS ONE MATRIX: `laneUsableBy` (tiles/lanes.ts) — car: all-lanes only;
+  bus: + bus lanes; bike: + bus AND cycle lanes (`LaneKind "cycle"`). Every
+  "which lanes may X use" question routes through it — the junction-derivation
+  filters in editOps.ts ask `laneUsableBy(l, "car")` now, NOT `kind !== "bus"`
+  (a cycle lane must not count as car capacity). `laneExits` gives `busTo`
+  movements to `cls !== "car"` (a bus gate admits cyclists).
+- A bike QUEUES CARS on a 1-lane road ON PURPOSE (no same-lane squeezing —
+  width is one global CLIP_LANES) — the incentive to paint a cycle lane, which
+  is the remedy: bikes spawn onto / drift to it (`cycleLaneIndices`, the
+  bus-lane twin) and cars flow. Multi-lane overtaking of bikes needed ZERO new
+  code (the trigger is pure speed-differential); bikes themselves NEVER
+  overtake (the bus rule) and spawn KERB-MOST, not rotating — a bike entering
+  on the inner lane has to be walked back by keep-right, so don't.
+- DETERMINISM: "bike" carries no default mix weight, so `pickKind`'s draw
+  sequence is unchanged on every pre-bike seeded board (pinned in
+  roadBikes.spec.ts). Bikes appear only where `traffic.mix` opts in.
+- `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
+  SIZE gate would pass a bike into any car bay — the class gate is the only
+  fence. Racks are phase C; until then a bike on a parking trip could only fail.
+- A bike NEVER rides an inner lane: `preferredLane` short-circuits for bikes to
+  the kerb-most cycle lane (else kerb-most usable lane) — no exit-lane settle,
+  no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
+  discipline (outermost lane permitting the move; only a dedicated inner-lane
+  turn pocket forces it in). Pinned by `/test/bikeleftturn` + roadBikes.spec.
+- Editor lane-count tools ➕/➖ (`addStreetLane`/`removeStreetLane` + run
+  variants via the shared `mapStreetRun` walker): step a street's car lanes
+  along a run without re-dragging the road — SYMMETRICALLY, both directions
+  together (1L ↔ 2L ↔ 3L, identical lane sets to the road tool's presets;
+  pinned by test). Symmetry is LOAD-BEARING: the yellow centreline paints at
+  the ribbon middle and dividers at whole-lane offsets, which only matches a
+  street whose directions carry EQUAL lane counts — an asymmetric 3+2 street
+  puts the centre marking through the middle of a lane (the sim would cope;
+  the paint cannot). ➖ is therefore ALL-OR-NOTHING per tile (an approach at
+  its last general lane blocks the tile) and never takes bus/cycle lanes; ➕
+  appends on the CENTRE side so kerb bus/cycle lanes stay put; re-ranking
+  keeps median bus lanes. One-way streets step their single direction.
+- Editor has FOUR lane tools sharing one set of lane hit paths: 🚌 toggles a
+  lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
+  green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —
+  `addCycleLane` inserts a NEW kerb lane (indices shift +1, the street widens)
+  so no car capacity is lost on any width; `removeCycleLane` re-indexes back.
+  The 🚲 click names only the direction (`toggleCycleLane`/`toggleCycleLaneRun`
+  — any lane of the approach toggles the same thing; the run's SEED tile
+  decides add vs remove). A cycle-ONLY approach (bike path) reverts to normal
+  instead of losing its last lane; junctions are excluded (streets only).
+- Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
+  head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
+  A cycle lane paints at HALF the lane width, KERB-ALIGNED (real-world
+  proportion), in three agreeing places: the green tint (Tile.vue
+  `restrictedLaneBands`, half=0.25·W shifted 0.25·W kerbward), a SOLID white
+  edge line replacing the full-slot dashed divider (`roadLaneMarkingPaths`
+  cycleA/cycleB — suppress divider `lanes-1`, emit `solid` inner at
+  `(lanes-0.5)·W`), and the bike's ride line (`laneGeometry.cycleStripShiftPx`,
+  +0.25·W kerbward scaled by lane-pos proximity so merges glide). The lane's
+  reserved SLOT is still a full lane in the sim/offset model — only paint and
+  ride line are half-width; a true half-width slot would rework the whole
+  band/seam/taper pipeline. Debug arrows `lg-cycle` green, shifted onto the strip.
+- `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
+  `/test/bikeovertake` (2-lane passing), `/test/bikeleftturn` (kerb rule at a
+  forced left); sim pins in `roadBikes.spec.ts`.
+
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
   and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled

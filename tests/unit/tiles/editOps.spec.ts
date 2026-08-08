@@ -16,10 +16,16 @@ import {
   addRoad,
   removeRoad,
   cycleDefaultArm,
-  toggleLaneKind,
+  toggleBusLane,
+  toggleCycleLane,
   setLaneKind,
   streetRunLanes,
-  setLaneKindRun,
+  setBusLaneRun,
+  toggleCycleLaneRun,
+  addStreetLane,
+  removeStreetLane,
+  addStreetLaneRun,
+  removeStreetLaneRun,
   syncJunctionBusGates,
   syncJunctionBusGatesAround,
 } from "@/tiles/editOps";
@@ -260,39 +266,197 @@ describe("road ops", () => {
   });
 });
 
-describe("toggleLaneKind", () => {
+describe("toggleBusLane (the 🚌 tool)", () => {
   const laneAt = (cell: TileCell, from: Position, index: number) =>
     cell.road!.find(l => l.from === from && l.index === index)!;
 
-  it("marks a normal lane as a bus lane and back, identified by from+index", () => {
+  it("toggles a lane bus ↔ normal in place, identified by from+index", () => {
     // A 2-lane one-way road L->R (index 0 kerb, index 1 inboard).
     let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
-    c = toggleLaneKind(c, Left, 0); // mark the kerb lane as bus
+    c = toggleBusLane(c, Left, 0); // normal → bus
     expect(laneAt(c, Left, 0).kind).toBe("bus");
     expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the other lane is untouched
-    c = toggleLaneKind(c, Left, 0); // toggle back to normal
+    c = toggleBusLane(c, Left, 0); // bus → normal
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2); // never structural
+  });
+
+  it("leaves a cycle lane alone — green belongs to the bike tool", () => {
+    let c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    c = setLaneKind(c, Left, 0, "cycle");
+    expect(toggleBusLane(c, Left, 0)).toBe(c);
   });
 
   it("keeps the lane's movements and index when flipping kind", () => {
     let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
-    c = toggleLaneKind(c, Left, 1);
+    c = toggleBusLane(c, Left, 1);
     const lane = laneAt(c, Left, 1);
     expect(lane).toMatchObject({ from: Left, to: [Right], index: 1, kind: "bus" });
   });
 
   it("is a no-op (same cell) when no lane matches", () => {
     const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
-    expect(toggleLaneKind(c, Left, 5)).toBe(c); // no lane at index 5
-    expect(toggleLaneKind(emptyCell(), Left, 0)).toBeDefined(); // no road at all
+    expect(toggleBusLane(c, Left, 5)).toBe(c); // no lane at index 5
+    expect(toggleBusLane(emptyCell(), Left, 0)).toBeDefined(); // no road at all
   });
 
   it("does not mutate the input cell", () => {
     const c = addRoad(emptyCell(), Left, Right, 1, 0, true);
     const before = c.road![0].kind;
-    toggleLaneKind(c, Left, 0);
+    toggleBusLane(c, Left, 0);
     expect(c.road![0].kind).toBe(before);
+  });
+});
+
+describe("addStreetLane / removeStreetLane (the ➕/➖ tools)", () => {
+  const laneAt = (cell: TileCell, from: Position, index: number) =>
+    cell.road!.find(l => l.from === from && l.index === index)!;
+
+  it("adds a car lane EACH WAY — 1L becomes 2L, exactly like the road presets", () => {
+    // Symmetry is load-bearing: the centreline paints at the ribbon middle,
+    // which is only the direction divider when both ways carry equal lanes.
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = addStreetLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
+    expect(c.road!.filter(l => l.from === Right)).toHaveLength(2);
+    expect(laneAt(c, Left, 1)).toMatchObject({ from: Left, to: [Right], index: 1 });
+    expect(laneAt(c, Right, 1)).toMatchObject({ from: Right, to: [Left], index: 1 });
+    expect(laneAt(c, Left, 1).kind).toBeUndefined();
+  });
+
+  it("➕ on a drawn 1L street yields exactly the road tool's 2L lane set", () => {
+    const grown = addStreetLane({ connections: [], road: nWayLanes(Left, Right, 1) }, Left);
+    const drawn = nWayLanes(Left, Right, 2);
+    const key = (l: { from: Position; index: number; to: Position[]; kind?: string }) =>
+      `${l.from}:${l.index}:${[...l.to].sort().join(",")}:${l.kind ?? ""}`;
+    expect(grown.road!.map(key).sort()).toEqual(drawn.map(key).sort());
+  });
+
+  it("a one-way street steps its single direction", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = addStreetLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(3);
+    c = removeStreetLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
+  });
+
+  it("adding keeps a kerb-side bus or cycle lane on the kerb", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = toggleBusLane(c, Left, 0); // bus on the kerb slot
+    c = addStreetLane(c, Left);
+    expect(laneAt(c, Left, 0).kind).toBe("bus"); // still kerb-most
+    expect(laneAt(c, Left, 2).kind).toBeUndefined(); // the new inner car lane
+  });
+
+  it("removes the innermost car lane, never a bus or cycle lane", () => {
+    let c = addRoad(emptyCell(), Left, Right, 3, 0, true);
+    c = toggleBusLane(c, Left, 0);
+    c = removeStreetLane(c, Left);
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(2);
+    expect(laneAt(c, Left, 0).kind).toBe("bus");
+    expect(laneAt(c, Left, 1).kind).toBeUndefined();
+  });
+
+  it("never removes a last car lane — a blocked approach blocks the whole tile", () => {
+    const c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    expect(removeStreetLane(c, Left)).toBe(c);
+    // A 2-lane two-way street whose eastbound kerb lane became a bus lane:
+    // eastbound is at its last car lane, so the WHOLE tile is a no-op —
+    // removing westbound alone would make the street asymmetric.
+    let b: TileCell = { connections: [], road: nWayLanes(Left, Right, 2) };
+    b = toggleBusLane(b, Left, 0);
+    expect(removeStreetLane(b, Left)).toBe(b);
+  });
+
+  it("re-ranks around a median (inner) bus lane on removal", () => {
+    // General lanes at 0 and 1, a median bus lane at 2 (busmedian-style).
+    const c: TileCell = {
+      connections: [],
+      road: [
+        { from: Left, to: [Right], index: 0 },
+        { from: Left, to: [Right], index: 1 },
+        { from: Left, to: [Right], index: 2, kind: "bus" },
+      ],
+    };
+    const out = removeStreetLane(c, Left);
+    const lanes = out.road!.filter(l => l.from === Left).sort((a, b) => a.index - b.index);
+    expect(lanes).toHaveLength(2);
+    expect(lanes[0].kind).toBeUndefined();
+    expect(lanes[1].kind).toBe("bus"); // the median bus lane closed the gap to index 1
+    expect(lanes[1].index).toBe(1);
+  });
+
+  it("run variants change the whole street in one click", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const widened = addStreetLaneRun(lvl, "1,0", Left, 0);
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      expect(widened[id].road!.filter(l => l.from === Left)).toHaveLength(2);
+    }
+    const narrowed = removeStreetLaneRun({ ...lvl, ...widened }, "1,0", Left, 0);
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      expect(narrowed[id].road!.filter(l => l.from === Left)).toHaveLength(1);
+    }
+  });
+});
+
+describe("toggleCycleLane (the 🚲 tool)", () => {
+  const laneAt = (cell: TileCell, from: Position, index: number) =>
+    cell.road!.find(l => l.from === from && l.index === index)!;
+
+  it("adds a NEW kerb-side green lane — the street widens, car lanes stay", () => {
+    // The headline case: a 1-lane street gains a bike lane WITHOUT losing its
+    // only car lane.
+    let c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    c = toggleCycleLane(c, Left);
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(2);
+    expect(laneAt(c, Left, 0).kind).toBe("cycle");
+    expect(laneAt(c, Left, 1).kind).toBeUndefined();
+    // The new green lane copies the street's movement.
+    expect(laneAt(c, Left, 0).to).toEqual([Right]);
+  });
+
+  it("widens a multi-lane street the same way — every car/bus lane kept", () => {
+    let c = addRoad(emptyCell(), Left, Right, 3, 0, true);
+    c = toggleBusLane(c, Left, 0); // kerb lane is a bus lane
+    c = toggleCycleLane(c, Left);
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(4); // green + bus + 2 car
+    expect(laneAt(c, Left, 0).kind).toBe("cycle");
+    expect(laneAt(c, Left, 1).kind).toBe("bus"); // shifted inboard, still a bus lane
+    expect(laneAt(c, Left, 2).kind).toBeUndefined();
+    expect(laneAt(c, Left, 3).kind).toBeUndefined();
+  });
+
+  it("toggles back off from ANY lane of the direction — no dead spots", () => {
+    let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
+    c = toggleCycleLane(c, Left); // add: 3 lanes
+    c = toggleCycleLane(c, Left); // remove again (direction-level toggle)
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(2);
+    expect(lanes.every(l => l.kind == null)).toBe(true);
+  });
+
+  it("only touches the clicked direction of a two-way street", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleCycleLane(c, Left);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
+    expect(c.road!.filter(l => l.from === Right)).toHaveLength(1); // untouched
+  });
+
+  it("a cycle-only direction (bike path) reverts to normal instead of vanishing", () => {
+    let c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    c = setLaneKind(c, Left, 0, "cycle");
+    c = toggleCycleLane(c, Left);
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0].kind).toBeUndefined();
   });
 });
 
@@ -428,19 +592,17 @@ describe("setLaneKind / setLaneKindRun", () => {
     expect(setLaneKind(c, Left, 9, "bus")).toBe(c);
   });
 
-  it("paints a mixed-state run to one uniform kind in a single pass", () => {
+  it("clicking a bus lane paints the run back to normal (two-state)", () => {
     // 3-tile straight; the middle tile's eastbound lane is already a bus lane, the
     // ends are normal — a half-painted street. Clicking the bus tile makes the
-    // CLICKED lane decide the target: it is bus, so the whole run becomes NORMAL.
+    // CLICKED lane decide the target: it is bus, so the whole run goes NORMAL.
     const lvl: Level = {
       "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
     };
-    // Make the middle eastbound lane a bus lane.
     lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "bus");
-    const changed = setLaneKindRun(lvl, "1,0", Left, 0);
-    // Every tile's eastbound lane is now normal (clicked lane was bus → target normal).
+    const changed = setBusLaneRun(lvl, "1,0", Left, 0);
     for (const id of ["0,0", "1,0", "2,0"]) {
       const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
       expect(lane.kind).toBeUndefined();
@@ -452,13 +614,69 @@ describe("setLaneKind / setLaneKindRun", () => {
       "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
     };
-    const changed = setLaneKindRun(lvl, "0,0", Left, 0);
+    const changed = setBusLaneRun(lvl, "0,0", Left, 0);
     for (const id of ["0,0", "1,0"]) {
       const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
       expect(lane.kind).toBe("bus");
     }
     // Only the eastbound lane (index 0 from Left) changed; the westbound lane stays.
     expect(changed["0,0"].road!.find(l => l.from === Right)!.kind).toBeUndefined();
+  });
+
+  it("the bus tool never touches a green lane, even via a run", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    lvl["0,0"] = setLaneKind(lvl["0,0"], Left, 0, "cycle");
+    lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "cycle");
+    expect(setBusLaneRun(lvl, "0,0", Left, 0)).toEqual({});
+  });
+});
+
+describe("toggleCycleLaneRun (the 🚲 tool, whole street)", () => {
+  it("adds a green kerb lane along the run — every tile widens, car lanes kept", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const changed = toggleCycleLaneRun(lvl, "1,0", Left, 0);
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      const east = changed[id].road!.filter(l => l.from === Left);
+      expect(east).toHaveLength(2); // green lane + the (kept) street lane
+      expect(east.find(l => l.index === 0)!.kind).toBe("cycle");
+      expect(east.find(l => l.index === 1)!.kind).toBeUndefined();
+      expect(changed[id].road!.filter(l => l.from === Right)).toHaveLength(1); // other way untouched
+    }
+  });
+
+  it("clicking a street that HAS the green lane removes it along the run", () => {
+    const widened = (): Level[string] =>
+      toggleCycleLane({ connections: [], road: nWayLanes(Left, Right, 1) }, Left);
+    const lvl: Level = { "0,0": widened(), "1,0": widened() };
+    // Click the CAR lane (index 1) — the direction, not the green lane, decides.
+    const changed = toggleCycleLaneRun(lvl, "0,0", Left, 1);
+    for (const id of ["0,0", "1,0"]) {
+      const east = changed[id].road!.filter(l => l.from === Left);
+      expect(east).toHaveLength(1); // narrowed back to the single car lane
+      expect(east[0].kind).toBeUndefined();
+      expect(east[0].index).toBe(0);
+    }
+  });
+
+  it("a half-equipped street becomes uniform: the seed tile decides the verb", () => {
+    // Tile 0 already has the green lane, tile 1 does not. Clicking tile 1 (no
+    // green) ADDS everywhere — tile 0 keeps its one lane (add is idempotent).
+    const lvl: Level = {
+      "0,0": toggleCycleLane({ connections: [], road: nWayLanes(Left, Right, 1) }, Left),
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const changed = toggleCycleLaneRun(lvl, "1,0", Left, 0);
+    for (const id of Object.keys(changed)) {
+      const east = changed[id].road!.filter(l => l.from === Left);
+      expect(east.filter(l => l.kind === "cycle")).toHaveLength(1);
+    }
   });
 });
 

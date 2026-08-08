@@ -2191,6 +2191,26 @@ export default toNative(PlayView);
     rgba(30, 44, 60, 0.55) 10px
   );
 }
+// A bicycle: a sliver of a vehicle — a slim capsule less than half a car long
+// and barely wider than its rider. The glass span is repurposed as the RIDER:
+// a dark head-dot amidships over the livery (the jersey), which is what keeps
+// a bike readable and individually trackable at 8px. Livery-first, one dot,
+// nothing else (the rolling-stock lesson at small sizes).
+.road-car--bike {
+  height: 8px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.road-car--bike .road-car-glass {
+  top: 50%;
+  bottom: auto;
+  left: 42%;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: rgba(28, 24, 20, 0.85);
+}
 // The fare pin lives in `components/FarePin.vue` — markup and styles both, so the
 // two views that draw it cannot drift apart.
 // ---- the build tool (Tycoon phase 2) ----

@@ -3,20 +3,27 @@ import { Position, type Coordinates } from "@/types";
 import { laneOffsetConstPx, seamPositioningBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 
-// A lane's vehicle class, for restrictions. v1 stores the field but does not
-// enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
-export type LaneKind = "all" | "bus"; // extensible
+// A lane's vehicle class, for restrictions. "bus" is a bus lane (bikes admitted,
+// the usual street rule); "cycle" is a cycle lane (bikes only).
+export type LaneKind = "all" | "bus" | "cycle"; // extensible
 
-// A vehicle's lane-access class. A general road vehicle ("car": car/truck/semi)
-// may not use bus-only lanes; a "bus" may use ANY lane (car lanes AND bus lanes).
-// This is the single rule for "which lanes may this vehicle drive in", consumed by
-// every lane query below so access logic lives in one place.
-export type VehicleClass = "car" | "bus";
+// A vehicle's lane-access class. "car" is the general motor vehicle
+// (car/truck/semi), "bus" a bus, "bike" a bicycle. Access is the matrix in
+// `laneUsableBy` — the single rule for "which lanes may this vehicle drive in",
+// consumed by every lane query below so access logic lives in one place.
+export type VehicleClass = "car" | "bus" | "bike";
 
-// May a vehicle of class `cls` drive in `lane`? Buses may use any lane; everything
-// else is barred from bus-only lanes.
+// May a vehicle of class `cls` drive in `lane`? The access matrix:
+//
+//   lane kind →   all   bus   cycle
+//   car           ✓     ✗     ✗
+//   bus           ✓     ✓     ✗
+//   bike          ✓     ✓     ✓     (bikes ride bus lanes; nobody else rides theirs)
 export function laneUsableBy(lane: Lane, cls: VehicleClass): boolean {
-  return cls === "bus" || lane.kind !== "bus";
+  const kind = lane.kind ?? "all";
+  if (kind === "all") return true;
+  if (kind === "bus") return cls === "bus" || cls === "bike";
+  return cls === "bike"; // "cycle"
 }
 
 // One physical lane through a tile, directed. A car enters via `from` and may
@@ -33,9 +40,11 @@ export interface Lane {
 }
 
 // The exits a vehicle of class `cls` may take from `lane`: everyone gets `to`;
-// buses additionally get `busTo`. (Whole-lane access is laneUsableBy's job.)
+// buses — and bikes, which are admitted wherever buses are (a bus gate lets
+// cyclists through) — additionally get `busTo`. (Whole-lane access is
+// laneUsableBy's job.)
 export function laneExits(lane: Lane, cls: VehicleClass): Port[] {
-  return cls === "bus" && lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
+  return cls !== "car" && lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
 }
 
 // Every exit the lane physically connects to, regardless of vehicle class. Use
@@ -142,6 +151,16 @@ export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
 export function busLaneIndices(road: Lane[] | undefined, from: Port): number[] {
   return lanesFrom(road, from)
     .filter(l => l.kind === "bus")
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
+// The cycle-lane indices of an approach (kind === "cycle"), ascending by index.
+// A bike prefers these — the drift twin of `busLaneIndices`; empty when the
+// approach has no cycle lane.
+export function cycleLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind === "cycle")
     .map(l => l.index)
     .sort((a, b) => a - b);
 }
