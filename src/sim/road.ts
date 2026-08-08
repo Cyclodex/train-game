@@ -427,6 +427,12 @@ export interface Car {
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
+  // IS THE SPACE IT IS AIMING FOR JUST THE KERB? True only for a car that looked
+  // for real parking, found none, and settled for the roadside
+  // (`ParkingRow.informal`). Carried on the car because the claim happens tiles
+  // and seconds after the plan that chose it, and without it the driver arrives
+  // at the very kerb it was sent to and cannot see the space.
+  parkInformal: boolean;
   // HOW FAR from `tripGoal` this car will look for a space when it NEXT plans a
   // route, or null for a car that is simply driving to an address.
   //
@@ -3078,6 +3084,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkInformal: false,
       parkWish: null,
       parkPermit: null,
       stall: null,
@@ -3207,8 +3214,25 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // outside a works are usually ON the works' own street, and settling the
       // trip there would delete the car half a tile before it parked.
       const parkPlan = wantsPark
-        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles, req.permit)
+        ? phases.planParkingNear(from, startPort, kind, cls, to, searchTiles, req.permit)
         : null;
+      // NOWHERE TO PARK MEANS YOU DO NOT SET OFF. Not a real bay, not a drive,
+      // not even a stretch of kerb within reach — so there is no journey to
+      // make by car, and refusing here is the honest end of the ladder.
+      //
+      // The alternative was what this replaces: dispatch anyway, drive to the
+      // address, and be DELETED on arrival — a car popping out of existence in
+      // the middle of the street, which is the one thing the board must never
+      // show. Measured on `/test/homeparking` with the works saturated, that was
+      // 12 of 30 dispatched cars.
+      //
+      // Refusing is not stranding anybody. `requestTrip` returning null is the
+      // long-standing "no car could be dispatched" path (no route, blocked
+      // street, fleet full): the citizen layer falls back to driving on a timer,
+      // so the journey still happens and still takes time — there is simply no
+      // vehicle on the board for it. Which is exactly right, because in a town
+      // with nowhere to park, that trip is the one you do not make by car.
+      if (wantsPark && !parkPlan) return null;
       let turns: RouteTurn[];
       let goalPort: Port | null;
       if (parkPlan) {
@@ -3256,6 +3280,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
       car.tripGoal = { tileId: toTileId, entryPort: goalPort };
       car.parkTarget = parkPlan?.facilityId ?? null;
+      car.parkInformal = parkPlan?.informal ?? false;
       car.parkPermit = req.permit ?? null;
       cars.push(car);
       trips.set(id, { status: "driving", wantedSpace: wantsPark, releasedFrom: null });
@@ -3463,6 +3488,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkInformal: false,
       parkWish: null,
       parkPermit: null,
       stall: null,
@@ -3579,6 +3605,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null, // ambient traffic: it drives off the map, not to an address
       parkTarget,
+      parkInformal: false,
       parkWish: null,
       // Ambient traffic never holds a permit — nobody merely passing through has
       // a drive on this street — so every private row stays invisible to it.

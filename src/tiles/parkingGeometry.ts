@@ -123,6 +123,12 @@ export function parkingApronPath(
   size: number,
   kerbPx: number,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal) return "";
   if (row.kind === "garage") return "";
   if (stallOnLane(row.kind)) return ""; // no bay, so no apron to pave
   const f = rowFrame(row, size);
@@ -158,6 +164,12 @@ export function stallOutlinePath(
   size: number,
   kerbPx: number,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal) return "";
   if (row.kind === "garage") return "";
   // A HALT has no bay to outline — it is a length of kerb, and its depth is zero
   // by definition. Drawing one anyway produces a DEGENERATE box: zero long and a
@@ -181,6 +193,12 @@ export function parkingKerbPath(
   size: number,
   kerbPx: number,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal) return "";
   if (row.kind === "garage") return "";
   // Same for a HALT: its kerb IS the road's own, and `busStopGeometry` paints the
   // yellow marking on it. A second white line here would just double it.

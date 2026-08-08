@@ -338,6 +338,27 @@ export interface ParkingRow {
   // Who may take one: `sim/parking.ts` (`bayClassOf` → "resident", and the
   // `permit` argument that carries the driver's address).
   resident?: string;
+  // THE EDGE OF THE ROAD YOU CAN LEAVE A CAR ON. Not a car park, not a bay —
+  // just the stretch of kerb where, if there is genuinely nowhere else, a driver
+  // stops anyway. It exists because the alternative was worse: a commuter who
+  // found nothing free used to drive to the address and be DELETED there, so
+  // cars popped out of existence in the middle of the street. Measured on
+  // `/test/homeparking` with the works saturated: 12 of 30 dispatched cars
+  // vanished that way.
+  //
+  // It is deliberately INVISIBLE to everyone who has an alternative:
+  //  · nothing plans for it (ambient traffic and the first-choice search skip
+  //    it entirely — see `stallFits`'s `informal` argument),
+  //  · it carries no paint at all — no apron, no bay lines, no kerb line, no P
+  //    sign. Painting it would make every street on the board look wider, and
+  //    an unmarked stretch of kerb is exactly what this is meant to be. The only
+  //    thing you see is the car standing there.
+  //
+  // It is still a real space: it has a position, it is claimed and released like
+  // any other, and the WALK from it is measured from where the car actually
+  // stopped. That is the whole point — the cost of nowhere to park stops being a
+  // flat penalty and becomes a walk the player can see and shorten.
+  informal?: boolean;
 }
 
 // The parking layer of one cell.

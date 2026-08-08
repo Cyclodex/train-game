@@ -236,7 +236,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     first one, which the trip model has no way to express yet.
     Files: `src/sim/citizens.ts`.
     Tracked: [#94](https://github.com/Cyclodex/train-game/issues/94).
-16. **A garage under the block, not just a drive in front of the house.**
+16. **Enforcement: what stops a driver leaving it anywhere?** Since 2026-08-05 a
+    driver with nowhere to park takes the bare kerb (`ParkingRow.informal`) and
+    walks, instead of the car being deleted at the address. Nothing yet says that
+    some of that kerb is somewhere they may NOT stop — no yellow lines, no fine,
+    no tow. That is the natural pair to the parking tariff (item 12): both turn a
+    place to stop into a decision, and both want the same thing, a per-row rule
+    and a cost the player sets.
+    Files: `src/tiles/kerbOverflow.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
+17. **A garage under the block, not just a drive in front of the house.**
     `StallKind: "garage"` already exists — the car glides into a ramp mouth and
     is not drawn, and `count` is simply the building's capacity — and it is the
     obvious flavour for a block of flats. It would also hand the DENSEST plots

@@ -2636,6 +2636,49 @@ of the above; read that section first.
   facility came back zero and the chip read "P VOLL" — a car park, standing empty,
   announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
   with their public number.
+## THE KERB (nowhere to park, 2026-08-05)
+- **A REQUESTED CAR IS DELETED WHEN IT REACHES ITS ADDRESS**
+  (`settleRequestedTrips`, half a tile in). That is the generic "arrived"
+  retirement, NOT a parking rule — but a commuter with nowhere to park used to be
+  dispatched as a plain address trip and retired there, so cars POPPED OUT OF
+  EXISTENCE mid-street. Measured on a saturated `/test/homeparking` (commuters at
+  every house → the works): 8/15/30 cars dispatched → **1/2/12 vanished**.
+  · And `parkingFrame().givenUp` was ZERO for them: they never reached the
+    give-up path at all. Nothing was free when they were DISPATCHED, so
+    `planParkingTripNear` returned null and they were sent to the address. Fixing
+    only `giveUpAndReplan` would have fixed nothing.
+- **`ParkingRow.informal` IS THE BARE KERB** (`tiles/kerbOverflow.ts`, derived
+  LAST, after the forecourts and the drives take their banks). Two `parallel`
+  spaces on whatever kerb is left. Same numbers now read 0/0/1 vanished.
+  · IT PAINTS NOTHING — no apron, no bay lines, no kerb line, no P sign (all four
+    return early on `row.informal`). This is not polish: the pass touches nearly
+    every street, so a row that painted itself would make every road on every
+    board look as though it had been widened.
+  · INVISIBLE UNLESS ASKED FOR: `stallFits(..., informal)` defaults FALSE, so
+    ambient traffic, the first-choice search and `capacity` (hence the P sign) all
+    look straight past it. `planParkingNear` = real parking first, kerb only if
+    that comes back empty — offering both at once sends drivers to the kerb
+    outside the gate instead of the half-empty car park behind it.
+  · NOT ON A ROAD OPENING THAT STOPS INSIDE THE MAP. `openingInsideLot`
+    (`sim/road.ts`) treats an opening on any parking tile as being inside a car
+    park and refuses to spawn/despawn there — right for an aisle, fatal here,
+    because a stub that happened to be a spawn point would silently go quiet.
+    Off-grid openings are exempt in that function already, so border streets keep
+    both their kerb and their traffic.
+- **NOWHERE TO PARK MEANS YOU DO NOT SET OFF.** `requestTrip` returns null when
+  `park` was asked for and nothing — bay, drive or kerb — is in reach. That is the
+  long-standing "no car could be dispatched" path, so the citizen still travels,
+  on a timer, with no vehicle on the board. Refusing is not stranding; dispatching
+  a car in order to delete it is a lie.
+- `giveUpAndReplan` used to retry through `planParkingTrip` — the AMBIENT planner,
+  any car park on the map weighted by size — even for a commuter. So somebody who
+  could not park at the works set off for a lot across town. A car with a
+  `tripGoal` now retries NEAR THAT GOAL with its own permit, then once more at
+  `PARK_LAST_RESORT_TILES`.
+- The cost of a shortfall is now a WALK, not a penalty constant:
+  `walkFromBaySec` measures from the stall the car really took, and on the rush
+  above the spread was 1→4 tiles from the gate.
+
 - `citizenStats.carsAtHome` vs `carsParked` is the DAY/NIGHT observable; one
   number cannot show the cycle because it reads the same at both ends of the day.
 - `TestScenario.mode` (a mode OBJECT, beating `modeId`) exists for boards whose
