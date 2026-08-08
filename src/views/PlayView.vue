@@ -113,6 +113,18 @@
         >
           + Train
         </button>
+        <!-- A bus is planned exactly like a train (#90). It needs no depot:
+             a bus lives on its line and appears at its first stop, so the
+             only thing that gates the order is having a stop to appear at. -->
+        <button
+          v-if="hasBusStops"
+          class="service-buy"
+          :disabled="!canBuyBus"
+          :title="buyBusTitle"
+          @click="buyBus"
+        >
+          + Bus
+        </button>
       </div>
       <!-- THE LINES. A line is a plan and stands on its own: you draw it
            before you own anything to run it, and it survives the last train
@@ -133,16 +145,21 @@
           </template>
           <span v-else class="service-idle">no stops yet</span>
         </span>
+        <!-- What RUNS it. A line does not care what serves it, so this counts
+             trains and buses together and "nothing" means neither. -->
         <span
           class="service-runners"
-          :class="{ 'service-runners--none': l.trains.length === 0 }"
+          :class="{ 'service-runners--none': l.trains.length + l.buses.length === 0 }"
           :title="
-            l.trains.length
-              ? `${l.trains.length} train(s) running this line`
+            l.trains.length + l.buses.length
+              ? `${l.trains.length} train(s), ${l.buses.length} bus(es) running this line`
               : 'Nothing is running this line — people will wait for it'
           "
-          >{{ l.trains.length }}🚆</span
         >
+          <template v-if="l.trains.length">{{ l.trains.length }}🚆</template>
+          <template v-if="l.buses.length">{{ l.buses.length }}🚌</template>
+          <template v-if="l.trains.length + l.buses.length === 0">0</template>
+        </span>
         <button
           class="service-edit"
           :class="{ 'service-edit--on': editingLineId === l.id }"
@@ -210,6 +227,37 @@
           @click="retireTrain(t.id, $event)"
         >
           {{ t.retiring ? "↩" : "✕" }}
+        </button>
+      </div>
+      <!-- THE BUSES. Same row shape as a train: what it is, what it carries,
+           which line it runs. It has no depot to be withdrawn to, so there is
+           one removal verb rather than the train's two. -->
+      <div v-for="b in game.busServices" :key="b.id" class="service-line">
+        <span class="service-livery service-livery--bus">🚌</span>
+        <span class="service-id">{{ b.id }}</span>
+        <span class="service-stops">
+          <span v-if="b.lineId" class="service-stop"
+            >{{ busLineName(b) }} — {{ b.passengers }} aboard</span
+          >
+          <span v-else class="service-idle">no line</span>
+        </span>
+        <select
+          class="service-assign"
+          :value="b.lineId ?? ''"
+          title="Put this bus onto a line"
+          @change="assignBus(b.id, $event)"
+        >
+          <option value="">— no line —</option>
+          <option v-for="l in game.lines" :key="l.id" :value="l.id">
+            {{ l.name }}
+          </option>
+        </select>
+        <button
+          class="service-retire"
+          title="Take this bus off the road"
+          @click="game.removeBus(b.id)"
+        >
+          ✕
         </button>
       </div>
       <p v-if="editingLineId" class="service-hint">
@@ -1416,6 +1464,32 @@ class PlayView extends Vue {
     return this.canBuyTrain
       ? "Order another train, in service on the line you are editing"
       : "This board has no depot to build a train in";
+  }
+  // A bus needs no depot: it lives on its line and appears at its first stop.
+  // What it does need is somewhere to appear — a board with no bus stops has
+  // no bus service to plan, so the button is not offered at all.
+  get hasBusStops(): boolean {
+    return this.game.busStopTiles.length > 0;
+  }
+  get canBuyBus(): boolean {
+    return this.hasBusStops;
+  }
+  get buyBusTitle(): string {
+    return this.editingLineId
+      ? "Order a bus, in service on the line you are editing"
+      : "Order a bus — assign it to a line to put it to work";
+  }
+  buyBus(): void {
+    // Bought onto the line being drawn, when one is: that is almost always why
+    // you are buying. Otherwise it waits on the roster to be assigned.
+    this.game.buyBus(this.editingLineId ?? undefined);
+  }
+  busLineName(b: { lineId?: string }): string {
+    return this.game.lines.find(l => l.id === b.lineId)?.name ?? "";
+  }
+  assignBus(busId: string, ev: Event): void {
+    const lineId = (ev.target as HTMLSelectElement).value;
+    this.game.assignBus(busId, lineId === "" ? null : lineId);
   }
   buyTrain(): void {
     // A train bought while a line is open goes straight onto it — the common
@@ -2762,6 +2836,15 @@ export default toNative(PlayView);
 /* How many trains run a line. Zero is a legitimate state — the plan stands
    whether or not anything serves it — but it is the thing to fix, so it is
    coloured as a warning rather than left to look like any other number. */
+/* A bus has no livery colour of its own — it belongs to whichever line it is
+   assigned to, and that line already wears the colour. The glyph is enough to
+   tell the row apart from a train's. */
+.service-livery--bus {
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+}
 .service-runners {
   font-size: 11px;
   color: #b9c0c8;

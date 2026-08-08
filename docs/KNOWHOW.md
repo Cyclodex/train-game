@@ -742,6 +742,67 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   each rider to the station they named (`off = final`), because a stopper calls
   everywhere it passes and can promise that. Only a RETIRING train dumps.
 
+## A BUS IS PLANNED LIKE A TRAIN (#90, 2026-08-05)
+- Draw a LINE, buy a bus, assign it. The line registry, the queues and the
+  boarding exchange are the shared `sim/transit.ts` — only the MOVEMENT differs,
+  and that stays with each sim (metals and interlocking vs lanes and junctions).
+- The road sim gained a SERVICE vehicle: one that stays on the board when it
+  arrives instead of ceasing to be traffic, plus `retarget(carId, toTile)` to
+  send it on from where it stands. An ordinary `requestTrip` still removes the
+  vehicle on arrival — the citizen got home — but a bus that vanished at every
+  stop would be a different bus each leg.
+- A bus is dispatched to its FIRST stop and works it before pulling away. It
+  spawns there with its doors open; without the call, that stop is skipped once,
+  at the start.
+- A line is a CYCLE for a bus exactly as for a train (`% stops.length`): past
+  the last stop it wraps to the first, and it runs for ever. There is no end of
+  shift and no garage — a bus lives on its line.
+- `pruneLineIfUnused` counts trains AND buses. Withdrawing the last train must
+  not delete a line a bus is still working.
+- A LINE'S STOPS ARE THE PLAYER'S, and nothing stops them naming a tile nobody
+  can wait at. Destinations are therefore drawn only from real stops
+  (`nextDestination` filters on `isStop`) — the graph may carry the node, it is
+  just not somewhere to ask for.
+- A bus stop is `TileCell.parking` with a `busstop` row. TWO STOPS MUST NOT
+  SHARE A `facility` ID: the parking layer treats one id as one facility, so
+  they pool capacity and show a single sign — the first cut of `busrail` read
+  "H 2/2" once instead of a halt at each end.
+
+## THE WALK BETWEEN A KERB AND A PLATFORM (D5, 2026-08-05)
+- `walkLinksOf(level)` pairs every bus stop with the stations within
+  `WALK_RADIUS_TILES`. The transit layer feeds them to the graph as services
+  calling at both ends — nothing ever RUNS them, so they only decide what is
+  reachable and where to change.
+- A walk has to MOVE people, not merely connect them: when a rider changes at a
+  stop, `walkOnward` asks whether the next hop is a walk and re-queues them at
+  the FAR end. Left standing at the kerb they would wait for ever for a train
+  that does not call at a road.
+- Board geometry is therefore load-bearing. On `busrail` the interchange kerb is
+  two tiles under the platform (inside the radius, so the network joins) and
+  Altstadt is four from every platform (outside it, so the bus is the only way
+  in). Move either and the board stops demonstrating anything.
+
+## THE TRANSIT LAYER — ONE FOR BOTH SIMS (2026-08-05)
+- `sim/transit.ts` owns the LINE registry, the line-graph memo, the QUEUES, the
+  spawn demand and the boarding EXCHANGE. All of it used to be private to
+  `createSimulation`, which was fine while "vehicle that carries passengers"
+  meant a train. A bus is planned the same way (#90) and a bus-then-train
+  journey is ONE journey — two copies would be the shadow-queue mistake again.
+- `createSimulation` takes an optional `transit`; without one it makes its own,
+  so every unit test and every road-less board is unchanged. `game.ts` will make
+  one and hand it to both sims.
+- The layer never learns what a stop IS. `isStop` is injected, and each sim
+  contributes its unassigned vehicles through `setStoppers(source, fn)` — keyed
+  by source, so rail and road contribute independently and neither can clobber
+  the other.
+- A matched DEPOT arrival is NOT an exchange. "Everyone home" ends every ride
+  aboard and counts them all, whatever they asked for; routing it through
+  `exchange` read them as CHANGING at a depot and re-queued them somewhere no
+  service will ever call — 3 delivered became 0. It calls `transit.deliver(n)`.
+- `exchange` MUTATES the manifest array it is given (the caller owns it) and
+  returns the counts a dwell event reports. Boarding asks the NETWORK, never a
+  single line's stop list.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get

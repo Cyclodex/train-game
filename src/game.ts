@@ -1,7 +1,13 @@
 import { markRaw, reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
-import { stationDemandOf, parkAndRideTargets } from "@/tiles/catchment";
+import {
+  stationDemandOf,
+  busStopDemandOf,
+  busStopTiles,
+  parkAndRideTargets,
+  walkLinksOf,
+} from "@/tiles/catchment";
 import { stationNames } from "@/tiles/stationNames";
 import { planRailRoute } from "@/sim/railRouter";
 import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
@@ -15,6 +21,7 @@ import {
   TrainState,
   BlockReason,
 } from "@/sim/simulation";
+import { Rider, StationDemand, TransitLayer, createTransit } from "@/sim/transit";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
 import { buildCitizenWorld } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
@@ -108,7 +115,19 @@ export interface LineView {
   name: string;
   stops: string[];
   trains: string[];
+  // The buses running it. A line does not care what serves it (#90), so the
+  // panel counts both and "nothing runs this" means neither.
+  buses: string[];
   colour: string;
+}
+
+// A bus as the panel sees it.
+export interface BusView {
+  id: string;
+  lineId?: string;
+  passengers: number;
+  // Where it is standing, when it is on the board at all.
+  tileId?: string;
 }
 
 // Strong, well-separated hues that read against ballast and grass alike. Not
@@ -523,6 +542,18 @@ export interface Game {
   deleteLine(lineId: string): boolean;
   // Put a train onto an existing line, or take it off with null.
   assignTrain(trainId: string, lineId: string | null): boolean;
+  // BUSES (#90). Planned exactly like trains: draw a line, buy a bus, assign
+  // it. Bought INTO service — with a line it starts running at once, without
+  // one it waits. There is no garage: a bus lives on its line and appears at
+  // its first stop.
+  buyBus(lineId?: string): string;
+  assignBus(busId: string, lineId: string | null): boolean;
+  removeBus(busId: string): boolean;
+  // Every bus, mirrored for the panel.
+  busServices: BusView[];
+  // Every bus stop on the board. The panel offers a bus only where one could
+  // actually appear.
+  busStopTiles: string[];
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -1123,7 +1154,60 @@ export function createGame(
   // later by the spawner at its spawnAtSec.
   const isScheduled = (def: TrainDef) => (def.spawnAtSec ?? 0) > 0;
 
+  // Every place a passenger can WAIT: rail platforms and bus stops alike. Since
+  // #90 a bus is planned like a train, so a stop is a node of the same network —
+  // which is why this is one list and not two, and why the transit layer below
+  // is handed it rather than reading tiles itself.
+  const busStops = busStopTiles(level);
+  const transitStops = new Set<string>([
+    ...Object.keys(level).filter(id => level[id]?.role === "station"),
+    ...busStops,
+  ]);
+
+  // Who turns up where. DERIVED from the ground within walking reach
+  // (tiles/catchment.ts): a town nearby means faster arrivals and a fuller
+  // platform; a lonely halt sees a trickle. The sim only executes the schedule
+  // it is handed — it stays terrain-blind. Snapshotted at construction, so a
+  // stop built mid-run queues nobody until reset.
+  //
+  // Under the citizen layer the SPAWNER is off — the people waiting are actual
+  // citizens with homes, jobs and a stopwatch running, and a second synthetic
+  // source would double-count the crowd. But the entry is still supplied,
+  // because `max` is also what CAPS the queue: without one every stop falls
+  // back to the hard cap (16), which a morning peak in a town of forty exceeds
+  // — and a commuter who cannot even JOIN the queue stands there until they
+  // give up, which reads as a broken railway when the railway is fine. An
+  // infinite interval spawns nobody, so it is a cap and nothing else.
+  function demandFor(id: string): StationDemand {
+    if (citizenSetup) {
+      return {
+        intervalSec: Number.POSITIVE_INFINITY,
+        max: CITIZEN_PLATFORM_CAP,
+        initial: 0,
+      };
+    }
+    // A kerb serves the houses around it; a station gathers a district. Giving
+    // a stop a platform's numbers makes the bus the main line and the railway
+    // an afterthought, which is backwards for a board where it is the feeder.
+    return level[id]?.role === "station"
+      ? stationDemandOf(level, id)
+      : busStopDemandOf(level, id);
+  }
+
+  // Rebuilt with the sims, never before them: a Retry has to give back the same
+  // empty platforms and the same lines the board opened with, and a layer that
+  // survived the rebuild would hand the new sim the old crowd.
+  let transit!: TransitLayer;
+
   function buildSims() {
+    transit = createTransit({
+      demand: Object.fromEntries([...transitStops].map(id => [id, demandFor(id)])),
+      isStop: (tileId: string) => transitStops.has(tileId),
+      // The intermodal edge: a bus stop and the platform beside it are one
+      // interchange, joined by a short walk (D5). Without it a kerb and a
+      // platform are separate islands however close they are drawn.
+      walkLinks: walkLinksOf(level),
+    });
     sim = createSimulation({
       level,
       depotColors,
@@ -1150,24 +1234,11 @@ export function createGame(
       // until they give up, which reads as a broken railway when the railway is
       // fine. An infinite interval spawns nobody (`advanceDemand`'s loop never
       // runs), so this is a cap and nothing else.
-      stationDemand: citizenSetup
-        ? Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [
-                id,
-                {
-                  intervalSec: Number.POSITIVE_INFINITY,
-                  max: CITIZEN_PLATFORM_CAP,
-                  initial: 0,
-                },
-              ])
-          )
-        : Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [id, stationDemandOf(level, id)])
-          ),
+      // THE SHARED TRANSIT LAYER (sim/transit.ts). Made here, not inside the
+      // sim, because the ROAD sim needs the same one: a bus is planned like a
+      // train and a bus-then-train journey is ONE journey, so it must run
+      // against one set of queues and one line registry (#90).
+      transit,
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.
       waitForDispatch: mode.controls.dispatch,
@@ -1677,6 +1748,179 @@ export function createGame(
     }
     prevStalls = cur;
   }
+
+  // --- BUS SERVICES (#90) ------------------------------------------------
+  //
+  // A bus is planned exactly like a train: you draw a LINE, you buy a bus, you
+  // assign it. What differs is only how it gets from one stop to the next —
+  // rails and interlocking there, lanes and junctions here — so the movement is
+  // the road sim's (`requestTrip` / `retarget`, which plan a real route through
+  // real traffic) and the passengers are the shared transit layer's, the same
+  // one the trains use.
+  //
+  // This runs in `advance()`, the headless world step. Not the render frame:
+  // model logic in an animation callback is invisible to a hidden tab and to
+  // every test.
+  const BUS_SEATS = 12;
+  const BUS_DWELL_SEC = 4;
+
+  interface BusService {
+    id: string;
+    lineId?: string;
+    // Which stop of its line it is heading for.
+    stopIndex: number;
+    // The road sim's id for the vehicle, while one is on the board.
+    carId?: string;
+    // Seconds of dwell left at the stop it is standing at.
+    dwellLeft: number;
+    manifest: Rider[];
+  }
+  const buses: BusService[] = [];
+  let busSeq = 0;
+  // The panel's copy. The sim objects are markRaw-adjacent plain state, so a
+  // getter reading `buses` directly would never re-run — the same trap that
+  // froze the train panel's next-stop pip. Refreshed per world step.
+  const busServices = reactive([]) as BusView[];
+
+  function syncBuses(): void {
+    busServices.splice(0, busServices.length);
+    for (const b of buses) {
+      busServices.push({
+        id: b.id,
+        ...(b.lineId ? { lineId: b.lineId } : {}),
+        passengers: b.manifest.length,
+        ...(b.carId ? { tileId: roadSim.carTile(b.carId) } : {}),
+      });
+    }
+  }
+
+  function busStopsOf(bus: BusService): string[] {
+    return (bus.lineId ? transit.stopsOfLine(bus.lineId) : undefined) ?? [];
+  }
+
+  function advanceBuses(dt: number): void {
+    for (const bus of buses) {
+      const stops = busStopsOf(bus);
+      // An unassigned bus is not a service: it sits out of the way rather than
+      // wandering, because a bus with no line has nowhere to be.
+      if (stops.length < 2) {
+        if (bus.carId) {
+          roadSim.despawn(bus.carId);
+          bus.carId = undefined;
+        }
+        continue;
+      }
+      // Not on the board yet: it starts at the line's first stop and sets off
+      // for the second. `requestTrip` spawns it there, so no separate garage
+      // machinery is needed — the line IS where a bus lives.
+      if (!bus.carId || !roadSim.hasCar(bus.carId)) {
+        const from = stops[bus.stopIndex % stops.length];
+        const to = stops[(bus.stopIndex + 1) % stops.length];
+        const id = roadSim.requestTrip(from, to, "bus", { service: true });
+        if (!id) continue; // the street is busy; try again next tick
+        bus.carId = id;
+        // It is standing at the first stop with its doors open, so it works it
+        // before pulling away. Without this the origin stop is served only on
+        // the second lap — and on a two-stop line that is every other call.
+        const r = transit.exchange({
+          stopId: from,
+          lineId: bus.lineId,
+          capacity: BUS_SEATS,
+          manifest: bus.manifest,
+        });
+        busEvents.push({ stopId: from, ...r });
+        bus.stopIndex = (bus.stopIndex + 1) % stops.length;
+        continue;
+      }
+      if (roadSim.tripStatus(bus.carId) !== "arrived") continue;
+
+      // Standing at a stop. Dwell first — the doors take time and a crowded
+      // kerb takes longer, exactly as a platform does.
+      if (bus.dwellLeft <= 0) {
+        const at = roadSim.carTile(bus.carId);
+        if (!at) continue;
+        const r = transit.exchange({
+          stopId: at,
+          lineId: bus.lineId,
+          capacity: BUS_SEATS,
+          manifest: bus.manifest,
+        });
+        bus.dwellLeft = BUS_DWELL_SEC + r.boarded * 0.4;
+        busEvents.push({ stopId: at, ...r });
+        continue;
+      }
+      bus.dwellLeft -= dt;
+      if (bus.dwellLeft > 0) continue;
+
+      // Doors closed: on to the next stop. Calling anywhere on the line moves
+      // the cursor PAST that stop, the same rule a train follows.
+      const at = roadSim.carTile(bus.carId);
+      const here = at ? stops.indexOf(at) : -1;
+      if (here >= 0) bus.stopIndex = (here + 1) % stops.length;
+      const next = stops[bus.stopIndex];
+      roadSim.retarget(bus.carId, next);
+    }
+  }
+
+  // Order a bus. Like a train it is bought INTO service — with a line it
+  // starts running it at once, without one it waits to be assigned. There is no
+  // garage to queue in: a bus lives on its line, and appears at its first stop.
+  function buyBus(lineId?: string): string {
+    busSeq += 1;
+    const id = `bus${busSeq}`;
+    buses.push({ id, lineId, stopIndex: 0, dwellLeft: 0, manifest: [] });
+    syncLines();
+    syncBuses();
+    return id;
+  }
+
+  function assignBus(busId: string, lineId: string | null): boolean {
+    const bus = buses.find(b => b.id === busId);
+    if (!bus) return false;
+    if (lineId !== null && !transit.lines().some(l => l.id === lineId)) return false;
+    const had = bus.lineId;
+    bus.lineId = lineId ?? undefined;
+    bus.stopIndex = 0;
+    // It re-plans from wherever it is on its next tick; taking it off a line
+    // takes it off the road, because a bus with no line has nowhere to be.
+    if (bus.carId && !bus.lineId) {
+      roadSim.despawn(bus.carId);
+      bus.carId = undefined;
+    }
+    transit.touch();
+    if (had && had !== bus.lineId) pruneLineIfUnused(had);
+    syncLines();
+    syncBuses();
+    return true;
+  }
+
+  // Scrap a bus. There is no orderly "run to the depot" verb yet — a bus has no
+  // shed to run to — so this is the only one, and it is not the emergency the
+  // train's `scrapTrain` is.
+  function removeBus(busId: string): boolean {
+    const at = buses.findIndex(b => b.id === busId);
+    if (at < 0) return false;
+    const bus = buses[at];
+    if (bus.carId) roadSim.despawn(bus.carId);
+    buses.splice(at, 1);
+    if (bus.lineId) pruneLineIfUnused(bus.lineId);
+    syncLines();
+    syncBuses();
+    return true;
+  }
+
+  // A line is only swept when NOTHING runs it — and "nothing" now has to count
+  // buses as well as trains, or withdrawing the last train would delete a line
+  // a bus is still working.
+  function pruneLineIfUnused(lineId: string): void {
+    if (sim.trainsOnLine(lineId).length > 0) return;
+    if (buses.some(b => b.lineId === lineId)) return;
+    transit.pruneLine(lineId);
+  }
+
+  // What the buses did this tick, so the log and the citizen layer see a bus
+  // call exactly as they see a train's dwell.
+  const busEvents: { stopId: string; boarded: number; alighted: number; changing: number; boardedTags: string[]; alightedTags: string[] }[] = [];
 
   function updateParking() {
     const held = roadSim.parkingOccupancy();
@@ -2343,6 +2587,7 @@ export function createGame(
         name: line.name,
         stops: [...line.stops],
         trains: sim.trainsOnLine(line.id),
+        buses: buses.filter(b => b.lineId === line.id).map(b => b.id),
         colour: LINE_COLOURS[i % LINE_COLOURS.length],
       });
     }
@@ -2748,6 +2993,10 @@ export function createGame(
     // Park & ride: whoever just pulled into a stall within walking reach of a
     // station is now standing on its platform.
     transferParkedArrivals();
+    // The bus services: dwell, exchange passengers, drive on to the next stop.
+    busEvents.length = 0;
+    advanceBuses(scaled);
+    syncBuses();
     // Ordered trains roll out of the shed as it clears, in the order bought.
     releasePendingTrains();
     // Fold the road's crossing-flow snapshot into the observation so the
@@ -3218,6 +3467,11 @@ export function createGame(
     lineOverlay,
     setLineOverlay,
     lines,
+    buyBus,
+    assignBus,
+    removeBus,
+    busServices,
+    busStopTiles: busStops,
     createLine,
     setLineStops,
     renameLine,
