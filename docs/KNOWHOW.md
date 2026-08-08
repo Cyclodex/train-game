@@ -3295,13 +3295,24 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
 - `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
   SIZE gate would pass a bike into any car bay — the class gate is the only
   fence. Racks are phase C; until then a bike on a parking trip could only fail.
-- Editor lane tool is a THREE-state cycle now: normal → bus → cycle → normal
-  (`toggleLaneKind`/`setLaneKindRun`).
+- A bike NEVER rides an inner lane: `preferredLane` short-circuits for bikes to
+  the kerb-most cycle lane (else kerb-most usable lane) — no exit-lane settle,
+  no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
+  discipline (outermost lane permitting the move; only a dedicated inner-lane
+  turn pocket forces it in). Pinned by `/test/bikeleftturn` + roadBikes.spec.
+- Editor lane tool is a THREE-state cycle: normal → bus → +cycle → normal, but
+  the CYCLE stage is STRUCTURAL, not a conversion — `addCycleLane` inserts a
+  NEW kerb lane (indices shift +1, the street widens) so no car capacity is
+  lost on any width; clicking the green lane runs `removeCycleLane` (re-indexes
+  back). A cycle-ONLY approach (bike path) reverts to normal instead of losing
+  its last lane. Junction tiles skip the cycle stage (streets only).
 - Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
   head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
-  Cycle lane tint green (`road-cycle-band`), debug arrows `lg-cycle` green.
+  Cycle lane tint green (`road-cycle-band`) at 70% lane width (a slim strip,
+  centred — Tile.vue `restrictedLaneBands` halfOf), debug arrows `lg-cycle` green.
 - `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
-  `/test/bikeovertake` (2-lane passing); sim pins in `roadBikes.spec.ts`.
+  `/test/bikeovertake` (2-lane passing), `/test/bikeleftturn` (kerb rule at a
+  forced left); sim pins in `roadBikes.spec.ts`.
 
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),

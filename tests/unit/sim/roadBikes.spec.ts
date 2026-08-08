@@ -5,6 +5,7 @@ import { cycleLaneIndices, laneUsableBy, oneWay } from "@/tiles/lanes";
 import { bikemix } from "@/levels/test/scenarios/bikemix";
 import { bikeovertake } from "@/levels/test/scenarios/bikeovertake";
 import { cyclelane } from "@/levels/test/scenarios/cyclelane";
+import { bikeleftturn } from "@/levels/test/scenarios/bikeleftturn";
 
 // BICYCLES — phase A+B of the bicycle plan
 // (docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md).
@@ -71,6 +72,7 @@ function drive(
 ): {
   kinds: Set<string>;
   bikes: { speed: number; laneIndex: number; overtakePhase: string }[];
+  carLanes: number[];
   carOnCycleLane: number;
   bikeOnCycleLaneRatio: number;
   completed: number;
@@ -90,6 +92,7 @@ function drive(
   });
   const kinds = new Set<string>();
   const bikes: { speed: number; laneIndex: number; overtakePhase: string }[] = [];
+  const carLanes: number[] = [];
   let carOnCycleLane = 0;
   let bikeSamples = 0;
   let bikeOnCycle = 0;
@@ -117,8 +120,9 @@ function drive(
         bikes.push({ speed: c.speed, laneIndex: c.laneIndex, overtakePhase: c.overtakePhase });
         bikeSamples++;
         if (onCycle) bikeOnCycle++;
-      } else if (onCycle) {
-        carOnCycleLane++;
+      } else {
+        carLanes.push(c.laneIndex);
+        if (onCycle) carOnCycleLane++;
       }
     }
     for (const id of prev) if (!now.has(id)) completedIds.add(id);
@@ -127,6 +131,7 @@ function drive(
   return {
     kinds,
     bikes,
+    carLanes,
     carOnCycleLane,
     bikeOnCycleLaneRatio: bikeSamples ? bikeOnCycle / bikeSamples : 0,
     completed: completedIds.size,
@@ -169,6 +174,20 @@ describe("the cycle lane (cyclelane)", () => {
     expect(r.carOnCycleLane).toBe(0);
     // Bikes spawn onto and drift to the cycle lane; near-all samples sit on it.
     expect(r.bikeOnCycleLaneRatio).toBeGreaterThan(0.9);
+    expect(r.completed).toBeGreaterThan(5);
+  });
+});
+
+describe("the kerb rule at a left turn (bikeleftturn)", () => {
+  it("cars sort inner for the forced left; bikes hold the kerb lane throughout", () => {
+    const r = drive(bikeleftturn, 90);
+    expect(r.bikes.length).toBeGreaterThan(0);
+    // The left-turn discipline still applies to cars: the eastbound approach
+    // puts them on the inner lane, so inner-lane car samples must exist.
+    expect(r.carLanes.some(l => Math.round(l) === 1)).toBe(true);
+    // The bikes are exempt: through the same forced left, every bike sample —
+    // approach, junction tile and exit arm — stays on the kerb lane.
+    for (const b of r.bikes) expect(Math.round(b.laneIndex)).toBe(0);
     expect(r.completed).toBeGreaterThan(5);
   });
 });

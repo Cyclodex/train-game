@@ -264,17 +264,51 @@ describe("toggleLaneKind", () => {
   const laneAt = (cell: TileCell, from: Position, index: number) =>
     cell.road!.find(l => l.from === from && l.index === index)!;
 
-  it("cycles a lane normal → bus → cycle → normal, identified by from+index", () => {
+  it("cycles a lane normal → bus → +cycle lane → normal, identified by from+index", () => {
     // A 2-lane one-way road L->R (index 0 kerb, index 1 inboard).
     let c = addRoad(emptyCell(), Left, Right, 2, 0, true);
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
     c = toggleLaneKind(c, Left, 0); // normal → bus
     expect(laneAt(c, Left, 0).kind).toBe("bus");
     expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the other lane is untouched
-    c = toggleLaneKind(c, Left, 0); // bus → cycle
+    // bus → cycle is STRUCTURAL: the lane reverts to normal and a new kerb-side
+    // cycle lane is added — the street widens from 2 to 3 lanes, keeping both
+    // car lanes (no capacity is sacrificed for the bike lane).
+    c = toggleLaneKind(c, Left, 0);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(3);
     expect(laneAt(c, Left, 0).kind).toBe("cycle");
-    c = toggleLaneKind(c, Left, 0); // cycle → normal
+    expect(laneAt(c, Left, 1).kind).toBeUndefined(); // the ex-bus lane, shifted inboard
+    expect(laneAt(c, Left, 2).kind).toBeUndefined();
+    // Clicking the green lane removes it: back to the original 2 normal lanes.
+    c = toggleLaneKind(c, Left, 0);
+    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
     expect(laneAt(c, Left, 0).kind).toBeUndefined();
+    expect(laneAt(c, Left, 1).kind).toBeUndefined();
+  });
+
+  it("adding a cycle lane keeps a single-lane street's car lane", () => {
+    // The headline case: a 1-lane street gains a bike lane WITHOUT losing its
+    // only car lane — bus stage, then the structural cycle stage.
+    let c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    c = toggleLaneKind(c, Left, 0); // → bus
+    c = toggleLaneKind(c, Left, 0); // → cycle lane added, lane back to normal
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(2);
+    expect(laneAt(c, Left, 0).kind).toBe("cycle");
+    expect(laneAt(c, Left, 1).kind).toBeUndefined();
+    // The new green lane copies the street's movement.
+    expect(laneAt(c, Left, 0).to).toEqual([Right]);
+  });
+
+  it("removing the only lane of a direction reverts it to normal instead", () => {
+    // A cycle-only approach (a bike path / legacy converted lane): clicking the
+    // green lane must not delete the direction — it becomes a normal lane.
+    let c = addRoad(emptyCell(), Left, Right, 1, 0, true);
+    c = setLaneKind(c, Left, 0, "cycle");
+    c = toggleLaneKind(c, Left, 0);
+    const lanes = c.road!.filter(l => l.from === Left);
+    expect(lanes).toHaveLength(1);
+    expect(lanes[0].kind).toBeUndefined();
   });
 
   it("keeps the lane's movements and index when flipping kind", () => {
@@ -430,11 +464,12 @@ describe("setLaneKind / setLaneKindRun", () => {
     expect(setLaneKind(c, Left, 9, "bus")).toBe(c);
   });
 
-  it("paints a mixed-state run to one uniform kind in a single pass", () => {
+  it("clicking a bus lane adds a cycle lane along the whole run", () => {
     // 3-tile straight; the middle tile's eastbound lane is already a bus lane, the
     // ends are normal — a half-painted street. Clicking the bus tile makes the
-    // CLICKED lane decide the target: it is bus, so the whole run becomes CYCLE
-    // (the three-state cycle normal → bus → cycle → normal).
+    // CLICKED lane decide: it is bus, so the cycle stage fires — every tile of
+    // the run gains a NEW kerb-side cycle lane and its street lane goes back to
+    // normal. The street widens; no car capacity is lost anywhere on the run.
     const lvl: Level = {
       "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
@@ -443,14 +478,33 @@ describe("setLaneKind / setLaneKindRun", () => {
     // Make the middle eastbound lane a bus lane.
     lvl["1,0"] = setLaneKind(lvl["1,0"], Left, 0, "bus");
     const changed = setLaneKindRun(lvl, "1,0", Left, 0);
-    // Every tile's eastbound lane is now a cycle lane (clicked was bus → cycle).
     for (const id of ["0,0", "1,0", "2,0"]) {
-      const lane = changed[id].road!.find(l => l.from === Left && l.index === 0)!;
-      expect(lane.kind).toBe("cycle");
+      const east = changed[id].road!.filter(l => l.from === Left);
+      expect(east).toHaveLength(2); // green lane + the (kept) street lane
+      expect(east.find(l => l.index === 0)!.kind).toBe("cycle");
+      expect(east.find(l => l.index === 1)!.kind).toBeUndefined();
     }
   });
 
-  it("clicking a cycle lane paints the run back to normal", () => {
+  it("clicking an added cycle lane removes it along the run", () => {
+    // A street that WAS widened by the cycle stage: green kerb lane + car lane.
+    const widened = (): Level[string] => {
+      let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+      c = setLaneKind(c, Left, 0, "bus");
+      c = toggleLaneKind(c, Left, 0); // bus → +cycle: green at 0, car at 1
+      return c;
+    };
+    const lvl: Level = { "0,0": widened(), "1,0": widened() };
+    const changed = setLaneKindRun(lvl, "0,0", Left, 0);
+    for (const id of ["0,0", "1,0"]) {
+      const east = changed[id].road!.filter(l => l.from === Left);
+      expect(east).toHaveLength(1); // narrowed back to the single car lane
+      expect(east[0].kind).toBeUndefined();
+      expect(east[0].index).toBe(0);
+    }
+  });
+
+  it("clicking a cycle-only lane (bike path) paints the run back to normal", () => {
     const lvl: Level = {
       "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
       "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },

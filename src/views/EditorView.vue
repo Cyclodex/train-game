@@ -633,7 +633,7 @@ const HINTS: Record<Tool, string> = {
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
   buslane:
-    "Click a lane to cycle it normal → BUS-only → CYCLE-only → normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. Buses use bus lanes, bikes use bus AND cycle lanes, cars neither. Ctrl+click toggles just that one tile's lane.",
+    "Click a lane to cycle it normal → BUS-only → +CYCLE lane → normal along the whole street (it runs through straights and curves, stopping at junctions). The bus stage converts the lane in place; the cycle stage ADDS a green kerb-side bike lane instead — the street widens and keeps all its car lanes. Click the green lane to remove it again. Buses use bus lanes, bikes use bus AND cycle lanes, cars neither. Ctrl+click toggles just that one tile's lane.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:

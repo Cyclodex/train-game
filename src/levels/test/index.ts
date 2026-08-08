@@ -83,6 +83,7 @@ import { buslaneBoundary } from "@/levels/test/scenarios/buslane-boundary";
 import { bikemix } from "@/levels/test/scenarios/bikemix";
 import { bikeovertake } from "@/levels/test/scenarios/bikeovertake";
 import { cyclelane } from "@/levels/test/scenarios/cyclelane";
+import { bikeleftturn } from "@/levels/test/scenarios/bikeleftturn";
 import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
@@ -222,7 +223,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "cycling",
         label: "Cycling",
-        scenarios: [bikemix, bikeovertake, cyclelane],
+        scenarios: [bikemix, bikeovertake, cyclelane, bikeleftturn],
       },
       {
         id: "routing",

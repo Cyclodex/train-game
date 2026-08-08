@@ -1577,7 +1577,11 @@ class Tile extends Vue {
     const road = this.tile.road;
     if (!this.config.roads || !road?.length) return [];
     const size = this.config.tileSize;
-    const half = 0.5 * LANE_WIDTH_PX_FRAC * size;
+    // A cycle lane's band is narrower than the lane itself (~70%) — real bike
+    // lanes are slimmer than car lanes, and the full-width tint read as heavy.
+    // Still centred on the lane, since that is where the bike actually rides.
+    const halfOf = (kind: "bus" | "cycle") =>
+      (kind === "cycle" ? 0.35 : 0.5) * LANE_WIDTH_PX_FRAC * size;
     const out: { d: string; kind: "bus" | "cycle" }[] = [];
     const coord = parseCoordId(this.coordId);
     for (const lane of road) {
@@ -1590,7 +1594,7 @@ class Tile extends Vue {
       const off = (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size;
       for (const to of laneAllExits(lane)) {
         if (oppositePort(lane.from) !== to) continue; // straight lanes only
-        out.push({ d: roadLaneBandPath(lane.from, to, size, off, half), kind: lane.kind });
+        out.push({ d: roadLaneBandPath(lane.from, to, size, off, halfOf(lane.kind)), kind: lane.kind });
       }
     }
     return out;

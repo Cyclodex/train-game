@@ -1497,10 +1497,27 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           // where the bus lane can't feed the move has no bus lane in `pool`, so it is
           // not dragged back onto the bus lane and never oscillates.
           const kind = turnKind(ahead.entry, myExit);
-          const pick = kind === "left" ? Math.max(...pool) : Math.min(...pool);
+          // A bike is exempt from the left-turn "innermost" rule: it takes the
+          // OUTERMOST lane that permits the move, whatever the turn. Only when
+          // the turn is served solely by inner lanes (a dedicated left pocket)
+          // does `pool` force it inward — it has to get there to follow its route.
+          const pick =
+            cls === "bike" || kind !== "left" ? Math.min(...pool) : Math.max(...pool);
           return clampLane(pick, curCount);
         }
       }
+    }
+
+    // A bike NEVER rides an inner lane on the open road: no exit-lane settle, no
+    // keep-right delay. It heads straight for the kerb-most cycle lane if the
+    // approach has one, else the kerb-most lane it may use (which includes a bus
+    // lane). Branch (F) above still wins on a junction approach — there the pick
+    // is the outermost lane that permits the turn.
+    if (cls === "bike") {
+      const own = cycleLaneIndices(tile?.road, head.entryPort);
+      const target =
+        own.length > 0 ? Math.min(...own) : kerbMostLane(tile?.road, head.entryPort, cls);
+      return clampLane(target, curCount);
     }
 
     // Settle into the exit lane matched at the last junction crossing (turn-aware,
@@ -1514,12 +1531,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // A bus with no turn to sort for prefers the bus lane on its current approach:
     // ease to the nearest bus lane (an empty list — no bus lane here — leaves it
     // in place). This is what makes a bus drift onto and ride the bus lane.
-    // A bike does exactly the same with a cycle lane — the drift twin.
-    if (cls === "bus" || cls === "bike") {
-      const ownLanes =
-        cls === "bus"
-          ? busLaneIndices(tile?.road, head.entryPort)
-          : cycleLaneIndices(tile?.road, head.entryPort);
+    if (cls === "bus") {
+      const ownLanes = busLaneIndices(tile?.road, head.entryPort);
       if (ownLanes.length > 0) {
         const nearest = ownLanes.reduce(
           (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
