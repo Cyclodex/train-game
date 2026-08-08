@@ -433,21 +433,31 @@ export function removeCycleLane(cell: TileCell, from: Port): TileCell {
   return { ...cell, road: next };
 }
 
-// Cycle a single lane's state: normal → bus → cycle → normal, identified by its
-// approach `from` and physical `index` (0 = kerb). The bus stage converts the
-// lane in place (a normal 2-lane road becomes "1 car + 1 bus" without
-// re-laying it); the CYCLE stage is structural — the lane reverts to normal and
-// a new kerb-side cycle lane is ADDED (the street widens; see addCycleLane).
-// Clicking the green lane itself removes it again. On a junction tile the cycle
-// stage is skipped (bus → normal): cycle lanes are street-only.
-// No-op if the cell has no such lane.
-export function toggleLaneKind(cell: TileCell, from: Port, index: number): TileCell {
+// The BUS-lane tool's single-tile action: toggle a lane bus-only ↔ normal,
+// identified by its approach `from` and physical `index` (0 = kerb). An
+// in-place conversion — the lane keeps its geometry and movements, so a normal
+// 2-lane road becomes "1 car + 1 bus" without re-laying it. A CYCLE lane is
+// no-op'd: green lanes belong to the bike-lane tool (toggleCycleLane), the two
+// tools never convert into each other's kind. No-op if the cell has no such lane.
+export function toggleBusLane(cell: TileCell, from: Port, index: number): TileCell {
   const road = cell.road;
   const lane = road?.find(l => l.from === from && l.index === index);
-  if (!road || !lane) return cell;
-  if (lane.kind === "cycle") return removeCycleLane(cell, from);
-  if (lane.kind === "bus") return addCycleLane(setLaneKind(cell, from, index, undefined), from);
-  return setLaneKind(cell, from, index, "bus" as LaneKind);
+  if (!road || !lane || lane.kind === "cycle") return cell;
+  return setLaneKind(cell, from, index, lane.kind === "bus" ? undefined : ("bus" as LaneKind));
+}
+
+// The BIKE-lane tool's single-tile action: toggle the cycle lane of the
+// direction the clicked lane belongs to. The approach has one → remove it (the
+// street narrows back); it has none → add one (a NEW kerb-side green lane, the
+// street widens — see addCycleLane). The clicked lane only names the DIRECTION;
+// clicking a car lane, a bus lane or the green lane itself all toggle the same
+// thing, so the tool has no dead spots.
+export function toggleCycleLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road?.some(l => l.from === from)) return cell;
+  return road.some(l => l.from === from && l.kind === "cycle")
+    ? removeCycleLane(cell, from)
+    : addCycleLane(cell, from);
 }
 
 // Set a single lane's kind explicitly (rather than toggling): "bus" tags it as a
@@ -621,17 +631,14 @@ export function streetRunLanes(
   return out;
 }
 
-// Apply the lane tool to a whole street run in one click, from the CLICKED
-// lane's state (the three-state cycle normal → bus → cycle → normal):
-//  • clicked normal → paint the run's lane to a BUS lane (in-place conversion);
-//  • clicked bus    → the run's lane reverts to normal and every tile of the run
-//                     gains a kerb-side CYCLE lane (the street widens — see
-//                     addCycleLane); no car capacity is lost;
-//  • clicked cycle  → the run's cycle lane is removed (the street narrows back).
-// Returns the cells that changed, keyed by id, as fresh TileCells — the editor
-// commits them in one go. A half-painted street therefore becomes uniform in a
-// single click instead of inverting tile by tile.
-export function setLaneKindRun(
+// The BUS-lane tool's whole-street action: toggle the clicked lane bus ↔ normal
+// along its street run. The CLICKED lane decides the target (bus → normal,
+// normal → bus), then that state is SET on every lane of the run, so a
+// half-painted street becomes uniform in a single click instead of inverting
+// tile by tile. A clicked cycle lane returns no changes (the bike-lane tool
+// owns green). Returns the changed cells keyed by id, as fresh TileCells — the
+// editor commits them in one go.
+export function setBusLaneRun(
   level: Level,
   id: string,
   from: Port,
@@ -641,6 +648,8 @@ export function setLaneKindRun(
   const clicked = seed && !isRoadJunction(seed.road)
     ? lanesFrom(seed.road, from).find(l => l.index === index)
     : undefined;
+  if (clicked?.kind === "cycle") return {};
+  const target: LaneKind | undefined = clicked?.kind === "bus" ? undefined : "bus";
   const run = streetRunLanes(level, id, from, index);
   const out: Record<string, TileCell> = {};
   for (const ref of run) {
@@ -649,12 +658,32 @@ export function setLaneKindRun(
     // version so multiple lanes on one tile all land.
     const base = out[ref.id] ?? level[ref.id];
     if (!base) continue;
-    out[ref.id] =
-      clicked?.kind === "cycle"
-        ? removeCycleLane(base, ref.from)
-        : clicked?.kind === "bus"
-          ? addCycleLane(setLaneKind(base, ref.from, ref.index, undefined), ref.from)
-          : setLaneKind(base, ref.from, ref.index, "bus" as LaneKind);
+    out[ref.id] = setLaneKind(base, ref.from, ref.index, target);
+  }
+  return out;
+}
+
+// The BIKE-lane tool's whole-street action: add or remove the cycle lane along
+// the clicked lane's street run. The SEED tile's approach decides the verb (it
+// has a cycle lane → remove everywhere; none → add everywhere), so a
+// half-equipped street becomes uniform in one click. The clicked lane names
+// only the direction — any lane of the approach works. Returns the changed
+// cells keyed by id, for the editor to commit in one go.
+export function toggleCycleLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  const seed = level[id];
+  if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
+  const removing = seed.road.some(l => l.from === from && l.kind === "cycle");
+  const run = streetRunLanes(level, id, from, index);
+  const out: Record<string, TileCell> = {};
+  for (const ref of run) {
+    const base = out[ref.id] ?? level[ref.id];
+    if (!base) continue;
+    out[ref.id] = removing ? removeCycleLane(base, ref.from) : addCycleLane(base, ref.from);
   }
   return out;
 }

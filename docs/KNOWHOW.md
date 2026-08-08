@@ -3300,12 +3300,15 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
   discipline (outermost lane permitting the move; only a dedicated inner-lane
   turn pocket forces it in). Pinned by `/test/bikeleftturn` + roadBikes.spec.
-- Editor lane tool is a THREE-state cycle: normal → bus → +cycle → normal, but
-  the CYCLE stage is STRUCTURAL, not a conversion — `addCycleLane` inserts a
-  NEW kerb lane (indices shift +1, the street widens) so no car capacity is
-  lost on any width; clicking the green lane runs `removeCycleLane` (re-indexes
-  back). A cycle-ONLY approach (bike path) reverts to normal instead of losing
-  its last lane. Junction tiles skip the cycle stage (streets only).
+- Editor has TWO lane tools sharing one set of lane hit paths: 🚌 toggles a
+  lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
+  green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —
+  `addCycleLane` inserts a NEW kerb lane (indices shift +1, the street widens)
+  so no car capacity is lost on any width; `removeCycleLane` re-indexes back.
+  The 🚲 click names only the direction (`toggleCycleLane`/`toggleCycleLaneRun`
+  — any lane of the approach toggles the same thing; the run's SEED tile
+  decides add vs remove). A cycle-ONLY approach (bike path) reverts to normal
+  instead of losing its last lane; junctions are excluded (streets only).
 - Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
   head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
   Cycle lane tint green (`road-cycle-band`) at 70% lane width (a slim strip,

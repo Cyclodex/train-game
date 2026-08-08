@@ -268,7 +268,7 @@
                lane's real centreline, so the author clicks the exact lane they
                want (hover highlights it). This replaces the edge zones for the
                buslane tool — a lane, not a tile edge, is the thing being toggled. -->
-          <template v-if="tool === 'buslane' && cell.tile">
+          <template v-if="(tool === 'buslane' || tool === 'bikelane') && cell.tile">
             <path
               v-for="(hl, i) in laneHits(cell.key)"
               :key="'lh' + i"
@@ -441,8 +441,10 @@ import {
   toggleSignalPort,
   cycleDefaultArm,
   cycleJunctionSignalMode,
-  toggleLaneKind,
-  setLaneKindRun,
+  toggleBusLane,
+  setBusLaneRun,
+  toggleCycleLane,
+  toggleCycleLaneRun,
   syncJunctionLanesAround,
   setTerrain,
   shiftHeight,
@@ -502,6 +504,7 @@ type Tool =
   | "erase"
   | "road"
   | "buslane"
+  | "bikelane"
   | "signalise"
   | "terrain"
   | "height"
@@ -554,7 +557,8 @@ const DOCK_GROUPS: DockGroup[] = [
     label: "Road",
     items: [
       { key: "road", icon: "🛣️", label: "Road", tool: "road" },
-      { key: "buslane", icon: "🚌", label: "Bus/cycle lane", tool: "buslane" },
+      { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
+      { key: "bikelane", icon: "🚲", label: "Bike lane", tool: "bikelane" },
       { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
     ],
   },
@@ -633,7 +637,9 @@ const HINTS: Record<Tool, string> = {
   erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
   road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
   buslane:
-    "Click a lane to cycle it normal → BUS-only → +CYCLE lane → normal along the whole street (it runs through straights and curves, stopping at junctions). The bus stage converts the lane in place; the cycle stage ADDS a green kerb-side bike lane instead — the street widens and keeps all its car lanes. Click the green lane to remove it again. Buses use bus lanes, bikes use bus AND cycle lanes, cars neither. Ctrl+click toggles just that one tile's lane.",
+    "Click a lane to toggle it BUS-only ↔ normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Green bike lanes are the 🚲 tool's. Ctrl+click toggles just that one tile's lane.",
+  bikelane:
+    "Click a street to ADD a green bike lane along that direction's kerb — a NEW lane; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets). Click again — any lane of that direction, or the green lane itself — to remove it. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
   signalise:
     "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
   parking:
@@ -1541,10 +1547,18 @@ class EditorView extends Vue {
   }
 
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
+    // Two lane tools share the hit paths: 🚌 toggles bus ↔ normal in place;
+    // 🚲 adds/removes the direction's kerb-side green lane (the street widens
+    // or narrows). Ctrl/Meta acts on one tile, a plain click on the street run.
+    const single = ev.ctrlKey || ev.metaKey;
     const changed =
-      ev.ctrlKey || ev.metaKey
-        ? { [id]: toggleLaneKind(this.cellOf(id), from, index) }
-        : setLaneKindRun(this.level, id, from, index);
+      this.tool === "bikelane"
+        ? single
+          ? { [id]: toggleCycleLane(this.cellOf(id), from) }
+          : toggleCycleLaneRun(this.level, id, from, index)
+        : single
+          ? { [id]: toggleBusLane(this.cellOf(id), from, index) }
+          : setBusLaneRun(this.level, id, from, index);
     // commit re-derives the adjoining junctions' busTo gates per tile.
     for (const [cid, cell] of Object.entries(changed)) this.commit(cid, cell);
   }
