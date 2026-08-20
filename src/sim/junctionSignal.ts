@@ -111,9 +111,9 @@ export interface JunctionSignalController {
   step(dt: number, approaching: ReadonlySet<Port>): void;
   // The current light for an approach arm, per vehicle class: during the bus
   // HEAD START stage the active arms are green for buses but still red for
-  // cars (the separate transit signal). An arm absent from the plan (or "off")
-  // shows green so the gate is a no-op there.
-  aspect(arm: Port, cls?: "car" | "bus"): SignalAspect;
+  // everyone else — cars and bikes alike (the separate transit signal). An arm
+  // absent from the plan (or "off") shows green so the gate is a no-op there.
+  aspect(arm: Port, cls?: "car" | "bus" | "bike"): SignalAspect;
 }
 
 export function createJunctionSignal(
@@ -209,7 +209,7 @@ export function createJunctionSignal(
         advanceStage(approaching);
       }
     },
-    aspect(arm: Port, cls: "car" | "bus" = "car"): SignalAspect {
+    aspect(arm: Port, cls: "car" | "bus" | "bike" = "car"): SignalAspect {
       if (sig.mode === "off" || plan.length === 0) return "green";
       if (!activeArms().includes(arm)) return "red";
       if (stage === "green") return "green";
