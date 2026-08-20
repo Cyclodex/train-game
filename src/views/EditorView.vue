@@ -36,126 +36,94 @@
       </div>
     </MenuDrawer>
 
-    <ToolDock :hint="hint">
-      <!-- Two-level dock, laid out like Transport Fever: the categories are a
-           fixed row along the BOTTOM and the open category's actions sit in a
-           panel ABOVE them. Keeping the categories in one place means the button
-           you just pressed never moves, and only the panel changes — a side-by-
-           side split instead left a large dead area and made the eye hunt. -->
-      <div class="dock-panel">
-        <!-- The chosen category's tools. A single-tool category (Erase) shows
-             nothing here rather than repeating the button below it. -->
-        <div v-if="activeGroup.items.length > 1" class="dock-items">
+    <!-- The three-row build dock (see BuildDock.vue): items+options / tabs /
+         categories, Transport-Fever style. The editor owns every piece of state;
+         the dock draws it and reports clicks. -->
+    <BuildDock
+      :categories="dockCategories"
+      :cat="cat"
+      :tab="activeTabId"
+      :active-item-key="activeItemKey"
+      :hint="hint"
+      :help="help"
+      :breadcrumb="breadcrumb"
+      :has-options="hasOptions"
+      @select-cat="selectCategory"
+      @select-tab="selectTab"
+      @select-item="selectItemByKey"
+    >
+      <template #options>
+        <!-- Roads tab: the two modifiers plus a live cross-section of the road
+             the next drag will lay — the "what am I about to draw" readout that
+             replaces composing 1L/2L/3L × 🚌 × ➡️ in your head. -->
+        <template v-if="tool === 'road'">
+          <div class="bd-chips">
+            <button
+              class="bd-chip"
+              :class="{ on: roadOneWay }"
+              title="One-way road (lanes only in the drawn direction)"
+              @click="roadOneWay = !roadOneWay"
+            >➡️ one-way</button>
+            <button
+              class="bd-chip"
+              :class="{ on: roadIsBus }"
+              title="Add a kerb-side bus lane per direction (cars cannot use it)"
+              @click="roadIsBus = !roadIsBus"
+            >🚌 bus lane</button>
+          </div>
+          <div class="bd-xsec" :title="xsecTitle">
+            <div class="bd-xsec__kerb"></div>
+            <template v-if="!roadOneWay">
+              <div v-if="roadIsBus" class="bd-xsec__lane bd-xsec__lane--bus">◂◂◂◂◂◂</div>
+              <div v-for="i in roadLaneCount" :key="'l' + i" class="bd-xsec__lane">◂◂◂◂◂◂</div>
+            </template>
+            <div v-for="i in roadLaneCount" :key="'r' + i" class="bd-xsec__lane">▸▸▸▸▸▸</div>
+            <div v-if="roadIsBus" class="bd-xsec__lane bd-xsec__lane--bus">▸▸▸▸▸▸</div>
+            <div class="bd-xsec__kerb"></div>
+          </div>
+        </template>
+        <!-- Parking bays: the reservation the laid bays carry. Reserved ones
+             stay empty in play — nothing issues a permit — which is what makes
+             a car park read as a real one, never 100% usable. -->
+        <div v-else-if="tool === 'parking'" class="bd-chips">
           <button
-            v-for="it in activeGroup.items"
-            :key="it.key"
-            class="dock-btn dock-btn--item"
-            :class="{ on: isActiveItem(it) }"
-            :title="it.label"
-            @click="selectItem(it)"
-          >
-            <span class="dock-btn__icon">{{ it.icon }}</span>
-            <span>{{ it.label }}</span>
-          </button>
-        </div>
-        <span v-else class="dock-panel__empty">{{ activeGroup.label }}</span>
-        <!-- Lane-count picker: only visible when the road tool is active. -->
-        <div v-if="tool === 'road'" class="lane-picker">
-        <button
-          v-for="n in [1, 2, 3]"
-          :key="n"
-          class="dock-btn lane-btn"
-          :class="{ on: roadLaneCount === n }"
-          @click="roadLaneCount = n"
-        >{{ n }}L</button>
-        <button
-          class="dock-btn lane-btn bus-btn"
-          :class="{ on: roadIsBus }"
-          @click="roadIsBus = !roadIsBus"
-          title="Bus-only lane (cars cannot use)"
-        >🚌</button>
-        <button
-          class="dock-btn lane-btn oneway-btn"
-          :class="{ on: roadOneWay }"
-          @click="roadOneWay = !roadOneWay"
-          title="One-way road (lanes only in the drawn direction)"
-        >➡️</button>
-        </div>
-        <!-- Reservation modifier: which bays the parking tool lays. Reserved
-             ones stay empty in play — nothing issues a permit — which is what
-             makes a car park read as a real one, never 100% usable. -->
-        <div v-if="tool === 'parking'" class="lane-picker">
-          <button
-            class="dock-btn lane-btn"
+            class="bd-chip"
             :class="{ on: !parkReserved }"
-            @click="parkReserved = undefined"
             title="Ordinary bays"
+            @click="parkReserved = undefined"
           >—</button>
           <button
-            class="dock-btn lane-btn"
+            class="bd-chip"
             :class="{ on: parkReserved === 'disabled' }"
-            @click="parkReserved = parkReserved === 'disabled' ? undefined : 'disabled'"
             title="Disabled bays (stay empty — no permit system yet)"
+            @click="parkReserved = parkReserved === 'disabled' ? undefined : 'disabled'"
           >♿</button>
           <button
-            class="dock-btn lane-btn"
+            class="bd-chip"
             :class="{ on: parkReserved === 'delivery' }"
-            @click="parkReserved = parkReserved === 'delivery' ? undefined : 'delivery'"
             title="Delivery bay (stays empty)"
+            @click="parkReserved = parkReserved === 'delivery' ? undefined : 'delivery'"
           >📦</button>
           <button
-            class="dock-btn lane-btn"
+            class="bd-chip"
             :class="{ on: parkReserved === 'long' }"
-            @click="parkReserved = parkReserved === 'long' ? undefined : 'long'"
             title="Lorry lay-by — lorries and coaches; cars may not use it"
+            @click="parkReserved = parkReserved === 'long' ? undefined : 'long'"
           >🚛</button>
           <button
-            class="dock-btn lane-btn"
+            class="bd-chip"
             :class="{ on: parkReserved === 'bus' }"
-            @click="parkReserved = parkReserved === 'bus' ? undefined : 'bus'"
             title="Bus stop — coaches only. Give it a short dwell: a halt is not parking."
+            @click="parkReserved = parkReserved === 'bus' ? undefined : 'bus'"
           >🚌</button>
         </div>
         <!-- Which car park the facility brush sweeps tiles into. -->
-        <div v-if="tool === 'facility'" class="lane-picker">
-          <input v-model="facilityId" class="facility-input" maxlength="12" />
-          <button class="dock-btn lane-btn" @click="nextFacilityId()" title="Next car park">＋</button>
+        <div v-else-if="tool === 'facility'" class="bd-chips">
+          <input v-model="facilityId" class="bd-facility-input" maxlength="12" />
+          <button class="bd-chip" title="Next car park" @click="nextFacilityId()">＋</button>
         </div>
-        <!-- The world grows right and down simply by drawing into the empty
-             margin. These add room on the other two sides, by shifting what is
-             already there — the engine anchors the world at 0,0. Right-aligned:
-             they belong to the board, not to the open category. -->
-        <div class="grow-picker">
-          <button
-            class="dock-btn lane-btn"
-            title="Add a column before the left edge (shifts the world right)"
-            @click="growLeft"
-          >⬅︎+</button>
-          <button
-            class="dock-btn lane-btn"
-            title="Add a row above the top edge (shifts the world down)"
-            @click="growUp"
-          >⬆︎+</button>
-          <span class="grow-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
-            {{ gridCols - 2 }}×{{ gridRows - 2 }}
-          </span>
-        </div>
-      </div>
-      <!-- The categories themselves: one fixed row, always in the same place. -->
-      <div class="dock-groups">
-        <button
-          v-for="g in dockGroups"
-          :key="g.id"
-          class="dock-group"
-          :class="{ on: group === g.id }"
-          :title="g.label"
-          @click="selectGroup(g.id)"
-        >
-          <span class="dock-group__icon">{{ g.icon }}</span>
-          <span class="dock-group__label">{{ g.label }}</span>
-        </button>
-      </div>
-    </ToolDock>
+      </template>
+    </BuildDock>
 
     <div class="world">
     <div
@@ -168,7 +136,23 @@
       @pointercancel="onViewportPointerUp"
       @wheel.prevent="onViewportWheel"
     >
+    <!-- Board chrome, all in one corner: the world grows right/down by drawing
+         into the margin; these two grow it before the origin. They live with the
+         zoom cluster because they are WORLD controls, not build tools. -->
     <div class="world-zoom">
+      <button
+        class="zoom-btn"
+        title="Add a column before the left edge (shifts the world right)"
+        @click.stop="growLeft"
+      >⬅︎+</button>
+      <button
+        class="zoom-btn"
+        title="Add a row above the top edge (shifts the world down)"
+        @click.stop="growUp"
+      >⬆︎+</button>
+      <span class="zoom-size" :title="`World size: ${gridCols - 2} x ${gridRows - 2} tiles`">
+        {{ gridCols - 2 }}×{{ gridRows - 2 }}
+      </span>
       <button class="zoom-btn" title="Zoom out" @click.stop="zoomBy(1 / 1.25)">−</button>
       <button class="zoom-btn zoom-btn--fit" title="Fit the whole world" @click.stop="fitWorld()">
         {{ Math.round(camera.zoom * 100) }}%
@@ -318,39 +302,44 @@
             />
           </template>
 
-          <!-- Rail-delete handles (erase mode): a tappable ✕ near the middle of
+          <!-- Rail-delete handles (bulldozer): a tappable ✕ near the middle of
                each rail removes just that connection (clicking elsewhere on the
-               tile erases the whole tile). -->
+               tile applies the armed layer filter). Shown only when the filter
+               includes rail, so a road-scoped bulldozer never offers a rail ✕. -->
           <template v-if="tool === 'erase' && cell.tile">
-            <g
-              v-for="(conn, i) in cell.tile.connections"
-              :key="'x' + i"
-              class="del"
-              @click.stop="deleteConn(cell.key, conn)"
-            >
-              <circle
-                :cx="delPos(conn).x"
-                :cy="delPos(conn).y"
-                r="13"
-                class="del-bg"
-              />
-              <path :d="delMark(conn)" class="del-mark" />
-            </g>
+            <template v-if="eraseScope === 'all' || eraseScope === 'rail'">
+              <g
+                v-for="(conn, i) in cell.tile.connections"
+                :key="'x' + i"
+                class="del"
+                @click.stop="deleteConn(cell.key, conn)"
+              >
+                <circle
+                  :cx="delPos(conn).x"
+                  :cy="delPos(conn).y"
+                  r="13"
+                  class="del-bg"
+                />
+                <path :d="delMark(conn)" class="del-mark" />
+              </g>
+            </template>
             <!-- Road-delete handles: a ✕ on each road pair removes just it. -->
-            <g
-              v-for="(road, i) in roadEdges(cell.tile)"
-              :key="'xr' + i"
-              class="del del--road"
-              @click.stop="deleteRoad(cell.key, road)"
-            >
-              <circle
-                :cx="delPos(road).x"
-                :cy="delPos(road).y"
-                r="13"
-                class="del-bg"
-              />
-              <path :d="delMark(road)" class="del-mark" />
-            </g>
+            <template v-if="eraseScope === 'all' || eraseScope === 'road'">
+              <g
+                v-for="(road, i) in roadEdges(cell.tile)"
+                :key="'xr' + i"
+                class="del del--road"
+                @click.stop="deleteRoad(cell.key, road)"
+              >
+                <circle
+                  :cx="delPos(road).x"
+                  :cy="delPos(road).y"
+                  r="13"
+                  class="del-bg"
+                />
+                <path :d="delMark(road)" class="del-mark" />
+              </g>
+            </template>
           </template>
 
           <!-- Lane-count badge: shown on road tiles when the road tool is
@@ -411,7 +400,9 @@ import { Component, Inject, Provide, Vue, Watch, toNative } from "vue-facing-dec
 import { GameConfig, GAME_CONFIG_KEY, gameConfig, setWorldTheme } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import MenuDrawer from "@/components/MenuDrawer.vue";
-import ToolDock from "@/components/ToolDock.vue";
+import BuildDock from "@/components/BuildDock.vue";
+import type { BuildDockCategoryView } from "@/components/BuildDock.vue";
+import type { JunctionSignal } from "@/sim/junctionSignal";
 import type { Game } from "@/game";
 import { initialSwitches } from "@/game";
 import { Position, Coordinates } from "@/types";
@@ -440,7 +431,6 @@ import {
   toggleStation,
   toggleSignalPort,
   cycleDefaultArm,
-  cycleJunctionSignalMode,
   toggleBusLane,
   setBusLaneRun,
   toggleCycleLane,
@@ -455,6 +445,9 @@ import {
   setTerrain,
   shiftHeight,
   cycleFlyover,
+  setJunctionSignalMode,
+  eraseLayer,
+  type EraseLayer,
   isBlankCell,
   canParkOn,
   parkingRowAt,
@@ -520,103 +513,351 @@ type Tool =
   | "parking"
   | "facility";
 
-// The dock is two levels: pick the LAYER you are working on, then the tool
-// within it. Terrain's "tools" are brush kinds rather than separate Tools, so an
-// item carries an optional `terrain` — selecting it arms the terrain tool AND
-// sets the brush, which is what makes the ground buttons live inside the Terrain
-// group instead of in a second picker beside it.
-type ToolGroupId = "rail" | "road" | "parking" | "terrain" | "erase";
+// The dock is THREE levels (see BuildDock.vue and the design spec
+// docs/superpowers/specs/2026-08-21-build-ui-redesign-design.md): pick the
+// CATEGORY you are working on (train / car / terrain / demolish), the TAB that
+// separates the verbs within it (build the way / stations / signalling;
+// roads / upgrade / traffic lights / parking), then the tool. Brush-like tools
+// (terrain kinds, stall kinds, road widths, signal modes, bulldozer scopes)
+// are ITEMS carrying their parameter — selecting one arms the tool AND sets
+// what it lays, so several items can share one Tool.
+type CategoryId = "rail" | "road" | "terrain" | "raze";
+
+// What the bulldozer removes: the whole tile, or one layer of it.
+type EraseScope = "all" | EraseLayer;
 
 interface DockItem {
   key: string;
-  icon: string;
   label: string;
+  icon?: string; // emoji…
+  lanes?: number; // …or the road cross-section glyph with this many lanes
+  title?: string; // tooltip override
   tool: Tool;
   terrain?: TerrainKind;
-  // Parking's "tools" are stall KINDS, the same way terrain's are brushes:
-  // selecting one arms the parking tool AND picks what it lays.
   stall?: StallKind;
-  // The height tool's two brushes (raise / lower), same pattern again.
   heightDelta?: 1 | -1;
+  // The road tool's width — 1L/2L/3L are separate catalog items, not a picker.
+  laneCount?: 1 | 2 | 3;
+  // The traffic-light tool's mode: pick it here, click junctions to apply.
+  signalMode?: JunctionSignal;
+  // The bulldozer's layer filter.
+  erase?: EraseScope;
+  // One-line hint (shown over the board) and the full help behind the ? button.
+  hint: string;
+  help: string;
 }
 
-interface DockGroup {
-  id: ToolGroupId;
-  icon: string;
+interface DockTab {
+  id: string;
   label: string;
   items: DockItem[];
 }
 
-const DOCK_GROUPS: DockGroup[] = [
+interface DockCategory {
+  id: CategoryId;
+  icon: string;
+  label: string;
+  accent: string;
+  shortcut: string;
+  tabs: DockTab[];
+}
+
+// Long help texts shared by every item of a tool (the ? popover). The one-line
+// `hint` is per item; this is the manual it condenses.
+const HELP = {
+  connect:
+    "Routes a track corner by corner: click an edge, then click tiles; click the start edge again or press Esc to finish. Drag for a quick single rail. Click a junction's switch to set its starting direction. Crossing water builds a bridge, rock or mountain a tunnel — priced accordingly.",
+  depot: "Trains start and end at depots. Click a cell to place one; click it again to rotate its facing.",
+  station:
+    "Click a tile with through-track (edge-to-edge rails) to make it a station — every train calls there briefly. Click it again to remove the station.",
+  signal:
+    "Click an edge to toggle a signal for that direction. At a signal a train reserves the whole route to the next signal before entering — signals are what keep trains apart.",
+  flyover:
+    "Click a diamond crossing (two rails crossing without switches) to cycle which line rides the bridge deck: flat → first line over → other line over → flat. Grade-separated lines never wait for each other — no junction, no conflict.",
+  road:
+    "Click an edge, then click tiles to route a road; click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different width to repaint it. The options set one-way (lanes only in the drawn direction) and a kerb-side bus lane per direction; the cross-section shows exactly what the next drag lays. Road over track = level crossing.",
+  laneadd:
+    "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L — a one-way street gains its one direction). 3L is the ceiling. Stops at junctions. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
+  laneremove:
+    "Click a street to remove the innermost car lane EACH WAY along the whole street (3L → 2L → 1L). Bus and bike lanes are never taken — use the bus/bike tools for those — and each direction keeps its last car lane. Ctrl+click changes just that one tile.",
+  buslane:
+    "Click a lane to toggle it BUS-only ↔ normal along the whole street (through straights and curves, stopping at junctions). An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Ctrl+click toggles just that one tile's lane.",
+  bikelane:
+    "Click a street to ADD a green bike lane on EACH kerb — a NEW lane per direction; the street widens and keeps every car lane it had. Click again (any lane) to remove them. Runs the whole street, stopping at junctions, where bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
+  widestreet:
+    "Click a street to make it WIDE: each direction gains an unmarked edge zone at the kerb — no green paint, no edge line, just visibly wider asphalt. Bikes ride the edge and cars pass alongside in their own lane, without a lane change and without queueing. Both directions change together. On a street with a green bike lane this strips the paint but keeps the width (and the bike-lane tool paints a wide street's edge green). Click again to narrow the street back. Runs the whole street, stopping at junctions. Ctrl+click toggles just that one tile.",
+  signalise:
+    "Applies the armed mode to the clicked road junction. Cars then obey per-arm green/amber/red on top of the give-way rules. Two-phase pairs opposite arms; round-robin gives each arm green in turn. +Bus lets an approaching bus call or extend its green. Off returns the junction to give-way rules.",
+  parking:
+    "Click a kerb to line the whole street with bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click; Ctrl+click does one tile. A greyed kerb cannot take the picked kind (90° bays need a narrow street; nothing parks in a bend or junction). 🏢 places a garage, 🚏 a bus stop IN the running lane. The reservation chips mark bays for one vehicle class: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody yet — reserved bays stay empty, which is what makes a car park look real.",
+  facility:
+    "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays. Drag over the same car park again to remove those tiles from it.",
+  terrain:
+    "Drag across the board to paint ground — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. Grass is the eraser. Water, rock and mountain cannot be built on; routing across water builds a bridge, across rock a tunnel. Woods and towns can be built through (you clear them).",
+  height:
+    "Drag to raise or lower the ground one step per stroke — paint a hill as an AREA. Track may climb ONE step per tile boundary (that joint is the ramp); anything steeper is flagged as a cliff. Climbs slow heavy trains.",
+  raze:
+    "The armed filter decides which layer the click removes; everything else on the tile stays. Everything clears the whole tile. With Rail or Road armed, a ✕ handle removes one single connection instead. A tile left carrying nothing disappears from the level.",
+};
+
+const DOCK: DockCategory[] = [
   {
     id: "rail",
-    icon: "🚂",
+    icon: "🚆",
     label: "Rail",
-    items: [
-      { key: "connect", icon: "🛤️", label: "Track", tool: "connect" },
-      { key: "depot", icon: "🏠", label: "Depot", tool: "depot" },
-      { key: "station", icon: "🚉", label: "Station", tool: "station" },
-      { key: "signal", icon: "🚦", label: "Signal", tool: "signal" },
-      { key: "flyover", icon: "🌉", label: "Flyover", tool: "flyover" },
+    accent: "#e3a63e",
+    shortcut: "1",
+    tabs: [
+      {
+        id: "track",
+        label: "Track",
+        items: [
+          {
+            key: "connect", icon: "🛤️", label: "Track", tool: "connect",
+            hint: "Click an edge, then click tiles to route track — Esc finishes.",
+            help: HELP.connect,
+          },
+        ],
+      },
+      {
+        id: "stations",
+        label: "Stations",
+        items: [
+          {
+            key: "station", icon: "🚉", label: "Station", tool: "station",
+            hint: "Click through-track to toggle a station.",
+            help: HELP.station,
+          },
+          {
+            key: "depot", icon: "🏠", label: "Depot", tool: "depot",
+            hint: "Click a cell to place a depot — click again to rotate.",
+            help: HELP.depot,
+          },
+        ],
+      },
+      {
+        id: "signalling",
+        label: "Signalling",
+        items: [
+          {
+            key: "signal", icon: "🚦", label: "Signal", tool: "signal",
+            hint: "Click an edge to toggle a signal for that direction.",
+            help: HELP.signal,
+          },
+          {
+            key: "flyover", icon: "🌉", label: "Flyover", tool: "flyover",
+            hint: "Click a diamond crossing to cycle which line rides the bridge.",
+            help: HELP.flyover,
+          },
+        ],
+      },
     ],
   },
   {
     id: "road",
     icon: "🚗",
     label: "Road",
-    items: [
-      { key: "road", icon: "🛣️", label: "Road", tool: "road" },
-      { key: "laneadd", icon: "➕", label: "Add lane", tool: "laneadd" },
-      { key: "laneremove", icon: "➖", label: "Remove lane", tool: "laneremove" },
-      { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
-      { key: "bikelane", icon: "🚲", label: "Bike lane", tool: "bikelane" },
-      { key: "widestreet", icon: "↔️", label: "Wide street", tool: "widestreet" },
-      { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
-    ],
-  },
-  {
-    id: "parking",
-    icon: "🅿️",
-    label: "Parking",
-    items: [
-      { key: "park-parallel", icon: "🚗", label: "Kerb", tool: "parking", stall: "parallel" },
-      { key: "park-angled", icon: "↗️", label: "Angled", tool: "parking", stall: "angled" },
-      { key: "park-perp", icon: "🅿️", label: "90°", tool: "parking", stall: "perpendicular" },
-      { key: "park-garage", icon: "🏢", label: "Garage", tool: "parking", stall: "garage" },
-      { key: "park-busstop", icon: "🚏", label: "Halt", tool: "parking", stall: "busstop" },
-      { key: "park-facility", icon: "#️⃣", label: "Car park", tool: "facility" },
+    accent: "#5f9fe8",
+    shortcut: "2",
+    tabs: [
+      {
+        id: "roads",
+        label: "Roads",
+        items: [
+          {
+            key: "road1", lanes: 1, label: "1-lane", tool: "road", laneCount: 1,
+            title: "Street — one lane per direction",
+            hint: "Click an edge, then click tiles to route the road — Esc finishes.",
+            help: HELP.road,
+          },
+          {
+            key: "road2", lanes: 2, label: "2-lane", tool: "road", laneCount: 2,
+            title: "Street — two lanes per direction",
+            hint: "Click an edge, then click tiles to route the road — Esc finishes.",
+            help: HELP.road,
+          },
+          {
+            key: "road3", lanes: 3, label: "3-lane", tool: "road", laneCount: 3,
+            title: "Street — three lanes per direction",
+            hint: "Click an edge, then click tiles to route the road — Esc finishes.",
+            help: HELP.road,
+          },
+        ],
+      },
+      {
+        id: "upgrade",
+        label: "Upgrade",
+        items: [
+          {
+            key: "laneadd", icon: "➕", label: "Add lane", tool: "laneadd",
+            hint: "Click a street to add a car lane each way along the run.",
+            help: HELP.laneadd,
+          },
+          {
+            key: "laneremove", icon: "➖", label: "Remove lane", tool: "laneremove",
+            hint: "Click a street to remove the innermost car lane each way.",
+            help: HELP.laneremove,
+          },
+          {
+            key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane",
+            hint: "Click a lane to toggle it bus-only along the street.",
+            help: HELP.buslane,
+          },
+          {
+            key: "bikelane", icon: "🚲", label: "Bike lane", tool: "bikelane",
+            hint: "Click a street to add green bike lanes on both kerbs.",
+            help: HELP.bikelane,
+          },
+          {
+            key: "widestreet", icon: "↔️", label: "Wide street", tool: "widestreet",
+            hint: "Click a street to widen it — bikes ride the edge, cars pass in-lane.",
+            help: HELP.widestreet,
+          },
+        ],
+      },
+      {
+        id: "lights",
+        label: "Traffic lights",
+        items: [
+          {
+            key: "sig-off", icon: "⭘", label: "Off", tool: "signalise",
+            signalMode: { mode: "off" },
+            hint: "Click a junction to remove its traffic lights.",
+            help: HELP.signalise,
+          },
+          {
+            key: "sig-2p", icon: "🚥", label: "Two-phase", tool: "signalise",
+            signalMode: { mode: "two-phase" },
+            hint: "Click a junction to give it two-phase lights.",
+            help: HELP.signalise,
+          },
+          {
+            key: "sig-2pb", icon: "🚥", label: "2-ph +Bus", tool: "signalise",
+            signalMode: { mode: "two-phase", busPriority: true },
+            title: "Two-phase with bus priority",
+            hint: "Click a junction — two-phase lights with bus priority.",
+            help: HELP.signalise,
+          },
+          {
+            key: "sig-rr", icon: "🔄", label: "Round-robin", tool: "signalise",
+            signalMode: { mode: "round-robin" },
+            hint: "Click a junction to give each arm green in turn.",
+            help: HELP.signalise,
+          },
+          {
+            key: "sig-rrb", icon: "🔄", label: "R-robin +Bus", tool: "signalise",
+            signalMode: { mode: "round-robin", busPriority: true },
+            title: "Round-robin with bus priority",
+            hint: "Click a junction — round-robin lights with bus priority.",
+            help: HELP.signalise,
+          },
+        ],
+      },
+      {
+        id: "parking",
+        label: "Parking",
+        items: [
+          {
+            key: "park-parallel", icon: "🚗", label: "Kerb", tool: "parking", stall: "parallel",
+            hint: "Click a kerb to line the street with parking bays.",
+            help: HELP.parking,
+          },
+          {
+            key: "park-angled", icon: "↗️", label: "Angled", tool: "parking", stall: "angled",
+            hint: "Click a kerb to lay angled bays.",
+            help: HELP.parking,
+          },
+          {
+            key: "park-perp", icon: "🅿️", label: "90°", tool: "parking", stall: "perpendicular",
+            hint: "Click a kerb for 90° bays — needs a narrow street.",
+            help: HELP.parking,
+          },
+          {
+            key: "park-garage", icon: "🏢", label: "Garage", tool: "parking", stall: "garage",
+            hint: "Click a kerb to place a garage with a ramp.",
+            help: HELP.parking,
+          },
+          {
+            key: "park-busstop", icon: "🚏", label: "Halt", tool: "parking", stall: "busstop",
+            hint: "Click a kerb — the bus halts in the running lane.",
+            help: HELP.parking,
+          },
+          {
+            key: "park-facility", icon: "#️⃣", label: "Car park", tool: "facility",
+            hint: "Drag tiles into one car park — aisles included.",
+            help: HELP.facility,
+          },
+        ],
+      },
     ],
   },
   {
     id: "terrain",
-    icon: "🏞️",
+    icon: "🏔️",
     label: "Terrain",
-    items: [
-      { key: "farmland", icon: "🌾", label: "Fields", tool: "terrain", terrain: "farmland" },
-      { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest" },
-      { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water" },
-      { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock" },
-      { key: "mountain", icon: "⛰️", label: "Mountain", tool: "terrain", terrain: "mountain" },
-      { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban" },
-      { key: "industry", icon: "🏭", label: "Works", tool: "terrain", terrain: "industry" },
-      { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass" },
-      { key: "raise", icon: "🔼", label: "Raise", tool: "height", heightDelta: 1 },
-      { key: "lower", icon: "🔽", label: "Lower", tool: "height", heightDelta: -1 },
+    accent: "#63b568",
+    shortcut: "3",
+    tabs: [
+      {
+        id: "ground",
+        label: "Ground",
+        items: [
+          { key: "farmland", icon: "🌾", label: "Fields", tool: "terrain", terrain: "farmland", hint: "Drag across the board to paint fields.", help: HELP.terrain },
+          { key: "forest", icon: "🌲", label: "Forest", tool: "terrain", terrain: "forest", hint: "Drag across the board to paint woods.", help: HELP.terrain },
+          { key: "water", icon: "💧", label: "Water", tool: "terrain", terrain: "water", hint: "Drag to paint water — routes across it bridge it.", help: HELP.terrain },
+          { key: "rock", icon: "🪨", label: "Rock", tool: "terrain", terrain: "rock", hint: "Drag to paint rock — routes across it tunnel it.", help: HELP.terrain },
+          { key: "mountain", icon: "⛰️", label: "Mountain", tool: "terrain", terrain: "mountain", hint: "Drag to paint mountains — routes tunnel under them.", help: HELP.terrain },
+          { key: "urban", icon: "🏘️", label: "Town", tool: "terrain", terrain: "urban", hint: "Drag across the board to paint town.", help: HELP.terrain },
+          { key: "industry", icon: "🏭", label: "Works", tool: "terrain", terrain: "industry", hint: "Drag across the board to paint industry.", help: HELP.terrain },
+          { key: "grass", icon: "🟩", label: "Grass", tool: "terrain", terrain: "grass", hint: "Drag to erase ground back to grass.", help: HELP.terrain },
+        ],
+      },
+      {
+        id: "height",
+        label: "Height",
+        items: [
+          { key: "raise", icon: "🔼", label: "Raise", tool: "height", heightDelta: 1, hint: "Drag to raise the ground one step — paint hills as areas.", help: HELP.height },
+          { key: "lower", icon: "🔽", label: "Lower", tool: "height", heightDelta: -1, hint: "Drag to lower the ground one step.", help: HELP.height },
+        ],
+      },
     ],
   },
   {
-    id: "erase",
-    icon: "🧽",
-    label: "Erase",
-    items: [{ key: "erase", icon: "🧽", label: "Erase", tool: "erase" }],
+    id: "raze",
+    icon: "🧨",
+    label: "Bulldozer",
+    accent: "#e0705e",
+    shortcut: "4",
+    tabs: [
+      {
+        id: "raze",
+        label: "Demolish",
+        items: [
+          { key: "raze-all", icon: "💥", label: "Everything", tool: "erase", erase: "all", hint: "Click a tile to clear it completely.", help: HELP.raze },
+          { key: "raze-rail", icon: "🛤️", label: "Rail", tool: "erase", erase: "rail", hint: "Click a tile to remove only its rails.", help: HELP.raze },
+          { key: "raze-road", icon: "🛣️", label: "Road", tool: "erase", erase: "road", hint: "Click a tile to remove only its road (parking goes with it).", help: HELP.raze },
+          { key: "raze-parking", icon: "🅿️", label: "Parking", tool: "erase", erase: "parking", hint: "Click a tile to remove only its parking.", help: HELP.raze },
+          { key: "raze-terrain", icon: "🏞️", label: "Terrain", tool: "erase", erase: "terrain", hint: "Click a tile to flatten its ground back to grass.", help: HELP.raze },
+        ],
+      },
+    ],
   },
 ];
 
-// Which group a tool belongs to, so arming a tool any other way (a shortcut, a
-// hand-off from another view) still opens the right drawer.
-const GROUP_OF_TOOL = new Map<Tool, ToolGroupId>(
-  DOCK_GROUPS.flatMap(g => g.items.map(i => [i.tool, g.id] as [Tool, ToolGroupId])),
-);
+// Where a tool lives in the dock (category + tab of its FIRST occurrence), so
+// arming a tool any other way (a hand-off, a shortcut) still opens the right
+// tab. Tools armed by several items (road widths, signal modes, brushes) all
+// live on one tab, so first-occurrence is exact.
+const LOCATION_OF_TOOL = new Map<Tool, { cat: CategoryId; tab: string }>();
+for (const c of DOCK) {
+  for (const t of c.tabs) {
+    for (const it of t.items) {
+      if (!LOCATION_OF_TOOL.has(it.tool)) {
+        LOCATION_OF_TOOL.set(it.tool, { cat: c.id, tab: t.id });
+      }
+    }
+  }
+}
 
 const LEVEL_KEY = "train-game:editor-level";
 const LANE_COUNT_KEY = "train-game:editor-road-lane-count";
@@ -638,39 +879,6 @@ const LANE_WIDTH_PX_FRAC = 0.14;
 // Empty cells kept beyond the level's content so there is always somewhere to
 // draw. Two is enough to see where you are going without a sea of blank grid.
 const GROW_MARGIN = 2;
-
-const HINTS: Record<Tool, string> = {
-  connect:
-    "Click an edge, then click tiles to route a track (corner by corner). Click the start edge again or press Esc to finish. Drag for a quick single rail. Click a junction's switch to set its starting direction.",
-  depot: "Click a cell to place a depot. Click it again to rotate its facing.",
-  station:
-    "Click a tile with through-track (edge-to-edge rails) to make it a station — every train calls there briefly. Click it again to remove the station.",
-  signal: "Click an edge to toggle a signal for that direction.",
-  erase: "Click a tile to clear it, or tap a rail's ✕ to remove just that connection.",
-  road: "Click an edge, then click tiles to route a road. Click the start edge again or Esc to finish. Drag for a quick single road. Draw over an existing road with a different lane count (1L/2L/3L) to repaint it. Toggle ➡️ for one-way (lanes only in the drawn direction). Road over track = level crossing.",
-  buslane:
-    "Click a lane to toggle it BUS-only ↔ normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Green bike lanes are the 🚲 tool's. Ctrl+click toggles just that one tile's lane.",
-  bikelane:
-    "Click a street to ADD a green bike lane on EACH kerb — a NEW lane per direction; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets, and a one-way gains its one). Both ways change together, like ➕/➖: a street with a bike lane on one side only is not something the road markings can draw. Click again — any lane, or a green lane itself — to remove them. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
-  widestreet:
-    "Click a street to make it WIDE: each direction gains an unmarked edge zone at the kerb — no green paint, no edge line, just visibly wider asphalt. Bikes ride the edge and cars pass alongside in their own lane, without a lane change and without queueing. Both directions change together, like 🚲/➕/➖. On a street with a green bike lane this strips the paint but keeps the width (and 🚲 paints a wide street's edge green). Click again to narrow the street back. Runs the whole street, stopping at junctions. Ctrl+click toggles just that one tile.",
-  laneadd:
-    "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L, exactly like re-drawing with a bigger preset — a one-way street gains its one direction). 3L is the ceiling, same as the road tool. Stops at junctions; no need to re-drag the road. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
-  laneremove:
-    "Click a street to remove the innermost car lane EACH WAY along the whole street (3L → 2L → 1L). Bus and bike lanes are never taken — use the 🚌 / 🚲 tools for those — and each direction keeps its last car lane (erase or redraw the road to remove it entirely). Ctrl+click changes just that one tile.",
-  signalise:
-    "Click a road junction to cycle its traffic-signal mode: off → two-phase → two-phase +bus → round-robin → round-robin +bus → off. Cars then obey per-arm green/amber/red on top of the give-way rules.",
-  parking:
-    "Click a kerb to line the whole street with parking bays — the clicked kerb decides the new state, so a half-painted street goes uniform in one click. Ctrl+click does just that one tile. Each tile fits as many bays as it can hold. A greyed kerb cannot take the picked kind: 90° bays need a narrow street, and nothing parks in a bend or a junction. 🏢 places a department-store garage and 🚏 a bus stop IN the running lane — the bus never leaves it, so the traffic behind has to wait (for a lay-by that traffic flows past, use 🚗 with 🚌). A bay serves ONE class of vehicle and nothing else that merely fits: 🚛 lorries and coaches, 🚌 coaches only, 📦 the delivery lorry, ♿ nobody (no permits yet, so they stay empty — which is what makes a car park look real). Everything unmarked takes cars, and a garage has a height barrier so no lorries go down the ramp.",
-  facility:
-    "Drag across tiles to sweep them into ONE car park, so its capacity and its P sign count together. Include the AISLE tiles, not just the ones with bays — the sim watches a car leave the car park's tiles to know it drove the whole thing without finding a space. Drag over the same car park again to remove those tiles from it.",
-  terrain:
-    "Pick a ground and drag across the board to paint it — woods, water, rock, mountains and towns are areas, and the trees, boulders and buildings on them follow automatically. 🟩 grass is the eraser. Water, rock and mountain cannot be built on; woods and towns can (you clear them). Routing across water builds a bridge, across rock/mountain a tunnel — both priced accordingly.",
-  height:
-    "Drag to raise (🔼) or lower (🔽) the ground one step per stroke — paint a hill as an AREA, not just along the line. It works on ANY ground: a wood, a rock field or a massif terraces in its own colour, and a field, a town or a works steps on straight cut banks. Track may climb ONE step per tile boundary (that joint is the ramp); anything steeper is flagged as a cliff. Climbs slow heavy trains, so a pass costs freight real time.",
-  flyover:
-    "Click a diamond crossing (two rails crossing without switches) to cycle which line rides the bridge deck: flat → first line over → other line over → flat. Grade-separated lines never wait for each other — no junction, no conflict.",
-};
 
 // A no-op stand-in for the live Game so Tile.vue can render in the editor.
 // `getLevel` lets the road lane-count lookups read the live editor level, so the
@@ -779,7 +987,7 @@ function stubGame(getLevel: () => Level, getTileSize: () => number): Game {
   } as unknown as Game;
 }
 
-@Component({ components: { MenuDrawer, ToolDock } })
+@Component({ components: { MenuDrawer, BuildDock } })
 class EditorView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Provide("game") game: Game = markRaw(
@@ -793,12 +1001,26 @@ class EditorView extends Vue {
 
   EDGES = EDGES;
   levelSizeY = 6;
-  // Build-tool order in the dock (rail + road grouped first). `setTool` logic is
-  // unaffected by order.
   tool: Tool = "connect";
-  // Which dock group is open. The tool and the group are separate state: the
-  // group decides what the second row OFFERS, the tool is what is armed.
-  group: ToolGroupId = "rail";
+  // Which dock category is open, which tab each category last showed, and which
+  // item each tab last armed. The tool and the dock position are separate
+  // state: the dock decides what the rows OFFER, the tool is what is armed —
+  // and the per-category/per-tab memory means switching Rail → Road → Rail
+  // restores your track tool rather than resetting to the first item.
+  cat: CategoryId = "rail";
+  tabByCat: Record<CategoryId, string> = {
+    rail: "track",
+    road: "roads",
+    terrain: "ground",
+    raze: "raze",
+  };
+  // Pre-seeded where the FIRST item is not the sensible default: opening the
+  // traffic-lights tab should arm a mode that BUILDS lights, not Off (which is
+  // listed first as the mode scale's zero).
+  itemByTab: Record<string, string> = { "road/lights": "sig-2p" };
+  // The bulldozer's armed layer filter, and the traffic-light tool's armed mode.
+  eraseScope: EraseScope = "all";
+  signalModeArmed: JunctionSignal = { mode: "two-phase" };
   // The kind the terrain brush paints. "grass" is the eraser: it clears the
   // field rather than storing a value, since absent means grass everywhere else.
   terrainBrush: TerrainKind = "forest";
@@ -828,43 +1050,110 @@ class EditorView extends Vue {
   // The kerb under the cursor, so only that one draws its ghost bays.
   hoverKerb: { id: string; bank: Port } | null = null;
 
-  dockGroups: DockGroup[] = DOCK_GROUPS;
+  // The dock's display data. BuildDock only reads the visual subset of each
+  // item; the richer DockItem satisfies its view types structurally.
+  dockCategories: BuildDockCategoryView[] = DOCK;
 
-  get activeGroup(): DockGroup {
-    return DOCK_GROUPS.find(g => g.id === this.group) ?? DOCK_GROUPS[0];
+  get activeCategory(): DockCategory {
+    return DOCK.find(c => c.id === this.cat) ?? DOCK[0];
+  }
+  get activeTabId(): string {
+    return this.tabByCat[this.cat];
+  }
+  get activeTab(): DockTab {
+    return (
+      this.activeCategory.tabs.find(t => t.id === this.activeTabId) ??
+      this.activeCategory.tabs[0]
+    );
   }
 
-  // A terrain item is "active" by its BRUSH, not just by its tool — otherwise
-  // every ground button would light up together whenever the brush is armed.
-  isActiveItem(item: DockItem): boolean {
+  // A brush-like item is "active" by its PARAMETER, not just by its tool —
+  // otherwise every ground button (or road width, or signal mode) would light
+  // up together whenever the shared tool is armed.
+  private isActiveItem(item: DockItem): boolean {
     if (item.terrain !== undefined) {
       return this.tool === "terrain" && this.terrainBrush === item.terrain;
     }
-    // Parking's items are stall KINDS, so several share one tool — without this
-    // branch every one of them lights up at once, and picking a kind does nothing.
     if (item.stall !== undefined) {
       return this.tool === "parking" && this.stallKind === item.stall;
     }
-    // Raise and lower share the height tool the same way.
     if (item.heightDelta !== undefined) {
       return this.tool === "height" && this.heightBrush === item.heightDelta;
+    }
+    if (item.laneCount !== undefined) {
+      return this.tool === "road" && this.roadLaneCount === item.laneCount;
+    }
+    if (item.signalMode !== undefined) {
+      return (
+        this.tool === "signalise" &&
+        this.signalModeArmed.mode === item.signalMode.mode &&
+        !!this.signalModeArmed.busPriority === !!item.signalMode.busPriority
+      );
+    }
+    if (item.erase !== undefined) {
+      return this.tool === "erase" && this.eraseScope === item.erase;
     }
     return this.tool === item.tool;
   }
 
-  selectGroup(id: ToolGroupId) {
-    this.group = id;
-    // Opening a group arms its first tool, so one click is enough for the common
-    // case and the board is never left in a state where the highlighted group
-    // does not match the armed tool.
-    const first = this.activeGroup.items[0];
-    if (first) this.selectItem(first);
+  // The armed item of the OPEN tab (the dock's one filled pill), or "" while a
+  // tool from another tab is armed.
+  get activeItem(): DockItem | undefined {
+    return this.activeTab.items.find(i => this.isActiveItem(i));
+  }
+  get activeItemKey(): string {
+    return this.activeItem?.key ?? "";
+  }
+
+  get hint(): string {
+    return this.activeItem?.hint ?? "";
+  }
+  get help(): string {
+    return this.activeItem?.help ?? "";
+  }
+  get breadcrumb(): string {
+    const it = this.activeItem;
+    if (!it) return "";
+    return `${this.activeCategory.label} → ${this.activeTab.label} → ${it.label}`;
+  }
+  // Whether the armed tool fills the options slot (see the template's #options).
+  get hasOptions(): boolean {
+    return this.tool === "road" || this.tool === "parking" || this.tool === "facility";
+  }
+  get xsecTitle(): string {
+    const dir = this.roadOneWay ? "one-way" : "per direction";
+    const bus = this.roadIsBus ? " + bus lane" : "";
+    return `Next drag lays: ${this.roadLaneCount} car lane${this.roadLaneCount > 1 ? "s" : ""} ${dir}${bus}`;
+  }
+
+  selectCategory(id: CategoryId) {
+    this.cat = id;
+    // Re-arm the tab's remembered item (or its first), so the highlighted dock
+    // position always matches the armed tool.
+    this.selectTab(this.tabByCat[id]);
+  }
+
+  selectTab(id: string) {
+    this.tabByCat[this.cat] = id;
+    const tab = this.activeTab;
+    const remembered = this.itemByTab[`${this.cat}/${tab.id}`];
+    const item = tab.items.find(i => i.key === remembered) ?? tab.items[0];
+    if (item) this.selectItem(item);
+  }
+
+  selectItemByKey(key: string) {
+    const item = this.activeTab.items.find(i => i.key === key);
+    if (item) this.selectItem(item);
   }
 
   selectItem(item: DockItem) {
     if (item.terrain !== undefined) this.terrainBrush = item.terrain;
     if (item.stall !== undefined) this.stallKind = item.stall;
     if (item.heightDelta !== undefined) this.heightBrush = item.heightDelta;
+    if (item.laneCount !== undefined) this.roadLaneCount = item.laneCount;
+    if (item.signalMode !== undefined) this.signalModeArmed = item.signalMode;
+    if (item.erase !== undefined) this.eraseScope = item.erase;
+    this.itemByTab[`${this.cat}/${this.activeTabId}`] = item.key;
     this.setTool(item.tool);
   }
   // Provided so tile-level children (TileGround) can read their neighbours'
@@ -880,10 +1169,6 @@ class EditorView extends Vue {
   roadOneWay = loadRoadOneWay();
   showIo = false;
   ioText = "";
-
-  get hint(): string {
-    return HINTS[this.tool];
-  }
 
   get routes(): TrainRoute[] {
     const d = this.depotIds;
@@ -928,9 +1213,26 @@ class EditorView extends Vue {
         () => this.worldSize,
         () => this.viewportSize(),
         // The board is full-bleed; the drawer and the dock float over it. These
-        // keep the GRID clear of them (see camera.ts) — the clearance the
-        // `.world` padding used to give, without the dead border it left.
-        () => CHROME_INSETS,
+        // keep the GRID clear of them (see camera.ts). The bottom inset is
+        // MEASURED off the live dock (three rows now, and taller again on a
+        // phone) rather than assumed; the top only has the zoom cluster on a
+        // narrow screen, so the board gets the space the play view spends on
+        // its score card.
+        () => {
+          const wrap = document.querySelector(
+            ".editor-view .build-dock-wrap",
+          ) as HTMLElement | null;
+          const bottom = wrap
+            ? Math.min(Math.round(window.innerHeight * 0.5), wrap.offsetHeight + 26)
+            : CHROME_INSETS.bottom;
+          const narrow = window.matchMedia("(max-width: 700px)").matches;
+          return {
+            top: narrow ? 56 : 60,
+            right: narrow ? 12 : CHROME_INSETS.right,
+            bottom,
+            left: narrow ? 12 : CHROME_INSETS.left,
+          };
+        },
       ),
     );
     this.routeCtrl = markRaw(
@@ -1727,13 +2029,27 @@ class EditorView extends Vue {
         if (next !== cur) this.commit(id, next);
       }
     } else if (this.tool === "erase") {
-      delete this.level[id];
-      this.syncBusGates([id]); // an erased bus street un-gates its junctions
-      this.persist();
-    } else if (this.tool === "signalise") {
-      // Cycle the road junction's traffic-signal mode (no-op off a junction).
+      if (this.eraseScope === "all") {
+        delete this.level[id];
+        this.syncBusGates([id]); // an erased bus street un-gates its junctions
+        this.persist();
+        return;
+      }
+      // Layer-scoped bulldozer: remove one layer, keep the rest standing.
+      // commit() drops the cell when nothing is left and re-derives bus gates.
       const cur = this.level[id];
-      if (cur) this.commit(id, cycleJunctionSignalMode(cur));
+      if (cur) {
+        const next = eraseLayer(cur, this.eraseScope);
+        if (next !== cur) this.commit(id, next);
+      }
+    } else if (this.tool === "signalise") {
+      // Apply the ARMED traffic-light mode to the junction (no-op off a
+      // junction, and a repeat application changes nothing).
+      const cur = this.level[id];
+      if (cur) {
+        const next = setJunctionSignalMode(cur, this.signalModeArmed);
+        if (next !== cur) this.commit(id, next);
+      }
     } else if (this.tool === "flyover") {
       // Cycle which line rides the deck (no-op off a diamond crossing).
       const cur = this.level[id];
@@ -1759,14 +2075,27 @@ class EditorView extends Vue {
   }
   setTool(t: Tool) {
     this.tool = t;
-    // Keep the open group honest even when a tool is armed without going
-    // through the dock.
-    const g = GROUP_OF_TOOL.get(t);
-    if (g) this.group = g;
+    // Keep the open category + tab honest even when a tool is armed without
+    // going through the dock (a hand-off, a shortcut).
+    const loc = LOCATION_OF_TOOL.get(t);
+    if (loc) {
+      this.cat = loc.cat;
+      this.tabByCat[loc.cat] = loc.tab;
+    }
     this.routeCtrl.toolChanged();
   }
   onKeydown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") this.finishRoute();
+    if (e.key === "Escape") {
+      this.finishRoute();
+      return;
+    }
+    // 1–4 switch dock categories. Not while typing (the facility id, the
+    // import box) and not under a modifier (browser shortcuts stay theirs).
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    const idx = ["1", "2", "3", "4"].indexOf(e.key);
+    if (idx >= 0) this.selectCategory(DOCK[idx].id);
   };
   mounted() {
     window.addEventListener("keydown", this.onKeydown);
@@ -2055,18 +2384,6 @@ export default toNative(EditorView);
 }
 // The facility tool: a wash over every tile of the car park being swept, tinted
 // per car-park id so two adjacent ones are visibly different.
-.facility-input {
-  width: 64px;
-  padding: 3px 6px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(0, 0, 0, 0.35);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: center;
-}
-
 .facility-tint {
   position: absolute;
   inset: 0;
@@ -2143,107 +2460,31 @@ export default toNative(EditorView);
   stroke-linecap: round;
   pointer-events: none;
 }
-// --- Dock layout -------------------------------------------------------------
-// The dock stacks: contextual panel on top, category row underneath. `:deep` is
-// needed because `.tool-dock` lives inside the ToolDock component, and a scoped
-// style stops at a child component's root.
-:deep(.tool-dock) {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 10px;
-}
-// What the open category can do. Reserves its height so the dock does not jump
-// as categories with different numbers of tools are opened.
-.dock-panel {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 76px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
-}
-.dock-panel__empty {
-  font-size: 13px;
-  font-weight: 600;
-  color: #6a7a6a;
-  padding: 0 6px;
-}
-.dock-items {
-  display: flex;
-  gap: 6px;
-}
-// The category row: one fixed place, so the button just pressed never moves.
-.dock-groups {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-}
-.dock-group {
-  @include glass-button;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 66px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-
-  &.on {
-    background: #5fd39a;
-    color: #0e1a14;
-    box-shadow: 0 0 14px rgba(95, 211, 154, 0.5);
-
-    &:hover {
-      background: #6ee0a8;
-      color: #0e1a14;
-    }
-  }
-}
-.dock-group__icon {
-  font-size: 24px;
-  line-height: 1;
-}
-// The tools inside a category read as secondary to the categories themselves.
-.dock-btn--item {
-  min-width: 68px;
-  padding: 9px 11px;
-  font-size: 12px;
-
-  .dock-btn__icon {
-    font-size: 24px;
-  }
-}
-// Lane-count picker: a compact inline group next to the road tool buttons.
-.lane-picker {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 8px;
-  padding-left: 10px;
-  border-left: 1px solid rgba(0, 0, 0, 0.15);
-}
-// World-growth controls: extend the board before the origin, and read off the
-// current size. Growing right/down needs no button — just draw into the margin.
-.grow-picker {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto; // board controls sit apart from the category's own tools
-  padding-left: 10px;
-  border-left: 1px solid rgba(0, 0, 0, 0.15);
-}
-.grow-size {
+// The world-size readout in the zoom cluster (the grow controls live there:
+// world chrome with world chrome).
+.zoom-size {
   font-size: 12px;
   font-weight: 700;
-  color: #4a5a4a;
+  color: #17331a;
   font-variant-numeric: tabular-nums;
-  padding: 0 2px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 8px;
+  padding: 0 7px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
 }
-.lane-btn {
-  min-width: 38px;
-  padding: 4px 6px;
-  font-size: 12px;
+// On a phone the full-width dock owns the bottom edge, so the board chrome
+// moves to the top-right corner instead of vanishing behind it.
+@media (max-width: 700px), (max-height: 500px) {
+  .editor-view .world-zoom {
+    top: 10px;
+    right: 10px;
+    bottom: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 60vw;
+  }
 }
 // Per-tile lane-count badge (road tool only): a small pill at the tile bottom.
 .lane-badge-bg {

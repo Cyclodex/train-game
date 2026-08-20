@@ -1,4 +1,4 @@
-import type { Level, TileCell } from "@/tiles/model";
+import type { Level, PlotKind, TileCell } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { WALK_RADIUS_TILES } from "@/tiles/catchment";
 import { rowsOf } from "@/tiles/parking";
@@ -22,10 +22,15 @@ import { makeRng } from "@/utils/globalHelpers";
 //
 // Design: docs/superpowers/specs/2026-08-01-citizens-and-cities-design.md
 
-// What a plot is FOR. Derived from terrain plus a seeded pick for the shops —
-// deliberately no new tile field, so every existing board (townscape, demoworld,
-// any generated level) has cities the moment this module is asked.
-export type PlotKind = "home" | "work" | "shop";
+// What a plot is FOR. Derived from terrain plus a seeded pick for the shops, so
+// every existing board (townscape, demoworld, any generated level) has cities
+// the moment this module is asked — and overridable per cell with `TileCell.zone`
+// for the two kinds no terrain can express (school, leisure).
+//
+// The type itself lives in `tiles/model.ts` now that a tile can carry it;
+// re-exported here because this is where land use is DECIDED and every caller
+// already imports it from this module.
+export type { PlotKind };
 
 // How built-up a plot is: 0 hamlet, 1 houses, 2 terraces, 3 blocks. The map
 // seeds it; the citizen sim owns it from then on.
@@ -40,10 +45,21 @@ export const MAX_DENSITY: Density = 3;
 // flavour — it is what decides whether anybody has to travel. With shops as big
 // as factories, every resident found work on their own street and 99% of all
 // journeys on the reference board were made on foot, railway or no railway.
+//
+// CAPACITY ON A NON-HOME PLOT IS JOBS, and that is the trap a school walks
+// straight into. `reviewDay` gates a town's growth on `freeJobs > 0`, so a school
+// sized by its PUPILS (a couple of hundred) would hand every town a mountain of
+// employment that does not exist and it would grow into it for ever. A school's
+// capacity is therefore its TEACHERS, and a café's its staff. Pupils are not
+// capacity at all: a school trip never touches `plot.people` — only `assignJob`
+// does — so three teachers can teach the whole town, which is both true enough
+// and the only version that leaves growth honest.
 const CAPACITY: Record<PlotKind, [number, number, number, number]> = {
   home: [4, 8, 16, 32],
   work: [12, 24, 48, 96],
   shop: [2, 4, 8, 16],
+  school: [3, 6, 12, 24],
+  leisure: [2, 4, 8, 16],
 };
 
 export function plotCapacity(kind: PlotKind, density: Density): number {
@@ -261,6 +277,11 @@ function comparePlotId(a: string, b: string): number {
  * their shops in the middle, and it gives the centre a reason to be reached.
  * The pick is a seeded hash of the coordinate, so it is identical on every
  * reload and in every replay.
+ *
+ * `TileCell.zone` overrides all of it. It is applied AFTER the shop ranking
+ * rather than before, so zoning a cell as a school does not silently promote
+ * some other house into the shop parade — the derived town stays the town it
+ * was, with the authored buildings placed into it.
  */
 export function plotsOf(level: Level, seed = 1): PlotSpec[] {
   const cities = citiesOf(level);
@@ -285,7 +306,8 @@ export function plotsOf(level: Level, seed = 1): PlotSpec[] {
     for (const id of city.plots) {
       const { x, y } = parseCoordId(id);
       const industry = level[id].terrain === "industry";
-      const kind: PlotKind = industry ? "work" : shops.has(id) ? "shop" : "home";
+      const kind: PlotKind =
+        level[id].zone ?? (industry ? "work" : shops.has(id) ? "shop" : "home");
       // Opening density: a seeded spread so a town is not uniform, biased up
       // toward the centre (the middle of a town is always the built-up part).
       const rng = makeRng((seed ^ (x * 73856093) ^ (y * 19349663)) >>> 0);

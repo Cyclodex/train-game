@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Position, ActiveIntersection } from "@/types";
 import { samePair, TileCell, Level } from "@/tiles/model";
-import { lanesAllowingExit, nWayLanes, twoWay } from "@/tiles/lanes";
+import { lanesAllowingExit, nWayLanes, twoWay, fromPairs } from "@/tiles/lanes";
 import { validateRoads } from "@/tiles/validate";
 import {
   emptyCell,
@@ -30,6 +30,9 @@ import {
   removeStreetLaneRun,
   syncJunctionBusGates,
   syncJunctionBusGatesAround,
+  setJunctionSignalMode,
+  eraseLayer,
+  isBlankCell,
 } from "@/tiles/editOps";
 
 const { Top, Right, Bottom, Left, Center } = Position;
@@ -907,5 +910,115 @@ describe("syncJunctionBusGates (bus-only street gates its junctions)", () => {
     // though no car lane "enters from" a missing tile.
     const synced = syncJunctionBusGates(level, "1,0");
     expect(synced).toBe(level["1,0"]);
+  });
+});
+
+describe("setJunctionSignalMode (the dock's pick-a-mode traffic-light verb)", () => {
+  const junction = (): TileCell => ({ connections: [], road: fromPairs([[Top, Bottom], [Left, Right]]) });
+
+  it("applies a mode directly and stores off as an absent signal", () => {
+    let c = setJunctionSignalMode(junction(), { mode: "round-robin", busPriority: true });
+    expect(c.signal).toEqual({ mode: "round-robin", busPriority: true });
+    c = setJunctionSignalMode(c, { mode: "two-phase" });
+    expect(c.signal).toEqual({ mode: "two-phase" });
+    c = setJunctionSignalMode(c, { mode: "off" });
+    expect(c.signal).toBeUndefined();
+    expect("signal" in c).toBe(false);
+  });
+
+  it("is a reference-equal no-op on non-junctions and on repeat application", () => {
+    const straight: TileCell = { connections: [], road: twoWay(Left, Right) };
+    expect(setJunctionSignalMode(straight, { mode: "two-phase" })).toBe(straight);
+    const j = setJunctionSignalMode(junction(), { mode: "two-phase" });
+    expect(setJunctionSignalMode(j, { mode: "two-phase" })).toBe(j);
+    const off = junction();
+    expect(setJunctionSignalMode(off, { mode: "off" })).toBe(off);
+  });
+
+  it("never stores busPriority: false (round-trips like the cycle)", () => {
+    const c = setJunctionSignalMode(junction(), { mode: "two-phase", busPriority: false });
+    expect(c.signal).toEqual({ mode: "two-phase" });
+    expect("busPriority" in c.signal!).toBe(false);
+  });
+});
+
+describe("eraseLayer (the bulldozer's layer filter)", () => {
+  // A level-crossing cell carrying every layer at once: rail with a signal on a
+  // depot... rail role is exclusive, so use a station on through-track.
+  const loaded = (): TileCell => ({
+    connections: [[Top, Bottom]],
+    role: "station",
+    signals: [Top],
+    road: twoWay(Left, Right),
+    parking: { rows: [], facility: "P1" },
+    terrain: "forest",
+    height: 2,
+  });
+
+  it("rail: drops track, role and rail signals; road, parking, terrain stay", () => {
+    const c = eraseLayer(loaded(), "rail");
+    expect(c.connections).toEqual([]);
+    expect(c.role).toBeUndefined();
+    expect(c.signals).toBeUndefined();
+    expect(c.road?.length).toBeGreaterThan(0);
+    expect(c.parking).toEqual({ rows: [], facility: "P1" });
+    expect(c.terrain).toBe("forest");
+    expect(c.height).toBe(2);
+  });
+
+  it("road: drops lanes, junction signal, priority AND parking; rail stays", () => {
+    const start: TileCell = {
+      ...loaded(),
+      road: fromPairs([[Top, Bottom], [Left, Right]]),
+      signal: { mode: "two-phase" },
+      roadPriority: 1,
+    };
+    const c = eraseLayer(start, "road");
+    expect(c.road).toBeUndefined();
+    expect(c.signal).toBeUndefined();
+    expect(c.roadPriority).toBeUndefined();
+    expect(c.parking).toBeUndefined(); // rows sit on the road that just left
+    expect(c.connections).toEqual([[Top, Bottom]]);
+    expect(c.role).toBe("station");
+  });
+
+  it("parking: drops only the parking layer", () => {
+    const c = eraseLayer(loaded(), "parking");
+    expect(c.parking).toBeUndefined();
+    expect(c.road?.length).toBeGreaterThan(0);
+    expect(c.connections).toEqual([[Top, Bottom]]);
+    expect(c.terrain).toBe("forest");
+  });
+
+  it("terrain: back to flat grass, leaving everything built", () => {
+    const c = eraseLayer(loaded(), "terrain");
+    expect(c.terrain).toBeUndefined();
+    expect(c.height).toBeUndefined();
+    expect(c.connections).toEqual([[Top, Bottom]]);
+    expect(c.road?.length).toBeGreaterThan(0);
+    expect(c.parking).toEqual({ rows: [], facility: "P1" });
+  });
+
+  it("a structure goes with the last line it carried", () => {
+    // Rail bridge over water, no road: erasing rail drops the bridge.
+    const railBridge: TileCell = {
+      connections: [[Top, Bottom]],
+      terrain: "water",
+      bridge: true,
+    };
+    expect(eraseLayer(railBridge, "rail").bridge).toBeUndefined();
+    // Rail + road share the crossing: erasing one layer keeps the structure.
+    const both: TileCell = { ...railBridge, road: twoWay(Left, Right) };
+    expect(eraseLayer(both, "rail").bridge).toBe(true);
+    expect(eraseLayer(both, "road").bridge).toBe(true);
+    // Erasing the water under a bridge grounds the line: the structure goes.
+    expect(eraseLayer(railBridge, "terrain").bridge).toBeUndefined();
+  });
+
+  it("erasing the only layer leaves a blank cell for the caller to drop", () => {
+    const railOnly: TileCell = { connections: [[Top, Bottom]] };
+    expect(isBlankCell(eraseLayer(railOnly, "rail"))).toBe(true);
+    const terrainOnly: TileCell = { connections: [], terrain: "water" };
+    expect(isBlankCell(eraseLayer(terrainOnly, "terrain"))).toBe(true);
   });
 });
