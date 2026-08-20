@@ -3358,6 +3358,12 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
     edge at `k=0.5` for a cycle lane. Before it, a one-way with a cycle lane
     got the tint and kept the full-slot dash.
   · `/test/cyclebend` and `/test/cycleoneway` are those two shapes in isolation.
+- `laneContinuity.spec.ts` must feed `couplerOffsets` the SAME class game.ts does
+  (`bus` / `bike` / `car`). It mapped every non-bus to "car", which for a bike on
+  a cycle lane asks for a car's landing lane through a turn — a point the
+  renderer never draws — and reported a whole lane of phantom teleport the first
+  time a bike turned off a cycle lane (`/test/cyclebend`). The harness measures
+  what the PLAYER sees, so any new vehicle class has to be added there too.
 - `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
   `/test/bikeovertake` (2-lane passing), `/test/bikeleftturn` (kerb rule at a
   forced left), `/test/cyclebend` + `/test/cycleoneway` (the paint on the other
