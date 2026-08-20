@@ -1728,6 +1728,32 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
 
+## EDITOR: the three-row build dock (2026-08-21)
+- The dock is `BuildDock.vue` (presentational; EditorView owns ALL state):
+  categories Rail / Road / Terrain / Bulldozer → tabs separating the verbs →
+  items. Brush-like tools (terrain kinds, stall kinds, road widths 1L/2L/3L,
+  traffic-light modes, bulldozer scopes) are ITEMS carrying their parameter —
+  several items share one `Tool`, and `isActiveItem` matches on the PARAMETER,
+  or every sibling lights up together.
+- Traffic lights are pick-then-apply (`setJunctionSignalMode`), NOT the old
+  6-state cycle (`cycleJunctionSignalMode` survives for back-compat). The
+  lights tab default-arms Two-phase via a pre-seeded `itemByTab` entry — its
+  first item is Off, and arming Off by default makes the first junction click
+  DELETE lights.
+- The bulldozer is layer-scoped: `eraseLayer(cell, "rail"|"road"|"parking"|
+  "terrain")` in editOps. Road erase takes `parking` with it (rows sit on the
+  kerbs of the street being removed); a structure (bridge/tunnel) goes with the
+  LAST line it carried, and terrain erase drops it too (no bridge over grass).
+  "Everything" is the caller's `delete level[id]`, not an EraseLayer value.
+- The dock has a FIXED width (880px desktop) so the category row never shifts
+  when tabs of different widths open; the camera's bottom inset is MEASURED off
+  `.build-dock-wrap` (the old constant 128 predates the three-row dock).
+- Keys 1–4 pick categories (guarded: not from INPUT/TEXTAREA, not with a
+  modifier); each category remembers its last tab + item per session.
+- e2e tests must open the right TAB before clicking a tool button — Depot is
+  Rail→Stations, Signal Rail→Signalling, the erase ✕ handles are Bulldozer
+  (default filter Everything; rail ✕ only shows for scope all|rail).
+
 ## EDITOR: heights & flyover tools (2026-07-31)
 - The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —
   `heightStroke` remembers where the drag has been, because re-applying ±1 on
