@@ -32,6 +32,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/overtaking": "🏎️",
   "streets/priority": "⚠️",
   "streets/vehicles": "🚌",
+  "streets/cycling": "🚲",
   "streets/routing": "📍",
   "streets/parking": "🅿️",
   "challenges/modes": "🎯",

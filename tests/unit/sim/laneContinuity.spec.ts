@@ -4,6 +4,7 @@ import { createLaneGeometry } from "@/sim/laneGeometry";
 import { laneSegmentPointAt } from "@/sim/pathGeometry";
 import { oppositePort } from "@/sim/topology";
 import type { CarSample } from "@/sim/road";
+import type { VehicleClass } from "@/tiles/lanes";
 import { simFor, hasRoad, canSpawn } from "../support/roadSim";
 
 // Lane continuity: a vehicle must never TELEPORT SIDEWAYS.
@@ -53,7 +54,7 @@ function worldPoint(
   geo: ReturnType<typeof createLaneGeometry>,
   s: CarSample,
   laneIndex: number,
-  cls: "car" | "bus",
+  cls: VehicleClass,
 ): { x: number; y: number; deg: number } | null {
   if (s.pose) return null; // parked / manoeuvring: not on a lane path at all
   const off = geo.couplerOffsets(s, laneIndex, cls);
@@ -95,11 +96,16 @@ describe("lane continuity — no vehicle ever jumps sideways", () => {
           for (let u = 0; u < c.units.length; u++) {
             // Exactly what game.ts's updateRoadCars feeds the geometry: the unit's
             // own front coupler, the car's lane index, and the unit's lane-access
-            // class (a bus is positioned on bus lanes a car may not use).
+            // class (a bus is positioned on bus lanes a car may not use, and a
+            // BIKE on the half-width cycle strip — mapping a bike to "car" here
+            // measured a point the renderer never draws, and read a whole lane of
+            // phantom teleport wherever a bike turned off a cycle lane).
             const unit = c.units[u];
             const f = unit.front;
             const id = `${c.id}#${u}`;
-            const pt = worldPoint(geo, f, c.laneIndex, unit.part === "bus" ? "bus" : "car");
+            const cls: VehicleClass =
+              unit.part === "bus" ? "bus" : unit.part === "bike" ? "bike" : "car";
+            const pt = worldPoint(geo, f, c.laneIndex, cls);
             if (!pt) continue; // parked: skip, and let it re-anchor when it drives off
             alive.add(id);
             const was = prev.get(id);
