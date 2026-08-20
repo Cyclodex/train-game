@@ -255,12 +255,17 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     and `LaneKind "cycle"` + bikes-in-bus-lanes via the `laneUsableBy` access
     matrix — the player's remedy for that queue; editor lane tool cycles
     normal → bus → cycle; scenarios `bikemix`/`bikeovertake`/`cyclelane`.
-    Remaining: (C) bike racks (`StallKind "bikerack"`, the busstop precedent
-    mirrored) + bike-and-ride at stations; (C′) `TravelMode
-    "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's reserved
-    "phase C"; (D) shared foot/bike paths, queued behind the standalone-footpath
-    axis. Files remaining: `src/tiles/parking.ts`, `src/sim/citizens.ts`;
-    scenarios `bikerack`/`bikeandride`/`citizenbike`.
+    **Phase C SHIPPED 2026-08-20**: `StallKind "bikerack"` (walk-in, no
+    manoeuvre — the busstop mirrored off-lane) + `BayClass "bike"` closing the
+    class matrix both ways, the P+R/bike-and-ride split by bay class
+    (`bikeAndRideStationsOf`), the racked-bike→platform transfer, and cycling
+    reach as a per-rider range (`BIKE_RANGE_TILES`/`bikeRangeOf` — casual
+    majority short, sporty tail far); scenarios `bikerack`/`bikeandride`.
+    Remaining: (C′) `TravelMode "bike"`/`"bikeAndRide"` in `quoteModes` — the
+    citizens spec's reserved "phase C", drawing each citizen's range via
+    `bikeRangeOf(bikeAffinity)`; (D) shared foot/bike paths, queued behind the
+    standalone-footpath axis. Files remaining: `src/sim/citizens.ts`; scenario
+    `citizenbike`.
 
 ## Architecture / code health
 

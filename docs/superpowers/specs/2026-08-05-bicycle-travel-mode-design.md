@@ -3,9 +3,23 @@
 _Status: phases A+B BUILT (2026-08-05) — the bike vehicle kind, the per-kind
 speed factor, the cycle lane and the access matrix, the editor's three-state
 lane tool, and the three `/test` scenarios (`bikemix`, `bikeovertake`,
-`cyclelane`; sim pins in `tests/unit/sim/roadBikes.spec.ts`). Phases C
-(racks/bike-and-ride), C′ (citizen travel mode) and D (shared paths) remain
-plans. The rest of this document is the impact survey and
+`cyclelane`; sim pins in `tests/unit/sim/roadBikes.spec.ts`). Phase C BUILT
+(2026-08-20) — `StallKind "bikerack"` (walk-in/walk-out, no manoeuvre, 11
+stands/tile), `BayClass "bike"` closing the class matrix both ways, the
+P+R/bike-and-ride split by bay class (`bikeAndRideStationsOf`,
+`CitizenWorld.bikeAndRideStations`), the transfer (a racked bike = 1 rider on
+the platform, zero new code), and — one deviation from §5/§6 below — cycling
+reach shipped as a per-rider RANGE, not a constant: `BIKE_RANGE_TILES`
+{typical 5, max 9} + `bikeRangeOf(affinity)` in `tiles/catchment.ts`, because
+most people take the bike for short hops while a sporty minority rides far;
+phase C′'s quoting draws each citizen's own range from that band (so
+`bikeMaxTiles` as one number is superseded — the tuning warning about eating
+rail share now applies to `typical`, and the mode-share acceptance test in §6
+stands unchanged). Scenarios `/test/bikerack` + `/test/bikeandride`; pins in
+`tests/unit/sim/bikeRack.spec.ts` and `tests/unit/parkAndRide.spec.ts`. Rack
+depth shipped 0.09, not §5's ~0.08 — the fit gate measures the real 17px bike
+body against `stallLengthPx · 0.98` and 16px refuses it. Phases C′ (citizen
+travel mode) and D (shared paths) remain plans. The rest of this document is the impact survey and
 phased design for bringing bicycles into the game: on the carriageway, in their
 own lanes, at the station, in the citizen's mode choice. It is the "phase C"
 that `2026-08-01-citizens-and-cities-design.md` §9 promised in one parenthesis

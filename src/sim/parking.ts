@@ -27,6 +27,7 @@ import {
   stallPose,
   stallIsHidden,
   stallOnLane,
+  stallWalkIn,
   stallLengthPx,
   forwardExitPath,
   forwardExitEndT,
@@ -40,20 +41,18 @@ import { specLength, vehicleSpec, type VehicleKind } from "./road";
 
 // Vehicles that may park at all. A SEMI never does: it is two articulated body
 // segments, and a bay is one box — an articulated lorry belongs in a lay-by, not
-// a shopper's car park. A BIKE doesn't either — yet: no bay class admits one
-// (every existing kind is car-sized or bigger, and the size gate would happily
-// pass a bike into any of them), so until bike racks exist a bike must never be
-// dispatched on a parking trip it can only fail. Excluding both here rather
-// than in the geometry keeps the rule where a reader looks for it.
+// a shopper's car park. A BIKE parks since racks exist (phase C) — and ONLY at
+// racks: no other bay class admits one, and that class gate is the only fence,
+// because the size gate would happily pass a bike into any car bay.
 export function vehicleCanPark(kind: VehicleKind): boolean {
-  return kind !== "semi" && kind !== "bike";
+  return kind !== "semi";
 }
 
 // WHO a bay is for. Deliberately not "how big is it": a lorry lay-by and a
 // delivery bay are the same size and serve different traffic, and a bus stop is
 // for coaches only however much room a lorry would have had. Size is a
 // CONSEQUENCE of the class (see `needsBigBay`); admission is the rule.
-export type BayClass = "car" | "lorry" | "bus" | "delivery" | "permit" | "resident";
+export type BayClass = "car" | "lorry" | "bus" | "delivery" | "permit" | "resident" | "bike";
 
 export function bayClassOf(row: ParkingRow): BayClass {
   // SOMEBODY'S DRIVE, and that beats every other reading of the row. A private
@@ -67,6 +66,9 @@ export function bayClassOf(row: ParkingRow): BayClass {
   // A halt on the carriageway is a bus stop by its own shape — it needs no
   // `reserved` flag to say so, and authoring one would just be a second spelling.
   if (row.kind === "busstop") return "bus";
+  // A rack is bike-only by its own shape too, for the same reason — and the
+  // validator refuses a reserved or private rack, so nothing below can re-read it.
+  if (row.kind === "bikerack") return "bike";
   switch (row.reserved) {
     case "long":
       return "lorry";
@@ -108,6 +110,11 @@ export function bayAdmits(kind: VehicleKind, cls: BayClass): boolean {
     // it is asked separately — `stallAdmits`, with the driver's address.
     case "resident":
       return kind === "car";
+    // A RACK. Bikes only — and the mirror rule matters just as much: no other
+    // class admits a bike, and that is the ONLY fence, because a bike passes
+    // every size gate there is.
+    case "bike":
+      return kind === "bike";
   }
 }
 
@@ -181,7 +188,7 @@ function hashOf(s: string): number {
 // question `capacity`/`freeCount` ask when no kind is named. Listing them beats
 // hard-coding a car: a lay-by of two lorry bays would otherwise report nought
 // capacity and its sign would read VOLL beside two empty spaces.
-const CAPACITY_PROBES: VehicleKind[] = ["car", "truck", "bus"];
+const CAPACITY_PROBES: VehicleKind[] = ["car", "truck", "bus", "bike"];
 
 // --- The registry ------------------------------------------------------------
 
@@ -505,8 +512,9 @@ export function createParkingRegistry(
       const info = infoOf(ref);
       if (!info) return 0;
       // A halt has no pull-in to start early for: the bus stops exactly AT the
-      // stop, on the lane it is already in.
-      if (info.onLane) return info.t;
+      // stop, on the lane it is already in. A WALKED-IN stall likewise — the
+      // rider stops at the kerb abeam the stand, there is no approach run.
+      if (info.onLane || stallWalkIn(info.row.kind)) return info.t;
       return manoeuvreStartT(info.row, ref.index, 1, info.kerb);
     },
 

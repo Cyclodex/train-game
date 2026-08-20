@@ -18,7 +18,7 @@ lanes, turn rules, vehicle classes, and (eventually) lateral lane changes.
 | E | Lane attributes / vehicle classes (bus lanes) | ✅ **Done & merged** (enforced + rendered + scenario) |
 | F | Route planner v2 (lane- + restriction-aware; car destinations) | ✅ **Done & merged** — cars sort into the turn lane their route needs; routes target off-map exits (one-way networks route) |
 | G | Lane switching (overtake, pre-turn positioning, lateral changes) | ✅ **Done & merged** — continuous lane position, gap-accepted lane changes, merge before a lane drop |
-| H | Bicycles (slow vehicle kind, cycle lanes, racks, citizen travel mode) | 🚧 **Phases A+B done** (2026-08-05: `bike` kind + per-kind speed + `cycle` LaneKind + editor tool + `bikemix`/`cyclelane`/`bikeovertake`); racks/citizen mode/shared paths planned — spec: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` |
+| H | Bicycles (slow vehicle kind, cycle lanes, racks, citizen travel mode) | 🚧 **Phases A+B+C done** (A+B 2026-08-05: `bike` kind + per-kind speed + `cycle` LaneKind + editor tool + `bikemix`/`cyclelane`/`bikeovertake`; C 2026-08-20: `bikerack` walk-in stalls + `BayClass "bike"` + bike-and-ride split/transfer + per-rider `BIKE_RANGE_TILES` + `bikerack`/`bikeandride`); citizen mode (C′)/shared paths (D) planned — spec: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` |
 
 ## Where we stand
 

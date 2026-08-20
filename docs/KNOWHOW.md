@@ -3270,8 +3270,9 @@ of the above; read that section first.
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
 ## BICYCLES (phase A+B — the slow kind and the cycle lane, 2026-08-05)
-Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phases
-C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT built).
+Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phase C
+— racks + bike-and-ride — is built, see the next section; C′/D — the citizen
+mode, shared paths — are NOT).
 - `VehicleKind "bike"` is the FIRST kind with its own pace: `KIND_SPEED`
   (road.ts, bike 0.45) scales the cruise draw at BOTH spawn sites; before it,
   every kind drew from the same `carSpeed ± spread` band and only length
@@ -3292,9 +3293,9 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
 - DETERMINISM: "bike" carries no default mix weight, so `pickKind`'s draw
   sequence is unchanged on every pre-bike seeded board (pinned in
   roadBikes.spec.ts). Bikes appear only where `traffic.mix` opts in.
-- `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
-  SIZE gate would pass a bike into any car bay — the class gate is the only
-  fence. Racks are phase C; until then a bike on a parking trip could only fail.
+- `vehicleCanPark` admits bikes since phase C (racks exist) — and racks are the
+  ONLY place they may stop: the SIZE gate would pass a bike into any car bay, so
+  the bay-CLASS gate is the only fence (see BICYCLES phase C below).
 - A bike NEVER rides an inner lane: `preferredLane` short-circuits for bikes to
   the kerb-most cycle lane (else kerb-most usable lane) — no exit-lane settle,
   no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
@@ -3369,6 +3370,46 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   forced left), `/test/cyclebend` + `/test/cycleoneway` (the paint on the other
   two road shapes); sim pins in `roadBikes.spec.ts`, paint pins in
   `roadGeometry.spec.ts`.
+
+## BICYCLES phase C — the rack and bike-and-ride (2026-08-20)
+- `StallKind "bikerack"` = the busstop's MIRROR: `stallWalkIn` (tiles/parking.ts)
+  is the one predicate — no manoeuvre curve in EITHER direction (the rider stops
+  at the kerb abeam the stand, `startTOf` returns `info.t`, `exitsForward` is
+  false, `beginEntering` short-circuits straight to `parked` with
+  `parkPath = null`). A halt keeps its road body (`parkOnLane`); a rack drops it
+  (ordinary parked invariant, zero body points) — that pair of predicates is the
+  whole difference between the two no-manoeuvre kinds.
+- A parked WALK-IN vehicle has no curve for `sample()`'s parked branch (it keys
+  on `parkPath`), so road.ts has a second branch that poses it straight from
+  `stallPose(row, index, 1, info.kerb)` — same source as the painted hoops, so
+  bike and stand cannot disagree. Forget it and a racked bike renders standing
+  in its lane.
+- Rack depth is 0.09 (18px), NOT the plan's 0.08: `stallFits` measures the real
+  body (bike 17.1px) against `stallLengthPx · 0.98`, and 16px refuses the very
+  vehicle the rack exists for. Pitch 0.09 → 11 stands/tile where 3 cars fit.
+- `BayClass "bike"` admits bikes ONLY, and no other class admits a bike — both
+  directions matter, because a bike passes every size gate there is. A rack
+  cannot be `reserved` (needsBigBay would size the stands for a lorry) or
+  `resident` (the resident class only admits cars → dead stands);
+  `validateParking` refuses both.
+- THE P+R TRAP (predicted by the survey, real): `parkAndRideStationsOf`
+  qualified a station on ANY parking row in reach — the first rack would have
+  made its station a car P+R target with nowhere for a car to park. It filters
+  by bay class now (`bayAdmits("car", bayClassOf(row))`), and
+  `bikeAndRideStationsOf` is the bike sibling (same WALK radius: the
+  rack→platform leg is a walk). `CitizenWorld.bikeAndRideStations` carries it
+  for phase C′.
+- CYCLING REACH IS A RANGE, NOT A CONSTANT (`BIKE_RANGE_TILES`
+  {typical 5, max 9} + `bikeRangeOf(affinity)`, tiles/catchment.ts): most riders
+  take the bike for short hops, a sporty tail rides far — per-rider willingness
+  is drawn from the band (C′ feeds `bikeAffinity` in), targeting/reachability
+  asks `max`. Never widen the shared WALK_RADIUS_TILES instead — it also feeds
+  station demand and P+R, and inflating it re-prices every station.
+- The transfer needed ZERO new code: a rack stall going free→taken within walk
+  reach injects `transferSizeOf` = 1 rider (the default arm — only a bus stop
+  returns a busload). Pinned in parkAndRide.spec.ts ("arrived BY BIKE").
+- `/test/bikerack` (rack + kerb bays side by side, classes never cross),
+  `/test/bikeandride` (the rack feeds the platform); pins in `bikeRack.spec.ts`.
 
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),

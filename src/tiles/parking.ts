@@ -50,12 +50,18 @@ import { getCoordinatesId } from "@/utils/tileHelpers";
 //                      at all, so the traffic behind it QUEUES, which is the whole
 //                      difference between a stop and a lay-by. Bus-only by its own
 //                      kind; no `reserved` needed (see sim/parking.ts bayClassOf).
+//  • "bikerack"      — a rank of stands off the kerb. The busstop's mirror image:
+//                      also no manoeuvre, but OFF the lane — the rider stops at
+//                      the kerb and the bike is WALKED in (see `stallWalkIn`).
+//                      High density: a rack row packs ~11 stands where 3 cars
+//                      fit. Bike-only by its own kind (sim/parking.ts bayClassOf).
 export type StallKind =
   | "parallel"
   | "perpendicular"
   | "angled"
   | "garage"
-  | "busstop";
+  | "busstop"
+  | "bikerack";
 
 // Does a vehicle using this stall stay ON the carriageway? The one property that
 // separates a bus STOP from a bus BAY, and it decides three things at once: no
@@ -63,6 +69,17 @@ export type StallKind =
 // its road body, so everything behind it has to wait.
 export function stallOnLane(kind: StallKind): boolean {
   return kind === "busstop";
+}
+
+// Is a vehicle WALKED into this kind of stall rather than driven? The bike
+// rack's own property, and it decides the same three things `stallOnLane` does
+// for a halt, the other way round: no pull-in curve (the rider stops at the kerb
+// abeam the stand and wheels the bike in), no manoeuvre to pace, and — the point
+// — the parked bike has NO road body (the ordinary `parked` invariant), so the
+// lane is genuinely free the moment the rider dismounts. The whole
+// Bézier/pivot/courtesy machinery is bypassed, not extended.
+export function stallWalkIn(kind: StallKind): boolean {
+  return kind === "bikerack";
 }
 
 // Does a vehicle drive OUT of this kind of stall nose-first?
@@ -74,6 +91,10 @@ export function stallOnLane(kind: StallKind): boolean {
 // lay-by can physically do. A garage is the same story, and is why it has a
 // second mouth to come out of.
 export function exitsForward(kind: StallKind, enteredReverse = false): boolean {
+  // A WALKED-IN stall is walked out of too — there is no curve in either
+  // direction, so neither exit style applies. Before the reverse rule, because a
+  // bike never "backed in" in the first place.
+  if (stallWalkIn(kind)) return false;
   // HOW YOU GOT IN DECIDES HOW YOU GET OUT, and that is the whole rule. Back into
   // a space and you drive out of it — which is exactly why drivers reverse into a
   // bay in the first place: you leave facing the traffic you are joining.
@@ -389,6 +410,12 @@ const DEPTH_FRAC: Record<StallKind, number> = {
   // depth than a 90° one, which is the other half of why echelon parking exists.
   angled: 0.21,
   garage: 0.11, // 22px — just the ramp mouth at the kerb
+  // 18px — a bike is 17px long (0.45 of a 38px car) and stands nose-in to the
+  // rack. NOT 16: the fit gate (`stallFits`, 2% margin) measures the body the
+  // sim actually builds, and at 16px it would refuse the very vehicle the rack
+  // exists for. Also comfortably over the half-lane "too shallow" floor (14px),
+  // so a parked bike reads as clear of the carriageway.
+  bikerack: 0.09,
 };
 
 // Longitudinal PITCH of one stall along the kerb, as a fraction of a tile. This
@@ -407,6 +434,10 @@ const PITCH_FRAC: Record<StallKind, number> = {
   // 90° bays and wastes a third of the kerb.
   angled: 0.145,
   garage: 1, // the ramp mouth is one object, whatever the capacity
+  // 18px per stand — a bike is 9px wide, so each gets its hoop plus room to
+  // wheel in beside a parked neighbour. 11 stands per tile where 3 cars fit
+  // (parallel pitch 60px): the density argument FOR racks, made visible.
+  bikerack: 0.09,
 };
 
 // A LONG bay — the lorry/coach bay. The longest single-box vehicle the sim builds
@@ -457,6 +488,7 @@ const REST_ANGLE: Record<StallKind, number> = {
   perpendicular: 90,
   angled: 45,
   garage: 90,
+  bikerack: 90, // nose-in to the stand, like a tiny 90° bay
 };
 
 // A garage stall is inside the building — the car is not drawn while it holds one.
@@ -1535,6 +1567,14 @@ export function validateParking(
       // forms behind a halted vehicle would be forming for a parked car.
       if (row.resident && stallOnLane(row.kind)) {
         add(tileId, `a private drive cannot be a "${row.kind}" — that is a halt on the carriageway`);
+      }
+      // A RACK carries no reservation and belongs to nobody. Every
+      // `StallReservation` names a motor-vehicle bay class — and the "big bay"
+      // sizing a reservation brings would scale the stands for a lorry — while
+      // `resident` would put the row behind a permit gate whose class only
+      // admits cars, leaving a rank of stands nothing can ever use.
+      if (stallWalkIn(row.kind) && (row.reserved || row.resident)) {
+        add(tileId, `a "${row.kind}" row cannot be reserved or private — it is bike-only by its own kind`);
       }
     }
   }
