@@ -420,6 +420,14 @@ another when it is taken.
 A screenshot proves what you saw; a link lets the reader see it for themselves.
 Both, every time — a change nobody can reach in one click is not handed over.
 
+**In a PR body, write localhost anyway.** A reviewer has no dev server, but you
+do not have to translate: once the PR preview is deployed, `deploy.yml` rewrites
+every `http://localhost:<port>/…` in the **body** to
+`https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…` — same paths, same
+hash routes, now clickable. It runs on every push to the PR, so links you add
+later are rewritten too. Comments are left alone (editing someone's posted words
+reads worse than a stale link), so paste preview URLs there yourself.
+
 
 ## Ticket ownership (don't double-build)
 

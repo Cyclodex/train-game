@@ -6,7 +6,9 @@ name: Deploy
 #   - pull requests   -> build + deploy to gh-pages/pr-preview/pr-<N>/
 #                        -> https://cyclodex.github.io/train-game/pr-preview/pr-<N>/
 #                        (the action comments the link on the PR and removes the
-#                        preview again when the PR closes)
+#                        preview again when the PR closes; a follow-up step
+#                        rewrites any localhost links in the PR body to that
+#                        preview, so a reviewer can click them)
 #
 # Both jobs push commits to the same gh-pages branch, so they share one
 # concurrency group to avoid racing pushes. The master deploy cleans everything
@@ -73,3 +75,39 @@ jobs:
         uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: dist
+
+      # Every task hands back links to the pages it touched (CLAUDE.md), and they
+      # are written against the dev server because that is where the author was
+      # looking. A reviewer has no dev server — so once the preview for THIS PR
+      # is live, rewrite those links to point at it. The author keeps writing
+      # localhost; the reader gets a URL that opens.
+      #
+      # Only the body: comments are a conversation with a timestamp, and editing
+      # someone's words after the fact reads worse than a stale link.
+      - name: Point localhost links at this PR's preview
+        if: github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            // github.io hosts are lower-case; the repo owner is not necessarily.
+            const base =
+              `https://${owner.toLowerCase()}.github.io/${repo}/pr-preview/pr-${context.issue.number}/`;
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: context.issue.number,
+            });
+            const body = pr.body ?? "";
+            // The trailing slash is part of the match, so `…:5173/#/play` becomes
+            // `…/pr-<N>/#/play` rather than growing a second one.
+            const rewritten = body.replace(
+              /https?:\/\/(?:localhost|127\.0\.0\.1):\d+\//g,
+              base
+            );
+            if (rewritten === body) {
+              core.info("No dev-server links in the body; nothing to rewrite.");
+              return;
+            }
+            await github.rest.pulls.update({
+              owner, repo, pull_number: context.issue.number, body: rewritten,
+            });
+            core.info(`Rewrote dev-server links to ${base}`);

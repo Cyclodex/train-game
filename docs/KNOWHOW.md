@@ -3720,6 +3720,19 @@ of the above; read that section first.
   break has no conflict to find.
 - And when it does break: the fix is usually in YOUR code, not their test. Ask
   what the other session's assertion was trying to say, and make that true.
+- WRITE LOCALHOST LINKS IN A PR BODY ANYWAY (2026-08-08). The hand-back links are
+  written against the dev server because that is where the author was looking,
+  and a reviewer has no dev server — so `deploy.yml` rewrites them after the PR
+  preview deploys: `http://localhost:<port>/…` ->
+  `https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…`. Same paths, same
+  hash routes. It runs on EVERY push to the PR, so links added later are caught
+  too, and it is idempotent (the trailing slash is part of the match, so a
+  rewritten URL no longer matches).
+  · BODY ONLY. Comments are a conversation with a timestamp; rewriting posted
+    words after the fact reads worse than a stale link — paste preview URLs
+    there yourself.
+  · Fork PRs never reach the step: their token cannot push to gh-pages, so the
+    whole preview job is skipped.
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
   BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
   one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor
