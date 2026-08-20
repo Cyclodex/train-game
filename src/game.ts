@@ -1893,7 +1893,25 @@ export function createGame(
       const here = at ? stops.indexOf(at) : -1;
       if (here >= 0) bus.stopIndex = (here + 1) % stops.length;
       const next = stops[bus.stopIndex];
-      roadSim.retarget(bus.carId, next);
+      if (roadSim.retarget(bus.carId, next)) continue;
+
+      // NO WAY ONWARD FROM THE LANE IT IS STANDING IN — a terminus. The router
+      // plans lane by lane and there is no U-turn, so a line that ends in a
+      // dead end leaves the bus facing a wall.
+      //
+      // It TURNS ROUND AT THE STOP: taken off the board here and put back on
+      // here, facing whichever way the next leg needs. What it must not do is
+      // what it used to: keep driving with a stale plan, off the end of the
+      // map, to be re-spawned at the FAR stop — the bus appeared to sit at the
+      // halt for ever and then teleport across the board. Reported as "buses
+      // move super slowly at a bus station", which is what a vanishing act
+      // looks like from the outside.
+      //
+      // The stop cursor goes back to the stop it is standing at, so the respawn
+      // above starts THIS leg rather than skipping to the next one.
+      roadSim.despawn(bus.carId);
+      bus.carId = undefined;
+      if (here >= 0) bus.stopIndex = here;
     }
   }
 

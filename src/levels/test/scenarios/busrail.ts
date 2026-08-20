@@ -6,9 +6,11 @@ import { TestScenario, mkLineTrain, railRing } from "@/levels/test/scenario";
 import type { ParkingRow } from "@/tiles/parking";
 
 const town = (): TileCell => ({ connections: [], terrain: "urban" });
-const street = (): TileCell => ({
+// A piece of the ring road: two-way between the two ports it joins, so a
+// straight and a corner are authored the same way.
+const road = (a: Position, b: Position): TileCell => ({
   connections: [],
-  road: twoWay(Position.Left, Position.Right),
+  road: twoWay(a, b),
 });
 const halt = (from: Position): ParkingRow => ({ from, kind: "busstop", count: 1 });
 const stationEW = (name: string): TileCell => ({
@@ -21,30 +23,45 @@ const stationEW = (name: string): TileCell => ({
 //
 // A bus is planned exactly like a train: draw a line, buy a bus, assign it.
 // This board is the proof that the two make ONE network rather than two — a
-// person at ALTSTADT can only reach OSTBAHNHOF by riding the bus in to the kerb
-// outside Hauptbahnhof, walking the few steps up to the platform, and taking
-// the train on. No single vehicle makes that journey.
+// person at ALTSTADT can only reach OSTBAHNHOF by riding the bus round to the
+// stop outside Hauptbahnhof, walking the few steps up to the platform, and
+// taking the train on. No single vehicle makes that journey.
 //
-// THE WALK is the piece that joins them (D5, `walkLinksOf` in
-// tiles/catchment.ts): a kerb and a platform are separate islands however close
-// they are drawn, until something says a passenger may cross between them. So
-// the geometry here is load-bearing rather than decorative —
-//   · the interchange halt (2,4) is TWO tiles under Hauptbahnhof (2,2): inside
-//     the walking radius, so the network joins them;
-//   · Altstadt (6,4) is four tiles from every platform: outside it, so its
+// THE STREET IS A RING, and that is load-bearing rather than scenic. A bus runs
+// its line as a CYCLE, so the road has to give it a way back to the first stop.
+// The first cut of this board was a straight street with a stop at each end: the
+// bus reached the far stop, could not turn round (the router plans lane by lane
+// and there is no U-turn), drove off the end of the map and was re-spawned at
+// the other stop — a teleport, which read on the board as a bus that sat at the
+// halt for ever and then jumped. A ring needs no U-turn: every stop leads on to
+// the next.
+//
+// THE WALK is what joins bus to train (D5, `walkLinksOf` in tiles/catchment.ts):
+// a kerb and a platform are separate islands however close they are drawn, until
+// something says a passenger may cross between them. So the geometry is
+// load-bearing too —
+//   · the interchange halt (2,3) is DIRECTLY BELOW Hauptbahnhof (2,2), one tile:
+//     well inside the walking radius, so the network joins there;
+//   · Altstadt (5,6) is four tiles from every platform: outside it, so its
 //     people genuinely cannot walk to a train and the bus is the only way in.
 // Move either one and the board stops demonstrating anything.
 //
-//   rail ring  1,1 ──── OST(2,1) ──── 3,1 ──── 4,1
-//               │                               │
-//              1,2 ──── HBF(2,2) ──── 3,2 ──── 4,2
+//   rail ring   1,1 ──── OST(2,1) ──── 3,1 ──── 4,1
+//                │                               │
+//               1,2 ──── HBF(2,2) ──── 3,2 ──── 4,2
 //
-//   street     2,4(HBF kerb) ── 3,4 ── 4,4 ── 5,4 ── ALT(6,4) ── 7,4
+//   ring road   1,3 ─ HALT(2,3) ─ 3,3 ─ 4,3 ─ 5,3 ─ 6,3     <- 2,3 is under HBF
+//                │                                   │
+//               1,4                                 6,4
+//                │                                   │
+//               1,5                                 6,5
+//                │                                   │
+//               1,6 ─ 2,6 ─ 3,6 ─ 4,6 ─ ALT(5,6) ─ 6,6
 export const busrail: TestScenario = {
   id: "busrail",
   name: "Bus and train",
   description:
-    "A journey nobody can make on one vehicle: the bus to the interchange, then the train.",
+    "A journey nobody can make on one vehicle: the bus round to the interchange, then the train.",
   modeId: "network",
   level: {
     // --- the railway: a compact ring with two platforms and one shed --------
@@ -62,10 +79,11 @@ export const busrail: TestScenario = {
       ],
     },
 
-    // --- the street, two rows south of the railway --------------------------
-    // THE INTERCHANGE: directly below Hauptbahnhof and inside walking reach.
-    "2,4": {
-      ...street(),
+    // --- the ring road, one tile below the railway --------------------------
+    // North side. THE INTERCHANGE sits directly under Hauptbahnhof.
+    "1,3": road(Position.Right, Position.Bottom), // NW corner
+    "2,3": {
+      ...road(Position.Left, Position.Right),
       parking: {
         // Its OWN facility id. Two stops sharing one id are one facility to the
         // parking layer — they pool their capacity and show a single sign, so
@@ -77,13 +95,23 @@ export const busrail: TestScenario = {
         rows: [halt(Position.Left)],
       },
     },
-    "3,4": street(),
-    "4,4": street(),
-    "5,4": street(),
-    // ALTSTADT: out of walking reach of any platform, so the bus is the only
-    // way its people reach the railway at all.
-    "6,4": {
-      ...street(),
+    "3,3": road(Position.Left, Position.Right),
+    "4,3": road(Position.Left, Position.Right),
+    "5,3": road(Position.Left, Position.Right),
+    "6,3": road(Position.Left, Position.Bottom), // NE corner
+    // The two sides.
+    "1,4": road(Position.Top, Position.Bottom),
+    "1,5": road(Position.Top, Position.Bottom),
+    "6,4": road(Position.Top, Position.Bottom),
+    "6,5": road(Position.Top, Position.Bottom),
+    // South side. ALTSTADT is out of walking reach of any platform, so the bus
+    // is the only way its people reach the railway at all.
+    "1,6": road(Position.Top, Position.Right), // SW corner
+    "2,6": road(Position.Left, Position.Right),
+    "3,6": road(Position.Left, Position.Right),
+    "4,6": road(Position.Left, Position.Right),
+    "5,6": {
+      ...road(Position.Left, Position.Right),
       parking: {
         facility: "halt-altstadt",
         label: "Altstadt",
@@ -91,12 +119,14 @@ export const busrail: TestScenario = {
         rows: [halt(Position.Left)],
       },
     },
-    "7,4": street(),
+    "6,6": road(Position.Top, Position.Left), // SE corner
 
     // --- the houses each stop serves ---------------------------------------
-    "5,5": town(),
-    "6,5": town(),
-    "7,5": town(),
+    // Altstadt's own quarter, south of the ring.
+    "4,7": town(),
+    "5,7": town(),
+    "6,7": town(),
+    // ...and the town the railway serves, north of it.
     "3,0": town(),
     "4,0": town(),
   },
@@ -109,5 +139,5 @@ export const busrail: TestScenario = {
     depotColors: { "0,2": "blue" },
     trainColors: { rail: "green" },
   },
-  size: { cols: 9, rows: 6 },
+  size: { cols: 8, rows: 8 },
 };

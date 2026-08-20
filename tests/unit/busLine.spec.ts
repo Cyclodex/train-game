@@ -149,8 +149,8 @@ describe("a bus runs a line", () => {
 // the train on. If bus and rail were two networks rather than one, nobody would
 // ever set out — which is exactly what D10 would (correctly) enforce.
 describe("bus and train are one network", () => {
-  const ALT = "6,4"; // the halt out of walking reach of any platform
-  const KERB = "2,4"; // the halt under Hauptbahnhof
+  const ALT = "5,6"; // the halt out of walking reach of any platform
+  const KERB = "2,3"; // the halt directly under Hauptbahnhof
   const HBF = "2,2";
   const OST = "2,1";
 
@@ -210,6 +210,37 @@ describe("bus and train are one network", () => {
     // gap and the whole railway becomes reachable from Altstadt.
     expect(game.sim.serves(ALT, HBF)).toBe(true);
     expect(game.sim.serves(ALT, OST)).toBe(true);
+  });
+
+  // A BUS DRIVES ITS LINE; IT NEVER JUMPS. The street is a ring so the cycle
+  // needs no U-turn — and the tile it stands on must therefore only ever change
+  // to a NEIGHBOUR. It used to drive off the end of a dead-end street and
+  // re-spawn at the far stop, which looked like a bus teleporting across the
+  // board (and, from the outside, like one that never left the halt).
+  it("drives from stop to stop instead of jumping", async () => {
+    const { game } = await board();
+    const line = game.createLine([ALT, KERB]);
+    game.buyBus(line);
+
+    const at = () => game.busServices[0]?.tileId;
+    const coord = (id: string) => id.split(",").map(Number);
+    let last: string | undefined;
+    const hops: string[] = [];
+    for (let t = 0; t < 200; t += 0.1) {
+      game.advance(0.1);
+      const now = at();
+      if (!now || now === last) continue;
+      if (last) {
+        const [ax, ay] = coord(last);
+        const [bx, by] = coord(now);
+        hops.push(`${last}->${now}`);
+        // Chebyshev 1: the next tile along the street, never across the map.
+        expect(Math.max(Math.abs(ax - bx), Math.abs(ay - by))).toBe(1);
+      }
+      last = now;
+    }
+    // It really did go round rather than standing still.
+    expect(hops.length).toBeGreaterThan(8);
   });
 
   it("carries somebody the whole way: bus, walk, train", async () => {
