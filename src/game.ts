@@ -465,6 +465,10 @@ export interface Game {
   stationQueues: Record<string, number>;
   // tileId -> the destination each of them asked for, in queue order.
   stationWaiting: Record<string, string[]>;
+  // Aligned with `stationWaiting`: the colour of the LINE each waiting person
+  // boards next, "" when no service can carry them. A crowd is then read as
+  // "which line is short of vehicles", not as an anonymous pile of dots.
+  stationWaitingColours: Record<string, string[]>;
   // tileId -> people per minute an UNSERVED platform would carry. Zero as soon
   // as a line reaches it. The "build here" hint on a board with no citizen
   // layer to be unhappy at you; never part of a score.
@@ -983,6 +987,9 @@ export function createGame(
   // from this, so a dot's colour says which platform its person asked for —
   // a queue nobody serves is then visible as one colour piling up.
   const stationWaiting = reactive({}) as Record<string, string[]>;
+  // Aligned with `stationWaiting`: the colour of the LINE each of those people
+  // will board next, or "" when nothing can carry them. See updateStationQueues.
+  const stationWaitingColours = reactive({}) as Record<string, string[]>;
   // trainId -> the stops it serves, mirrored from the sim so the service panel
   // renders reactively. The SIM owns the line; this is a view copy, refreshed
   // whenever a line changes (it changes on player action, not per frame).
@@ -2338,12 +2345,16 @@ export function createGame(
     return Math.max(1, Math.round(60 / d.intervalSec));
   }
 
-  // Mirror each station's live platform queue for the crowd render. Vue's
-  // reactive set is a no-op while the count is unchanged, so this is cheap.
+  // Mirror each STOP's live queue for the crowd render — platforms and kerbs
+  // alike, because since #90 a bus stop is a node of the same network and its
+  // waiting people are just as real. Vue's reactive set is a no-op while the
+  // count is unchanged, so this is cheap.
   function updateStationQueues() {
     for (const id of Object.keys(level)) {
-      if (level[id]?.role !== "station") {
+      if (!transitStops.has(id)) {
         if (id in stationQueues) delete stationQueues[id];
+        if (id in stationWaiting) delete stationWaiting[id];
+        if (id in stationWaitingColours) delete stationWaitingColours[id];
         continue;
       }
       stationQueues[id] = sim.stationQueue(id);
@@ -2353,6 +2364,22 @@ export function createGame(
       const cur = stationWaiting[id];
       if (!cur || cur.length !== waiting.length || waiting.some((d, i) => cur[i] !== d)) {
         stationWaiting[id] = waiting;
+      }
+      // THE COLOUR OF THE LINE THEY ARE WAITING FOR, one per person. Computed
+      // here rather than in the view: the answer comes from the line graph,
+      // which is engine work. Recomputed even when the QUEUE is unchanged,
+      // because redrawing a line changes what these people are waiting for
+      // without anybody joining or leaving the queue — and written back only on
+      // a real difference, so Vue still re-renders a platform only when its
+      // crowd actually looks different. A person no service can carry gets ""
+      // and is drawn neutral.
+      const colours = waiting.map(dest => {
+        const lineId = dest ? sim.lineFrom(id, dest) : undefined;
+        return (lineId && lines.find(l => l.id === lineId)?.colour) || "";
+      });
+      const curC = stationWaitingColours[id];
+      if (!curC || curC.length !== colours.length || colours.some((c, i) => curC[i] !== c)) {
+        stationWaitingColours[id] = colours;
       }
     }
   }
@@ -3493,6 +3520,7 @@ export function createGame(
     occupied,
     stationQueues,
     stationWaiting,
+    stationWaitingColours,
     stationLatent,
     cities,
     citizenStats,

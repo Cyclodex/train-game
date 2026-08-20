@@ -437,6 +437,8 @@ export interface Simulation {
   // Every station a service reaches from here, in a stable order. Read-only —
   // what a HUD showing latent demand would draw from.
   servedFrom(tileId: string): string[];
+  // The line a person waiting at `tileId` boards next on their way to `to`.
+  lineFrom(tileId: string, to: string): string | undefined;
   // Passengers currently riding this train.
   trainPassengers(id: string): number;
   // Total passengers whose ride ended (at a station call or a matched depot
@@ -1614,6 +1616,9 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     servedFrom(tileId: string) {
       return transit.servedFrom(tileId);
+    },
+    lineFrom(tileId: string, to: string) {
+      return transit.lineFrom(tileId, to);
     },
     enqueuePassenger(tileId: string, dest: string, tag?: string) {
       return transit.enqueue(tileId, dest, tag);

@@ -628,26 +628,20 @@ import {
 } from "@/utils/stationArt";
 import { WALK_RADIUS_TILES, stationCatchment } from "@/tiles/catchment";
 
-// A stable colour per DESTINATION tile, so a waiting passenger's dot says
-// where they are going and the same platform is the same colour everywhere on
-// the board. Hashed from the coordinate rather than looked up, so it needs no
-// registry and never shifts when a station is added.
-const DEST_COLOURS = [
-  "#e2574c",
-  "#f0b429",
-  "#3fa796",
-  "#5b8def",
-  "#a05fd0",
-  "#6aa84f",
-];
-function destinationColour(tileId: string | undefined): string {
-  if (!tileId) return "#8a5a3b";
-  let hash = 0;
-  for (let i = 0; i < tileId.length; i++) {
-    hash = (hash * 31 + tileId.charCodeAt(i)) >>> 0;
-  }
-  return DEST_COLOURS[hash % DEST_COLOURS.length];
-}
+// A WAITING PASSENGER WEARS THE COLOUR OF THE LINE THEY ARE WAITING FOR, which
+// the game hands over per person in `stationWaitingColours`.
+//
+// It used to be a colour hashed from their DESTINATION, and that told the player
+// nothing they could act on: six colours over a board of destinations collide,
+// and "four people want to go to the orange place" is not a thing you can build.
+// The line they need IS: a heap of red dots says the red line is short of
+// vehicles, in the same red as its row in the panel and its pip on the name
+// plate. One colour language for a plan and the people waiting on it.
+//
+// Neutral is for anyone the network cannot help — and for every person who is
+// not waiting for a service at all (walking, driving), who is drawn by the
+// citizen layer and is deliberately left plain.
+const NEUTRAL_PASSENGER = "#8a5a3b";
 
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts so the painted road, the per-car lateral offset, and the
@@ -890,6 +884,11 @@ class Tile extends Vue {
   get stationLabel(): string {
     return this.game.stationLabels?.[this.coordId] ?? "S";
   }
+  // ...and any other stop, for a hover that names a place rather than a
+  // coordinate ("waiting for Ostbahnhof").
+  labelOf(tileId: string): string {
+    return this.game.stationLabels?.[tileId] ?? tileId;
+  }
   // People per minute this platform would carry if a line ever reached it.
   // Zero (and therefore hidden) the moment one does.
   get latentDemand(): number {
@@ -959,6 +958,7 @@ class Tile extends Vue {
     const slabs = this.stationPlatforms;
     if (!slabs.length) return [];
     const waiting = this.game.stationWaiting?.[this.coordId] ?? [];
+    const colours = this.game.stationWaitingColours?.[this.coordId] ?? [];
     const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
     const s = slabs[0];
     const horizontal = s.w >= s.h;
@@ -967,8 +967,8 @@ class Tile extends Vue {
       const t = (i + 0.75) / 13; // fixed pitch from the platform end
       const scatter = (((i * 37) % 7) - 3) * (s.w >= s.h ? s.h : s.w) * 0.055;
       const dest = waiting[i];
-      const fill = destinationColour(dest);
-      const title = dest ? `waiting for ${dest}` : "waiting";
+      const fill = colours[i] || NEUTRAL_PASSENGER;
+      const title = dest ? `waiting for ${this.labelOf(dest)}` : "waiting";
       if (horizontal) {
         out.push({ cx: s.x + t * s.w, cy: s.y + s.h / 2 + scatter, fill, title });
       } else {

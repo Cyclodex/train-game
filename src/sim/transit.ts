@@ -24,6 +24,12 @@
 
 import { LineGraph, LineStops, buildLineGraph } from "./lineGraph";
 
+// A walk enters the line graph as a service calling at both ends, so that a kerb
+// and a platform are ONE network. It is not a vehicle, though, and the two
+// places that care — "is anyone actually carried" and "which line is this person
+// waiting for" — tell them apart by this prefix.
+const WALK_PREFIX = "walk:";
+
 // A LINE: the plan, with an identity of its own. Vehicles are assigned to it —
 // many, or none. `pinned` marks one the player drew deliberately rather than one
 // inferred from assigning stops to a vehicle; an unpinned line is swept up when
@@ -130,6 +136,9 @@ export interface TransitLayer {
   offFor(lineId: string | undefined, at: string, final: string): string | undefined;
   serves(from: string, to: string): boolean;
   servedFrom(stopId: string): string[];
+  // Which line someone standing at `at` boards next for `to` — the board paints
+  // a waiting passenger in that line's colour. See LineGraph.lineFrom.
+  lineFrom(at: string, to: string): string | undefined;
 
   // --- who is waiting ------------------------------------------------------
   queue(stopId: string): Waiting[];
@@ -237,7 +246,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     // so it only ever affects what is reachable and where to change.
     for (const [a, list] of walkTo) {
       for (const b of list) {
-        if (a < b) spec.push({ id: `walk:${a}|${b}`, stops: [a, b] });
+        if (a < b) spec.push({ id: `${WALK_PREFIX}${a}|${b}`, stops: [a, b] });
       }
     }
     graph = buildLineGraph(spec);
@@ -327,11 +336,14 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       return network().alightFor(lineId, at, final);
     },
     serves(from: string, to: string) {
-      return network().serves(from, to);
+      return servesByLine(from, to);
     },
     servedFrom(stopId: string) {
-      return network().reachableFrom(stopId);
+      return network()
+        .reachableFrom(stopId)
+        .filter(to => servesByLine(stopId, to));
     },
+    lineFrom: publicLineFrom,
     queue(stopId: string) {
       return queues.get(stopId) ?? [];
     },
@@ -513,12 +525,60 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     return best;
   }
 
+  // THE FIRST RIDE ON A JOURNEY — the first hop somebody is actually CARRIED,
+  // as against walked.
+  //
+  // The graph holds three kinds of service and they are not equal here. A drawn
+  // LINE and a lineless VEHICLE both carry you. A WALK does not: it is in the
+  // graph so that a kerb and a platform are one network (D5), and it is your own
+  // legs. So the walks are stepped over, and whatever ride comes first is the
+  // answer. Bounded, because a render must never loop.
+  function firstRideFrom(at: string, to: string): string | undefined {
+    const g = network();
+    let cur = at;
+    for (let step = 0; step < 6; step++) {
+      const id = g.lineFrom(cur, to);
+      if (!id) return undefined;
+      if (!id.startsWith(WALK_PREFIX)) return id;
+      const off = g.alightFor(id, cur, to);
+      if (!off || off === cur) return undefined;
+      cur = off;
+    }
+    return undefined;
+  }
+
+  // The line a waiting passenger is COLOURED by: the first ride, when it is a
+  // line somebody drew. An unassigned vehicle has no line and no colour, so its
+  // passengers are drawn neutral — which is honest, there is no line to blame
+  // for the wait.
+  function publicLineFrom(at: string, to: string): string | undefined {
+    const id = firstRideFrom(at, to);
+    return id && lines[id] ? id : undefined;
+  }
+
+  // CAN ANYTHING CARRY THEM, or would they simply walk? A journey made ENTIRELY
+  // of walks is reachable by the graph while needing no vehicle at all — and it
+  // must not create a passenger. D10 says nobody waits at a stop that cannot
+  // take them where they are going, and a platform whose only "service" to your
+  // destination is your own legs is exactly that: people queued at Ostbahnhof
+  // for a kerb two tiles away, waiting for a train that will never call at a
+  // road. Spotted because they had no line to be coloured by — the board drew a
+  // crowd nothing could explain, and the honest question was why they were there
+  // at all.
+  function servesByLine(from: string, to: string): boolean {
+    if (from === to) return false;
+    return network().serves(from, to) && firstRideFrom(from, to) !== undefined;
+  }
+
   function nextDestination(id: string): string | null {
     // Only a real STOP is somewhere to ask for. A line's stop list is the
     // player's, and nothing stops it naming a tile that is not a stop at all —
     // the graph will happily carry that as a node, and then people queue for a
     // patch of road nobody can wait at.
-    const choices = network().reachableFrom(id).filter(isStop);
+    const choices = network()
+      .reachableFrom(id)
+      .filter(isStop)
+      .filter(to => servesByLine(id, to));
     if (choices.length === 0) return null;
     const at = destCursors.get(id) ?? 0;
     destCursors.set(id, at + 1);
