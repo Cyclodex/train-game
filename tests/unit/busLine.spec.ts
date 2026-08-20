@@ -258,3 +258,55 @@ describe("bus and train are one network", () => {
     expect(game.sim.stationQueue(KERB)).toBeLessThan(4);
   });
 });
+
+// HOW FULL EVERY VEHICLE IS, in one book for trains and buses. The board draws a
+// gauge from it and the panel prints "n/seats" from the same numbers, so the two
+// can never disagree — and it is filled in the WORLD STEP, not the render frame,
+// which is what makes it readable here at all (KNOWHOW → the hidden-tab trap).
+describe("what a vehicle is carrying", () => {
+  it("reports a bus by the id the board draws it under, with its line's colour", () => {
+    const game = gameFor();
+    const line = game.createLine([WEST, EAST]);
+    game.buyBus(line);
+    run(game, 120);
+
+    // A bus on a DEAD-END street is off the board for one tick each time it
+    // turns round at a terminus (it is despawned and re-spawned facing the other
+    // way), so take a moment when it is actually driving rather than whichever
+    // tick the loop above happened to stop on.
+    let bus = game.busServices[0];
+    for (let t = 0; t < 60 && !bus.carId; t += 0.1) {
+      game.advance(0.1);
+      bus = game.busServices[0];
+    }
+    expect(bus.seats).toBe(12);
+    // The gauge hangs off the ROAD CAR, which is what the renderer holds — the
+    // bus's own id is not on the board at all. (`game.roadCars` itself is a
+    // RENDER mirror and stays empty headlessly, which is exactly why the bus
+    // carries the join.)
+    expect(bus.carId).toBeDefined();
+    const load = game.vehicleLoads[bus.carId!];
+    expect(load).toBeDefined();
+    expect(load.seats).toBe(12);
+    expect(load.aboard).toBe(bus.passengers);
+    expect(load.colour).toBe(game.lines.find(l => l.id === line)?.colour);
+  });
+
+  it("gives a freight train no gauge at all", async () => {
+    // Seats are what a gauge is a fraction OF. A goods train has none, and an
+    // empty gauge on something that was never going to carry anybody is noise.
+    const { busrail } = await import("@/levels/test/scenarios/busrail");
+    const game = createGame(
+      busrail.level,
+      [{ id: "goods", x: 0, y: 2, type: "fraight", wagonIds: ["g1"] }],
+      200,
+      networkMode,
+      1,
+      busrail.colors,
+      undefined,
+      "busrail"
+    );
+    run(game, 30);
+    expect(game.vehicleLoads["goods"]).toBeUndefined();
+  });
+});

@@ -183,6 +183,7 @@
                clears, so the queue is visible instead of the button looking
                like it did nothing. -->
           <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
+          <span v-if="t.load" class="service-load" :title="`${t.load} aboard`">{{ t.load }}</span>
         </span>
         <!-- The stops as PLACES, not numbers: a line reads "A → C → D", and
              the one the train is heading for is lit. Hovering gives the tile
@@ -240,7 +241,7 @@
         <span class="service-id">{{ b.id }}</span>
         <span class="service-stops">
           <span v-if="b.lineId" class="service-stop"
-            >{{ busLineName(b) }} — {{ b.passengers }} aboard</span
+            >{{ busLineName(b) }} — {{ b.passengers }}/{{ b.seats }} aboard</span
           >
           <span v-else class="service-idle">no line</span>
         </span>
@@ -558,7 +559,7 @@
         </svg>
       </div>
       <div
-        v-for="car in roadCars"
+        v-for="car in roadCarsView"
         :key="car.id"
         :class="['road-car', `road-car--${car.part}`, { 'road-car--inspect': config.debug }]"
         :style="{
@@ -571,6 +572,15 @@
         @click.stop="onCarClick(car.id)"
       >
         <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
+        <!-- A SERVICE VEHICLE'S LOAD, the same gauge a train wears (Train.vue).
+             Only a bus running a line has one: an ordinary car is somebody's own
+             journey, not a service with seats to sell. -->
+        <span v-if="car.load" class="vehicle-load" :title="car.load.title">
+          <span
+            class="vehicle-load-fill"
+            :style="{ width: car.load.pct + '%', background: car.load.colour }"
+          />
+        </span>
         <span
           v-if="config.debug && car.part !== 'trailer'"
           class="road-car-id"
@@ -790,7 +800,7 @@ import {
   createRouteDrawController,
   type RouteDrawController,
 } from "@/routeDrawController";
-import { createGame, FareBadge, Game, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, RoadCar, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
@@ -1487,6 +1497,8 @@ class PlayView extends Vue {
     nextStop?: string;
     queued: boolean;
     retiring: boolean;
+    // "3/16" for a passenger train, "" for anything with no seats.
+    load: string;
   }[] {
     return Object.keys(this.game.trainColors)
       .filter(id => !this.game.removedTrains.includes(id))
@@ -1500,6 +1512,7 @@ class PlayView extends Vue {
         nextStop: this.game.trainNextStops[id],
         queued: this.game.queuedTrains.includes(id),
         retiring: this.game.retiringTrains.includes(id),
+        load: this.loadLabel(id),
       }));
   }
   // Ordering only needs a depot to exist. A busy one does not refuse the sale
@@ -1548,6 +1561,39 @@ class PlayView extends Vue {
   }
   busLineName(b: { lineId?: string }): string {
     return this.game.lines.find(l => l.id === b.lineId)?.name ?? "";
+  }
+  // The same number the gauge on the board draws, for the panel row: a vehicle
+  // is easier to compare in a list than to chase across the map.
+  loadLabel(vehicleId: string): string {
+    const at = this.game.vehicleLoads?.[vehicleId];
+    return at && at.seats > 0 ? `${at.aboard}/${at.seats}` : "";
+  }
+  // The cars as the board draws them, each carrying its own load gauge (or none).
+  // The gauge is attached HERE rather than looked up per binding in the
+  // template: the markup needs it three times, and vue-tsc cannot narrow a
+  // function call to non-null across three separate calls.
+  get roadCarsView(): (RoadCar & {
+    load: { pct: number; colour: string; title: string } | null;
+  })[] {
+    return this.roadCars.map(car => ({
+      // The gauge belongs to the VEHICLE and rides its leading unit: a semi is
+      // drawn as a cab and a trailer, and two gauges on one lorry would be two
+      // lorries as far as the eye is concerned.
+      ...car,
+      load: car.unit === 0 ? this.carLoad(car.vehicleId) : null,
+    }));
+  }
+  // The load gauge for a road vehicle, or null for one that is not a service.
+  // Keyed by the CAR's id, which is what a bus is drawn under — `vehicleLoads`
+  // is written that way for exactly this lookup.
+  carLoad(carId: string): { pct: number; colour: string; title: string } | null {
+    const at = this.game.vehicleLoads?.[carId];
+    if (!at || at.seats <= 0) return null;
+    return {
+      pct: Math.max(0, Math.min(100, Math.round((at.aboard / at.seats) * 100))),
+      colour: at.colour || "#cbd5e1",
+      title: `${at.aboard}/${at.seats} aboard`,
+    };
   }
   assignBus(busId: string, ev: Event): void {
     const lineId = (ev.target as HTMLSelectElement).value;
@@ -2299,6 +2345,29 @@ export default toNative(PlayView);
   background: rgba(185, 222, 255, 0.9);
   border-radius: 2px;
 }
+/* The load gauge on a service vehicle. Same shape and reading as a train's
+   (Train.vue) — one gauge for one meaning, whatever is carrying you. It rides
+   with the body, so it needs no counter-rotation. */
+.vehicle-load {
+  position: absolute;
+  left: 10%;
+  top: 50%;
+  width: 48%;
+  height: 7px;
+  transform: translateY(-50%);
+  // Light track, dark rim — same reasoning as the train's gauge: the empty part
+  // has to be visible against the vehicle's own paint, whatever colour that is.
+  background: rgba(236, 242, 248, 0.85);
+  border: 1px solid rgba(12, 16, 22, 0.75);
+  border-radius: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.vehicle-load-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
 // A rigid truck's cab is only the front of its longer body, so its windscreen is
 // a small pane right at the nose rather than a wide window like a car's.
 .road-car--truck .road-car-glass {
@@ -2876,6 +2945,14 @@ export default toNative(PlayView);
 .service-queued {
   opacity: 0.75;
   font-size: 11px;
+}
+/* "3/16" beside a vehicle's id: the same reading as the gauge on the board, in
+   a form you can compare down a list. */
+.service-load {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
 }
 .service-idle {
   color: #8b939c;

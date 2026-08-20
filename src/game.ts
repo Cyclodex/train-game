@@ -136,6 +136,13 @@ export interface BusView {
   id: string;
   lineId?: string;
   passengers: number;
+  // Its seats, so the panel can read "3/12" rather than a bare count.
+  seats: number;
+  // The ROAD CAR it is driving right now, when it is on the board. A bus has two
+  // ids — its own in the panel, its car's on the tarmac — and this is the join
+  // between them: the load gauge is keyed by the car, because that is what the
+  // renderer holds.
+  carId?: string;
   // Where it is standing, when it is on the board at all.
   tileId?: string;
 }
@@ -262,7 +269,13 @@ function roadCarCapacity(level: Level, tileSize: number): number {
 // `${carId}#${segmentIndex}` so Vue reuses DOM nodes per box; `widthPx` sizes
 // the sprite to the segment's length and `part` selects its style.
 export interface RoadCar {
+  // The drawn UNIT's id, `<vehicleId>#<unit>` — a semi is two of these.
   id: string;
+  // The vehicle the unit belongs to, which is what the sim knows it as. The
+  // load gauge hangs off this: it belongs to the bus, not to a segment of it.
+  vehicleId: string;
+  // Which unit of that vehicle this is; 0 is the leading one.
+  unit: number;
   x: number;
   y: number;
   angle: number;
@@ -469,6 +482,10 @@ export interface Game {
   // boards next, "" when no service can carry them. A crowd is then read as
   // "which line is short of vehicles", not as an anonymous pile of dots.
   stationWaitingColours: Record<string, string[]>;
+  // HOW FULL EACH VEHICLE IS, keyed by the id the board draws it under: a
+  // train's own id, a bus's road-car id. `colour` is its line's, so a full bar
+  // names the service that needs another vehicle.
+  vehicleLoads: Record<string, { aboard: number; seats: number; colour: string }>;
   // tileId -> people per minute an UNSERVED platform would carry. Zero as soon
   // as a line reaches it. The "build here" hint on a board with no citizen
   // layer to be unhappy at you; never part of a score.
@@ -1017,6 +1034,11 @@ export function createGame(
   // getter that read them directly never re-ran and the panel froze on whatever it
   // showed first. Mirrored per frame like every other live readout.
   const trainNextStops = reactive({}) as Record<string, string>;
+  // How full each vehicle is — see updateVehicleLoads.
+  const vehicleLoads = reactive({}) as Record<
+    string,
+    { aboard: number; seats: number; colour: string }
+  >;
   const retiringTrains = reactive([]) as string[];
 
   // What each stop is CALLED — platforms and kerbs alike. Level data, so
@@ -1831,8 +1853,44 @@ export function createGame(
         id: b.id,
         ...(b.lineId ? { lineId: b.lineId } : {}),
         passengers: b.manifest.length,
+        seats: BUS_SEATS,
+        ...(b.carId ? { carId: b.carId } : {}),
         ...(b.carId ? { tileId: roadSim.carTile(b.carId) } : {}),
       });
+    }
+  }
+
+  // HOW FULL EVERY VEHICLE IS, trains and buses in one book, keyed by the id the
+  // BOARD draws it under — a train's own id, a bus's road-car id. The load bar
+  // rides the vehicle, so the renderer needs to look up by what it is holding.
+  //
+  // Refreshed from the world step rather than the render frame: a hidden tab
+  // must not freeze it, and a headless test has to be able to read it (KNOWHOW →
+  // the hidden-tab trap).
+  function updateVehicleLoads(): void {
+    const seen = new Set<string>();
+    const put = (id: string, aboard: number, seats: number, colour: string) => {
+      seen.add(id);
+      const cur = vehicleLoads[id];
+      if (!cur || cur.aboard !== aboard || cur.seats !== seats || cur.colour !== colour) {
+        vehicleLoads[id] = { aboard, seats, colour };
+      }
+    };
+    const colourOfLine = (lineId: string | undefined) =>
+      (lineId && lines.find(l => l.id === lineId)?.colour) || "";
+    for (const id of Object.keys(sim.trains)) {
+      const seats = sim.trainCapacity(id);
+      // A freight train has no seats and gets no bar: an empty gauge on
+      // something that was never going to carry anybody is noise.
+      if (seats <= 0) continue;
+      put(id, sim.trainPassengers(id), seats, colourOfLine(sim.lineOf(id)));
+    }
+    for (const b of buses) {
+      if (!b.carId) continue;
+      put(b.carId, b.manifest.length, BUS_SEATS, colourOfLine(b.lineId));
+    }
+    for (const id of Object.keys(vehicleLoads)) {
+      if (!seen.has(id)) delete vehicleLoads[id];
     }
   }
 
@@ -2477,7 +2535,7 @@ export function createGame(
           existing.widthPx = widthPx;
           existing.part = unit.part;
         } else {
-          roadCars.push({ id, x, y, angle, widthPx, part: unit.part });
+          roadCars.push({ id, vehicleId: s.id, unit: u, x, y, angle, widthPx, part: unit.part });
         }
       }
     }
@@ -3078,6 +3136,12 @@ export function createGame(
     busEvents.length = 0;
     advanceBuses(scaled);
     syncBuses();
+    // How full each vehicle is: a MODEL fact (who is aboard, how many seats),
+    // so it is refreshed with the world and not with the render frame. Put in
+    // `frame()` it would freeze in a hidden tab and be invisible to a headless
+    // test — which is exactly what happened on the first cut, and what the
+    // comment on updateVehicleLoads claimed it had avoided.
+    updateVehicleLoads();
     // Ordered trains roll out of the shed as it clears, in the order bought.
     releasePendingTrains();
     // Fold the road's crossing-flow snapshot into the observation so the
@@ -3521,6 +3585,7 @@ export function createGame(
     stationQueues,
     stationWaiting,
     stationWaitingColours,
+    vehicleLoads,
     stationLatent,
     cities,
     citizenStats,

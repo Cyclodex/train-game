@@ -793,6 +793,54 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   the check is doing it in the UI — `npm run dev` and a Playwright pass over the
   actual clicks, not just the game verb.
 
+## THE COLOUR OF A WAITING PASSENGER (2026-08-20)
+- A dot on a platform (or now a kerb) wears the COLOUR OF THE LINE it is waiting
+  for — `game.stationWaitingColours`, aligned with `stationWaiting`. It used to
+  be a hash of the DESTINATION, which told the player nothing they could act on:
+  six colours collide over a board of destinations, and "four people want to go
+  to the orange place" is not something you can build. The line they need is.
+- `lineGraph.lineFrom(at, to)` is the primitive: which service they board next,
+  by the same "strictly closer" rule `alightFor` uses for where to get OFF.
+- A WALK IS NOT A SERVICE, and this is the rule that matters (found by the
+  colours, 2026-08-20). Walk links sit in the graph as services calling at both
+  ends — that is what makes a kerb and a platform one network — so a journey made
+  ENTIRELY of walking counted as "reachable" and produced passengers: people
+  queued at Ostbahnhof for a kerb two tiles away, waiting for a train that will
+  never call at a road. They had no line to be coloured by, which is how they
+  were spotted. Every demand gate now asks for a real RIDE (`firstRideFrom` in
+  transit.ts steps over `walk:` ids).
+  · A vehicle with NO line still counts as a ride. Where nobody has drawn
+    anything the lineless vehicles ARE the network, and every board written
+    before lines rests on that — 18 tests said so when the first cut demanded a
+    drawn line. Such a passenger is drawn NEUTRAL: no line to blame for the wait.
+- A bus stop draws its queue too (`busStopQueueSpots`). It never did: the crowd
+  came off the platform slabs, which a kerb has none of, so a halt with six
+  people looked identical to an empty one while the HUD counted them.
+  · The dots stand PAST the stop, on the verge: a halt sits at the head of its
+    tile, so a queue growing backwards ran off the tile's own edge at twelve
+    people, and the sign chip (HTML, drawn over the tile, ~0.13 of a tile out)
+    covered the front of the queue at anything less than 0.155 out.
+
+## HOW FULL A VEHICLE IS (2026-08-20)
+- `game.vehicleLoads[id] = {aboard, seats, colour}` — trains and buses in ONE
+  book, so the gauge on the board and the "n/seats" in the panel cannot disagree.
+- KEYED BY WHAT THE BOARD DRAWS IT UNDER: a train's own id, a bus's ROAD CAR id.
+  A bus has two identities (`bus1` in the panel, `car7` on the tarmac) and
+  `BusView.carId` is the join. `RoadCar` carries `vehicleId`/`unit` for the same
+  reason — the rendered id is `<vehicleId>#<unit>`, and a gauge belongs to the
+  vehicle, on its leading unit (a semi is two units, not two lorries).
+- REFRESHED IN THE WORLD STEP, not the frame. It is a model fact; in `frame()`
+  it froze in a hidden tab and was invisible to headless tests — the first cut
+  did exactly that, with a comment claiming otherwise. The test caught it.
+- The gauge is a LIGHT trough with a dark rim, not a dark one: it sits on a
+  locomotive, which is dark grey, and a dark trough made an almost-empty train
+  read as no gauge at all.
+- Its fill is the LINE's colour, falling back to the vehicle's livery when it
+  runs no line — a full bar is a complaint about a service, and it should point
+  at the same colour the panel row and the platform pips use.
+- No seats, no gauge: a freight train never carried anybody, and an empty gauge
+  on it is noise.
+
 ## THE WALK BETWEEN A KERB AND A PLATFORM (D5, 2026-08-05)
 - `walkLinksOf(level)` pairs every bus stop with the stations within
   `WALK_RADIUS_TILES`. The transit layer feeds them to the graph as services

@@ -441,6 +441,10 @@ export interface Simulation {
   lineFrom(tileId: string, to: string): string | undefined;
   // Passengers currently riding this train.
   trainPassengers(id: string): number;
+  // Its seats — what `trainPassengers` is a fraction OF. The board draws a load
+  // bar from the pair, so both come from the sim rather than the view guessing
+  // a capacity from the wagon count.
+  trainCapacity(id: string): number;
   // Total passengers whose ride ended (at a station call or a matched depot
   // arrival) since the sim was created. The mode layer scores off the event
   // deltas; this absolute exists for tests and debugging.
@@ -1625,6 +1629,9 @@ export function createSimulation(config: SimConfig): Simulation {
     },
     trainPassengers(id: string) {
       return trains[id]?.manifest.length ?? 0;
+    },
+    trainCapacity(id: string) {
+      return trains[id]?.capacity ?? 0;
     },
     passengersDelivered() {
       return transit.delivered();
