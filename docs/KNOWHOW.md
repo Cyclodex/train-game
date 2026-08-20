@@ -552,11 +552,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   coordinates nobody can match to the board.
 - The name is an HTML plate, NOT SVG text: a fixed shield cannot size itself to
   a word, and the first cut crushed "Nordstadt" into 18px.
-- `game.lineOverlay` (set via `setLineOverlay(trainId | null)`) is what the
-  board draws while a line is edited: a big call-order badge per stop, a
-  hollow "+" on the stations you could still add, and the route along the
+- `game.lineOverlay` (set via `setLineOverlay({lineId} | {trainId} | null)`) is
+  what the board draws while a line is edited: a big call-order badge per stop,
+  a hollow "+" on the stops you could still add, and the route along the
   metals. It is ENGINE work — the route is planned with the same
   `planRailRoute` the trains drive, so the picture cannot disagree with them.
+- IT DIED SILENTLY FOR FOUR WEEKS (found 2026-08-20). `Tile.vue` gated the badge
+  and the route on `overlay.trainId`, from when a line was edited from a TRAIN's
+  row; D11 made the LINE the thing you edit and `setLineOverlay({lineId})`
+  leaves `trainId` null — so nothing drew at all, on any line, and no test
+  noticed because the overlay's DATA was still correct. Gate a view on "is the
+  overlay open", never on which door opened it.
+- The hollow "+" is an OFFER, so it only appears on a stop the open line could
+  actually take (`overlay.kind`); a stop already on the line keeps its number
+  regardless, because that is a fact rather than an invitation.
+- The badge is its OWN svg layer, not a group inside the station layer: a bus
+  stop is a stop too (#90), and that layer only renders for a platform.
 - The overlay stores the SEGMENTS driven per tile (`[entry, exit][]`), never
   just tile ids: on a junction, tile-level lighting paints every arm — the
   depot spur included — and the drawn line then shows a route the train never
@@ -767,6 +778,20 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   SHARE A `facility` ID: the parking layer treats one id as one facility, so
   they pool capacity and show a single sign — the first cut of `busrail` read
   "H 2/2" once instead of a halt at each end.
+- A LINE HAS A KIND (`LineView.kind`, 2026-08-20): `rail` from platforms, `road`
+  from kerbs, `null` until its first stop. It must never MIX — no train can call
+  at a kerb and no bus can drive to a platform, and a mixed line fails SILENTLY
+  (the bus's `requestTrip` from a platform returns null for ever, so it simply
+  never appears). D5's intermodal journey is TWO lines meeting at a walk link,
+  never one line pretending to be both. The kind lives in `game.ts` and both the
+  panel and the board read it; deriving it twice is how the two drift apart.
+- THE MODEL SUPPORTING A THING IS NOT THE FEATURE (2026-08-20). #90 shipped with
+  `createLine([kerb, kerb])` proved by tests, and NO WAY TO DO IT IN THE BROWSER:
+  the line editor gated clicks on `role === "station"`, so bus stops were not
+  pickable and the whole feature was unreachable by a player. A headless test
+  calling the verb directly cannot see that. When a feature is a player ACTION,
+  the check is doing it in the UI — `npm run dev` and a Playwright pass over the
+  actual clicks, not just the game verb.
 
 ## THE WALK BETWEEN A KERB AND A PLATFORM (D5, 2026-08-05)
 - `walkLinksOf(level)` pairs every bus stop with the stations within

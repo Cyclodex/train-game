@@ -119,6 +119,16 @@ export interface LineView {
   // panel counts both and "nothing runs this" means neither.
   buses: string[];
   colour: string;
+  // WHAT CAN RUN IT, from the stops on it: platforms make a rail line, kerbs a
+  // bus line, and an empty line has no kind yet — the first stop decides.
+  //
+  // A line must never mix the two. No train can call at a kerb and no bus can
+  // drive to a platform, so a mixed line is one its own vehicle silently fails
+  // to run (`requestTrip` from a platform returns null, for ever). The
+  // intermodal journey is TWO lines meeting at a walk link (D5), never one line
+  // pretending to be both — so this is the model's word on it, and the panel
+  // and the board both read it rather than each deciding for themselves.
+  kind: "rail" | "road" | null;
 }
 
 // A bus as the panel sees it.
@@ -526,6 +536,9 @@ export interface Game {
   lineOverlay: {
     lineId: string | null;
     trainId: string | null;
+    // What can run the line being drawn (LineView.kind), so a tile can tell
+    // whether it is a stop this line could still take.
+    kind: "rail" | "road" | null;
     colour: string;
     order: Record<string, number>;
     path: Record<string, [Port, Port][]>;
@@ -999,8 +1012,10 @@ export function createGame(
   const trainNextStops = reactive({}) as Record<string, string>;
   const retiringTrains = reactive([]) as string[];
 
-  // What each platform is CALLED. Level data, so computed once.
+  // What each stop is CALLED — platforms and kerbs alike. Level data, so
+  // computed once.
   const stationLabels = stationNames(level);
+
 
   // THE LINE OVERLAY: while a line is being edited the board shows it the way
   // Transport Fever does — a big call-order number on each stop and the route
@@ -1015,6 +1030,10 @@ export function createGame(
     // The train whose panel row opened it, when one did. Only used to keep the
     // row highlighted; the drawing itself never needs it.
     trainId: null as string | null,
+    // The line's kind (LineView.kind), so a tile can tell whether it is a stop
+    // this line could still take. Without it every platform invites a click
+    // while a BUS line is open — a hollow "+" on something the click refuses.
+    kind: null as "rail" | "road" | null,
     colour: "",
     // stationTileId -> its 1-based place in the line.
     order: {} as Record<string, number>,
@@ -1027,6 +1046,7 @@ export function createGame(
   function clearLineOverlay(): void {
     lineOverlay.lineId = null;
     lineOverlay.trainId = null;
+    lineOverlay.kind = null;
     lineOverlay.colour = "";
     for (const k of Object.keys(lineOverlay.order)) delete lineOverlay.order[k];
     for (const k of Object.keys(lineOverlay.path)) delete lineOverlay.path[k];
@@ -1043,6 +1063,7 @@ export function createGame(
     lineOverlay.trainId = what.trainId ?? null;
     lineOverlay.colour = lines.find(l => l.id === lineId)?.colour ?? "#f0b429";
     const stops = sim.lines().find(l => l.id === lineId)?.stops ?? [];
+    lineOverlay.kind = lineKindOf(stops);
     stops.forEach((id, i) => {
       // A stop listed twice keeps its FIRST place — the badge says when the
       // train first calls there, which is what a reader wants.
@@ -1163,6 +1184,20 @@ export function createGame(
     ...Object.keys(level).filter(id => level[id]?.role === "station"),
     ...busStops,
   ]);
+
+  // The kind of vehicle a stop takes — and therefore a line's kind, which is
+  // the kind of the stops on it. See LineView.kind for why a line must not mix.
+  function stopKindOf(tileId: string): "rail" | "road" | null {
+    if (level[tileId]?.role === "station") return "rail";
+    return busStops.includes(tileId) ? "road" : null;
+  }
+  function lineKindOf(stops: readonly string[]): "rail" | "road" | null {
+    for (const s of stops) {
+      const kind = stopKindOf(s);
+      if (kind) return kind;
+    }
+    return null;
+  }
 
   // Who turns up where. DERIVED from the ground within walking reach
   // (tiles/catchment.ts): a town nearby means faster arrivals and a fuller
@@ -2589,6 +2624,7 @@ export function createGame(
         trains: sim.trainsOnLine(line.id),
         buses: buses.filter(b => b.lineId === line.id).map(b => b.id),
         colour: LINE_COLOURS[i % LINE_COLOURS.length],
+        kind: lineKindOf(line.stops),
       });
     }
     for (const id of Object.keys(stationLines)) delete stationLines[id];

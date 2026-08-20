@@ -293,20 +293,6 @@
           class="station-platform-edge"
         />
       </g>
-      <!-- LINE EDITING: this platform's place in the line being drawn, big
-           enough to read at a glance across the board (Transport Fever shows
-           the order the same way). A station that is NOT on the line shows a
-           hollow marker instead, so the ones you could still add are just as
-           visible as the ones you have. -->
-      <g v-if="lineBadge" class="station-order" :class="{ 'station-order--off': !lineBadge.on }">
-        <circle :cx="config.tileSize / 2" :cy="config.tileSize / 2" r="21" />
-        <text
-          :x="config.tileSize / 2"
-          :y="config.tileSize / 2 + 9"
-          text-anchor="middle"
-        >{{ lineBadge.label }}</text>
-      </g>
-
       <!-- Debug: the walking catchment — the reach whose town tiles set this
            station's demand (tiles/catchment.ts). Overflows the tile on purpose. -->
       <circle
@@ -332,6 +318,28 @@
       >
         <title>{{ p.title }}</title>
       </circle>
+    </svg>
+
+    <!-- LINE EDITING: this stop's place in the line being drawn, big enough to
+         read at a glance across the board (Transport Fever shows the order the
+         same way). A stop NOT on the line shows a hollow marker, so the ones
+         you could still add are as visible as the ones you have.
+         Its own layer rather than a group inside the station SVG: a BUS STOP is
+         a stop too since #90, and that SVG only renders for a platform — so a
+         kerb could never wear a badge, however the getter was written. -->
+    <svg
+      v-if="lineBadge"
+      class="line-badge-layer"
+      :viewBox="`0 0 ${config.tileSize} ${config.tileSize}`"
+    >
+      <g class="station-order" :class="{ 'station-order--off': !lineBadge.on }">
+        <circle :cx="config.tileSize / 2" :cy="config.tileSize / 2" r="21" />
+        <text
+          :x="config.tileSize / 2"
+          :y="config.tileSize / 2 + 9"
+          text-anchor="middle"
+        >{{ lineBadge.label }}</text>
+      </g>
     </svg>
 
     <!-- The station BUILDING: a shelter or an Empfangsgebäude (which, is the
@@ -887,12 +895,33 @@ class Tile extends Vue {
   get latentDemand(): number {
     return this.game.stationLatent?.[this.coordId] ?? 0;
   }
-  // While a line is being drawn: this station's place in it, or a hollow
-  // marker when it is one you could still add.
+  // Is this tile a place a passenger can WAIT? A platform or a kerb — the two
+  // node kinds of the one transit network (#90), and therefore the two things
+  // that can be a stop on a line.
+  get isTransitStop(): boolean {
+    return this.stopKind !== null;
+  }
+  get stopKind(): "rail" | "road" | null {
+    if (this.isStation) return "rail";
+    return rowsOf(this.tile).some(r => r.kind === "busstop") ? "road" : null;
+  }
+  // While a line is being drawn: this stop's place in it, or a hollow marker
+  // when it is one you could still add.
+  //
+  // Keyed off the overlay being OPEN, not off it naming a train. It used to ask
+  // for `trainId`, from when a line was edited from a train's row; D11 made the
+  // line the thing you edit, and `setLineOverlay({lineId})` leaves trainId null
+  // — so the badges silently stopped drawing for every line. A plan you cannot
+  // see while you draw it is the one thing this overlay exists to prevent.
   get lineBadge(): { label: string; on: boolean; colour: string } | null {
     const overlay = this.game.lineOverlay;
-    if (!this.isStation || !overlay?.trainId) return null;
+    if (!this.isTransitStop || !(overlay?.lineId || overlay?.trainId)) return null;
     const at = overlay.order[this.coordId];
+    // A stop of the OTHER kind gets no hollow marker: this line can never call
+    // there, and an invitation the click refuses is worse than no invitation.
+    // (A stop already ON the line keeps its number regardless — it is a fact
+    // about the line, not an offer.)
+    if (!at && overlay.kind && overlay.kind !== this.stopKind) return null;
     return at
       ? { label: String(at), on: true, colour: overlay.colour }
       : { label: "+", on: false, colour: overlay.colour };
@@ -903,7 +932,11 @@ class Tile extends Vue {
   // connection here and the line never takes it.
   get lineRoutePaths(): string[] {
     const overlay = this.game.lineOverlay;
-    const segments = overlay?.trainId ? overlay.path[this.coordId] : undefined;
+    // Same rule as the badges: whenever an overlay is open. A bus line has no
+    // rail segments to draw, so this is simply empty for one — its badges carry
+    // the call order.
+    const segments =
+      overlay?.lineId || overlay?.trainId ? overlay.path[this.coordId] : undefined;
     if (!segments?.length) return [];
     const size = this.config.tileSize;
     return segments.map(([a, b]) => segmentPathD(a, b, size));
@@ -2522,6 +2555,16 @@ export default toNative(Tile);
   opacity: 0.75;
 }
 /* The call-order badge: big, because it is read across the whole board. */
+/* The call-order badge sits above the station art AND above road paint, so a
+   kerb's badge reads as clearly as a platform's while a line is being drawn. */
+.line-badge-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
 .station-order circle {
   fill: #f0b429;
   stroke: #221803;

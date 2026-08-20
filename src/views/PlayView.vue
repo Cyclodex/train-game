@@ -209,7 +209,10 @@
           @change="assignTrain(t.id, $event)"
         >
           <option value="">— no line —</option>
-          <option v-for="l in game.lines" :key="l.id" :value="l.id">
+          <!-- Only lines a TRAIN can actually run: a rail line, or one still
+               empty. Offering a bus line here would strand the train on stops
+               it has no rails to reach. -->
+          <option v-for="l in linesFor('rail')" :key="l.id" :value="l.id">
             {{ l.name }}
           </option>
         </select>
@@ -248,7 +251,8 @@
           @change="assignBus(b.id, $event)"
         >
           <option value="">— no line —</option>
-          <option v-for="l in game.lines" :key="l.id" :value="l.id">
+          <!-- The mirror of the train's list: bus lines and empty ones only. -->
+          <option v-for="l in linesFor('road')" :key="l.id" :value="l.id">
             {{ l.name }}
           </option>
         </select>
@@ -260,8 +264,11 @@
           ✕
         </button>
       </div>
+      <!-- The hint names what is CLICKABLE right now, which changes once the
+           first stop fixes the line's kind: a rail line takes platforms, a bus
+           line takes kerbs, and never both. -->
       <p v-if="editingLineId" class="service-hint">
-        Click stations on the board to build <b>{{ editingLineName }}</b> —
+        Click {{ pickHint }} on the board to build <b>{{ editingLineName }}</b> —
         click a stop again to remove it.
       </p>
     </div>
@@ -452,7 +459,7 @@
         :class="{
           'level-tile--build-glow': buildArmed && buildGlowId === cell.key,
           'level-tile--razeable': razeArmed && canRaze(cell.key),
-          'level-tile--pickable': lineEditing && isStationTile(cell.key),
+          'level-tile--pickable': isPickable(cell.key),
         }"
         :style="{
           width: config.tileSize + 'px',
@@ -1423,11 +1430,53 @@ class PlayView extends Vue {
   get editingLineName(): string {
     return this.game.lines.find(l => l.id === this.editingLineId)?.name ?? "";
   }
+  get pickHint(): string {
+    const kind = this.lineKindOf(this.editingLineId);
+    if (kind === "rail") return "stations";
+    if (kind === "road") return "bus stops";
+    return this.hasBusStops ? "stations or bus stops" : "stations";
+  }
   lineIdOf(trainId: string): string {
     return this.game.lines.find(l => l.trains.includes(trainId))?.id ?? "";
   }
+  // The lines a vehicle of this kind can run: its own kind, plus any line still
+  // empty — an empty line has no kind yet, and buying the vehicle first is a
+  // perfectly ordinary order of doing things.
+  linesFor(kind: "rail" | "road"): { id: string; name: string }[] {
+    return this.game.lines.filter(l => {
+      const k = this.lineKindOf(l.id);
+      return k === null || k === kind;
+    });
+  }
   isStationTile(tileId: string): boolean {
     return this.level[tileId]?.role === "station";
+  }
+  isBusStopTile(tileId: string): boolean {
+    return this.game.busStopTiles.includes(tileId);
+  }
+  // What KIND of vehicle can serve a stop: a platform is rail, a kerb is road.
+  stopKindOf(tileId: string): "rail" | "road" | null {
+    if (this.isStationTile(tileId)) return "rail";
+    if (this.isBusStopTile(tileId)) return "road";
+    return null;
+  }
+  // A LINE has a kind too — the kind of the stops on it — and an empty one has
+  // none yet, so the first click decides. A line must not MIX the two: no train
+  // can call at a kerb and no bus can call at a platform, so a mixed line is one
+  // its own vehicle can never run (the bus simply never spawns, silently). The
+  // intermodal journey is two lines meeting at a walk link (D5), not one line
+  // pretending to be both.
+  lineKindOf(lineId: string | null): "rail" | "road" | null {
+    return this.game.lines.find(l => l.id === lineId)?.kind ?? null;
+  }
+  // A tile you may click right now to add to (or remove from) the line open in
+  // the panel.
+  isPickable(tileId: string): boolean {
+    if (!this.lineEditing) return false;
+    const kind = this.stopKindOf(tileId);
+    if (!kind) return false;
+    const lineKind = this.lineKindOf(this.editingLineId);
+    return lineKind === null || lineKind === kind;
   }
   // The service, as the panel shows it: every train with its stops and the one
   // it is heading for right now.
@@ -1458,9 +1507,16 @@ class PlayView extends Vue {
   // clears (Transport Fever's rule: a full depot delays the departure, not the
   // purchase).
   get canBuyTrain(): boolean {
+    // A bus line open in the panel: the train would be bought straight onto
+    // stops it cannot reach, so the order is refused rather than silently
+    // producing a train that never moves.
+    if (this.lineKindOf(this.editingLineId) === "road") return false;
     return this.game.depotTiles.length > 0;
   }
   get buyTitle(): string {
+    if (this.lineKindOf(this.editingLineId) === "road") {
+      return "The line you are editing is a bus line — buy a bus for it";
+    }
     return this.canBuyTrain
       ? "Order another train, in service on the line you are editing"
       : "This board has no depot to build a train in";
@@ -1472,9 +1528,15 @@ class PlayView extends Vue {
     return this.game.busStopTiles.length > 0;
   }
   get canBuyBus(): boolean {
+    // The mirror of canBuyTrain: a rail line open means the bus would be bought
+    // onto platforms it cannot drive to.
+    if (this.lineKindOf(this.editingLineId) === "rail") return false;
     return this.hasBusStops;
   }
   get buyBusTitle(): string {
+    if (this.lineKindOf(this.editingLineId) === "rail") {
+      return "The line you are editing is a rail line — buy a train for it";
+    }
     return this.editingLineId
       ? "Order a bus, in service on the line you are editing"
       : "Order a bus — assign it to a line to put it to work";
@@ -1585,7 +1647,7 @@ class PlayView extends Vue {
   // means: bulldoze, edit a line, or nothing.
   onTileClicked(tileId: string): void {
     if (this.panning) return;
-    if (this.lineEditing && this.isStationTile(tileId)) {
+    if (this.isPickable(tileId)) {
       this.editLineAt(tileId);
       return;
     }

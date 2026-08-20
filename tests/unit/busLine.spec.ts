@@ -106,6 +106,33 @@ describe("a bus runs a line", () => {
     expect(game.busServices).toEqual([]);
   });
 
+  // WHAT CAN RUN A LINE, and why the panel needs to be told. A line drawn over
+  // kerbs is a bus line; one drawn over platforms is a rail line; an empty one
+  // has no kind until its first stop. The UI reads this to decide which stops
+  // are clickable and which vehicles may be put on it — a mixed line is one no
+  // vehicle can run (a bus asked to start at a platform never spawns at all).
+  it("takes its kind from its stops, and an empty line has none", () => {
+    const game = gameFor();
+    const empty = game.createLine([]);
+    expect(game.lines.find(l => l.id === empty)?.kind).toBeNull();
+
+    game.setLineStops(empty, [WEST, EAST]);
+    expect(game.lines.find(l => l.id === empty)?.kind).toBe("road");
+  });
+
+  it("tells the board which stops the open line could still take", () => {
+    const game = gameFor();
+    const line = game.createLine([WEST]);
+    game.setLineOverlay({ lineId: line });
+    // The overlay is what the tiles read. It must carry the kind, or every
+    // platform offers itself while a bus line is being drawn.
+    expect(game.lineOverlay.kind).toBe("road");
+    expect(game.lineOverlay.order[WEST]).toBe(1);
+
+    game.setLineOverlay(null);
+    expect(game.lineOverlay.kind).toBeNull();
+  });
+
   it("never sends anyone to a tile that is not a stop", () => {
     const game = gameFor();
     // A line the player drew through a plain road tile. It is a legal line —
@@ -149,6 +176,24 @@ describe("bus and train are one network", () => {
     );
     return { game, busrail };
   }
+
+  it("keeps the two kinds of line apart on a board that has both", async () => {
+    const { game } = await board();
+    // The authored rail line, and a bus line over the kerbs. Each names what
+    // can run it, so the panel can offer the right vehicle and the right stops.
+    const rail = game.lines.find(l => l.stops.includes(HBF));
+    expect(rail?.kind).toBe("rail");
+    const bus = game.createLine([ALT, KERB]);
+    expect(game.lines.find(l => l.id === bus)?.kind).toBe("road");
+  });
+
+  it("names a bus stop, so a line reads as places and not coordinates", async () => {
+    const { game } = await board();
+    // The kerb's label comes from the facility already authored on the tile —
+    // the same name its sign shows on the board.
+    expect(game.stationLabels[ALT]).toBe("Altstadt");
+    expect(game.stationLabels[KERB]).toBe("Hauptbahnhof");
+  });
 
   it("cannot get from Altstadt to the railway without a bus", async () => {
     const { game } = await board();
