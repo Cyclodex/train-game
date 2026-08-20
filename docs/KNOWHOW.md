@@ -3753,6 +3753,11 @@ of the above; read that section first.
   hash routes. It runs on EVERY push to the PR, so links added later are caught
   too, and it is idempotent (the trailing slash is part of the match, so a
   rewritten URL no longer matches).
+  · It runs on `edited` too, as its OWN job with no build behind it. A body is
+    very often written AFTER the push that deployed the preview (it was on the
+    PR this shipped on), and a rewrite bolted to the deploy job leaves those
+    links dead until someone happens to push again. No loop: an edit made with
+    GITHUB_TOKEN does not itself trigger a workflow.
   · BODY ONLY. Comments are a conversation with a timestamp; rewriting posted
     words after the fact reads worse than a stale link — paste preview URLs
     there yourself.

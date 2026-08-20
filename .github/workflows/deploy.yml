@@ -24,7 +24,11 @@ on:
   push:
     branches: [master]
   pull_request:
-    types: [opened, reopened, synchronize, closed]
+    # `edited` is here for the link rewrite alone (a body written or reworded
+    # AFTER the preview deployed would otherwise keep its dead localhost links
+    # until the next push). The deploy job skips that action — a reworded
+    # description does not change the build.
+    types: [opened, reopened, synchronize, closed, edited]
 
 permissions:
   contents: write
@@ -58,7 +62,8 @@ jobs:
     # Fork PRs get a read-only token and cannot push to gh-pages; skip them.
     if: >-
       github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action != 'edited'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,16 +81,32 @@ jobs:
         with:
           source-dir: dist
 
-      # Every task hands back links to the pages it touched (CLAUDE.md), and they
-      # are written against the dev server because that is where the author was
-      # looking. A reviewer has no dev server — so once the preview for THIS PR
-      # is live, rewrite those links to point at it. The author keeps writing
-      # localhost; the reader gets a URL that opens.
-      #
-      # Only the body: comments are a conversation with a timestamp, and editing
-      # someone's words after the fact reads worse than a stale link.
+  # Every task hands back links to the pages it touched (CLAUDE.md), and they are
+  # written against the dev server because that is where the author was looking.
+  # A reviewer has no dev server — so once the preview for THIS PR is live,
+  # rewrite those links to point at it. The author keeps writing localhost; the
+  # reader gets a URL that opens.
+  #
+  # Only the body: comments are a conversation with a timestamp, and editing
+  # someone's words after the fact reads worse than a stale link.
+  #
+  # Its OWN job so it can also run on `edited`, with no build behind it. A body
+  # is very often written after the push that deployed the preview — that was
+  # true of the first PR this shipped on — and a rewrite that only ever runs on
+  # a push leaves those links dead until someone happens to push again.
+  # No loop: an edit made with GITHUB_TOKEN does not itself trigger a workflow,
+  # and the rewrite is idempotent anyway.
+  rewrite-preview-links:
+    needs: [deploy-pr-preview]
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action != 'closed' &&
+      (needs.deploy-pr-preview.result == 'success' || github.event.action == 'edited')
+    runs-on: ubuntu-latest
+    steps:
       - name: Point localhost links at this PR's preview
-        if: github.event.action != 'closed'
         uses: actions/github-script@v7
         with:
           script: |
