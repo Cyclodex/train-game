@@ -19,6 +19,7 @@ import {
 import { bankFor, rowsOf, validateParking } from "@/tiles/parking";
 import { levelBounds } from "@/tiles/bounds";
 import { neighborCoord, oppositePort } from "@/sim/topology";
+import { LANE_WIDTH_FRAC, oneWayLaneOffsetPx, seamPositioningBand } from "@/sim/laneOffset";
 import { parseCoordId, type Level, type Port, type TileCell } from "@/tiles/model";
 import {
   twoWay,
@@ -206,6 +207,87 @@ describe("paint parity: seamPaintLanes IS what the surface strokes, board-wide",
           ? junctionArmPaintTotal(selfAt, n.crossing, n.junction)
           : roadSeamPaintTotal(selfAt, n.crossing, n.junction);
         expect(seamPaintLanes(level, coord, port), at).toBeCloseTo(expected, 6);
+      });
+    }
+  });
+});
+
+describe("car-band parity: the vehicles drive inside the profile's kerb, board-wide", () => {
+  // The cars' lateral positions come from `sim/laneOffset.ts` (the positioning
+  // band + the one-way run anchor), not from the profile — a hot path this
+  // refactor deliberately leaves in place. This case is what makes that
+  // duplication safe: on every seam of every registered board, the band the
+  // vehicles are positioned on must end exactly at the profile's painted kerb.
+  // If either side ever moves alone — a car on the grass, or tarmac no car can
+  // reach — this names the board and the tile.
+  it("the positioning band's edge is the painted kerb on every seam", () => {
+    for (const scenario of SCENARIOS) {
+      const level = scenario.level;
+      const roadAt = (c: { x: number; y: number }) => level[`${c.x},${c.y}`]?.road;
+      eachRoadSeam(level, (tileId, cell, port) => {
+        const road = cell.road;
+        const coord = parseCoordId(tileId);
+        const at = `${scenario.id} ${tileId} port ${port}`;
+        const profile = resolveSeamProfile(level, coord, port);
+        const owFrom = ([port, oppositePort(port)] as Port[]).find(f =>
+          isOneWayStraight(road, f),
+        );
+        if (owFrom !== undefined) {
+          // ONE-WAY: the kerb lane (index 0) rides the run anchor, so its outer
+          // edge is the painted kerb on every tile of the run.
+          const runMax = oneWayRunMax(roadAt, coord, owFrom);
+          const lane0Outer = oneWayLaneOffsetPx(0, runMax, 200) / 200 + LANE_WIDTH_FRAC / 2;
+          expect(lane0Outer, `${at}: kerb lane off the painted kerb`).toBeCloseTo(
+            flankAt(profile, bankFor(owFrom, "right")).kerb,
+            6,
+          );
+          // Centre side: the innermost lane that actually crosses this seam
+          // (`oneWaySeamCount`'s min rule, replicated) ends on the painted
+          // centre edge at the ENTRY seam. At the EXIT seam of a lane drop the
+          // paint deliberately stays a lane wider (the gore shuts the lane, not
+          // the kerb), so there the car merely stays INSIDE the tarmac.
+          const m = laneCount(road, owFrom);
+          const seamCount = (p: Port): number => {
+            const n = neighborCoord(coord, p);
+            const nRoad = n ? level[`${n.x},${n.y}`]?.road : undefined;
+            if (!nRoad?.length || isRoadJunction(nRoad)) return m;
+            const crossing = laneCountAt(nRoad, oppositePort(p));
+            return crossing > 0 ? Math.min(m, crossing) : m;
+          };
+          const cnt = Math.max(1, seamCount(port));
+          const innerEdge = oneWayLaneOffsetPx(cnt - 1, runMax, 200) / 200 - LANE_WIDTH_FRAC / 2;
+          const centreEdge = -flankAt(profile, bankFor(owFrom, "left")).kerb;
+          if (port === owFrom) {
+            expect(innerEdge, `${at}: centre lane off the painted centre edge`).toBeCloseTo(
+              centreEdge,
+              6,
+            );
+          } else {
+            expect(
+              innerEdge,
+              `${at}: a car outside the painted band at a gore seam`,
+            ).toBeGreaterThanOrEqual(centreEdge - 1e-6);
+          }
+          return;
+        }
+        // CENTRED surfaces (two-way straights, bends, junction arms): the
+        // junction-aware positioning band (`seamPositioningBand` over
+        // `laneCountAt / 2`, exactly as `laneGeometry.ts positioningBandAt`
+        // resolves it) ends on the painted kerb.
+        const selfBand = laneCountAt(road, port) / 2;
+        const n = neighborCoord(coord, port);
+        const nRoad = n ? level[`${n.x},${n.y}`]?.road : undefined;
+        const nBand = nRoad ? laneCountAt(nRoad, oppositePort(port)) / 2 : 0;
+        const band = seamPositioningBand(
+          selfBand,
+          isRoadJunction(road),
+          nBand,
+          isRoadJunction(nRoad),
+        );
+        expect(band * LANE_WIDTH_FRAC, `${at}: positioning band off the painted kerb`).toBeCloseTo(
+          flankAt(profile, seamFlanks(port)[0]).kerb,
+          6,
+        );
       });
     }
   });
