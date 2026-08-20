@@ -2776,8 +2776,17 @@ of the above; read that section first.
   seam ⇒ the PAINT is the bug. Overlay is the diagnostic for all road geometry.
 
 ## CURVES — rail ≠ road (the #1 trap)
-- RAIL curve = quadratic Bézier through TILE CENTRE (`Q centre`). `geometry.ts
-  railPathsFor`, `pathGeometry.ts segmentPathD`.
+- RAIL curve CENTRELINE (the sleeper bed, the path a train drives) = quadratic
+  Bézier through TILE CENTRE (`Q centre`). `pathGeometry.ts segmentPathD`.
+- The two RAILS are a TRUE PARALLEL OFFSET of that quad — every sample pushed ⟂
+  to ITS OWN tangent, emitted as a 24-leg polyline (`geometry.ts railPathsFor`).
+  NOT a `Q` with offset endpoints (2026-08-20 fix): offsetting only the endpoints,
+  ⟂ to the CHORD, with the control point left at the tile centre, gave (a) HALF
+  GAUGE at the apex — 14px at the ports, 7px mid-bend, the rails visibly merging
+  into one line through every curve — and (b) a ~5px SIDEWAYS JOG at every seam,
+  since a Left↔Bottom curve started its rail at (−4.95, 104.95) while the abutting
+  straight put its own at (0, 107). Same rule as the road (next-but-one bullet):
+  offset the SAMPLED centreline, never the control point. `/test/railcurves`.
 - ROAD turn = 90° CIRCULAR ARC around the WRAPPED TILE CORNER, r=size/2, tangent
   at port edges (`A r r 0 0 sweep`). `roadSegmentPathD`, `turnCornerPoint` (=pa+pb−c).
   Centre-quad bulged into the junction box — fixed bug. Don't merge road turn → rail quad.
@@ -2787,7 +2796,8 @@ of the above; read that section first.
   overlap on curves. `scaleX` sprite-foreshorten was REVERTED (user hated it) —
   wrong cause. Kept: chord render (`UnitChord{front,rear}`) + `BOGIE_INSET_FRAC=0.2`.
 - Constant-width road curve: offset the SAMPLED centreline ⟂ (`laneOffsetPointAt`),
-  never the Bézier control point (pinches apex).
+  never the Bézier control point (pinches apex). Holds for RAIL too — the rail
+  gauge is the same problem and had the same bug for a year (see above).
 - Turn-LANE path = corner FILLET of the two lane lines (`pathGeometry.ts
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =

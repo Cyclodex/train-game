@@ -1,6 +1,7 @@
 import { TestScenario } from "@/levels/test/scenario";
 import { straight } from "@/levels/test/scenarios/straight";
 import { curve } from "@/levels/test/scenarios/curve";
+import { railcurves } from "@/levels/test/scenarios/railcurves";
 import { depot } from "@/levels/test/scenarios/depot";
 import { station } from "@/levels/test/scenarios/station";
 import { transfer } from "@/levels/test/scenarios/transfer";
@@ -164,7 +165,7 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "trains",
     label: "Trains",
     categories: [
-      { id: "basics", label: "Basics", scenarios: [straight, curve, depot, rollingstock] },
+      { id: "basics", label: "Basics", scenarios: [straight, curve, railcurves, depot, rollingstock] },
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
