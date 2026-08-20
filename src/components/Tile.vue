@@ -2452,10 +2452,12 @@ export default toNative(Tile);
   stroke-dashoffset: 2;
   stroke-linecap: butt;
 }
+/* The flyover deck's own track. Must match TileRail.vue's ground rails, or the
+   line visibly changes weight where it climbs onto the deck. */
 .deck-rail {
   fill: none;
   stroke: gray;
-  stroke-width: 1px;
+  stroke-width: 1.6px;
 }
 
 /* --- tunnel (the line is underground) ---

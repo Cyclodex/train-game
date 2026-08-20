@@ -2971,9 +2971,39 @@ of the above; read that section first.
   Lane-graph overlay code must stay identical to it. Cyan ≠ painted dash/gore at a
   seam ⇒ the PAINT is the bug. Overlay is the diagnostic for all road geometry.
 
+## TRACK PROPORTIONS (2026-08-20)
+- Anchor the track's look on REAL numbers — standard gauge 1435mm on a 2600mm
+  sleeper, i.e. the rails at **55% of the sleeper's half-length**. Everything is
+  drawn in `TileRail.vue`: the sleeper band is the centreline stroked 20px
+  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1.6px grey.
+- RAIL STROKE 1.6, not the old 1. A 1px grey hairline all but disappears into
+  the sleeper band at normal board zoom — the track read as bare sleepers with
+  no metal on it. `Tile.vue`'s `.deck-rail` (the flyover deck's own track) must
+  carry the SAME width, or the line changes weight where it climbs onto the deck.
+- `railDistanceFromPath` = HALF THE GAUGE in px, and 20/2 × 0.55 = **5.5**. It was
+  7 (70%), which left a 3px sleeper end past the rail and read as "rails sitting
+  on the sleeper tips" — the user spotted it by eye before the maths was done.
+- The terrain keep-out (`terrain.ts RAIL_HALF = 8` units) follows the SLEEPER,
+  not the rail, so re-gauging does not move the cleared right-of-way.
+- SLEEPER PITCH IS DELIBERATELY COARSE. Real pitch would be ~"2.5 3" (600mm
+  centres at 1px = 130mm), roughly twice as many sleepers. Tried and rejected:
+  it looks right at a macro crop and blurs into a solid dark band at the normal
+  board zoom, where the track loses its railway texture. Judge any sleeper/rail
+  weight change at BOARD scale (`npm run shot -- railcurves --scale 2`), not
+  only on a zoomed crop.
+
 ## CURVES — rail ≠ road (the #1 trap)
-- RAIL curve = quadratic Bézier through TILE CENTRE (`Q centre`). `geometry.ts
-  railPathsFor`, `pathGeometry.ts segmentPathD`.
+- RAIL curve CENTRELINE (the sleeper bed, the path a train drives) = quadratic
+  Bézier through TILE CENTRE (`Q centre`). `pathGeometry.ts segmentPathD`.
+- The two RAILS are a TRUE PARALLEL OFFSET of that quad — every sample pushed ⟂
+  to ITS OWN tangent, emitted as a 24-leg polyline (`geometry.ts railPathsFor`).
+  NOT a `Q` with offset endpoints (2026-08-20 fix): offsetting only the endpoints,
+  ⟂ to the CHORD, with the control point left at the tile centre, gave (a) HALF
+  GAUGE at the apex — 14px at the ports, 7px mid-bend, the rails visibly merging
+  into one line through every curve — and (b) a ~5px SIDEWAYS JOG at every seam,
+  since a Left↔Bottom curve started its rail at (−4.95, 104.95) while the abutting
+  straight put its own at (0, 107). Same rule as the road (next-but-one bullet):
+  offset the SAMPLED centreline, never the control point. `/test/railcurves`.
 - ROAD turn = 90° CIRCULAR ARC around the WRAPPED TILE CORNER, r=size/2, tangent
   at port edges (`A r r 0 0 sweep`). `roadSegmentPathD`, `turnCornerPoint` (=pa+pb−c).
   Centre-quad bulged into the junction box — fixed bug. Don't merge road turn → rail quad.
@@ -2983,7 +3013,8 @@ of the above; read that section first.
   overlap on curves. `scaleX` sprite-foreshorten was REVERTED (user hated it) —
   wrong cause. Kept: chord render (`UnitChord{front,rear}`) + `BOGIE_INSET_FRAC=0.2`.
 - Constant-width road curve: offset the SAMPLED centreline ⟂ (`laneOffsetPointAt`),
-  never the Bézier control point (pinches apex).
+  never the Bézier control point (pinches apex). Holds for RAIL too — the rail
+  gauge is the same problem and had the same bug for a year (see above).
 - Turn-LANE path = corner FILLET of the two lane lines (`pathGeometry.ts
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
