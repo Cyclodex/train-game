@@ -1356,10 +1356,14 @@ export function createGame(
           // The car's own trip names where its driver is standing. Resolving the
           // kerb HERE — rather than handing the citizen layer a bank to carry —
           // is what keeps bays and pavement sides on this side of the port.
+          // `kerb.at` is the CAR: pass it, or the walker is placed at the middle
+          // of the road tile and the driver materialises in the traffic.
           requestFromKerb: (carTripId, toPlot) => {
             const kerb = roadSim.tripParkedKerb(carTripId);
             if (!kerb) return null;
-            return pedestrianSim?.requestFromKerb(kerb.tileId, kerb.bank, toPlot) ?? null;
+            return (
+              pedestrianSim?.requestFromKerb(kerb.tileId, kerb.bank, toPlot, kerb.at) ?? null
+            );
           },
           status: id => pedestrianSim?.status(id) ?? "arrived",
           release: id => pedestrianSim?.release(id),

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { itSlow } from "./support/tier";
 import { createGame } from "@/game";
 import { createCitizenSim, type DrivingPort, type WalkingPort } from "@/sim/citizens";
+import { createRoadSim } from "@/sim/road";
+import { createPedestrianSim } from "@/sim/pedestrians";
 import { buildCitizenWorld } from "@/tiles/cities";
 import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
@@ -232,6 +234,84 @@ describe("the pavement goes AROUND the parking, not through it", () => {
       pavementOffsetFor(level["1,1"], 1, Position.Left, Position.Right),
     );
     expect(off + PAVEMENT_WIDTH / 2).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("the driver gets out AT THE CAR", () => {
+  // The figure used to materialise at the middle of the road tile and step
+  // sideways onto the pavement, because the only thing that reached the walker
+  // was a tile: `requestFromKerb` could take the car's own position, and the one
+  // caller never passed it. The middle of a road tile is the middle of the
+  // CARRIAGEWAY — a bay is a whole car's width out from it.
+  const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
+  const bayLevel: Level = {
+    "0,0": street(),
+    "1,0": {
+      ...street(),
+      parking: {
+        facility: "P",
+        rows: [{ from: Position.Left, side: "right", kind: "perpendicular", count: 2 }],
+      },
+    },
+    "2,0": street(),
+  };
+
+  it("says where the car is standing, not just which tile it is on", () => {
+    const s = createRoadSim({ level: bayLevel, width: 3, height: 1, seed: 1 });
+    const id = s.requestTrip("0,0", "2,0", "car", { park: true });
+    expect(id).toBeTruthy();
+    let parked = false;
+    for (let t = 0; t < 200 && !parked; t += 0.2) {
+      s.step(0.2, () => false);
+      parked = s.tripStatus(id as string) === "parked";
+    }
+    expect(parked).toBe(true);
+
+    const kerb = s.tripParkedKerb(id as string);
+    expect(kerb).not.toBeNull();
+    expect(kerb!.tileId).toBe("1,0");
+
+    // The car's OWN position, from the sample the renderer draws: a parked car
+    // reports an absolute tile-local pose, so this is where the player sees it.
+    const car = s.sample().find(c => c.id === id)!;
+    const unit = car.units[0];
+    const cx = unit.front.coord.x + (unit.front.pose!.tx + unit.rear.pose!.tx) / 2;
+    const cy = unit.front.coord.y + (unit.front.pose!.ty + unit.rear.pose!.ty) / 2;
+    expect(kerb!.at.x).toBeCloseTo(cx, 2);
+    expect(kerb!.at.y).toBeCloseTo(cy, 2);
+    // ...and that is emphatically not the middle of the tile.
+    expect(Math.hypot(kerb!.at.x - 1.5, kerb!.at.y - 0.5)).toBeGreaterThan(0.15);
+  });
+
+  it("starts the walk there, rather than out in the carriageway", () => {
+    const level = homeparking.level;
+    // A bay and a door with pavement between them — the last leg of a drive.
+    const plots = Object.keys(level).filter(id => !level[id].road?.length);
+    let tileId = "";
+    let bank = Position.Top;
+    let plot = "";
+    outer: for (const id of Object.keys(level).sort()) {
+      for (const row of rowsOf(level[id])) {
+        for (const p of plots) {
+          if (accessTileOf(level, p) === id) continue; // its own doorstep: no walk
+          if (!planWalkFromKerb(level, id, bankOf(row), p)) continue;
+          tileId = id;
+          bank = bankOf(row);
+          plot = p;
+          break outer;
+        }
+      }
+    }
+    expect(plot).not.toBe("");
+    const { x, y } = parseCoordId(tileId);
+    const peds = createPedestrianSim({ level });
+    // Somewhere in the bay: off the centreline, part way along the tile.
+    const at = { x: x + 0.3, y: y + 0.78 };
+    const walk = peds.requestFromKerb(tileId, bank, plot, at);
+    expect(walk).not.toBeNull();
+    const w = peds.sample().find(sample => sample.id === walk)!;
+    expect(w.x).toBeCloseTo(at.x, 5);
+    expect(w.y).toBeCloseTo(at.y, 5);
   });
 });
 

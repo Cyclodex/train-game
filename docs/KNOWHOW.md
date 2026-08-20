@@ -2690,6 +2690,13 @@ of the above; read that section first.
   .requestFromKerb(carTripId, toPlot)`). `game.ts` resolves it through
   `roadSim.tripParkedKerb`, which keeps banks, sides and bay geometry entirely
   out of the citizen layer — the same line terrain-blindness is drawn on.
+  · **AND A TILE IS NOT ENOUGH TO STAND SOMEBODY IN**: `tripParkedKerb` also
+    returns `at`, the car's own resting pose (`stallPose` at the stall's kerb, in
+    world TILE units), and `pedestrians.requestFromKerb` takes it as a REQUIRED
+    argument. It was optional, the one caller never passed it, and the walker was
+    duly placed at the tile's centre — which is the middle of the carriageway, so
+    the driver appeared standing in the traffic and stepped sideways out of it.
+    An optional argument with one caller is a dead argument; make it required.
 - The leg now ends when the WALKER arrives, with `legRemaining` kept as the
   backstop (same rule as the `walking` leg): no pavement, no route, or a pavement
   deleted underfoot falls back to the clock rather than stranding anybody.
