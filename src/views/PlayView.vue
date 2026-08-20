@@ -992,6 +992,13 @@ class PlayView extends Vue {
     saveLastModeId(this.mode.id);
     this.best = loadBest(this.levelId);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
+    // The bus lines this board was authored with (`?board=<scenario>`), each
+    // with a bus on it — the same seeding /test does, so a board plays the way
+    // it demonstrates. A train comes with the level; a bus lives on its line,
+    // so it can only be placed once the line exists.
+    for (const stops of this.board?.busLines ?? []) {
+      this.game.buyBus(this.game.createLine(stops));
+    }
     if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     // Test hook: expose the live game so e2e can read simulation state without
     // depending on Vue's internal instance shape.
@@ -2082,6 +2089,12 @@ class PlayView extends Vue {
   // keeps a semi's cab and trailer in one livery.
   carColor(id: string): string {
     const base = id.split("#")[0];
+    // A SERVICE VEHICLE WEARS ITS LINE'S COLOUR, like the train does: the bus on
+    // the green line is green, and so are the people waiting for it and its row
+    // in the panel. An ordinary car keeps a colour from the traffic palette —
+    // it is somebody's own journey, not a service anyone is waiting for.
+    const service = this.game.vehicleLoads?.[base];
+    if (service?.colour) return service.colour;
     const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
   }

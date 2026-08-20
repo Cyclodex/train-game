@@ -1,7 +1,7 @@
 import { Position } from "@/types";
 import { expandKind } from "@/tiles/kinds";
 import { TileCell } from "@/tiles/model";
-import { twoWay } from "@/tiles/lanes";
+import { fromPairs, twoWay } from "@/tiles/lanes";
 import { TestScenario, mkLineTrain, railRing } from "@/levels/test/scenario";
 import type { ParkingRow } from "@/tiles/parking";
 
@@ -52,11 +52,16 @@ const stationEW = (name: string): TileCell => ({
 //
 //   ring road   1,3 ─ HALT(2,3) ─ 3,3 ─ 4,3 ─ 5,3 ─ 6,3     <- 2,3 is under HBF
 //                │                                   │
-//               1,4                                 6,4
+//        0,4 ── 1,4                                 6,4
 //                │                                   │
-//               1,5                                 6,5
+//               1,5                                 6,5 ── 7,5
 //                │                                   │
 //               1,6 ─ 2,6 ─ 3,6 ─ 4,6 ─ ALT(5,6) ─ 6,6
+//
+// The two stubs at 0,4 and 7,5 are where ORDINARY traffic comes from: cars enter
+// at a map edge and leave by the other. A bus does not use them — it lives on
+// its line and appears at its first stop — but a ring with no way in reads as a
+// race track rather than a town's streets.
 export const busrail: TestScenario = {
   id: "busrail",
   name: "Bus and train",
@@ -99,11 +104,32 @@ export const busrail: TestScenario = {
     "4,3": road(Position.Left, Position.Right),
     "5,3": road(Position.Left, Position.Right),
     "6,3": road(Position.Left, Position.Bottom), // NE corner
-    // The two sides.
-    "1,4": road(Position.Top, Position.Bottom),
+    // The two sides. Each carries a T where the road out of town joins, so the
+    // ring is connected to the world beyond the map rather than being a sealed
+    // circuit: ordinary traffic drives IN at one edge and out at the other.
+    // (A bus needs none of this — it lives on its line and appears at its first
+    // stop — but a ring road nothing can enter reads as a race track.)
+    "1,4": {
+      connections: [],
+      road: fromPairs([
+        [Position.Top, Position.Bottom], // the ring itself
+        [Position.Left, Position.Top],
+        [Position.Left, Position.Bottom],
+      ]),
+    },
     "1,5": road(Position.Top, Position.Bottom),
     "6,4": road(Position.Top, Position.Bottom),
-    "6,5": road(Position.Top, Position.Bottom),
+    "6,5": {
+      connections: [],
+      road: fromPairs([
+        [Position.Top, Position.Bottom],
+        [Position.Right, Position.Top],
+        [Position.Right, Position.Bottom],
+      ]),
+    },
+    // ...and the two roads out, each running to a map edge.
+    "0,4": road(Position.Left, Position.Right),
+    "7,5": road(Position.Left, Position.Right),
     // South side. ALTSTADT is out of walking reach of any platform, so the bus
     // is the only way its people reach the railway at all.
     "1,6": road(Position.Top, Position.Right), // SW corner
@@ -135,9 +161,14 @@ export const busrail: TestScenario = {
     // for ever — a ring needs no turn-back.
     rail: mkLineTrain("rail", 0, 2, "people", 2, ["2,2", "2,1"]),
   },
+  // THE BUS THE BOARD IS ABOUT. Authored like the train above: Altstadt to the
+  // Hauptbahnhof kerb, with a bus on it from the first frame. Without this the
+  // board that exists to show a bus opened with no bus, and the mechanic was
+  // invisible until a visitor drew the line themselves.
+  busLines: [["5,6", "2,3"]],
   colors: {
     depotColors: { "0,2": "blue" },
     trainColors: { rail: "green" },
   },
-  size: { cols: 8, rows: 8 },
+  size: { cols: 9, rows: 8 },
 };

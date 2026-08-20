@@ -2816,6 +2816,35 @@ export function createGame(
   // asking the sim alone reports "no line" for a train the player has just
   // routed — and `trainInit` carries `def.line` over when it finally rolls out,
   // so the definition is the honest answer until then.
+  // A VEHICLE WEARS ITS LINE'S COLOUR — on a board where a line is the plan.
+  //
+  // The liveries used to come from the depot-matching palette, which on a
+  // service board says nothing: `/test/transfer` had a yellow train working the
+  // green line and a green train working the yellow one, each collecting dots of
+  // the OTHER colour. The dots are already coloured by the line somebody is
+  // waiting for, so tying the vehicle to the same colour makes the board read at
+  // a glance: green train, green dots, green row in the panel.
+  //
+  // Only where lines ARE the game (`hud.passengers`). In the classic modes a
+  // train's colour is a RULE — it has to match the depot it delivers to — and
+  // repainting it would break the mechanic rather than explain it. A vehicle
+  // with no line keeps its own livery either way: that is the only identity it
+  // has.
+  function liveryOf(trainId: string): string {
+    const own = assignedColors.trainColors[trainId] ?? trainColors[trainId];
+    if (!mode.hud.passengers) return own;
+    const lineId = sim.trains[trainId] ? sim.lineOf(trainId) : undefined;
+    const line = lineId ? lines.find(l => l.id === lineId) : undefined;
+    return line?.colour ?? own;
+  }
+
+  function syncLiveries(): void {
+    for (const id of Object.keys(trainColors)) {
+      const want = liveryOf(id);
+      if (trainColors[id] !== want) trainColors[id] = want;
+    }
+  }
+
   function syncLine(trainId: string): void {
     const stops = sim.trains[trainId]
       ? sim.trainLine(trainId)
@@ -2842,6 +2871,9 @@ export function createGame(
         kind: lineKindOf(line.stops),
       });
     }
+    // The lines have just been rebuilt, so the liveries that follow them can be
+    // brought into step — after `lines`, because that is what liveryOf reads.
+    syncLiveries();
     for (const id of Object.keys(stationLines)) delete stationLines[id];
     for (const line of lines) {
       for (const stop of line.stops) {
