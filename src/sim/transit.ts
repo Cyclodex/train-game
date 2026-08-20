@@ -149,7 +149,10 @@ export interface TransitLayer {
   // Anonymous demand: `count` people who will each be given a destination the
   // network can actually serve. Returns how many were queued.
   addPassengers(stopId: string, count: number): number;
-  // Advance the spawn schedule.
+  // Advance the spawn schedule — and the people ON FOOT, whose next step is a
+  // walk rather than a ride. Both belong to the same tick: a passenger who can
+  // only be moved by walking is one no vehicle will ever pick up, and leaving
+  // them standing fills the queue and stops the stop generating anyone at all.
   advanceDemand(dt: number): void;
   // Seed the opening crowd. Called once the vehicles exist, because with none
   // of them nothing is served and nobody would appear (D10).
@@ -213,6 +216,9 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
 
   // stop -> the stops you can walk to from it, both ways.
   const walkTo = new Map<string, string[]>();
+  // stop -> everywhere reachable from it on FOOT alone. Memoised: the walk links
+  // are fixed at construction, so this answer never changes.
+  const walkOnlyCache = new Map<string, Set<string>>();
   for (const [a, b] of config.walkLinks ?? []) {
     walkTo.set(a, [...(walkTo.get(a) ?? []), b]);
     walkTo.set(b, [...(walkTo.get(b) ?? []), a]);
@@ -380,6 +386,9 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       return accepted;
     },
     advanceDemand(dt: number) {
+      // On foot FIRST, so a stop that was full of people who only had to walk
+      // has room again before this tick's arrivals are counted.
+      walkWaiting();
       for (const [id, d] of Object.entries(demand)) {
         let clock = (spawnClocks.get(id) ?? 0) + dt;
         const q = queues.get(id) ?? [];
@@ -429,20 +438,26 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         }
         alighted += 1;
         if (rider.tag !== undefined) alightedTags.push(rider.tag);
+        // WHERE they go from here. Normally they wait right here for the onward
+        // service — but if the next step of their journey is a WALK (off the
+        // bus, across to the platform), they take it now. Left standing at the
+        // kerb they would wait for ever for a train that does not call there,
+        // which is the whole reason the walk exists.
+        const on = rider.final === stopId ? stopId : walkOnward(stopId, rider.final);
         // A DELIVERY is arriving where you asked for, and nowhere else (D9):
         // counting a change as an arrival would score one person two or three
         // times and quietly inflate every objective built on the number.
-        if (rider.final === stopId) deliveredTotal += 1;
+        //
+        // The last few steps ON FOOT still arrive. Re-queueing them at their own
+        // destination — which is what treating the walk as a change did — is a
+        // state `enqueue` itself forbids, and it sent every Altstadt rider round
+        // the railway one more time before anybody counted them.
+        if (on === rider.final) deliveredTotal += 1;
         else {
           changing.push({
             dest: rider.final,
             ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
-            // WHERE they wait for the onward service. Normally right here — but
-            // if the next step of their journey is a WALK (off the bus, across
-            // to the platform), they take it now and wait at the far end. Left
-            // standing at the kerb they would wait for ever for a train that
-            // does not call there, which is the whole reason the walk exists.
-            at: walkOnward(stopId, rider.final),
+            at: on,
           });
         }
       }
@@ -511,6 +526,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
   // otherwise `at` itself. Strictly closer, like every other hop — a walk that
   // does not get you closer is not a step, it is a stroll.
   function walkOnward(at: string, final: string): string {
+    if (walkTo.size === 0) return at;
     const g = network();
     const here = g.hops(at, final);
     if (here === undefined) return at;
@@ -523,6 +539,55 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       best = n;
     }
     return best;
+  }
+
+  // Move everyone waiting whose next step is a WALK rather than a ride.
+  //
+  // Only riders getting OFF a vehicle used to walk, which left a whole class of
+  // passenger with nothing that could ever move them: someone whose journey
+  // BEGINS on foot (the platform, out to the kerb, then the bus). No vehicle
+  // boards them — their first hop is not a ride — so they stood there, the
+  // queue filled to its cap, and `advanceDemand` stops generating at the cap,
+  // so the stop quietly died. Every hop of every journey now has something that
+  // performs it.
+  function walkWaiting(): void {
+    if (walkTo.size === 0) return;
+    const arrivals = new Map<string, Waiting[]>();
+    for (const [at, q] of queues) {
+      if (q.length === 0) continue;
+      const staying: Waiting[] = [];
+      for (const w of q) {
+        const to = walkOnward(at, w.dest);
+        if (to === at) staying.push(w);
+        // The walk WAS the last leg: they have arrived, on foot.
+        else if (to === w.dest) deliveredTotal += 1;
+        else arrivals.set(to, [...(arrivals.get(to) ?? []), w]);
+      }
+      if (staying.length !== q.length) queues.set(at, staying);
+    }
+    // Applied after the sweep, never during it, so nobody is walked twice in one
+    // tick. They join at the FRONT and PAST THE CAP, exactly like a change (D8):
+    // once someone has set off they are mid-journey, and a cap is a limit on the
+    // SPAWNER, not on how many people may stand at a kerb. Held back by it
+    // instead, they stayed put and their own stop stayed full — which is the
+    // starvation this whole fix is about (`busrail` measured: Hauptbahnhof
+    // pinned at 8/8 for the whole run, generating nobody at all).
+    for (const [at, walked] of arrivals) {
+      queues.set(at, [...walked, ...(queues.get(at) ?? [])]);
+    }
+  }
+
+  // The stops you can walk to from here — the AUTHORED links, one hop, never a
+  // chain of them. `walkLinksOf` pairs a kerb with the platform beside it and
+  // says nothing about two platforms that happen to share a kerb: reading the
+  // chain as "walkable" made the whole of `busrail`'s railway one long stroll,
+  // every station dropped out of every pool, and the board delivered NOBODY.
+  function walkOnlyReach(from: string): Set<string> {
+    const cached = walkOnlyCache.get(from);
+    if (cached) return cached;
+    const seen = new Set<string>(walkTo.get(from) ?? []);
+    walkOnlyCache.set(from, seen);
+    return seen;
   }
 
   // THE FIRST RIDE ON A JOURNEY — the first hop somebody is actually CARRIED,
@@ -570,15 +635,30 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     return network().serves(from, to) && firstRideFrom(from, to) !== undefined;
   }
 
+
   function nextDestination(id: string): string | null {
     // Only a real STOP is somewhere to ask for. A line's stop list is the
     // player's, and nothing stops it naming a tile that is not a stop at all —
     // the graph will happily carry that as a node, and then people queue for a
     // patch of road nobody can wait at.
+    //
+    // And a WALK IS NOT A JOURNEY. A stop one walk link away is somewhere you
+    // never became a passenger to get to: the graph counts the walk as a service
+    // so that bus-then-train is one journey, but nothing runs it. Offering it as
+    // a destination invented people no vehicle could serve, whose queue then hit
+    // its cap and stopped the stop generating anyone real — and had they been
+    // walked there instead it would have scored the player a delivery they did
+    // not earn.
+    //
+    // `walkOnlyReach` is the direct neighbours; `firstRideFrom` catches the same
+    // thing a hop or two out, where a chain of walks would otherwise deliver
+    // somebody on foot and call it a service. The two say the same thing at
+    // different ranges, and neither declares the railway "walkable" — that is
+    // the trap the transitive version fell into.
+    const onFoot = walkOnlyReach(id);
     const choices = network()
       .reachableFrom(id)
-      .filter(isStop)
-      .filter(to => servesByLine(id, to));
+      .filter(s => isStop(s) && !onFoot.has(s) && firstRideFrom(id, s) !== undefined);
     if (choices.length === 0) return null;
     const at = destCursors.get(id) ?? 0;
     destCursors.set(id, at + 1);

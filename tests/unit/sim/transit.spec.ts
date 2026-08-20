@@ -198,3 +198,117 @@ describe("the transit layer: who turns up (D10)", () => {
     expect(t.waiting(A)).not.toContain(C);
   });
 });
+
+// A WALK IS NOT A JOURNEY — the kerb outside the station.
+//
+// `walkLinks` puts a pseudo-service between a stop and the platform beside it,
+// and that is what makes a bus-then-train trip ONE journey. But NOTHING RUNS
+// IT: no vehicle ever calls at a walk. Two rules have to hold together or the
+// network quietly seizes up —
+//   · nobody is created whose whole journey is a walk. They would stand there
+//     for ever (no vehicle can help them), fill the queue, and stop the stop
+//     generating anyone who DOES need a service.
+//   · anyone whose next STEP is a walk takes it, waiting or riding — otherwise
+//     a journey that begins or ends on foot can never be made.
+describe("the transit layer: a walk is not a journey", () => {
+  const KERB = "kerb";
+  const PLAT = "plat";
+  const TOWN = "town";
+  const OTHER = "other";
+  const walk: [string, string][] = [[KERB, PLAT]];
+
+  it("queues nobody for somewhere they can simply walk to", () => {
+    const t = createTransit({
+      demand: { [PLAT]: { intervalSec: 1, max: 4, initial: 4 } },
+      walkLinks: walk,
+    });
+    // The kerb is the only thing the platform connects to, and it is a walk.
+    // Nobody stands on a platform waiting for a ride they could take on foot.
+    t.seed();
+    expect(t.queueLength(PLAT)).toBe(0);
+    t.advanceDemand(10);
+    expect(t.queueLength(PLAT)).toBe(0);
+    expect(t.addPassengers(PLAT, 3)).toBe(0);
+  });
+
+  it("still fills for the places that need a vehicle, and walks them to it", () => {
+    const t = createTransit({
+      demand: { [PLAT]: { intervalSec: 1, max: 4 } },
+      walkLinks: walk,
+    });
+    // A bus runs from the kerb into town: reachable from the platform, but only
+    // by walking out to the kerb first.
+    t.createLine([KERB, TOWN], undefined, true);
+    t.advanceDemand(10);
+    expect(t.queueLength(PLAT)).toBeGreaterThan(0);
+    expect(t.waiting(PLAT).every(d => d === TOWN)).toBe(true);
+
+    // …and on the next tick they are at the kerb, where the bus calls. Left on
+    // the platform they would wait for ever for a bus that never comes up the
+    // stairs — and the full queue would stop anyone else setting out.
+    t.advanceDemand(1);
+    expect(t.queueLength(KERB)).toBe(4);
+    expect(t.waiting(KERB).every(d => d === TOWN)).toBe(true);
+    expect(t.queueLength(PLAT)).toBeLessThan(4);
+  });
+
+  it("leaves alone someone whose own service calls right here", () => {
+    const t = createTransit({
+      demand: { [PLAT]: { intervalSec: 1, max: 4 } },
+      walkLinks: walk,
+    });
+    t.createLine([PLAT, OTHER], undefined, true);
+    t.advanceDemand(10);
+    t.advanceDemand(1);
+    // A walk that does not get them closer is not a step, it is a stroll.
+    expect(t.waiting(PLAT).every(d => d === OTHER)).toBe(true);
+    expect(t.queueLength(KERB)).toBe(0);
+  });
+
+  it("counts a journey that finishes on foot as delivered", () => {
+    const t = createTransit({ walkLinks: walk });
+    const bus = t.createLine([TOWN, KERB], undefined, true);
+    // Off the bus at the kerb, bound for the platform a few steps away. That is
+    // an ARRIVAL: re-queueing them at their own destination is a state
+    // `enqueue` itself forbids, and it would send them round the railway once
+    // more before anyone counted them.
+    const manifest: Rider[] = [seat(PLAT, KERB)];
+    const r = t.exchange({ stopId: KERB, lineId: bus.id, capacity: 4, manifest });
+    expect(r.alighted).toBe(1);
+    expect(r.changing).toBe(0);
+    expect(t.delivered()).toBe(1);
+    expect(t.queueLength(PLAT)).toBe(0);
+  });
+
+  it("carries a named traveller bus, walk, train the whole way", () => {
+    const t = createTransit({ walkLinks: walk });
+    const bus = t.createLine([TOWN, KERB], undefined, true);
+    const rail = t.createLine([PLAT, OTHER], undefined, true);
+    expect(t.enqueue(TOWN, OTHER, "traveller")).toBe(true);
+
+    // The bus takes them as far as the kerb — its line cannot reach OTHER, but
+    // it can hand them on.
+    const onBus: Rider[] = [];
+    expect(
+      t.exchange({ stopId: TOWN, lineId: bus.id, capacity: 4, manifest: onBus })
+        .boardedTags
+    ).toEqual(["traveller"]);
+    const off = t.exchange({ stopId: KERB, lineId: bus.id, capacity: 4, manifest: onBus });
+    expect(off.alightedTags).toEqual(["traveller"]);
+    expect(off.changing).toBe(1);
+    // The WALK: they are on the platform now, not standing at the kerb waiting
+    // for a train that does not call at a road.
+    expect(t.waiting(PLAT)).toEqual([OTHER]);
+
+    const onTrain: Rider[] = [];
+    t.exchange({ stopId: PLAT, lineId: rail.id, capacity: 4, manifest: onTrain });
+    const arrive = t.exchange({
+      stopId: OTHER,
+      lineId: rail.id,
+      capacity: 4,
+      manifest: onTrain,
+    });
+    expect(arrive.alightedTags).toEqual(["traveller"]);
+    expect(t.delivered()).toBe(1);
+  });
+});

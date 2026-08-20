@@ -1827,6 +1827,10 @@ export function createGame(
   // every test.
   const BUS_SEATS = 12;
   const BUS_DWELL_SEC = 4;
+  // How long a bus may fail to get back on the road before the log says so. A
+  // busy street clears in a tick or two; a stop it can never be driven to does
+  // not, and that is the one worth a line.
+  const STRANDED_REPORT_SEC = 10;
 
   interface BusService {
     id: string;
@@ -1838,6 +1842,20 @@ export function createGame(
     // Seconds of dwell left at the stop it is standing at.
     dwellLeft: number;
     manifest: Rider[];
+    // The last stop it worked. Where its riders are set down if it is withdrawn:
+    // a bus that leaves the board must not take its passengers with it.
+    lastStopId?: string;
+    // Doors closed, waiting to pull away. The dwell is OVER — so the exchange
+    // must not run again — but the road sim has not accepted the onward leg yet.
+    departing?: boolean;
+    // The stop it has failed to plan a route to, so the failure is reported once
+    // rather than every tick it retries, and how long the failure has lasted —
+    // a busy street clears in a tick or two, an unreachable stop never does.
+    strandedFor?: string;
+    strandedSec?: number;
+    // The stop it has just turned round at. It worked that stop before the
+    // turn, so the respawn there must not work it again.
+    turnedRoundAt?: string;
   }
   const buses: BusService[] = [];
   let busSeq = 0;
@@ -1917,48 +1935,75 @@ export function createGame(
         const from = stops[bus.stopIndex % stops.length];
         const to = stops[(bus.stopIndex + 1) % stops.length];
         const id = roadSim.requestTrip(from, to, "bus", { service: true });
-        if (!id) continue; // the street is busy; try again next tick
+        if (!id) {
+          // Usually the street is simply busy and the next tick does it, which
+          // is why this is not reported at once. But a stop the line can NEVER
+          // be driven to (a road edited away under it, a line redrawn through
+          // somewhere with no road at all) fails here for ever, and a bus
+          // silently off the board with people aboard is not something to leave
+          // the player guessing at. Reported once it has lasted long enough to
+          // mean something, and once per stranded stop — the retry runs every
+          // tick, and a line in the log every tick is noise, not a report.
+          bus.strandedSec = (bus.strandedSec ?? 0) + dt;
+          if (bus.strandedSec > STRANDED_REPORT_SEC && bus.strandedFor !== to) {
+            bus.strandedFor = to;
+            logBusHold(bus, to, from);
+          }
+          continue;
+        }
         bus.carId = id;
+        bus.strandedFor = undefined;
+        bus.strandedSec = 0;
+        bus.departing = false;
         // It is standing at the first stop with its doors open, so it works it
         // before pulling away. Without this the origin stop is served only on
         // the second lap — and on a two-stop line that is every other call.
-        const r = transit.exchange({
-          stopId: from,
-          lineId: bus.lineId,
-          capacity: BUS_SEATS,
-          manifest: bus.manifest,
-        });
-        busEvents.push({ stopId: from, ...r });
+        // Unless it has just TURNED ROUND here: it worked this stop a moment
+        // ago, and a second exchange would board the same queue twice.
+        if (bus.turnedRoundAt !== from) callAt(bus, from);
+        bus.turnedRoundAt = undefined;
         bus.stopIndex = (bus.stopIndex + 1) % stops.length;
         continue;
       }
-      if (roadSim.tripStatus(bus.carId) !== "arrived") continue;
+      if (roadSim.tripStatus(bus.carId) !== "arrived") {
+        bus.departing = false;
+        continue;
+      }
 
       // Standing at a stop. Dwell first — the doors take time and a crowded
       // kerb takes longer, exactly as a platform does.
-      if (bus.dwellLeft <= 0) {
-        const at = roadSim.carTile(bus.carId);
-        if (!at) continue;
-        const r = transit.exchange({
-          stopId: at,
-          lineId: bus.lineId,
-          capacity: BUS_SEATS,
-          manifest: bus.manifest,
-        });
-        bus.dwellLeft = BUS_DWELL_SEC + r.boarded * 0.4;
-        busEvents.push({ stopId: at, ...r });
-        continue;
+      if (!bus.departing) {
+        if (bus.dwellLeft <= 0) {
+          const at = roadSim.carTile(bus.carId);
+          if (!at) continue;
+          const r = callAt(bus, at);
+          bus.dwellLeft = BUS_DWELL_SEC + r.boarded * 0.4;
+          continue;
+        }
+        bus.dwellLeft -= dt;
+        if (bus.dwellLeft > 0) continue;
+        // Doors closed. From here on it is LEAVING, whatever the road says — so
+        // a failed departure retries the route and never re-opens the doors.
+        bus.departing = true;
       }
-      bus.dwellLeft -= dt;
-      if (bus.dwellLeft > 0) continue;
 
-      // Doors closed: on to the next stop. Calling anywhere on the line moves
-      // the cursor PAST that stop, the same rule a train follows.
+      // On to the next stop. Calling anywhere on the line moves the cursor PAST
+      // that stop, the same rule a train follows. Recomputing it from where the
+      // bus stands makes this idempotent, which a retry depends on.
       const at = roadSim.carTile(bus.carId);
       const here = at ? stops.indexOf(at) : -1;
       if (here >= 0) bus.stopIndex = (here + 1) % stops.length;
       const next = stops[bus.stopIndex];
-      if (roadSim.retarget(bus.carId, next)) continue;
+      // `retarget` REFUSES rather than teleporting the bus, and that answer has
+      // to be acted on: the trip stays "arrived" with the dwell run out, so a
+      // bus that ignored it re-ran the exchange at the same kerb every
+      // BUS_DWELL_SEC — boarding the queue again, logging a call that never
+      // happened.
+      if (roadSim.retarget(bus.carId, next)) {
+        bus.strandedFor = undefined;
+        bus.departing = false;
+        continue;
+      }
 
       // NO WAY ONWARD FROM THE LANE IT IS STANDING IN — a terminus. The router
       // plans lane by lane and there is no U-turn, so a line that ends in a
@@ -1973,11 +2018,71 @@ export function createGame(
       // looks like from the outside.
       //
       // The stop cursor goes back to the stop it is standing at, so the respawn
-      // above starts THIS leg rather than skipping to the next one.
+      // above starts THIS leg rather than skipping to the next one — and the
+      // respawn is told the stop has just been WORKED, or turning round would
+      // open the doors a second time at a kerb the bus never left.
       roadSim.despawn(bus.carId);
       bus.carId = undefined;
       if (here >= 0) bus.stopIndex = here;
+      bus.turnedRoundAt = at;
     }
+  }
+
+  // The bus works a stop: everyone off who wanted here, everyone on who this
+  // line can help. `lastStopId` is remembered because a withdrawn bus has to set
+  // its riders down SOMEWHERE, and this is the last place it stood.
+  function callAt(bus: BusService, stopId: string) {
+    const r = transit.exchange({
+      stopId,
+      lineId: bus.lineId,
+      capacity: BUS_SEATS,
+      manifest: bus.manifest,
+    });
+    bus.lastStopId = stopId;
+    busEvents.push({ stopId, ...r });
+    return r;
+  }
+
+  // Set a withdrawn bus's riders down instead of deleting them, exactly as a
+  // RETIRING train does (`dumpAll` in simulation.ts): they are better off at a
+  // stop than in a shed, and passengers who simply vanish are a loss the player
+  // never sees and the delivery count never explains.
+  //
+  // Also on a REASSIGNMENT: a rider's `off` was decided from the line the bus
+  // was running (D7), so a bus that changes line would carry them to a stop it
+  // no longer calls at — for ever.
+  function setDownAll(bus: BusService): void {
+    if (bus.manifest.length === 0) return;
+    const at = stopUnder(bus) ?? bus.lastStopId;
+    if (!at) return; // it has never called anywhere, so nobody is aboard
+    const r = transit.exchange({
+      stopId: at,
+      lineId: bus.lineId,
+      capacity: BUS_SEATS,
+      manifest: bus.manifest,
+      dumpAll: true,
+    });
+    busEvents.push({ stopId: at, ...r });
+  }
+
+  // The stop the bus is standing at, if it is standing at one at all.
+  function stopUnder(bus: BusService): string | undefined {
+    if (!bus.carId || !roadSim.hasCar(bus.carId)) return undefined;
+    const at = roadSim.carTile(bus.carId);
+    return at && busStopsOf(bus).includes(at) ? at : undefined;
+  }
+
+  // A stop the line can no longer reach, said ONCE per hold: the retry runs
+  // every tick and a line in the log every tick is noise, not a report.
+  function logBusHold(bus: BusService, to: string, at: string | undefined): void {
+    const where = at ? ` at ${stationLabels[at] ?? at}` : "";
+    eventLog.push({
+      id: logSeq++,
+      time: clock,
+      kind: "blocked",
+      trainId: bus.id,
+      text: `held${where} — no route to ${stationLabels[to] ?? to}`,
+    });
   }
 
   // Order a bus. Like a train it is bought INTO service — with a line it
@@ -1997,8 +2102,13 @@ export function createGame(
     if (!bus) return false;
     if (lineId !== null && !transit.lines().some(l => l.id === lineId)) return false;
     const had = bus.lineId;
+    // Everyone off first, while it is still on the line they boarded for and
+    // still standing where they can be set down.
+    if (had !== (lineId ?? undefined)) setDownAll(bus);
     bus.lineId = lineId ?? undefined;
     bus.stopIndex = 0;
+    bus.departing = false;
+    bus.strandedFor = undefined;
     // It re-plans from wherever it is on its next tick; taking it off a line
     // takes it off the road, because a bus with no line has nowhere to be.
     if (bus.carId && !bus.lineId) {
@@ -2019,6 +2129,8 @@ export function createGame(
     const at = buses.findIndex(b => b.id === busId);
     if (at < 0) return false;
     const bus = buses[at];
+    // Its riders get off at the kerb rather than disappearing with the vehicle.
+    setDownAll(bus);
     if (bus.carId) roadSim.despawn(bus.carId);
     buses.splice(at, 1);
     if (bus.lineId) pruneLineIfUnused(bus.lineId);
