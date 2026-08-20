@@ -297,6 +297,17 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
+18. **Finish the street-profile unification** (`tiles/streetProfile.ts`,
+    2026-08-20). Pavement + walkers + surface paint already read the profile;
+    the cars (`sim/laneOffset.ts`, hot path) and the parking kerb
+    (`parking.ts kerbOffsetPx`, min-2 floor) keep their own derivations, pinned
+    board-wide by the profile sweep. Next steps, each safe on its own: (a) have
+    `laneGeometry.ts` resolve its bands through `roadEdgeFrac`, retiring
+    `seamPositioningBand`'s parallel pairing; (b) decide the min-2 floor's fate
+    once 1-lane one-way bends can carry parking; (c) the **authorable profile**
+    — an optional `TileCell.profile` preset (boulevard / shared-surface / tree
+    strip) biasing the resolver per tile, seams still reconciling both sides
+    (see the design doc's "authoring seam" section).
 
 ## Recently landed (kept for context)
 

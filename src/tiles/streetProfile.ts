@@ -1,6 +1,5 @@
 import type { Coordinates } from "@/types";
 import type { Level, Port, TileCell } from "@/tiles/model";
-import { parseCoordId } from "@/tiles/model";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import {

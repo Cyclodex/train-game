@@ -125,3 +125,37 @@ build-out real streets put there.
 - `/test/parkinglot` restored to its pre-2026-08-05 look (aisles opt out);
   `/test/homeparking` shows drives behind a continuous pavement with the
   crossover apron; `/test/workparking` shows the tapered kerbside strip.
+
+## Implementation state (2026-08-20, same day, second pass)
+
+The rule above shipped first as seam machinery inside `footway.ts`; the second
+pass promoted it to a **street profile resolver** — `tiles/streetProfile.ts` —
+and made that the module every layer reads:
+
+- `resolveSeamProfile(level, coord, port)` answers, per flank, the ordered
+  strips `carriageway → parking → verge → pavement`, plus the `kerb` and the
+  pavement centreline. Symmetric per seam by construction.
+- `footway.ts` (`bandsFor`, `pavementOffsetEndsFor`) reads the profile; its
+  private seam machinery is deleted. `Tile.vue`'s surface paint reads
+  `seamPaintLanes`. The cars (`sim/laneOffset.ts`) and the parking kerb
+  (`parking.ts kerbOffsetPx`) keep their own homes — the hot path is not worth
+  rewriting while agreement is provable — and are **pinned board-wide** by the
+  sweep `tests/unit/tiles/streetProfile.spec.ts` (pavement / paint / car-band
+  parity + symmetry + invariants + a synthetic street×parking×footway matrix).
+- The one deliberate asymmetry (one-way gore seams: the centre-side surface
+  steps a lane; a merging car is inside the tarmac, not on its edge) and the
+  three absurdities the parity oracle surfaced (bands clamped inside wide
+  junction arms; bands clamped into deep gapped bays — both now honestly
+  `pavement: null`; walkers missing the one-way kerb-anchored branch — now
+  fixed onto the paint's numbers) are documented in `docs/KNOWHOW.md` → THE
+  STREET PROFILE.
+
+### The authoring seam (deliberately later)
+
+The profile is today fully DERIVED (lanes + parking rows + footway opt-out in,
+strips out). The agreed follow-up is an optional `TileCell.profile` authoring
+hook — e.g. named presets (`"boulevard"`, `"shared-surface"`, wider verges,
+tree strips) that bias the resolver per tile while seams still reconcile the
+two sides. Nothing reads such a field yet; adding it means extending
+`resolveSeamProfile`'s inputs, and every consumer picks the change up for free
+because the resolver is the only place cross-sections are decided.

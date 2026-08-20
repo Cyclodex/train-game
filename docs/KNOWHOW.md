@@ -985,6 +985,51 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
     · `isPlotGround` — town ground with nothing built across it. What holds
       PEOPLE. Nobody lives on the carriageway.
   Before the split, a street through a town read as two towns.
+- **THE STREET PROFILE (2026-08-20).** `tiles/streetProfile.ts` is the single
+  lateral truth of a street: per SEAM, per FLANK (the seam's two perpendicular
+  ports), the ordered strips centreline→out: carriageway → kerbside parking →
+  verge → pavement. Resolved at seams because seams are where two tiles must
+  AGREE (symmetric by construction — that agreement IS the connectedness of
+  every band); a tile's interior is linear interpolation between its two seam
+  profiles, one taper rule for every layer at once.
+    · CONSUMERS: pavement paint (`footway.ts bandsFor`) and walkers
+      (`pavementOffsetEndsFor`) read `FlankProfile.pavement`; the surface paint
+      reads `seamPaintLanes` (`Tile.vue` roadPaths — the junction-adopts /
+      min-seam pairing now lives ONLY in `roadEdgeFrac`). The cars stay on
+      `sim/laneOffset.ts` (hot path) and the parking kerb stays `parking.ts
+      kerbOffsetPx` — both PINNED to the profile by the sweep
+      (`tests/unit/tiles/streetProfile.spec.ts`): pavement parity, paint
+      parity, car-band parity, seam symmetry, strip invariants, and a
+      synthetic street×parking×footway matrix — all board-wide over every
+      registered scenario. Move either side alone and CI names the board+tile.
+    · ACROSS-KERB parking (drives, forecourts) is deliberately NOT a strip: it
+      lies beyond the pavement on the property side and never moves the band
+      (the cross-section rule, `docs/superpowers/specs/2026-08-20-street-cross-
+      section-design.md`). Bare kerb (`row.informal`) paints nothing and moves
+      nothing either.
+    · THE ONE DELIBERATE ASYMMETRY: a one-way lane drop's centre-side surface
+      STEPS a lane at the gore seam — the closing lane's tarmac is shut by the
+      hatch, not by the kerb pinching in. The profile reports each side's
+      paint truth (`oneWayCentreBand`), the symmetry sweep exempts that flank,
+      and a merging car sits INSIDE the still-wide tarmac (containment, not
+      equality, at gore seams — see the car-band case).
+    · Three pre-existing absurdities the parity oracle surfaced: (a) a WIDE
+      junction arm (kerb past 0.5 − band) used to clamp the pavement band
+      INSIDE the carriageway and paint tarmac over it — the profile answers
+      `pavement: null` (no room is no pavement; the walkers keep the clamp
+      fallback so their sampler stays total); (b) deep gapped bays near the
+      tile edge clamped the band into the bay — also null now; (c) the walkers
+      never had the paint's kerb-anchored ONE-WAY branch, so people and paint
+      quietly disagreed on every one-way lane-drop run — the migration put the
+      walkers on the paint's numbers (uniform runs unchanged, so nothing
+      visibly moved).
+    · UNITS: profile = tile fractions; footway = ground units of 100 (×100);
+      parking = px at tileSize. LANE 0.14 / VERGE 0.04 / PAVEMENT 0.08 — the
+      lockstep with footway's PAVEMENT_GAP/WIDTH is itself a sweep assertion.
+    · `parking.ts kerbOffsetPx` keeps its min-2 floor; `roadEdgeFrac` (like
+      the pavement always did) does not. They differ only on 1-lane one-way
+      BENDS, where no parking row is legal anyway — documented at
+      `roadEdgeFrac`.
 - **FOOTWAYS (2026-08-02).** `TileCell.footway?: "both" | "none"` is the fifth
   tile axis and only ever an OPT-OUT — every street has pavements unless it says
   "none", so boards written before footways existed grew them for free.
@@ -1013,18 +1058,19 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       drawn its true ONE lane wide, so flooring at two floats the band half a lane
       out with a strip of bare ground behind the kerb (`/test/citizencars`).
     · **The band is seam-matched PER END, not per tile** (`pavementPaths` takes the
-      LEVEL, not just the cell). The tarmac meets its neighbour flush —
-      `roadSeamPaintTotal` narrows a road toward a narrower neighbour and
-      `junctionArmPaintTotal` makes a junction arm adopt the street it opens onto
-      — so a pavement measured from the tile alone jogs sideways at exactly the
-      seams the kerb it follows does not. Use `roadKerbEdge` / `roadCurveKerbEdgeTapered`
-      with SIGNED per-end offsets and `side = 1`; both taper for free.
+      LEVEL, not just the cell). The tarmac meets its neighbour flush, so a
+      pavement measured from the tile alone jogs sideways at exactly the seams
+      the kerb it follows does not. Since 2026-08-20 the per-end numbers come
+      from THE STREET PROFILE (above) — `bandsFor` just reads
+      `FlankProfile.pavement` at each seam; the seam rules live in
+      `roadEdgeFrac`, nowhere else. Draw with `roadKerbEdge` /
+      `roadCurveKerbEdgeTapered`, SIGNED per-end offsets, `side = 1`.
     · **A ONE-WAY street is the one road not symmetric about its centreline.** It
       kerb-anchors the run's widest lane count, so lanes open and close on the
-      CENTRE side while the kerb runs dead straight — each pavement has to follow
-      its OWN edge (`kerb + pad` / `inner − pad`), and a centred ±half puts the
-      kerb-side band on the tarmac. `/test/footwaywidth` is the isolation board
-      for all of this: a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
+      CENTRE side while the kerb runs dead straight — each pavement follows its
+      OWN flank of the profile, and a centred ±half puts the kerb-side band on
+      the tarmac. `/test/footwaywidth` is the isolation board for all of this:
+      a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
     · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
       and pavements, above EVERY tile's ground patch and not just their own. A
       terrain patch's corners are jittered OFF the tile grid on purpose, so a

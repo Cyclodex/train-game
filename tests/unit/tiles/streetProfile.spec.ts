@@ -16,7 +16,7 @@ import {
   PAVEMENT_GAP,
   PAVEMENT_WIDTH,
 } from "@/tiles/footway";
-import { bankFor, rowsOf, validateParking } from "@/tiles/parking";
+import { bankFor, validateParking } from "@/tiles/parking";
 import { levelBounds } from "@/tiles/bounds";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { LANE_WIDTH_FRAC, oneWayLaneOffsetPx, seamPositioningBand } from "@/sim/laneOffset";
@@ -51,7 +51,7 @@ import { Position } from "@/types";
 //     them: 1/2/3-lane two-way, 1/2-lane one-way, each with nothing, marked
 //     kerb bays, bare kerb, a drive, a lay-by, a bus stop, footway on and off.
 
-const { Top, Right, Bottom, Left } = Position;
+const { Right, Bottom, Left } = Position;
 
 // The constants the footway draws with, restated through the profile: if these
 // ever drift apart, every parity assertion below goes red at once.
