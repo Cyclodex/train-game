@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { createRoadSim, roadEntries } from "@/sim/road";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { buildCitizenWorld } from "@/tiles/cities";
+import { twoWay } from "@/tiles/lanes";
+import { Position } from "@/types";
+import type { Level } from "@/tiles/model";
 
 // `requestTrip` is the road sim's second way to make a car exist. Ambient
 // traffic enters at a map edge and leaves by another one; a REQUESTED car is
@@ -66,6 +69,45 @@ describe("road: requested trips", () => {
 
   it("an unknown trip id reads arrived, so nobody waits on a car that is gone", () => {
     expect(sim().tripStatus("car-that-never-was")).toBe("arrived");
+  });
+
+  it("tries every way out of the street before deciding it cannot park", () => {
+    // A driver leaves their street by one of its approaches, and WHICH ONE
+    // decides what they can reach: `planParkingNear` runs from `(tile, entry)`,
+    // so a space that lies east is invisible to the westbound approach.
+    //
+    // The ports are tried in a fixed order (ascending, so Right — the westbound
+    // approach — comes first here), and the parking refusal used to `return`
+    // out of that loop on the very first failure. A driver who could have
+    // parked by turning the other way out of their own street was told the town
+    // was full and never set off.
+    const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
+    const level: Level = {
+      // A dead end: nothing west of 1,1 and no junction to turn round at, so
+      // the westbound approach can reach no parking at all.
+      "1,1": street(),
+      "2,1": street(),
+      "3,1": street(),
+      "4,1": {
+        ...street(),
+        parking: {
+          facility: "P",
+          rows: [{ from: Position.Left, side: "right", kind: "perpendicular", count: 2 }],
+        },
+      },
+    };
+    expect(Position.Right).toBeLessThan(Position.Left); // the order this turns on
+    const s = createRoadSim({ level, width: 6, height: 3, seed: 1 });
+    const id = s.requestTrip("2,1", "4,1", "car", { park: true });
+    expect(id).toBeTruthy();
+    // ...and it is a real journey, not just an id: the car reaches the bay.
+    let parked = false;
+    for (let t = 0; t < 200 && !parked; t += 0.2) {
+      s.step(0.2, () => false);
+      parked = s.tripStatus(id as string) === "parked";
+    }
+    expect(parked).toBe(true);
+    expect(s.tripParkedAt(id as string)).toBe("4,1");
   });
 
   it("runs many trips at once without losing any of them", () => {

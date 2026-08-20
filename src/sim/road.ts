@@ -22,7 +22,14 @@ import {
   type ParkingRegistry,
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
-import { bankOf, manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
+import {
+  bankOf,
+  manoeuvreAt,
+  stallId,
+  stallPose,
+  type ManoeuvrePath,
+  type StallRef,
+} from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -743,8 +750,13 @@ export interface RoadSim {
   // This is how far the driver has to WALK, and charging that walk is the whole
   // reason a car park two streets away is worse than the space at the gate.
   tripParkedAt(tripId: string): string | null;
-  // ...and the kerb it is against, for actually WALKING that leg on a pavement.
-  tripParkedKerb(tripId: string): { tileId: string; bank: Port } | null;
+  // ...and the kerb it is against, for actually WALKING that leg on a pavement:
+  // the tile, the bank the bay hugs (which pavement the driver steps onto) and
+  // `at`, the car's own resting position in world tile units — so the figure
+  // appears beside the car rather than at the middle of the carriageway.
+  tripParkedKerb(
+    tripId: string,
+  ): { tileId: string; bank: Port; at: { x: number; y: number } } | null;
   // The owner is back. The car gives up its bay — waiting in it, with no road
   // body and no right of way, until the traffic genuinely leaves a gap — and
   // then drives to `toTileId`, where the trip finally reads "arrived".
@@ -3234,7 +3246,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // so the journey still happens and still takes time — there is simply no
       // vehicle on the board for it. Which is exactly right, because in a town
       // with nowhere to park, that trip is the one you do not make by car.
-      if (wantsPark && !parkPlan) return null;
+      //
+      // ...BUT THAT IS A VERDICT ON THE WHOLE STREET, NOT ON THIS ONE APPROACH,
+      // which is why it is `continue` and never `return`. `planParkingNear`
+      // searches from `(tile, entry)`, so what a driver can reach depends on
+      // WHICH WAY THEY PULL OUT — a space one street east is invisible to the
+      // westbound approach, and the ports are tried in a fixed order with no
+      // idea where the parking is. Returning here turned away a driver who
+      // could have parked by turning the other way out of their own street.
+      // The loop running out of ports is the real refusal, at the bottom.
+      if (wantsPark && !parkPlan) continue;
       let turns: RouteTurn[];
       let goalPort: Port | null;
       if (parkPlan) {
@@ -3403,16 +3424,34 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return car?.stall?.tileId ?? null;
   }
 
-  // WHERE THE DRIVER IS STANDING when they get out: the tile, and the kerb their
-  // bay hugs. The bank is what decides which pavement they are on, and it cannot
-  // be worked out from the tile alone — a street with a bay on each side has two.
-  function tripParkedKerb(tripId: string): { tileId: string; bank: Port } | null {
+  // WHERE THE DRIVER IS STANDING when they get out: the tile, the kerb their bay
+  // hugs, and the spot itself. The bank is what decides which pavement they are
+  // on, and it cannot be worked out from the tile alone — a street with a bay on
+  // each side has two.
+  //
+  // `at` is the CAR, in world tile units, and it is not a nicety: a walker given
+  // only a tile is put at its centre, and the centre of a road tile is the middle
+  // of the carriageway. The driver appeared standing in the traffic and stepped
+  // sideways onto the pavement. It comes from the stall's own pose, which is
+  // where the manoeuvre ends and therefore where the car is resting.
+  function tripParkedKerb(
+    tripId: string,
+  ): { tileId: string; bank: Port; at: { x: number; y: number } } | null {
     if (trips.get(tripId)?.status !== "parked") return null;
     const car = cars.find(c => c.id === tripId);
     if (!car?.stall) return null;
-    const row = parking.info(car.stall)?.row;
-    if (!row) return null;
-    return { tileId: car.stall.tileId, bank: bankOf(row) };
+    const info = parking.info(car.stall);
+    if (!info) return null;
+    // Tile units (size 1), the same frame `pathFor` builds its manoeuvre curves
+    // in and the same one the walkers use — never px, which would be right in
+    // the sim and 200x wrong in the renderer.
+    const pose = stallPose(info.row, car.stall.index, 1, info.kerb);
+    const coord = parseCoordId(car.stall.tileId);
+    return {
+      tileId: car.stall.tileId,
+      bank: bankOf(info.row),
+      at: { x: coord.x + pose.x, y: coord.y + pose.y },
+    };
   }
 
   // Take the car off the board outright, wherever it is. The caller has decided

@@ -94,11 +94,17 @@ export interface PedestrianSim {
   request(fromPlot: string, toPlot: string): string | null;
   // A walk that starts at a stretch of kerb rather than at a building — the last
   // leg of a driven journey, from the space the car stopped in to the door.
+  //
+  // `at` — where the car actually stopped — is REQUIRED, and that is deliberate.
+  // It was optional, the one caller never passed it, and the driver duly
+  // materialised at the middle of the road tile (i.e. out in the carriageway)
+  // and stepped sideways onto the pavement. Anybody who knows which bay the car
+  // is in knows where the car is, so make them hand it over.
   requestFromKerb(
     roadTile: string,
     bank: Port,
     toPlot: string,
-    at?: { x: number; y: number },
+    at: { x: number; y: number },
   ): string | null;
   step(dt: number): void;
   status(id: string): "walking" | "arrived";
@@ -451,7 +457,7 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
       roadTile: string,
       bank: Port,
       toPlot: string,
-      at?: { x: number; y: number },
+      at: { x: number; y: number },
     ): string | null {
       const route = planWalkFromKerb(level, roadTile, bank, toPlot);
       if (!route) return null;

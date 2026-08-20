@@ -6,11 +6,13 @@ import { workparking } from "@/levels/test/scenarios/workparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { deriveKerbOverflow, kerbOverflowTiles, KERB_SPACES } from "@/tiles/kerbOverflow";
 import { levelBounds } from "@/tiles/bounds";
-import { rowsOf, validateParking, facilitiesOf, bankOf } from "@/tiles/parking";
+import { rowsOf, validateParking, facilitiesOf, bankOf, rowFor } from "@/tiles/parking";
 import { createParkingRegistry, stallFits } from "@/sim/parking";
-import { roadEntries } from "@/sim/road";
+import { pavementOffsetEndsFor, pavementPaths, roadThrough } from "@/tiles/footway";
+import { twoWay } from "@/tiles/lanes";
 import { buildCitizenWorld, plotsOf } from "@/tiles/cities";
 import { parkingApronPath, stallOutlinePath, parkingKerbPath } from "@/tiles/parkingGeometry";
+import { Position } from "@/types";
 import type { Level } from "@/tiles/model";
 
 // THE EDGE OF THE ROAD — what happens to the driver who finds everything full.
@@ -42,6 +44,35 @@ function informalRows(level: Level) {
       .filter(r => r.informal)
       .map(r => ({ id, row: r })),
   );
+}
+
+const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
+
+// A street in from the left map edge that STOPS inside the map — the shape
+// `openingInsideLot` (sim/road.ts) mistakes for the end of a car-park aisle.
+function stubStreet(): Level {
+  return { "0,1": street(), "1,1": street(), "2,1": street(), "3,1": street() };
+}
+const STUB_W = 6;
+const STUB_H = 3;
+
+// The tiles cars are actually seen appearing on, which is the only honest way to
+// ask what the sim's spawn pool ended up containing: `roadEntries` is the raw
+// list BEFORE `createRoadSim` filters it, so asking it about parking can only
+// ever answer "unchanged".
+function spawnTiles(level: Level): string[] {
+  const s = createRoadSim({ level, width: STUB_W, height: STUB_H, seed: 5 });
+  const seen = new Set<string>();
+  const known = new Set<string>();
+  for (let t = 0; t < 120; t += 0.2) {
+    s.step(0.2, () => false);
+    for (const c of s.cars()) {
+      if (known.has(c.id)) continue;
+      known.add(c.id);
+      seen.add(c.tileId);
+    }
+  }
+  return [...seen].sort();
 }
 
 describe("the kerb is derived from the street", () => {
@@ -86,15 +117,26 @@ describe("the kerb is derived from the street", () => {
     expect(drives.length).toBeGreaterThan(0);
   });
 
-  it("keeps off a road opening that stops inside the map", () => {
+  it("keeps off a road opening that stops inside the map, so it still spawns", () => {
     // `openingInsideLot` (sim/road.ts) treats any opening on a parking tile as
     // being INSIDE a car park rather than a way off the map, and refuses to
     // spawn or despawn there. This pass touches nearly every street, so a stub
     // it parked on would silently go quiet — and on a board whose traffic
     // enters at a stub, that is the whole board's traffic.
-    const before = roadEntries(citizencars.level, 12, 9);
-    const after = roadEntries(deriveKerbOverflow(citizencars.level), 12, 9);
-    expect(after).toEqual(before);
+    //
+    // ASKED THROUGH THE SIM, because that is where the filter lives. Comparing
+    // `roadEntries` before and after is no test at all: it never reads parking,
+    // so it returns the same list whatever this pass does.
+    const base = stubStreet();
+    const withKerb = deriveKerbOverflow(base);
+    // The stub tile is the one the pass has to leave alone...
+    expect(rowsOf(withKerb["3,1"]).length).toBe(0);
+    // ...and the rest of the street is not, or the guard would be vacuous.
+    expect(informalRows(withKerb).length).toBeGreaterThan(0);
+    // ...so cars still enter the map there.
+    const tiles = spawnTiles(withKerb);
+    expect(tiles).toContain("3,1");
+    expect(tiles).toEqual(spawnTiles(base));
   });
 });
 
@@ -117,6 +159,36 @@ describe("the kerb is invisible to anyone with an alternative", () => {
     expect(stallFits("car", row, 0.19, 200, null, true)).toBe(true);
   });
 
+  it("moves no pavement — the band still hugs the same kerb", () => {
+    // A REAL bay pushes its bank's pavement out behind it, so people walk
+    // behind the parked cars instead of over them (`parkingOutsetUnits` in
+    // tiles/footway.ts). Bare kerb must do NOTHING of the sort: this pass
+    // touches nearly every street, so counting it detached the pavement from
+    // the carriageway BOARD-WIDE — grey ribbons floating a car's width out in
+    // the verge, on streets with no visible parking on them at all.
+    //
+    // Both callers are asked, because paint and people disagreeing is people
+    // walking beside the pavement rather than on it.
+    const base = citizencars.level;
+    const withKerb = deriveKerbOverflow(base);
+    expect(informalRows(withKerb).length).toBeGreaterThan(0);
+    for (const id of Object.keys(base)) {
+      const through = roadThrough(base[id]);
+      if (!through) continue;
+      for (const side of [1, -1] as const) {
+        // Both ends, because the walkers now taper between the seam-agreed
+        // values — bare kerb must move neither of them.
+        expect(
+          pavementOffsetEndsFor(withKerb, id, side, through.from, through.to),
+          `the walkers' pavement on ${id} moved`,
+        ).toEqual(pavementOffsetEndsFor(base, id, side, through.from, through.to));
+      }
+      expect(pavementPaths(withKerb, id), `the painted pavement on ${id} moved`).toBe(
+        pavementPaths(base, id),
+      );
+    }
+  });
+
   it("counts as no capacity at all, so nothing signs it", () => {
     const p = createParkingRegistry(level, 0.19, 200);
     const [{ id }] = informalRows(level);
@@ -131,27 +203,53 @@ describe("the kerb is invisible to anyone with an alternative", () => {
     // Ambient cars park at `PARKING.fraction`, and they plan through
     // `planParkingTrip`, which never passes the informal flag. If that ever
     // changed, every street on every board would fill with parked traffic.
-    const s = createRoadSim({
-      level: citizencars.level,
-      width: 12,
-      height: 9,
-      seed: 3,
-    });
-    const withKerb = createRoadSim({
-      level: deriveKerbOverflow(citizencars.level),
-      width: 12,
-      height: 9,
-      seed: 3,
-    });
-    for (let t = 0; t < 120; t += 0.2) {
+    //
+    // ASKED ON A BOARD WHERE AMBIENT CARS ACTUALLY SPAWN AND ACTUALLY PARK:
+    // an open street with one small car park, `parkFraction: 1` so every car
+    // that enters is looking for a space, and bare kerb laid down the rest of
+    // it. Run on the closed ring instead, this compared nothing to nothing.
+    const base: Level = {
+      "0,1": street(),
+      "1,1": street(),
+      "2,1": street(),
+      "3,1": {
+        ...street(),
+        parking: {
+          facility: "P",
+          rows: [
+            { from: Position.Left, side: "right", kind: "perpendicular", count: 2 },
+          ],
+        },
+      },
+      "4,1": street(),
+      "5,1": street(),
+      "6,1": street(),
+    };
+    const level = deriveKerbOverflow(base);
+    expect(informalRows(level).length).toBeGreaterThan(0);
+    const s = createRoadSim({ level, width: 7, height: 3, seed: 3, parkFraction: 1 });
+    let everParked = 0;
+    for (let t = 0; t < 300; t += 0.2) {
       s.step(0.2, () => false);
-      withKerb.step(0.2, () => false);
+      for (const key of Object.keys(s.parkingOccupancy())) {
+        const [tileId, from, side, index] = key.split("|");
+        const row = rowFor(level[tileId], {
+          tileId,
+          from: Number(from) as Position,
+          side: side as "right" | "left",
+          index: Number(index),
+        });
+        expect(row, `no such stall as ${key}`).toBeDefined();
+        // THE HEADLINE: a car that nobody asked to leave at the roadside never
+        // ends up there.
+        expect(row!.informal ?? false, `an ambient car parked on bare kerb (${key})`).toBe(
+          false,
+        );
+        everParked++;
+      }
     }
-    // The closed ring spawns nothing ambient either way; what this pins is that
-    // adding kerb everywhere did not invent traffic or parked cars.
-    expect(withKerb.cars().filter(c => c.parked).length).toBe(
-      s.cars().filter(c => c.parked).length,
-    );
+    // ...and it really did park somewhere, so the loop above is not vacuous.
+    expect(everParked).toBeGreaterThan(0);
   });
 });
 
