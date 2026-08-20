@@ -257,6 +257,21 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     the live one rather than the map's opening roll.
     Files: `src/tiles/homeParking.ts`, `src/tiles/parking.ts`.
 
+13. **Bicycles** (spec:
+    `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md`). The
+    missing middle of the citizen mode choice and the road layer's first
+    genuinely slow vehicle. **Phases A+B SHIPPED 2026-08-05**: `VehicleKind
+    "bike"` in mixed traffic (0.45× cruise, cars queue behind it — deliberate)
+    and `LaneKind "cycle"` + bikes-in-bus-lanes via the `laneUsableBy` access
+    matrix — the player's remedy for that queue; editor lane tool cycles
+    normal → bus → cycle; scenarios `bikemix`/`bikeovertake`/`cyclelane`.
+    Remaining: (C) bike racks (`StallKind "bikerack"`, the busstop precedent
+    mirrored) + bike-and-ride at stations; (C′) `TravelMode
+    "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's reserved
+    "phase C"; (D) shared foot/bike paths, queued behind the standalone-footpath
+    axis. Files remaining: `src/tiles/parking.ts`, `src/sim/citizens.ts`;
+    scenarios `bikerack`/`bikeandride`/`citizenbike`.
+
 ## Architecture / code health
 
 12. **Sass `@use` migration.** Stylesheets still use `@import` (deprecation is

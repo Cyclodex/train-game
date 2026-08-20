@@ -16,6 +16,9 @@
 // is the subject (routing, lane centrelines, where a vehicle actually drives).
 // The script does not merely assume the app's default — it READS the stage's
 // current state and toggles the button until it matches what was asked for.
+// That goes for BOTH stage toggles (BG and Debug): gameConfig survives hash
+// navigations within one browser run, so a blind click on either button would
+// ALTERNATE its state across the scenarios of a multi-id invocation.
 //
 // An argument beginning with `#` is taken as a RAW HASH ROUTE rather than a
 // scenario id, so anything the app can show can be photographed — the Ready
@@ -225,12 +228,21 @@ async function main() {
         await page.waitForLoadState("networkidle").catch(() => {});
       }
 
-      // Flat backdrop (unless --backdrop): click the 🌳 BG button. Stage-only
+      // Flat backdrop (unless --backdrop): like the Debug toggle below, read the
+      // current state — App.vue puts `bg-plain` on the shell while
+      // gameConfig.plainBackdrop is on — and click the 🌳 BG button only when it
+      // differs from what was asked for. gameConfig is NOT reset between
+      // scenarios (hash navigation keeps the app instance), so a blind click
+      // here alternated flat/themed across the ids of one run. Stage-only
       // chrome from here down — detect it rather than assume it, so a route shot
       // outside /test skips what isn't there instead of failing on it.
       const bg = page.getByRole("button", { name: /BG/ });
-      if (!opt.backdrop && (await bg.count())) {
-        await bg.click();
+      if (await bg.count()) {
+        const plainOn = await page.evaluate(
+          () => !!document.querySelector(".bg-plain"),
+        );
+        const wantPlain = !opt.backdrop;
+        if (plainOn !== wantPlain) await bg.click();
       }
       // Debug overlay (the driving-lines): read the current state and toggle
       // the button so it ends up in the requested state (off unless --debug),

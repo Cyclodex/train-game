@@ -16,6 +16,7 @@ import { Level } from "@/tiles/model";
 import {
   laneCount,
   laneCountAt,
+  cycleLaneIndices,
   isRoadJunction,
   isOneWayStraight,
   oneWayRunMax,
@@ -24,6 +25,7 @@ import {
   VehicleClass,
 } from "@/tiles/lanes";
 import {
+  LANE_WIDTH_FRAC,
   laneSeamOffsetPx,
   laneOffsetConstPx,
   oneWayLaneOffsetPx,
@@ -135,6 +137,26 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     );
   }
 
+  // A bike on a CYCLE lane rides the green strip, not the slot centre: the strip
+  // is painted at HALF the lane width against the kerb (Tile.vue
+  // restrictedLaneBands + roadGeometry's solid cycle edge), so the ride line
+  // shifts a quarter-lane kerbward. Scaled by the continuous lane position's
+  // proximity to the cycle lane, so a merge onto / off the strip glides instead
+  // of stepping sideways. Zero for every other vehicle class (nothing else may
+  // enter a cycle lane).
+  function cycleStripShiftPx(
+    coord: Coordinates,
+    entry: Port,
+    lanePos: number,
+    cls: VehicleClass,
+  ): number {
+    if (cls !== "bike") return 0;
+    const cycles = cycleLaneIndices(level[getCoordinatesId(coord)]?.road, entry);
+    if (!cycles.length) return 0;
+    const near = Math.max(...cycles.map(c => 1 - Math.min(1, Math.abs(lanePos - c))));
+    return near * 0.25 * LANE_WIDTH_FRAC * tileSize;
+  }
+
   // Seam-aware lateral offsets (right-of-travel) for one coupler: the offset at the
   // tile's entry seam and at its exit seam. The PATH between them is the shared lane
   // geometry (sim/pathGeometry.ts laneSegmentPointAt): a straight interpolates
@@ -165,12 +187,13 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     if (exit !== null && exit === oppositePort(entry) && isOneWayStraightAt(s.coord, entry)) {
       const runMax = oneWayRunMaxAt(s.coord, entry);
       const local = laneCount(level[getCoordinatesId(s.coord)]?.road, entry);
+      const strip = cycleStripShiftPx(s.coord, entry, lanePos, cls);
       const at = (port: Port) =>
         oneWayLaneOffsetPx(
           Math.min(lanePos, Math.max(1, oneWaySeamCount(s.coord, port, local)) - 1),
           runMax,
           tileSize,
-        );
+        ) + strip;
       return { offEntry: at(entry), offExit: at(exit) };
     }
     const selfBand = centeredBandAt(s.coord, entry);
@@ -188,9 +211,12 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     // also what the sim assigns on crossing the seam). That is the branch below.
     const hereIsJunction = isRoadJunction(level[getCoordinatesId(s.coord)]?.road);
     if (exit !== null && exit === oppositePort(entry) && !hereIsJunction) {
+      const strip = cycleStripShiftPx(s.coord, entry, lanePos, cls);
       return {
-        offEntry: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, entry), tileSize),
-        offExit: laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, exit), tileSize),
+        offEntry:
+          laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, entry), tileSize) + strip,
+        offExit:
+          laneSeamOffsetPx(lanePos, selfBand, positioningBandAt(s.coord, exit), tileSize) + strip,
       };
     }
     // Curve / junction: sit on the entry arm's band, then ease to the lane the
@@ -199,10 +225,24 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     // junction whose arms differ in width — glides to its real exit lane instead
     // of holding the approach offset and snapping at the boundary.
     // Dead-end / map edge → hold the approach offset.
-    const offEntry = laneOffsetConstPx(lanePos, positioningBandAt(s.coord, entry), tileSize);
+    const offEntry =
+      laneOffsetConstPx(lanePos, positioningBandAt(s.coord, entry), tileSize) +
+      cycleStripShiftPx(s.coord, entry, lanePos, cls);
     if (exit === null) return { offEntry, offExit: offEntry };
     const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
-    return { offEntry, offExit: offExit ?? offEntry };
+    if (offExit === null) return { offEntry, offExit: offEntry };
+    // A bike leaving a turn onto an arm that carries a cycle lane lands
+    // kerb-most — ON the half-width strip — so the exit offset carries the same
+    // quarter-lane kerbward shift, keeping the glide continuous across the seam
+    // (the next tile's entry offset includes it via cycleStripShiftPx).
+    const next = neighborCoord(s.coord, exit);
+    const exitStrip =
+      cls === "bike" &&
+      next &&
+      cycleLaneIndices(level[getCoordinatesId(next)]?.road, oppositePort(exit)).length > 0
+        ? 0.25 * LANE_WIDTH_FRAC * tileSize
+        : 0;
+    return { offEntry, offExit: offExit + exitStrip };
   }
 
   return { couplerOffsets, turnExitOffsetPx, oneWayRunMaxAt };

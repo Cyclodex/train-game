@@ -40,10 +40,13 @@ import { specLength, vehicleSpec, type VehicleKind } from "./road";
 
 // Vehicles that may park at all. A SEMI never does: it is two articulated body
 // segments, and a bay is one box — an articulated lorry belongs in a lay-by, not
-// a shopper's car park. Excluding it here rather than in the geometry keeps the
-// rule where a reader looks for it.
+// a shopper's car park. A BIKE doesn't either — yet: no bay class admits one
+// (every existing kind is car-sized or bigger, and the size gate would happily
+// pass a bike into any of them), so until bike racks exist a bike must never be
+// dispatched on a parking trip it can only fail. Excluding both here rather
+// than in the geometry keeps the rule where a reader looks for it.
 export function vehicleCanPark(kind: VehicleKind): boolean {
-  return kind !== "semi";
+  return kind !== "semi" && kind !== "bike";
 }
 
 // WHO a bay is for. Deliberately not "how big is it": a lorry lay-by and a
