@@ -54,6 +54,22 @@
           <path :d="p.bus.sign" class="bus-stop-pole" />
           <path :d="p.bus.signFlag" class="bus-stop-flag" />
         </template>
+        <!-- THE PEOPLE WAITING HERE, in the colour of the line they are waiting
+             for — the same dots a platform draws, because a kerb is a stop of
+             the same network (#90). Without them a halt with six people looked
+             exactly like an empty one: the HUD counted a crowd the board never
+             showed. -->
+        <circle
+          v-for="(w, wi) in p.waiting"
+          :key="'bw' + pi + '_' + wi"
+          :cx="w.x"
+          :cy="w.y"
+          r="4.5"
+          class="stop-passenger"
+          :style="{ fill: w.fill }"
+        >
+          <title>{{ w.title }}</title>
+        </circle>
       </template>
       <template v-if="p.garage">
         <path :d="p.garage.mouth" class="parking-garage-mouth" />
@@ -116,8 +132,14 @@ import {
   garageGeometry,
   busStopGeometry,
   bikeRackGeometry,
+  busStopQueueSpots,
 } from "@/tiles/parkingGeometry";
 import { rowsOf, rowSide, stallId, facilityOf } from "@/tiles/parking";
+import type { ParkingRow } from "@/tiles/parking";
+
+// Anyone the network cannot help waits in plain clothes; see Tile.vue, which
+// uses the same neutral for a platform queue.
+const NEUTRAL_PASSENGER = "#8a5a3b";
 
 // Physical width of one lane as a fraction of tile size. Must match the same
 // constant in game.ts and Tile.vue so the painted road, the per-car lateral
@@ -168,6 +190,29 @@ class TileParking extends Vue {
     return widest;
   }
 
+  // The queue at a halt: one dot per waiting passenger, coloured by the LINE
+  // they will board (`game.stationWaitingColours`), capped so a swamped stop
+  // crowds rather than paving the verge. Read from the same mirrors a platform
+  // queue uses, so a kerb and a platform can never disagree about who is
+  // standing where.
+  waitingAt(
+    row: ParkingRow,
+    size: number,
+    kerb: number,
+  ): { x: number; y: number; fill: string; title: string }[] {
+    const count = Math.min(this.game.stationQueues?.[this.coordId] ?? 0, 12);
+    if (count === 0) return [];
+    const dests = this.game.stationWaiting?.[this.coordId] ?? [];
+    const colours = this.game.stationWaitingColours?.[this.coordId] ?? [];
+    const labels = this.game.stationLabels ?? {};
+    return busStopQueueSpots(row, size, kerb, count).map((p, i) => ({
+      x: p.x,
+      y: p.y,
+      fill: colours[i] || NEUTRAL_PASSENGER,
+      title: dests[i] ? `waiting for ${labels[dests[i]] ?? dests[i]}` : "waiting",
+    }));
+  }
+
   // The parking layer's paint: the apron each row of bays stands on, its outer
   // kerb, and one outline per bay.
   get paths(): {
@@ -185,6 +230,7 @@ class TileParking extends Vue {
     // A HALT stands in the lane and so needs a sign; a LAY-BY has a bay to mark.
     busHalt: boolean;
     rack: ReturnType<typeof bikeRackGeometry> | null;
+    waiting: { x: number; y: number; fill: string; title: string }[];
   }[] {
     if (!this.config.roads) return [];
     const rows = rowsOf(this.tile);
@@ -221,6 +267,7 @@ class TileParking extends Vue {
             : null,
         busHalt: row.kind === "busstop",
         rack: row.kind === "bikerack" ? bikeRackGeometry(row, size, kerb) : null,
+        waiting: row.kind === "busstop" ? this.waitingAt(row, size, kerb) : [],
         garage: row.kind === "garage" ? garageGeometry(row, size, kerb, "in") : null,
         // The second driveway. A garage a car can only reverse out of reads as a
         // dead end; the out-ramp is what makes it a building traffic flows THROUGH.
@@ -362,6 +409,13 @@ export default toNative(TileParking);
 .bus-stop-flag {
   fill: #ffd24a;
   stroke: #6b5300;
+  stroke-width: 1;
+}
+
+/* A person waiting at a halt. Same size and outline as the platform crowd in
+   Tile.vue, so the two read as the same kind of thing. */
+.stop-passenger {
+  stroke: rgba(0, 0, 0, 0.55);
   stroke-width: 1;
 }
 

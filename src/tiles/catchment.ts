@@ -131,3 +131,62 @@ export function stationDemandOf(level: Level, coordId: string): StationDemand {
     initial: Math.min(2 + Math.floor(urban / 2), 8),
   };
 }
+
+// Every BUS STOP on the board, in a stable order: a tile whose parking carries
+// a `busstop` row (`tiles/parking.ts` — a halt ON the carriageway, as against a
+// lay-by the bus pulls into).
+//
+// A stop is a place a passenger can WAIT, which is the whole reason this list
+// exists: since #90 a bus is planned like a train, so a stop is a node of the
+// transit network exactly as a platform is, with its own queue and its own
+// catchment-derived demand. The rule that it is derived from the MAP and never
+// stored is the same one that governs a station.
+export function busStopTiles(level: Level): string[] {
+  return Object.keys(level)
+    .filter(id => level[id]?.parking?.rows?.some(r => r.kind === "busstop"))
+    .sort();
+}
+
+export function isBusStop(level: Level, coordId: string): boolean {
+  return !!level[coordId]?.parking?.rows?.some(r => r.kind === "busstop");
+}
+
+// A bus stop's demand, from the same catchment rule a platform uses — but
+// THINNER. A kerb serves the houses immediately around it, while a station
+// gathers a district and holds a crowd; giving a stop a platform's numbers
+// makes the bus the main line and the railway an afterthought, which is
+// backwards for a board where the bus is the feeder.
+export function busStopDemandOf(level: Level, coordId: string): StationDemand {
+  const full = stationDemandOf(level, coordId);
+  return {
+    intervalSec: full.intervalSec * 2,
+    max: Math.max(3, Math.round(full.max / 2)),
+    initial: Math.min(2, full.initial ?? 0),
+  };
+}
+
+// Where a passenger can WALK between two stops: every bus stop paired with the
+// stations within walking reach of it.
+//
+// This is the intermodal edge the design has called for since D5 — "a bus stop
+// and a platform connect when they are adjacent" — and it is what makes a
+// bus→train journey ONE journey rather than two unrelated ones. Without it the
+// network graph sees a kerb and a platform as separate islands, however close
+// together they are drawn, and nobody would ever set out.
+//
+// Derived from the map like everything else here. Chebyshev distance, the same
+// square ring `stationCatchment` uses, because that is how a neighbourhood
+// reads on a grid.
+export function walkLinksOf(level: Level): [string, string][] {
+  const stations = Object.keys(level).filter(id => level[id]?.role === "station");
+  const out: [string, string][] = [];
+  for (const stop of busStopTiles(level)) {
+    const a = parseCoordId(stop);
+    for (const station of stations) {
+      const b = parseCoordId(station);
+      const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+      if (d <= WALK_RADIUS_TILES) out.push([stop, station]);
+    }
+  }
+  return out;
+}
