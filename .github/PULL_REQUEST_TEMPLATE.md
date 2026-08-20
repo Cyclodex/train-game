@@ -5,7 +5,15 @@ Closes #
 
 ## How to verify
 
-<!-- Steps for the reviewer, mapped to the issue's acceptance criteria. -->
+<!--
+Steps for the reviewer, mapped to the issue's acceptance criteria.
+
+Name the pages the change touches (the /test/<id> scenario, the /#/play?… board)
+as markdown links, one per line, each with a few words on what to watch for —
+not in a code fence. Write them against localhost as usual: deploy.yml rewrites
+every http://localhost:<port>/… link in THIS BODY to the PR's deployed preview
+once it is live, so the reviewer can click straight through.
+-->
 
 ## Before / After
 

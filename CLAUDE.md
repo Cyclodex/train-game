@@ -420,6 +420,25 @@ another when it is taken.
 A screenshot proves what you saw; a link lets the reader see it for themselves.
 Both, every time — a change nobody can reach in one click is not handed over.
 
+**IN A CLOUD SESSION THERE IS NO LOCALHOST FOR THE READER.** The rule above
+assumes the dev server is on the same machine as the person reading. When the
+session runs in a remote container (Claude Code on the web, a GitHub Action),
+`npm run dev` is listening in that container and dies with it — a
+`http://localhost:5173/…` link handed back in CHAT points at the user's own
+machine, where nothing is running. Hand back the **deployed preview** instead
+(`https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…`, or the master
+deploy for work already merged), and say which board or scenario to open. The
+localhost convention still applies to the PR BODY, which is rewritten — see
+below.
+
+**In a PR body, write localhost anyway.** A reviewer has no dev server, but you
+do not have to translate: once the PR preview is deployed, `deploy.yml` rewrites
+every `http://localhost:<port>/…` in the **body** to
+`https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…` — same paths, same
+hash routes, now clickable. It runs on every push to the PR, so links you add
+later are rewritten too. Comments are left alone (editing someone's posted words
+reads worse than a stale link), so paste preview URLs there yourself.
+
 
 ## Ticket ownership (don't double-build)
 
