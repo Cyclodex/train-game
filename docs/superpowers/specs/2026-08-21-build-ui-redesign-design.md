@@ -1,6 +1,11 @@
 # Build UI redesign — Transport-Fever-grade tool organisation
 
-**Status:** proposal (analysis + design, not yet implemented)
+**Status:** IMPLEMENTED 2026-08-21 (all three phases plus a mobile pass, on the
+branch this spec landed on). §4–§5 describe what is now built; deviations:
+traffic-light items are labelled Off / Two-phase / 2-ph +Bus / Round-robin /
+R-robin +Bus, the lights tab default-arms Two-phase (not Off), and the dock has
+a FIXED width so the category row never shifts between tabs. The old
+`ToolDock.vue` was removed with its `_hud.scss` styles.
 **Scope:** `/editor` tool dock (`EditorView.vue`, `ToolDock.vue`); no simulation
 or tile-model changes. PlayView's in-play Build/Raze toggle is out of scope but
 gets a follow-up note (§8).

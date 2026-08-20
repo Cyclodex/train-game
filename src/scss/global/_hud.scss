@@ -1,7 +1,7 @@
-// Shared HUD chrome: the left menu drawer (style A) and the bottom tool dock
-// (style B), plus the buttons that live in them. Used by MenuDrawer.vue and
-// ToolDock.vue. These are GLOBAL (unscoped) so the buttons the views pass into
-// the slots pick up the styling. The panels reuse the score-card's `glass` look.
+// Shared HUD chrome: the left menu drawer (style A) and the buttons that live
+// in it. Used by MenuDrawer.vue. These are GLOBAL (unscoped) so the buttons the
+// views pass into the slots pick up the styling. The panels reuse the
+// score-card's `glass` look. (The bottom dock is BuildDock.vue, self-styled.)
 
 $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
@@ -147,59 +147,5 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
 }
 
-// ---- Tool dock (style B) ---------------------------------------------------
-.tool-dock-wrap {
-  position: fixed;
-  z-index: 1500;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  pointer-events: none; // wrapper transparent; children re-enable
-  max-width: calc(100vw - 24px);
-}
-.tool-dock__hint {
-  @include glass($radius: 999px);
-  pointer-events: auto;
-  max-width: 560px;
-  padding: 8px 14px;
-  font: 600 12px/1.35 $hud-font;
-  color: #eaf0f5;
-  text-align: center;
-}
-.tool-dock {
-  @include glass;
-  pointer-events: auto;
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-  padding: 8px;
-}
-// Big, kid-friendly tap targets: a large icon stacked over a label.
-.dock-btn {
-  @include glass-button;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 76px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  font-size: 13px;
-
-  &.on {
-    background: #5fd39a;
-    color: #0e1a14;
-    box-shadow: 0 0 14px rgba(95, 211, 154, 0.5);
-
-    &:hover {
-      background: #6ee0a8;
-      color: #0e1a14;
-    }
-  }
-}
-.dock-btn__icon {
-  font-size: 28px;
-  line-height: 1;
-}
+// The bottom tool dock (style B) is BuildDock.vue now, which carries its own
+// scoped styles; only the drawer chrome above remains global.
