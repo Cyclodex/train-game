@@ -4,13 +4,15 @@ import { createGame } from "@/game";
 import { createCitizenSim, type DrivingPort, type WalkingPort } from "@/sim/citizens";
 import { buildCitizenWorld } from "@/tiles/cities";
 import { homeparking } from "@/levels/test/scenarios/homeparking";
+import { workparking } from "@/levels/test/scenarios/workparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { citizensModeWith } from "@/modes/citizens";
 import {
   planWalkFromKerb,
   sideOfBank,
   sideOfPlot,
-  pavementOffsetFor,
+  pavementOffsetEndsFor,
+  hasFootway,
   roadHalfUnits,
   roadThrough,
   PAVEMENT_WIDTH,
@@ -19,13 +21,15 @@ import { accessTileOf } from "@/tiles/access";
 import {
   rowsOf,
   bankOf,
-  bankFor,
+  bayNearPx,
   kerbOffsetAt,
   stallDepthPx,
-  stallOnLane,
+  turnsInAcrossKerb,
   needsBigBay,
 } from "@/tiles/parking";
 import { twoWay } from "@/tiles/lanes";
+import { laneSegmentPointAt } from "@/sim/pathGeometry";
+import { neighborCoord, oppositePort } from "@/sim/topology";
 import { parseCoordId, type Level } from "@/tiles/model";
 import { Position } from "@/types";
 
@@ -95,74 +99,143 @@ describe("a walk can start at a kerb, not just at a building", () => {
   });
 });
 
-describe("the pavement goes AROUND the parking, not through it", () => {
-  it("clears every bay on every parking tile", () => {
-    // Before this, both the paint and the people were offset from the
-    // CARRIAGEWAY alone — and a bay starts at that same kerb and reaches
-    // outward, so it swallowed the footway whole. Measured on this board:
-    // every parking tile overlapped by 8 units, which is the pavement's ENTIRE
-    // width. People walked over the bonnets.
+describe("the street cross-section: who is behind whom", () => {
+  // docs/superpowers/specs/2026-08-20-street-cross-section-design.md:
+  //
+  //   carriageway → kerbside parking → PAVEMENT → across-kerb parking → plot
+  //
+  // ALONG the kerb (parallel) is street furniture: the pavement runs behind it.
+  // ACROSS the kerb (a drive, a forecourt) is property access: the pavement
+  // runs in front of it and the CAR crosses the pavement — never the pedestrian
+  // the parking.
+
+  function bandAt(level: Level, tileId: string, side: 1 | -1) {
+    const cell = level[tileId];
+    const through = roadThrough(cell)!;
+    const ends = pavementOffsetEndsFor(level, tileId, side, through.from, through.to);
+    return {
+      inner: Math.min(Math.abs(ends.offEntry), Math.abs(ends.offExit)) - PAVEMENT_WIDTH / 2,
+      outer: Math.max(Math.abs(ends.offEntry), Math.abs(ends.offExit)) + PAVEMENT_WIDTH / 2,
+    };
+  }
+
+  it("keeps the pavement clear of every KERBSIDE bay", () => {
     const level = homeparking.level;
     for (const [tileId, cell] of Object.entries(level)) {
-      const rows = rowsOf(cell);
-      if (rows.length === 0) continue;
-      const through = roadThrough(cell);
-      if (!through) continue;
       const coord = parseCoordId(tileId);
-      for (const row of rows) {
-        if (stallOnLane(row.kind)) continue; // a halt is in the lane, not beside it
-        const bank = bankOf(row);
-        const side = sideOfBank(level, tileId, bank);
+      for (const row of rowsOf(cell)) {
+        if (row.kind !== "parallel") continue;
+        const side = sideOfBank(level, tileId, bankOf(row));
         if (side === null) continue;
-        const centre = Math.abs(pavementOffsetFor(cell, side, through.from, through.to));
-        const pavementInner = centre - PAVEMENT_WIDTH / 2;
-        // The bay, in the same ground units (100 per tile against 200 px).
         const bayOuter =
           (kerbOffsetAt(level, coord, row.from, 200) +
             stallDepthPx(row.kind, 200, needsBigBay(row.reserved))) /
           2;
         expect(
-          pavementInner,
+          bandAt(level, tileId, side).inner,
           `pavement runs through the ${row.kind} bay on ${tileId}`,
         ).toBeGreaterThanOrEqual(bayOuter);
       }
     }
   });
 
-  it("moves only the bank that HAS the parking", () => {
-    // A street with a drive on one side and nothing on the other has two
-    // pavements at two distances. Pushing both out by the wider of them would
-    // leave the empty side's band floating in the verge for no reason.
+  it("keeps every ACROSS-KERB rank behind the pavement instead", () => {
+    // A drive does not move the pavement — the car crosses it. So the bay's
+    // NEAR edge must clear the band's outer edge, which is the opposite
+    // inequality to the kerbside case, and the pair of them is the whole rule.
+    const level = homeparking.level;
+    let drives = 0;
+    for (const [tileId, cell] of Object.entries(level)) {
+      const coord = parseCoordId(tileId);
+      for (const row of rowsOf(cell)) {
+        if (!turnsInAcrossKerb(row.kind)) continue;
+        drives++;
+        const side = sideOfBank(level, tileId, bankOf(row));
+        if (side === null) continue;
+        const bayInner =
+          bayNearPx(row, 200, kerbOffsetAt(level, coord, row.from, 200)) / 2;
+        expect(
+          bandAt(level, tileId, side).outer,
+          `the ${row.kind} rank on ${tileId} sits under the pavement`,
+        ).toBeLessThanOrEqual(bayInner);
+      }
+    }
+    expect(drives).toBeGreaterThan(0);
+  });
+
+  it("is one CONNECTED line — both tiles agree wherever it crosses a seam", () => {
+    // The failure this replaces: a per-tile outset put a parking tile's band 13
+    // units further out than its neighbour's, so the pavement broke into
+    // disconnected segments and the walkers teleported sideways at every seam.
+    // This samples the actual walker geometry (the same two-offset call the
+    // pedestrians make) at t=1 on one tile and t=0 on the next, and demands the
+    // physical points coincide.
+    for (const scenario of [homeparking, workparking]) {
+      const level = scenario.level;
+      for (const [tileId, cell] of Object.entries(level)) {
+        if (!hasFootway(cell)) continue;
+        const through = roadThrough(cell);
+        if (!through) continue;
+        const exitPort = through.to;
+        const coord = parseCoordId(tileId);
+        const n = neighborCoord(coord, exitPort);
+        if (!n) continue;
+        const nId = `${n.x},${n.y}`;
+        const nCell = level[nId];
+        if (!hasFootway(nCell)) continue;
+        const nThrough = roadThrough(nCell);
+        if (!nThrough) continue;
+        // Orient the neighbour's traversal to ENTER through the shared seam.
+        const back = oppositePort(exitPort);
+        let nEntry: Position;
+        let nExit: Position;
+        if (nThrough.from === back) [nEntry, nExit] = [nThrough.from, nThrough.to];
+        else if (nThrough.to === back) [nEntry, nExit] = [nThrough.to, nThrough.from];
+        else continue; // roads do not actually join at this seam
+        const pointsOf = (
+          id: string,
+          entry: Position,
+          exit: Position,
+          t: number,
+        ): { x: number; y: number }[] => {
+          const { x, y } = parseCoordId(id);
+          return ([1, -1] as (1 | -1)[]).map(side => {
+            const e = pavementOffsetEndsFor(level, id, side, entry, exit);
+            const pt = laneSegmentPointAt(entry, exit, 1, e.offEntry / 100, e.offExit / 100, t);
+            return { x: x + pt.x, y: y + pt.y };
+          });
+        };
+        const ours = pointsOf(tileId, through.from, through.to, 1);
+        const theirs = pointsOf(nId, nEntry, nExit, 0);
+        for (const p of ours) {
+          const met = theirs.some(q => Math.abs(q.x - p.x) < 1e-6 && Math.abs(q.y - p.y) < 1e-6);
+          expect(met, `pavement breaks at the ${tileId}→${nId} seam of ${scenario.id}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("moves only the bank that HAS the kerbside parking", () => {
+    // A street with marked bays on one side and nothing on the other has two
+    // pavements at two distances; pushing both out by the wider of them would
+    // leave the empty side's band floating in the verge.
     const level: Level = {
       "0,1": { connections: [], road: twoWay(Position.Left, Position.Right), terrain: "urban" },
       "2,1": { connections: [], road: twoWay(Position.Left, Position.Right), terrain: "urban" },
-      "1,2": { connections: [], terrain: "urban" },
       "1,1": {
         connections: [],
         road: twoWay(Position.Left, Position.Right),
         terrain: "urban",
         parking: {
-          rows: [
-            {
-              from: Position.Left,
-              side: "right",
-              kind: "perpendicular",
-              count: 2,
-              marking: "none",
-              resident: "1,2",
-            },
-          ],
+          rows: [{ from: Position.Left, side: "right", kind: "parallel", count: 3 }],
         },
       },
     };
-    const cell = level["1,1"];
-    const plain = roadHalfUnits(cell) + 8; // gap + half the band
-    // Travelling east, "right" is the south bank — the one with the drive.
-    expect(bankFor(Position.Left, "right")).toBe(Position.Bottom);
-    expect(Math.abs(pavementOffsetFor(cell, 1, Position.Left, Position.Right))).toBeGreaterThan(
-      plain,
-    );
-    expect(Math.abs(pavementOffsetFor(cell, -1, Position.Left, Position.Right))).toBe(plain);
+    const plain = roadHalfUnits(level["1,1"]) + 8; // gap + half the band
+    const south = pavementOffsetEndsFor(level, "1,1", 1, Position.Left, Position.Right);
+    const north = pavementOffsetEndsFor(level, "1,1", -1, Position.Left, Position.Right);
+    expect(Math.abs(south.offEntry)).toBeGreaterThan(plain);
+    expect(Math.abs(north.offEntry)).toBe(plain);
   });
 
   it("keeps the band on its own tile however deep the bay", () => {
@@ -180,10 +253,8 @@ describe("the pavement goes AROUND the parking, not through it", () => {
         },
       },
     };
-    const off = Math.abs(
-      pavementOffsetFor(level["1,1"], 1, Position.Left, Position.Right),
-    );
-    expect(off + PAVEMENT_WIDTH / 2).toBeLessThanOrEqual(50);
+    const e = pavementOffsetEndsFor(level, "1,1", 1, Position.Left, Position.Right);
+    expect(Math.abs(e.offEntry) + PAVEMENT_WIDTH / 2).toBeLessThanOrEqual(50);
   });
 });
 

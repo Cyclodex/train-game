@@ -7,7 +7,7 @@ import { oppositePort } from "@/sim/topology";
 import {
   hasFootway,
   hasRailCrossing,
-  pavementOffsetFor,
+  pavementOffsetEndsFor,
   planWalk,
   planWalkFromKerb,
   roadThrough,
@@ -192,11 +192,13 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     // the doubling back is expressed by running `t` back down again, not by
     // bending the curve.
     const to = exit === entry ? oppositePort(entry) : exit;
-    // A side is fixed to the street; this offset is relative to the walker's
-    // direction of travel. Walking the street back the other way flips it — see
-    // `pavementOffsetFor`.
-    const off = pavementOffsetFor(level[tileId], side, entry, to) / 100;
-    const p = laneSegmentPointAt(entry, to, 1, off, off, t);
+    // A side is fixed to the street; these offsets are relative to the walker's
+    // direction of travel, and there are TWO of them — the band tapers between
+    // its seam-agreed ends wherever kerbside parking pushes it out, and the
+    // sampler has taken a pair of offsets since the cars first needed lane
+    // tapering. One number here and the walker cuts the corner the paint takes.
+    const { offEntry, offExit } = pavementOffsetEndsFor(level, tileId, side, entry, to);
+    const p = laneSegmentPointAt(entry, to, 1, offEntry / 100, offExit / 100, t);
     return { x: x + p.x, y: y + p.y, headingDeg: p.tangentDeg };
   }
 

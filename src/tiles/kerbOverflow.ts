@@ -7,6 +7,7 @@ import { levelBounds } from "@/tiles/bounds";
 import {
   bankFor,
   bankOf,
+  kerbRunClash,
   rowsOf,
   validateParking,
   type ParkingCell,
@@ -95,6 +96,11 @@ export function deriveKerbOverflow(level: Level, opts: KerbOverflowOptions = {})
       for (const side of sides) {
         const bank = bankFor(from, side);
         if (taken.has(bank)) continue;
+        // ONE KERB RUN, ONE SIDE OF THE PAVEMENT: informal kerb is kerbside
+        // parking, and next to a drive on the same flank the band would have to
+        // taper across the drive's bays to get behind these spaces. The kerb
+        // beside a run of driveways simply is not somewhere you leave a car.
+        if (kerbRunClash(level, tileId, from, bank, "parallel")) continue;
         taken.add(bank);
         const rows = additions.get(tileId) ?? [];
         rows.push({

@@ -140,46 +140,77 @@ export function roadHalfUnits(cell: TileCell | undefined): number {
 
 
 // The furthest out a pavement's CENTRELINE may run and still leave the band on
-// its own tile (a tile's half-width is 50 ground units).
+// its own tile (a tile's half-width is 50 ground units). A backstop for the
+// deepest kerbside case (a lorry lay-by), not a working position.
 const MAX_PAVEMENT_OFFSET = 50 - PAVEMENT_WIDTH / 2;
 
 /**
- * How much further out this bank's pavement has to run to clear PARKING, in
- * ground units. Zero on a bank with no bays, which is nearly every bank.
+ * How much further out this cell's pavement runs on flank `bank` to clear
+ * KERBSIDE parking, in ground units. Zero on a bank with no parallel rows —
+ * which is every bank on most boards.
  *
- * THE PAVEMENT GOES BEHIND THE PARKED CARS, NOT UNDER THEM. Before this, both
- * the paint and the people were offset from the CARRIAGEWAY alone, so a bay —
- * which starts at that same kerb and reaches outward — swallowed the footway
- * whole. Measured on `/test/homeparking`, every single parking tile overlapped
- * by 8 units, which is the pavement's entire width: a kerbside bay spans 14→27
- * and a drive 14→38, against a band at 18→26. People walked over the bonnets.
+ * PARALLEL ROWS ONLY, and that restriction IS the street cross-section rule
+ * (docs/superpowers/specs/2026-08-20-street-cross-section-design.md):
  *
- * Both callers use this, and they must: `pavementPaths` draws the strip and
- * `pavementOffsetFor` puts the walkers on it, and a board where those two
- * disagree is one where people walk beside the pavement instead of on it.
+ *   carriageway → kerbside parking → PAVEMENT → across-kerb parking → the plot
+ *
+ *  · ALONG the kerb (parallel — marked bays, the informal kerb, lay-bys) is
+ *    street furniture. The pavement runs BEHIND it, so it pushes the band out.
+ *  · ACROSS the kerb (perpendicular / angled / garage) is property access. The
+ *    pavement runs IN FRONT of it, continuous, and the CAR crosses the pavement
+ *    to reach its bay — the bays sit behind the band by data
+ *    (`ParkingRow.gap`, see `tiles/parking.ts`), so they push nothing here.
+ *    The first version pushed the band out for these too, and it could not
+ *    work: an outward push is blind to what stands BEHIND the parking, and on
+ *    `/test/parkinglot` the two aisles' pushed-out pavements ran straight
+ *    through each other's back-to-back ranks.
+ *  · A HALT (`busstop`) is in the carriageway; nothing to clear — passengers
+ *    board from the pavement, which is exactly where it already is.
  */
-function bankOfSide(cell: TileCell | undefined, side: 1 | -1): Port | null {
-  const through = roadThrough(cell);
-  if (!through) return null;
-  // `side` is measured against the tile's OWN through movement (see
-  // `sideOfPlot`), and `bankFor` names the bank right/left of a movement — so
-  // the two are the same question, asked in the two vocabularies this file has
-  // to speak: pavements think in ±1, parking rows think in ports.
-  return bankFor(through.from, side === 1 ? "right" : "left");
-}
-
-function parkingOutsetUnits(cell: TileCell | undefined, bank: Port): number {
+function kerbParkingOutset(cell: TileCell | undefined, bank: Port): number {
   let out = 0;
   for (const row of rowsOf(cell)) {
     if (bankOf(row) !== bank) continue;
-    // A HALT is not a bay — the vehicle never leaves the carriageway, so there
-    // is nothing between the kerb and the pavement to walk around.
-    if (stallOnLane(row.kind)) continue;
+    if (row.kind !== "parallel") continue;
     // Ground units are half of tile pixels (100 per tile against 200).
     const depth = stallDepthPx(row.kind, 200, needsBigBay(row.reserved)) / 2;
     out = Math.max(out, depth + (row.gap ?? 0) * LANE_W);
   }
   return out;
+}
+
+/**
+ * The agreed pavement outset where the band on flank `flank` crosses the seam
+ * through `port`: the larger of what the two adjacent tiles need there.
+ *
+ * THIS IS WHAT MAKES THE PAVEMENT ONE CONNECTED LINE. The first version was
+ * per-tile, so a parking tile's band sat 13 units further out than its
+ * neighbour's and the pavement broke into disconnected segments at every seam —
+ * with the walkers, positioned by the same number, teleporting sideways at each
+ * one. Agreement at the seam is SYMMETRIC by construction (both tiles compute
+ * max over the same two cells), the same philosophy as the road's own min-seam
+ * paint rule — and `paintedHalfAt` already agrees about the tarmac half-width
+ * at a seam for the same reason, so both terms of the offset match from both
+ * sides. Within a tile the band then TAPERS linearly between its two seam
+ * values, which the kerb-edge helpers and the walkers' two-offset sampler both
+ * express natively.
+ *
+ * The flank is an absolute PORT (one of the two perpendicular neighbours of the
+ * edge), not a travel-relative side — so the lookup needs no side mapping, and
+ * bends and junctions need no special case: their own outset is zero and their
+ * bands taper toward whatever their straight neighbours need.
+ */
+function seamOutset(level: Level, coord: Coordinates, port: Port, flank: Port): number {
+  const own = kerbParkingOutset(level[`${coord.x},${coord.y}`], flank);
+  const n = neighborCoord(coord, port);
+  if (!n) return own;
+  const nCell = level[`${n.x},${n.y}`];
+  // A neighbour only pulls the band outward if a band actually CONTINUES into
+  // it: it has a pavement at all, and its road crosses the shared seam. An
+  // aisle with `footway: "none"` beside a street keeps its parking to itself.
+  if (!hasFootway(nCell)) return own;
+  if (laneCountAt(nCell?.road, oppositePort(port)) === 0) return own;
+  return Math.max(own, kerbParkingOutset(nCell, flank));
 }
 
 /** The centreline offset of each pavement on this cell, in ground units. */
@@ -197,8 +228,10 @@ function travelNormal(from: Port, to: Port): { x: number; y: number } {
 }
 
 /**
- * The signed lateral offset, in ground units, that puts a walker on pavement
- * `side` while they travel `entry`→`exit` across this cell.
+ * The signed lateral offsets, in ground units, that put a walker on pavement
+ * `side` at each END of a traversal `entry`→`exit` across this cell — the same
+ * two numbers the paint tapers between, handed to the walkers' two-offset
+ * sampler so paint and people follow ONE line.
  *
  * WHY THIS IS NOT JUST `pavementOffsets(cell)[0] * side`, which is what it was
  * and which is wrong half the time: a `side` is FIXED to the tile (it is which
@@ -213,27 +246,48 @@ function travelNormal(from: Port, to: Port): { x: number; y: number } {
  * changed sides properly, then walked WEST on the coordinates of the pavement
  * they had just left — and the driveway at the far end dragged them back over
  * the tarmac to reach their door.
+ *
+ * Symmetric under reversal by construction: walking the tile back swaps which
+ * end is `entry`, flips the sign, and looks up the SAME seam/flank pairs — so
+ * both directions land on the same physical curve.
  */
-export function pavementOffsetFor(
-  cell: TileCell | undefined,
+export function pavementOffsetEndsFor(
+  level: Level,
+  coordId: string,
   side: 1 | -1,
   entry: Port,
   exit: Port
-): number {
-  // Which bank this `side` names, so a pavement that has to clear parking
-  // clears the parking ON ITS OWN SIDE. A street with a drive on one bank and
-  // bare kerb on the other has two different pavements, and pushing both out by
-  // the wider of the two would leave one floating in the road's verge.
-  const bank = bankOfSide(cell, side);
-  const outset = bank === null ? 0 : parkingOutsetUnits(cell, bank);
-  const off = Math.min(pavementOffsets(cell)[0] + outset, MAX_PAVEMENT_OFFSET) * side;
-  const through = roadThrough(cell);
-  if (!through) return off;
-  const a = travelNormal(entry, exit);
-  const b = travelNormal(through.from, through.to);
+): { offEntry: number; offExit: number } {
+  const cell = level[coordId];
+  const coord = parseCoordId(coordId);
   // Travelling against the tile's own direction flips which bank is on the
   // right. Square to it (dot 0) is ambiguous — leave the sign alone.
-  return a.x * b.x + a.y * b.y < 0 ? -off : off;
+  const through = roadThrough(cell);
+  let sign: 1 | -1 = side;
+  if (through) {
+    const a = travelNormal(entry, exit);
+    const b = travelNormal(through.from, through.to);
+    if (a.x * b.x + a.y * b.y < 0) sign = side === 1 ? -1 : 1;
+  }
+  // The physical flank the band runs on at each END of this traversal. On a
+  // straight both are the same port; on a bend they differ (the outer band of a
+  // west→south turn crosses the west seam on its north half and the south seam
+  // on its east half) — and `bankFor` names both, because each end is locally a
+  // straight movement: away from `entry`, and into `exit`.
+  const rel: "right" | "left" = sign === 1 ? "right" : "left";
+  const entryFlank = bankFor(entry, rel);
+  const exitFlank = bankFor(oppositePort(exit), rel);
+  // The tarmac half-width per END (the same seam-symmetric number the paint
+  // uses), plus the seam-agreed parking outset on that end's flank. Both terms
+  // agree across every seam, which is what keeps a walker continuous crossing
+  // one — and keeps this function equal to the band the paint draws.
+  const road = cell?.road;
+  const base = (p: Port) => paintedHalfAt(level, coord, road, p) + PAVEMENT_PAD;
+  const clamp = (v: number) => Math.min(v, MAX_PAVEMENT_OFFSET);
+  return {
+    offEntry: clamp(base(entry) + seamOutset(level, coord, entry, entryFlank)) * sign,
+    offExit: clamp(base(exit) + seamOutset(level, coord, exit, exitFlank)) * sign,
+  };
 }
 
 // --- the walking graph -------------------------------------------------------
@@ -575,7 +629,6 @@ interface PavementBand {
  * TAPERS with the tarmac it follows and the two halves of a seam still meet.
  */
 function bandsFor(level: Level, coord: Coordinates, road: Lane[], from: Port, to: Port): PavementBand[] {
-  const cell = level[`${coord.x},${coord.y}`];
   // A ONE-WAY street is the one road that is not symmetric about its centreline:
   // it kerb-anchors the whole run's widest lane count (see `Tile.vue`'s one-way
   // branch and `sim/laneOffset.ts`), so lanes open and close on the CENTRE side
@@ -597,26 +650,39 @@ function bandsFor(level: Level, coord: Coordinates, road: Lane[], from: Port, to
     // surface it follows.
     const innerEntry = kerb - entryCount * LANE_W;
     const innerExit = kerb - Math.max(entryCount, exitCount) * LANE_W;
-    // The parking on each bank pushes that bank's band further out — see
-    // `parkingOutsetUnits`. Per BANK, not per tile: a street with a drive on one
-    // side and bare kerb on the other has two pavements at two distances.
-    const kOut = outsetOn(cell, from, "right");
-    const iOut = outsetOn(cell, from, "left");
+    // KERBSIDE parking pushes each bank's band further out, agreed at each
+    // SEAM with the neighbour and tapered across the tile — see `seamOutset`.
+    const kerbFlankIn = bankFor(from, "right");
+    const kerbFlankOut = bankFor(oppositePort(to), "right");
+    const innFlankIn = bankFor(from, "left");
+    const innFlankOut = bankFor(oppositePort(to), "left");
     return [
-      { offEntry: pave(kerb + kOut), offExit: pave(kerb + kOut) },
+      {
+        offEntry: pave(kerb + seamOutset(level, coord, from, kerbFlankIn)),
+        offExit: pave(kerb + seamOutset(level, coord, to, kerbFlankOut)),
+      },
       // The centre-side band is NOT the mirror of the kerb-side one on a one-way
       // street — that is the whole reason this branch exists — so it is padded
       // and outset INWARD from its own edge rather than negated.
-      { offEntry: paveInner(innerEntry, iOut), offExit: paveInner(innerExit, iOut) },
+      {
+        offEntry: paveInner(innerEntry, seamOutset(level, coord, from, innFlankIn)),
+        offExit: paveInner(innerExit, seamOutset(level, coord, to, innFlankOut)),
+      },
     ];
   }
   const halfEntry = paintedHalfAt(level, coord, road, from);
   const halfExit = paintedHalfAt(level, coord, road, to);
-  const rOut = outsetOn(cell, from, "right");
-  const lOut = outsetOn(cell, from, "left");
+  // Each end's flank is resolved locally (away from `from`, into `to`) so a
+  // BEND's outer band picks up the outset of the straight it hands over to at
+  // each of its two seams — which is how the taper reaches around corners
+  // without the corner carrying any parking of its own.
+  const rIn = seamOutset(level, coord, from, bankFor(from, "right"));
+  const rOut = seamOutset(level, coord, to, bankFor(oppositePort(to), "right"));
+  const lIn = seamOutset(level, coord, from, bankFor(from, "left"));
+  const lOut = seamOutset(level, coord, to, bankFor(oppositePort(to), "left"));
   return [
-    { offEntry: pave(halfEntry + rOut), offExit: pave(halfExit + rOut) },
-    { offEntry: -pave(halfEntry + lOut), offExit: -pave(halfExit + lOut) },
+    { offEntry: pave(halfEntry + rIn), offExit: pave(halfExit + rOut) },
+    { offEntry: -pave(halfEntry + lIn), offExit: -pave(halfExit + lOut) },
   ];
 }
 
@@ -631,11 +697,6 @@ function pave(half: number): number {
 // further down, and the tile edge is at -MAX.
 function paveInner(edge: number, outset: number): number {
   return Math.max(edge - PAVEMENT_PAD - outset, -MAX_PAVEMENT_OFFSET);
-}
-
-// The parking outset on the bank `side`-of-travel from `from`.
-function outsetOn(cell: TileCell | undefined, from: Port, side: "right" | "left"): number {
-  return parkingOutsetUnits(cell, bankFor(from, side));
 }
 
 /**

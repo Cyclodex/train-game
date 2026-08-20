@@ -8,7 +8,7 @@ import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { threecities } from "@/levels/test/scenarios/threecities";
 import { deriveHomeParking, homeDriveTiles, DRIVE_SPACES } from "@/tiles/homeParking";
 import { levelBounds } from "@/tiles/bounds";
-import { facilitiesOf, rowsOf, validateParking, stallId } from "@/tiles/parking";
+import { bankOf, facilitiesOf, rowsOf, validateParking, stallId } from "@/tiles/parking";
 import { createParkingRegistry } from "@/sim/parking";
 import { plotsOf } from "@/tiles/cities";
 import type { Level } from "@/tiles/model";
@@ -100,18 +100,36 @@ describe("a drive is derived at every house", () => {
   });
 
   it("lets two houses share one road tile, each on its own kerb", () => {
-    // The east run of `/test/homeparking` has a house either side of it. Both
-    // get a drive on the same tile and they are not the same tarmac — which is
-    // the case a facility-level permit could not have expressed, and the reason
-    // ownership is a property of the ROW.
-    const shared = Object.entries(homeparking.level).filter(
-      ([, cell]) => rowsOf(cell).filter(r => r.resident).length > 1,
-    );
-    expect(shared.length).toBeGreaterThan(0);
-    for (const [, cell] of shared) {
-      const rows = rowsOf(cell).filter(r => r.resident);
-      expect(new Set(rows.map(r => r.resident)).size).toBe(rows.length);
-    }
+    // A house either side of one street: both get a drive on the same tile and
+    // they are not the same tarmac — the case a facility-level permit could not
+    // have expressed, and the reason ownership is a property of the ROW.
+    //
+    // A purpose-built level rather than `/test/homeparking`, whose east run
+    // used to show this incidentally: since the one-kerb-run rule (a drive
+    // never stands beside kerbside parking on the same flank), that board
+    // resolves its east column differently, and this test is about the
+    // CAPABILITY, not about one board's layout.
+    const street = (): Level[string] => ({
+      connections: [],
+      road: [
+        { from: 3, to: [1], index: 0 },
+        { from: 1, to: [3], index: 0 },
+      ],
+      terrain: "urban",
+    });
+    const home = (): Level[string] => ({ connections: [], terrain: "urban" });
+    const level: Level = {
+      "0,1": street(),
+      "1,1": street(),
+      "2,1": street(),
+      "1,0": home(),
+      "1,2": home(),
+    };
+    const next = deriveHomeParking(level);
+    const rows = rowsOf(next["1,1"]).filter(r => r.resident);
+    expect(rows.length).toBe(2);
+    expect(new Set(rows.map(r => r.resident)).size).toBe(2);
+    expect(new Set(rows.map(r => bankOf(r))).size).toBe(2);
   });
 
   it("ships nothing the parking validator would reject", () => {
