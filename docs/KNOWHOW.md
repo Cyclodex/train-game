@@ -3480,6 +3480,18 @@ of the above; read that section first.
   `gameConfig.debug` is `false` and NOT persisted (no localStorage key, unlike
   `worldTheme`), so a `/#/play?…` route shot, which has no stage toggle at all,
   is debug-free by construction.
+- SAME RULE FOR THE BG TOGGLE since 2026-08-20 — it was blind-clicked before,
+  which ALTERNATED flat/themed across the ids of one multi-scenario run
+  (gameConfig survives hash navigation; the app instance is never reset between
+  scenarios), silently breaking before/after pairs shot in runs of different
+  length or position. The script now reads `#app.bg-plain` and clicks only on a
+  mismatch. Any future stage toggle the script drives must follow this
+  read-then-click shape.
+- FLAT ≠ BARE: `plainBackdrop` only re-anchors the ground TONE (app ground
+  `#3f6b40`, terraces via `TERRACE_BASE.plain`) — the meadow scatter (tufts,
+  flowers, patches) still draws. So tell flat from themed by tone (pixel-sample
+  the grass: flat ≈ `#3f6b40`, meadow ≈ `#6aac6a`), not by looking for an empty
+  green field.
 - `tests/unit/sim/roadScenarioSweep.spec.ts` = BEHAVIOURAL sweep of every road
   scenario (iterates `SCENARIOS`): populates, flows, never stands still, bodies
   never clip. Flow is measured as tile CROSSINGS — despawn counts call a closed

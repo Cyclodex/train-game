@@ -80,7 +80,9 @@ tight PNG of just the tiles (default `screenshots/`, git-ignored). The
 board — the reservation tint and the cyan/amber driving-lines cover lane paint,
 terrain and depot art — so a debug shot can make a real change look like it did
 nothing. The helper does not trust the app's state: it reads the stage's Debug
-toggle and switches it off before shooting. Pass `--debug` when the overlay
+and 🌳 BG toggles and clicks each only when it differs from what was requested
+(state persists across the scenarios of one run, so a blind click would
+alternate it). Pass `--debug` when the overlay
 itself is what you are showing (routing, lane centrelines, *where* a vehicle
 drives); then use the same flag for **both** halves of a before/after pair and
 say so in the PR body. `gameConfig.debug` is `false` by default and not
