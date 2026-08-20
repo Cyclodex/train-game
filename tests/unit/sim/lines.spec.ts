@@ -273,3 +273,78 @@ describe("a line says which stations a train serves", () => {
     expect(new Set(calls)).toEqual(new Set(["2,2", "3,2", "2,0", "3,0"]));
   });
 });
+
+// D11: a line is a PLAN with an identity, and a plan outlives the vehicles
+// running it. Before this, the stops hung off the train, so "I have planned a
+// service here" and "a vehicle is running it" were the same fact — you could
+// not draw a line before buying a train, and withdrawing the last train
+// silently deleted the service everyone had planned around.
+describe("a line exists without a train on it", () => {
+  it("can be drawn with nothing running it, and stays when a train leaves", () => {
+    const sim = createSimulation({
+      level: shuttleLine(),
+      trains: [train()],
+    });
+    const id = sim.createLine(["2,0", "4,0"], "Küstenbahn");
+    expect(sim.lines().map(l => l.id)).toContain(id);
+    expect(sim.trainsOnLine(id)).toEqual([]);
+
+    sim.assignTrain("t1", id);
+    expect(sim.trainsOnLine(id)).toEqual(["t1"]);
+    expect(sim.trainLine("t1")).toEqual(["2,0", "4,0"]);
+
+    sim.assignTrain("t1", null);
+    // The service is still there — that is the whole point.
+    expect(sim.lines().map(l => l.id)).toContain(id);
+    expect(sim.trainLine("t1")).toEqual([]);
+  });
+
+  it("survives the withdrawal of the last train running it", () => {
+    const sim = createSimulation({
+      level: shuttleLine(),
+      trains: [train(["2,0", "4,0"])],
+    });
+    const id = sim.createLine(["2,0", "4,0"]);
+    run(sim, 20);
+    expect(sim.retireTrain("t1")).toBe(true);
+    expect(sim.lines().find(l => l.id === id)?.stops).toEqual(["2,0", "4,0"]);
+  });
+
+  it("puts two trains given the same stops onto ONE line", () => {
+    const sim = createSimulation({
+      level: shuttleLine(),
+      trains: [
+        train(["2,0", "4,0"]),
+        { ...train(["2,0", "4,0"]), id: "t2", coord: { x: 5, y: 0 } },
+      ],
+    });
+    expect(sim.lines()).toHaveLength(1);
+    expect(sim.trainsOnLine(sim.lines()[0].id).sort()).toEqual(["t1", "t2"]);
+  });
+
+  it("re-stopping a line moves every train running it", () => {
+    const sim = createSimulation({
+      level: shuttleLine(),
+      trains: [train(["2,0", "4,0"])],
+    });
+    const id = sim.lineOf("t1") as string;
+    expect(sim.setLineStops(id, ["4,0"])).toBe(true);
+    expect(sim.trainLine("t1")).toEqual(["4,0"]);
+    expect(sim.trainNextStop("t1")).toBe("4,0");
+  });
+
+  it("deleting a line leaves its trains running as classic services", () => {
+    const sim = createSimulation({
+      level: shuttleLine(),
+      // An express past 2,0 — until the line it is running is deleted.
+      trains: [train(["4,0"])],
+    });
+    const id = sim.lineOf("t1") as string;
+    expect(sim.deleteLine(id)).toBe(true);
+    expect(sim.lineOf("t1")).toBeUndefined();
+    expect(sim.lines()).toHaveLength(0);
+    // No line = the classic train, which stops at every platform it passes.
+    const calls = dwellsAt(run(sim, 120));
+    expect(new Set(calls)).toEqual(new Set(["2,0", "4,0"]));
+  });
+});

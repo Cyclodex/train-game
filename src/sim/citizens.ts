@@ -105,7 +105,12 @@ export interface Activity {
 // The legs a trip passes through. Timed legs (`walking`, `driving`) run down a
 // clock; `waiting` and `riding` are driven by what the RAIL simulation actually
 // does, which is what makes a bad timetable cost real time.
-type Leg = "walking" | "driving" | "waiting" | "riding" | "egress";
+// "parking" is the walk from the space to the door. It is its own leg and not
+// part of "walking" because of what ENDS it: an ordinary walking leg either
+// finishes the journey or delivers somebody to a platform, and this one always
+// finishes a car journey — but only after the car has stopped being traffic and
+// started being a parked vehicle holding a real bay.
+type Leg = "walking" | "driving" | "parking" | "waiting" | "riding" | "egress";
 
 export interface TravelProfile {
   carOwner: boolean;
@@ -130,6 +135,11 @@ export interface Trip {
   legRemaining: number; // seconds left on a timed leg
   // Transit bookkeeping.
   station: string | null; // the platform they are on / rode from
+  // The platform they are RIDING TO — their own destination as the railway
+  // understands it. Handed to the rail sim when they join the queue, so it
+  // carries them where they actually want to go (changing trains if it has to)
+  // rather than inventing a destination for them.
+  toStation: string | null;
   onPlatform: boolean; // actually accepted onto the sim's platform
   waitedSec: number;
   transfers: number;
@@ -161,7 +171,13 @@ export type ModeRefusal =
   | "no-railway"
   | "no-station-in-reach"
   | "no-park-and-ride"
-  | "same-station";
+  | "same-station"
+  // Two platforms with track between them are not a SERVICE. Nobody sets out
+  // for a station nothing can take them from (D10) — they drive, they walk, or
+  // they stay at home. Distinct from "no-station-in-reach": the stations are
+  // right there, it is the line that is missing, and that is the player's to
+  // fix rather than the map's.
+  | "no-service";
 
 /**
  * One mode, priced for one person on one journey — the row the inspector panel
@@ -181,6 +197,12 @@ export interface ModeQuote {
   cost: number;
   /** The station a transit-ish trip starts from. */
   station: string | null;
+  /**
+   * …and the one it ends at. Handed to the rail sim when this person joins the
+   * queue, so it carries them where THEY are going — changing trains if it has
+   * to — rather than inventing a destination for them.
+   */
+  toStation: string | null;
   /** Seconds of timed leg before the platform (walk to it, or drive to it). */
   approachSec: number;
   /** True on the one the model picked. */
@@ -226,8 +248,22 @@ export interface Citizen {
    * re-rolled: a schedule is a clock, not a planner.
    */
   routine: Activity[];
+  // THEIR CAR, standing in a bay somewhere while they are not in it. This is
+  // what makes a commuter's car a thing that occupies the world for a whole
+  // working day rather than a sprite that is deleted on arrival: the space is
+  // held against every other driver looking for one, and the same vehicle is
+  // the one that drives home at going-home time.
+  parkedCar: {
+    tripId: string; // the road sim's trip (which is also the car's id)
+    at: string; // the plot they parked FOR — where they will come back from
+    tileId: string; // the road tile the car is standing on
+  } | null;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
+  // Sim-time until which this person is not going anywhere: a journey they
+  // could not make costs them the rest of that stretch of the day, rather than
+  // freeing them up for cheerful errands (see the refusal in `startTrip`).
+  stuckUntil: number;
   // The last few scored journeys, newest first: the evidence behind the mood.
   recent: TripOutcome[];
 }
@@ -288,8 +324,29 @@ export interface CitizenTuning {
   // The wait a rider assumes when comparing modes (they do not know the
   // timetable; they know roughly how often trains come).
   assumedHeadwaySec: number;
-  // What parking costs a driver, in seconds of perceived time.
+  // What parking costs a driver, in seconds of perceived time, when they are
+  // COMPARING modes. Still an estimate and still flat, because that is what a
+  // driver knows before they set off — what it actually costs them is measured
+  // afterwards from where the car really stopped (`walkFromBaySec`). The gap
+  // between the two is what makes somebody unhappy about their commute.
   parkPenaltySec: number;
+  // What it costs to arrive somewhere with nowhere to park: the circling, and
+  // then leaving it further away than anybody would choose. Charged only when
+  // the driver actually went looking on a board that HAS parking — a board with
+  // none has no parking problem, it has no parking.
+  parkSearchSec: number;
+  // How far from HOME a resident will take a space, in tiles.
+  //
+  // Much shorter than the commuter's radius, and the reason is not politeness —
+  // it is what somebody will actually do. A bay six tiles from the office is a
+  // walk you make once and grumble about; six tiles from your own front door,
+  // every night, with the shopping, is not parking at home at all. Your street
+  // and the next one is the whole of it.
+  //
+  // It is also the fence that keeps residents out of the workplace forecourts
+  // across town — see the dispatch rule in `startTrip`, which is where the
+  // measured 12-of-12-bays-at-03:00 failure came from.
+  homeParkTiles: number;
   // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
   //
   // A plot-to-plot straight line is not a journey. The real one goes down the
@@ -360,6 +417,13 @@ export const DEFAULT_TUNING: CitizenTuning = {
   refSpeed: 0.22,
   assumedHeadwaySec: 12,
   parkPenaltySec: 8,
+  // Three times the quoted penalty. Deliberately a lot: this is the number that
+  // makes a full street read as a failure rather than as a rounding error, and
+  // it is the one a player fixes with a car park.
+  parkSearchSec: 24,
+  // Your own drive is one tile away (it is on the road tile your house fronts
+  // onto), so 2 is "my drive, or the kerb at the end of the road".
+  homeParkTiles: 2,
   walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
@@ -383,9 +447,16 @@ export const DEFAULT_TUNING: CitizenTuning = {
 // and park & ride are simply not available, which is exactly right for a
 // headless test with no railway in it.
 export interface TransitPort {
-  // Put `n` people on this platform; returns how many were actually accepted
-  // (the sim caps a platform). The citizen only counts as waiting once accepted.
-  enqueue(stationId: string, n: number): number;
+  // Put ONE named person on this platform, bound for `dest`. False when the
+  // platform is at its cap; the citizen only counts as waiting once accepted,
+  // and keeps trying while the clock runs. The `tag` comes back on the rail
+  // sim's dwell events, which is how this layer learns when its person boarded
+  // and where they got off — instead of shadowing the sim's queue and guessing.
+  enqueue(stationId: string, dest: string, tag: string): boolean;
+  // Does any chain of SERVICES connect these two platforms? Nobody sets out for
+  // a station nothing can take them to: they drive, they walk, or they stay at
+  // home and think less of you for it (D10).
+  connects(fromStation: string, toStation: string): boolean;
 }
 
 // The road world, same shape and same reason. Omitted → a driving citizen is an
@@ -406,9 +477,50 @@ export interface DrivingPort {
   // when no car could be dispatched — no route, the street outside blocked, the
   // road full. A null is not a failed journey: the citizen simply drives
   // "off-screen" on a timer instead, so a saturated road never strands anyone.
-  request(fromTileId: string, toTileId: string): string | null;
-  // Is that car still going?
-  status(tripId: string): "driving" | "arrived";
+  //
+  // `park` asks for the car to TAKE A SPACE at the far end and hold it, instead
+  // of evaporating at the address. The status then goes "parked" rather than
+  // "arrived", and the car is still there — outside the works, in the way of
+  // everybody else looking for a space — until `resume` sends it home.
+  //
+  // `park.permit` is the driver's own ADDRESS, and it is the key to that
+  // household's drive (`tiles/homeParking.ts`). Somebody driving home carries
+  // it and nobody else does, which is the whole difference between a drive and
+  // a car park: a stranger cannot take it however empty it is.
+  //
+  // `park.searchTiles` bounds how far from the destination a space is still
+  // worth having. It is deliberately much shorter going home than going to work
+  // — see `HOME_PARK_TILES`.
+  request(
+    fromTileId: string,
+    toTileId: string,
+    park?: { permit?: string; searchTiles?: number },
+  ): string | null;
+  // Is that car still going? "parked" means the driving leg is over and the
+  // vehicle is standing in a bay waiting for its owner.
+  status(tripId: string): "driving" | "parked" | "arrived";
+  // The tile a parked car is standing on — how far its owner has to walk.
+  parkedAt(tripId: string): string | null;
+  // Did this trip set off looking for a space on a board that has spaces? True
+  // and finished WITHOUT one means the driver circled and found nothing, which
+  // is the thing a player can fix by building a car park.
+  wantedSpace(tripId: string): boolean;
+  // The owner is back: give up the bay and drive to `toTileId`. False when
+  // there is no such parked car any more, and the caller falls back to
+  // dispatching a fresh one.
+  //
+  // `park` makes the return leg a parking trip in its own right, on the same
+  // terms as `request` — which is what the evening commute is. Omitted, the car
+  // is retired at the address, which is right for the cases where nobody is
+  // coming back for it (an emigrant's car, a journey abandoned).
+  resume(
+    tripId: string,
+    toTileId: string,
+    park?: { permit?: string; searchTiles?: number },
+  ): boolean;
+  // Nobody is coming back for this car: take it off the board and hand its bay
+  // back. Releasing the TRIP alone would leave the vehicle standing there.
+  abandon(tripId: string): void;
   // The caller has read the result and will not ask again.
   release(tripId: string): void;
 }
@@ -424,6 +536,16 @@ export interface CitizenStats {
   driving: number;
   // ...and the same for people on an actual pavement.
   onFoot: number;
+  // Citizens whose car is standing in a real bay right now, holding it against
+  // every other driver. The observable that says commuter parking is happening
+  // at all — from outside a headless run there is no other way to see it.
+  carsParked: number;
+  // ...and how many of those are standing AT HOME rather than out at a
+  // workplace. The two numbers trade places over a day — the town's cars are on
+  // its drives at 03:00 and at its workplaces at 11:00 — and separating them is
+  // the only way to see that cycle from a headless run. One number could not:
+  // it reads the same at both ends of the day.
+  carsAtHome: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -643,10 +765,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const people = new Map<string, Citizen>();
   let nextId = 1;
 
-  // Shadow queues: who is standing on each platform, in the order they arrived.
-  // Popped by the rail sim's OWN boarding count — never by reading the queue
-  // size, which the scheduled demand also moves (see the design doc's traps).
-  const shadowQueue = new Map<string, string[]>();
+  // Who is aboard which train. Built from the rail sim's own boarded/alighted
+  // TAGS, so this is a view of the sim's ledger rather than a second one —
+  // there used to be a shadow queue here, and a rider kept a seat the sim had
+  // already freed.
   const riders = new Map<string, string[]>(); // train id → citizen ids aboard
 
   let clock = 0;
@@ -757,7 +879,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       trip: null,
       stage,
       routine: makeRoutine(stage, habitRng),
+      parkedCar: null,
       unhappyDays: 0,
+      stuckUntil: 0,
       recent: [],
     };
     people.set(c.id, c);
@@ -771,14 +895,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const w = plots.get(c.work);
       if (w) w.people = Math.max(0, w.people - 1);
     }
-    // Leave no ghost in a queue or aboard a train.
-    if (c.trip?.station) {
-      const q = shadowQueue.get(c.trip.station);
-      if (q) {
-        const i = q.indexOf(c.id);
-        if (i >= 0) q.splice(i, 1);
-      }
-    }
+    // Leave no ghost aboard a train. (A ghost left in the sim's platform queue
+    // is harmless: it is anonymous demand from that moment on, and the platform
+    // cap still bounds it.)
     for (const list of riders.values()) {
       const i = list.indexOf(c.id);
       if (i >= 0) list.splice(i, 1);
@@ -786,6 +905,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // Somebody who leaves town mid-journey does not leave a ghost behind.
     if (c.trip?.carTrip) driving?.release(c.trip.carTrip);
     if (c.trip?.walkTrip) walking?.release(c.trip.walkTrip);
+    // ...nor a car parked outside the works for ever. A held bay whose owner has
+    // emigrated is a space that can never be used again, and on a board people
+    // are leaving that is one lost space per lost commuter.
+    sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
     people.delete(c.id);
   }
 
@@ -824,6 +947,35 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       if (d < bestD || (d === bestD && best !== null && s < best)) {
         best = s;
         bestD = d;
+      }
+    }
+    return best;
+  }
+
+  // The best pair of platforms for this journey: the shortest walk at each end
+  // among the pairs a SERVICE actually connects.
+  //
+  // Not simply "nearest to home, nearest to work". A town can sit between two
+  // railways, and then the nearest platform at one end and the nearest at the
+  // other are on lines that never meet — a journey that cannot be made, from a
+  // pair that was never asked whether it could be. Choosing by connectivity is
+  // what stops a perfectly good railway looking useless to the people beside it.
+  function railPairFor(
+    from: WorldPlot,
+    to: WorldPlot
+  ): { board: string; alight: string; access: number; egress: number } | null {
+    if (!transit) return null;
+    let best: { board: string; alight: string; access: number; egress: number } | null =
+      null;
+    for (const board of from.stationsInReach) {
+      const access = walkToStation(from, board) / tuning.walkSpeed;
+      for (const alight of to.stationsInReach) {
+        if (board === alight) continue;
+        if (!transit.connects(board, alight)) continue;
+        const egress = walkToStation(to, alight) / tuning.walkSpeed;
+        if (!best || access + egress < best.access + best.egress) {
+          best = { board, alight, access, egress };
+        }
       }
     }
     return best;
@@ -874,13 +1026,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // showing both: a car winning on `cost` while losing on `sec` is a person
     // choosing badly, and that is a fact about the town worth seeing.
     const offer = (mode: TravelMode, sec: number, cost: number, station: string | null) =>
-      out.push({ mode, estimateSec: sec, cost, station, approachSec: sec, chosen: false });
+      out.push({
+        mode,
+        estimateSec: sec,
+        cost,
+        station,
+        toStation: null,
+        approachSec: sec,
+        chosen: false,
+      });
     const refuse = (mode: TravelMode, why: ModeRefusal) =>
       out.push({
         mode,
         estimateSec: Infinity,
         cost: Infinity,
         station: null,
+        toStation: null,
         approachSec: 0,
         chosen: false,
         unavailable: why,
@@ -915,24 +1076,29 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
     // TRANSIT. The assumed headway is in here because a rider comparing modes
     // does not know the timetable — they know roughly how often trains come.
+    // The PAIR is chosen by connectivity, not "nearest at each end": a town can
+    // sit between two railways, and then the nearest platform at one end and the
+    // nearest at the other are on lines that never meet — a journey that cannot
+    // be made, offered by a pair nobody asked whether it could be.
+    const pair = transit ? railPairFor(from, to) : null;
     if (!transit) refuse("transit", "no-railway");
     else if (!board || !alight) refuse("transit", "no-station-in-reach");
     else if (board === alight) refuse("transit", "same-station");
+    else if (!pair) refuse("transit", "no-service");
     else {
-      const access = walkToStation(from, board) / tuning.walkSpeed;
-      const egress = walkToStation(to, alight) / tuning.walkSpeed;
       const ride =
         manhattan(
-          stationCoord.get(board) as { x: number; y: number },
-          stationCoord.get(alight) as { x: number; y: number }
+          stationCoord.get(pair.board) as { x: number; y: number },
+          stationCoord.get(pair.alight) as { x: number; y: number }
         ) / tuning.trainSpeed;
-      const sec = access + tuning.assumedHeadwaySec + ride + egress;
+      const sec = pair.access + tuning.assumedHeadwaySec + ride + pair.egress;
       out.push({
         mode: "transit",
         estimateSec: sec,
         cost: sec * c.profile.transitAffinity,
-        station: board,
-        approachSec: access,
+        station: pair.board,
+        toStation: pair.alight,
+        approachSec: pair.access,
         chosen: false,
       });
     }
@@ -944,6 +1110,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     else if (!c.profile.carOwner) refuse("parkAndRide", "no-car");
     else if (from.roadComponent === null || !pr) refuse("parkAndRide", "no-park-and-ride");
     else if (pr.station === alight) refuse("parkAndRide", "same-station");
+    else if (!transit.connects(pr.station, alight)) refuse("parkAndRide", "no-service");
     else {
       const prCoord = stationCoord.get(pr.station) as { x: number; y: number };
       const drive =
@@ -960,6 +1127,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         estimateSec: sec,
         cost: sec * ((c.profile.transitAffinity + c.profile.carAffinity) / 2),
         station: pr.station,
+        toStation: alight,
         approachSec: drive,
         chosen: false,
       });
@@ -996,6 +1164,19 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // Refused: no way to make this journey at all. The single strongest
       // signal in the model, and it lands on `access`.
       tripsRefused += 1;
+      // A refused journey still moves the car. Somebody who cannot get home
+      // from work is standing next to the vehicle they drove there in, and
+      // leaving it in the bay is how a board slowly turns every space into a
+      // permanent obstacle — one per refused commute, and refusals are exactly
+      // what happens on a network the player has not finished.
+      //
+      // Refused AT HOME is the case that needs no rescuing: the car is on its
+      // own drive, where it is supposed to be, and shifting it would evict a
+      // household from its own hardstanding for the crime of not being able to
+      // get to work.
+      if (c.parkedCar && c.parkedCar.at === fromId && c.parkedCar.at !== c.home) {
+        sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
+      }
       remember(c, {
         purpose,
         mode: null,
@@ -1005,7 +1186,20 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         failed: "refused",
       });
       c.mood = clamp01(c.mood - 0.3);
-      if (cityId) feedTopic(cityId, "access", 0, FAILURE_WEIGHT);
+      // It lands on `access` AND on the journey's own topic, because a commute
+      // you cannot make is a bad commute, not merely a badly connected town.
+      // Exactly what an abandoned trip costs: the two are the same failure at
+      // different stages, and under D10 the failure moved from one to the other
+      // (a person no longer trudges to a platform to wait for a train that was
+      // never coming — they stay at home and think less of you). Charging less
+      // for it quietly turned off the mode's whole loop: no railway, no
+      // consequence, because the freed-up day went on cheerful errands instead.
+      if (cityId) {
+        feedTopic(cityId, topic, 0, FAILURE_WEIGHT);
+        feedTopic(cityId, "access", 0, FAILURE_WEIGHT);
+      }
+      // A day lost to a journey they could not make is not a day of errands.
+      c.stuckUntil = clock + tuning.secPerDay / 3;
       return;
     }
     if (cityId) feedTopic(cityId, "access", 1);
@@ -1027,6 +1221,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       leg: option.mode === "walk" ? "walking" : option.mode === "car" ? "driving" : option.mode === "parkAndRide" ? "driving" : "walking",
       legRemaining: option.approachSec,
       station: option.station,
+      toStation: option.toStation,
       onPlatform: false,
       waitedSec: 0,
       transfers: 0,
@@ -1047,9 +1242,67 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         trip.mode === "car"
           ? (plotOf(toId)?.roadTile ?? null)
           : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
-      if (origin && target && origin !== target) {
-        trip.carTrip = driving.request(origin, target);
+      // THEIR OWN CAR IS ALREADY HERE. Somebody leaving work does not have a
+      // second car materialise on the driveway — they walk to the one they left
+      // outside this morning and drive it away. Same vehicle, same id, and the
+      // bay it was holding is handed back to the next driver looking for one.
+      const mine = c.parkedCar;
+      const parkAtEnd =
+        trip.mode === "car" && purpose === "home"
+          ? { permit: c.home, searchTiles: tuning.homeParkTiles }
+          : trip.mode === "car"
+            ? {}
+            : undefined;
+      if (mine && mine.at === fromId && target && driving.resume(mine.tripId, target, parkAtEnd)) {
+        trip.carTrip = mine.tripId;
+        c.parkedCar = null;
+      } else if (origin && target && origin !== target) {
+        // WHO COMPETES FOR A SPACE, and it is not everybody.
+        //  · Going to WORK or to the SHOPS: yes. That is the whole feature —
+        //    a handful of bays at the gate against everyone who drove there.
+        //  · Going HOME: yes, but to THEIR OWN DRIVE first. A house has off-street
+        //    parking and now the board actually has it (`tiles/homeParking.ts`),
+        //    so a resident arriving home takes their own hardstanding, which no
+        //    passing driver could have taken from them. Only the overspill — the
+        //    third car at a two-space drive, and every car at a block of flats —
+        //    competes for public kerb, and it does so within a couple of tiles of
+        //    home rather than across the whole town.
+        //
+        //    THIS IS THE FENCE THAT KEEPS THE OLD BUG OUT. Letting residents park
+        //    anywhere at night, on a board where the only bays were the works'
+        //    own forecourt, silently converted every space on the map into
+        //    permanent resident parking: 12 of 12 held at 03:00 on
+        //    `/test/workparking`, rising to the cap over four days, after which
+        //    no commuter could park again. Two things stop that now and both are
+        //    needed — most cars go somewhere PRIVATE, and the ones that cannot
+        //    are looking `HOME_PARK_TILES` from their own front door rather than
+        //    `PARK_SEARCH_TILES` from anywhere.
+        //  · PARK & RIDE: no, it still pays the flat penalty. Its car is left at
+        //    a station, and a HELD bay there needs the return half too — you come
+        //    back to a different platform and have to reach the car you left at
+        //    the first one.
+        trip.carTrip = driving.request(origin, target, parkAtEnd);
       }
+    }
+    // Departing from where the car is by any OTHER means still moves the car:
+    // left behind at a WORKPLACE it would hold a public bay somebody else needs
+    // until the backstop dwell expired, and then drive to a stale address. Send
+    // it after them.
+    //
+    // EXCEPT AT HOME, which is the whole point of a drive. A car parked at its
+    // owner's own address is not squatting a space, it is standing where it
+    // lives, and it stays there while they walk to the shops or take the train —
+    // exactly as the real one on your own drive does. Without this exemption the
+    // feature inverts itself: every resident who walked anywhere would send their
+    // car driving off after them, so a town of pedestrians would empty its own
+    // drives and fill its streets with cars going nowhere.
+    if (
+      c.parkedCar &&
+      c.parkedCar.at === fromId &&
+      c.parkedCar.at !== c.home &&
+      trip.carTrip !== c.parkedCar.tripId
+    ) {
+      sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
     }
     // A walking leg becomes an ACTUAL PERSON on the pavement whenever a footway
     // route joins the two ends. The whole trip for a walk; the approach to the
@@ -1058,6 +1311,20 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       const target = trip.mode === "walk" ? toId : (trip.station ?? "");
       if (target) trip.walkTrip = walking.request(fromId, target);
     }
+  }
+
+  // Let a car go without its owner in it. Not a cosmetic tidy-up: a bay held by
+  // a citizen who is never coming back is a space nobody can ever use again, and
+  // one per lost commuter drains a car park over a run.
+  function sendCarAway(c: Citizen, toTile: string | null): void {
+    const mine = c.parkedCar;
+    if (!mine) return;
+    c.parkedCar = null;
+    if (!driving) return;
+    if (toTile && driving.resume(mine.tripId, toTile)) return;
+    // Nowhere to send it, so it does not just get forgotten about — forgetting
+    // the TRIP would leave the CAR parked, holding a space for ever.
+    driving.abandon(mine.tripId);
   }
 
   function remember(c: Citizen, o: TripOutcome): void {
@@ -1087,6 +1354,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       }
       // They go home rather than vanish — an abandoned trip still ends somewhere.
       c.at = c.home;
+      // And the car they left at the other end comes home too. Without this, an
+      // abandoned journey strands a bay AND the person would ask for a second
+      // car the next morning.
+      if (c.parkedCar && c.parkedCar.at !== c.home) {
+        sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
+      }
       return;
     }
     c.at = t.to;
@@ -1129,15 +1402,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   function boardOrWait(c: Citizen): void {
     const t = c.trip;
-    if (!t || !t.station || !transit) return;
+    if (!t || !t.station || !t.toStation || !transit) return;
     if (t.onPlatform) return;
-    // The platform may be full: they keep trying, and the time counts.
-    if (transit.enqueue(t.station, 1) > 0) {
-      t.onPlatform = true;
-      const q = shadowQueue.get(t.station) ?? [];
-      q.push(c.id);
-      shadowQueue.set(t.station, q);
-    }
+    // The platform may be full: they keep trying, and the time counts. They join
+    // it under their OWN id, which is how the dwell events later say that THIS
+    // person boarded and THIS person got off here.
+    if (transit.enqueue(t.station, t.toStation, c.id)) t.onPlatform = true;
   }
 
   function advanceTrip(c: Citizen, dt: number): void {
@@ -1150,10 +1420,35 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         // and a closed level crossing are now paid for in this person's journey
         // time, and therefore in their mood.
         if (t.carTrip) {
+          const carTrip = t.carTrip;
           t.carSec += dt;
-          if (driving?.status(t.carTrip) === "arrived") {
-            driving.release(t.carTrip);
+          const status = driving?.status(carTrip);
+          // THE CAR FOUND A SPACE. The driving leg is over, but the journey is
+          // not: they are in a bay, not at their desk. Where the bay is decides
+          // what happens next, and that is the whole point of modelling it —
+          // the space at the gate costs a few seconds, the one two streets away
+          // costs a walk the driver never budgeted for.
+          if (status === "parked") {
+            const tileId = driving?.parkedAt(carTrip) ?? null;
+
+            c.parkedCar = tileId ? { tripId: carTrip, at: t.to, tileId } : null;
             t.carTrip = null;
+            t.leg = "parking";
+            t.legRemaining = walkFromBaySec(tileId, t.to);
+            return;
+          }
+          if (status === "arrived") {
+            driving?.release(carTrip);
+            t.carTrip = null;
+            // No bay was to be had anywhere near, so the car was retired at the
+            // address — the driver "found something down the road". They still
+            // pay for the hunt, because that is what circling a full street IS,
+            // and it is the number a player can act on by building a car park.
+            if (t.mode === "car" && driving?.wantedSpace(carTrip)) {
+              t.leg = "parking";
+              t.legRemaining = tuning.parkSearchSec;
+              return;
+            }
             arriveFromDrive(c, t);
             return;
           }
@@ -1195,6 +1490,15 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         boardOrWait(c);
         return;
       }
+      case "parking": {
+        // The last stretch on foot, from the space to the door — or the time
+        // spent hunting for one that was never there. Either way it is the
+        // journey, so it lands on the same stopwatch the citizen is judged by,
+        // and a player who builds a car park at the gate can watch it shrink.
+        t.legRemaining -= dt;
+        if (t.legRemaining <= 0) arriveFromDrive(c, t);
+        return;
+      }
       case "waiting": {
         t.waitedSec += dt;
         boardOrWait(c);
@@ -1214,6 +1518,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
   }
 
+  // From the bay to the door, in seconds. Measured from where the car ACTUALLY
+  // stopped, which is the number the whole feature turns on: the space at the
+  // gate is a few seconds and the one two streets away is most of a minute, and
+  // nothing else in the model can tell the player those apart.
+  //
+  // The half-tile floor is the walk across the forecourt. A bay on the
+  // workplace's own street is zero tiles away by coordinate and is still not
+  // inside the building.
+  function walkFromBaySec(tileId: string | null, toPlotId: string): number {
+    if (!tileId) return tuning.parkPenaltySec;
+    const bay = parseCoordId(tileId);
+    const dest = parseCoordId(toPlotId);
+    const tiles = Math.max(0.5, manhattan(bay, dest));
+    return tiles / tuning.walkSpeed;
+  }
+
   // The driving leg is over. For a car trip that IS the journey; for park & ride
   // the car has been left at the station and the platform is next.
   function arriveFromDrive(c: Citizen, t: Trip): void {
@@ -1226,14 +1546,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     boardOrWait(c);
   }
 
+  // Giving up on a wait. The person stops counting themselves as waiting; the
+  // entry they left in the rail sim's queue becomes anonymous demand from here
+  // on, which the platform cap still bounds. (There is no shadow queue to prune
+  // any more — that WAS the second ledger.)
   function leavePlatform(c: Citizen): void {
     const t = c.trip;
     if (!t?.station) return;
-    const q = shadowQueue.get(t.station);
-    if (q) {
-      const i = q.indexOf(c.id);
-      if (i >= 0) q.splice(i, 1);
-    }
     t.onPlatform = false;
   }
 
@@ -1265,17 +1584,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         continue;
       }
       if (e.type !== "dwell") continue;
+      // WHO the rail sim just moved — its own ledger, by name. This used to be
+      // a shadow queue here plus a guess about who was carried where, and the
+      // guess kept a rider in a seat the sim had already freed.
       const aboard = riders.get(e.trainId) ?? [];
-      // Who gets off here, and who stays in their seat.
-      const staying: string[] = [];
-      for (const id of aboard) {
-        if (!alightAt(id, e.tileId)) staying.push(id);
-      }
-      // Then board from this platform, in the order people arrived on it.
-      const q = shadowQueue.get(e.tileId) ?? [];
-      const on = q.splice(0, Math.min(e.boarded, q.length));
-      shadowQueue.set(e.tileId, q);
-      for (const id of on) {
+      const off = new Set(e.alightedTags ?? []);
+      const staying = aboard.filter(id => !off.has(id));
+      for (const id of off) alightedAt(id, e.tileId);
+      for (const id of e.boardedTags ?? []) {
         const c = people.get(id);
         if (!c?.trip) continue;
         c.trip.leg = "riding";
@@ -1287,43 +1603,38 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
   }
 
-  // Off the train, or not. One question: is where I am going within walking
-  // reach of THIS station? Returns true if they got off.
+  // The rail sim set this person down here. Either it is where they were going —
+  // and the walk from the platform is the last leg — or it is an INTERCHANGE and
+  // the sim has already put them back on the platform to wait for the service
+  // that finishes the job. Both are told apart by one question: is this the
+  // station they asked for?
   //
-  // A CITIZEN STAYS IN THEIR SEAT UNTIL THEIR STATION COMES UP. The rail sim's
-  // passengers are typeless counts that ride exactly one hop and are set down at
-  // the next call (Bahnhof phase 2, D6) — that is fine for an anonymous crowd
-  // and wrong for a person who knows where they are going. Mirroring it
-  // literally was catastrophic on a shuttle: a train would take sixteen people
-  // aboard at a platform, run to the depot at the end of the line, bounce, and
-  // put all sixteen back down at the SAME platform as a "transfer" — so a
-  // perfectly good railway looked to its passengers like one that never went
-  // anywhere, and most of them gave up.
-  //
-  // The cost of this approximation is that a through-rider keeps a seat the rail
-  // sim has already freed, so the sim's own passenger count under-reads on a
-  // multi-hop journey. Boarding is still gated by the real train's real
-  // capacity, which is the part that has to be true. Destination-typed
-  // passengers in the sim itself are the proper fix — design doc §9 phase B.
-  function alightAt(citizenId: string, stationId: string): boolean {
+  // Nothing is DECIDED here any more. The sim carries a passenger to the station
+  // they named, changing trains where it has to (`sim/lineGraph.ts`), so this
+  // layer only has to record what happened. It used to guess from station
+  // geography — and its own comment admitted the cost, a through-rider holding a
+  // seat the sim had already freed.
+  function alightedAt(citizenId: string, stationId: string): void {
     const c = people.get(citizenId);
     const t = c?.trip;
-    if (!c || !t) return true; // vanished mid-ride: let go of the seat
-    const dest = plotOf(t.to);
-    if (dest && dest.stationsInReach.includes(stationId)) {
+    if (!c || !t) return; // vanished mid-ride
+    if (stationId === t.toStation) {
+      const dest = plotOf(t.to);
       t.leg = "egress";
       t.station = stationId;
-      t.legRemaining = walkToStation(dest, stationId) / tuning.walkSpeed;
-      return true;
+      t.trainId = null;
+      t.legRemaining = dest ? walkToStation(dest, stationId) / tuning.walkSpeed : 0;
+      return;
     }
-    // Not my stop. `transfers` counts stations ridden past: a rider carried past
-    // too many of them is on a train that is not going where they need.
+    // A CHANGE. They are back on a platform — the sim re-queued them itself, so
+    // they are already waiting under their own id and this layer must not queue
+    // them a second time.
     t.transfers += 1;
-    if (t.transfers > tuning.maxTransfers) {
-      finishTrip(c, false);
-      return true;
-    }
-    return false;
+    t.station = stationId;
+    t.trainId = null;
+    t.onPlatform = true;
+    t.leg = "waiting";
+    if (t.transfers > tuning.maxTransfers) finishTrip(c, false);
   }
 
   // --- the day -----------------------------------------------------------------
@@ -1337,6 +1648,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
   function considerTrips(c: Citizen): void {
     if (c.trip) return;
+    if (clock < c.stuckUntil) return;
     const hour = hourNow();
     // Home for the night, whatever else the day did. The one activity nobody's
     // routine has to declare, and the backstop that makes every `windowH` above
@@ -1632,12 +1944,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       tradesperson: 0,
       retired: 0,
     };
+    let parkedNow = 0;
+    let atHomeNow = 0;
     for (const c of people.values()) {
       population += 1;
       byStage[c.stage] += 1;
       if (c.trip) travelling += 1;
       if (c.trip?.carTrip) drivingNow += 1;
       if (c.trip?.walkTrip) walkingNow += 1;
+      if (c.parkedCar) {
+        parkedNow += 1;
+        if (c.parkedCar.at === c.home) atHomeNow += 1;
+      }
     }
     const total =
       modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
@@ -1650,6 +1968,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       travelling,
       driving: drivingNow,
       onFoot: walkingNow,
+      carsParked: parkedNow,
+      carsAtHome: atHomeNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,
@@ -1704,6 +2024,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     now: () => clock,
     day: () => dayIndex,
     hour: hourNow,
-    waitingAt: (stationId: string) => shadowQueue.get(stationId)?.length ?? 0,
+    // How many CITIZENS are waiting here. Counted from the people themselves —
+    // the rail sim's queue also holds anonymous demand, which is not a person
+    // this layer knows anything about.
+    waitingAt: (stationId: string) =>
+      [...people.values()].filter(
+        c => c.trip?.onPlatform && c.trip.station === stationId
+      ).length,
   };
 }

@@ -3,20 +3,27 @@ import { Position, type Coordinates } from "@/types";
 import { laneOffsetConstPx, seamPositioningBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 
-// A lane's vehicle class, for restrictions. v1 stores the field but does not
-// enforce it; bus-lane / vehicle-class enforcement lands in a later sub-project.
-export type LaneKind = "all" | "bus"; // extensible
+// A lane's vehicle class, for restrictions. "bus" is a bus lane (bikes admitted,
+// the usual street rule); "cycle" is a cycle lane (bikes only).
+export type LaneKind = "all" | "bus" | "cycle"; // extensible
 
-// A vehicle's lane-access class. A general road vehicle ("car": car/truck/semi)
-// may not use bus-only lanes; a "bus" may use ANY lane (car lanes AND bus lanes).
-// This is the single rule for "which lanes may this vehicle drive in", consumed by
-// every lane query below so access logic lives in one place.
-export type VehicleClass = "car" | "bus";
+// A vehicle's lane-access class. "car" is the general motor vehicle
+// (car/truck/semi), "bus" a bus, "bike" a bicycle. Access is the matrix in
+// `laneUsableBy` — the single rule for "which lanes may this vehicle drive in",
+// consumed by every lane query below so access logic lives in one place.
+export type VehicleClass = "car" | "bus" | "bike";
 
-// May a vehicle of class `cls` drive in `lane`? Buses may use any lane; everything
-// else is barred from bus-only lanes.
+// May a vehicle of class `cls` drive in `lane`? The access matrix:
+//
+//   lane kind →   all   bus   cycle
+//   car           ✓     ✗     ✗
+//   bus           ✓     ✓     ✗
+//   bike          ✓     ✓     ✓     (bikes ride bus lanes; nobody else rides theirs)
 export function laneUsableBy(lane: Lane, cls: VehicleClass): boolean {
-  return cls === "bus" || lane.kind !== "bus";
+  const kind = lane.kind ?? "all";
+  if (kind === "all") return true;
+  if (kind === "bus") return cls === "bus" || cls === "bike";
+  return cls === "bike"; // "cycle"
 }
 
 // One physical lane through a tile, directed. A car enters via `from` and may
@@ -33,9 +40,11 @@ export interface Lane {
 }
 
 // The exits a vehicle of class `cls` may take from `lane`: everyone gets `to`;
-// buses additionally get `busTo`. (Whole-lane access is laneUsableBy's job.)
+// buses — and bikes, which are admitted wherever buses are (a bus gate lets
+// cyclists through) — additionally get `busTo`. (Whole-lane access is
+// laneUsableBy's job.)
 export function laneExits(lane: Lane, cls: VehicleClass): Port[] {
-  return cls === "bus" && lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
+  return cls !== "car" && lane.busTo?.length ? [...lane.to, ...lane.busTo] : lane.to;
 }
 
 // Every exit the lane physically connects to, regardless of vehicle class. Use
@@ -142,6 +151,16 @@ export function carLaneIndices(road: Lane[] | undefined, from: Port): number[] {
 export function busLaneIndices(road: Lane[] | undefined, from: Port): number[] {
   return lanesFrom(road, from)
     .filter(l => l.kind === "bus")
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
+// The cycle-lane indices of an approach (kind === "cycle"), ascending by index.
+// A bike prefers these — the drift twin of `busLaneIndices`; empty when the
+// approach has no cycle lane.
+export function cycleLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind === "cycle")
     .map(l => l.index)
     .sort((a, b) => a - b);
 }
@@ -291,6 +310,17 @@ export function junctionExitLane(
 // real exit-arm lane across the junction tile instead of holding the approach
 // offset and snapping at the boundary (a turn onto a narrower arm used to end
 // outside its only lane). Pure: the renderer supplies both roads + the exit band.
+//
+// `entryLane` is CONTINUOUS — a vehicle mid-lane-change sits at 0.49 — so the
+// offset must be continuous in it too. `junctionExitLane` is a map between lane
+// INDICES and can only answer for whole lanes, so this interpolates between the
+// answers for the two lanes the vehicle is straddling. Rounding to the nearer one
+// (what this did) makes the target a STEP function: a car still changing lanes as
+// it reached a bend flipped its whole exit offset the tick its fractional lane
+// crossed .5, and the drawn point snapped sideways by `t · laneWidth` — up to a
+// third of a lane in one tick, mid-curve, with nothing in the sim having moved
+// (`laneContinuity.spec.ts`, roadcurvetraffic-long). At an integer `entryLane`
+// this is exactly the old value, so nothing that was already continuous moves.
 export function junctionExitOffsetPx(
   junctionRoad: Lane[] | undefined,
   entryPort: Port,
@@ -302,16 +332,17 @@ export function junctionExitOffsetPx(
   tileSize: number,
   cls: VehicleClass,
 ): number {
-  const target = junctionExitLane(
-    junctionRoad,
-    entryPort,
-    Math.round(entryLane),
-    exitPort,
-    exitRoad,
-    exitApproach,
-    cls,
-  );
-  return laneOffsetConstPx(target, exitBand, tileSize);
+  const offsetForLane = (lane: number) =>
+    laneOffsetConstPx(
+      junctionExitLane(junctionRoad, entryPort, lane, exitPort, exitRoad, exitApproach, cls),
+      exitBand,
+      tileSize,
+    );
+  const lo = Math.floor(entryLane);
+  const hi = Math.ceil(entryLane);
+  const offLo = offsetForLane(lo);
+  if (hi === lo) return offLo;
+  return offLo + (offsetForLane(hi) - offLo) * (entryLane - lo);
 }
 
 // Does a class-`cls` vehicle in approach lane `entryLane` LAND on a bus lane on the

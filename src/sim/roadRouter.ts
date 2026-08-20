@@ -73,8 +73,9 @@ export function planRoute(
   const targets = allEntries.filter(
     e =>
       !(getCoordinatesId(e.coord) === spawnId && e.entryPort === spawnEntry) &&
-      // A bus-only street's open end is a destination only buses may take.
-      (cls === "bus" || !e.busOnly),
+      // A bus-only street's open end is a destination only buses (and bikes,
+      // which bus gates admit) may take.
+      (cls !== "car" || !e.busOnly),
   );
   if (targets.length === 0) return { turns: [], destination: null };
 

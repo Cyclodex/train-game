@@ -250,9 +250,11 @@ class TestStage extends Vue {
 
   // A scenario can name a mode (e.g. Time Attack for its scheduled spawner);
   // otherwise demos run in free-play Sandbox.
-  private mode = this.scenario.modeId
-    ? modeById(this.scenario.modeId)
-    : sandboxMode;
+  private mode = this.scenario.mode
+    ? this.scenario.mode
+    : this.scenario.modeId
+      ? modeById(this.scenario.modeId)
+      : sandboxMode;
 
   @Provide("game") game: Game = markRaw(
     createGame(
@@ -766,6 +768,23 @@ export default toNative(TestStage);
     rgba(30, 44, 60, 0.55) 7px,
     rgba(30, 44, 60, 0.55) 10px
   );
+}
+// A bicycle: a slim capsule less than half a car long; the glass span is the
+// RIDER — a dark head-dot over the livery (the jersey). Mirrors PlayView.
+.road-car--bike {
+  height: 8px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.road-car--bike .road-car-glass {
+  top: 50%;
+  bottom: auto;
+  left: 42%;
+  width: 6px;
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: rgba(28, 24, 20, 0.85);
 }
 .event-log {
   width: 320px;

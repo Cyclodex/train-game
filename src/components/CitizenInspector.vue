@@ -92,7 +92,9 @@
       <table class="inspector__modes">
         <tr v-for="m in modes" :key="m.mode" :class="{ 'is-chosen': m.chosen, 'is-off': !!m.why }">
           <td class="inspector__mode">{{ icon(m.mode) }} {{ label(m.mode) }}</td>
-          <td class="inspector__time">{{ m.why ? "—" : m.label }}</td>
+          <td class="inspector__time" :title="m.why ? '' : `${m.boardLabel} on the board`">
+            {{ m.why ? "—" : m.label }}
+          </td>
           <td class="inspector__note">
             <template v-if="m.why">{{ m.why }}</template>
             <template v-else-if="m.chosen">chosen</template>
@@ -105,8 +107,9 @@
         <b>access</b> score takes it.
       </p>
       <p class="inspector__foot">
-        Times are seconds on the board. They pick the one that <i>feels</i>
-        shortest — a long walk drags, and how much depends on the person.
+        Journey times are on the town's own clock, the same one at the top of
+        the card. They pick the one that <i>feels</i> shortest — a long walk
+        drags, and how much depends on the person.
       </p>
       <button v-if="plot" class="inspector__back" @click="personId = null">‹ back to {{ plot.id }}</button>
     </template>
@@ -115,7 +118,7 @@
 
 <script lang="ts">
 import { Component, Inject, Prop, Vue, Watch, toNative } from "vue-facing-decorator";
-import { Game, ModeCompare, PersonCard, PlotCard, durationLabel } from "@/game";
+import { Game, ModeCompare, PersonCard, PlotCard } from "@/game";
 import { TravelMode } from "@/sim/citizens";
 
 // THE INSPECTOR — click a house, click a person, see their day and the choice
@@ -210,16 +213,20 @@ class CitizenInspector extends Vue {
   icon(m: TravelMode): string {
     return MODE_ICON[m];
   }
+  // The game binds its own day length, so the panel never has to know it.
   dur(sec: number): string {
-    return durationLabel(sec);
+    return this.game.durationLabel(sec);
   }
 
   // How much this person's habits stretch or shrink the honest estimate. Shown
   // only when it actually differs — an identical number twice reads as a bug.
   feels(m: ModeCompare): string | null {
     if (m.seconds === null || m.perceivedSeconds === null) return null;
-    if (Math.abs(m.perceivedSeconds - m.seconds) < 1) return null;
-    return durationLabel(m.perceivedSeconds);
+    // Only when it differs by enough to PRINT differently — the same string
+    // twice reads as a bug.
+    if (this.game.durationLabel(m.perceivedSeconds) === this.game.durationLabel(m.seconds))
+      return null;
+    return this.game.durationLabel(m.perceivedSeconds);
   }
 
   moodFace(mood: number): string {

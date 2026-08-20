@@ -240,12 +240,187 @@ was decoration.
   colour piling up.
 - Authoring consequence: a ONE-station board has no journeys on it.
 
-Not modelled: TRANSFERS. A passenger only ever travels on a direct service, so
-two lines that meet do not yet hand passengers over. That is the next real
-step for this thread.
+Not modelled: TRANSFERS — see phase 9.
 
 Still open beyond that: buses as passenger CARRIERS rather than feeders,
 buses as carriers rather than feeders, and rising demand over time.
+
+### Phase 9 — CHANGING TRAINS — **SHIPPED 2026-08-03**
+
+**The problem, stated sharply.** Phase 8 boards a passenger only when the
+train's line calls at their FINAL destination (`serves.has(dest)` in
+`simulation.ts`). On a network of two lines meeting at an interchange, someone
+whose destination is served only by line B, standing at a line-A station, never
+boards ANY train. They sit until the platform cap and count against you. So the
+game today makes a two-line network strictly worse than one enormous line — the
+exact opposite of what a Transport-Fever-like mode should reward. Transfers are
+not a nicety on top of phase 8; they are the bug phase 8 created.
+
+The citizen layer (merged from #69) has the same hole from the other side, and
+its own comment says so: `alightAt` in `sim/citizens.ts` keeps a rider in their
+seat until a station within walking reach of their destination comes up, because
+mirroring the sim's one-hop rule "was catastrophic on a shuttle". It therefore
+runs a `shadowQueue` beside the sim's real queue and knowingly under-reads the
+sim's passenger count on a multi-hop journey. Both layers are working around the
+same missing concept.
+
+**The concept: a LINE GRAPH, separate from the track graph.** `railRouter.ts`
+answers "can a train physically get there". The new question is "can a
+PASSENGER get there on the services that exist" — nodes are stations, and two
+stations are adjacent when some line calls at both. Shortest path over that
+graph gives the change points.
+
+**D7 — decide the hop at BOARDING time, never store a plan.** A rider carries
+`{ final, off }` where `off` is chosen when they step aboard: the station on
+THIS train's line from which their `final` is still reachable, closest to it.
+Nothing is cached on a waiting passenger, so a player who redraws a line
+mid-journey cannot strand anyone holding a stale plan — the next dwell simply
+re-decides. The line graph itself is memoised behind a version counter bumped by
+`setLine`; lines change only on a player action, so this is nearly free.
+
+**D8 — a transfer is a re-queue, and it never fails.** At `off`, a rider with
+`off !== final` goes back onto that platform's queue with their unchanged
+`final`. Transfers BYPASS the platform cap: a passenger already travelling must
+never be deleted mid-journey by a queue that happens to be full — that would be
+an invisible loss the player cannot even see happen. They go to the FRONT of the
+queue (they have already waited once).
+
+**D9 — delivered counts once, at `final`.** `passengersDeliveredTotal` currently
+counts everyone who steps off. With transfers that would score the same person
+two or three times and quietly inflate every objective. Only `off === final`
+is a delivery; a transfer is its own event, so the HUD can show "changing" as
+distinct from "arrived".
+
+**D10 — NOBODY GOES TO A STATION THAT CANNOT TAKE THEM.** A passenger is only
+created for a destination the line graph actually serves (directly or by
+changing). Phase 8 spawned over TRACK-reachable stations, which put people on a
+platform for a journey no service could make; they then stood there for ever,
+coloured the crowd and drove the overcrowd predicate. That is not how a person
+behaves. You check whether a connection exists, and if it does not you drive,
+you walk, or you stay at home — you do not walk to the platform and wait for a
+train that was never going to come.
+
+The consequence is that the platform crowd becomes an HONEST signal. Under
+phase 8 a growing queue mixed two completely different failures: "your service
+is too infrequent" (fair, fixable by adding a train) and "there is no service
+at all" (unfixable by anything the queue itself suggests). After D10 a crowd
+can only ever mean the first. Trap (3) below — the interchange locking itself
+against the queue cap — largely dissolves with it.
+
+Unmet demand does not vanish, it MOVES OFF the platform. It belongs where the
+person is, not where they never went: the citizen layer already has exactly
+this and it is the better instrument — `chooseMode` falls back to car or walk,
+or refuses the trip outright, which costs mood and feeds the city's `access`
+topic (`tripsRefused`, `FAILURE_WEIGHT`). A town that wants a railway tells you
+by being unhappy about its commute, not by piling figures onto a platform you
+never connected.
+
+On a NETWORK-mode board without the citizen layer there are no moods to read,
+so a latent-demand readout (a station badge, or the town card: "N people would
+travel to Weststadt") is the substitute — a HUD job, never a queue job, and it
+must not feed the fail predicate. But it is a convenience, not the design: the
+signal this mode is built on is an unhappy town, not a pile of figures you must
+clear. Passengers accumulating on a platform until you serve them is MINI
+METRO's loop, and it is explicitly not the one we are building.
+
+**D11 — A LINE EXISTS WITHOUT A TRAIN ON IT.** This is what D10 actually
+demands, and the code cannot express it today. `setLine(trainId, stops)` hangs
+the stops off a TRAIN: no train, no line. So "I have planned a service here"
+and "a vehicle is currently running it" are the same fact, and they must not be.
+
+The rule is: a person goes to the station because a LINE connects them to where
+they are going. Whether a train is on that line right now, whether it is one
+train an hour or six, is the PLAYER'S problem — and the queue that grows while
+they under-serve it is the honest complaint from D10's first category. That is
+TF2's arrangement: you draw a line, then you assign vehicles to it, and an
+under-served line is a visible, fixable failure rather than an invisible one.
+
+So the line becomes a first-class object — `{ id, name, stops[] }` in the sim,
+with trains ASSIGNED to it (many trains, one line; a train on no line is the
+classic lineless service, unchanged). The line graph is then built from LINES,
+not from the trains that happen to exist, which is also what makes it stable:
+retiring the last train off a line must not delete the line and strand everyone
+who planned around it.
+
+Consequences to expect: the service panel grows a line list beside its train
+list (create/name/edit a line, then assign); `stationLines` derives from lines
+rather than from `trainLines`; the line overlay draws a LINE, so it no longer
+needs a train selected to show one.
+
+**Slices** (each its own PR, each headless-testable):
+
+- **9A — the line becomes a thing (D11).** `{ id, name, stops[] }` in the sim,
+  trains assigned to it rather than owning it. `setLine(trainId, stops)` becomes
+  create-line + assign-train; `stationLines` derives from lines; retiring the
+  last train off a line leaves the line standing. The service panel grows a line
+  list beside its train list. Nothing about routing changes yet — this slice is
+  purely "a plan can outlive the vehicle running it", and every existing test
+  should survive it.
+- **9B — the line graph** (`src/sim/lineGraph.ts`, pure). Built from the LINES;
+  `nextHopFor(at, final, line)` → the station to get off at, or null when this
+  line does not help. Unit spec: direct service prefers no change; a two-line
+  network routes via the interchange; a disconnected destination returns null
+  rather than a wrong hop.
+- **9C — the sim uses it.** Manifest entries become `{ final, off }`; boarding
+  asks the line graph instead of `serves.has(dest)`; alighting re-queues on a
+  transfer; delivered counts only at `final`. A lineless train keeps its exact
+  one-hop behaviour, so every classic board stays byte-identical.
+- **9D — spawn behind the line graph (D10).** `addStationPassengers` draws its
+  destination round-robin over stations a LINE serves, not track-reachable ones,
+  and queues nobody when nothing is served — it already returns what it actually
+  queued, so both callers handle 0 today. Note what D11 buys here: demand
+  appears the moment the line is DRAWN, before any train is bought, which is the
+  order a player actually works in. Watch the round-robin cursor: it must stay
+  deterministic as the served set changes under it, or a run stops being
+  replayable.
+- **9E — the test world.** A `transfer` scenario: two lines, one interchange,
+  a passenger who cannot arrive without changing. Plus the three regressions
+  that matter — ONE line through everything produces no transfer at all; NO line
+  produces no waiting passenger at all; and a line with no train assigned still
+  gathers a queue (the under-served case, which must look like a complaint and
+  not like a bug).
+- **9F — the citizen handover.** Queue entries gain an opaque tag; the dwell
+  event carries boarded/alighted TAGS, not just counts. `transit.enqueue` takes
+  the citizen's real destination station (`nearestStation(to)` — already
+  computed in `optionsFor`), and `optionsFor` only offers transit when a line
+  connects the two ends, so an unconnected citizen falls back to car/walk or
+  refuses — D10, arriving where it belongs. Then `shadowQueue`, the seat a
+  through-rider holds after the sim freed it, and the `maxTransfers` guess all
+  go away, and the two layers keep ONE ledger.
+- **9G — the HUD.** Show a changing passenger as changing; the line list from
+  9A; and on a citizen-less board the latent-demand readout. Read-only, never
+  in the fail predicate.
+
+**What shipped, and what it cost.** All seven slices. Three things were learned
+the hard way and are worth carrying forward:
+
+- **A lineless train had to change too.** The plan said classic boards would be
+  byte-identical, with the one-hop rule kept for a train with no line. That was
+  wrong, and the citizen layer proved it: a stopper that dumps its whole load at
+  the next call leaves a person on a platform the sim never re-queued them on.
+  A stopper calls everywhere it passes, so it can carry someone to the station
+  they named — and now does. Only a RETIRING train dumps.
+- **D10 has a balance cost the plan did not price.** With transit refused rather
+  than attempted-and-abandoned, a failed commute became a free afternoon and the
+  citizens mode stopped hollowing out its towns. A refusal now feeds the
+  journey's own topic and costs part of the day. On `threecities` only the town
+  genuinely beyond walking range dies; the near one walks and merely suffers.
+  That is the honest model — what used to kill both was the artefact.
+- **The platform pair has to be chosen by connectivity.** "Nearest station to
+  home, nearest to work" is a journey nobody can make when a town sits between
+  two railways that never meet.
+
+**Traps to expect.** (1) A cycle in the line graph must not become an infinite
+transfer loop — the hop must strictly decrease distance-to-destination, or a
+rider can be handed round a triangle for ever. (2) Re-queueing at the front is
+invisible in a count-only queue, so 9F's tags are what make it observable. (3)
+`STATION_QUEUE_HARD_CAP` counts a transferring rider once they are on the
+platform, so a busy interchange can lock itself; the cap needs to be a spawn
+gate, not a queue-length invariant. (4) D10 changes the BALANCE of every
+network board: passengers now appear only once a line exists, so the phase-3
+demand rates and the mode's passenger targets were tuned against a world that
+no longer happens. Re-check `tests/unit/modes/network.spec.ts`'s balance
+regression rather than assuming it still holds.
 
 #### The original sketch (for reference)
 

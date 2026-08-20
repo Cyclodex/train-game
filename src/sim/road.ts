@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing, parseCoordId } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, cycleLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -22,7 +22,7 @@ import {
   type ParkingRegistry,
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
-import { manoeuvreAt, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
+import { manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -43,17 +43,21 @@ export { isRoadJunction } from "@/tiles/lanes";
 // loco + wagon). Everything downstream (following distance, lane occupancy,
 // rendering) is derived from the spec, so adding a kind is a one-row change.
 
-export type VehicleKind = "car" | "truck" | "semi" | "bus";
+export type VehicleKind = "car" | "truck" | "semi" | "bus" | "bike";
 
 export interface VehicleSegment {
   length: number; // rendered box length, in tiles
-  part: "car" | "truck" | "cab" | "trailer" | "bus"; // render style hint for the view
+  part: "car" | "truck" | "cab" | "trailer" | "bus" | "bike"; // render style hint for the view
 }
 
 // The lane-access class of a vehicle kind: a bus may use bus lanes (and prefers
-// them); every other kind is a general "car" confined to non-bus lanes.
+// them); a bike may use bus AND cycle lanes (and prefers cycle lanes); every
+// other kind is a general "car" confined to unrestricted lanes. The matrix
+// itself lives in `laneUsableBy` (tiles/lanes.ts).
 export function vehicleClassOf(kind: VehicleKind): VehicleClass {
-  return kind === "bus" ? "bus" : "car";
+  if (kind === "bus") return "bus";
+  if (kind === "bike") return "bike";
+  return "car";
 }
 
 export interface VehicleSpec {
@@ -70,6 +74,24 @@ const SEMI_GAP = 0.12;
 // reads as a passenger coach rather than a cargo hauler (the renderer's `bus`
 // part then paints a long side window-band so it looks distinct from a truck).
 const BUS_LEN = 1.45;
+// A bicycle is a sliver of a vehicle — under half a car's length. Its width is
+// the renderer's business (an 8px capsule); the sim keeps one shared lane-band
+// width for every kind, so a bike occupies its lane like anything else and a
+// car queues behind it rather than squeezing past. (Same-lane passing needs
+// per-vehicle width AND borrowing the oncoming lane — the deferred §3b work.)
+const BIKE_LEN = 0.45;
+
+// Per-kind cruise-speed factor over the sim's carSpeed. The bike is the first
+// genuinely slow kind: under half car pace, which is what makes a car queue
+// behind it on a single-lane road — and what trips the speed-differential
+// overtake trigger the moment a second lane exists. Every motor kind keeps the
+// shared band (per-kind truck/bus pacing would slot in here too).
+const KIND_SPEED: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.45 };
+// A bike also pulls away and brakes more gently than a motor vehicle. The
+// softer brake feeds vSafe = sqrt(2·brake·clear), so a bike naturally keeps a
+// slightly longer headway for its speed.
+const KIND_ACCEL: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.55 };
+const KIND_BRAKE: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.8 };
 
 export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
   switch (kind) {
@@ -77,6 +99,8 @@ export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
       return { segments: [{ length: base * TRUCK_LEN, part: "truck" }], gap: 0 };
     case "bus":
       return { segments: [{ length: base * BUS_LEN, part: "bus" }], gap: 0 };
+    case "bike":
+      return { segments: [{ length: base * BIKE_LEN, part: "bike" }], gap: 0 };
     case "semi":
       return {
         segments: [
@@ -99,7 +123,7 @@ export function specLength(spec: VehicleSpec): number {
 
 // Relative spawn weights per kind. Omitted/zero kinds never spawn; `{ car: 1 }`
 // (the default) reproduces the original all-cars behaviour.
-export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number };
+export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number; bike?: number };
 
 // Per-level road-traffic settings: how busy the roads are and what mix of
 // vehicles drives them. All optional; each overlays the sim's defaults.
@@ -418,10 +442,35 @@ export interface Car {
   // off the edge of the world; a requested car is somebody going somewhere, and
   // it stops when it gets there. Null for ambient traffic — which is every car
   // that existed before the citizen layer.
-  tripGoal: { tileId: string; entryPort: Port } | null;
+  // `entryPort: null` means ANY approach counts as having arrived. A trip that
+  // ends at a car park does not know which way round the block the driver will
+  // come back to the address on, and after giving up on a space the route home
+  // is planned fresh — pinning the port the outbound BFS happened to choose
+  // would leave the car circling an address it is standing on.
+  tripGoal: { tileId: string; entryPort: Port | null } | null;
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
+  // HOW FAR from `tripGoal` this car will look for a space when it NEXT plans a
+  // route, or null for a car that is simply driving to an address.
+  //
+  // It exists because the drive home is a parking trip too, and it cannot be
+  // planned when it is asked for. `requestTrip` plans from a standing start, but
+  // the evening leg begins with the car already in a bay outside the office: the
+  // route out of that bay is built later, by `resumeFromStall`, from wherever
+  // the car actually is. So the WISH is recorded here at release time and
+  // honoured then. Without it the owner drove home and their car evaporated at
+  // the kerb — the one leg of the day that still deleted the vehicle, and the
+  // reason the drives stood empty all night while the works' bays filled.
+  parkWish: number | null;
+  // THE DRIVER'S ADDRESS — a home plot's coordinate id — for a car that may use
+  // that household's own drive. Null for every other car on the board, which is
+  // most of them: ambient traffic, deliveries, and anybody's commute TO work.
+  //
+  // It is carried on the car rather than looked up per claim because the claim
+  // happens tiles and seconds away from the dispatch that granted it, and the
+  // registry has no idea who is driving.
+  parkPermit: string | null;
   // The stall the car has claimed. Claiming IS the reservation — set the moment
   // the car reaches a tile with a free bay, cleared once it is fully back on the
   // road — so two cars can never aim for the same space.
@@ -656,10 +705,37 @@ export interface RoadSimConfig {
   dwell?: { min: number; max: number };
 }
 
-// A journey requested from outside: still going, or finished. There is no
-// "failed" — a car that could not be dispatched never produced a trip id at all
-// (`requestTrip` returns null), and one that got lost still ends up somewhere.
-export type TripStatus = "driving" | "arrived";
+// A journey requested from outside. There is no "failed" — a car that could not
+// be dispatched never produced a trip id at all (`requestTrip` returns null),
+// and one that got lost still ends up somewhere.
+//
+// "parked" is the state a COMMUTER'S car spends the working day in: the driving
+// leg is over, the vehicle is standing in a real bay holding it against everyone
+// else, and the trip is not finished — its owner will come back for it. It ends
+// when the caller says so (`releaseTrip`), not when a dwell timer runs out.
+export type TripStatus = "driving" | "parked" | "arrived";
+
+// How a requested trip ENDS.
+export interface TripRequest {
+  kind?: VehicleKind;
+  // Park at the far end instead of evaporating at the address. The car aims at
+  // the nearest car park with a free bay (`parkSearchTiles` of the destination),
+  // takes a real space and holds it until `releaseTrip`.
+  //
+  // When nothing open is within reach the trip falls back to driving to the
+  // address itself and retiring there — the driver "found something down the
+  // road". Canon: a saturated network must SLOW people, never strand them, and
+  // the caller can see which happened (`tripParkedAt`) and charge for it.
+  park?: boolean;
+  // How far from the destination a bay may be and still be worth taking, in
+  // tiles. Default PARK_SEARCH_TILES.
+  parkSearchTiles?: number;
+  // The driver's ADDRESS — a home plot's coordinate id — which unlocks that
+  // household's own drive and nothing else (`tiles/parking.ts` → `ParkingRow
+  // .resident`). Somebody driving home carries it; the same person driving to
+  // work does not, because their drive is not at work.
+  permit?: string;
+}
 
 export interface RoadSim {
   step(dt: number, closed: CrossingClosed): void;
@@ -668,10 +744,36 @@ export interface RoadSim {
   // when no car could be dispatched — no road, no route, the street outside
   // blocked, or the requested-trip cap reached. The car is ordinary traffic in
   // every other respect: same lanes, same junctions, same queues.
-  requestTrip(fromTileId: string, toTileId: string, kind?: VehicleKind): string | null;
+  requestTrip(
+    fromTileId: string,
+    toTileId: string,
+    kind?: VehicleKind,
+    req?: TripRequest,
+  ): string | null;
   // Is that journey still going? Unknown ids read "arrived" so a caller can
   // never wait for ever on a trip that no longer exists.
   tripStatus(tripId: string): TripStatus;
+  // Did this trip set off LOOKING for a space, on a board that has spaces? The
+  // difference between "there was nowhere to park" — which is a thing the player
+  // can fix — and "nobody parks on this board", which is not a complaint.
+  tripWantedSpace(tripId: string): boolean;
+  // The tile a parked trip's car is standing on, or null if it is not parked.
+  // This is how far the driver has to WALK, and charging that walk is the whole
+  // reason a car park two streets away is worse than the space at the gate.
+  tripParkedAt(tripId: string): string | null;
+  // The owner is back. The car gives up its bay — waiting in it, with no road
+  // body and no right of way, until the traffic genuinely leaves a gap — and
+  // then drives to `toTileId`, where the trip finally reads "arrived".
+  //
+  // False when there is no such parked trip (already gone, never parked); the
+  // caller then falls back to its own clock, exactly as when a dispatch fails.
+  //
+  // `req` makes the return leg a PARKING trip in its own right — the evening
+  // commute, which ends on the driver's own drive rather than at the kerb.
+  releaseTrip(tripId: string, toTileId: string, req?: TripRequest): boolean;
+  // Take the car off the board, wherever it is. For a caller that has lost the
+  // owner: a bay held by nobody is a bay nobody can ever use again.
+  abandonTrip(tripId: string): void;
   // Forget a finished trip (the caller has read the result).
   clearFinishedTrip(tripId: string): void;
   // The crossing-flow snapshot for the objective layer (see RoadFrame).
@@ -1084,7 +1186,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // stay deterministic. Kinds with no/zero weight never appear; an empty mix
   // falls back to a car.
   function pickKind(): VehicleKind {
-    const weighted = (["car", "truck", "semi", "bus"] as VehicleKind[])
+    // "bike" carries no default weight, so every board seeded before bikes
+    // existed draws the identical kind sequence — bikes appear only where a
+    // level's mix opts in.
+    const weighted = (["car", "truck", "semi", "bus", "bike"] as VehicleKind[])
       .map(k => [k, Math.max(0, mix[k] ?? 0)] as const)
       .filter(([, w]) => w > 0);
     const total = weighted.reduce((s, [, w]) => s + w, 0);
@@ -1367,12 +1472,20 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
         // turn from a bus lane too, so this can include one; a car never can.
         const allow = lanesAllowingExitFor(jTile.road, ahead.entry, myExit, cls);
         if (allow.length > 0) {
-          // A bus prefers a bus lane among the permitted lanes; otherwise pick the
-          // nearest permitted lane to where we already are.
+          // A bus prefers a bus lane — and a bike a cycle lane — among the
+          // permitted lanes; otherwise pick by turn discipline below.
           const busAllowed = allow.filter(l =>
             busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
-          const pool = cls === "bus" && busAllowed.length > 0 ? busAllowed : allow;
+          const cycleAllowed = allow.filter(l =>
+            cycleLaneIndices(jTile.road, ahead.entry).includes(l),
+          );
+          const pool =
+            cls === "bus" && busAllowed.length > 0
+              ? busAllowed
+              : cls === "bike" && cycleAllowed.length > 0
+                ? cycleAllowed
+                : allow;
           // Turn-direction lane discipline: among the permitted lanes, a LEFT turn
           // takes the innermost (highest index), a RIGHT turn or STRAIGHT takes the
           // kerb-most (lowest index, keep-right). This holds whether the junction has
@@ -1384,10 +1497,27 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           // where the bus lane can't feed the move has no bus lane in `pool`, so it is
           // not dragged back onto the bus lane and never oscillates.
           const kind = turnKind(ahead.entry, myExit);
-          const pick = kind === "left" ? Math.max(...pool) : Math.min(...pool);
+          // A bike is exempt from the left-turn "innermost" rule: it takes the
+          // OUTERMOST lane that permits the move, whatever the turn. Only when
+          // the turn is served solely by inner lanes (a dedicated left pocket)
+          // does `pool` force it inward — it has to get there to follow its route.
+          const pick =
+            cls === "bike" || kind !== "left" ? Math.min(...pool) : Math.max(...pool);
           return clampLane(pick, curCount);
         }
       }
+    }
+
+    // A bike NEVER rides an inner lane on the open road: no exit-lane settle, no
+    // keep-right delay. It heads straight for the kerb-most cycle lane if the
+    // approach has one, else the kerb-most lane it may use (which includes a bus
+    // lane). Branch (F) above still wins on a junction approach — there the pick
+    // is the outermost lane that permits the turn.
+    if (cls === "bike") {
+      const own = cycleLaneIndices(tile?.road, head.entryPort);
+      const target =
+        own.length > 0 ? Math.min(...own) : kerbMostLane(tile?.road, head.entryPort, cls);
+      return clampLane(target, curCount);
     }
 
     // Settle into the exit lane matched at the last junction crossing (turn-aware,
@@ -1402,11 +1532,11 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // ease to the nearest bus lane (an empty list — no bus lane here — leaves it
     // in place). This is what makes a bus drift onto and ride the bus lane.
     if (cls === "bus") {
-      const busLanes = busLaneIndices(tile?.road, head.entryPort);
-      if (busLanes.length > 0) {
-        const nearest = busLanes.reduce(
+      const ownLanes = busLaneIndices(tile?.road, head.entryPort);
+      if (ownLanes.length > 0) {
+        const nearest = ownLanes.reduce(
           (b, l) => (Math.abs(l - cur) < Math.abs(b - cur) ? l : b),
-          busLanes[0],
+          ownLanes[0],
         );
         return clampLane(nearest, curCount);
       }
@@ -3000,6 +3130,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkWish: null,
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3028,11 +3160,54 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // Live requested trips: car id → whether it is still going. An entry survives
   // the car's despawn so the caller can ask "did they get there?" on a later
   // tick; it is dropped once read as finished.
-  const trips = new Map<string, "driving" | "arrived">();
+  // Live requested trips. `wantedSpace` records that the caller asked for a bay
+  // AND this board has bays to offer — which is what lets a caller tell "there
+  // was nowhere to park" apart from "nobody parks on this board", and charge for
+  // only the first. Without it, every board that has no parking at all would
+  // start punishing its drivers for failing to use parking that does not exist.
+  const trips = new Map<
+    string,
+    { status: TripStatus; wantedSpace: boolean; releasedFrom: string | null }
+  >();
 
+  // How far from the destination a commuter will take a space. Six tiles is
+  // already a long walk in this world (`walkMaxTiles` on the citizens mode is
+  // FOUR for a whole journey), so anything beyond it is not "parking at work",
+  // it is a different trip.
+  const PARK_SEARCH_TILES = 6;
+
+  // How long a car HOLDS a bay for its owner, when nobody ever comes back for
+  // it. Not Infinity, deliberately: a citizen who emigrates, or a caller that
+  // simply forgets, would otherwise strand a space for the rest of the run and
+  // the car park would drain one bay per lost commuter. An hour of board time is
+  // far longer than any working day the mode runs and short enough to self-heal.
+  const HELD_DWELL_SEC = 3600;
+
+  // Requested cars that are TRAFFIC — everything except the ones standing in a
+  // bay. The cap bounds how many named journeys may be under way at once, and a
+  // parked car is not a journey under way: it is not routed, not followed and
+  // not in anybody's lane.
+  //
+  // Counting parked cars too was right while only COMMUTERS parked: their cars
+  // stood in a bay for the working day and were gone by evening, so the cap
+  // still turned over. It stopped being right the moment the car came home to
+  // its own drive as well (`ParkingRow.resident`), because then a car owner's
+  // vehicle is on the board for good — parked at work by day, parked at home by
+  // night — and every slot would be taken by the first sixty drivers, after
+  // which nobody else on the map could ever be dispatched a car again. The
+  // fleet would ossify around whoever happened to commute first.
+  //
+  // Nothing is unbounded as a result, and the reason is physical rather than
+  // arithmetic: a car only counts as parked while it HOLDS A REAL STALL
+  // (`settleRequestedTrips` sets the status from `phase === "parked" && stall`),
+  // so parked cars are bounded by the number of spaces the board actually has.
+  // A caller that forgets one is covered separately, by `HELD_DWELL_SEC`.
   function requestedCarCount(): number {
     let n = 0;
-    for (const c of cars) if (c.tripGoal) n++;
+    for (const c of cars) {
+      const t = trips.get(c.id);
+      if (t && t.status !== "parked") n++;
+    }
     return n;
   }
 
@@ -3051,7 +3226,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   function requestTrip(
     fromTileId: string,
     toTileId: string,
-    kind: VehicleKind = "car"
+    kind: VehicleKind = "car",
+    req: TripRequest = {},
   ): string | null {
     if (fromTileId === toTileId) return null;
     if (requestedCarCount() >= MAX_REQUESTED_CARS) return null;
@@ -3068,17 +3244,38 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       entryPort,
     }));
     if (goals.length === 0) return null;
+    const wantsPark = !!req.park && parking.any() && vehicleCanPark(kind);
+    const searchTiles = req.parkSearchTiles ?? PARK_SEARCH_TILES;
 
     // The driver pulls out of their street onto whichever approach actually
     // leads there. Ports are tried in a fixed order so a given board dispatches
     // the same way every run.
     for (const startPort of approachPorts(fromTileId, cls).sort((a, b) => a - b)) {
-      const plan = planRouteToGoals(level, from, startPort, goals, cls);
-      if (!plan.goal) continue;
+      // A PARKING trip aims at the nearest car park to the address, not at the
+      // address. It still carries the address as its `tripGoal`: that is what
+      // the trip falls back to if the driver gives up on finding a space and
+      // replans (`giveUpAndReplan`), and it is why the goal test below is
+      // suppressed while a space is still being aimed for — the staff bays
+      // outside a works are usually ON the works' own street, and settling the
+      // trip there would delete the car half a tile before it parked.
+      const parkPlan = wantsPark
+        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles, req.permit)
+        : null;
+      let turns: RouteTurn[];
+      let goalPort: Port | null;
+      if (parkPlan) {
+        turns = parkPlan.turns;
+        goalPort = null; // any approach of the address will do after a give-up
+      } else {
+        const plan = planRouteToGoals(level, from, startPort, goals, cls);
+        if (!plan.goal) continue;
+        turns = plan.turns;
+        goalPort = plan.goal.entryPort;
+      }
 
       const usable = usableLaneIndices(fromRoad, startPort, cls);
       if (usable.length === 0) continue;
-      const exit = routeAwareExitForSpawn(from, startPort, plan.turns, cls);
+      const exit = routeAwareExitForSpawn(from, startPort, turns, cls);
       const length = specLength(vehicleSpec(kind, carLength));
       const probe = blankCar("", kind, { coord: from, entryPort: startPort, exitPort: exit });
       // A closed crossing must not stop somebody LEAVING THEIR HOUSE — it is
@@ -3097,41 +3294,160 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const id = `car${nextId++}`;
       const car = blankCar(id, kind, { coord: from, entryPort: startPort, exitPort: exit });
       car.length = length;
-      car.speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+      car.speed = carSpeed * KIND_SPEED[kind] * (1 - speedSpread + rng() * 2 * speedSpread);
       // From REST, unlike an ambient car: this one has just pulled off a
       // driveway, it has not been rolling in from off-screen.
       car.velocity = 0;
-      car.accel = DEFAULT_CAR_ACCEL;
-      car.brake = DEFAULT_CAR_BRAKE;
-      car.routePlan = plan.turns;
+      car.accel = DEFAULT_CAR_ACCEL * KIND_ACCEL[kind];
+      car.brake = DEFAULT_CAR_BRAKE * KIND_BRAKE[kind];
+      car.routePlan = turns;
       car.laneIndex = chosen;
       car.targetLane = chosen;
       car.laneAnchor = chosen;
       car.overtakeHomeLane = chosen;
-      car.overtaker = driverRng() < overtakeFraction && cls !== "bus";
-      car.tripGoal = { tileId: toTileId, entryPort: plan.goal.entryPort };
+      car.overtaker = driverRng() < overtakeFraction && cls !== "bus" && cls !== "bike";
+      car.tripGoal = { tileId: toTileId, entryPort: goalPort };
+      car.parkTarget = parkPlan?.facilityId ?? null;
+      car.parkPermit = req.permit ?? null;
       cars.push(car);
-      trips.set(id, "driving");
+      trips.set(id, { status: "driving", wantedSpace: wantsPark, releasedFrom: null });
+      // THE TOKEN COMES AFTER `cars.push`, and not one line earlier. Every
+      // bail-out above can fire — a blocked street most of all — and a token for
+      // a car that was never created can never be released, so car parks would
+      // drain to empty and stay there. Same trap, same rule, as `trySpawn`.
+      if (parkPlan) {
+        parking.aim(parkPlan.facilityId, id);
+        // A commuter can set off from the very tile the bays are on (the staff
+        // rank outside their own works, on a short street). The tile-crossing
+        // hook would never fire for that car, so claim here too — otherwise it
+        // drives straight past the space it was dispatched to take.
+        if (parking.facilityOfTile(fromTileId) === parkPlan.facilityId) {
+          car.enteredTarget = true;
+          claimStallHere(car, fromTileId, startPort);
+        }
+      }
       return id;
     }
     return null;
   }
 
-  // Requested cars that have reached their destination: they stop being traffic
-  // and the trip is marked arrived for whoever asked for it.
+  // Requested cars that have reached the end of their journey.
+  //
+  // TWO endings, and which one applies is the whole parking feature:
+  //  · PARKED — the car took a bay. It stops being traffic without leaving the
+  //    map: the trip reads "parked", the bay is HELD (the dwell is stretched to
+  //    an hour, far past any working day), and it stays that way until
+  //    `releaseTrip`. This is a commuter's car sitting outside the works.
+  //  · ARRIVED — it is standing on the address. The car is retired.
+  //
+  // A car still aiming for a space is NEVER settled by the address test, even
+  // while standing on the address: staff bays are normally on the workplace's
+  // own street, so the address IS the car park's tile and the trip would be
+  // deleted half a tile before it could park. Once the driver gives up
+  // (`giveUpAndReplan` clears `parkTarget`), the address test applies again and
+  // is the graceful fallback — they found something down the road.
   function settleRequestedTrips(): void {
     for (let i = cars.length - 1; i >= 0; i--) {
       const c = cars[i];
+      if (!trips.has(c.id)) continue;
+      if (c.phase === "parked" && c.stall) {
+        const t = trips.get(c.id);
+        // ...unless it is STILL IN THE BAY ITS OWNER JUST LET IT OUT OF. A
+        // released car keeps phase `parked` while it waits for a gap in the
+        // traffic (leaving a bay buys no right of way), so a test that only
+        // asked "is it parked?" fired again on the very next tick, re-parked the
+        // trip and reset the hold to another full hour. The symptom was subtle
+        // and the diagnosis was not: commuters ended their journey HOME
+        // "parked", so a car sat outside its owner's house holding a public bay
+        // all night, and the works' kerb filled with residents until no
+        // commuter could park.
+        //
+        // Comparing the STALL rather than carrying a "released" flag is what
+        // lets the evening leg park again at the other end. The flag said
+        // "released" for the rest of the journey, so the car that pulled onto
+        // its own drive at 18:00 was never recorded as standing on it.
+        const here = stallId(c.stall);
+        if (t && t.status === "driving" && t.releasedFrom !== here) {
+          t.status = "parked";
+          t.releasedFrom = null;
+          c.dwellLeft = HELD_DWELL_SEC;
+        }
+        continue;
+      }
       const goal = c.tripGoal;
       if (!goal || c.phase !== "driving") continue;
+      if (c.parkTarget !== null) continue; // still looking for a space
       if (tileIdOf(c) !== goal.tileId) continue;
       // Half way across the destination tile reads as "pulled up at the address"
       // rather than "clipped the corner of the street".
-      if (c.path[c.headIndex].entryPort !== goal.entryPort || c.headProgress < 0.5) continue;
-      trips.set(c.id, "arrived");
+      if (goal.entryPort !== null && c.path[c.headIndex].entryPort !== goal.entryPort) continue;
+      if (c.headProgress < 0.5) continue;
+      setTripStatus(c.id, "arrived");
       releaseStall(c);
       cars.splice(i, 1);
     }
+  }
+
+  // The owner is back for the car. It gives up the bay — `advanceParking` only
+  // lets it out on a genuine gap, so this is a request and not a teleport — and
+  // then drives to `toTileId`, where `settleRequestedTrips` retires it.
+  //
+  // ...unless `req.park`, in which case the far end is a SPACE near `toTileId`
+  // rather than the address itself, and the trip reads "parked" again when the
+  // car gets there. That is the evening commute: you do not drive home and
+  // vanish, you drive home and put the car on the drive. The plan cannot be made
+  // here — the car is still in a bay and the route out of it is built at the
+  // moment it leaves — so the wish is recorded and `resumeFromStall` honours it.
+  function releaseTrip(tripId: string, toTileId: string, req: TripRequest = {}): boolean {
+    if (trips.get(tripId)?.status !== "parked") return false;
+    const car = cars.find(c => c.id === tripId);
+    if (!car || car.phase !== "parked") return false;
+    if (!level[toTileId]?.road?.length) return false;
+    car.tripGoal = { tileId: toTileId, entryPort: null };
+    car.dwellLeft = 0;
+    const wantsPark = !!req.park && parking.any() && vehicleCanPark(car.kind);
+    car.parkWish = wantsPark ? (req.parkSearchTiles ?? PARK_SEARCH_TILES) : null;
+    car.parkPermit = req.permit ?? null;
+    const t = trips.get(tripId);
+    if (t) {
+      t.status = "driving";
+      // The bay it is being let out of, so the settle test can tell "still
+      // waiting in the space I was released from" (do nothing) from "has driven
+      // away and taken a different one" (park again). A boolean could not: it
+      // said "released" for ever, so the car that reached its own drive at the
+      // end of the day was never recorded as parked there.
+      t.releasedFrom = car.stall ? stallId(car.stall) : null;
+      if (wantsPark) t.wantedSpace = true;
+    }
+    return true;
+  }
+
+  function tripParkedAt(tripId: string): string | null {
+    if (trips.get(tripId)?.status !== "parked") return null;
+    const car = cars.find(c => c.id === tripId);
+    return car?.stall?.tileId ?? null;
+  }
+
+  // Take the car off the board outright, wherever it is. The caller has decided
+  // it has no owner any more — somebody emigrated, or gave up on the journey and
+  // there is nowhere left to send it.
+  //
+  // The alternative is worse than untidy. A car left parked with nobody to
+  // release it holds its bay until the backstop dwell expires, then pulls out
+  // and drives a stale route — and on a closed ring road, with no map edge to
+  // despawn at, it circles for the rest of the run.
+  function abandonTrip(tripId: string): void {
+    const i = cars.findIndex(c => c.id === tripId);
+    if (i >= 0) {
+      releaseStall(cars[i]);
+      cars.splice(i, 1);
+    }
+    trips.delete(tripId);
+  }
+
+  function setTripStatus(tripId: string, status: TripStatus): void {
+    const t = trips.get(tripId);
+    if (t) t.status = status;
   }
 
   function trySpawn(closed: CrossingClosed): boolean {
@@ -3141,7 +3457,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     // and buses can spawn there at all (previously such edges had no entry).
     const kind = pickKind();
     const cls = vehicleClassOf(kind);
-    const pool = cls === "bus" ? entries : entries.filter(e => !e.busOnly);
+    // A busOnly entry is a bus-gated street's open end — buses AND bikes may use
+    // it (the matrix in laneUsableBy); the general car class may not.
+    const pool = cls !== "car" ? entries : entries.filter(e => !e.busOnly);
     if (pool.length === 0) return false;
     const entry = pool[Math.floor(rng() * pool.length)];
     const id = getCoordinatesId(entry.coord);
@@ -3199,6 +3517,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkWish: null,
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3225,21 +3545,27 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       }
     }
     // Lane order to try at the entry, by class:
-    //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane),
-    //    then the remaining lanes from a rotating start.
+    //  • A bus prefers the bus lane(s) first (so it enters already on the bus lane);
+    //    a bike its cycle lane(s) — then the remaining lanes from a rotating start.
     //  • A car uses the turn-lane preference (F) when its first junction has a
     //    dedicated turn lane, else fills its car lanes evenly from a rotating start.
     // Either way, spawn ONLY into a probed-clear lane; if all are blocked at the
     // edge skip the spawn (saturated — better than stacking cars).
     let order: number[];
-    if (cls === "bus") {
-      const busLanes = busLaneIndices(entryRoad, entry.entryPort);
-      const rest = usable.filter(l => !busLanes.includes(l));
-      const rotatedRest = Array.from(
-        { length: rest.length },
-        (_, k) => rest[(spawnLaneRot + k) % rest.length],
-      );
-      order = [...busLanes, ...rotatedRest];
+    if (cls === "bus" || cls === "bike") {
+      const ownLanes =
+        cls === "bus"
+          ? busLaneIndices(entryRoad, entry.entryPort)
+          : cycleLaneIndices(entryRoad, entry.entryPort);
+      const rest = usable.filter(l => !ownLanes.includes(l));
+      // A bus fills the rest from a rotating start (it uses any lane freely);
+      // a bike takes the KERB-most first — it never has business entering on an
+      // inner lane, and keep-right would only have to walk it back out.
+      const restOrder =
+        cls === "bike"
+          ? [...rest].sort((a, b) => a - b)
+          : Array.from({ length: rest.length }, (_, k) => rest[(spawnLaneRot + k) % rest.length]);
+      order = [...ownLanes, ...restOrder];
     } else {
       const preferred = preferredSpawnLane(entry.coord, entry.entryPort, exit, routePlan, usable.length);
       order =
@@ -3257,9 +3583,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
     if (chosenLane < 0) return false; // preferred/all lanes blocked — wait, don't stack
     spawnLaneRot++;
-    // Buses never overtake (they ride their lane, preferring the bus lane). Draw
-    // from the driver RNG regardless so its stream stays stable across mixes.
-    const overtaker = driverRng() < overtakeFraction && cls !== "bus";
+    // Buses and bikes never overtake (each rides its lane, preferring its own —
+    // the bus lane / the cycle lane). Draw from the driver RNG regardless so its
+    // stream stays stable across mixes.
+    const overtaker = driverRng() < overtakeFraction && cls !== "bus" && cls !== "bike";
     // A minority back into a 90° bay. Its OWN stream: a draw added to the driver
     // stream shifts every later draw on it, and two seeded overtaking tests failed
     // the moment it shared one. A new decision class gets a new stream — the same
@@ -3267,8 +3594,9 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     const reverseParker = parkerRng() < PARKING.reverseFraction;
     const length = specLength(vehicleSpec(kind, carLength));
     // Draw this car's preferred speed uniformly in [1-spread, 1+spread]·carSpeed
-    // from the seeded RNG (per-car speed sequence stays reproducible for a seed).
-    const speed = carSpeed * (1 - speedSpread + rng() * 2 * speedSpread);
+    // from the seeded RNG (per-car speed sequence stays reproducible for a seed),
+    // scaled by the kind's cruise factor (a bike rides at under half car pace).
+    const speed = carSpeed * KIND_SPEED[kind] * (1 - speedSpread + rng() * 2 * speedSpread);
     const spawnExit = routeAwareExitForSpawn(entry.coord, entry.entryPort, routePlan, cls);
     const carId = `car${nextId++}`;
     const spawned: Car = {
@@ -3282,8 +3610,8 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // caps the first step at the available room, so entering at speed can't make
       // it overrun a car just ahead.
       velocity: speed,
-      accel: DEFAULT_CAR_ACCEL,
-      brake: DEFAULT_CAR_BRAKE,
+      accel: DEFAULT_CAR_ACCEL * KIND_ACCEL[kind],
+      brake: DEFAULT_CAR_BRAKE * KIND_BRAKE[kind],
       length,
       path: [{ coord: entry.coord, entryPort: entry.entryPort, exitPort: spawnExit }],
       headIndex: 0,
@@ -3313,6 +3641,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null, // ambient traffic: it drives off the map, not to an address
       parkTarget,
+      parkWish: null,
+      // Ambient traffic never holds a permit — nobody merely passing through has
+      // a drive on this street — so every private row stays invisible to it.
+      parkPermit: null,
       stall: null,
       parkPath: null,
       manoeuvre: 0,
@@ -3511,7 +3843,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
           // A REQUESTED car that leaves the map never reached its address (its
           // route should have ended on it). Close the trip anyway rather than
           // leave whoever asked for it waiting for ever.
-          if (cars[i].tripGoal) trips.set(cars[i].id, "arrived");
+          // (`trips`, not `tripGoal`: a car dispatched to PARK carries no
+          // address to settle on while it is still hunting for a space, so
+          // testing the goal would leave that citizen waiting for ever.)
+          if (trips.has(cars[i].id)) setTripStatus(cars[i].id, "arrived");
           // Hand the bay back on the way out. A claim that outlives its car would
           // strand that space for the rest of the run — the road-layer version of
           // "a parked train occupies its depot tile forever".
@@ -3524,8 +3859,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     },
     requestTrip,
     tripStatus(tripId: string) {
-      return trips.get(tripId) ?? "arrived";
+      return trips.get(tripId)?.status ?? "arrived";
     },
+    tripWantedSpace(tripId: string) {
+      return trips.get(tripId)?.wantedSpace ?? false;
+    },
+    tripParkedAt,
+    releaseTrip,
+    abandonTrip,
     clearFinishedTrip(tripId: string) {
       trips.delete(tripId);
     },
@@ -3662,13 +4003,28 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       for (const c of cars) {
         if (c.parkTarget) inbound.set(c.parkTarget, (inbound.get(c.parkTarget) ?? 0) + 1);
       }
-      return parking.facilities().map(f => ({
-        id: f.id,
-        label: f.label,
-        capacity: parking.capacity(f.id),
-        free: parking.freeCount(f.id),
-        inbound: inbound.get(f.id) ?? 0,
-      }));
+      return (
+        parking
+          .facilities()
+          .map(f => ({
+            id: f.id,
+            label: f.label,
+            capacity: parking.capacity(f.id),
+            free: parking.freeCount(f.id),
+            inbound: inbound.get(f.id) ?? 0,
+          }))
+          // NO PUBLIC SPACES, NO SIGN. `capacity` counts what a member of the
+          // public could use, so a facility that is nothing but private drives —
+          // or nothing but disabled bays — comes back as zero, and the renderer's
+          // sign then read "P VOLL": a car park, standing empty, announcing that
+          // it is full. Nobody puts a P sign on their own driveway.
+          //
+          // The mixed case still signs correctly and is the reason this is a
+          // filter on the total rather than a flag on the row: a tile carrying
+          // three kerb bays AND a drive is a public car park of three, and that
+          // is exactly the number `capacity` already gives.
+          .filter(s => s.capacity > 0)
+      );
     },
     parkingFrame() {
       let parked = 0;

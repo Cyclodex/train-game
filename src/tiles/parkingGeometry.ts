@@ -164,6 +164,12 @@ export function stallOutlinePath(
   // full pitch wide, which renders as a bare line straight across the road. Its
   // yellow kerb marking and legend are what mark it (`busStopGeometry`).
   if (stallOnLane(row.kind)) return "";
+  // AN UNMARKED KERB HAS NOTHING TO OUTLINE. The bays are still there in the
+  // model — same pitch, same manoeuvre, same occupancy — they are simply not
+  // painted, which is the entire difference between a European bay rank and an
+  // American wide street you park along. The apron and the outer kerb line are
+  // deliberately still drawn: without them the parked cars would sit on grass.
+  if (row.marking === "none") return "";
   return poly(stallBoxPoints(row, index, size, kerbPx));
 }
 

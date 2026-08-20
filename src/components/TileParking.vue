@@ -12,7 +12,12 @@
          one continuous surface instead of bays floating on grass (the same trick
          `.road-gore-fill` uses for a hatched closure). -->
     <template v-for="(p, pi) in paths" :key="'pk' + pi">
-      <path v-if="p.apron" :d="p.apron" class="parking-apron" />
+      <path
+        v-if="p.apron"
+        :d="p.apron"
+        class="parking-apron"
+        :class="{ 'parking-apron--private': p.priv }"
+      />
       <path v-if="p.garage" :d="p.garage.apron" class="parking-apron" />
       <path v-if="p.garageOut" :d="p.garageOut.apron" class="parking-apron" />
     </template>
@@ -158,6 +163,10 @@ class TileParking extends Vue {
     apron: string;
     kerb: string;
     reserved?: string;
+    // Somebody's DRIVE rather than public parking. Paint, not behaviour — but
+    // the paint is what tells a player at a glance which tarmac is theirs to
+    // park on, and the rules are invisible without it.
+    priv: boolean;
     stalls: { d: string; key: string; occupied: boolean }[];
     garage: ReturnType<typeof garageGeometry> | null;
     garageOut: ReturnType<typeof garageGeometry> | null;
@@ -189,6 +198,7 @@ class TileParking extends Vue {
         apron: parkingApronPath(row, size, kerb),
         kerb: parkingKerbPath(row, size, kerb),
         reserved: row.reserved,
+        priv: !!row.resident,
         stalls,
         // A bus stop of either shape gets its yellow kerb marking, its legend and
         // its shelter. Without them a lay-by is indistinguishable from the lorry
@@ -248,6 +258,16 @@ export default toNative(TileParking);
    than a separate slab parked next to it. */
 .parking-apron {
   fill: #4a4a4a;
+}
+/* ...EXCEPT A PRIVATE DRIVE, which is the one case where reading as the street
+   is exactly wrong. A drive is not a widening of the carriageway, it is the
+   householder's own hardstanding, and it is laid in whatever the householder
+   laid it in — concrete, gravel, block paving — never in the road's tarmac.
+   Painting it pale is the only thing on the board that tells a player which
+   spaces are theirs to take and which belong to the house behind them; the rule
+   itself (`ParkingRow.resident`) is otherwise completely invisible. */
+.parking-apron--private {
+  fill: #9c9187;
 }
 /* The outer kerb, where the parking strip meets the verge. The road's own kerb
    line is buried under the apron on this flank, so without this the tarmac would
