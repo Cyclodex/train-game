@@ -34,6 +34,17 @@ export interface LineGraph {
   // stop on it is reachable from every other and the direction never matters
   // here — only which stops it touches.
   alightFor(lineId: string, at: string, to: string): string | undefined;
+  // Standing at `at` and bound for `to`, WHICH LINE do they board next? The one
+  // whose ride leaves them strictly closer — the mirror of `alightFor`, which
+  // answers where to get off once aboard.
+  //
+  // Nothing in the sim needs this: the hop is decided at boarding from the same
+  // graph (D7). It exists for the BOARD — a waiting passenger is drawn in the
+  // colour of the line they are waiting FOR, so a queue that will not clear
+  // reads as "the red line is short of vehicles" rather than as an anonymous
+  // crowd. Undefined when no service can take them (nobody should be there at
+  // all then, per D10) — the caller draws those neutral.
+  lineFrom(at: string, to: string): string | undefined;
   // Is `to` reachable from `at` by any chain of services? The spawn gate (D10):
   // nobody walks to a station that cannot take them where they are going.
   serves(at: string, to: string): boolean;
@@ -120,6 +131,27 @@ export function buildLineGraph(lines: LineStops[]): LineGraph {
         if (d === undefined || d >= bestDist) continue;
         bestDist = d;
         best = stop;
+      }
+      return best;
+    },
+    lineFrom(at: string, to: string) {
+      if (at === to) return undefined;
+      const here = distancesFrom(at).get(to);
+      if (here === undefined) return undefined;
+      // The same "strictly closer" test `alightFor` uses, asked of each line
+      // calling here: whichever ride makes the most progress wins, and ties go
+      // to the first line drawn, so the colour on the board is stable rather
+      // than flickering between two equally good services.
+      let best: string | undefined;
+      let bestDist = here;
+      for (const lineId of linesAt.get(at) ?? []) {
+        for (const stop of stopsOfLine.get(lineId) ?? []) {
+          if (stop === at) continue;
+          const d = distancesFrom(stop).get(to);
+          if (d === undefined || d >= bestDist) continue;
+          bestDist = d;
+          best = lineId;
+        }
       }
       return best;
     },
