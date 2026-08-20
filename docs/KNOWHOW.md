@@ -1015,8 +1015,12 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       agrees by construction (the old stepped exit edge was the one asymmetry
       the symmetry sweep had to exempt — and a visible pavement JUMP at every
       lane drop). A merging car sits INSIDE gore/recovery tarmac (containment,
-      not equality — see the car-band case); markings and gores keep the
-      min-based REAL lane counts, a recovery wedge has no lane in it.
+      not equality — see the car-band case); markings keep the min-based REAL
+      lane counts. A one-way drop paints NO Sperrfläche (user call, same day):
+      the hatched bay ended in a hard white bar right where the recovery
+      tarmac carries on, so the closing lane is plain tarmac, its boundary
+      divider runs dashed to the seam, and the tapering edge line + merge
+      arrows are the whole signage. Two-way reducer gores are untouched.
     · Three pre-existing absurdities the parity oracle surfaced: (a) a WIDE
       junction arm (kerb past 0.5 − band) used to clamp the pavement band
       INSIDE the carriageway and paint tarmac over it — the profile answers
