@@ -26,6 +26,16 @@ $hud-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   // Slide left until only the tab pokes past the screen edge.
   transform: translate(-100%, -50%);
 }
+// A phone-sized screen: the drawer opens narrower and hugs the edge, so even
+// expanded it covers less of the board (it also STARTS collapsed there — see
+// MenuDrawer.vue).
+@media (max-width: 700px) {
+  .menu-drawer {
+    width: 172px;
+    left: 8px;
+    padding: 10px 8px;
+  }
+}
 .menu-drawer__tab {
   @include glass($radius: 0 10px 10px 0);
   position: absolute;

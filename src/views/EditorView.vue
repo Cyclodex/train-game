@@ -1203,9 +1203,26 @@ class EditorView extends Vue {
         () => this.worldSize,
         () => this.viewportSize(),
         // The board is full-bleed; the drawer and the dock float over it. These
-        // keep the GRID clear of them (see camera.ts) — the clearance the
-        // `.world` padding used to give, without the dead border it left.
-        () => CHROME_INSETS,
+        // keep the GRID clear of them (see camera.ts). The bottom inset is
+        // MEASURED off the live dock (three rows now, and taller again on a
+        // phone) rather than assumed; the top only has the zoom cluster on a
+        // narrow screen, so the board gets the space the play view spends on
+        // its score card.
+        () => {
+          const wrap = document.querySelector(
+            ".editor-view .build-dock-wrap",
+          ) as HTMLElement | null;
+          const bottom = wrap
+            ? Math.min(Math.round(window.innerHeight * 0.5), wrap.offsetHeight + 26)
+            : CHROME_INSETS.bottom;
+          const narrow = window.matchMedia("(max-width: 700px)").matches;
+          return {
+            top: narrow ? 56 : 60,
+            right: narrow ? 12 : CHROME_INSETS.right,
+            bottom,
+            left: narrow ? 12 : CHROME_INSETS.left,
+          };
+        },
       ),
     );
     this.routeCtrl = markRaw(
@@ -2439,6 +2456,18 @@ export default toNative(EditorView);
   height: 34px;
   display: inline-flex;
   align-items: center;
+}
+// On a phone the full-width dock owns the bottom edge, so the board chrome
+// moves to the top-right corner instead of vanishing behind it.
+@media (max-width: 700px), (max-height: 500px) {
+  .editor-view .world-zoom {
+    top: 10px;
+    right: 10px;
+    bottom: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 60vw;
+  }
 }
 // Per-tile lane-count badge (road tool only): a small pill at the tile bottom.
 .lane-badge-bg {
