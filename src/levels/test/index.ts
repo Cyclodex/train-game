@@ -19,6 +19,7 @@ import { citizenzebra } from "@/levels/test/scenarios/citizenzebra";
 import { citizenrail } from "@/levels/test/scenarios/citizenrail";
 import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
 import { citizencrossback } from "@/levels/test/scenarios/citizencrossback";
+import { citizenday } from "@/levels/test/scenarios/citizenday";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -108,6 +109,7 @@ import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
+import { hinterland } from "@/levels/test/scenarios/hinterland";
 import { terrain } from "@/levels/test/scenarios/terrain";
 import { townscape } from "@/levels/test/scenarios/townscape";
 import { farmland } from "@/levels/test/scenarios/farmland";
@@ -176,7 +178,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback, citizenday] },
       {
         id: "crossings",
         label: "Crossings",
@@ -250,7 +252,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
       // straight from the picker or via /play?board=demoworld.
-      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, bridge, tunnel, clearing, townscape, industry, forestworld, lakevalley, lakevalleyOpen, demoworld, parkcity] },
+      { id: "worlds", label: "Worlds", scenarios: [terrain, farmland, bridge, tunnel, clearing, townscape, industry, forestworld, lakevalley, lakevalleyOpen, demoworld, hinterland, parkcity] },
     ],
   },
 ];

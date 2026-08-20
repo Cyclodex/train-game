@@ -1480,6 +1480,88 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   steady while the town self-selects for drivers, so `access` shows the failure
   only as a DIP — assert on the minimum over a run, never the end state.
 
+## LIFE STAGES & DAILY ROUTINES (2026-08-04)
+- Everybody used to get the same three numbers (`outHour`/`backHour`/`shopHour`),
+  so a board had TWO SPIKES AND ELEVEN DEAD HOURS. A citizen now has
+  `stage: LifeStage` + `routine: Activity[]` — a list of `{target, from?, hour,
+  windowH, everyNDays, lastDay}` rolled once at move-in. Five stages: `child`,
+  `worker`, `shiftWorker`, `tradesperson`, `retired`.
+  Measured on `/test/citizenday`, busiest "travelling" per in-game hour, same map
+  and seed, only the mix changed: **at 14:00 and 15:00 an all-worker town has
+  NOBODY out at all** where the mixed one has 17. Trough/peak 0.00 → 0.19, and
+  the peaks barely move — same people, spread over the hours they would use.
+- `TripPurpose` IS the activity target (`home|work|shop|school|leisure|callout`),
+  so there is no second `purpose` field to keep in step. Still only THREE topics:
+  school/callout → `commute`, leisure → `errands`. A fourth `Topic` would drag
+  `CityHappiness`, `recompute()` and the panel behind it to say nothing new.
+- **Resolve a target when the activity FIRES, never at move-in.** The nearest shop
+  fills up, a call-out is a different address every day, a school may not exist.
+- **`everyNDays` parity must include the ACTIVITY INDEX**
+  (`(dayIndex + hashId(id) + i) % n`). Leave it out and all of one person's
+  every-other-day activities land on the same days — the empty-day bug in
+  miniature.
+- **`from` (anchor an activity to where it starts) is not polish.** The old errand
+  rolled 10:00–19:00 and was gated on being at home, so for most workers the
+  window opened while they were at their desk and THE TRIP NEVER HAPPENED. A trip
+  home never carries `from`, so wherever the day left somebody they can get back.
+- `TileCell.zone?: PlotKind` overrides the derived kind, applied AFTER the shop
+  ranking so zoning a school does not promote some other house into the parade.
+  `PlotKind` lives in `tiles/model.ts` now (it is tile data), re-exported from
+  `tiles/cities.ts`. **A school's capacity is its TEACHERS, not its pupils** —
+  capacity on a non-home plot is JOBS and `reviewDay` gates growth on
+  `freeJobs > 0`, so a 160-pupil school hands every town imaginary employment.
+- `CitizenTuning.stageMix` replaces `joblessShare`. Tests that want one life say
+  `stageMix: { worker: 1, … }`.
+- **POPULATION IS A BLUNTED SIGNAL ON A STRANDED BOARD NOW; THE BARS ARE THE
+  SHARP ONE.** A quarter of every town is children and retired residents whose
+  whole day is a local walk — journeys that succeed with no railway at all. They
+  are happy, they pull the mean mood up, and newcomers keep arriving faster than
+  the stranded commuters leave. Measured on threecities with NO trains, same
+  seed, only the mix changed:
+
+  | | Westfield | Eastfield | Steinbach (walks) |
+  |---|---|---|---|
+  | all workers | 47 → 22 | 43 → 30 | 21 → 84 |
+  | life stages | 47 → **72** | 43 → **56** | 21 → 84 |
+
+  The failure is still perfectly visible — Eastfield's commute bar reads 0.53
+  against Steinbach's 1.00 — it just is not visible in the headcount. Assert on
+  `happiness.commute`/`access`, and keep an ALL-WORKER control run beside it
+  (`citizensModeWith({ stageMix: { worker: 1, … } })`) so a real weakening of the
+  model cannot hide behind the non-commuter floor. This is the same CHURN the
+  road-only note below describes, amplified.
+
+## BIG CITIZEN BOARDS (`/test/hinterland`, 35x24, 2026-08-04)
+Four rules, each measured on that board, each of which failed silently:
+- **A house column three tiles from BOTH railway corridors strands everyone in it
+  without a car** — no walk (`walkMaxTiles: 4`), no car, no station in reach, so
+  every trip out is REFUSED. The tell is the red Access bar on the city card.
+  Lay a village as `rail · road · house · road · rail`: every column one tile
+  from a carriageway AND two from a platform. A town is at most as wide as its
+  lines can serve.
+- **Past a point, MORE TRAINS MAKE A RAILWAY CARRY LESS.** Six services on a
+  single-track theta spent the day holding each other at signals: rail share fell
+  38% → 4% and a six-day headless run took SEVEN TIMES longer. On single track a
+  service is a block; buy wagons, not trains. (4 x 10 wagons ships.)
+- **A DAILY trip must be a LOCAL trip.** With one café in the valley every retired
+  resident of the far village rode three quarters of the ring for a coffee every
+  day, gave up, and the village fell 136 → 32 in six days. Make the SCARCE thing
+  the twice-a-day one (the school), never the daily one.
+- **A pure dormitory dies.** Villages whose every job is a lap away lost half
+  their people. Two industrial plots each and all three villages bottom out on
+  day three and then GROW AGAIN with their happiness. A place needs a reason to
+  stay as well as a reason to travel.
+- A ring is one-directional, so the way HOME is the long way round. Watch
+  `maxTransfers` (6): a return leg past seven platforms fails outright.
+- Build a big board's road net from a SET OF COORDINATES and derive each tile's
+  lanes from which neighbours are road (2 arms → `twoWay`, more → every arm to
+  every other). Hand-authoring `twoWay(L,R)+twoWay(T,B)` at a crossroads makes a
+  junction nobody can turn at; deriving it cannot.
+- A `TrainDef` built for a headless test MUST carry `destinations` and `line` —
+  omit them and the trains sit in their sheds while the probe reports "transit
+  0%" and you go looking for a bug in the citizens. Copy `buildTrainDefs` from
+  `TestStage.vue`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate

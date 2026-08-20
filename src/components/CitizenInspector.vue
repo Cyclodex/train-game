@@ -43,17 +43,19 @@
         📍 {{ pinned === person.id ? "Pinned — click to remove" : "Pin them on the board" }}
       </button>
       <p class="inspector__sub">
-        lives {{ person.home }} ·
+        {{ person.stageLabel }} · lives {{ person.home }} ·
         <template v-if="person.work">works {{ person.work }}</template>
         <template v-else>no job</template>
         · {{ person.carOwner ? "owns a car" : "no car" }}
       </p>
 
-      <!-- The day. Fixed times, rolled once when they moved in. -->
+      <!-- The day. Their own routine, rolled once when they moved in — a LIST,
+           because a tradesperson has six of these and a worker has three. -->
       <ul class="inspector__day">
-        <li><b>{{ person.leavesAt }}</b> leaves for work</li>
-        <li><b>{{ person.shopsAt }}</b> runs an errand</li>
-        <li><b>{{ person.returnsAt }}</b> heads home</li>
+        <li v-for="(s, i) in person.schedule" :key="i">
+          <b>{{ s.at }}</b> {{ s.what }}
+          <span v-if="!s.daily" class="inspector__every">every other day</span>
+        </li>
       </ul>
 
       <p class="inspector__now">
@@ -183,7 +185,15 @@ class CitizenInspector extends Vue {
 
   get kindLabel(): string {
     const k = this.plot?.kind;
-    return k === "home" ? "Houses" : k === "shop" ? "Shops" : "Workplace";
+    return k === "home"
+      ? "Houses"
+      : k === "shop"
+        ? "Shops"
+        : k === "school"
+          ? "School"
+          : k === "leisure"
+            ? "Café"
+            : "Workplace";
   }
 
   show(id: string): void {
@@ -347,6 +357,10 @@ export default toNative(CitizenInspector);
     flex: 0 0 auto;
     min-width: 38px;
     font-variant-numeric: tabular-nums;
+  }
+  .inspector__every {
+    color: #7a8492;
+    font-size: 11px;
   }
 }
 .inspector__timing {
