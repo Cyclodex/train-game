@@ -2658,7 +2658,8 @@ of the above; read that section first.
     OTHER side too: on every bank of every street, the pavement's near edge is
     exactly `PAVEMENT_GAP` from the last solid thing on that bank (kerb, or the
     bay standing at it) — `parkingWalk.spec.ts` → "never floats off into the
-    verge either", measured at 4.0 on all 27 banks of `/test/homeparking`.
+    verge either", measured at exactly 4.0 on all 28 banks of
+    `/test/homeparking`.
 - **PER BANK, NOT PER TILE.** A street with a drive on one side and bare kerb on
   the other has two pavements at two distances; pushing both by the wider leaves
   the empty side's band floating in the verge. `bankOfSide` converts the walker
