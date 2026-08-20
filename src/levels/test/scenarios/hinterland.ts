@@ -63,6 +63,22 @@ const { Top, Right, Bottom, Left } = Position;
 // that falls and keeps falling, which is what this board did before each village
 // had work of its own and a café of its own.
 //
+// KNOWN, MEASURED, AND NOT YET FIXED (2026-08-21): Marktstadt's streets jam
+// against the staff bays that now derive at every workplace gate. This village
+// packs a school, a café and four shops into a tight ladder of ONE-TILE two-way
+// streets inside a CLOSED loop, so `deriveWorkplaceParking` lands 17 tiles of
+// kerbside bays in it and cars manoeuvring in and out have nowhere to drain to.
+// The tell in the model: 35 journeys a day ending "given up on after 9h 36m",
+// which is exactly `maxWaitSec * 2` — the give-up clock on a car that never
+// arrives — and Marktstadt's commute bar pinned at 0.00 while Nordheim and Südau
+// recover normally. `/test/citizenday`, whose ring road is long and carries only
+// six bays, is unaffected (zero abandoned trips, commute 0.87-0.95), so this is
+// about DENSITY, not about the mechanic.
+//
+// The fix is street layout, not tuning: one-way circulation through the village,
+// or workplaces spread out of the core. Until then read this board for the day
+// rhythm and the road/rail lever, and read the commute bar on citizenday.
+//
 // Playable at /#/play?mode=citizens&board=hinterland.
 
 const COLS = 35;
@@ -150,8 +166,6 @@ const BRANCH_LINE = [
   `19,${RING_BOTTOM}`,
   `${BRANCH_X},13`,
 ];
-
-const branchFrom = (first: string) => rotate(BRANCH_LINE, first);
 
 // Signals are block boundaries: a train reserves the whole route to the next one,
 // so with too few of them one train locks most of the circuit and holds every
