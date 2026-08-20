@@ -3342,9 +3342,27 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   reserved SLOT is still a full lane in the sim/offset model — only paint and
   ride line are half-width; a true half-width slot would rework the whole
   band/seam/taper pipeline. Debug arrows `lg-cycle` green, shifted onto the strip.
+- Those three have to agree on all THREE ROAD SHAPES, and each reaches the paint
+  by a different door — miss one and the lane half-renders:
+  · STRAIGHT two-way → `roadLaneMarkingPaths` straight branch (skipA/skipB).
+  · BEND → its curve branch (same swap on the offset arc). The TINT skipped
+    every non-straight movement, so a bend showed the edge line with no green
+    under it; `restrictedLaneBands` now emits a `laneRibbonPathD` ribbon at the
+    same constant offset for a bend, and still skips a JUNCTION (inside the box
+    the paint is turn ribbons/guides, and the offsets there are movements).
+  · ONE-WAY STRAIGHT → NOT `roadLaneMarkingPaths` at all: Tile.vue's one-way
+    branch is KERB-ANCHORED to the run max (`oneWayLaneOffsetPx`) while that
+    function's one-way branch is CENTRED (right only for a one-way bend), so
+    the straight has its own builder, `oneWayStraightMarkingPaths` — survivor
+    dividers at `(R/2−k)·W`, the widening fan, suppressed `k=1` and the solid
+    edge at `k=0.5` for a cycle lane. Before it, a one-way with a cycle lane
+    got the tint and kept the full-slot dash.
+  · `/test/cyclebend` and `/test/cycleoneway` are those two shapes in isolation.
 - `/test/bikemix` (the queue), `/test/cyclelane` (the remedy),
   `/test/bikeovertake` (2-lane passing), `/test/bikeleftturn` (kerb rule at a
-  forced left); sim pins in `roadBikes.spec.ts`.
+  forced left), `/test/cyclebend` + `/test/cycleoneway` (the paint on the other
+  two road shapes); sim pins in `roadBikes.spec.ts`, paint pins in
+  `roadGeometry.spec.ts`.
 
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),

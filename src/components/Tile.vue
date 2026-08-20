@@ -578,6 +578,7 @@ import {
   roadCurvePolygonPathTapered,
   roadLaneBandPath,
   roadLaneMarkingPaths,
+  oneWayStraightMarkingPaths,
   roadKerbEdge,
   roadCurveKerbEdgeTapered,
   flankPort,
@@ -1488,23 +1489,22 @@ class Tile extends Vue {
         // edge runs at the wider of the two seam counts and is straight on a narrowing.
         const innerEntry = kerbOff - entryCount * LANE_W;
         const innerExit = kerbOff - Math.max(entryCount, exitCount) * LANE_W;
-        const owMarkings: LaneMarkingPath[] = [];
-        // Survivor dividers — straight lines between through-lanes present at both
-        // ends (lane k boundary at (R/2 − k)·W, measured from the kerb). The
-        // boundary of the dropping lane is drawn by the closure gore
-        // (laneDropOverlay), so stop before it.
-        const survivors = Math.min(entryCount, exitCount);
-        for (let k = 1; k < survivors; k++) {
-          const d = (R / 2 - k) * LANE_W;
-          owMarkings.push({ d: roadParallelLine(entry, exit, size, d, d), kind: "inner" });
-        }
-        // A widening opens new lanes on the LEFT (centre side): their dividers fan
-        // out from the entry kerb-aligned edge to their straight line.
-        for (let k = entryCount; k < exitCount; k++) {
-          const dOpen = (R / 2 - entryCount) * LANE_W;
-          const dStraight = (R / 2 - k) * LANE_W;
-          owMarkings.push({ d: roadParallelLine(entry, exit, size, dOpen, dStraight), kind: "inner" });
-        }
+        // Dividers — survivor lines between through-lanes present at both ends
+        // (lane k boundary at (R/2 − k)·W, measured from the kerb), fan-out lines
+        // for a widening, and the kerb cycle lane's SOLID half-width edge line in
+        // place of its full-slot dash. The boundary of a DROPPING lane is drawn by
+        // the closure gore (laneDropOverlay), so the survivor lines stop before it.
+        // Kerb-anchored, hence its own builder rather than roadLaneMarkingPaths,
+        // whose one-way branch is centred (right for a bend, not for a straight).
+        const owMarkings: LaneMarkingPath[] = oneWayStraightMarkingPaths(
+          entry,
+          exit,
+          size,
+          R,
+          entryCount,
+          exitCount,
+          this.cycleLanesFrom(entry),
+        );
         return {
           surface: roadRibbonPolygonPath(entry, exit, size, innerEntry, kerbOff, innerExit, kerbOff),
           laneMarkings: owMarkings,
@@ -1577,8 +1577,12 @@ class Tile extends Vue {
   // laterally aligned with that lane exactly like the debug arrows and the cars
   // (positioningBand + the per-lane offset), so only the restricted lane is
   // tinted — not the whole ribbon (gold = bus, green = cycle).
-  // Straight movements only (restricted lanes are authored on straight road for
-  // now). Always on (not debug-gated) — it marks a real road feature.
+  // Straights AND simple bends: a painted lane that vanished at the corner read
+  // as a gap in the infrastructure, and on a cycle lane it disagreed with the
+  // solid edge line, which roadLaneMarkingPaths DOES draw around a bend. A
+  // JUNCTION is still skipped: inside the box the paint is the turn ribbons and
+  // guides, and the raw per-lane offsets there belong to movements, not to a
+  // continuous strip. Always on (not debug-gated) — it marks a real road feature.
   get restrictedLaneBands(): { d: string; kind: "bus" | "cycle" }[] {
     const road = this.tile.road;
     if (!this.config.roads || !road?.length) return [];
@@ -1604,9 +1608,19 @@ class Tile extends Vue {
       const selfBand = this.positioningBandAt(coord, lane.from);
       const off =
         (selfBand - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size + shiftOf(lane.kind);
+      const half = halfOf(lane.kind);
       for (const to of laneAllExits(lane)) {
-        if (oppositePort(lane.from) !== to) continue; // straight lanes only
-        out.push({ d: roadLaneBandPath(lane.from, to, size, off, halfOf(lane.kind)), kind: lane.kind });
+        const straight = oppositePort(lane.from) === to;
+        if (!straight && this.tileIsRoadJunction) continue; // the box paints its own
+        out.push({
+          d: straight
+            ? roadLaneBandPath(lane.from, to, size, off, half)
+            : // The bend's twin: a constant-offset ribbon between the strip's two
+              // edges, on the same offset arc the cycle edge line is drawn at
+              // (roadGeometry's curve branch), so line and tint agree round the corner.
+              laneRibbonPathD(lane.from, to, size, off - half, off - half, off + half, off + half),
+          kind: lane.kind,
+        });
       }
     }
     return out;

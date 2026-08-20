@@ -654,6 +654,58 @@ export function roadLaneMarkingPaths(
   return out;
 }
 
+// Lane markings for a ONE-WAY STRAIGHT tile — the KERB-ANCHORED twin of the
+// one-way branch above, which is CENTRED and therefore only right on a bend.
+// Since the run-max kerb anchor a one-way straight pins lane index 0 to the
+// kerb at `(runMax/2)·W` and adds / drops lanes on the CENTRE side (see
+// sim/laneOffset.ts `oneWayLaneOffsetPx`), so the boundary above lane k−1 is
+// the run-constant offset `(runMax/2 − k)·W` — no seam taper on a surviving
+// lane. `entryCount` / `exitCount` are the lane counts actually crossing each
+// seam (the min-seam clamp the renderer computes); the boundary of a DROPPING
+// lane is drawn by the closure gore, not here, so the straight dividers stop at
+// `min(entryCount, exitCount)` and a WIDENING fans its new dividers out from
+// the entry-side edge.
+//
+// `cycle` (0 or 1) is the direction's kerb-side cycle lanes. It paints exactly
+// as on a two-way street: the full-slot dashed divider of lane 0 (k = 1) is
+// suppressed and a SOLID white edge line is drawn HALF a lane in from the kerb
+// (k = 0.5), where the green tint's inner edge and the bike's ride line are.
+// A one-way that is ONLY a cycle lane has no lane line to swap — its own kerb
+// edges bound it — hence the two-lane floor, mirroring `lanes >= 2` above.
+export function oneWayStraightMarkingPaths(
+  entry: Port,
+  exit: Port,
+  size: number,
+  runMax: number,
+  entryCount: number,
+  exitCount: number,
+  cycle = 0,
+): LaneMarkingPath[] {
+  const LANE_W = size * 0.14;
+  const at = (k: number) => (runMax / 2 - k) * LANE_W;
+  const hasCycle = cycle > 0 && Math.max(entryCount, exitCount) >= 2;
+  const out: LaneMarkingPath[] = [];
+  // Survivor dividers: straight lines between through-lanes present at both ends.
+  const survivors = Math.min(entryCount, exitCount);
+  for (let k = 1; k < survivors; k++) {
+    if (hasCycle && k === 1) continue; // the cycle lane's slot boundary
+    out.push({ d: roadParallelLine(entry, exit, size, at(k), at(k)), kind: "inner" });
+  }
+  // A widening opens new lanes on the LEFT (centre side): their dividers fan out
+  // from the entry-side edge to their straight line.
+  for (let k = entryCount; k < exitCount; k++) {
+    out.push({ d: roadParallelLine(entry, exit, size, at(entryCount), at(k)), kind: "inner" });
+  }
+  if (hasCycle) {
+    out.push({
+      d: roadParallelLine(entry, exit, size, at(0.5), at(0.5)),
+      kind: "inner",
+      solid: true,
+    });
+  }
+  return out;
+}
+
 // A line offset by `dA` at the entry end and `dB` at the exit end, parallel
 // to the entry→exit centreline in the right-hand-of-travel direction. When
 // `dA === dB` this is a straight constant-offset parallel (the original

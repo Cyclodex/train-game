@@ -8,6 +8,7 @@ import {
   roadCurveKerbEdgeTapered,
   flankPort,
   roadLaneMarkingPaths,
+  oneWayStraightMarkingPaths,
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
@@ -231,6 +232,128 @@ describe("roadLaneMarkingPaths", () => {
       3, 2,
     );
     expect(marks.filter(m => m.kind === "inner")).toHaveLength(4);
+  });
+
+  // A kerb-side cycle lane swaps its full-slot dashed divider for a SOLID edge
+  // line half a lane in from the kerb — the real-world half-width bike lane.
+  // Both directions are always equipped together (the 🚲 tool is symmetric,
+  // see tiles/editOps.ts addCycleLane), which is what keeps the centre marking
+  // between the two streams.
+  describe("kerb-side cycle lanes", () => {
+    const LANE_W = 200 * 0.14; // 28px
+    const yOf = (d: string) => parseFloat(d.match(/M [\d.]+ (-?[\d.]+)/)![1]);
+
+    it("straight: the outer dash becomes a solid line at half a lane from the kerb", () => {
+      // 1 car + 1 cycle each way. Without the cycle lane this is a plain 2+2:
+      // dividers at ±1·LANE_W. With it, those become solid edges at ±1.5·LANE_W.
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Right, 200, 2, 2, 2 * LANE_W, 2 * LANE_W, 1, 1,
+      );
+      const inner = marks.filter(m => m.kind === "inner");
+      expect(inner).toHaveLength(2); // one per direction, no full-slot dash left
+      expect(inner.every(m => m.solid)).toBe(true);
+      expect(inner.map(m => yOf(m.d)).sort((a, b) => a - b)).toEqual([
+        100 - 1.5 * LANE_W,
+        100 + 1.5 * LANE_W,
+      ]);
+      // The yellow centreline still runs down the middle of the ribbon, which is
+      // only the divider between the streams while the street stays symmetric.
+      expect(marks.filter(m => m.kind === "centre")).toHaveLength(1);
+    });
+
+    it("straight: a wider street keeps its car dividers and adds the cycle edge", () => {
+      // 2 car + 1 cycle each way: dashed divider between the car lanes (2·W),
+      // solid cycle edge at 2.5·W, and nothing at the suppressed 3-1 = 2… the
+      // slot boundary the cycle lane would otherwise own.
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Right, 200, 3, 3, 3 * LANE_W, 3 * LANE_W, 1, 1,
+      );
+      const inner = marks.filter(m => m.kind === "inner");
+      expect(inner.filter(m => m.solid)).toHaveLength(2); // the two cycle edges
+      expect(inner.filter(m => !m.solid)).toHaveLength(2); // one car divider per way
+      const solids = inner.filter(m => m.solid).map(m => yOf(m.d)).sort((a, b) => a - b);
+      expect(solids).toEqual([100 - 2.5 * LANE_W, 100 + 2.5 * LANE_W]);
+    });
+
+    it("bend: the same swap, on the offset arc", () => {
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Bottom, 200, 2, 2, undefined, undefined, 1, 1,
+      );
+      const inner = marks.filter(m => m.kind === "inner");
+      expect(inner).toHaveLength(2);
+      expect(inner.every(m => m.solid)).toBe(true);
+      // A curved marking is a sampled polyline, not a 2-point line.
+      expect(inner[0].d.split(" L ").length).toBeGreaterThan(2);
+    });
+  });
+});
+
+describe("oneWayStraightMarkingPaths (kerb-anchored one-way straights)", () => {
+  const LANE_W = 200 * 0.14; // 28px
+  const yOf = (d: string) => parseFloat(d.match(/M [\d.]+ (-?[\d.]+)/)![1]);
+
+  it("uniform 2-lane one-way: one dashed divider, no centre line", () => {
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 2, 2, 2);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].kind).toBe("inner");
+    expect(marks[0].solid).toBeUndefined();
+    // Kerb at (R/2)·W below the centreline; the divider sits one lane in.
+    expect(yOf(marks[0].d)).toBeCloseTo(100 + (2 / 2 - 1) * LANE_W, 3);
+  });
+
+  it("a cycle lane replaces the outer dash with a solid half-lane edge", () => {
+    // 1 car + 1 kerb cycle lane. The full-slot divider (k=1) is gone; the edge
+    // line sits at k=0.5 — half a lane in from the kerb, where the green tint
+    // ends and the bike rides.
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 2, 2, 2, 1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].solid).toBe(true);
+    expect(yOf(marks[0].d)).toBeCloseTo(100 + (2 / 2 - 0.5) * LANE_W, 3);
+  });
+
+  it("a wider one-way keeps its car dividers and adds the cycle edge", () => {
+    // 2 car + 1 cycle: divider between the car lanes at k=2, cycle edge at k=0.5,
+    // and NO dash at k=1 (the cycle lane's suppressed slot boundary).
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 3, 3, 3, 1);
+    expect(marks).toHaveLength(2);
+    const ys = marks.map(m => yOf(m.d)).sort((a, b) => a - b);
+    expect(ys).toEqual([100 + (1.5 - 2) * LANE_W, 100 + (1.5 - 0.5) * LANE_W]);
+    expect(marks.filter(m => m.solid)).toHaveLength(1);
+  });
+
+  it("mirrors when the one-way runs the other way (kerb is right-of-travel)", () => {
+    const marks = oneWayStraightMarkingPaths(Position.Right, Position.Left, 200, 2, 2, 2, 1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].solid).toBe(true);
+    expect(yOf(marks[0].d)).toBeCloseTo(100 - 0.5 * LANE_W, 3);
+  });
+
+  it("a lane drop stops the survivor dividers before the closing lane", () => {
+    // 3 lanes in, 2 out on a 3-wide run: only the k=1 divider is a survivor
+    // line; the closing lane's boundary is the gore's job.
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 3, 3, 2);
+    expect(marks).toHaveLength(1);
+    expect(yOf(marks[0].d)).toBeCloseTo(100 + (1.5 - 1) * LANE_W, 3);
+  });
+
+  it("a widening fans the new dividers out from the entry-side edge", () => {
+    // 1 lane in, 3 out on a 3-wide run: the opening lanes' dividers start on the
+    // entry edge (k=1) and splay to their own straight offsets.
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 3, 1, 3);
+    expect(marks).toHaveLength(2); // k=1 (degenerate at the edge) and k=2 (the fan)
+    const ends = marks.map(m => {
+      const [x0, y0, x1, y1] = m.d.match(/M ([\d.-]+) ([\d.-]+) L ([\d.-]+) ([\d.-]+)/)!.slice(1);
+      return { from: parseFloat(y0), to: parseFloat(y1), x0: parseFloat(x0), x1: parseFloat(x1) };
+    });
+    // Every divider starts on the entry-side edge …
+    expect(ends.every(e => Math.abs(e.from - (100 + (1.5 - 1) * LANE_W)) < 1e-6)).toBe(true);
+    // … and one of them opens out to the k=2 line at the exit.
+    expect(ends.some(e => Math.abs(e.to - (100 + (1.5 - 2) * LANE_W)) < 1e-6)).toBe(true);
+  });
+
+  it("a one-way that is ONLY a cycle lane draws no lane line at all", () => {
+    // Its own kerb edges bound it — there is no lane boundary to swap.
+    expect(oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 1, 1, 1, 1)).toEqual([]);
   });
 });
 
