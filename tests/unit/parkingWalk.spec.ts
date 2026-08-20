@@ -303,7 +303,7 @@ describe("the street cross-section: who is behind whom", () => {
     const south = pavementOffsetEndsFor(level, "1,1", 1, Position.Left, Position.Right);
     const north = pavementOffsetEndsFor(level, "1,1", -1, Position.Left, Position.Right);
     expect(Math.abs(south.offEntry)).toBeGreaterThan(plain);
-    expect(Math.abs(north.offEntry)).toBe(plain);
+    expect(Math.abs(north.offEntry)).toBeCloseTo(plain, 6);
   });
 
   it("keeps the band on its own tile however deep the bay", () => {
