@@ -2775,6 +2775,23 @@ of the above; read that section first.
   Lane-graph overlay code must stay identical to it. Cyan ≠ painted dash/gore at a
   seam ⇒ the PAINT is the bug. Overlay is the diagnostic for all road geometry.
 
+## TRACK PROPORTIONS (2026-08-20)
+- Anchor the track's look on REAL numbers — standard gauge 1435mm on a 2600mm
+  sleeper, i.e. the rails at **55% of the sleeper's half-length**. Everything is
+  drawn in `TileRail.vue`: the sleeper band is the centreline stroked 20px
+  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1px grey.
+- `railDistanceFromPath` = HALF THE GAUGE in px, and 20/2 × 0.55 = **5.5**. It was
+  7 (70%), which left a 3px sleeper end past the rail and read as "rails sitting
+  on the sleeper tips" — the user spotted it by eye before the maths was done.
+- The terrain keep-out (`terrain.ts RAIL_HALF = 8` units) follows the SLEEPER,
+  not the rail, so re-gauging does not move the cleared right-of-way.
+- SLEEPER PITCH IS DELIBERATELY COARSE. Real pitch would be ~"2.5 3" (600mm
+  centres at 1px = 130mm), roughly twice as many sleepers. Tried and rejected:
+  it looks right at a macro crop and blurs into a solid dark band at the normal
+  board zoom, where the track loses its railway texture. Judge any sleeper/rail
+  weight change at BOARD scale (`npm run shot -- railcurves --scale 2`), not
+  only on a zoomed crop.
+
 ## CURVES — rail ≠ road (the #1 trap)
 - RAIL curve CENTRELINE (the sleeper bed, the path a train drives) = quadratic
   Bézier through TILE CENTRE (`Q centre`). `pathGeometry.ts segmentPathD`.
