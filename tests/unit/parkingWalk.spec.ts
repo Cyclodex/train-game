@@ -13,6 +13,7 @@ import {
   pavementOffsetFor,
   roadHalfUnits,
   roadThrough,
+  PAVEMENT_GAP,
   PAVEMENT_WIDTH,
 } from "@/tiles/footway";
 import { accessTileOf } from "@/tiles/access";
@@ -96,12 +97,17 @@ describe("a walk can start at a kerb, not just at a building", () => {
 });
 
 describe("the pavement goes AROUND the parking, not through it", () => {
-  it("clears every bay on every parking tile", () => {
+  it("clears every VISIBLE bay on every parking tile", () => {
     // Before this, both the paint and the people were offset from the
     // CARRIAGEWAY alone — and a bay starts at that same kerb and reaches
     // outward, so it swallowed the footway whole. Measured on this board:
     // every parking tile overlapped by 8 units, which is the pavement's ENTIRE
     // width. People walked over the bonnets.
+    //
+    // VISIBLE, and that word is the correction: bare kerb (`row.informal`) is
+    // derived onto nearly every straight street and paints nothing at all, so
+    // going round it pushed the pavement off the carriageway board-wide. It is
+    // pinned the other way, in kerbOverflow.spec.ts — bare kerb moves nothing.
     const level = homeparking.level;
     for (const [tileId, cell] of Object.entries(level)) {
       const rows = rowsOf(cell);
@@ -111,6 +117,7 @@ describe("the pavement goes AROUND the parking, not through it", () => {
       const coord = parseCoordId(tileId);
       for (const row of rows) {
         if (stallOnLane(row.kind)) continue; // a halt is in the lane, not beside it
+        if (row.informal) continue; // and bare kerb is not a bay at all
         const bank = bankOf(row);
         const side = sideOfBank(level, tileId, bank);
         if (side === null) continue;
@@ -125,6 +132,47 @@ describe("the pavement goes AROUND the parking, not through it", () => {
           pavementInner,
           `pavement runs through the ${row.kind} bay on ${tileId}`,
         ).toBeGreaterThanOrEqual(bayOuter);
+      }
+    }
+  });
+
+  it("and never floats off into the verge either", () => {
+    // THE OTHER HALF OF THE SAME QUESTION, and the half that was missing: a
+    // test that only asks whether the band CLEARS the bays passes just as
+    // happily when the band has come away from the street altogether. That is
+    // what shipped — every bank of every street pushed out by a parallel bay's
+    // depth for a row of bare kerb nobody can see, so the board grew grey
+    // ribbons lying in the ground with tarmac nowhere near them.
+    //
+    // So: on EVERY bank of EVERY street, the pavement's near edge is exactly
+    // PAVEMENT_GAP from the last solid thing on that bank — the kerb, or the
+    // bay standing at it.
+    const level = homeparking.level;
+    for (const [tileId, cell] of Object.entries(level)) {
+      const through = roadThrough(cell);
+      if (!through) continue;
+      const coord = parseCoordId(tileId);
+      for (const side of [1, -1] as const) {
+        // The furthest out anything on this bank reaches: the kerb, unless a
+        // visible bay stands outside it.
+        let solid = roadHalfUnits(cell);
+        for (const row of rowsOf(cell)) {
+          if (stallOnLane(row.kind) || row.informal) continue;
+          if (sideOfBank(level, tileId, bankOf(row)) !== side) continue;
+          solid = Math.max(
+            solid,
+            (kerbOffsetAt(level, coord, row.from, 200) +
+              stallDepthPx(row.kind, 200, needsBigBay(row.reserved))) /
+              2,
+          );
+        }
+        const inner =
+          Math.abs(pavementOffsetFor(cell, side, through.from, through.to)) -
+          PAVEMENT_WIDTH / 2;
+        expect(inner - solid, `the pavement on ${tileId} (side ${side}) floats`).toBeCloseTo(
+          PAVEMENT_GAP,
+          5,
+        );
       }
     }
   });

@@ -57,8 +57,12 @@ import {
 // A lane is 14% of a tile (`roadGeometry.ts`), and everything below is in the
 // same 0..100 ground units the tile art uses.
 const LANE_W = 14;
-// How far past the tarmac edge the middle of the pavement sits.
-const PAVEMENT_GAP = 4;
+// How far past the tarmac edge (or past the parking outside it) the pavement's
+// near edge sits. Exported because it is the whole difference between a
+// pavement and a grey ribbon lying in the verge: a test that checks the band
+// CLEARS the bays and nothing else passes just as happily when the band has
+// come away from the street altogether.
+export const PAVEMENT_GAP = 4;
 /** How wide the paved strip is drawn. */
 export const PAVEMENT_WIDTH = 8;
 
@@ -175,6 +179,16 @@ function parkingOutsetUnits(cell: TileCell | undefined, bank: Port): number {
     // A HALT is not a bay — the vehicle never leaves the carriageway, so there
     // is nothing between the kerb and the pavement to walk around.
     if (stallOnLane(row.kind)) continue;
+    // NEITHER IS BARE KERB, and this one is the trap. `ParkingRow.informal`
+    // (tiles/kerbOverflow.ts) is the last-resort roadside a car may be left on:
+    // it paints NOTHING, and it is derived onto nearly every straight street on
+    // every board. Counted here it pushed each of those pavements a parallel
+    // bay's depth (13 units) out from a kerb with nothing standing at it, and
+    // the band came away from the carriageway BOARD-WIDE — grey ribbons
+    // floating in the verge, which is exactly how it shipped and exactly what
+    // /test/homeparking showed. The rule is the one the paint already follows:
+    // the pavement goes round what you can SEE.
+    if (row.informal) continue;
     // Ground units are half of tile pixels (100 per tile against 200).
     const depth = stallDepthPx(row.kind, 200, needsBigBay(row.reserved)) / 2;
     out = Math.max(out, depth + (row.gap ?? 0) * LANE_W);

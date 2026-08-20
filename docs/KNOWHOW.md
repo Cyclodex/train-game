@@ -2646,6 +2646,19 @@ of the above; read that section first.
   against a pavement at 18→26). Now +4 clear on all of them.
 - `parkingOutsetUnits(cell, bank)` is the shared fix and BOTH callers must use
   it: paint and people disagreeing is people walking beside the pavement.
+- **ONLY WHAT YOU CAN SEE PUSHES IT OUT** (2026-08-20). The first cut counted
+  every row, and `row.informal` — bare kerb, derived onto NEARLY EVERY STRAIGHT
+  STREET (`tiles/kerbOverflow.ts`), painting nothing — is a `parallel` row, so it
+  contributed 13 units on roads with no visible parking at all. Every pavement on
+  the board came away from its carriageway and lay in the ground as a free grey
+  ribbon; `/test/homeparking` showed it on the outer ring, the inner ring and both
+  sides. `parkingOutsetUnits` skips `informal` as it skips `busstop`.
+  · **A ONE-SIDED TEST IS WHY IT SHIPPED.** "the band clears every bay" passes
+    just as happily when the band has left the street entirely. The guard is the
+    OTHER side too: on every bank of every street, the pavement's near edge is
+    exactly `PAVEMENT_GAP` from the last solid thing on that bank (kerb, or the
+    bay standing at it) — `parkingWalk.spec.ts` → "never floats off into the
+    verge either", measured at 4.0 on all 27 banks of `/test/homeparking`.
 - **PER BANK, NOT PER TILE.** A street with a drive on one side and bare kerb on
   the other has two pavements at two distances; pushing both by the wider leaves
   the empty side's band floating in the verge. `bankOfSide` converts the walker
@@ -2699,9 +2712,10 @@ of the above; read that section first.
   LAST, after the forecourts and the drives take their banks). Two `parallel`
   spaces on whatever kerb is left. Same numbers now read 0/0/1 vanished.
   · IT PAINTS NOTHING — no apron, no bay lines, no kerb line, no P sign (all four
-    return early on `row.informal`). This is not polish: the pass touches nearly
-    every street, so a row that painted itself would make every road on every
-    board look as though it had been widened.
+    return early on `row.informal`), AND IT MOVES NOTHING: `parkingOutsetUnits`
+    (`tiles/footway.ts`) must skip it too, or every pavement on the board steps
+    13 units into the verge. This is not polish: the pass touches nearly every
+    street, so anything a row does to its tile, it does to the whole board.
   · INVISIBLE UNLESS ASKED FOR: `stallFits(..., informal)` defaults FALSE, so
     ambient traffic, the first-choice search and `capacity` (hence the P sign) all
     look straight past it. `planParkingNear` = real parking first, kerb only if
