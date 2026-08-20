@@ -803,9 +803,46 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   the FAR end. Left standing at the kerb they would wait for ever for a train
   that does not call at a road.
 - Board geometry is therefore load-bearing. On `busrail` the interchange kerb is
-  two tiles under the platform (inside the radius, so the network joins) and
-  Altstadt is four from every platform (outside it, so the bus is the only way
-  in). Move either and the board stops demonstrating anything.
+  directly under the platform, one tile (inside the radius, so the network
+  joins) and Altstadt is four from every platform (outside it, so the bus is the
+  only way in). Move either and the board stops demonstrating anything.
+- **A WALK IS A STEP OF A JOURNEY, NEVER A JOURNEY** (2026-08-20, review of
+  #90). Three rules, and the first cut of the walk had only the middle one:
+    · `nextDestination` never offers a stop ONE WALK LINK AWAY
+      (`walkOnlyReach`). Nobody becomes a passenger to get somewhere they can
+      walk to — and walking them there would have scored a delivery the player
+      never earned. Measured on `busrail` as the gallery ships it: every SECOND
+      Hauptbahnhof passenger was sent to the kerb outside, nothing could move
+      them, the queue hit its cap — and `advanceDemand` stops generating AT the
+      cap, so the platform died. After: 54/103/176 delivered per 300s window,
+      the platforms peaking at 3 rather than pinned on their cap of 8.
+    · Anyone WAITING whose next hop is a walk takes it (`walkWaiting`, run from
+      `advanceDemand`). Only riders getting off a vehicle used to walk, which
+      left a journey that BEGINS on foot unstartable: no vehicle boards them
+      (their first hop is not a ride, and `alightFor`'s strictly-closer rule
+      refuses them), so they stood there for ever.
+    · A walk that ENDS at the rider's destination is a DELIVERY. Treating it as
+      a change re-queued them at their own destination — a state `enqueue`
+      itself forbids — so every Altstadt rider sat at Hauptbahnhof and rode one
+      pointless extra lap before anybody counted them.
+- A WALKER GOES PAST THE CAP, exactly like a CHANGE (D8). A cap is a limit on
+  the SPAWNER, not on how many people may stand at a kerb, and holding walkers
+  back recreates the very starvation this fixes: with the cap applied to them,
+  `busrail`'s Hauptbahnhof sat at 8/8 for an entire run — its Altstadt-bound
+  people could not walk to the full kerb, and a stop at its cap generates
+  nobody. The cost is a kerb queue with no bound when the bus service is too
+  thin to clear it; that is the SIGNAL (buy another bus), and kerbs do not feed
+  the overcrowd fail predicate — `worstStationQueue` counts platforms only.
+- ONE WALK LINK IS ONE WALK. `walkOnlyReach` is the direct neighbours, never a
+  transitive closure: `walkLinksOf` pairs a kerb with the platform beside it and
+  says nothing about two platforms that happen to share a kerb. Chaining them
+  made all of `busrail`'s railway "walkable", every station dropped out of every
+  pool, and the board delivered NOBODY — 0 in 400s. Caught only because the
+  board changed under the fix mid-review; on the old straight-street board no
+  two stations shared a kerb, so nothing showed it.
+- The invariant to hold on to: NO PASSENGER IS EVER CREATED THAT NO MECHANISM
+  CAN MOVE. Every hop of every offered journey is either a ride (a line, or a
+  stopper) or a walk, and both now have something that performs them.
 
 ## THE TRANSIT LAYER — ONE FOR BOTH SIMS (2026-08-05)
 - `sim/transit.ts` owns the LINE registry, the line-graph memo, the QUEUES, the
