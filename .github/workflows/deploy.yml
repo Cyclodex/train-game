@@ -97,10 +97,12 @@ jobs:
               owner, repo, pull_number: context.issue.number,
             });
             const body = pr.body ?? "";
-            // The trailing slash is part of the match, so `…:5173/#/play` becomes
-            // `…/pr-<N>/#/play` rather than growing a second one.
+            // The trailing slash is eaten by the match and given back by `base`,
+            // so `…:5173/#/play` becomes `…/pr-<N>/#/play` rather than growing a
+            // second slash — and a bare `…:5173` still lands on the preview root.
+            // Idempotent either way: a rewritten URL has no localhost left in it.
             const rewritten = body.replace(
-              /https?:\/\/(?:localhost|127\.0\.0\.1):\d+\//g,
+              /https?:\/\/(?:localhost|127\.0\.0\.1):\d+\/?/g,
               base
             );
             if (rewritten === body) {
