@@ -174,20 +174,25 @@ describe("paint parity: seamPaintLanes IS what the surface strokes, board-wide",
             junction: isRoadJunction(nRoad),
           };
         };
-        // ONE-WAY straight along this seam's axis: Tile.vue's one-way branch —
-        // width entryCount at the entry seam; the closing lane's tarmac stays
-        // full width across a narrowing tile, so max(entry, exit) at the exit.
+        // ONE-WAY straight along this seam's axis: the entry edge carries what
+        // the upstream street brings (a same-direction one-way neighbour is
+        // adopted at ITS own count — the recovery taper after a gore lives on
+        // the tile downstream of it), the exit edge carries this tile's own
+        // count. That is what makes every one-way↔one-way seam agree.
         const owFrom = ([port, oppositePort(port)] as Port[]).find(f =>
           isOneWayStraight(road, f),
         );
         if (owFrom !== undefined) {
           const m = laneCount(road, owFrom);
+          const nUp = neighborCoord(coord, owFrom);
+          const upRoad = nUp ? level[`${nUp.x},${nUp.y}`]?.road : undefined;
           const e = crossingAt(owFrom);
-          const x = crossingAt(oppositePort(owFrom));
-          const entryCount = !e.junction && e.crossing > 0 ? Math.min(m, e.crossing) : m;
-          const exitCount = !x.junction && x.crossing > 0 ? Math.min(m, x.crossing) : m;
-          const expected =
-            port === owFrom ? entryCount : Math.max(entryCount, exitCount);
+          const entryBand = isOneWayStraight(upRoad, owFrom)
+            ? laneCount(upRoad, owFrom)
+            : !e.junction && e.crossing > 0
+              ? Math.min(m, e.crossing)
+              : m;
+          const expected = port === owFrom ? entryBand : m;
           expect(seamPaintLanes(level, coord, port), at).toBeCloseTo(expected, 6);
           // And the kerb flank itself is the run anchor — the constant edge the
           // one-way surface hangs its through lanes on.
@@ -242,10 +247,12 @@ describe("car-band parity: the vehicles drive inside the profile's kerb, board-w
             6,
           );
           // Centre side: the innermost lane that actually crosses this seam
-          // (`oneWaySeamCount`'s min rule, replicated) ends on the painted
-          // centre edge at the ENTRY seam. At the EXIT seam of a lane drop the
-          // paint deliberately stays a lane wider (the gore shuts the lane, not
-          // the kerb), so there the car merely stays INSIDE the tarmac.
+          // (`oneWaySeamCount`'s min rule, replicated) ends exactly on the
+          // painted centre edge wherever the tarmac carries only real lanes.
+          // Where the surface is deliberately WIDER than the lanes crossing —
+          // the gore side of a drop seam (the hatch shuts the lane at full
+          // width) and the recovery taper on the tile after it — the car
+          // merely stays INSIDE the tarmac.
           const m = laneCount(road, owFrom);
           const seamCount = (p: Port): number => {
             const n = neighborCoord(coord, p);
@@ -257,7 +264,8 @@ describe("car-band parity: the vehicles drive inside the profile's kerb, board-w
           const cnt = Math.max(1, seamCount(port));
           const innerEdge = oneWayLaneOffsetPx(cnt - 1, runMax, 200) / 200 - LANE_WIDTH_FRAC / 2;
           const centreEdge = -flankAt(profile, bankFor(owFrom, "left")).kerb;
-          if (port === owFrom) {
+          const bandLanes = seamPaintLanes(level, coord, port);
+          if (Math.abs(bandLanes - cnt) < 1e-6) {
             expect(innerEdge, `${at}: centre lane off the painted centre edge`).toBeCloseTo(
               centreEdge,
               6,
@@ -265,7 +273,7 @@ describe("car-band parity: the vehicles drive inside the profile's kerb, board-w
           } else {
             expect(
               innerEdge,
-              `${at}: a car outside the painted band at a gore seam`,
+              `${at}: a car outside the painted band at a gore/recovery seam`,
             ).toBeGreaterThanOrEqual(centreEdge - 1e-6);
           }
           return;
@@ -319,11 +327,20 @@ describe("symmetry: both tiles of a seam describe the same edge", () => {
           const a = flankAt(ours, flank);
           const b = flankAt(theirs, flank);
           const at = `${scenario.id} ${tileId}↔${nId} flank ${flank}`;
-          // THE ONE DELIBERATE ASYMMETRY: a one-way lane drop's centre-side
-          // surface steps a full lane at the gore seam (the closing lane's
-          // tarmac stays wide until the hatched gore shuts it). The profile
-          // reports the paint's truth on each side rather than smoothing it.
-          if (oneWayCentreFlank(cell, flank) || oneWayCentreFlank(nCell, flank)) continue;
+          // A one-way↔one-way seam AGREES on the centre flank too, since the
+          // entry edge adopts what the upstream tile brings (the recovery taper
+          // lives downstream of the gore, never at the seam). The exemption
+          // survives only for a one-way meeting something with a different
+          // anchor — a junction's centred arm, a two-way street — where the two
+          // sides legitimately describe different surfaces.
+          const bothOneWay = ([port, oppositePort(port)] as Port[]).some(
+            f => isOneWayStraight(cell.road, f) && isOneWayStraight(nCell.road, f),
+          );
+          if (
+            !bothOneWay &&
+            (oneWayCentreFlank(cell, flank) || oneWayCentreFlank(nCell, flank))
+          )
+            continue;
           expect(a.kerb, `${at}: kerbs disagree`).toBeCloseTo(b.kerb, 6);
           // The pavement agrees wherever BOTH tiles have one; a tile without a
           // footway simply ends the band at the seam.

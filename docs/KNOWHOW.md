@@ -1007,12 +1007,16 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       (the cross-section rule, `docs/superpowers/specs/2026-08-20-street-cross-
       section-design.md`). Bare kerb (`row.informal`) paints nothing and moves
       nothing either.
-    · THE ONE DELIBERATE ASYMMETRY: a one-way lane drop's centre-side surface
-      STEPS a lane at the gore seam — the closing lane's tarmac is shut by the
-      hatch, not by the kerb pinching in. The profile reports each side's
-      paint truth (`oneWayCentreBand`), the symmetry sweep exempts that flank,
-      and a merging car sits INSIDE the still-wide tarmac (containment, not
-      equality, at gore seams — see the car-band case).
+    · ONE-WAY CENTRE RULE (2026-08-20, second pass): the tarmac a stream brings
+      to a seam is the tarmac it had — the ENTRY edge adopts the upstream
+      one-way's own count, the EXIT edge carries the tile's own. So a gore
+      shuts its lane at full width on the tile that owns it, the NEXT tile
+      paints the recovery taper back down, and every one-way↔one-way seam
+      agrees by construction (the old stepped exit edge was the one asymmetry
+      the symmetry sweep had to exempt — and a visible pavement JUMP at every
+      lane drop). A merging car sits INSIDE gore/recovery tarmac (containment,
+      not equality — see the car-band case); markings and gores keep the
+      min-based REAL lane counts, a recovery wedge has no lane in it.
     · Three pre-existing absurdities the parity oracle surfaced: (a) a WIDE
       junction arm (kerb past 0.5 − band) used to clamp the pavement band
       INSIDE the carriageway and paint tarmac over it — the profile answers

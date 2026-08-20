@@ -606,8 +606,8 @@ import {
   laneAllExits,
   approachPortsOf,
 } from "@/tiles/lanes";
-import { rowsOf } from "@/tiles/parking";
-import { seamPaintLanes } from "@/tiles/streetProfile";
+import { bankFor, rowsOf } from "@/tiles/parking";
+import { roadEdgeFrac, seamPaintLanes } from "@/tiles/streetProfile";
 import TileParking from "./TileParking.vue";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -1452,13 +1452,19 @@ class Tile extends Vue {
         const entryCount = !jEntry && crossEntry > 0 ? Math.min(m, crossEntry) : m;
         const exitCount = !jExit && crossExit > 0 ? Math.min(m, crossExit) : m;
         const R = this.game.roadOneWayRunMax(coord, entry);
-        const kerbOff = (R / 2) * LANE_W; // constant kerb (right, +n, index 0 side)
-        // The closing-lane tarmac stays FULL width across a narrowing tile (the
-        // lane is closed by the hatched gore, not by the kerb tapering — a real
-        // motorway lane drop); it only grows on a WIDENING. So the centre (left)
-        // edge runs at the wider of the two seam counts and is straight on a narrowing.
-        const innerEntry = kerbOff - entryCount * LANE_W;
-        const innerExit = kerbOff - Math.max(entryCount, exitCount) * LANE_W;
+        // SURFACE edges from the street profile. The kerb (right of travel) is
+        // the run anchor; the centre edge carries what the upstream street
+        // brings at the entry seam and this tile's own count at the exit seam —
+        // so a lane drop is shut by its gore at full width and the tile AFTER
+        // the gore paints the recovery taper back down (see streetProfile's
+        // `oneWayCentreBand`). `entryCount`/`exitCount` above stay min-based:
+        // they are the REAL lanes for the survivor markings and the gore, not
+        // the tarmac — a recovery wedge is dead tarmac with no lane in it.
+        const kerbOff = roadEdgeFrac(this.level, coord, entry, bankFor(entry, "right")) * size;
+        const centreAt = (port: Position) =>
+          -roadEdgeFrac(this.level, coord, port, bankFor(entry, "left")) * size;
+        const innerEntry = centreAt(entry);
+        const innerExit = centreAt(exit);
         // Dividers — survivor lines between through-lanes present at both ends
         // (lane k boundary at (R/2 − k)·W, measured from the kerb), fan-out lines
         // for a widening, and the kerb cycle lane's SOLID half-width edge line in

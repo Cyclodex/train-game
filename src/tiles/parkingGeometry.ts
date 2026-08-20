@@ -163,13 +163,17 @@ export function stallOutlinePath(
   index: number,
   size: number,
   kerbPx: number,
+  // DEBUG ONLY: draw the box even where the player must never see one — an
+  // informal or unmarked stall. The debug overlay passes true so the invisible
+  // spaces become inspectable (a dashed ghost); nothing else may.
+  ghost = false,
 ): string {
   // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
   // omission. This is the stretch of roadside a driver stops on when there is
   // nowhere else; marking it would turn it into a bay, and painting an apron
   // down every street on the board would make the whole town look as though its
   // roads had been widened. The car standing there is the only thing to see.
-  if (row.informal) return "";
+  if (row.informal && !ghost) return "";
   if (row.kind === "garage") return "";
   // A HALT has no bay to outline — it is a length of kerb, and its depth is zero
   // by definition. Drawing one anyway produces a DEGENERATE box: zero long and a
@@ -181,7 +185,7 @@ export function stallOutlinePath(
   // painted, which is the entire difference between a European bay rank and an
   // American wide street you park along. The apron and the outer kerb line are
   // deliberately still drawn: without them the parked cars would sit on grass.
-  if (row.marking === "none") return "";
+  if (row.marking === "none" && !ghost) return "";
   return poly(stallBoxPoints(row, index, size, kerbPx));
 }
 

@@ -151,14 +151,16 @@ export function roadEdgeFrac(
     const kerbFlank = bankFor(oneWayFrom, "right");
     const kerb = (runMax / 2) * PROFILE_LANE_FRAC;
     if (flank === kerbFlank) return kerb;
-    // CENTRE flank. In lockstep with the one-way band the pavement has always
-    // drawn (`bandsFor`'s one-way branch), including its deliberate seam
-    // ASYMMETRY at a lane drop: the closing lane's tarmac stays full width
-    // across the narrowing tile (the lane is shut by the hatched gore, not by
-    // the kerb pinching in), so the wide tile's EXIT edge carries the wider
-    // count while the narrow neighbour's entry edge carries its own. The
-    // centre-side surface genuinely STEPS a lane at a gore seam — that is the
-    // paint's truth, and the profile reports it rather than smoothing it.
+    // CENTRE flank: the tarmac a stream brings to a seam is the tarmac it had.
+    // The entry edge adopts the upstream one-way's own count, the exit edge
+    // carries this tile's own — so every one-way↔one-way seam AGREES by
+    // construction and each width change happens DOWNSTREAM of its seam: the
+    // gore closes a lane at full width, and the tile after it carries the
+    // recovery taper back to its own count (a widening keeps its fan-out
+    // downstream exactly as before). This replaced the old stepped exit edge
+    // (max(entry, exit)), whose one-lane jump at every gore seam was the one
+    // asymmetry the profile had to exempt from its symmetry sweep — and the
+    // visible pavement step the boards showed at every one-way lane drop.
     const m = oneWayCentreBand(level, coord, port, oneWayFrom);
     return m * PROFILE_LANE_FRAC - kerb;
   }
@@ -343,20 +345,24 @@ function oneWayApproach(road: TileCell["road"], port: Port): Port | null {
   return null;
 }
 
-// The centre-side band of a one-way straight at one of its two seams — the
-// exact numbers of the footway's one-way branch: `entryCount` at the entry
-// seam, `max(entryCount, exitCount)` at the exit seam (the closing lane's
-// tarmac stays full width across a narrowing tile).
+// The centre-side band of a one-way straight at one of its two seams, in lanes.
+//
+// ENTRY seam: what the upstream street brings. A same-direction one-way
+// neighbour is adopted at ITS own count — wider after a gore (this tile then
+// carries the recovery taper), narrower before a fan-out (unchanged, the min
+// rule always gave that) — so the seam agrees from both sides. Any other feeder
+// (junction, two-way, map edge) keeps the min-seam rule.
+//
+// EXIT seam: this tile's OWN count, always. A lane drop is shut by the hatched
+// gore at full width on the tile that owns the gore, and the taper back down
+// belongs to the tile after the seam — never to the seam itself.
 function oneWayCentreBand(level: Level, coord: Coordinates, port: Port, from: Port): number {
   const m = laneCount(level[getCoordinatesId(coord)]?.road, from);
-  const count = (p: Port): number => {
-    const n = neighborCoord(coord, p);
-    const nRoad = n ? level[getCoordinatesId(n)]?.road : undefined;
-    if (!nRoad?.length) return m;
-    const crossing = laneCountAt(nRoad, oppositePort(p));
-    return !isRoadJunction(nRoad) && crossing > 0 ? Math.min(m, crossing) : m;
-  };
-  const entryCount = count(from);
-  if (port === from) return entryCount;
-  return Math.max(entryCount, count(oppositePort(from)));
+  if (port !== from) return m;
+  const n = neighborCoord(coord, from);
+  const nRoad = n ? level[getCoordinatesId(n)]?.road : undefined;
+  if (!nRoad?.length) return m;
+  if (isOneWayStraight(nRoad, from)) return laneCount(nRoad, from);
+  const crossing = laneCountAt(nRoad, oppositePort(from));
+  return !isRoadJunction(nRoad) && crossing > 0 ? Math.min(m, crossing) : m;
 }

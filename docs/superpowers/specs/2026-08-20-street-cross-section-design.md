@@ -142,13 +142,18 @@ and made that the module every layer reads:
   rewriting while agreement is provable — and are **pinned board-wide** by the
   sweep `tests/unit/tiles/streetProfile.spec.ts` (pavement / paint / car-band
   parity + symmetry + invariants + a synthetic street×parking×footway matrix).
-- The one deliberate asymmetry (one-way gore seams: the centre-side surface
-  steps a lane; a merging car is inside the tarmac, not on its edge) and the
-  three absurdities the parity oracle surfaced (bands clamped inside wide
+- The three absurdities the parity oracle surfaced (bands clamped inside wide
   junction arms; bands clamped into deep gapped bays — both now honestly
   `pavement: null`; walkers missing the one-way kerb-anchored branch — now
   fixed onto the paint's numbers) are documented in `docs/KNOWHOW.md` → THE
-  STREET PROFILE.
+  STREET PROFILE. The gore-seam asymmetry the first pass carried (the centre
+  edge STEPPED a lane at every one-way drop, and the pavement jumped with it)
+  is gone: the entry edge now adopts what the upstream street brings and the
+  tile after a gore paints the recovery taper, so one-way seams agree like
+  every other seam (KNOWHOW → ONE-WAY CENTRE RULE). Junction pavements are
+  likewise drawn from geometry — corner fillets between adjacent arms plus a
+  band along a flat side — instead of per movement, which used to leave green
+  wedges and box-crossing band slivers at every T.
 
 ### The authoring seam (deliberately later)
 

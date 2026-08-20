@@ -3,7 +3,7 @@ import type { Coordinates } from "@/types";
 import type { Level, Port, TileCell } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import type { Lane } from "@/tiles/lanes";
-import { laneCountAt, roadPortsOf } from "@/tiles/lanes";
+import { isRoadJunction, laneCountAt, roadPortsOf, turnKind } from "@/tiles/lanes";
 import { oppositePort } from "@/sim/topology";
 import { roadCurveKerbEdgeTapered, roadKerbEdge } from "@/tiles/roadGeometry";
 import { accessTileOf } from "@/tiles/access";
@@ -562,6 +562,56 @@ export function pavementPaths(level: Level, coordId: string, size = 100): string
   const coord = parseCoordId(coordId);
   const scale = size / 100;
   const width = PAVEMENT_WIDTH * scale;
+
+  const stroke = (d: string) =>
+    `<path d="${d}" fill="none" stroke="${PAVEMENT_FILL}" stroke-width="${width.toFixed(2)}" stroke-linecap="butt" />`;
+
+  // A JUNCTION's pavement is drawn from its GEOMETRY, not its movements. The
+  // per-movement loop below draws two bands per movement, and on a junction a
+  // turn's outer band cuts diagonally across the box (entry on one street's far
+  // pavement, exit beside the arm) while the through band runs straight across
+  // the arm mouths — both mostly hidden under the box tarmac, but their
+  // uncovered slivers showed as green wedges and ragged joins at every seam
+  // (the parkinglot T was the report). What a junction physically has is:
+  //  · a STRAIGHT band along each flat side (a T-junction's armless flank),
+  //  · a CORNER FILLET between each pair of adjacent arms — the same corner
+  //    the tarmac's fillet kerb traces, one band, tapering from one street's
+  //    pavement offset to the other's.
+  if (isRoadJunction(road)) {
+    const arms = new Set<Port>(roadPortsOf(road));
+    const at = (port: Port, flank: Port): number | null => {
+      const f = flankAt(resolveSeamProfile(level, coord, port), flank);
+      return f.pavement === null ? null : f.pavement * 100;
+    };
+    const out: string[] = [];
+    const all: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
+    for (const flank of all) {
+      if (arms.has(flank)) continue;
+      const p = ((flank + 1) % 4) as Port;
+      const q = ((flank + 3) % 4) as Port;
+      if (!arms.has(p) || !arms.has(q)) continue;
+      const sign = bankFor(p, "right") === flank ? 1 : -1;
+      const offP = at(p, flank);
+      const offQ = at(q, flank);
+      if (offP === null && offQ === null) continue;
+      const a = (offP ?? offQ!) * sign * scale;
+      const b = (offQ ?? offP!) * sign * scale;
+      out.push(stroke(roadKerbEdge(p, q, size, a, b, 1)));
+    }
+    for (const pa of all) {
+      const pb = ((pa + 1) % 4) as Port;
+      if (!arms.has(pa) || !arms.has(pb)) continue;
+      const rel = turnKind(pa, pb) === "right" ? ("right" as const) : ("left" as const);
+      const sign = rel === "right" ? 1 : -1;
+      const offA = at(pa, bankFor(pa, rel));
+      const offB = at(pb, bankFor(oppositePort(pb), rel));
+      if (offA === null && offB === null) continue;
+      const a = (offA ?? offB!) * sign * scale;
+      const b = (offB ?? offA!) * sign * scale;
+      out.push(stroke(roadCurveKerbEdgeTapered(pa, pb, size, a, b, 1)));
+    }
+    return out.join("");
+  }
 
   // One band per distinct movement across the tile, deduplicated: a two-way
   // street is two lanes over the same ground and must not paint its pavement
