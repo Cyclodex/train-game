@@ -293,8 +293,10 @@ export const FOOT: Record<TerrainKind, number> = {
   industry: 13,
 };
 // A trunk needs far less room than a canopy: how much clearance a FOREST
-// tree's base needs before it is standing in the ballast.
-const TRUNK_CLEAR = 4;
+// tree's base needs before it is standing in the ballast. Exported because the
+// meadow's backdrop trees fell their right-of-way by the same rule
+// (utils/meadowBackdrop.ts).
+export const TRUNK_CLEAR = 4;
 
 // --- Glades ------------------------------------------------------------------
 //

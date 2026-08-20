@@ -170,6 +170,11 @@
         :badge="badge"
         @send="onFareClick(badge)"
       />
+      <!-- The meadow theme's backdrop trees: one world overlay in the canopy
+           band, above rails/trains/cars (see components/BackdropTrees.vue).
+           Absolutely positioned, so it is not a grid ITEM (KNOWHOW → RENDER
+           LAYOUT). The 🌳 BG toggle strips it with the rest of the theme. -->
+      <BackdropTrees :cols="cols" :rows="rows" />
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"

@@ -245,7 +245,9 @@ Key files:
   `index.ts` is the registry; one file per mode (`sandbox`, `puzzle`, `daily`,
   `time-attack`, `crossing-keeper`); `lastMode.ts` persists the last-opened mode.
 - `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
-  `src/utils/meadowBackdrop.ts` builds the seamless meadow backdrop SVG.
+  `src/utils/meadowBackdrop.ts` owns the seeded meadow tree layout, rendered by
+  `components/BackdropTrees.vue` as a world overlay ABOVE rails/trains/cars
+  (the canopy z band), not as a background under the board.
 - `src/objectiveStore.ts` — per-level best-result (stars/time) persistence;
   `src/gameLog.ts` — humanises `SimEvent`s into an activity log;
   `src/utils/colorAssignment.ts` — deterministic, solvable depot/train colours.

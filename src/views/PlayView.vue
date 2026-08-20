@@ -566,6 +566,11 @@
       >
         {{ buildCostTag.label }}
       </div>
+      <!-- The meadow theme's backdrop trees: one world overlay in the canopy
+           band, above rails/trains/cars, so overlapping crowns read as foliage
+           the traffic passes under. Absolutely positioned, so it is not a grid
+           ITEM (KNOWHOW → RENDER LAYOUT). -->
+      <BackdropTrees :cols="bounds.cols" :rows="bounds.rows" />
       <Crossing
         v-for="c in crossings"
         :key="`crossing-${c.key}`"

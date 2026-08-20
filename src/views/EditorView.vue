@@ -391,6 +391,12 @@
           />
         </svg>
       </div>
+      <!-- The meadow theme's backdrop trees: one world overlay in the canopy
+           band (see components/BackdropTrees.vue). pointer-events: none, and
+           the editor's own handles sit at z30, so every zone stays clickable.
+           Absolutely positioned, so it is not a grid ITEM (KNOWHOW → RENDER
+           LAYOUT). -->
+      <BackdropTrees :cols="gridCols" :rows="gridRows" />
     </div>
     </div>
     </div>
