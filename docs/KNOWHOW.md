@@ -770,6 +770,28 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   shift and no garage — a bus lives on its line.
 - `pruneLineIfUnused` counts trains AND buses. Withdrawing the last train must
   not delete a line a bus is still working.
+- A WITHDRAWN BUS SETS ITS RIDERS DOWN (`setDownAll`, 2026-08-20). `removeBus`
+  and `assignBus(id, null)` used to drop the manifest with the vehicle: people
+  the player was carrying, gone, with nothing in the count to explain it. It
+  mirrors the retiring train's `dumpAll` and dumps at the stop under the bus,
+  else the last one it worked (`lastStopId`). Reassigning to ANOTHER line dumps
+  too — `off` was decided from the old line (D7), so those riders would be
+  carried to a stop the bus no longer calls at, for ever.
+- `retarget`'s BOOLEAN MUST BE ACTED ON (2026-08-20). It fails when the bus
+  cannot be routed on from the lane it stands in. Ignoring it left the trip
+  "arrived" with the dwell run out, so the next tick re-ran the exchange at the
+  same kerb: the queue boarded again, and a call that never happened went in the
+  log, every `BUS_DWELL_SEC`. Three responses, in order:
+    · a TERMINUS turns round at the stop (despawn + respawn there, cursor left
+      pointing at that stop). The router plans lane by lane with no U-turn, so a
+      line that ends in a dead end otherwise drove off the map;
+    · the respawn must NOT work the stop again (`turnedRoundAt`) — it was worked
+      a moment ago, and the doors would open twice at a kerb the bus never left;
+    · a stop that cannot be driven to AT ALL fails the respawn's `requestTrip`
+      for ever, which leaves the bus off the board with people aboard. Logged
+      once per stranded stop (`strandedFor`), never once per tick.
+  `departing` marks "doors shut, still trying", so no path back into the dwell
+  can re-open them.
 - A LINE'S STOPS ARE THE PLAYER'S, and nothing stops them naming a tile nobody
   can wait at. Destinations are therefore drawn only from real stops
   (`nextDestination` filters on `isStop`) — the graph may carry the node, it is
@@ -777,7 +799,10 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - A bus stop is `TileCell.parking` with a `busstop` row. TWO STOPS MUST NOT
   SHARE A `facility` ID: the parking layer treats one id as one facility, so
   they pool capacity and show a single sign — the first cut of `busrail` read
-  "H 2/2" once instead of a halt at each end.
+  "H 2/2" once instead of a halt at each end. Pinned by
+  `busLine.spec.ts` → "makes two halts two facilities, not one pooled stop",
+  which shows both halves: distinct ids give two one-stall facilities, a shared
+  id gives one facility spanning both ends of the street.
 - A LINE HAS A KIND (`LineView.kind`, 2026-08-20): `rail` from platforms, `road`
   from kerbs, `null` until its first stop. It must never MIX — no train can call
   at a kerb and no bus can drive to a platform, and a mixed line fails SILENTLY

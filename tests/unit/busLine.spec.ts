@@ -4,7 +4,8 @@ import { networkMode } from "@/modes/network";
 import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { twoWay } from "@/tiles/lanes";
-import type { ParkingRow } from "@/tiles/parking";
+import { facilitiesOf, type ParkingRow } from "@/tiles/parking";
+import { itSlow } from "./support/tier";
 
 // A BUS RUNS A LINE (#90). Planned exactly like a train: draw the line, buy a
 // bus, assign it. What differs is only how it gets between stops — lanes and
@@ -26,13 +27,25 @@ function busBoard(): Level {
     "0,1": street(),
     "1,1": {
       ...street(),
-      parking: { facility: "halt", label: "West", dwellSec: [5, 9], rows: [halt(Position.Left)] },
+      // Its OWN facility id. Two stops sharing one id are ONE facility to the
+      // parking layer — see "two halts are two facilities" below.
+      parking: {
+        facility: "halt-west",
+        label: "West",
+        dwellSec: [5, 9],
+        rows: [halt(Position.Left)],
+      },
     },
     "2,1": street(),
     "3,1": street(),
     "4,1": {
       ...street(),
-      parking: { facility: "halt", label: "East", dwellSec: [5, 9], rows: [halt(Position.Left)] },
+      parking: {
+        facility: "halt-east",
+        label: "East",
+        dwellSec: [5, 9],
+        rows: [halt(Position.Left)],
+      },
     },
     "5,1": street(),
     // The houses each halt serves. Demand is derived from these (D3).
@@ -131,6 +144,93 @@ describe("a bus runs a line", () => {
 
     game.setLineOverlay(null);
     expect(game.lineOverlay.kind).toBeNull();
+  });
+
+  // A WITHDRAWN BUS DOES NOT TAKE ITS PASSENGERS WITH IT. The train's retiring
+  // path has always set its riders down (`dumpAll`) — they are better off at a
+  // stop than in a shed — and a manifest that simply vanishes is people the
+  // player was carrying, lost with nothing in the count to explain it.
+  const carried = (g: ReturnType<typeof createGame>) =>
+    g.sim.stationQueue(WEST) + g.sim.stationQueue(EAST) + g.sim.passengersDelivered();
+
+  it("sets a scrapped bus's riders down instead of deleting them", () => {
+    const game = gameFor();
+    const line = game.createLine([WEST, EAST]);
+    const bus = game.buyBus(line);
+    run(game, 60);
+    const aboard = game.busServices[0]?.passengers ?? 0;
+    expect(aboard).toBeGreaterThan(0);
+
+    const before = carried(game);
+    expect(game.removeBus(bus)).toBe(true);
+    // Everyone aboard is either back at a stop or counted as arrived.
+    expect(carried(game)).toBe(before + aboard);
+  });
+
+  it("sets its riders down when it is taken off its line", () => {
+    const game = gameFor();
+    const line = game.createLine([WEST, EAST]);
+    const bus = game.buyBus(line);
+    run(game, 60);
+    const aboard = game.busServices[0]?.passengers ?? 0;
+    expect(aboard).toBeGreaterThan(0);
+
+    const before = carried(game);
+    expect(game.assignBus(bus, null)).toBe(true);
+    expect(carried(game)).toBe(before + aboard);
+    expect(game.busServices[0]?.passengers).toBe(0);
+  });
+
+  // A stop can stop being reachable — a road edited away, a one-way reversed,
+  // or (here) a line redrawn through somewhere no road goes. `retarget` says so
+  // rather than teleporting the bus, and that answer has to be acted on: the
+  // trip stays "arrived" with the dwell run out, so a bus that ignored it
+  // re-ran the exchange at the same kerb every BUS_DWELL_SEC — boarding the
+  // queue again and again, and logging calls that never happened.
+  it("holds at the kerb when its next stop cannot be reached", () => {
+    const game = gameFor();
+    const line = game.createLine([WEST, EAST]);
+    const bus = game.buyBus(line);
+    run(game, 60);
+    // 0,0 is a town tile: no road on it at all, so no route can ever be planned.
+    game.setLineStops(line, [WEST, "0,0"]);
+    run(game, 120);
+
+    const aboard = game.busServices[0]?.passengers ?? 0;
+    const held = game.eventLog.filter(e => e.trainId === bus);
+    expect(held).toHaveLength(1);
+    expect(held[0].text).toContain("no route");
+
+    run(game, 60);
+    // The doors stayed shut: no second exchange, no second helping of the queue,
+    // and the hold is reported once rather than every tick it retries.
+    expect(game.busServices[0]?.passengers).toBe(aboard);
+    expect(game.eventLog.filter(e => e.trainId === bus)).toHaveLength(1);
+  });
+
+  // TWO STOPS MUST NOT SHARE A `facility` ID. The parking layer treats one id
+  // as one facility: the stalls pool, the sign shows a single count, and a car
+  // park's "am I full" is answered for the pair. Two halts at opposite ends of a
+  // street are not one car park — the first cut of this board and of `busrail`
+  // both had it, and the board read "H 2/2" once instead of a halt at each end.
+  it("makes two halts two facilities, not one pooled stop", () => {
+    const board = busBoard();
+    const split = facilitiesOf(board);
+    expect(split.map(f => f.id)).toEqual(["halt-east", "halt-west"]);
+    expect(split.map(f => f.label)).toEqual(["East", "West"]);
+    expect(split.every(f => f.stalls.length === 1)).toBe(true);
+
+    // The trap, spelled out: give them one id and the layer sees ONE stop with
+    // two bays, spread over both ends of the street.
+    const shared: Level = {
+      ...board,
+      "1,1": { ...board["1,1"], parking: { ...board["1,1"].parking!, facility: "halt" } },
+      "4,1": { ...board["4,1"], parking: { ...board["4,1"].parking!, facility: "halt" } },
+    };
+    const pooled = facilitiesOf(shared);
+    expect(pooled).toHaveLength(1);
+    expect(pooled[0].stalls).toHaveLength(2);
+    expect([...pooled[0].tileIds].sort()).toEqual([WEST, EAST].sort());
   });
 
   it("never sends anyone to a tile that is not a stop", () => {
@@ -243,7 +343,26 @@ describe("bus and train are one network", () => {
     expect(hops.length).toBeGreaterThan(8);
   });
 
+  // A line with nobody running it is the CONTROL for the test below: the
+  // journey exists on paper, no vehicle makes it, and Altstadt fills to its cap
+  // and stays there. Every delivery the next test counts over and above this
+  // one is a journey the bus made.
+  it("strands Altstadt while nothing runs the line", async () => {
+    const { game } = await board();
+    game.createLine([ALT, KERB]);
+    for (let t = 0; t < 400; t += 0.1) game.advance(0.1);
+    expect(game.sim.stationQueue(ALT)).toBeGreaterThan(0);
+    // Nobody there has moved: no bus, no journey.
+    expect(game.sim.stationWaiting(ALT).length).toBe(game.sim.stationQueue(ALT));
+  });
+
   it("carries somebody the whole way: bus, walk, train", async () => {
+    const control = (await board()).game;
+    control.createLine([ALT, KERB]);
+    for (let t = 0; t < 400; t += 0.1) control.advance(0.1);
+    const withoutABus = control.sim.passengersDelivered();
+    const strandedAtAltstadt = control.sim.stationQueue(ALT);
+
     const { game } = await board();
     const busLine = game.createLine([ALT, KERB]);
     game.buyBus(busLine);
@@ -252,9 +371,43 @@ describe("bus and train are one network", () => {
 
     for (let t = 0; t < 400; t += 0.1) game.advance(0.1);
 
-    expect(game.sim.passengersDelivered()).toBeGreaterThan(0);
-    // Nobody is left stranded at the kerb: the walk moved them to the platform
-    // rather than leaving them waiting for a train that never calls at a road.
-    expect(game.sim.stationQueue(KERB)).toBeLessThan(4);
+    // The SAME board and the same 400 seconds, the only difference being a bus
+    // on the line. Every extra arrival is therefore a journey through Altstadt
+    // — nothing else on this board changed — and Altstadt itself is worked
+    // clear rather than stuck at the cap it sits at with no bus.
+    expect(game.sim.passengersDelivered()).toBeGreaterThan(withoutABus);
+    expect(game.sim.stationQueue(ALT)).toBeLessThan(strandedAtAltstadt);
+    // And the interchange works as an interchange: whoever the bus set down at
+    // the kerb bound for the railway walked up to the platform and left on a
+    // train, so Hauptbahnhof is not sitting on the cap that would stop it
+    // generating anyone at all.
+    expect(game.sim.stationQueue(HBF)).toBeLessThan(8);
+  });
+
+  // THE INVARIANT ITEM 1 IS ABOUT: a stop must never fill with people no
+  // mechanism can move. `advanceDemand` stops generating at the cap, so ONE
+  // unmovable passenger class is enough to kill a stop's traffic for the rest
+  // of the run — which is what a kerb two tiles from the platform used to do to
+  // Hauptbahnhof, every other passenger, on the board as the gallery ships it.
+  itSlow("keeps every stop generating over a long run", async () => {
+    const { game } = await board();
+    const line = game.createLine([ALT, KERB]);
+    game.buyBus(line);
+
+    const marks: number[] = [];
+    let worstHbf = 0;
+    for (let window = 0; window < 3; window++) {
+      for (let t = 0; t < 300; t += 0.1) {
+        game.advance(0.1);
+        worstHbf = Math.max(worstHbf, game.sim.stationQueue(HBF));
+      }
+      marks.push(game.sim.passengersDelivered());
+    }
+    // Deliveries keep coming in every window, not just the first.
+    expect(marks[1] - marks[0]).toBeGreaterThan(0);
+    expect(marks[2] - marks[1]).toBeGreaterThan(0);
+    // …and Hauptbahnhof never sat at its cap: a saturated platform stops
+    // generating, and a platform that stops generating is a dead board.
+    expect(worstHbf).toBeLessThan(8);
   });
 });
