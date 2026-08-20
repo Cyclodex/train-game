@@ -1003,7 +1003,9 @@ test.describe("Level editor", () => {
 
     // Connect tool is default: draw a horizontal rail across three cells.
     for (const c of ["1,1", "2,1", "3,1"]) await drawWestEast(page, c);
-    // Cap both ends with depots.
+    // Cap both ends with depots. Depot lives on Rail → Stations in the
+    // three-row dock, so open that tab first.
+    await page.getByRole("button", { name: "Stations" }).click();
     await page.getByRole("button", { name: "depot" }).click();
     await cell(page, "0,1").click();
     await cell(page, "4,1").click();
@@ -1025,9 +1027,9 @@ test.describe("Level editor", () => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(1);
-    // In the redesigned editor, the erase tool reveals a ✕ delete handle per
-    // connection; clicking it removes just that rail.
-    await page.getByRole("button", { name: "erase" }).click();
+    // The bulldozer category reveals a ✕ delete handle per connection (its
+    // default filter is Everything); clicking it removes just that rail.
+    await page.getByRole("button", { name: "Bulldozer" }).click();
     await cell(page, "2,2").locator(".del").first().click({ force: true });
     await expect(cell(page, "2,2").locator(".tile")).toHaveCount(0);
   });
@@ -1035,8 +1037,9 @@ test.describe("Level editor", () => {
   test("signal tool places a per-direction signal", async ({ page }) => {
     await page.goto("/#/editor");
     await drawWestEast(page, "2,2");
-    // Anchored on the icon: a plain "signal" also substring-matches the
-    // "🚥 Signalise" tool, which made this ambiguous the day that tool was added.
+    // Signal lives on Rail → Signalling; opening the tab arms its first item,
+    // which IS the signal tool.
+    await page.getByRole("button", { name: "Signalling" }).click();
     await page.getByRole("button", { name: /🚦 Signal/ }).click();
     // Toggle a signal on the East edge of the straight.
     await cell(page, "2,2").locator('.zone[data-port="1"]').click();
