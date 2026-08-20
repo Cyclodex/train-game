@@ -2710,6 +2710,11 @@ of the above; read that section first.
   the other has two pavements at two distances; pushing both by the wider leaves
   the empty side's band floating in the verge. `bankOfSide` converts the walker
   model's ±1 to the parking model's Port (`bankFor(through.from, "right"|"left")`).
+- **THE KERB IS THE BIKE'S** (2026-08-20, PR #98 × #87). A cycle lane rides the
+  kerb side of its stream (`bankFor(from, "right")`), so `deriveKerbOverflow`
+  lays no informal space on a bank whose approach has `cycleLaneIndices` — a car
+  left there would stand ON the green strip. Per BANK here too: a one-way with a
+  kerb-side cycle lane keeps its far bank's spaces (`kerbOverflow.spec.ts`).
 - Clamped to `MAX_PAVEMENT_OFFSET` (50 − half the band) or a lorry lay-by, at 55
   units deep on its own, puts the pavement half a tile into the neighbour.
 - A `busstop` is exempt: the vehicle never leaves the carriageway, so there is

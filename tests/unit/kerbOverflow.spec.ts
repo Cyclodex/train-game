@@ -4,6 +4,8 @@ import { createRoadSim } from "@/sim/road";
 import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { workparking } from "@/levels/test/scenarios/workparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
+import { cyclelane } from "@/levels/test/scenarios/cyclelane";
+import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
 import { deriveKerbOverflow, kerbOverflowTiles, KERB_SPACES } from "@/tiles/kerbOverflow";
 import { levelBounds } from "@/tiles/bounds";
 import { rowsOf, validateParking, facilitiesOf, bankOf, rowFor } from "@/tiles/parking";
@@ -115,6 +117,25 @@ describe("the kerb is derived from the street", () => {
       rowsOf(c).filter(r => r.resident),
     );
     expect(drives.length).toBeGreaterThan(0);
+  });
+
+  it("keeps off the bike's kerb — a cycle lane's bank grows no informal space", () => {
+    // #87 paints a half-width cycle strip on the kerb side of its stream and
+    // rides its bikes there; a car left on that bank would stand ON the cycle
+    // lane, and a car pulling in would cut across it. The `cyclelane` street
+    // has a green strip both ways, so BOTH banks are the bikes' and the pass
+    // changes the scenario not at all.
+    expect(kerbOverflowTiles(cyclelane.level)).toEqual([]);
+    expect(deriveKerbOverflow(cyclelane.level)).toEqual(cyclelane.level);
+    // Per BANK, not per tile: the one-way's kerb side (right of travel,
+    // Bottom) is green, but its far bank is legitimate kerb and keeps its
+    // spaces — blanket-skipping the tile would have thrown that kerb away.
+    const next = deriveKerbOverflow(cycleoneway.level);
+    const laid = informalRows(next);
+    expect(laid.length).toBeGreaterThan(0);
+    for (const { id, row } of laid) {
+      expect(bankOf(row), `informal kerb on the cycle lane's bank at ${id}`).toBe(Position.Top);
+    }
   });
 
   it("keeps off a road opening that stops inside the map, so it still spawns", () => {
