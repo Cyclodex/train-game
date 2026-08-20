@@ -52,12 +52,16 @@ import {
 // tile's interior is then linear interpolation between its two seam profiles —
 // one taper rule for every layer at once.
 //
-// Migration state: the pavement (paint + walkers) reads this façade. The
-// carriageway numbers wrap the same primitives the surface paint and the lane
-// offsets use (`roadSeamPaintTotal` / `junctionArmPaintTotal` /
-// `oneWayRunMax`), so those consumers can migrate call by call without a pixel
-// moving; the kerb's own home stays `parking.ts` (`kerbOffsetPx`), which this
-// module composes rather than duplicates.
+// Migration state: the pavement (paint + walkers) reads this façade, and the
+// SURFACE PAINT's seam widths do too (`Tile.vue` roadPaths reads
+// `seamPaintLanes` for its centred ribbons; its one-way straight branch still
+// derives entry/exit counts locally for the gores and survivor markings, in
+// asserted lockstep with `oneWayCentreBand`). The carriageway numbers wrap the
+// same primitives the lane offsets use (`roadSeamPaintTotal` /
+// `junctionArmPaintTotal` / `oneWayRunMax`), so the remaining consumers can
+// migrate call by call without a pixel moving; the kerb's own home stays
+// `parking.ts` (`kerbOffsetPx`), which this module composes rather than
+// duplicates.
 
 // All widths in FRACTIONS OF A TILE, the one scale-free unit. At the native
 // 200px tile: a lane 28px, the verge 8px, the pavement 16px.
@@ -175,6 +179,24 @@ export function roadEdgeFrac(
     ? junctionArmPaintTotal(selfAt, nCrossing, nJunction)
     : roadSeamPaintTotal(selfAt, nCrossing, nJunction);
   return (total / 2) * PROFILE_LANE_FRAC;
+}
+
+/**
+ * The painted lane TOTAL crossing a seam — `roadEdgeFrac` in the paint's unit
+ * (lanes of tarmac). The sum of the two flank edges, so it is right for every
+ * surface: on a centred (two-way / bend / junction-arm) seam the flanks are
+ * equal halves; on a one-way straight the kerb flank carries the run anchor and
+ * the centre flank the (possibly stepped) band, and their sum is the true
+ * painted width at that seam. `Tile.vue`'s roadPaths strokes exactly this many
+ * lanes of tarmac at the seam — it reads THIS number, so the surface and the
+ * profile cannot drift apart.
+ */
+export function seamPaintLanes(level: Level, coord: Coordinates, port: Port): number {
+  const [f0, f1] = seamFlanks(port);
+  return (
+    (roadEdgeFrac(level, coord, port, f0) + roadEdgeFrac(level, coord, port, f1)) /
+    PROFILE_LANE_FRAC
+  );
 }
 
 /**

@@ -599,8 +599,6 @@ import {
   roadEdges,
   laneCount,
   laneCountAt,
-  roadSeamPaintTotal,
-  junctionArmPaintTotal,
   seamMismatch,
   isRoadJunction,
   turnKind,
@@ -609,6 +607,7 @@ import {
   approachPortsOf,
 } from "@/tiles/lanes";
 import { rowsOf } from "@/tiles/parking";
+import { seamPaintLanes } from "@/tiles/streetProfile";
 import TileParking from "./TileParking.vue";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -689,26 +688,15 @@ class Tile extends Vue {
     return this.kind === "road-straight" && this.roadTapers ? "road-taper" : this.kind;
   }
   // True when this straight road tile changes painted width between its two
-  // ends, i.e. it sits at a lane-count change against a neighbour. Mirrors the
-  // per-seam width logic in `roadPaths` exactly. False in the editor (the stub
-  // game reports 0 neighbour lanes, so every tile renders at its own width).
+  // ends, i.e. it sits at a lane-count change against a neighbour. Reads the
+  // street profile's seam totals — the same numbers `roadPaths` strokes.
   get roadTapers(): boolean {
     const road = this.tile.road;
     if (!road?.length) return false;
     const coord = parseCoordId(this.coordId);
     return roadEdges(road).some(([a, b]) => {
       if (oppositePort(a) !== b) return false; // straight edges only
-      const selfTotal = Math.max(laneCount(road, a) + laneCount(road, b), 2);
-      const na = neighborCoord(coord, a);
-      const nb = neighborCoord(coord, b);
-      const jA = na ? this.game.roadIsJunctionAt(na) : false;
-      const jB = nb ? this.game.roadIsJunctionAt(nb) : false;
-      const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
-      const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
-      return (
-        roadSeamPaintTotal(selfTotal, crossingA, jA) !==
-        roadSeamPaintTotal(selfTotal, crossingB, jB)
-      );
+      return seamPaintLanes(this.level, coord, a) !== seamPaintLanes(this.level, coord, b);
     });
   }
   // Debug suffix on the tile-kind label: the configured lane amount of a road
@@ -1313,8 +1301,6 @@ class Tile extends Vue {
     return roadEdges(this.tile.road).map(([a, b]) => {
       const selfA = laneCount(this.tile.road, a);
       const selfB = laneCount(this.tile.road, b);
-      // Minimum 2 so a one-way road still renders as a 2-lane-wide ribbon.
-      const selfTotal = Math.max((selfA || 0) + (selfB || 0), 2);
       const isStraight = oppositePort(a) === b;
 
       // Curved, T-junction, and cross tiles: flag mismatches instead of tapering.
@@ -1367,33 +1353,17 @@ class Tile extends Vue {
             };
           }
         }
-        // Width PER END, each seam-matched to its own arm (seamPaintTotal against
-        // the neighbour crossing that seam) — the ribbon tapers across the bend so
-        // EACH end meets ITS arm flush. A junction's own laneCountAt deliberately
-        // over-counts an arm (every approach lane that can fan onto it counts), so
-        // the old constant max-of-both-ends width painted a narrow arm as wide as
-        // the widest one: a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of
-        // tarmac at the entrance seam, twice the road it meets.
-        // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
-        // so the arm mouth — straight or turning — meets the road flush, no taper
-        // at the seam (#30). A simple curve (not a junction) keeps the per-end
-        // seam taper between unequal straights, but a junction neighbour never
-        // pinches it (roadSeamPaintTotal) — the junction adopts the curve.
-        //
-        // NO min-2 FLOOR. It dates from when a 1-lane one-way road was itself drawn
-        // 2 lanes wide; since the run-max kerb anchor (2026-07-25) a one-way
-        // STRAIGHT is drawn its true 1 lane, and leaving the floor on curves made a
-        // one-way single-lane BEND twice the width of the straights either side of
-        // it — a visible bulge at every corner of a car-park aisle. `laneCountAt`
-        // counts both directions, so anything two-way is already >= 2 and this
-        // changes nothing for it; the only tiles affected are genuine one-way
-        // single-lane bends. Guarded by `roadPaintWidth.spec.ts`.
-        const widthEndA = this.tileIsRoadJunction
-          ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
-          : roadSeamPaintTotal(selfAtA, nTotalA, aJunction);
-        const widthEndB = this.tileIsRoadJunction
-          ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
-          : roadSeamPaintTotal(selfAtB, nTotalB, bJunction);
+        // Width PER END, each seam-matched to its own arm — the ribbon tapers
+        // across the bend so EACH end meets ITS arm flush. The numbers come from
+        // the street profile (`seamPaintLanes` → `roadEdgeFrac`), which owns the
+        // seam rules this site used to spell out inline: a JUNCTION arm adopts
+        // its adjoining road's width (no taper at the seam, #30), a simple curve
+        // keeps the per-end taper between unequal straights but is never pinched
+        // by a junction neighbour, and there is NO min-2 floor (a one-way
+        // single-lane bend paints its true 1 lane — the aisle-corner bulge,
+        // guarded by `roadPaintWidth.spec.ts`).
+        const widthEndA = seamPaintLanes(this.level, coord, a);
+        const widthEndB = seamPaintLanes(this.level, coord, b);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -1520,14 +1490,11 @@ class Tile extends Vue {
       // Bidirectional straight road: centred symmetric taper (min-seam rule).
       // A junction seam keeps the road's full width (no taper next to a junction).
       // The JUNCTION's own through-corridor adopts each adjoining road's width at
-      // its mouth (junctionArmPaintTotal), so the arm meets the road flush and the
-      // width change (unequal arms) happens INSIDE the box, never at the seam (#30).
-      const totalA = this.tileIsRoadJunction
-        ? junctionArmPaintTotal(laneCountAt(this.tile.road, a), crossingA, jA)
-        : roadSeamPaintTotal(selfTotal, crossingA, jA);
-      const totalB = this.tileIsRoadJunction
-        ? junctionArmPaintTotal(laneCountAt(this.tile.road, b), crossingB, jB)
-        : roadSeamPaintTotal(selfTotal, crossingB, jB);
+      // its mouth, so the arm meets the road flush and the width change (unequal
+      // arms) happens INSIDE the box, never at the seam (#30). Both rules live in
+      // the street profile — `seamPaintLanes` is its `roadEdgeFrac` in lanes.
+      const totalA = seamPaintLanes(this.level, coord, a);
+      const totalB = seamPaintLanes(this.level, coord, b);
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       // Road edge line where the tarmac meets the grass — one per outer kerb,

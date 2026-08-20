@@ -4,7 +4,9 @@ import {
   resolveSeamProfile,
   flankAt,
   seamFlanks,
+  seamPaintLanes,
   PAVEMENT_FRAC,
+  PROFILE_LANE_FRAC,
   VERGE_FRAC,
 } from "@/tiles/streetProfile";
 import {
@@ -18,7 +20,18 @@ import { bankFor, rowsOf, validateParking } from "@/tiles/parking";
 import { levelBounds } from "@/tiles/bounds";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { parseCoordId, type Level, type Port, type TileCell } from "@/tiles/model";
-import { twoWay, oneWay, oneWayLanes, isOneWayStraight } from "@/tiles/lanes";
+import {
+  twoWay,
+  oneWay,
+  oneWayLanes,
+  isOneWayStraight,
+  isRoadJunction,
+  laneCount,
+  laneCountAt,
+  oneWayRunMax,
+  roadSeamPaintTotal,
+  junctionArmPaintTotal,
+} from "@/tiles/lanes";
 import { Position } from "@/types";
 
 // THE STREET-PROFILE SWEEP — the oracle for "one truth for the cross-section".
@@ -132,6 +145,67 @@ describe("parity: the profile IS the pavement's numbers, board-wide", () => {
             `${scenario.id} ${tileId} port ${port} flank ${flank}: profile disagrees with the pavement`,
           ).toBeCloseTo(Math.abs(off), 6);
         }
+      });
+    }
+  });
+});
+
+describe("paint parity: seamPaintLanes IS what the surface strokes, board-wide", () => {
+  // `Tile.vue`'s roadPaths now reads `seamPaintLanes` for its ribbon widths.
+  // This pins the profile to the formulas the paint used before the migration —
+  // the junction-aware pairing for centred surfaces, the kerb-anchored run for
+  // one-way straights — on every seam of every registered board, so the
+  // migration is provably pixel-identical and any future profile change that
+  // would move tarmac fails here with the board and tile named.
+  it("matches the legacy per-seam paint totals on every board", () => {
+    for (const scenario of SCENARIOS) {
+      const level = scenario.level;
+      const roadAt = (c: { x: number; y: number }) => level[`${c.x},${c.y}`]?.road;
+      eachRoadSeam(level, (tileId, cell, port) => {
+        const road = cell.road;
+        const coord = parseCoordId(tileId);
+        const at = `${scenario.id} ${tileId} port ${port}`;
+        const crossingAt = (p: Port): { crossing: number; junction: boolean } => {
+          const n = neighborCoord(coord, p);
+          const nRoad = n ? level[`${n.x},${n.y}`]?.road : undefined;
+          return {
+            crossing: nRoad ? laneCountAt(nRoad, oppositePort(p)) : 0,
+            junction: isRoadJunction(nRoad),
+          };
+        };
+        // ONE-WAY straight along this seam's axis: Tile.vue's one-way branch —
+        // width entryCount at the entry seam; the closing lane's tarmac stays
+        // full width across a narrowing tile, so max(entry, exit) at the exit.
+        const owFrom = ([port, oppositePort(port)] as Port[]).find(f =>
+          isOneWayStraight(road, f),
+        );
+        if (owFrom !== undefined) {
+          const m = laneCount(road, owFrom);
+          const e = crossingAt(owFrom);
+          const x = crossingAt(oppositePort(owFrom));
+          const entryCount = !e.junction && e.crossing > 0 ? Math.min(m, e.crossing) : m;
+          const exitCount = !x.junction && x.crossing > 0 ? Math.min(m, x.crossing) : m;
+          const expected =
+            port === owFrom ? entryCount : Math.max(entryCount, exitCount);
+          expect(seamPaintLanes(level, coord, port), at).toBeCloseTo(expected, 6);
+          // And the kerb flank itself is the run anchor — the constant edge the
+          // one-way surface hangs its through lanes on.
+          const runMax = oneWayRunMax(roadAt, coord, owFrom);
+          const profile = resolveSeamProfile(level, coord, port);
+          expect(
+            flankAt(profile, bankFor(owFrom, "right")).kerb,
+            `${at}: one-way kerb is not the run anchor`,
+          ).toBeCloseTo((runMax / 2) * PROFILE_LANE_FRAC, 6);
+          return;
+        }
+        // Centred surfaces (two-way straights, bends, junction arms): the
+        // junction-aware pairing, per seam, no min-2 floor.
+        const selfAt = laneCountAt(road, port);
+        const n = crossingAt(port);
+        const expected = isRoadJunction(road)
+          ? junctionArmPaintTotal(selfAt, n.crossing, n.junction)
+          : roadSeamPaintTotal(selfAt, n.crossing, n.junction);
+        expect(seamPaintLanes(level, coord, port), at).toBeCloseTo(expected, 6);
       });
     }
   });
