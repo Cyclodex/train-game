@@ -769,14 +769,35 @@ export default toNative(TestStage);
     rgba(30, 44, 60, 0.55) 10px
   );
 }
-// A bicycle: a slim capsule less than half a car long; the glass span is the
-// RIDER — a dark head-dot over the livery (the jersey). Mirrors PlayView.
+// A bicycle: a true sliver — ~0.3× a car's 20px width, so the frame is thinner
+// than the rider. The glass span is the RIDER: a dark head-dot amidships over
+// the livery (the jersey), deliberately WIDER than the frame (overflow visible)
+// so the velo stays trackable at 6px. Mirrors PlayView.
 .road-car--bike {
+  height: 6px;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  overflow: visible; // the rider's head-dot overhangs the slim frame
+}
+.road-car--bike .road-car-glass {
+  top: 50%;
+  bottom: auto;
+  left: 42%;
+  width: 7px;
+  height: 7px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: rgba(28, 24, 20, 0.85);
+}
+// A motorcycle: today's 8px capsule (the bike's old body) — a fast, narrow car
+// in behaviour, so it keeps the chunkier motor-vehicle silhouette. Mirrors
+// PlayView.
+.road-car--motorcycle {
   height: 8px;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
-.road-car--bike .road-car-glass {
+.road-car--motorcycle .road-car-glass {
   top: 50%;
   bottom: auto;
   left: 42%;

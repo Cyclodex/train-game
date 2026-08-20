@@ -1,6 +1,6 @@
 import { Coordinates, Position } from "@/types";
 import { Level, isLevelCrossing, parseCoordId } from "@/tiles/model";
-import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, cycleLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
+import { exitsForCar, isRoadJunction, isOneWayStraight, laneCount, laneUsableBy, lanesAllowingExit, lanesAllowingExitFor, carLaneIndices, usableExits, usableLaneIndices, nearestUsableLaneIndex, busLaneIndices, bikeLaneIndices, junctionExitLane, approachPortsOf, turnKind, type VehicleClass } from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import {
   JunctionSignal,
@@ -43,17 +43,19 @@ export { isRoadJunction } from "@/tiles/lanes";
 // loco + wagon). Everything downstream (following distance, lane occupancy,
 // rendering) is derived from the spec, so adding a kind is a one-row change.
 
-export type VehicleKind = "car" | "truck" | "semi" | "bus" | "bike";
+export type VehicleKind = "car" | "truck" | "semi" | "bus" | "bike" | "motorcycle";
 
 export interface VehicleSegment {
   length: number; // rendered box length, in tiles
-  part: "car" | "truck" | "cab" | "trailer" | "bus" | "bike"; // render style hint for the view
+  part: "car" | "truck" | "cab" | "trailer" | "bus" | "bike" | "motorcycle"; // render style hint for the view
 }
 
 // The lane-access class of a vehicle kind: a bus may use bus lanes (and prefers
 // them); a bike may use bus AND cycle lanes (and prefers cycle lanes); every
 // other kind is a general "car" confined to unrestricted lanes. The matrix
-// itself lives in `laneUsableBy` (tiles/lanes.ts).
+// itself lives in `laneUsableBy` (tiles/lanes.ts). A MOTORCYCLE is deliberately
+// class "car": a fast, narrow car — any general lane (including the overtaking
+// lane a bike must never touch), overtaking allowed, no bus/cycle lanes.
 export function vehicleClassOf(kind: VehicleKind): VehicleClass {
   if (kind === "bus") return "bus";
   if (kind === "bike") return "bike";
@@ -80,18 +82,24 @@ const BUS_LEN = 1.45;
 // car queues behind it rather than squeezing past. (Same-lane passing needs
 // per-vehicle width AND borrowing the oncoming lane — the deferred §3b work.)
 const BIKE_LEN = 0.45;
+// A motorcycle is the bike's motorised sibling: the same sliver of a body (the
+// renderer keeps the 8px capsule the bike used to wear), but class "car" — it
+// rides any general lane and overtakes like the fast, narrow car it behaves as.
+const MOTORCYCLE_LEN = 0.45;
 
 // Per-kind cruise-speed factor over the sim's carSpeed. The bike is the first
 // genuinely slow kind: under half car pace, which is what makes a car queue
 // behind it on a single-lane road — and what trips the speed-differential
-// overtake trigger the moment a second lane exists. Every motor kind keeps the
-// shared band (per-kind truck/bus pacing would slot in here too).
-const KIND_SPEED: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.45 };
+// overtake trigger the moment a second lane exists. The motorcycle is the first
+// FAST kind: a nudge above car pace, so it closes on queues and uses the
+// overtaking lane the way its riders do.
+const KIND_SPEED: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.45, motorcycle: 1.15 };
 // A bike also pulls away and brakes more gently than a motor vehicle. The
 // softer brake feeds vSafe = sqrt(2·brake·clear), so a bike naturally keeps a
-// slightly longer headway for its speed.
-const KIND_ACCEL: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.55 };
-const KIND_BRAKE: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.8 };
+// slightly longer headway for its speed. A motorcycle is the nimble opposite:
+// quicker off the mark than a car.
+const KIND_ACCEL: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.55, motorcycle: 1.35 };
+const KIND_BRAKE: Record<VehicleKind, number> = { car: 1, truck: 1, semi: 1, bus: 1, bike: 0.8, motorcycle: 1 };
 
 export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
   switch (kind) {
@@ -101,6 +109,8 @@ export function vehicleSpec(kind: VehicleKind, base: number): VehicleSpec {
       return { segments: [{ length: base * BUS_LEN, part: "bus" }], gap: 0 };
     case "bike":
       return { segments: [{ length: base * BIKE_LEN, part: "bike" }], gap: 0 };
+    case "motorcycle":
+      return { segments: [{ length: base * MOTORCYCLE_LEN, part: "motorcycle" }], gap: 0 };
     case "semi":
       return {
         segments: [
@@ -123,7 +133,7 @@ export function specLength(spec: VehicleSpec): number {
 
 // Relative spawn weights per kind. Omitted/zero kinds never spawn; `{ car: 1 }`
 // (the default) reproduces the original all-cars behaviour.
-export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number; bike?: number };
+export type TrafficMix = { car?: number; truck?: number; semi?: number; bus?: number; bike?: number; motorcycle?: number };
 
 // Per-level road-traffic settings: how busy the roads are and what mix of
 // vehicles drives them. All optional; each overlays the sim's defaults.
@@ -1186,10 +1196,10 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
   // stay deterministic. Kinds with no/zero weight never appear; an empty mix
   // falls back to a car.
   function pickKind(): VehicleKind {
-    // "bike" carries no default weight, so every board seeded before bikes
-    // existed draws the identical kind sequence — bikes appear only where a
-    // level's mix opts in.
-    const weighted = (["car", "truck", "semi", "bus", "bike"] as VehicleKind[])
+    // "bike" and "motorcycle" carry no default weight, so every board seeded
+    // before they existed draws the identical kind sequence — both appear only
+    // where a level's mix opts in.
+    const weighted = (["car", "truck", "semi", "bus", "bike", "motorcycle"] as VehicleKind[])
       .map(k => [k, Math.max(0, mix[k] ?? 0)] as const)
       .filter(([, w]) => w > 0);
     const total = weighted.reduce((s, [, w]) => s + w, 0);
@@ -1478,7 +1488,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             busLaneIndices(jTile.road, ahead.entry).includes(l),
           );
           const cycleAllowed = allow.filter(l =>
-            cycleLaneIndices(jTile.road, ahead.entry).includes(l),
+            bikeLaneIndices(jTile.road, ahead.entry).includes(l),
           );
           const pool =
             cls === "bus" && busAllowed.length > 0
@@ -1509,12 +1519,12 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     }
 
     // A bike NEVER rides an inner lane on the open road: no exit-lane settle, no
-    // keep-right delay. It heads straight for the kerb-most cycle lane if the
-    // approach has one, else the kerb-most lane it may use (which includes a bus
-    // lane). Branch (F) above still wins on a junction approach — there the pick
-    // is the outermost lane that permits the turn.
+    // keep-right delay. It heads straight for the kerb-most cycle lane or
+    // shoulder if the approach has one, else the kerb-most lane it may use
+    // (which includes a bus lane). Branch (F) above still wins on a junction
+    // approach — there the pick is the outermost lane that permits the turn.
     if (cls === "bike") {
-      const own = cycleLaneIndices(tile?.road, head.entryPort);
+      const own = bikeLaneIndices(tile?.road, head.entryPort);
       const target =
         own.length > 0 ? Math.min(...own) : kerbMostLane(tile?.road, head.entryPort, cls);
       return clampLane(target, curCount);
@@ -3556,7 +3566,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       const ownLanes =
         cls === "bus"
           ? busLaneIndices(entryRoad, entry.entryPort)
-          : cycleLaneIndices(entryRoad, entry.entryPort);
+          : bikeLaneIndices(entryRoad, entry.entryPort);
       const rest = usable.filter(l => !ownLanes.includes(l));
       // A bus fills the rest from a rotating start (it uses any lane freely);
       // a bike takes the KERB-most first — it never has business entering on an

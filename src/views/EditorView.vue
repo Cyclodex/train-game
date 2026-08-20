@@ -445,6 +445,8 @@ import {
   setBusLaneRun,
   toggleCycleLane,
   toggleCycleLaneRun,
+  toggleShoulderLane,
+  toggleShoulderLaneRun,
   addStreetLane,
   addStreetLaneRun,
   removeStreetLane,
@@ -509,6 +511,7 @@ type Tool =
   | "road"
   | "buslane"
   | "bikelane"
+  | "widestreet"
   | "laneadd"
   | "laneremove"
   | "signalise"
@@ -567,6 +570,7 @@ const DOCK_GROUPS: DockGroup[] = [
       { key: "laneremove", icon: "➖", label: "Remove lane", tool: "laneremove" },
       { key: "buslane", icon: "🚌", label: "Bus lane", tool: "buslane" },
       { key: "bikelane", icon: "🚲", label: "Bike lane", tool: "bikelane" },
+      { key: "widestreet", icon: "↔️", label: "Wide street", tool: "widestreet" },
       { key: "signalise", icon: "🚥", label: "Signals", tool: "signalise" },
     ],
   },
@@ -648,6 +652,8 @@ const HINTS: Record<Tool, string> = {
     "Click a lane to toggle it BUS-only ↔ normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Green bike lanes are the 🚲 tool's. Ctrl+click toggles just that one tile's lane.",
   bikelane:
     "Click a street to ADD a green bike lane on EACH kerb — a NEW lane per direction; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets, and a one-way gains its one). Both ways change together, like ➕/➖: a street with a bike lane on one side only is not something the road markings can draw. Click again — any lane, or a green lane itself — to remove them. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
+  widestreet:
+    "Click a street to make it WIDE: each direction gains an unmarked edge zone at the kerb — no green paint, no edge line, just visibly wider asphalt. Bikes ride the edge and cars pass alongside in their own lane, without a lane change and without queueing. Both directions change together, like 🚲/➕/➖. On a street with a green bike lane this strips the paint but keeps the width (and 🚲 paints a wide street's edge green). Click again to narrow the street back. Runs the whole street, stopping at junctions. Ctrl+click toggles just that one tile.",
   laneadd:
     "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L, exactly like re-drawing with a bigger preset — a one-way street gains its one direction). 3L is the ceiling, same as the road tool. Stops at junctions; no need to re-drag the road. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
   laneremove:
@@ -1361,15 +1367,17 @@ class EditorView extends Vue {
       // tile's own both-direction band keeps the path on the lane the car drives.
       const band = laneCountAt(tile.road, lane.from) / 2;
       // A cycle lane's visible strip is half-width, kerb-aligned — put the hover
-      // highlight on the green, a quarter-lane kerbward of the slot centre.
-      const cycleShift = lane.kind === "cycle" ? 0.25 * LANE_WIDTH_PX_FRAC * size : 0;
+      // highlight on the green, a quarter-lane kerbward of the slot centre. A
+      // wide street's shoulder is the same ride line minus the paint.
+      const isBikeLane = lane.kind === "cycle" || lane.kind === "shoulder";
+      const cycleShift = isBikeLane ? 0.25 * LANE_WIDTH_PX_FRAC * size : 0;
       const off = (band - 0.5 - lane.index) * LANE_WIDTH_PX_FRAC * size + cycleShift;
       out.push({
         d: laneSegmentPathD(lane.from, to, size, off, off),
         from: lane.from,
         index: lane.index,
         isBus: lane.kind === "bus",
-        isCycle: lane.kind === "cycle",
+        isCycle: isBikeLane,
       });
     }
     return out;
@@ -1566,6 +1574,7 @@ class EditorView extends Vue {
     return (
       this.tool === "buslane" ||
       this.tool === "bikelane" ||
+      this.tool === "widestreet" ||
       this.tool === "laneadd" ||
       this.tool === "laneremove"
     );
@@ -1583,6 +1592,10 @@ class EditorView extends Vue {
         ? single
           ? { [id]: toggleCycleLane(this.cellOf(id), from) }
           : toggleCycleLaneRun(this.level, id, from, index)
+        : this.tool === "widestreet"
+          ? single
+            ? { [id]: toggleShoulderLane(this.cellOf(id), from) }
+            : toggleShoulderLaneRun(this.level, id, from, index)
         : this.tool === "laneadd"
           ? single
             ? { [id]: addStreetLane(this.cellOf(id), from) }

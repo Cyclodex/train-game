@@ -489,6 +489,11 @@ export function roadLaneBandPath(
 // as part of the carriageway). The green tint (Tile.vue restrictedLaneBands)
 // and the bike's ride line (sim/laneGeometry cycle-strip shift) use the same
 // half-width kerb alignment, so paint, tint and rider agree.
+// `shoulderA` / `shoulderB`: how many KERB-side SHOULDER lanes each direction
+// carries (the wide street's edge zone — 0 or 1). A shoulder is the cycle lane
+// minus the paint: the kerb slot's full-width dashed divider is suppressed just
+// the same, but NO solid edge line (and no tint) replaces it — the street
+// simply reads as wider asphalt, and the bike rides its edge.
 export function roadLaneMarkingPaths(
   entry: Port,
   exit: Port,
@@ -499,6 +504,8 @@ export function roadLaneMarkingPaths(
   capHalfB?: number,
   cycleA = 0,
   cycleB = 0,
+  shoulderA = 0,
+  shoulderB = 0,
 ): LaneMarkingPath[] {
   const LANE_W = size * 0.14;
   const out: LaneMarkingPath[] = [];
@@ -532,7 +539,9 @@ export function roadLaneMarkingPaths(
     // entry→exit puts the kerb on the positive side (lane 0's boundary is k=1),
     // travel exit→entry mirrors it (boundary k = m-1, edge at k = m-0.5).
     const cycle = lanesA > 0 ? cycleA : cycleB;
-    const skipK = cycle > 0 && m >= 2 ? (lanesA > 0 ? 1 : m - 1) : -1;
+    // A shoulder suppresses the same kerb-slot divider but paints NO edge line.
+    const shoulder = lanesA > 0 ? shoulderA : shoulderB;
+    const skipK = (cycle > 0 || shoulder > 0) && m >= 2 ? (lanesA > 0 ? 1 : m - 1) : -1;
     const edgeK = lanesA > 0 ? 0.5 : m - 0.5;
     for (let k = 1; k < m; k++) {
       if (k === skipK) continue;
@@ -590,9 +599,10 @@ export function roadLaneMarkingPaths(
     // A direction with a kerb-side cycle lane swaps that lane's full-slot dashed
     // boundary (divider i = lanes−1, the outermost) for a SOLID edge line half a
     // lane in from the kerb — the real-world half-width cycle lane. The slot's
-    // inner half reads as carriageway.
-    const skipA = cycleA > 0 && lanesA >= 2 ? lanesA - 1 : -1;
-    const skipB = cycleB > 0 && lanesB >= 2 ? lanesB - 1 : -1;
+    // inner half reads as carriageway. A SHOULDER suppresses the same divider
+    // but gets NO edge line — plain wide asphalt.
+    const skipA = (cycleA > 0 || shoulderA > 0) && lanesA >= 2 ? lanesA - 1 : -1;
+    const skipB = (cycleB > 0 || shoulderB > 0) && lanesB >= 2 ? lanesB - 1 : -1;
     const pushEdge = (d0: number) => {
       const sgn = Math.sign(d0);
       let fromD = d0;
@@ -616,7 +626,7 @@ export function roadLaneMarkingPaths(
       if (capHalfB !== undefined) toD = Math.min(toD, capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
-    if (skipA > 0) pushEdge((lanesA - 0.5) * LANE_W);
+    if (skipA > 0 && cycleA > 0) pushEdge((lanesA - 0.5) * LANE_W);
     // Between same-direction lanes on the exit→entry side (negative offset).
     for (let i = 1; i < hi; i++) {
       if (i === skipB) continue;
@@ -626,27 +636,27 @@ export function roadLaneMarkingPaths(
       if (capHalfB !== undefined) toD = Math.max(toD, -capHalfB);
       out.push({ d: taperedParallel(entry, exit, size, fromD, toD), kind: "inner", merge: isMerge(i) });
     }
-    if (skipB > 0) pushEdge(-(lanesB - 0.5) * LANE_W);
+    if (skipB > 0 && cycleB > 0) pushEdge(-(lanesB - 0.5) * LANE_W);
   } else {
     // Curved tile (adjacent ports): add offset Bézier inner dividers for each
     // same-direction lane boundary, using the entry→exit and exit→entry sides.
     // The cycle-lane swap (solid half-width edge for the full-slot divider)
     // applies on bends exactly as on straights, so a painted run stays coherent
-    // through a corner.
-    const skipA = cycleA > 0 && lanesA >= 2 ? lanesA - 1 : -1;
-    const skipB = cycleB > 0 && lanesB >= 2 ? lanesB - 1 : -1;
+    // through a corner — and the shoulder's divider-only suppression likewise.
+    const skipA = (cycleA > 0 || shoulderA > 0) && lanesA >= 2 ? lanesA - 1 : -1;
+    const skipB = (cycleB > 0 || shoulderB > 0) && lanesB >= 2 ? lanesB - 1 : -1;
     for (let i = 1; i < lanesA; i++) {
       if (i === skipA) continue;
       out.push({ d: curvedParallelPath(entry, exit, size, i * LANE_W), kind: "inner" });
     }
-    if (skipA > 0) {
+    if (skipA > 0 && cycleA > 0) {
       out.push({ d: curvedParallelPath(entry, exit, size, (lanesA - 0.5) * LANE_W), kind: "inner", solid: true });
     }
     for (let i = 1; i < lanesB; i++) {
       if (i === skipB) continue;
       out.push({ d: curvedParallelPath(entry, exit, size, -i * LANE_W), kind: "inner" });
     }
-    if (skipB > 0) {
+    if (skipB > 0 && cycleB > 0) {
       out.push({ d: curvedParallelPath(entry, exit, size, -(lanesB - 0.5) * LANE_W), kind: "inner", solid: true });
     }
   }
@@ -672,6 +682,10 @@ export function roadLaneMarkingPaths(
 // (k = 0.5), where the green tint's inner edge and the bike's ride line are.
 // A one-way that is ONLY a cycle lane has no lane line to swap — its own kerb
 // edges bound it — hence the two-lane floor, mirroring `lanes >= 2` above.
+//
+// `shoulder` (0 or 1) is the direction's kerb-side SHOULDER lanes (the wide
+// street's edge zone): the same slot-boundary suppression as a cycle lane, but
+// NO solid edge line — plain wider asphalt.
 export function oneWayStraightMarkingPaths(
   entry: Port,
   exit: Port,
@@ -680,15 +694,18 @@ export function oneWayStraightMarkingPaths(
   entryCount: number,
   exitCount: number,
   cycle = 0,
+  shoulder = 0,
 ): LaneMarkingPath[] {
   const LANE_W = size * 0.14;
   const at = (k: number) => (runMax / 2 - k) * LANE_W;
   const hasCycle = cycle > 0 && Math.max(entryCount, exitCount) >= 2;
+  const hasEdgeLane =
+    (cycle > 0 || shoulder > 0) && Math.max(entryCount, exitCount) >= 2;
   const out: LaneMarkingPath[] = [];
   // Survivor dividers: straight lines between through-lanes present at both ends.
   const survivors = Math.min(entryCount, exitCount);
   for (let k = 1; k < survivors; k++) {
-    if (hasCycle && k === 1) continue; // the cycle lane's slot boundary
+    if (hasEdgeLane && k === 1) continue; // the cycle/shoulder lane's slot boundary
     out.push({ d: roadParallelLine(entry, exit, size, at(k), at(k)), kind: "inner" });
   }
   // A widening opens new lanes on the LEFT (centre side): their dividers fan out

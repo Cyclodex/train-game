@@ -18,6 +18,8 @@ import {
   cycleDefaultArm,
   toggleBusLane,
   toggleCycleLane,
+  toggleShoulderLane,
+  toggleShoulderLaneRun,
   setLaneKind,
   streetRunLanes,
   setBusLaneRun,
@@ -510,6 +512,99 @@ describe("toggleCycleLane (the 🚲 tool)", () => {
     const lanes = c.road!.filter(l => l.from === Left);
     expect(lanes).toHaveLength(1);
     expect(lanes[0].kind).toBeUndefined();
+  });
+});
+
+describe("toggleShoulderLane (the ↔ wide-street tool)", () => {
+  const laneAt = (cell: TileCell, from: Position, index: number) =>
+    cell.road!.find(l => l.from === from && l.index === index)!;
+
+  it("widens the street with an unmarked kerb edge zone, both directions", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleShoulderLane(c, Left);
+    for (const dir of [Left, Right]) {
+      const lanes = c.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(2);
+      expect(lanes.find(l => l.index === 0)!.kind).toBe("shoulder"); // kerb edge zone
+      expect(lanes.find(l => l.index === 1)!.kind).toBeUndefined(); // car lane kept
+    }
+  });
+
+  it("toggles back off — the street narrows to its old width", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleShoulderLane(c, Left);
+    c = toggleShoulderLane(c, Right); // any lane of the street toggles it
+    for (const dir of [Left, Right]) {
+      const lanes = c.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(1);
+      expect(lanes[0].kind).toBeUndefined();
+    }
+  });
+
+  it("converts a cycle street in place — the paint goes, the width stays", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleCycleLane(c, Left); // green street: cycle + car each way
+    c = toggleShoulderLane(c, Left);
+    for (const dir of [Left, Right]) {
+      const lanes = c.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(2); // same width — a retag, not a second widening
+      expect(laneAt(c, dir, 0).kind).toBe("shoulder");
+    }
+  });
+
+  it("…and 🚲 paints a wide street's edge zone green the same way", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleShoulderLane(c, Left); // wide street
+    c = toggleCycleLane(c, Left); // paint it
+    for (const dir of [Left, Right]) {
+      const lanes = c.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(2);
+      expect(laneAt(c, dir, 0).kind).toBe("cycle");
+    }
+  });
+
+  it("the shoulder is exempt from the 3-lane carriageway cap, like the cycle lane", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 3) };
+    c = toggleShoulderLane(c, Left); // 3 car + shoulder each way
+    const grown = addStreetLane(c, Left);
+    expect(grown).toBe(c); // the CAP blocks (3 general lanes already)…
+    let d: TileCell = { connections: [], road: nWayLanes(Left, Right, 2) };
+    d = toggleShoulderLane(d, Left); // …but 2 car + shoulder can still grow
+    const wider = addStreetLane(d, Left);
+    expect(wider).not.toBe(d);
+    expect(wider.road!.filter(l => l.from === Left && l.kind == null)).toHaveLength(3);
+  });
+
+  it("the bus tool leaves a shoulder alone — the edge zone belongs to ↔", () => {
+    let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
+    c = toggleShoulderLane(c, Left);
+    expect(toggleBusLane(c, Left, 0)).toBe(c);
+  });
+});
+
+describe("toggleShoulderLaneRun (the ↔ tool, whole street)", () => {
+  it("widens the whole run, both directions, and narrows it back", () => {
+    const lvl: Level = {
+      "0,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "1,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+      "2,0": { connections: [], road: nWayLanes(Left, Right, 1) },
+    };
+    const widened = toggleShoulderLaneRun(lvl, "1,0", Left, 0);
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      for (const dir of [Left, Right]) {
+        const lanes = widened[id].road!.filter(l => l.from === dir);
+        expect(lanes).toHaveLength(2);
+        expect(lanes.find(l => l.index === 0)!.kind).toBe("shoulder");
+      }
+    }
+    const narrowed = toggleShoulderLaneRun({ ...lvl, ...widened }, "1,0", Left, 0);
+    for (const id of ["0,0", "1,0", "2,0"]) {
+      for (const dir of [Left, Right]) {
+        const lanes = narrowed[id].road!.filter(l => l.from === dir);
+        expect(lanes).toHaveLength(1);
+        expect(lanes[0].kind).toBeUndefined();
+      }
+    }
   });
 });
 
