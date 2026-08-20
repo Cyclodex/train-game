@@ -2779,7 +2779,11 @@ of the above; read that section first.
 - Anchor the track's look on REAL numbers — standard gauge 1435mm on a 2600mm
   sleeper, i.e. the rails at **55% of the sleeper's half-length**. Everything is
   drawn in `TileRail.vue`: the sleeper band is the centreline stroked 20px
-  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1px grey.
+  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1.6px grey.
+- RAIL STROKE 1.6, not the old 1. A 1px grey hairline all but disappears into
+  the sleeper band at normal board zoom — the track read as bare sleepers with
+  no metal on it. `Tile.vue`'s `.deck-rail` (the flyover deck's own track) must
+  carry the SAME width, or the line changes weight where it climbs onto the deck.
 - `railDistanceFromPath` = HALF THE GAUGE in px, and 20/2 × 0.55 = **5.5**. It was
   7 (70%), which left a 3px sleeper end past the rail and read as "rails sitting
   on the sleeper tips" — the user spotted it by eye before the maths was done.
