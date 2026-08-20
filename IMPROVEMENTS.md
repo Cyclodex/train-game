@@ -287,6 +287,14 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
+18. **Build-dock IA redesign (Transport-Fever-grade).** The editor dock's five
+    flat groups mix building/retrofit/control per row, express "tool options"
+    in three different widget patterns, and lean on hidden-state click-cycling
+    (Signalise's six modes). The designed fix — four categories (Rail / Road /
+    Terrain / Bulldozer), tabs that separate the verbs, parking under Road,
+    traffic-light modes as items, a layer-scoped bulldozer, one options slot,
+    one-line hints — is specced with a 3-phase plan in
+    `docs/superpowers/specs/2026-08-21-build-ui-redesign-design.md`.
 
 ## Recently landed (kept for context)
 
