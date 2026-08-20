@@ -691,6 +691,14 @@ export function oneWayStraightMarkingPaths(
     if (hasCycle && k === 1) continue; // the cycle lane's slot boundary
     out.push({ d: roadParallelLine(entry, exit, size, at(k), at(k)), kind: "inner" });
   }
+  // A DROPPING lane keeps its divider to the seam: the lane is real tarmac to
+  // the end of this tile (the recovery taper lives on the NEXT tile), so its
+  // boundary dashes run the whole way instead of stopping where the old
+  // Sperrfläche used to take over — a divider that ends mid-tile reads as a
+  // painting mistake now that no hatched bay explains it.
+  for (let k = survivors; k < entryCount; k++) {
+    out.push({ d: roadParallelLine(entry, exit, size, at(k), at(k)), kind: "inner" });
+  }
   // A widening opens new lanes on the LEFT (centre side): their dividers fan out
   // from the entry-side edge to their straight line.
   for (let k = entryCount; k < exitCount; k++) {

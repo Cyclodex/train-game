@@ -585,7 +585,6 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
-  laneClosureGore,
   oneWayMergeArrowPath,
   junctionApproachSignalGeom,
   laneDirectionArrowPath,
@@ -1926,25 +1925,12 @@ class Tile extends Vue {
         if (exitCount < entryCount) {
           const W = size * LANE_WIDTH_PX_FRAC;
           const R = this.game.roadOneWayRunMax(coord, entry);
-          // The closing lane stays full-width drivable; the gore (Sperrfläche) is a
-          // POINT upstream that WIDENS downstream to fill the lane where it ends —
-          // a real motorway lane drop, not a tarmac that pinches. Bounded below by
-          // the full-width kerb (straight) and above by a line diverging from that
-          // kerb (upstream point) to the survivors' boundary (downstream).
-          const kerbOff = (R / 2 - entryCount) * W; // full-width centre edge (closing-lane outer, −n)
-          const innerOff = (R / 2 - exitCount) * W; // survivors' boundary (gore inner, downstream)
-          gores.push({
-            // Same primitive as the bidirectional lane drop — only the ANCHOR
-            // differs (centre edge here, kerb there). A point at the centre edge
-            // upstream (outer === inner), widening to outer..inner downstream.
-            ...laneClosureGore(entry, exit, size, {
-              outerEntry: kerbOff,
-              innerEntry: kerbOff,
-              outerExit: kerbOff,
-              innerExit: innerOff,
-            }),
-            clipId: `gore-${this.coordId}-${entry}-${exit}`,
-          });
+          // NO Sperrfläche on a one-way drop (user call, 2026-08-20): with the
+          // recovery taper on the tile after the gore the surface already reads
+          // as a smooth motorway narrowing, and the hatched bay — which used to
+          // end in a hard white bar right where the tarmac carries on — fought
+          // that. The closing lane is plain tarmac; the merge arrows below and
+          // the tapering centre edge line are the drop's whole signage.
           // Merge arrows in the still-open part of the closing lane, leaning toward
           // the through lanes (the merge direction).
           const laneOff = (R / 2 + 0.5 - entryCount) * W; // closing lane centre (−n side)
