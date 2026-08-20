@@ -460,11 +460,47 @@ describe("toggleCycleLane (the 🚲 tool)", () => {
     expect(lanes.every(l => l.kind == null)).toBe(true);
   });
 
-  it("only touches the clicked direction of a two-way street", () => {
+  it("paints BOTH directions of a two-way street — the click names the street", () => {
+    // SYMMETRY IS LOAD-BEARING (the same rule as ➕/➖): the yellow centreline
+    // paints at the ribbon middle and the dividers at whole-lane offsets, so a
+    // 2+1 street would run the centre marking through the middle of an
+    // oncoming car lane. One click equips the whole street, both ways.
     let c: TileCell = { connections: [], road: nWayLanes(Left, Right, 1) };
     c = toggleCycleLane(c, Left);
-    expect(c.road!.filter(l => l.from === Left)).toHaveLength(2);
-    expect(c.road!.filter(l => l.from === Right)).toHaveLength(1); // untouched
+    for (const dir of [Left, Right]) {
+      const lanes = c.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(2);
+      expect(lanes.find(l => l.index === 0)!.kind).toBe("cycle"); // kerb-side green
+      expect(lanes.find(l => l.index === 1)!.kind).toBeUndefined(); // car lane kept
+    }
+    // …and the same street reads exactly as symmetric on the way back out.
+    const bare = toggleCycleLane(c, Right);
+    for (const dir of [Left, Right]) {
+      const lanes = bare.road!.filter(l => l.from === dir);
+      expect(lanes).toHaveLength(1);
+      expect(lanes[0]).toMatchObject({ index: 0 });
+      expect(lanes[0].kind).toBeUndefined();
+    }
+  });
+
+  it("re-symmetrises a half-equipped street instead of deepening the asymmetry", () => {
+    // A hand-authored (or legacy) street with green on one side only: clicking
+    // the BARE side adds there and leaves the equipped side alone, so the tile
+    // converges to the symmetric state rather than gaining a second lane on the
+    // side that already had one.
+    const c: TileCell = {
+      connections: [],
+      road: [
+        { from: Left, to: [Right], index: 0, kind: "cycle" },
+        { from: Left, to: [Right], index: 1 },
+        { from: Right, to: [Left], index: 0 },
+      ],
+    };
+    const fixed = toggleCycleLane(c, Right);
+    for (const dir of [Left, Right]) {
+      expect(fixed.road!.filter(l => l.from === dir && l.kind === "cycle")).toHaveLength(1);
+      expect(fixed.road!.filter(l => l.from === dir)).toHaveLength(2);
+    }
   });
 
   it("a cycle-only direction (bike path) reverts to normal instead of vanishing", () => {
@@ -660,11 +696,14 @@ describe("toggleCycleLaneRun (the 🚲 tool, whole street)", () => {
     };
     const changed = toggleCycleLaneRun(lvl, "1,0", Left, 0);
     for (const id of ["0,0", "1,0", "2,0"]) {
-      const east = changed[id].road!.filter(l => l.from === Left);
-      expect(east).toHaveLength(2); // green lane + the (kept) street lane
-      expect(east.find(l => l.index === 0)!.kind).toBe("cycle");
-      expect(east.find(l => l.index === 1)!.kind).toBeUndefined();
-      expect(changed[id].road!.filter(l => l.from === Right)).toHaveLength(1); // other way untouched
+      // BOTH directions of every tile: an asymmetric street is one the road
+      // paint cannot express (see addStreetLane / addCycleLane).
+      for (const dir of [Left, Right]) {
+        const lanes = changed[id].road!.filter(l => l.from === dir);
+        expect(lanes).toHaveLength(2); // green lane + the (kept) street lane
+        expect(lanes.find(l => l.index === 0)!.kind).toBe("cycle");
+        expect(lanes.find(l => l.index === 1)!.kind).toBeUndefined();
+      }
     }
   });
 
@@ -675,10 +714,12 @@ describe("toggleCycleLaneRun (the 🚲 tool, whole street)", () => {
     // Click the CAR lane (index 1) — the direction, not the green lane, decides.
     const changed = toggleCycleLaneRun(lvl, "0,0", Left, 1);
     for (const id of ["0,0", "1,0"]) {
-      const east = changed[id].road!.filter(l => l.from === Left);
-      expect(east).toHaveLength(1); // narrowed back to the single car lane
-      expect(east[0].kind).toBeUndefined();
-      expect(east[0].index).toBe(0);
+      for (const dir of [Left, Right]) {
+        const lanes = changed[id].road!.filter(l => l.from === dir);
+        expect(lanes).toHaveLength(1); // narrowed back to the single car lane
+        expect(lanes[0].kind).toBeUndefined();
+        expect(lanes[0].index).toBe(0);
+      }
     }
   });
 
@@ -691,8 +732,11 @@ describe("toggleCycleLaneRun (the 🚲 tool, whole street)", () => {
     };
     const changed = toggleCycleLaneRun(lvl, "1,0", Left, 0);
     for (const id of Object.keys(changed)) {
-      const east = changed[id].road!.filter(l => l.from === Left);
-      expect(east.filter(l => l.kind === "cycle")).toHaveLength(1);
+      for (const dir of [Left, Right]) {
+        const lanes = changed[id].road!.filter(l => l.from === dir);
+        expect(lanes.filter(l => l.kind === "cycle")).toHaveLength(1);
+        expect(lanes).toHaveLength(2);
+      }
     }
   });
 });

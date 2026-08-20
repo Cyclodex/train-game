@@ -389,47 +389,74 @@ export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
   return { ...cell, road: dropMovement(dropMovement(road, a, b), b, a) };
 }
 
-// Add a cycle lane to one direction of a street: a NEW kerb-side lane (index 0,
-// kind "cycle") is inserted and the direction's existing lanes shift inboard by
-// one — the street WIDENS, keeping every car/bus lane it had. This is the
-// deliberate asymmetry with the bus lane (which converts a lane in place): a
-// cycle lane is an add-on beside the carriageway, not a car lane sacrificed.
-// No-op on a junction (cycle lanes are street-authored; they end at junctions),
-// when the approach has no lanes, or when it already has a cycle lane.
+// Add a cycle lane to EVERY approach of a street tile: per direction a NEW
+// kerb-side lane (index 0, kind "cycle") is inserted and that direction's
+// existing lanes shift inboard by one — the street WIDENS, keeping every
+// car/bus lane it had. This is the deliberate asymmetry with the bus lane
+// (which converts a lane in place): a cycle lane is an add-on beside the
+// carriageway, not a car lane sacrificed.
+//
+// SYMMETRY IS LOAD-BEARING, exactly as for addStreetLane/removeStreetLane: the
+// renderer paints the yellow centreline at the ribbon MIDDLE and every divider
+// at whole-lane offsets from it, so a street whose directions carry different
+// lane counts puts the centre marking through the middle of an oncoming car
+// lane — and the cycle lane's own solid edge line then lands nowhere near its
+// green tint. `from` therefore names the STREET, not the side: it validates
+// the click and the change is per-tile. A one-way street is trivially
+// symmetric — it has a single direction and steps that one.
+//
+// Idempotent per direction (a side that already carries green is left alone),
+// so a half-equipped legacy street CONVERGES to symmetric instead of gaining a
+// second green lane, and the run applicator can add over a mixed street.
+// No-op on a junction (cycle lanes are street-authored; they end at
+// junctions), when the clicked approach has no lanes, or when every direction
+// already has its cycle lane.
 export function addCycleLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
-  if (!road || isRoadJunction(road)) return cell;
-  const approach = road.filter(l => l.from === from);
-  if (approach.length === 0 || approach.some(l => l.kind === "cycle")) return cell;
-  const kerb = approach.reduce((b, l) => (l.index < b.index ? l : b));
-  const next: Lane[] = road.map(l => (l.from === from ? { ...l, index: l.index + 1 } : l));
-  next.push({ from, to: [...kerb.to], index: 0, kind: "cycle" as LaneKind });
+  if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))].filter(
+    f => !road.some(l => l.from === f && l.kind === "cycle"),
+  );
+  if (froms.length === 0) return cell;
+  let next: Lane[] = road;
+  for (const f of froms) {
+    const kerb = next.filter(l => l.from === f).reduce((b, l) => (l.index < b.index ? l : b));
+    next = next.map(l => (l.from === f ? { ...l, index: l.index + 1 } : l));
+    next = [...next, { from: f, to: [...kerb.to], index: 0, kind: "cycle" as LaneKind }];
+  }
   return { ...cell, road: next };
 }
 
-// The inverse: strip one direction's cycle lane(s) and close the gap — the
-// remaining lanes of the approach are re-indexed by rank so the street narrows
-// back to its pre-cycle-lane width. When the cycle lane is the approach's ONLY
-// lane (a hand-authored bike path, or a legacy converted lane), removing it
-// would delete the direction outright — instead the lane reverts to a normal
-// lane, so the toggle always lands somewhere sane. No-op when the approach has
-// no cycle lane.
+// The inverse, and symmetric for the same reason: strip the cycle lane(s) of
+// EVERY direction and close the gap — the remaining lanes of each approach are
+// re-indexed by rank so the street narrows back to its pre-cycle-lane width.
+// When the cycle lane is an approach's ONLY lane (a hand-authored bike path, or
+// a legacy converted lane), removing it would delete the direction outright —
+// instead that lane reverts to a normal lane, so the toggle always lands
+// somewhere sane. No-op when no direction carries a cycle lane.
 export function removeCycleLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
-  if (!road || !road.some(l => l.from === from && l.kind === "cycle")) return cell;
-  const remaining = road.filter(l => !(l.from === from && l.kind === "cycle"));
-  if (!remaining.some(l => l.from === from)) {
-    // Cycle-only approach: strip the kind rather than the lane.
-    const next = road.map(l =>
-      l.from === from && l.kind === "cycle" ? { from: l.from, to: l.to, index: l.index } : l,
-    );
-    return { ...cell, road: next };
+  if (!road || !road.some(l => l.from === from)) return cell;
+  const froms = [...new Set(road.map(l => l.from))].filter(f =>
+    road.some(l => l.from === f && l.kind === "cycle"),
+  );
+  if (froms.length === 0) return cell;
+  let next: Lane[] = road;
+  for (const f of froms) {
+    const remaining = next.filter(l => !(l.from === f && l.kind === "cycle"));
+    if (!remaining.some(l => l.from === f)) {
+      // Cycle-only approach: strip the kind rather than the lane.
+      next = next.map(l =>
+        l.from === f && l.kind === "cycle" ? { from: l.from, to: l.to, index: l.index } : l,
+      );
+      continue;
+    }
+    const ranked = remaining
+      .filter(l => l.from === f)
+      .sort((a, b) => a.index - b.index);
+    const rank = new Map(ranked.map((l, i) => [l, i]));
+    next = remaining.map(l => (l.from === f ? { ...l, index: rank.get(l)! } : l));
   }
-  const ranked = remaining
-    .filter(l => l.from === from)
-    .sort((a, b) => a.index - b.index);
-  const rank = new Map(ranked.map((l, i) => [l, i]));
-  const next = remaining.map(l => (l.from === from ? { ...l, index: rank.get(l)! } : l));
   return { ...cell, road: next };
 }
 
@@ -519,12 +546,14 @@ export function toggleBusLane(cell: TileCell, from: Port, index: number): TileCe
   return setLaneKind(cell, from, index, lane.kind === "bus" ? undefined : ("bus" as LaneKind));
 }
 
-// The BIKE-lane tool's single-tile action: toggle the cycle lane of the
-// direction the clicked lane belongs to. The approach has one → remove it (the
-// street narrows back); it has none → add one (a NEW kerb-side green lane, the
-// street widens — see addCycleLane). The clicked lane only names the DIRECTION;
-// clicking a car lane, a bus lane or the green lane itself all toggle the same
-// thing, so the tool has no dead spots.
+// The BIKE-lane tool's single-tile action: toggle the STREET's cycle lane, with
+// the clicked lane's direction deciding the verb. That direction has one →
+// remove (both ways; the street narrows back); it has none → add (both ways: a
+// NEW kerb-side green lane per direction, the street widens — see
+// addCycleLane). The clicked lane only names the direction; clicking a car
+// lane, a bus lane or the green lane itself all toggle the same thing, so the
+// tool has no dead spots. The change itself is always SYMMETRIC — an
+// asymmetric street is one the road paint cannot express.
 export function toggleCycleLane(cell: TileCell, from: Port): TileCell {
   const road = cell.road;
   if (!road?.some(l => l.from === from)) return cell;
@@ -785,8 +814,9 @@ function mapStreetRun(
 // the clicked lane's street run. The SEED tile's approach decides the verb (it
 // has a cycle lane → remove everywhere; none → add everywhere), so a
 // half-equipped street becomes uniform in one click. The clicked lane names
-// only the direction — any lane of the approach works. Returns the changed
-// cells keyed by id, for the editor to commit in one go.
+// only the direction — any lane of the approach works — and each tile changes
+// SYMMETRICALLY, both directions together (see addCycleLane). Returns the
+// changed cells keyed by id, for the editor to commit in one go.
 export function toggleCycleLaneRun(
   level: Level,
   id: string,

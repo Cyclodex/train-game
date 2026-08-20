@@ -3316,13 +3316,20 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   median bus lanes. One-way streets step their single direction.
 - Editor has FOUR lane tools sharing one set of lane hit paths: 🚌 toggles a
   lane bus ↔ normal IN PLACE (`toggleBusLane`/`setBusLaneRun`; it never touches
-  green), and 🚲 toggles the DIRECTION's bike lane STRUCTURALLY —
+  green), and 🚲 toggles the STREET's bike lane STRUCTURALLY —
   `addCycleLane` inserts a NEW kerb lane (indices shift +1, the street widens)
   so no car capacity is lost on any width; `removeCycleLane` re-indexes back.
-  The 🚲 click names only the direction (`toggleCycleLane`/`toggleCycleLaneRun`
-  — any lane of the approach toggles the same thing; the run's SEED tile
-  decides add vs remove). A cycle-ONLY approach (bike path) reverts to normal
-  instead of losing its last lane; junctions are excluded (streets only).
+  🚲 is SYMMETRIC like ➕/➖ — BOTH directions gain/lose their green lane on one
+  click, for the same load-bearing reason (a 2+1 street runs the yellow centre
+  marking through the middle of an oncoming car lane, puts the cycle edge line
+  at the kerb while the tint sits half a lane away, and emits a phantom merge
+  dash on the untouched side). The click names only the direction, and only to
+  pick the verb (`toggleCycleLane`/`toggleCycleLaneRun` — any lane of the
+  approach toggles the same thing; the run's SEED tile decides add vs remove).
+  Add is idempotent PER DIRECTION, so a half-equipped legacy street converges
+  to symmetric rather than double-widening the side that already had green. A
+  cycle-ONLY approach (bike path) reverts to normal instead of losing its last
+  lane; junctions are excluded (streets only).
 - Render: `road-car--bike` is an 8px capsule whose GLASS SPAN is the rider's
   head-dot (livery = jersey), CSS duplicated in PlayView + TestStage as ever.
   A cycle lane paints at HALF the lane width, KERB-ALIGNED (real-world
