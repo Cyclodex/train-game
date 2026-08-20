@@ -2732,6 +2732,13 @@ of the above; read that section first.
   long-standing "no car could be dispatched" path, so the citizen still travels,
   on a timer, with no vehicle on the board. Refusing is not stranding; dispatching
   a car in order to delete it is a lie.
+  · **BUT ASK EVERY WAY OUT OF THE STREET FIRST** — `continue`, never `return`,
+    inside the `approachPorts` loop. `planParkingNear` searches from
+    `(tile, entry)`, so a space to the east is invisible to the westbound
+    approach, and the ports are tried in a fixed ascending order that knows
+    nothing about where the parking is. Returning on the first failure refused
+    drivers who only had to turn the other way out of their own street. The loop
+    running out of ports is the real refusal.
 - `giveUpAndReplan` used to retry through `planParkingTrip` — the AMBIENT planner,
   any car park on the map weighted by size — even for a commuter. So somebody who
   could not park at the works set off for a lot across town. A car with a

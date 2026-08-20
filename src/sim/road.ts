@@ -3234,7 +3234,16 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // so the journey still happens and still takes time — there is simply no
       // vehicle on the board for it. Which is exactly right, because in a town
       // with nowhere to park, that trip is the one you do not make by car.
-      if (wantsPark && !parkPlan) return null;
+      //
+      // ...BUT THAT IS A VERDICT ON THE WHOLE STREET, NOT ON THIS ONE APPROACH,
+      // which is why it is `continue` and never `return`. `planParkingNear`
+      // searches from `(tile, entry)`, so what a driver can reach depends on
+      // WHICH WAY THEY PULL OUT — a space one street east is invisible to the
+      // westbound approach, and the ports are tried in a fixed order with no
+      // idea where the parking is. Returning here turned away a driver who
+      // could have parked by turning the other way out of their own street.
+      // The loop running out of ports is the real refusal, at the bottom.
+      if (wantsPark && !parkPlan) continue;
       let turns: RouteTurn[];
       let goalPort: Port | null;
       if (parkPlan) {
