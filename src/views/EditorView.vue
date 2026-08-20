@@ -647,7 +647,7 @@ const HINTS: Record<Tool, string> = {
   buslane:
     "Click a lane to toggle it BUS-only ↔ normal along the whole street (it runs through straights and curves, stopping at junctions). The clicked lane decides the new state, so a half-painted street becomes uniform in one click. An in-place conversion: the lane keeps its place, only who may use it changes (buses and bikes; cars not). Green bike lanes are the 🚲 tool's. Ctrl+click toggles just that one tile's lane.",
   bikelane:
-    "Click a street to ADD a green bike lane along that direction's kerb — a NEW lane; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets). Click again — any lane of that direction, or the green lane itself — to remove it. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
+    "Click a street to ADD a green bike lane on EACH kerb — a NEW lane per direction; the street widens and keeps every car lane it had (works the same on 1, 2 or 3-lane streets, and a one-way gains its one). Both ways change together, like ➕/➖: a street with a bike lane on one side only is not something the road markings can draw. Click again — any lane, or a green lane itself — to remove them. Runs the whole street, stopping at junctions, where the bike lane ends and bikes merge in. Only bikes may ride green (they may use bus lanes too). Ctrl+click toggles just that one tile.",
   laneadd:
     "Click a street to add one car lane EACH WAY along the whole street (1L → 2L → 3L, exactly like re-drawing with a bigger preset — a one-way street gains its one direction). 3L is the ceiling, same as the road tool. Stops at junctions; no need to re-drag the road. New lanes go on the centre side, so a kerb-side bus or bike lane stays on the kerb. Ctrl+click changes just that one tile.",
   laneremove:
@@ -1573,8 +1573,9 @@ class EditorView extends Vue {
 
   onLaneClick(ev: MouseEvent, id: string, from: Port, index: number) {
     // Four lane tools share the hit paths: 🚌 toggles bus ↔ normal in place;
-    // 🚲 adds/removes the direction's kerb-side green lane; ➕/➖ step the
-    // STREET's car-lane count (both directions together — 1L ↔ 2L ↔ 3L).
+    // 🚲 adds/removes the kerb-side green lane and ➕/➖ step the STREET's
+    // car-lane count (1L ↔ 2L ↔ 3L) — both of those act on BOTH directions
+    // together, because the road markings cannot draw an asymmetric street.
     // Ctrl/Meta acts on one tile, a plain click on the whole street run.
     const single = ev.ctrlKey || ev.metaKey;
     const changed =
