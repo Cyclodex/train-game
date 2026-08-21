@@ -90,6 +90,7 @@ import {
   taxFor,
 } from "@/sim/calendar";
 import { RoadFrame } from "@/sim/road";
+import { CoachActive, coachMarksFor, createCoach } from "@/coach";
 
 export interface TrainDef {
   id: string;
@@ -656,6 +657,11 @@ export interface Game {
   undoable: Ref<{ pieces: number; value: number }>;
   // One fare pin per live, unpaid train, refreshed each frame beside the sprites.
   fareBadges: FareBadge[];
+  // The teaching layer: the coach-mark to show right now, or null. Reactive
+  // mirror of the coach controller (src/coach.ts), advanced with the world in
+  // advance() so a headless test can watch a mark appear and be dismissed by
+  // the action it teaches. Boards without a hint list keep this null for ever.
+  coach: { active: CoachActive | null };
   // Send a waiting train (Tycoon). Returns false when the train isn't waiting —
   // no mode without `controls.dispatch` ever has one, so this is a no-op there.
   dispatch(trainId: string): boolean;
@@ -3255,6 +3261,55 @@ export function createGame(
   let taxPaidTotal = 0;
   let unpaidTaxTotal = 0;
 
+  // --- coach-marks (the teaching layer, src/coach.ts) ------------------------
+  // The controller sequences a board's authored hints against cumulative run
+  // facts; the reactive mirror is what the views draw. Marks whose verb the
+  // mode has disabled are filtered out up front (a hint that can never be
+  // dismissed is a dead end, not a lesson).
+  const coachCtl = createCoach(coachMarksFor(setup.levelId, mode.controls));
+  const coach = reactive({ active: null }) as { active: CoachActive | null };
+  // Successful dispatches this run (zeroed by reset(), like the totals above).
+  let coachDispatchTotal = 0;
+  // Whether any junction ARM changed this run. Detected by snapshot diff: the
+  // switch table is mutated directly by the view (Tile.vue pickArm), so there
+  // is no handler to count in. Only arms present in BOTH snapshots compare —
+  // a build merging fresh junction entries in (applyEdits) adds keys, and new
+  // keys are not a flip.
+  let coachSwitchTouched = false;
+  let coachPrevArms: Record<string, Record<number, ActiveIntersection>> | null =
+    null;
+
+  function stepCoach() {
+    if (coachCtl.empty) return;
+    if (coachPrevArms && !coachSwitchTouched) {
+      outer: for (const id of Object.keys(coachPrevArms)) {
+        const cur = switches[id];
+        if (!cur) continue;
+        for (const port of Object.keys(coachPrevArms[id])) {
+          const p = Number(port);
+          if (cur[p] !== undefined && cur[p] !== coachPrevArms[id][p]) {
+            coachSwitchTouched = true;
+            break outer;
+          }
+        }
+      }
+    }
+    const snap: Record<string, Record<number, ActiveIntersection>> = {};
+    for (const id of Object.keys(switches)) snap[id] = { ...switches[id] };
+    coachPrevArms = snap;
+    coachCtl.step({
+      phase: objective.phase,
+      tilesBuilt: tilesBuiltTotal,
+      dispatches: coachDispatchTotal,
+      switchTouched: coachSwitchTouched,
+      delivered: deliveries.value,
+    });
+    const a = coachCtl.active;
+    if (coach.active?.id !== a?.id) {
+      coach.active = a ? { id: a.id, text: a.text, anchor: a.anchor } : null;
+    }
+  }
+
   function refreshObjective() {
     Object.assign(objective, tracker.state());
   }
@@ -3431,6 +3486,9 @@ export function createGame(
     refreshObjective();
     refreshMoney();
     updateGridlock(scaled);
+    // Last, over the freshly refreshed objective phase: the coach teaches the
+    // state the player is actually in this tick.
+    stepCoach();
   }
 
   function frame(now: number) {
@@ -3912,12 +3970,16 @@ export function createGame(
     money,
     gridlock,
     fareBadges,
+    coach,
     dispatch(trainId: string) {
       const sent = sim.dispatch(trainId);
       // Sending a train puts the railway into service: the layout stops being a
       // draft, so the last purchase is no longer a draft either. From here,
       // taking track out is a demolition job.
-      if (sent) setLastBuild(null);
+      if (sent) {
+        setLastBuild(null);
+        coachDispatchTotal += 1;
+      }
       return sent;
     },
     mode,
@@ -4005,6 +4067,14 @@ export function createGame(
       refreshMoney();
       tracker.reset();
       refreshObjective();
+      // The coach's RUN facts start over with the run; what the player has
+      // already learned stays learned (createCoach keeps its done set), so a
+      // Retry never re-teaches a verb that was performed.
+      coachDispatchTotal = 0;
+      coachSwitchTouched = false;
+      coachPrevArms = null;
+      coachCtl.newRun();
+      coach.active = null;
     },
     toggleHold(tileId: string, exitPort: Position) {
       const wasHeld = sim.isHeld(tileId, exitPort);

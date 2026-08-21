@@ -842,7 +842,16 @@ test.describe("Train game", () => {
     // switching, dispatching all three trains, the win screen, and the ledger
     // adding up.
     await page.goto("/#/play?mode=tycoon&board=lakevalley-open");
+    // Nothing floats over the Ready card — the coach only teaches a live run.
+    await expect(page.getByTestId("coach-mark")).toHaveCount(0);
     await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    // The teaching layer (src/coach.ts): level 1's first lesson is the build,
+    // pinned over the gap in the ring, the moment the run starts.
+    await expect(page.getByTestId("coach-mark")).toHaveAttribute(
+      "data-coach-id",
+      "build-ring"
+    );
 
     const balance = () =>
       page.evaluate(() => (window as any).__game.money.balance as number);
@@ -909,6 +918,21 @@ test.describe("Train game", () => {
       )
       .toBe(7);
 
+    // Building was the dismissal: the coach has moved on to the dispatch
+    // lesson, riding the waiting train's fare pin.
+    await expect(page.getByTestId("coach-mark")).toHaveAttribute(
+      "data-coach-id",
+      "dispatch-train"
+    );
+    // The switch lesson's dismissal is a changed ARM. The routing table below
+    // mostly re-writes default values (which no observer can distinguish from
+    // untouched), so teach the verb explicitly first on an arm no train in
+    // this choreography ever reads: 2,2 entered from the East.
+    await page.evaluate(() => {
+      const g = (window as any).__game;
+      g.switches["2,2"][1] = (g.switches["2,2"][1] + 1) % 3;
+    });
+
     // Route the three trains on disjoint paths (the rebuilt ring is the
     // passing loop): blue east along the trunk, red down the east side and
     // west along the bought ring into the yellow station, yellow up the west
@@ -930,6 +954,10 @@ test.describe("Train game", () => {
 
     // Dispatch all three by clicking their fare pins, then run fast.
     for (const pin of await page.locator(".fare-pin").all()) await pin.click();
+    // Every verb has now been performed, so the coach has nothing left to
+    // teach — the dispatch dismissed its own mark, and the switch lesson
+    // auto-completed on the arm change above.
+    await expect(page.getByTestId("coach-mark")).toHaveCount(0);
     await page.evaluate(() => {
       (window as any).__game.speed.value = 4;
     });
