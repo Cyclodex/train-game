@@ -58,6 +58,11 @@ lean — prune as much as you add. This file only stays useful if every task ten
   against the whole window. The bottom of a big world was then unreachable by
   exactly the chrome height (~310px). Guarded by `npm run probe`'s camera check
   (pans to each extreme, asserts the world edge comes flush).
+- TRAP: a bare boolean attribute (`<BuildDock compact>`) reaches a vue-facing-
+  decorator `@Prop({ default: false })` as the STRING `""` — which is FALSY — 
+  unless the prop declares `type: Boolean` explicitly (no TS-metadata inference).
+  Symptom: the flag "just stays false" with zero warnings. Either declare
+  `@Prop({ type: Boolean })` or bind explicitly (`:compact="true"`).
 - TRAP: build the controller in `created()`, NOT as a class field. vue-facing-
   decorator collects data off a THROWAWAY instance, so a field initialiser's
   closures capture a `this` whose injected `config` is undefined → first render
@@ -1964,6 +1969,23 @@ Four rules, each measured on that board, each of which failed silently:
 - e2e tests must open the right TAB before clicking a tool button — Depot is
   Rail→Stations, Signal Rail→Signalling, the erase ✕ handles are Bulldozer
   (default filter Everything; rail ✕ only shows for scope all|rail).
+
+## PLAY: the in-play build dock (2026-08-21)
+- PlayView reuses `BuildDock.vue` with `compact closable` (TF manner): a slim
+  Build handle flush with the bottom edge while watching; opening it shows the
+  dock with the PLAY verb set only — Rail→Track (`game.buildRoute`) and
+  Bulldozer (`game.bulldoze`). Opening always ARMS a tool; category switch
+  re-arms (that is the Build/Bulldoze exclusivity); Esc finishes the open
+  route, a second Esc (or ✕) closes and disarms everything.
+- `compact` puts the dock in normal flow (host positions it), sizes to content,
+  and moves the hint INSIDE the items row; `closable` renders the ✕
+  (`data-testid="build-dock-close"`). Both props need their `type: Boolean`
+  (see the bare-attribute trap above).
+- RULE: nothing may stack ABOVE the play dock — every pixel over it is board a
+  click can no longer reach (the undo pill above the dock broke the lakevalley
+  e2e build; Undo now docks in the `actions` slot while the dock is open).
+- Which modes see the dock = `mode.controls.build` (sandbox, tycoon, citizens).
+  Per-mode tool sets layer on `playDockCategories` when play gains more verbs.
 
 ## EDITOR: heights & flyover tools (2026-07-31)
 - The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —

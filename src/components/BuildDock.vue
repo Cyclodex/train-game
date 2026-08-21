@@ -1,5 +1,5 @@
 <template>
-  <div class="build-dock-wrap">
+  <div class="build-dock-wrap" :class="{ 'build-dock-wrap--compact': compact }">
     <!-- One-line hint with a ? that opens the full help. The paragraph that used
          to float over the board permanently now only appears when asked for. -->
     <div v-if="showHelp" class="bd-help">
@@ -7,8 +7,11 @@
       <div class="bd-help__title">{{ breadcrumb }}</div>
       <div class="bd-help__body">{{ help }}</div>
     </div>
+    <!-- The hint floats above the dock in the editor, but in compact mode it
+         moves INSIDE the items row: a play dock must not stack chrome over the
+         board — every pixel above it is board a click can no longer reach. -->
     <transition name="bd-hint">
-      <div v-if="hint" class="bd-hint">
+      <div v-if="hint && !compact" class="bd-hint">
         <span class="bd-hint__text">{{ hint }}</span>
         <button
           v-if="help"
@@ -31,6 +34,7 @@
             class="bd-item"
             :class="{ on: it.key === activeItemKey }"
             :title="it.title || it.label"
+            :data-testid="'dock-item-' + it.key"
             @click="$emit('select-item', it.key)"
           >
             <span v-if="it.lanes" class="bd-item__icon bd-item__icon--svg">
@@ -51,13 +55,34 @@
             <span class="bd-item__label">{{ it.label }}</span>
           </button>
         </div>
-        <div class="bd-options">
+        <div v-if="hasOptions || !compact" class="bd-options">
           <template v-if="hasOptions">
             <div class="bd-options__label">Options</div>
             <slot name="options" />
           </template>
           <span v-else class="bd-options__none">no options for this tool</span>
         </div>
+        <div v-if="hint && compact" class="bd-hint-inline">
+          <span class="bd-hint-inline__text">{{ hint }}</span>
+          <button
+            v-if="help"
+            class="bd-hint__q"
+            :class="{ on: showHelp }"
+            title="Full help for this tool"
+            @click="showHelp = !showHelp"
+          >?</button>
+        </div>
+        <!-- Host-provided actions (PlayView docks its Undo here) — actions live
+             IN the dock so nothing stacks above it over the board. -->
+        <slot name="actions" />
+        <button
+          v-if="closable"
+          class="bd-close"
+          data-testid="build-dock-close"
+          title="Put the tools away (Esc)"
+          aria-label="Close build tools"
+          @click="$emit('close')"
+        >✕</button>
       </div>
 
       <!-- Row 2: the open category's tabs. -->
@@ -81,10 +106,11 @@
           class="bd-cat"
           :class="{ on: c.id === cat }"
           :style="{ '--cat-accent': c.accent }"
-          :title="`${c.label} (${c.shortcut})`"
+          :title="c.shortcut ? `${c.label} (${c.shortcut})` : c.label"
+          :data-testid="'dock-cat-' + c.id"
           @click="$emit('select-cat', c.id)"
         >
-          <span class="bd-cat__key">{{ c.shortcut }}</span>
+          <span v-if="c.shortcut" class="bd-cat__key">{{ c.shortcut }}</span>
           <span class="bd-cat__icon">{{ c.icon }}</span>
           <span class="bd-cat__label">{{ c.label }}</span>
         </button>
@@ -136,6 +162,15 @@ class BuildDock extends Vue {
   @Prop({ default: "" }) help!: string;
   @Prop({ default: "" }) breadcrumb!: string;
   @Prop({ default: false }) hasOptions!: boolean;
+  // Compact: size to content and position in normal flow (the caller places the
+  // dock), instead of the editor's fixed-width bottom-center overlay. Used by
+  // PlayView, whose dock carries a fraction of the editor's tool set.
+  // (type: Boolean is load-bearing: without it a bare `compact` attribute
+  // arrives as the falsy string "".)
+  @Prop({ default: false, type: Boolean }) compact!: boolean;
+  // Render a ✕ that emits `close` — for hosts where the dock is a temporary
+  // surface over the game (PlayView) rather than the room itself (the editor).
+  @Prop({ default: false, type: Boolean }) closable!: boolean;
 
   showHelp = false;
 
@@ -180,6 +215,54 @@ export default toNative(BuildDock);
   gap: 8px;
   pointer-events: none; // wrapper transparent; children re-enable
   max-width: calc(100vw - 24px);
+}
+
+// Compact: the host places the dock (normal flow) and it sizes to its content —
+// the fixed editor width exists so the editor's category row never shifts
+// between tabs of different widths, which a two-tool play dock cannot suffer.
+.build-dock-wrap--compact {
+  position: static;
+  transform: none;
+  max-width: 100%;
+
+  .build-dock {
+    position: relative;
+    width: auto;
+    min-width: 320px;
+    // The play dock grows out of the screen edge (TF's slim-bar manner), so
+    // only the top corners round.
+    border-radius: 14px 14px 0 0;
+  }
+  .bd-row--items {
+    min-height: 0;
+    align-items: center;
+    padding-right: 40px; // clear the anchored ✕
+  }
+  // Anchor the ✕ to the dock's corner, out of the row flow — on mobile the
+  // items row goes column and an in-flow ✕ would wrap to its own line.
+  .bd-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    margin: 0;
+  }
+}
+
+// Compact mode's in-row hint (the floating pill is editor-only — see above).
+.bd-hint-inline {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 300px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  font: 600 11px/1.35 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #c6d1da;
+  text-align: left;
+}
+.bd-hint-inline__text {
+  overflow: hidden;
 }
 
 // ---- Hint (one line) + help popover ----------------------------------------
@@ -357,6 +440,27 @@ export default toNative(BuildDock);
 .bd-options__none {
   font: 500 11px/1.3 ui-sans-serif, system-ui, sans-serif;
   color: #5f6b76;
+}
+
+// The put-away ✕ (closable hosts only): top-right of the items row, the corner
+// every window keeps its close button in.
+.bd-close {
+  flex: none;
+  align-self: flex-start;
+  width: 24px;
+  height: 24px;
+  margin: 2px 0 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8fa3b3;
+  font: 700 13px/1 ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
 }
 
 .bd-row--tabs {
@@ -575,6 +679,12 @@ export default toNative(BuildDock);
   .bd-hint {
     max-width: calc(100vw - 24px);
     font-size: 11px;
+  }
+  // The compact in-row hint loses its divider once the row goes column.
+  .bd-hint-inline {
+    border-left: 0;
+    padding-left: 0;
+    max-width: 100%;
   }
 }
 </style>
