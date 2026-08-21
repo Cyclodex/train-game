@@ -316,6 +316,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
   renders its ground/scatter a SECOND time above the trains, clipped to the
   tile, as the bore's roof (see TUNNELS).
+- BACKDROP TREES ARE CANOPY TOO (2026-08-21): the meadow theme's seeded tree
+  scatter is NOT a CSS background any more — it was `--meadow-trees` under the
+  board, which put every crown BEHIND the rails/trains/cars laid over it. It is
+  one `<BackdropTrees>` world overlay per view (Play/Editor/TestStage, inside
+  `.level`, absolutely positioned, z7 like `.tile-canopy`), same seed + 680px
+  pattern as before (`meadowTreeLayout` in utils/meadowBackdrop.ts). A tree
+  whose BASE cell is swallowed — non-grass terrain, `parking`, a `role` plot —
+  is dropped (`backdropTreeHiddenBy`), and the forest's right-of-way rule
+  applies too: a trunk within TRUNK_CLEAR of a rail/road corridor (own cell +
+  4 side-neighbours, `backdropCorridorsAt`/`backdropTreeFelledBy`) is felled,
+  while one beside the line keeps its crown OVER the traffic. /test scenario:
+  `backdroptrees`. TestStage never had backdrop trees before; now the 🌳 BG
+  toggle governs them like the rest of the theme.
 
 ## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
 - THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`

@@ -93,6 +93,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   carscurve: "🛤️",
   roadcurveloops: "🔁",
   // Challenges
+  backdroptrees: "🌳",
   objectives: "🎯",
   timeattack: "⏱️",
   buildgap: "🏗️",

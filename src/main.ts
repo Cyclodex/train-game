@@ -9,6 +9,7 @@ import TileGround from "@/components/TileGround.vue";
 import Train from "@/components/Train.vue";
 import DebugShowRoutes from "@/components/DebugShowRoutes.vue";
 import CarRouteOverlay from "@/components/CarRouteOverlay.vue";
+import BackdropTrees from "@/components/BackdropTrees.vue";
 
 const app = createApp(App);
 
@@ -21,6 +22,7 @@ app.component("TileGround", TileGround);
 app.component("Train", Train);
 app.component("DebugShowRoutes", DebugShowRoutes);
 app.component("CarRouteOverlay", CarRouteOverlay);
+app.component("BackdropTrees", BackdropTrees);
 
 app.use(router);
 app.mount("#app");
