@@ -88,8 +88,10 @@ export function bayClassOf(row: ParkingRow): BayClass {
 // can use looks exactly like a bay nobody happens to have taken yet.
 export function bayAdmits(kind: VehicleKind, cls: BayClass): boolean {
   switch (cls) {
+    // A motorcycle parks where a car does — it is a fast, narrow car to every
+    // rule but the sprite, and a car bay swallows one with room to spare.
     case "car":
-      return kind === "car";
+      return kind === "car" || kind === "motorcycle";
     // A lay-by serves both the lorries and the coaches; that is what a lay-by IS.
     case "lorry":
       return kind === "truck" || kind === "bus";
@@ -107,7 +109,7 @@ export function bayAdmits(kind: VehicleKind, cls: BayClass): boolean {
     // at a house); WHOSE drive it is cannot be answered from the kind at all, so
     // it is asked separately — `stallAdmits`, with the driver's address.
     case "resident":
-      return kind === "car";
+      return kind === "car" || kind === "motorcycle";
   }
 }
 

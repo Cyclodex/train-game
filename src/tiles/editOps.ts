@@ -500,43 +500,53 @@ export function removeRoad(cell: TileCell, a: Port, b: Port): TileCell {
 // No-op on a junction (cycle lanes are street-authored; they end at
 // junctions), when the clicked approach has no lanes, or when every direction
 // already has its cycle lane.
-export function addCycleLane(cell: TileCell, from: Port): TileCell {
+//
+// The wide street's SHOULDER (`addShoulderLane` below) is the same structural
+// shape — an extra bike-only kerb lane beside the carriageway — so both tools
+// share `addEdgeLane`/`removeEdgeLane`. Adding one kind where the OTHER already
+// sits CONVERTS the lane in place (a retag, no width change): 🚲 on a wide
+// street paints its edge zone green, ↔ on a cycle street strips the paint but
+// keeps the width. A street never carries both (two bike-only kerb lanes would
+// be nonsense).
+const otherEdgeKind = (kind: "cycle" | "shoulder") =>
+  kind === "cycle" ? "shoulder" : "cycle";
+
+function addEdgeLane(cell: TileCell, from: Port, kind: "cycle" | "shoulder"): TileCell {
   const road = cell.road;
   if (!road || isRoadJunction(road) || !road.some(l => l.from === from)) return cell;
+  const other = otherEdgeKind(kind);
   const froms = [...new Set(road.map(l => l.from))].filter(
-    f => !road.some(l => l.from === f && l.kind === "cycle"),
+    f => !road.some(l => l.from === f && l.kind === kind),
   );
   if (froms.length === 0) return cell;
   let next: Lane[] = road;
   for (const f of froms) {
+    if (next.some(l => l.from === f && l.kind === other)) {
+      // The sibling edge lane already sits on the kerb: convert it in place.
+      next = next.map(l => (l.from === f && l.kind === other ? { ...l, kind } : l));
+      continue;
+    }
     const kerb = next.filter(l => l.from === f).reduce((b, l) => (l.index < b.index ? l : b));
     next = next.map(l => (l.from === f ? { ...l, index: l.index + 1 } : l));
-    next = [...next, { from: f, to: [...kerb.to], index: 0, kind: "cycle" as LaneKind }];
+    next = [...next, { from: f, to: [...kerb.to], index: 0, kind: kind as LaneKind }];
   }
   return { ...cell, road: next };
 }
 
-// The inverse, and symmetric for the same reason: strip the cycle lane(s) of
-// EVERY direction and close the gap — the remaining lanes of each approach are
-// re-indexed by rank so the street narrows back to its pre-cycle-lane width.
-// When the cycle lane is an approach's ONLY lane (a hand-authored bike path, or
-// a legacy converted lane), removing it would delete the direction outright —
-// instead that lane reverts to a normal lane, so the toggle always lands
-// somewhere sane. No-op when no direction carries a cycle lane.
-export function removeCycleLane(cell: TileCell, from: Port): TileCell {
+function removeEdgeLane(cell: TileCell, from: Port, kind: "cycle" | "shoulder"): TileCell {
   const road = cell.road;
   if (!road || !road.some(l => l.from === from)) return cell;
   const froms = [...new Set(road.map(l => l.from))].filter(f =>
-    road.some(l => l.from === f && l.kind === "cycle"),
+    road.some(l => l.from === f && l.kind === kind),
   );
   if (froms.length === 0) return cell;
   let next: Lane[] = road;
   for (const f of froms) {
-    const remaining = next.filter(l => !(l.from === f && l.kind === "cycle"));
+    const remaining = next.filter(l => !(l.from === f && l.kind === kind));
     if (!remaining.some(l => l.from === f)) {
-      // Cycle-only approach: strip the kind rather than the lane.
+      // Edge-lane-only approach: strip the kind rather than the lane.
       next = next.map(l =>
-        l.from === f && l.kind === "cycle" ? { from: l.from, to: l.to, index: l.index } : l,
+        l.from === f && l.kind === kind ? { from: l.from, to: l.to, index: l.index } : l,
       );
       continue;
     }
@@ -547,6 +557,35 @@ export function removeCycleLane(cell: TileCell, from: Port): TileCell {
     next = remaining.map(l => (l.from === f ? { ...l, index: rank.get(l)! } : l));
   }
   return { ...cell, road: next };
+}
+
+export function addCycleLane(cell: TileCell, from: Port): TileCell {
+  return addEdgeLane(cell, from, "cycle");
+}
+
+// The inverse, and symmetric for the same reason: strip the cycle lane(s) of
+// EVERY direction and close the gap — the remaining lanes of each approach are
+// re-indexed by rank so the street narrows back to its pre-cycle-lane width.
+// When the cycle lane is an approach's ONLY lane (a hand-authored bike path, or
+// a legacy converted lane), removing it would delete the direction outright —
+// instead that lane reverts to a normal lane, so the toggle always lands
+// somewhere sane. No-op when no direction carries a cycle lane.
+export function removeCycleLane(cell: TileCell, from: Port): TileCell {
+  return removeEdgeLane(cell, from, "cycle");
+}
+
+// The WIDE-street tool's structural pair: a SHOULDER is the cycle lane minus
+// the paint — a new bike-only kerb lane per direction (the street widens; cars
+// keep their own lane and pass a bike without a lane change), rendered as plain
+// wider asphalt with no green tint, no solid edge line and no divider. Same
+// symmetry rule, same idempotence, same junction exclusion as the cycle lane;
+// adding over a cycle street converts the green lane in place (see addEdgeLane).
+export function addShoulderLane(cell: TileCell, from: Port): TileCell {
+  return addEdgeLane(cell, from, "shoulder");
+}
+
+export function removeShoulderLane(cell: TileCell, from: Port): TileCell {
+  return removeEdgeLane(cell, from, "shoulder");
 }
 
 // The ADD-lane tool's single-tile action: one more GENERAL (car) lane on EVERY
@@ -575,7 +614,9 @@ export function addStreetLane(cell: TileCell, from: Port): TileCell {
   // All-or-nothing, like removal: an approach at the 3-lane cap blocks the tile
   // (adding to the other direction alone would make the street asymmetric).
   for (const f of froms) {
-    const carriageway = road.filter(l => l.from === f && l.kind !== "cycle").length;
+    const carriageway = road.filter(
+      l => l.from === f && l.kind !== "cycle" && l.kind !== "shoulder",
+    ).length;
     if (carriageway >= MAX_STREET_LANES) return cell;
   }
   const added: Lane[] = froms.map(f => {
@@ -631,7 +672,7 @@ export function removeStreetLane(cell: TileCell, from: Port): TileCell {
 export function toggleBusLane(cell: TileCell, from: Port, index: number): TileCell {
   const road = cell.road;
   const lane = road?.find(l => l.from === from && l.index === index);
-  if (!road || !lane || lane.kind === "cycle") return cell;
+  if (!road || !lane || lane.kind === "cycle" || lane.kind === "shoulder") return cell;
   return setLaneKind(cell, from, index, lane.kind === "bus" ? undefined : ("bus" as LaneKind));
 }
 
@@ -649,6 +690,19 @@ export function toggleCycleLane(cell: TileCell, from: Port): TileCell {
   return road.some(l => l.from === from && l.kind === "cycle")
     ? removeCycleLane(cell, from)
     : addCycleLane(cell, from);
+}
+
+// The WIDE-street tool's single-tile action: toggle the STREET between normal
+// and the wide variant, exactly the bike-lane toggle's shape — the clicked
+// lane's direction decides the verb, the change is symmetric per tile. On a
+// street with a cycle lane, adding the shoulder converts the green lane in
+// place (the paint goes, the width stays — see addEdgeLane).
+export function toggleShoulderLane(cell: TileCell, from: Port): TileCell {
+  const road = cell.road;
+  if (!road?.some(l => l.from === from)) return cell;
+  return road.some(l => l.from === from && l.kind === "shoulder")
+    ? removeShoulderLane(cell, from)
+    : addShoulderLane(cell, from);
 }
 
 // Set a single lane's kind explicitly (rather than toggling): "bus" tags it as a
@@ -839,7 +893,7 @@ export function setBusLaneRun(
   const clicked = seed && !isRoadJunction(seed.road)
     ? lanesFrom(seed.road, from).find(l => l.index === index)
     : undefined;
-  if (clicked?.kind === "cycle") return {};
+  if (clicked?.kind === "cycle" || clicked?.kind === "shoulder") return {};
   const target: LaneKind | undefined = clicked?.kind === "bus" ? undefined : "bus";
   const run = streetRunLanes(level, id, from, index);
   const out: Record<string, TileCell> = {};
@@ -917,6 +971,24 @@ export function toggleCycleLaneRun(
   const removing = seed.road.some(l => l.from === from && l.kind === "cycle");
   return mapStreetRun(level, id, from, index, (cell, f) =>
     removing ? removeCycleLane(cell, f) : addCycleLane(cell, f),
+  );
+}
+
+// The WIDE-street tool's whole-street action — toggleCycleLaneRun's twin: the
+// SEED tile's approach decides the verb (it has a shoulder → revert the street
+// to normal everywhere; none → widen everywhere), applied along the run so a
+// half-widened street becomes uniform in one click.
+export function toggleShoulderLaneRun(
+  level: Level,
+  id: string,
+  from: Port,
+  index: number,
+): Record<string, TileCell> {
+  const seed = level[id];
+  if (!seed?.road?.length || isRoadJunction(seed.road)) return {};
+  const removing = seed.road.some(l => l.from === from && l.kind === "shoulder");
+  return mapStreetRun(level, id, from, index, (cell, f) =>
+    removing ? removeShoulderLane(cell, f) : addShoulderLane(cell, f),
   );
 }
 
