@@ -3718,6 +3718,54 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   two road shapes); sim pins in `roadBikes.spec.ts`, paint pins in
   `roadGeometry.spec.ts`.
 
+## BIKES vs MOTORCYCLES + THE WIDE STREET (#99, 2026-08-21)
+- The old "bike" split in two. The BIKE keeps the slow kerb-bound behaviour and
+  slims to a 6px sliver whose rider head-dot (7px) OVERHANGS the frame —
+  `.road-car` clips (`overflow: hidden`), so `.road-car--bike` must set
+  `overflow: visible` or the dot is cut to the frame. The MOTORCYCLE
+  (`VehicleKind "motorcycle"`, part `"motorcycle"`) wears the old 8px capsule
+  and is deliberately class "car": any general lane (including the overtaking
+  lane a bike must never touch), overtakes, parks in car bays (`bayAdmits`
+  "car"/"resident" admit it), KIND_SPEED 1.15 / ACCEL 1.35. Determinism rule as
+  ever: NO default mix weight for either — `pickKind` appends new kinds at the
+  END of the weighted list so zero-weight entries change no seeded draw
+  (pinned in roadBikes.spec.ts for both kinds).
+- WIDE STREET = `LaneKind "shoulder"`: the cycle lane MINUS THE PAINT. Access
+  matrix: bike-only (laneUsableBy's final return covers cycle AND shoulder).
+  Ride side and paint side are now SEPARATE queries — `bikeLaneIndices`
+  (cycle + shoulder: spawn-onto, drift-to, preferredLane, the quarter-lane
+  kerbward cycleStripShiftPx and the turn-exit strip) vs `cycleLaneIndices`
+  (cycle only: green tint + solid edge line). Grep for the right one before
+  adding a caller; using the paint query in the sim re-opens the "bike rides
+  the slot centre on a wide street" gap.
+- Shoulder paint is a SUPPRESSION, not a marking: in all three marking doors
+  (roadLaneMarkingPaths straight/curve/one-way branches + the kerb-anchored
+  oneWayStraightMarkingPaths) the kerb slot's full-width dashed divider is
+  skipped exactly like a cycle lane's, but the solid half-lane edge is emitted
+  ONLY for cycle — a shoulder adds nothing, so the street just paints wider
+  (the ribbon width follows from the lane count for free; a shoulder slot is a
+  full lane in the band/seam/taper model, same as a cycle lane's).
+- Editor: ↔ "Wide street" is the 🚲 tool's structural twin (symmetric per tile,
+  run-walker, junctions excluded) via shared `addEdgeLane`/`removeEdgeLane` in
+  editOps. Adding one kind where the OTHER sits CONVERTS in place (retag, no
+  width change): 🚲 on a wide street paints the edge green, ↔ on a green street
+  strips the paint but keeps the width — a street never carries both. Shoulder
+  is exempt from the 3L carriageway cap (like cycle) and the 🚌 tool no-ops on
+  it.
+- Router (roadRouter.planRoute): a bike runs a TWO-PASS BFS — pass 1 skips
+  expansion into 3-lane streets without a bike lane (`bikeAvoidsStreet`:
+  carriageway ≥ 3 counting general+bus per approach, no cycle/shoulder), pass 2
+  is the plain search when pass 1 finds nothing (soft penalty — the only-route
+  bike holds the kerb). The TARGET TILE IS EXEMPT from avoidance: the goal test
+  fires while STANDING on the destination's edge tile, so blocking it would
+  make every arterial-side exit unreachable and silently fall back to the full
+  arterial route. The second pass draws NO RNG (target picked before both), so
+  every non-bike stream is untouched.
+- `/test/widestreet` (edge-zone riding, cars pass in-lane), `/test/motorcycles`
+  (moto overtakes on 2 lanes while bikes hold the kerb), `/test/bikedetour`
+  (arterial avoidance — cars straight, bikes round the back street; deletes of
+  the back street exercise the fallback in roadBikes.spec.ts).
+
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
   and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled

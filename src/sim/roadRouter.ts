@@ -1,6 +1,12 @@
 import { Coordinates } from "@/types";
 import { Level } from "@/tiles/model";
-import { usableExits, isRoadJunction, type VehicleClass } from "@/tiles/lanes";
+import {
+  usableExits,
+  isRoadJunction,
+  lanesFrom,
+  bikeLaneIndices,
+  type VehicleClass,
+} from "@/tiles/lanes";
 import { Port, neighborCoord, oppositePort } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { RoadEntry } from "./road";
@@ -59,6 +65,22 @@ export interface RoutePlan {
   destination: RoadEntry | null;
 }
 
+// Is the street tile at `id`, approached via `entry`, one a BIKE avoids? A
+// 3-lane arterial without a cycle lane or shoulder: bikes shun big roads unless
+// they get their own space — realistic, and the player's incentive to paint a
+// cycle lane on the arterial. Counted per approach over CARRIAGEWAY lanes
+// (general + bus; the half-width cycle lane / shoulder is an add-on beside the
+// carriageway, exactly the ➕ tool's budget rule). Junctions are movements, not
+// streets — never avoided.
+function bikeAvoidsStreet(level: Level, id: string, entry: Port): boolean {
+  const road = level[id]?.road;
+  if (!road?.length || isRoadJunction(road)) return false;
+  const carriageway = lanesFrom(road, entry).filter(
+    l => l.kind !== "cycle" && l.kind !== "shoulder",
+  ).length;
+  return carriageway >= 3 && bikeLaneIndices(road, entry).length === 0;
+}
+
 export function planRoute(
   level: Level,
   spawnCoord: Coordinates,
@@ -83,83 +105,102 @@ export function planRoute(
   const target = targets[Math.floor(rng() * targets.length)];
   const targetId = getCoordinatesId(target.coord);
 
-  // BFS state: each node is (coord, entryPort) — the tile and how the car
-  // arrived. We carry the full path so we can extract turns at the end.
-  interface BfsNode {
-    coord: Coordinates;
-    entryPort: Port;
-  }
-  interface QueueItem {
-    node: BfsNode;
-    path: PathStep[];
-  }
-
-  const visited = new Set<string>();
-  const startStateId = `${spawnId}:${spawnEntry}`;
-  visited.add(startStateId);
-
-  const queue: QueueItem[] = [
-    { node: { coord: spawnCoord, entryPort: spawnEntry }, path: [] },
-  ];
-
-  while (queue.length > 0) {
-    const item = queue.shift()!;
-    const { node, path } = item;
-
-    const tile = level[getCoordinatesId(node.coord)];
-    if (!tile?.road || tile.road.length === 0) continue;
-
-    // Only traverse lanes this vehicle class may use (a car skips bus-only lanes;
-    // a bus may take them, so only a bus is routed through a bus-only street).
-    const exits = usableExits(tile.road, node.entryPort, cls);
-
-    for (const exitPort of exits) {
-      // Center has no map-edge neighbour — skip.
-      const nextCoord = neighborCoord(node.coord, exitPort);
-      if (!nextCoord) continue;
-
-      const nextId = getCoordinatesId(nextCoord);
-      const nextTile = level[nextId];
-      const connectedBack =
-        nextTile?.road &&
-        usableExits(nextTile.road, oppositePort(exitPort), cls).length > 0;
-
-      if (!connectedBack) {
-        // Off-grid or dead-end: check whether this is our target exit.
-        if (
-          getCoordinatesId(node.coord) === targetId &&
-          exitPort === target.entryPort
-        ) {
-          // Found the target — build the full path and return its turns.
-          return {
-            turns: extractTurns(level, [
-              ...path,
-              { coord: node.coord, entry: node.entryPort, exit: exitPort },
-            ]),
-            destination: target,
-          };
-        }
-        // Not our target — this exit leads nowhere useful, skip.
-        continue;
-      }
-
-      // Normal in-grid next tile: advance the BFS.
-      const stateId = `${nextId}:${oppositePort(exitPort)}`;
-      if (visited.has(stateId)) continue;
-      visited.add(stateId);
-
-      queue.push({
-        node: { coord: nextCoord, entryPort: oppositePort(exitPort) },
-        path: [
-          ...path,
-          { coord: node.coord, entry: node.entryPort, exit: exitPort },
-        ],
-      });
+  // One BFS pass over the class-usable road graph. With `avoidArterials` the
+  // expansion skips tiles a bike shuns (3-lane streets without a cycle lane or
+  // shoulder) — except the target's own tile, which the bike must be allowed to
+  // reach however wide its street is.
+  const search = (avoidArterials: boolean): RoutePlan | null => {
+    // BFS state: each node is (coord, entryPort) — the tile and how the car
+    // arrived. We carry the full path so we can extract turns at the end.
+    interface QueueItem {
+      node: { coord: Coordinates; entryPort: Port };
+      path: PathStep[];
     }
-  }
 
-  // No path to the chosen target found.
-  return { turns: [], destination: null };
+    const visited = new Set<string>([`${spawnId}:${spawnEntry}`]);
+    const queue: QueueItem[] = [
+      { node: { coord: spawnCoord, entryPort: spawnEntry }, path: [] },
+    ];
+
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      const { node, path } = item;
+
+      const tile = level[getCoordinatesId(node.coord)];
+      if (!tile?.road || tile.road.length === 0) continue;
+
+      // Only traverse lanes this vehicle class may use (a car skips bus-only lanes;
+      // a bus may take them, so only a bus is routed through a bus-only street).
+      const exits = usableExits(tile.road, node.entryPort, cls);
+
+      for (const exitPort of exits) {
+        // Center has no map-edge neighbour — skip.
+        const nextCoord = neighborCoord(node.coord, exitPort);
+        if (!nextCoord) continue;
+
+        const nextId = getCoordinatesId(nextCoord);
+        const nextTile = level[nextId];
+        const nextEntry = oppositePort(exitPort);
+        const connectedBack =
+          nextTile?.road && usableExits(nextTile.road, nextEntry, cls).length > 0;
+
+        if (!connectedBack) {
+          // Off-grid or dead-end: check whether this is our target exit.
+          if (
+            getCoordinatesId(node.coord) === targetId &&
+            exitPort === target.entryPort
+          ) {
+            // Found the target — build the full path and return its turns.
+            return {
+              turns: extractTurns(level, [
+                ...path,
+                { coord: node.coord, entry: node.entryPort, exit: exitPort },
+              ]),
+              destination: target,
+            };
+          }
+          // Not our target — this exit leads nowhere useful, skip.
+          continue;
+        }
+
+        // The avoidance pass steers round arterials it can go round; the target
+        // tile is exempt (a destination on a wide street is still a destination).
+        if (
+          avoidArterials &&
+          nextId !== targetId &&
+          bikeAvoidsStreet(level, nextId, nextEntry)
+        )
+          continue;
+
+        // Normal in-grid next tile: advance the BFS.
+        const stateId = `${nextId}:${nextEntry}`;
+        if (visited.has(stateId)) continue;
+        visited.add(stateId);
+
+        queue.push({
+          node: { coord: nextCoord, entryPort: nextEntry },
+          path: [
+            ...path,
+            { coord: node.coord, entry: node.entryPort, exit: exitPort },
+          ],
+        });
+      }
+    }
+
+    // No path to the chosen target found under these constraints.
+    return null;
+  };
+
+  // A bike first looks for a route that stays off 3-lane streets without a
+  // cycle lane or shoulder. A soft penalty, not a hard ban: when no such route
+  // exists (the arterial is the only way), the plain pass below routes it
+  // anyway and the bike holds the kerb lane. The second pass draws no RNG, so
+  // the spawn/route streams stay untouched for every other vehicle.
+  if (cls === "bike") {
+    const avoiding = search(true);
+    if (avoiding) return avoiding;
+  }
+  return search(false) ?? { turns: [], destination: null };
 }
 
 // --- Routing to a place ON the map (parking) ---------------------------------
