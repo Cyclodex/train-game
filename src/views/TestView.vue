@@ -205,10 +205,19 @@ export default toNative(TestView);
 .crumbs {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 2px;
+  min-width: 0;
   font-size: 14px;
 }
+// A crumb wraps as a WHOLE label or not at all. Without this a narrow header
+// tore "One-way & lanes" into four stacked lines of one word each.
 .crumb {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #8fa3b3;
   text-decoration: none;
   &:hover {
@@ -227,6 +236,16 @@ export default toNative(TestView);
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  // `grid-auto-rows: max-content` IS LOAD-BEARING, not tidiness. The row track
+  // has to be sized from the card's transferred aspect-ratio height. Left at
+  // `auto`, a card whose children are ALL absolutely positioned contributes no
+  // content height, and once the rows stop fitting the (definite, scrolling)
+  // grid height Chrome collapses every track to a slice of the leftover space —
+  // measured 45px tracks under 214px cards. The cards then OVERLAP: on a phone
+  // the gallery was a stack of stripes with every title and description buried
+  // under the next card. It only bit narrow screens because a wide one fits its
+  // three rows in the viewport and never reaches the squeeze.
+  grid-auto-rows: max-content;
   gap: 16px;
   flex: 1 1 auto;
   min-height: 0;
@@ -324,6 +343,9 @@ export default toNative(TestView);
   font-size: 12.5px;
   line-height: 1.35;
   color: #d4dde4;
+  // Scenario prose carries paths like `/test/lanedrop` — no space to break at,
+  // so without this the card scrolls sideways instead of wrapping.
+  overflow-wrap: anywhere;
   // Keep long descriptions from overgrowing the tile.
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -350,5 +372,77 @@ export default toNative(TestView);
 .stage-desc-icon {
   flex: 0 0 auto;
   font-size: 14px;
+}
+
+// ---- Phone / short-screen layout -------------------------------------------
+//
+// The same `(max-width: 700px), (max-height: 500px)` pair the rest of the HUD
+// uses (see `_hud.scss`, BuildDock, EditorView) so the whole app changes shape
+// at one breakpoint — and so a LANDSCAPE phone, which is wide but only ~375px
+// tall, gets the compact treatment too.
+//
+// The gallery's desktop proportions do not survive either shape: a 16/10 tile on
+// the full 343px column is 214px tall, so barely two fit on a portrait screen and
+// drilling through 81 scenarios is all scrolling. The tile therefore goes
+// BANNER-shaped — wide and short — which keeps the title and the two-line
+// description at full column width (the readable part) and spends less height on
+// the map art. The glyph and the paddings shrink with it so the text still clears
+// the icon.
+@media (max-width: 700px), (max-height: 500px) {
+  .test-header {
+    align-self: stretch;
+    gap: 10px;
+    margin: 8px 8px 6px;
+    padding: 8px 10px;
+  }
+  .nav-link {
+    flex: 0 0 auto;
+    padding: 8px 11px;
+    font-size: 13px;
+  }
+  .crumbs {
+    font-size: 12.5px;
+  }
+  .card-grid {
+    gap: 10px;
+    padding: 2px 10px 12px;
+  }
+  .card {
+    aspect-ratio: 16 / 7;
+    border-radius: 10px;
+  }
+  .card-icon {
+    top: 36%;
+    font-size: 40px;
+  }
+  .card-icon--scenario {
+    font-size: 32px;
+  }
+  .card-overlay {
+    gap: 2px;
+    padding: 8px 11px;
+  }
+  .card-title {
+    font-size: 15px;
+  }
+  .card-meta {
+    font-size: 10.5px;
+  }
+  .card-desc {
+    font-size: 12px;
+  }
+  // The description is prose and some scenarios write a paragraph of it: left at
+  // its desktop size it took HALF a phone screen and pushed the board off the
+  // bottom. Cap it at a quarter of the screen and let the long ones scroll
+  // inside the panel — nothing is hidden, and the stage keeps its room.
+  .stage-desc {
+    margin: 0 8px 6px;
+    padding: 7px 10px;
+    max-height: 24vh;
+    overflow-y: auto;
+    gap: 8px;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
 }
 </style>
