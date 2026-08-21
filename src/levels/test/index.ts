@@ -107,6 +107,7 @@ import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
+import { coachmarks } from "@/levels/test/scenarios/coachmarks";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { faredistance } from "@/levels/test/scenarios/faredistance";
 import { heldby } from "@/levels/test/scenarios/heldby";
@@ -269,10 +270,12 @@ export const DOMAINS: ScenarioDomain[] = [
       // `scenarioCoverage.spec.ts` pins both halves: no mode twice, and every
       // objective-carrying picker mode present.
       { id: "modes", label: "Game modes", scenarios: [daily, objectives, dispatch, networkmode, threecities, timeattack] },
-      // The Tycoon economy deep-dives, one dial per board: fare decay by
-      // distance, blocked routes, buying track, land prices, the tax year and
-      // its bankruptcy fail state.
-      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt] },
+      // The Tycoon deep-dives, one dial per board: fare decay by distance,
+      // blocked routes, buying track, land prices, the tax year and its
+      // bankruptcy fail state — plus the coach-marks that teach the mode's
+      // verbs (a second tycoon board, so it lives here rather than in the
+      // one-demo-per-mode gallery above).
+      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
