@@ -142,6 +142,10 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />
@@ -386,9 +390,12 @@ class TestStage extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
-    this.cam.onPointerDown(e);
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well; two fingers pinch, which the camera works out for itself.
+    //
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan: e.button === 0 || e.button === 1 });
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);
@@ -674,7 +681,9 @@ export default toNative(TestStage);
 .stage-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  row-gap: 8px;
 }
 .stage-button {
   padding: 8px 16px;
@@ -773,6 +782,38 @@ export default toNative(TestStage);
 }
 .stage-calendar--broke {
   color: #e2574c; // next year's bill is more than there is in hand
+}
+
+// ---- Phone / short-screen layout -------------------------------------------
+//
+// The same breakpoint pair as the rest of the HUD. The bar is ~700px of chips; on
+// a 375px screen it wrapped into four rows of desktop-sized buttons and left the
+// board a sliver. Shrinking the chips (and the cars slider, the widest single
+// item) brings it back to two rows and gives the world its height back — which is
+// exactly what a landscape phone needs as well, hence the height clause.
+@media (max-width: 700px), (max-height: 500px) {
+  .test-stage {
+    gap: 8px;
+    padding: 0 8px 8px;
+  }
+  .stage-controls {
+    gap: 6px;
+    row-gap: 6px;
+  }
+  .stage-button {
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .stage-cars,
+  .stage-deliveries,
+  .stage-money,
+  .stage-calendar {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+  .stage-cars-range {
+    width: 84px;
+  }
 }
 .level {
   display: grid;

@@ -506,6 +506,10 @@
           :switch-interactive="switchesEnabled && !buildArmed && !razeArmed"
           :switches-visible="switchesEnabled"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />
@@ -1458,15 +1462,32 @@ class PlayView extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well.
+    //
     // …EXCEPT while the build tool is armed: then the left drag belongs to
     // drawing (edge → edge one-shot routes), exactly the editor's policy —
     // stealing it makes the board unbuildable (KNOWHOW → WORLD SIZE + CAMERA).
     // Pan stays on middle-drag or space+left, and left-pan returns the moment
     // build is disarmed.
-    if (this.buildArmed && e.button === 0 && !this.spaceHeld) return;
-    this.cam.onPointerDown(e);
+    const pan =
+      (e.button === 0 || e.button === 1) &&
+      !(this.buildArmed && e.button === 0 && !this.spaceHeld);
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch, and a pinch outranks the
+    // build tool — no tool in this app takes two fingers. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan });
+    if (this.cam.pinching) this.abandonPinchedDraw();
+  }
+  // Belt and braces, exactly as in EditorView: the first finger of a pinch may
+  // have pressed an edge zone (the zone's handler runs before this one bubbles
+  // up), and a pinch that lays a rail would be worse than no pinch. It cannot
+  // happen today — the zones bind `@mousedown`/`@mouseup`, and a
+  // `touch-action: none` surface fires no compatibility mouse events, so building
+  // by touch does not work here yet either. This is what stops a pinch drawing
+  // once they move to pointer events.
+  abandonPinchedDraw(): void {
+    if (this.buildArmed) this.routeCtrl.clearPress();
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);
@@ -2855,14 +2876,16 @@ export default toNative(PlayView);
   font-size: 18px;
   line-height: 1;
 }
-// The edge hit-zone overlay: above the rails, but BELOW the road cars (6) and
-// the fare pins (8) so a waiting train stays dispatchable mid-build.
+// The edge hit-zone overlay, above every piece of board art the ghost route can
+// cross — including the town's roofs (`.tile-structures`, z7), which at the old
+// z5 covered a preview rail drawn through a plot. The fare pins stay above it,
+// so a waiting train is still dispatchable mid-build.
 .build-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 5;
+  z-index: 8;
 }
 // Edge hit-zones + wedge cues, matching the editor's look so the gesture reads
 // as the same tool (both stylesheets are scoped, so the rules can't be shared).
