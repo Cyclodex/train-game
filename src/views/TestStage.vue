@@ -362,9 +362,12 @@ class TestStage extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
-    this.cam.onPointerDown(e);
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well; two fingers pinch, which the camera works out for itself.
+    //
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan: e.button === 0 || e.button === 1 });
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);

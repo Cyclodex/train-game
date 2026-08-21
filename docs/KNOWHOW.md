@@ -114,6 +114,41 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## PINCH-ZOOM / TOUCH INPUT (2026-08-21)
+- Pinch lives in `cameraController.ts`, so all three boards (PlayView, EditorView,
+  TestStage) get it once. Two fingers zoom AND drag; the `−/%/+` buttons stay.
+- **Every view must hand the controller EVERY pointer**, saying only whether that
+  pointer may pan: `cam.onPointerDown(e, { pan })`. Returning early on a pointer
+  the view does not want (what all three used to do) hides the SECOND finger from
+  the camera, and the editor — where one finger belongs to the connect tool and
+  never pans — could then not be moved by touch at all. A pinch outranks every
+  tool: nothing in this app takes two fingers.
+- **Zoom about the PREVIOUS midpoint, then pan by the midpoint's travel.** The
+  other order (zoom about the new midpoint, then pan) leaks
+  `delta * (1/oldZoom - 1/newZoom)` every frame, so the board slides out from
+  under the fingers on any pinch that also drifts — which is all of them. Proved
+  in `tests/unit/cameraController.spec.ts` as a world-point invariant, not as a
+  number.
+- **Never read `e.movementX` for a drag.** It is undefined-or-zero for touch
+  pointers in several engines, so a one-finger drag moved the board by nothing on
+  a phone. The controller tracks `clientX/Y` itself — identical for a mouse
+  (the pointer is never locked here) and the only thing that exists for a finger.
+- Ending a touch gesture has three cases, all of them live: 3→2 fingers must
+  RE-BASELINE the span (a different pair spans a different distance, and without
+  it the board jumps); 2→1 hands the pan to the finger still down (lifting a thumb
+  and dragging on is ordinary map handling); and the LAST finger up must clear
+  `state.panning` even when no pointer ever owned the pan, or the board keeps the
+  grabbing cursor and swallows every click from then on.
+- **The build/edit edge zones are bound to `@mousedown`/`@mouseup`, not pointer
+  events** (`EditorView.vue`, `PlayView.vue`). A `touch-action: none` surface
+  fires NO compatibility mouse events — measured: a touch drag over a zone
+  delivers `pointerdown`/`touchstart`/`pointerup` and nothing else. So the
+  drawing tools cannot be used by touch at all yet. Moving them to pointer events
+  is what unlocks that; the `cam.pinching` → `clearPress()` guard in both views
+  is already in place for the day it happens.
+- `MIN_ZOOM` is still 0.15, so `fitWorld()` on a landscape phone (a ~170px-tall
+  viewport) cannot show a big world whole — pinch and pan reach the rest.
+
 ## PHONE LAYOUT (2026-08-21) — the /test gallery, and one grid trap
 - ONE breakpoint pair for the whole app: `@media (max-width: 700px), (max-height:
   500px)`. `_hud.scss`, `BuildDock.vue`, `EditorView.vue`, `TestView.vue` and
