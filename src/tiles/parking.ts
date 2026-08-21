@@ -20,7 +20,7 @@
 // source of truth exactly as they do for lanes (`tiles/lanes.ts`).
 
 import type { Coordinates } from "@/types";
-import { rotatePort, type Port, type TileCell, type Level } from "./model";
+import { parseCoordId, rotatePort, type Port, type TileCell, type Level } from "./model";
 import {
   laneCountAt,
   roadSeamPaintTotal,
@@ -359,6 +359,27 @@ export interface ParkingRow {
   // Who may take one: `sim/parking.ts` (`bayClassOf` → "resident", and the
   // `permit` argument that carries the driver's address).
   resident?: string;
+  // THE EDGE OF THE ROAD YOU CAN LEAVE A CAR ON. Not a car park, not a bay —
+  // just the stretch of kerb where, if there is genuinely nowhere else, a driver
+  // stops anyway. It exists because the alternative was worse: a commuter who
+  // found nothing free used to drive to the address and be DELETED there, so
+  // cars popped out of existence in the middle of the street. Measured on
+  // `/test/homeparking` with the works saturated: 12 of 30 dispatched cars
+  // vanished that way.
+  //
+  // It is deliberately INVISIBLE to everyone who has an alternative:
+  //  · nothing plans for it (ambient traffic and the first-choice search skip
+  //    it entirely — see `stallFits`'s `informal` argument),
+  //  · it carries no paint at all — no apron, no bay lines, no kerb line, no P
+  //    sign. Painting it would make every street on the board look wider, and
+  //    an unmarked stretch of kerb is exactly what this is meant to be. The only
+  //    thing you see is the car standing there.
+  //
+  // It is still a real space: it has a position, it is claimed and released like
+  // any other, and the WALK from it is measured from where the car actually
+  // stopped. That is the whole point — the cost of nowhere to park stops being a
+  // flat penalty and becomes a walk the player can see and shorten.
+  informal?: boolean;
 }
 
 // The parking layer of one cell.
@@ -732,7 +753,13 @@ export function stallPose(
   const t = along / size;
 
   // Lateral: out past the kerb, plus any authored verge, to the middle of the bay.
-  const lateral = sideSign * (bayNearPx(row, size, kerbPx) + depth / 2);
+  // INFORMAL kerb is the exception (2026-08-20): there is no bay — nothing is
+  // painted and the pavement never moved — so the car stands HALF ON THE KERB,
+  // centred on the kerb line itself, the way a real car is left on a street
+  // with no marked space. Centred a bay-depth out (the painted-bay pose) it
+  // stood squarely on the pavement band, which is where the report came from.
+  // Moving traffic eases around the protruding half (`laneGeometry`'s squeeze).
+  const lateral = sideSign * (row.informal ? kerbPx : bayNearPx(row, size, kerbPx) + depth / 2);
 
   const travelDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
   // Nose INTO the bay: the rest angle turns from the travel heading toward the
@@ -1447,6 +1474,37 @@ export interface ParkingIssue {
 //
 // `tileSize` matters: every dimension here is a fraction of a tile, so "does this
 // bay fit" is only answerable against the size the board actually renders at.
+/**
+ * Would laying a row of `laying` kind-family on `bank` of this tile put the two
+ * SIDES of the pavement on one kerb run? An across-kerb rank sits behind the
+ * band and kerbside parking in front of it, so the mix on the same flank of
+ * ADJACENT tiles forces the band to taper across somebody's bays. The derive
+ * passes veto with this before laying; `validateParking` backstops authored
+ * boards with the same predicate, so the two can never disagree.
+ */
+export function kerbRunClash(
+  level: Level,
+  tileId: string,
+  from: Port,
+  bank: Port,
+  laying: "parallel" | "across",
+): boolean {
+  const coord = parseCoordId(tileId);
+  for (const alongPort of [from, oppositePort(from)]) {
+    const n = neighborCoord(coord, alongPort);
+    if (!n) continue;
+    const nCell = level[getCoordinatesId(n)];
+    if (!nCell?.road?.length || nCell.footway === "none") continue;
+    const clash = rowsOf(nCell).some(r => {
+      if (bankOf(r) !== bank) return false;
+      if (stallOnLane(r.kind)) return false;
+      return laying === "parallel" ? turnsInAcrossKerb(r.kind) : r.kind === "parallel";
+    });
+    if (clash) return true;
+  }
+  return false;
+}
+
 export function validateParking(
   level: Level,
   tileSize = 200,
@@ -1535,9 +1593,48 @@ export function validateParking(
       // IS 2+2 — but it has to be said out loud rather than discovered.
       const kerb = kerbOffsetAt(level, coord, row.from, tileSize);
       const big = needsBigBay(row.reserved);
+      // THE STREET CROSS-SECTION RULE (docs/superpowers/specs/
+      // 2026-08-20-street-cross-section-design.md): on a street WITH a pavement,
+      // an across-kerb rank (a drive, a forecourt) sits BEHIND it — the car
+      // crosses the pavement, never the pedestrian the parking. Expressed as
+      // DATA through `gap` (one lane width = exactly the pavement strip), so the
+      // geometry, the manoeuvre, the apron's crossover and the walk all agree
+      // without the parking layer ever asking the footway layer anything.
+      //
+      // The footway test is inlined (a road that has not opted out) rather than
+      // imported: `tiles/footway.ts` imports from this module, and the one fact
+      // needed here is not worth a cycle.
+      const hasPavement = !!cell.road?.length && cell.footway !== "none";
+      const acrossKerb = turnsInAcrossKerb(row.kind);
+      if (acrossKerb && hasPavement && (row.gap ?? 0) < 1) {
+        add(
+          tileId,
+          `a ${row.kind} rank on a street with a pavement sits BEHIND it — give the row gap: 1, or opt the tile out with footway: "none"`,
+        );
+      }
+      // ONE KERB RUN, ONE SIDE OF THE PAVEMENT. An across-kerb rank sits
+      // BEHIND the band and kerbside parking sits IN FRONT of it, so the two
+      // may never stand on the same flank of ADJACENT tiles: the band would
+      // have to taper across the rank's bays to reach the kerbside row next
+      // door, and a pavement through parked cars is the exact failure this
+      // whole rule exists to end. The derive passes veto the combination
+      // before it is laid; this is the backstop for an authored one.
+      if (acrossKerb && hasPavement && kerbRunClash(level, tileId, row.from, bankOf(row), "across")) {
+        add(
+          tileId,
+          `a ${row.kind} rank and kerbside parking share one kerb run on adjacent tiles — the pavement cannot run behind one and in front of the other; leave a tile between them`,
+        );
+      }
       const outer =
         bayNearPx(row, tileSize, kerb) + stallDepthPx(row.kind, tileSize, big);
-      if (outer > tileSize / 2 + 0.5) {
+      // ...and in exchange such a rank may overhang the tile edge by up to the
+      // strip that pushed it out: the ground behind the pavement is the plot the
+      // rank serves (a drive's own house, a forecourt's own works). The art
+      // clips at the tile's viewBox, which costs the outermost 4px of an outline
+      // a drive does not even paint.
+      const overhangAllowance =
+        acrossKerb && hasPavement && (row.gap ?? 0) >= 1 ? LANE_WIDTH_FRAC * tileSize : 0;
+      if (outer > tileSize / 2 + overhangAllowance + 0.5) {
         add(
           tileId,
           `${row.kind} bays overhang the tile beside a ${laneCountAt(cell.road, row.from)}-lane road (use "parallel", or a narrower road)`,

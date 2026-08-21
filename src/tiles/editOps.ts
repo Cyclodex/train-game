@@ -7,6 +7,7 @@ import {
   needsBigBay,
   type ParkingCell,
   type ParkingRow,
+  turnsInAcrossKerb,
 } from "@/tiles/parking";
 import {
   Port,
@@ -1371,6 +1372,18 @@ export function setParkingRow(
   const row: ParkingRow = {
     ...spec,
     from,
+    // The street cross-section rule, applied by the TOOL so a hand-laid rank is
+    // born legal: an across-kerb rank on a street with a pavement sits BEHIND
+    // it (`gap: 1` — one lane width is exactly the pavement strip), and the car
+    // crosses the pavement to reach it. An author who wants bays AT the kerb
+    // opts the tile out with footway: "none" — which is what a car-park aisle
+    // does — rather than fighting the validator row by row.
+    ...(turnsInAcrossKerb(spec.kind) &&
+    !!cell.road?.length &&
+    cell.footway !== "none" &&
+    (spec.gap ?? 0) < 1
+      ? { gap: 1 }
+      : {}),
     // A whole building is not a disabled bay or a loading bay: a reservation is a
     // property of a painted rank, so it is dropped here rather than relied on not
     // to be armed.

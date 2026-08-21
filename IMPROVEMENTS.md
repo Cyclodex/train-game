@@ -223,20 +223,30 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     at setup too, so a house built in play grows none, and the same fix covers
     both. Whenever it lands, a re-derive must never yank a bay out from under a
     car parked in it.
-14. **Walk from the bay to the desk on an actual pavement.** The last leg of a
-    driven commute is charged as TIME (`walkFromBaySec`) but nobody is drawn
-    doing it. Handing it to `pedestrianSim` is what would make a car park
-    visibly feed a stream of people into a factory — and it is the same
-    plumbing `citizenwalk` already has.
-    Files: `src/sim/citizens.ts`, `src/sim/pedestrians.ts`.
-    Tracked: [#93](https://github.com/Cyclodex/train-game/issues/93).
+14. ~~**Walk from the bay to the desk on an actual pavement.**~~ SHIPPED
+    2026-08-05. The last leg of a driven commute was charged as TIME
+    (`walkFromBaySec`) with nobody drawn doing it. It is now a real figure on the
+    pavement: `planWalkFromKerb`/`sideOfBank` (`tiles/footway.ts`) start a walk at
+    the KERB a bay hugs rather than at a building, and the leg ends when the
+    walker arrives, with the old clock kept as the backstop for a board with no
+    pavements. Tracked: [#93](https://github.com/Cyclodex/train-game/issues/93).
+    What is still open there: the walk is charged from the STALL TILE, so a long
+    car park's own aisles cost nothing to cross.
 15. **Park & ride should hold a real bay too.** A P+R car still evaporates at
     the station and pays the flat penalty. The blocker is the return half: you
     come back to a different platform and have to reach the car you left at the
     first one, which the trip model has no way to express yet.
     Files: `src/sim/citizens.ts`.
     Tracked: [#94](https://github.com/Cyclodex/train-game/issues/94).
-16. **A garage under the block, not just a drive in front of the house.**
+16. **Enforcement: what stops a driver leaving it anywhere?** Since 2026-08-05 a
+    driver with nowhere to park takes the bare kerb (`ParkingRow.informal`) and
+    walks, instead of the car being deleted at the address. Nothing yet says that
+    some of that kerb is somewhere they may NOT stop — no yellow lines, no fine,
+    no tow. That is the natural pair to the parking tariff (item 12): both turn a
+    place to stop into a decision, and both want the same thing, a per-row rule
+    and a cost the player sets.
+    Files: `src/tiles/kerbOverflow.ts`, `src/sim/parking.ts`, `src/sim/economy.ts`.
+17. **A garage under the block, not just a drive in front of the house.**
     `StallKind: "garage"` already exists — the car glides into a ramp mouth and
     is not drawn, and `count` is simply the building's capacity — and it is the
     obvious flavour for a block of flats. It would also hand the DENSEST plots
@@ -296,7 +306,18 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
-18. **Build-dock IA redesign (Transport-Fever-grade)** — SHIPPED 2026-08-21,
+18. **Finish the street-profile unification** (`tiles/streetProfile.ts`,
+    2026-08-20). Pavement + walkers + surface paint already read the profile;
+    the cars (`sim/laneOffset.ts`, hot path) and the parking kerb
+    (`parking.ts kerbOffsetPx`, min-2 floor) keep their own derivations, pinned
+    board-wide by the profile sweep. Next steps, each safe on its own: (a) have
+    `laneGeometry.ts` resolve its bands through `roadEdgeFrac`, retiring
+    `seamPositioningBand`'s parallel pairing; (b) decide the min-2 floor's fate
+    once 1-lane one-way bends can carry parking; (c) the **authorable profile**
+    — an optional `TileCell.profile` preset (boulevard / shared-surface / tree
+    strip) biasing the resolver per tile, seams still reconciling both sides
+    (see the design doc's "authoring seam" section).
+19. **Build-dock IA redesign (Transport-Fever-grade)** — SHIPPED 2026-08-21,
     including the mobile pass (collapsed drawer, dock-aware camera fit,
     scrollable item rows). The editor dock is now four categories (Rail / Road /
     Terrain / Bulldozer) with tabs separating the verbs, parking under Road,

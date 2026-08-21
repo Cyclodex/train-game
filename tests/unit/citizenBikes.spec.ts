@@ -223,6 +223,13 @@ describe("citizens ride real bikes", () => {
       },
       walking: {
         request: (from, to) => pedSim.request(from, to),
+        // Kerb walks are the CAR overflow's leg (walk from an informally
+        // parked car); bikes rack instead, so this port never fires here and a
+        // plain fallback keeps the mock honest.
+        requestFromKerb: (carTripId, toPlotId) => {
+          const kerb = roadSim.tripParkedKerb(carTripId);
+          return kerb ? pedSim.request(kerb.tileId, toPlotId) : null;
+        },
         status: id => pedSim.status(id),
         release: id => pedSim.release(id),
       },

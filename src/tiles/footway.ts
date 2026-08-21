@@ -3,19 +3,12 @@ import type { Coordinates } from "@/types";
 import type { Level, Port, TileCell } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import type { Lane } from "@/tiles/lanes";
-import {
-  isOneWayStraight,
-  isRoadJunction,
-  junctionArmPaintTotal,
-  laneCount,
-  laneCountAt,
-  oneWayRunMax,
-  roadPortsOf,
-  roadSeamPaintTotal,
-} from "@/tiles/lanes";
-import { neighborCoord, oppositePort } from "@/sim/topology";
+import { isRoadJunction, laneCountAt, roadPortsOf, turnKind } from "@/tiles/lanes";
+import { oppositePort } from "@/sim/topology";
 import { roadCurveKerbEdgeTapered, roadKerbEdge } from "@/tiles/roadGeometry";
 import { accessTileOf } from "@/tiles/access";
+import { flankAt, resolveSeamProfile, PAVEMENT_FRAC } from "@/tiles/streetProfile";
+import { bankFor } from "@/tiles/parking";
 
 // FOOTWAYS — the pavement (Fussweg / Trottoir) beside a street, and the graph
 // people walk on.
@@ -49,8 +42,12 @@ import { accessTileOf } from "@/tiles/access";
 // A lane is 14% of a tile (`roadGeometry.ts`), and everything below is in the
 // same 0..100 ground units the tile art uses.
 const LANE_W = 14;
-// How far past the tarmac edge the middle of the pavement sits.
-const PAVEMENT_GAP = 4;
+// How far past the tarmac edge (or past the parking outside it) the pavement's
+// near edge sits. Exported because it is the whole difference between a
+// pavement and a grey ribbon lying in the verge: a test that checks the band
+// CLEARS the bays and nothing else passes just as happily when the band has
+// come away from the street altogether.
+export const PAVEMENT_GAP = 4;
 /** How wide the paved strip is drawn. */
 export const PAVEMENT_WIDTH = 8;
 
@@ -130,6 +127,11 @@ export function roadHalfUnits(cell: TileCell | undefined): number {
   return ((widest || 2) / 2) * LANE_W;
 }
 
+
+
+
+
+
 /** The centreline offset of each pavement on this cell, in ground units. */
 export function pavementOffsets(cell: TileCell | undefined): [number, number] {
   const half = roadHalfUnits(cell) + PAVEMENT_GAP + PAVEMENT_WIDTH / 2;
@@ -145,8 +147,10 @@ function travelNormal(from: Port, to: Port): { x: number; y: number } {
 }
 
 /**
- * The signed lateral offset, in ground units, that puts a walker on pavement
- * `side` while they travel `entry`→`exit` across this cell.
+ * The signed lateral offsets, in ground units, that put a walker on pavement
+ * `side` at each END of a traversal `entry`→`exit` across this cell — the same
+ * two numbers the paint tapers between, handed to the walkers' two-offset
+ * sampler so paint and people follow ONE line.
  *
  * WHY THIS IS NOT JUST `pavementOffsets(cell)[0] * side`, which is what it was
  * and which is wrong half the time: a `side` is FIXED to the tile (it is which
@@ -161,21 +165,48 @@ function travelNormal(from: Port, to: Port): { x: number; y: number } {
  * changed sides properly, then walked WEST on the coordinates of the pavement
  * they had just left — and the driveway at the far end dragged them back over
  * the tarmac to reach their door.
+ *
+ * Symmetric under reversal by construction: walking the tile back swaps which
+ * end is `entry`, flips the sign, and looks up the SAME seam/flank pairs — so
+ * both directions land on the same physical curve.
  */
-export function pavementOffsetFor(
-  cell: TileCell | undefined,
+export function pavementOffsetEndsFor(
+  level: Level,
+  coordId: string,
   side: 1 | -1,
   entry: Port,
   exit: Port
-): number {
-  const off = pavementOffsets(cell)[0] * side;
-  const through = roadThrough(cell);
-  if (!through) return off;
-  const a = travelNormal(entry, exit);
-  const b = travelNormal(through.from, through.to);
+): { offEntry: number; offExit: number } {
+  const cell = level[coordId];
+  const coord = parseCoordId(coordId);
   // Travelling against the tile's own direction flips which bank is on the
   // right. Square to it (dot 0) is ambiguous — leave the sign alone.
-  return a.x * b.x + a.y * b.y < 0 ? -off : off;
+  const through = roadThrough(cell);
+  let sign: 1 | -1 = side;
+  if (through) {
+    const a = travelNormal(entry, exit);
+    const b = travelNormal(through.from, through.to);
+    if (a.x * b.x + a.y * b.y < 0) sign = side === 1 ? -1 : 1;
+  }
+  // The physical flank the band runs on at each END of this traversal. On a
+  // straight both are the same port; on a bend they differ (the outer band of a
+  // west→south turn crosses the west seam on its north half and the south seam
+  // on its east half) — and `bankFor` names both, because each end is locally a
+  // straight movement: away from `entry`, and into `exit`.
+  const rel: "right" | "left" = sign === 1 ? "right" : "left";
+  const at = (port: Port, flank: Port): number => {
+    const f = flankAt(resolveSeamProfile(level, coord, port), flank);
+    // A flank the profile declares pavement-less (no room behind a wide arm or
+    // deep bays) keeps the old clamped number for the WALKERS, so a walk routed
+    // across such a tile still resolves to a position instead of exploding —
+    // the paint drops the band there, and nothing places a plot on such a
+    // flank, but the sampler must stay total.
+    return (f.pavement ?? 0.5 - PAVEMENT_FRAC / 2) * 100;
+  };
+  return {
+    offEntry: at(entry, bankFor(entry, rel)) * sign,
+    offExit: at(exit, bankFor(oppositePort(exit), rel)) * sign,
+  };
 }
 
 // --- the walking graph -------------------------------------------------------
@@ -343,10 +374,78 @@ export function planWalk(
     goal === toPlot ? [1, -1] : ([sideOfPlot(level, toPlot, goal)] as (1 | -1)[]);
   if (startSides.some(s => s === null) || goalSides.some(s => s === null)) return null;
 
-  const sources = startSides.map(side => ({ tileId: start, side }) as WalkNode);
-  const goalKeys = new Set(goalSides.map(side => walkNodeKey({ tileId: goal, side })));
+  return walkBetweenMulti(
+    level,
+    startSides.map(side => ({ tileId: start, side }) as WalkNode),
+    new Set(goalSides.map(side => walkNodeKey({ tileId: goal, side }))),
+  );
+}
+
+/**
+ * The pavement a walker who is standing at a KERB is on.
+ *
+ * The sibling of `sideOfPlot`, and it exists for the same reason that one does:
+ * a `side` is fixed to the TILE (which bank of the street), while everything
+ * downstream measures offsets against the DIRECTION OF TRAVEL. `sideOfPlot`
+ * answers the question for somebody standing in a building; this answers it for
+ * somebody who has just got out of a car parked against `bank`.
+ *
+ * `bank` is the port the parking row hugs (`bankOf` in `tiles/parking.ts`).
+ */
+export function sideOfBank(level: Level, roadTile: string, bank: Port): 1 | -1 | null {
+  const through = roadThrough(level[roadTile]);
+  if (!through) return null;
+  const { x: nx, y: ny } = travelNormal(through.from, through.to);
+  if (nx === 0 && ny === 0) return 1;
+  // The bank as a direction out of the tile's centre, against the same normal
+  // `sideOfPlot` compares a plot's offset to.
+  const v = portVector(bank);
+  const dot = v.x * nx + v.y * ny;
+  if (dot === 0) return 1;
+  return dot > 0 ? 1 : -1;
+}
+
+/**
+ * A walk from a stretch of KERB to a plot — the last leg of a driven journey,
+ * from the space the car actually stopped in to the door.
+ *
+ * Not `planWalk` with a fake plot: a plot resolves to `accessTileOf` (the road
+ * it fronts onto) and a side derived from where the building stands, and a
+ * parked car has neither. It is already ON the road tile, and which pavement it
+ * is beside is decided by the bank its bay hugs.
+ */
+export function planWalkFromKerb(
+  level: Level,
+  roadTile: string,
+  bank: Port,
+  toPlot: string
+): { tiles: string[]; sides: (1 | -1)[] } | null {
+  const goal = accessTileOf(level, toPlot);
+  if (!goal) return null;
+  if (!hasFootway(level[roadTile]) || !hasFootway(level[goal])) return null;
+  const startSide = sideOfBank(level, roadTile, bank);
+  const goalSide = sideOfPlot(level, toPlot, goal);
+  if (startSide === null || goalSide === null) return null;
+  return walkBetweenMulti(
+    level,
+    [{ tileId: roadTile, side: startSide }],
+    new Set([walkNodeKey({ tileId: goal, side: goalSide })]),
+  );
+}
+
+// The shared MULTI-SOURCE breadth-first search over (tile, side). The entry
+// points above differ only in how they seed the START — a street-tile endpoint
+// may stand on either pavement (both sides seeded), a parked car's kerb and a
+// plot each pin exactly one — and in which (tile, side) pairs count as ARRIVED.
+// From there the graph, the crossings and the route are identical, and
+// duplicating this is how the entry points would drift apart.
+function walkBetweenMulti(
+  level: Level,
+  sources: WalkNode[],
+  goalKeys: Set<string>,
+): { tiles: string[]; sides: (1 | -1)[] } | null {
   for (const from of sources) {
-    if (goalKeys.has(walkNodeKey(from))) return { tiles: [start], sides: [from.side] };
+    if (goalKeys.has(walkNodeKey(from))) return { tiles: [from.tileId], sides: [from.side] };
   }
 
   const prev = new Map<string, WalkNode | null>(
@@ -451,43 +550,6 @@ function portVector(p: Port): { x: number; y: number } {
 // it reads as a paved strip against both the carriageway and the ground.
 export const PAVEMENT_FILL = "hsl(210 8% 72%)";
 
-// How far outside the tarmac edge the middle of the paved strip runs.
-const PAVEMENT_PAD = PAVEMENT_GAP + PAVEMENT_WIDTH / 2;
-
-/** The road layer of the neighbouring cell through `port`, if there is one. */
-function neighbourRoad(level: Level, coord: Coordinates, port: Port): Lane[] | undefined {
-  const n = neighborCoord(coord, port);
-  return n ? level[`${n.x},${n.y}`]?.road : undefined;
-}
-
-/**
- * The PAINTED half-width of the carriageway where this cell meets `port`, in
- * ground units — the very number `Tile.vue` hands its kerb line, seam rules and
- * all.
- *
- * A tile's own lane count is not enough, because the road renderer meets its
- * neighbour flush: a road narrows toward a narrower neighbour (`roadSeamPaintTotal`)
- * and a junction arm adopts the width of the street it opens onto
- * (`junctionArmPaintTotal`). Measure the pavement against the tile alone and it
- * steps sideways at exactly the seams where the tarmac does not — a jog in the
- * kerb line every time a road changes width or meets a crossroads.
- */
-function paintedHalfAt(
-  level: Level,
-  coord: Coordinates,
-  road: Lane[] | undefined,
-  port: Port
-): number {
-  const nRoad = neighbourRoad(level, coord, port);
-  const nCrossing = nRoad ? laneCountAt(nRoad, oppositePort(port)) : 0;
-  const nJunction = isRoadJunction(nRoad);
-  const selfAt = laneCountAt(road, port);
-  const total = isRoadJunction(road)
-    ? junctionArmPaintTotal(selfAt, nCrossing, nJunction)
-    : roadSeamPaintTotal(selfAt, nCrossing, nJunction);
-  return (total / 2) * LANE_W;
-}
-
 /** One pavement band: a lateral offset at each end of a movement, right-of-travel. */
 interface PavementBand {
   offEntry: number;
@@ -500,39 +562,34 @@ interface PavementBand {
  * TAPERS with the tarmac it follows and the two halves of a seam still meet.
  */
 function bandsFor(level: Level, coord: Coordinates, road: Lane[], from: Port, to: Port): PavementBand[] {
-  // A ONE-WAY street is the one road that is not symmetric about its centreline:
-  // it kerb-anchors the whole run's widest lane count (see `Tile.vue`'s one-way
-  // branch and `sim/laneOffset.ts`), so lanes open and close on the CENTRE side
-  // while the kerb runs dead straight. Each pavement therefore has to follow its
-  // own edge; a centred ±half would put the kerb-side band on the tarmac.
-  if (!isRoadJunction(road) && to === oppositePort(from) && isOneWayStraight(road, from)) {
-    const m = laneCount(road, from);
-    const runMax = oneWayRunMax(c => level[`${c.x},${c.y}`]?.road, coord, from);
-    const nEntry = neighbourRoad(level, coord, from);
-    const nExit = neighbourRoad(level, coord, to);
-    const crossEntry = nEntry ? laneCountAt(nEntry, oppositePort(from)) : 0;
-    const crossExit = nExit ? laneCountAt(nExit, oppositePort(to)) : 0;
-    const entryCount = !isRoadJunction(nEntry) && crossEntry > 0 ? Math.min(m, crossEntry) : m;
-    const exitCount = !isRoadJunction(nExit) && crossExit > 0 ? Math.min(m, crossExit) : m;
-    const kerb = (runMax / 2) * LANE_W;
-    // The closing lane's tarmac stays full width across a narrowing tile (the
-    // lane is shut by the hatched gore, not by the kerb pinching in), so the
-    // centre edge runs at the wider of the two seam counts — same rule as the
-    // surface it follows.
-    const innerEntry = kerb - entryCount * LANE_W;
-    const innerExit = kerb - Math.max(entryCount, exitCount) * LANE_W;
-    return [
-      { offEntry: kerb + PAVEMENT_PAD, offExit: kerb + PAVEMENT_PAD },
-      { offEntry: innerEntry - PAVEMENT_PAD, offExit: innerExit - PAVEMENT_PAD },
-    ];
+  // BOTH bands, straight or bend, one-way or two-way, from the street PROFILE —
+  // the same numbers the walkers sample, which is the whole point of the
+  // profile: paint and people cannot disagree because neither owns the number.
+  //
+  // A flank whose profile says "no pavement" (a car-park aisle's neighbour, a
+  // junction arm too wide to leave room) contributes NO band at that end; a band
+  // with no room at either end is not drawn at all. The old code clamped such
+  // bands INSIDE the carriageway or into the neighbouring bays and painted over
+  // them — the profile's null is the honest answer, and here it becomes paint.
+  const at = (port: Port, flank: Port): number | null => {
+    const f = flankAt(resolveSeamProfile(level, coord, port), flank);
+    return f.pavement === null ? null : f.pavement * 100;
+  };
+  const bands: PavementBand[] = [];
+  for (const rel of ["right", "left"] as const) {
+    const sign = rel === "right" ? 1 : -1;
+    const entryOff = at(from, bankFor(from, rel));
+    const exitOff = at(to, bankFor(oppositePort(to), rel));
+    if (entryOff === null && exitOff === null) continue;
+    bands.push({
+      offEntry: (entryOff ?? exitOff!) * sign,
+      offExit: (exitOff ?? entryOff!) * sign,
+    });
   }
-  const halfEntry = paintedHalfAt(level, coord, road, from);
-  const halfExit = paintedHalfAt(level, coord, road, to);
-  return [
-    { offEntry: halfEntry + PAVEMENT_PAD, offExit: halfExit + PAVEMENT_PAD },
-    { offEntry: -(halfEntry + PAVEMENT_PAD), offExit: -(halfExit + PAVEMENT_PAD) },
-  ];
+  return bands;
 }
+
+
 
 /**
  * The pavements of one cell, as stroked SVG paths in its own 0..100 ground
@@ -556,6 +613,56 @@ export function pavementPaths(level: Level, coordId: string, size = 100): string
   const coord = parseCoordId(coordId);
   const scale = size / 100;
   const width = PAVEMENT_WIDTH * scale;
+
+  const stroke = (d: string) =>
+    `<path d="${d}" fill="none" stroke="${PAVEMENT_FILL}" stroke-width="${width.toFixed(2)}" stroke-linecap="butt" />`;
+
+  // A JUNCTION's pavement is drawn from its GEOMETRY, not its movements. The
+  // per-movement loop below draws two bands per movement, and on a junction a
+  // turn's outer band cuts diagonally across the box (entry on one street's far
+  // pavement, exit beside the arm) while the through band runs straight across
+  // the arm mouths — both mostly hidden under the box tarmac, but their
+  // uncovered slivers showed as green wedges and ragged joins at every seam
+  // (the parkinglot T was the report). What a junction physically has is:
+  //  · a STRAIGHT band along each flat side (a T-junction's armless flank),
+  //  · a CORNER FILLET between each pair of adjacent arms — the same corner
+  //    the tarmac's fillet kerb traces, one band, tapering from one street's
+  //    pavement offset to the other's.
+  if (isRoadJunction(road)) {
+    const arms = new Set<Port>(roadPortsOf(road));
+    const at = (port: Port, flank: Port): number | null => {
+      const f = flankAt(resolveSeamProfile(level, coord, port), flank);
+      return f.pavement === null ? null : f.pavement * 100;
+    };
+    const out: string[] = [];
+    const all: Port[] = [Position.Top, Position.Right, Position.Bottom, Position.Left];
+    for (const flank of all) {
+      if (arms.has(flank)) continue;
+      const p = ((flank + 1) % 4) as Port;
+      const q = ((flank + 3) % 4) as Port;
+      if (!arms.has(p) || !arms.has(q)) continue;
+      const sign = bankFor(p, "right") === flank ? 1 : -1;
+      const offP = at(p, flank);
+      const offQ = at(q, flank);
+      if (offP === null && offQ === null) continue;
+      const a = (offP ?? offQ!) * sign * scale;
+      const b = (offQ ?? offP!) * sign * scale;
+      out.push(stroke(roadKerbEdge(p, q, size, a, b, 1)));
+    }
+    for (const pa of all) {
+      const pb = ((pa + 1) % 4) as Port;
+      if (!arms.has(pa) || !arms.has(pb)) continue;
+      const rel = turnKind(pa, pb) === "right" ? ("right" as const) : ("left" as const);
+      const sign = rel === "right" ? 1 : -1;
+      const offA = at(pa, bankFor(pa, rel));
+      const offB = at(pb, bankFor(oppositePort(pb), rel));
+      if (offA === null && offB === null) continue;
+      const a = (offA ?? offB!) * sign * scale;
+      const b = (offB ?? offA!) * sign * scale;
+      out.push(stroke(roadCurveKerbEdgeTapered(pa, pb, size, a, b, 1)));
+    }
+    return out.join("");
+  }
 
   // One band per distinct movement across the tile, deduplicated: a two-way
   // street is two lanes over the same ground and must not paint its pavement

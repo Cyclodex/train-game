@@ -7,7 +7,7 @@ import {
   hasFootCrossing,
   hasFootway,
   pavementOffsets,
-  pavementOffsetFor,
+  pavementOffsetEndsFor,
   hasRailCrossing,
   pavementPaths,
   planWalk,
@@ -211,14 +211,18 @@ describe("which bank of the street a walker is on", () => {
   // the driveway at the far end then dragged them over the carriageway.
   it("flips the offset when the walk runs against the tile's own direction", () => {
     const cell = street(Position.Left, Position.Right); // canonical: eastbound
+    const level: Level = { "1,1": cell };
     const [half] = pavementOffsets(cell);
+    const at = (side: 1 | -1, a: Position, b: Position) =>
+      pavementOffsetEndsFor(level, "1,1", side, a, b);
 
     // Eastbound, side +1: right of travel, so the south bank.
-    expect(pavementOffsetFor(cell, 1, Position.Left, Position.Right)).toBeCloseTo(half);
+    expect(at(1, Position.Left, Position.Right).offEntry).toBeCloseTo(half);
+    expect(at(1, Position.Left, Position.Right).offExit).toBeCloseTo(half);
     // Westbound, side +1: STILL the south bank, which is now on the left — so
     // the offset handed to the sampler has to change sign.
-    expect(pavementOffsetFor(cell, -1, Position.Right, Position.Left)).toBeCloseTo(half);
-    expect(pavementOffsetFor(cell, 1, Position.Right, Position.Left)).toBeCloseTo(-half);
+    expect(at(-1, Position.Right, Position.Left).offEntry).toBeCloseTo(half);
+    expect(at(1, Position.Right, Position.Left).offEntry).toBeCloseTo(-half);
   });
 
   it("agrees with the side a plot is assigned, whichever way it is walked", () => {
@@ -228,16 +232,20 @@ describe("which bank of the street a walker is on", () => {
     expect(north).toBe(-south);
     // The house north of the street is north of the centreline no matter which
     // way its owner happens to be walking.
-    const cell = level["1,1"];
-    expect(pavementOffsetFor(cell, north, Position.Left, Position.Right)).toBeLessThan(0);
-    expect(pavementOffsetFor(cell, north, Position.Right, Position.Left)).toBeGreaterThan(0);
+    const east = pavementOffsetEndsFor(level, "1,1", north, Position.Left, Position.Right);
+    const west = pavementOffsetEndsFor(level, "1,1", north, Position.Right, Position.Left);
+    expect(east.offEntry).toBeLessThan(0);
+    expect(west.offEntry).toBeGreaterThan(0);
   });
 
   it("keeps a bend's two directions on the same pavement", () => {
     const bend: TileCell = { connections: [], road: twoWay(Position.Top, Position.Right) };
+    const level: Level = { "1,1": bend };
     const [half] = pavementOffsets(bend);
-    expect(pavementOffsetFor(bend, 1, Position.Top, Position.Right)).toBeCloseTo(half);
-    expect(pavementOffsetFor(bend, 1, Position.Right, Position.Top)).toBeCloseTo(-half);
+    const fwd = pavementOffsetEndsFor(level, "1,1", 1, Position.Top, Position.Right);
+    const back = pavementOffsetEndsFor(level, "1,1", 1, Position.Right, Position.Top);
+    expect(fwd.offEntry).toBeCloseTo(half);
+    expect(back.offEntry).toBeCloseTo(-half);
   });
 });
 

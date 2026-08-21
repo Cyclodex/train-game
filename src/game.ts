@@ -48,7 +48,12 @@ import {
   VehicleClass,
   type Lane,
 } from "@/tiles/lanes";
-import { createLaneGeometry } from "@/sim/laneGeometry";
+import {
+  buildSqueezeBanks,
+  createLaneGeometry,
+  informalSqueeze,
+  type LaneOffsets,
+} from "@/sim/laneGeometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
@@ -1527,6 +1532,18 @@ export function createGame(
         // ...and a person who walks becomes an actual figure on the pavement.
         walking: {
           request: (from, to) => pedestrianSim?.request(from, to) ?? null,
+          // The car's own trip names where its driver is standing. Resolving the
+          // kerb HERE — rather than handing the citizen layer a bank to carry —
+          // is what keeps bays and pavement sides on this side of the port.
+          // `kerb.at` is the CAR: pass it, or the walker is placed at the middle
+          // of the road tile and the driver materialises in the traffic.
+          requestFromKerb: (carTripId, toPlot) => {
+            const kerb = roadSim.tripParkedKerb(carTripId);
+            if (!kerb) return null;
+            return (
+              pedestrianSim?.requestFromKerb(kerb.tileId, kerb.bank, toPlot, kerb.at) ?? null
+            );
+          },
           status: id => pedestrianSim?.status(id) ?? "arrived",
           release: id => pedestrianSim?.release(id),
         },
@@ -2713,6 +2730,16 @@ export function createGame(
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
+    // THE SQUEEZE — passing traffic eases around informally parked cars. The
+    // maths (and its never-into-oncoming-traffic proof) live in
+    // sim/laneGeometry.ts, where the body-overlap oracle tests the exact
+    // function the renderer runs here.
+    const squeezeBanks = buildSqueezeBanks(roadSim.informalParked());
+    const squeezed = (
+      c: { coord: Coordinates; entryPort: Position; exitPort: Position | null },
+      off: LaneOffsets,
+      lanePos: number,
+    ): LaneOffsets => informalSqueeze(squeezeBanks, c, off, lanePos, tileSize);
     for (const s of samples) {
       const curIndex = s.laneIndex;
       for (let u = 0; u < s.units.length; u++) {
@@ -2734,10 +2761,10 @@ export function createGame(
         // offset rather than as "not applicable".
         const offsetFront = unit.front.pose
           ? ZERO_LANE_OFFSET
-          : couplerOffsets(unit.front, curIndex, cls);
+          : squeezed(unit.front, couplerOffsets(unit.front, curIndex, cls), unit.front.lanePos ?? curIndex);
         const offsetRear = unit.rear.pose
           ? ZERO_LANE_OFFSET
-          : couplerOffsets(unit.rear, curIndex, cls);
+          : squeezed(unit.rear, couplerOffsets(unit.rear, curIndex, cls), unit.rear.lanePos ?? curIndex);
 
         const { x, y, angle } = positionRoadUnit(unit, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;

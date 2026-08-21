@@ -31,8 +31,11 @@ const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Ri
 const rank = (side: "right" | "left") =>
   ({ from: Position.Left, side, kind: "angled" as const, count: 6 });
 
+// Aisle tiles carry no pavement — a car park has none, and the cross-section
+// rule would otherwise sit these ranks BEHIND a band nobody wants here.
 const bays = () => ({
   connections: [],
+  footway: "none" as const,
   road: [oneWay(Position.Left, Position.Right)],
   parking: {
     facility: "echelon",
@@ -46,6 +49,7 @@ const bays = () => ({
 
 const aisleOnly = (road: ReturnType<typeof oneWay>[]) => ({
   connections: [],
+  footway: "none" as const,
   road,
   parking: { facility: "echelon" },
 });

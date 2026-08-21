@@ -534,6 +534,20 @@ export interface TransitPort {
 // unaffected.
 export interface WalkingPort {
   request(fromPlotId: string, toPlotId: string): string | null;
+  // The walk from a parked CAR to the door, named by the car's own trip.
+  //
+  // NOT `request` with the road tile as a plot: a plot resolves to the street it
+  // fronts onto and to a pavement side taken from where its building stands, and
+  // a parked car has neither — it is already on the road tile, and which
+  // pavement it is beside is decided by the kerb its bay hugs. Passing the TRIP
+  // rather than a tile keeps that entirely on the far side of this port: the
+  // citizen layer stays out of banks, sides and bay geometry, exactly as it
+  // stays out of terrain.
+  //
+  // Null when there is no footway route (or no pavement at all), and the caller
+  // then charges the leg as time — which is what it did before anybody was drawn
+  // walking it.
+  requestFromKerb(carTripId: string, toPlotId: string): string | null;
   status(tripId: string): "walking" | "arrived";
   release(tripId: string): void;
 }
@@ -1644,6 +1658,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
             t.carTrip = null;
             t.leg = "parking";
             t.legRemaining = walkFromBaySec(tileId, t.to);
+            // ...AND THEY GET OUT AND WALK IT. The bay-to-door leg was a pure
+            // countdown: the cost was modelled and the person was not, so a car
+            // park fed nobody into the building it served. On a board with
+            // pavements they are now a figure on one, and the clock above stays
+            // as the backstop for a board without.
+            if (tileId) t.walkTrip = walking?.requestFromKerb(carTrip, t.to) ?? null;
             return;
           }
           if (status === "arrived") {
@@ -1704,8 +1724,21 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         // spent hunting for one that was never there. Either way it is the
         // journey, so it lands on the same stopwatch the citizen is judged by,
         // and a player who builds a car park at the gate can watch it shrink.
+        //
+        // When there IS a walker, the leg ends when they arrive, and the clock
+        // runs alongside as the backstop — the same rule the `walking` leg
+        // lives under, and for the same reason: a pavement deleted under
+        // somebody's feet must not strand them.
         t.legRemaining -= dt;
-        if (t.legRemaining <= 0) arriveFromDrive(c, t);
+        if (t.walkTrip) {
+          const done = walking?.status(t.walkTrip) === "arrived";
+          if (!done && t.legRemaining > -tuning.maxWaitSec) return;
+          walking?.release(t.walkTrip);
+          t.walkTrip = null;
+        } else if (t.legRemaining > 0) {
+          return;
+        }
+        arriveFromDrive(c, t);
         return;
       }
       case "waiting": {

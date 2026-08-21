@@ -62,7 +62,7 @@ import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { Position } from "@/types";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
 import { TileCell, Port, parseCoordId } from "@/tiles/model";
-import { laneCount, roadPortsOf } from "@/tiles/lanes";
+import { isOneWayStraight, laneCount, roadPortsOf } from "@/tiles/lanes";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import {
   CrossingBoom,
@@ -144,6 +144,15 @@ class Crossing extends Vue {
     const u = seam(up);
     const downLanes = laneCount(road, down);
     const upLanes = laneCount(road, up);
+    // ONE-WAY: the entry edge adopts a same-direction one-way neighbour's own
+    // count (the recovery taper after a gore — streetProfile `oneWayCentreBand`),
+    // so the span under the booms matches the painted tarmac.
+    const entryPort = downLanes > 0 ? down : up;
+    const nEntry = neighborCoord(coord, entryPort);
+    const nEntryRoad = nEntry ? this.game.roadAt(nEntry) : undefined;
+    const upstreamCount = isOneWayStraight(nEntryRoad, entryPort)
+      ? laneCount(nEntryRoad, entryPort)
+      : 0;
     const span = crossingRoadSpan({
       size: this.size,
       downLanes,
@@ -152,7 +161,8 @@ class Crossing extends Vue {
       crossUp: u.cross,
       downIsJunction: d.junction,
       upIsJunction: u.junction,
-      runMax: this.game.roadOneWayRunMax(coord, downLanes > 0 ? down : up),
+      runMax: this.game.roadOneWayRunMax(coord, entryPort),
+      upstreamCount,
     });
     return crossingLayout(this.size, span);
   }

@@ -35,7 +35,7 @@
         :d="s.d"
         class="parking-bay"
         :class="[
-          { 'parking-bay--taken': s.occupied },
+          { 'parking-bay--taken': s.occupied, 'parking-bay--ghost': s.ghost },
           p.reserved ? 'parking-bay--' + p.reserved : '',
         ]"
       />
@@ -223,7 +223,7 @@ class TileParking extends Vue {
     // the paint is what tells a player at a glance which tarmac is theirs to
     // park on, and the rules are invisible without it.
     priv: boolean;
-    stalls: { d: string; key: string; occupied: boolean }[];
+    stalls: { d: string; key: string; occupied: boolean; ghost: boolean }[];
     garage: ReturnType<typeof garageGeometry> | null;
     garageOut: ReturnType<typeof garageGeometry> | null;
     bus: ReturnType<typeof busStopGeometry> | null;
@@ -241,14 +241,20 @@ class TileParking extends Vue {
     return rows.map(row => {
       const kerb = this.kerbFor(coord, row.from);
       const side = rowSide(row);
-      const stalls: { d: string; key: string; occupied: boolean }[] = [];
+      // DEBUG GHOSTS: an informal or unmarked stall paints nothing for the
+      // player (that is its point), which also makes it impossible to inspect —
+      // "why is that car standing there?" has no visible answer. With the debug
+      // overlay on, such stalls draw as dashed ghost boxes instead.
+      const ghost = this.config.debug && (!!row.informal || row.marking === "none");
+      const stalls: { d: string; key: string; occupied: boolean; ghost: boolean }[] = [];
       if (row.kind !== "garage") {
         for (let i = 0; i < row.count; i++) {
           const key = stallId({ tileId: this.coordId, from: row.from, side, index: i });
           stalls.push({
-            d: stallOutlinePath(row, i, size, kerb),
+            d: stallOutlinePath(row, i, size, kerb, this.config.debug),
             key,
             occupied: !!occupancy?.[key],
+            ghost,
           });
         }
       }
@@ -369,6 +375,15 @@ export default toNative(TileParking);
 .parking-bay--long {
   fill: rgba(255, 255, 255, 0.03);
   stroke-dasharray: 7 4;
+}
+/* DEBUG GHOST: an informal / unmarked stall, visible only with the debug
+   overlay on. Cyan to match the overlay's other diagnostics, dashed and
+   unfilled so it cannot be mistaken for painted parking. */
+.parking-bay--ghost {
+  fill: none;
+  stroke: rgba(80, 220, 255, 0.75);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
 }
 /* Bus stops. A lay-by is the same SIZE and OUTLINE as the lorry bay beside it and
    a halt has no outline at all, so neither can be told apart by shape — the

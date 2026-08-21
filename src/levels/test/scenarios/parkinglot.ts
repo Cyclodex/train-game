@@ -36,8 +36,14 @@ const rank = (side: "right" | "left") =>
   ({ from: Position.Left, side, kind: "perpendicular" as const, count: 7 });
 
 // An aisle tile: a single eastbound lane with a rank of bays on each bank.
+// NO PAVEMENT — a real car park has none along its aisles; you walk on the
+// aisle. This is also load-bearing for the geometry: the street cross-section
+// rule puts an across-kerb rank BEHIND a pavement wherever one exists, and an
+// aisle that kept its derived footway would push its own ranks a strip outward
+// into the tile behind them.
 const aisle = () => ({
   connections: [],
+  footway: "none" as const,
   road: [oneWay(Position.Left, Position.Right)],
   parking: {
     facility: "lot",
@@ -59,6 +65,7 @@ const aisle = () => ({
 // park the moment it left the last row of bays.
 const aisleOnly = (road: ReturnType<typeof oneWay>[]) => ({
   connections: [],
+  footway: "none" as const,
   road,
   parking: { facility: "lot" },
 });

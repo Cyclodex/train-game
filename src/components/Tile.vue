@@ -593,7 +593,6 @@ import {
   laneDropArrowPath,
   laneDropArrowPlan,
   laneDropGore,
-  laneClosureGore,
   oneWayMergeArrowPath,
   junctionApproachSignalGeom,
   laneDirectionArrowPath,
@@ -607,8 +606,6 @@ import {
   roadEdges,
   laneCount,
   laneCountAt,
-  roadSeamPaintTotal,
-  junctionArmPaintTotal,
   seamMismatch,
   isRoadJunction,
   turnKind,
@@ -616,7 +613,8 @@ import {
   laneAllExits,
   approachPortsOf,
 } from "@/tiles/lanes";
-import { rowsOf } from "@/tiles/parking";
+import { bankFor, rowsOf } from "@/tiles/parking";
+import { roadEdgeFrac, seamPaintLanes } from "@/tiles/streetProfile";
 import TileParking from "./TileParking.vue";
 import { signalModeLabel } from "@/sim/junctionSignal";
 import { neighborCoord, oppositePort } from "@/sim/topology";
@@ -691,26 +689,15 @@ class Tile extends Vue {
     return this.kind === "road-straight" && this.roadTapers ? "road-taper" : this.kind;
   }
   // True when this straight road tile changes painted width between its two
-  // ends, i.e. it sits at a lane-count change against a neighbour. Mirrors the
-  // per-seam width logic in `roadPaths` exactly. False in the editor (the stub
-  // game reports 0 neighbour lanes, so every tile renders at its own width).
+  // ends, i.e. it sits at a lane-count change against a neighbour. Reads the
+  // street profile's seam totals — the same numbers `roadPaths` strokes.
   get roadTapers(): boolean {
     const road = this.tile.road;
     if (!road?.length) return false;
     const coord = parseCoordId(this.coordId);
     return roadEdges(road).some(([a, b]) => {
       if (oppositePort(a) !== b) return false; // straight edges only
-      const selfTotal = Math.max(laneCount(road, a) + laneCount(road, b), 2);
-      const na = neighborCoord(coord, a);
-      const nb = neighborCoord(coord, b);
-      const jA = na ? this.game.roadIsJunctionAt(na) : false;
-      const jB = nb ? this.game.roadIsJunctionAt(nb) : false;
-      const crossingA = na ? this.game.roadLaneCountAt(na, oppositePort(a)) : 0;
-      const crossingB = nb ? this.game.roadLaneCountAt(nb, oppositePort(b)) : 0;
-      return (
-        roadSeamPaintTotal(selfTotal, crossingA, jA) !==
-        roadSeamPaintTotal(selfTotal, crossingB, jB)
-      );
+      return seamPaintLanes(this.level, coord, a) !== seamPaintLanes(this.level, coord, b);
     });
   }
   // Debug suffix on the tile-kind label: the configured lane amount of a road
@@ -1353,8 +1340,6 @@ class Tile extends Vue {
     return roadEdges(this.tile.road).map(([a, b]) => {
       const selfA = laneCount(this.tile.road, a);
       const selfB = laneCount(this.tile.road, b);
-      // Minimum 2 so a one-way road still renders as a 2-lane-wide ribbon.
-      const selfTotal = Math.max((selfA || 0) + (selfB || 0), 2);
       const isStraight = oppositePort(a) === b;
 
       // Curved, T-junction, and cross tiles: flag mismatches instead of tapering.
@@ -1407,33 +1392,17 @@ class Tile extends Vue {
             };
           }
         }
-        // Width PER END, each seam-matched to its own arm (seamPaintTotal against
-        // the neighbour crossing that seam) — the ribbon tapers across the bend so
-        // EACH end meets ITS arm flush. A junction's own laneCountAt deliberately
-        // over-counts an arm (every approach lane that can fan onto it counts), so
-        // the old constant max-of-both-ends width painted a narrow arm as wide as
-        // the widest one: a 1-lane arm fed by 2-lane turn ribbons drew ~4 lanes of
-        // tarmac at the entrance seam, twice the road it meets.
-        // A JUNCTION arm adopts its adjoining road's width (junctionArmPaintTotal)
-        // so the arm mouth — straight or turning — meets the road flush, no taper
-        // at the seam (#30). A simple curve (not a junction) keeps the per-end
-        // seam taper between unequal straights, but a junction neighbour never
-        // pinches it (roadSeamPaintTotal) — the junction adopts the curve.
-        //
-        // NO min-2 FLOOR. It dates from when a 1-lane one-way road was itself drawn
-        // 2 lanes wide; since the run-max kerb anchor (2026-07-25) a one-way
-        // STRAIGHT is drawn its true 1 lane, and leaving the floor on curves made a
-        // one-way single-lane BEND twice the width of the straights either side of
-        // it — a visible bulge at every corner of a car-park aisle. `laneCountAt`
-        // counts both directions, so anything two-way is already >= 2 and this
-        // changes nothing for it; the only tiles affected are genuine one-way
-        // single-lane bends. Guarded by `roadPaintWidth.spec.ts`.
-        const widthEndA = this.tileIsRoadJunction
-          ? junctionArmPaintTotal(selfAtA, nTotalA, aJunction)
-          : roadSeamPaintTotal(selfAtA, nTotalA, aJunction);
-        const widthEndB = this.tileIsRoadJunction
-          ? junctionArmPaintTotal(selfAtB, nTotalB, bJunction)
-          : roadSeamPaintTotal(selfAtB, nTotalB, bJunction);
+        // Width PER END, each seam-matched to its own arm — the ribbon tapers
+        // across the bend so EACH end meets ITS arm flush. The numbers come from
+        // the street profile (`seamPaintLanes` → `roadEdgeFrac`), which owns the
+        // seam rules this site used to spell out inline: a JUNCTION arm adopts
+        // its adjoining road's width (no taper at the seam, #30), a simple curve
+        // keeps the per-end taper between unequal straights but is never pinched
+        // by a junction neighbour, and there is NO min-2 floor (a one-way
+        // single-lane bend paints its true 1 lane — the aisle-corner bulge,
+        // guarded by `roadPaintWidth.spec.ts`).
+        const widthEndA = seamPaintLanes(this.level, coord, a);
+        const widthEndB = seamPaintLanes(this.level, coord, b);
         const widthA2 = widthEndA * LANE_W;
         const widthB2 = widthEndB * LANE_W;
         // Edge lines. A *simple* curve (a single bend, 2 ports): both kerbs,
@@ -1522,13 +1491,19 @@ class Tile extends Vue {
         const entryCount = !jEntry && crossEntry > 0 ? Math.min(m, crossEntry) : m;
         const exitCount = !jExit && crossExit > 0 ? Math.min(m, crossExit) : m;
         const R = this.game.roadOneWayRunMax(coord, entry);
-        const kerbOff = (R / 2) * LANE_W; // constant kerb (right, +n, index 0 side)
-        // The closing-lane tarmac stays FULL width across a narrowing tile (the
-        // lane is closed by the hatched gore, not by the kerb tapering — a real
-        // motorway lane drop); it only grows on a WIDENING. So the centre (left)
-        // edge runs at the wider of the two seam counts and is straight on a narrowing.
-        const innerEntry = kerbOff - entryCount * LANE_W;
-        const innerExit = kerbOff - Math.max(entryCount, exitCount) * LANE_W;
+        // SURFACE edges from the street profile. The kerb (right of travel) is
+        // the run anchor; the centre edge carries what the upstream street
+        // brings at the entry seam and this tile's own count at the exit seam —
+        // so a lane drop is shut by its gore at full width and the tile AFTER
+        // the gore paints the recovery taper back down (see streetProfile's
+        // `oneWayCentreBand`). `entryCount`/`exitCount` above stay min-based:
+        // they are the REAL lanes for the survivor markings and the gore, not
+        // the tarmac — a recovery wedge is dead tarmac with no lane in it.
+        const kerbOff = roadEdgeFrac(this.level, coord, entry, bankFor(entry, "right")) * size;
+        const centreAt = (port: Position) =>
+          -roadEdgeFrac(this.level, coord, port, bankFor(entry, "left")) * size;
+        const innerEntry = centreAt(entry);
+        const innerExit = centreAt(exit);
         // Dividers — survivor lines between through-lanes present at both ends
         // (lane k boundary at (R/2 − k)·W, measured from the kerb), fan-out lines
         // for a widening, and the kerb cycle lane's SOLID half-width edge line in
@@ -1561,14 +1536,11 @@ class Tile extends Vue {
       // Bidirectional straight road: centred symmetric taper (min-seam rule).
       // A junction seam keeps the road's full width (no taper next to a junction).
       // The JUNCTION's own through-corridor adopts each adjoining road's width at
-      // its mouth (junctionArmPaintTotal), so the arm meets the road flush and the
-      // width change (unequal arms) happens INSIDE the box, never at the seam (#30).
-      const totalA = this.tileIsRoadJunction
-        ? junctionArmPaintTotal(laneCountAt(this.tile.road, a), crossingA, jA)
-        : roadSeamPaintTotal(selfTotal, crossingA, jA);
-      const totalB = this.tileIsRoadJunction
-        ? junctionArmPaintTotal(laneCountAt(this.tile.road, b), crossingB, jB)
-        : roadSeamPaintTotal(selfTotal, crossingB, jB);
+      // its mouth, so the arm meets the road flush and the width change (unequal
+      // arms) happens INSIDE the box, never at the seam (#30). Both rules live in
+      // the street profile — `seamPaintLanes` is its `roadEdgeFrac` in lanes.
+      const totalA = seamPaintLanes(this.level, coord, a);
+      const totalB = seamPaintLanes(this.level, coord, b);
       const widthA = totalA * LANE_W;
       const widthB = totalB * LANE_W;
       // Road edge line where the tarmac meets the grass — one per outer kerb,
@@ -1995,25 +1967,12 @@ class Tile extends Vue {
         if (exitCount < entryCount) {
           const W = size * LANE_WIDTH_PX_FRAC;
           const R = this.game.roadOneWayRunMax(coord, entry);
-          // The closing lane stays full-width drivable; the gore (Sperrfläche) is a
-          // POINT upstream that WIDENS downstream to fill the lane where it ends —
-          // a real motorway lane drop, not a tarmac that pinches. Bounded below by
-          // the full-width kerb (straight) and above by a line diverging from that
-          // kerb (upstream point) to the survivors' boundary (downstream).
-          const kerbOff = (R / 2 - entryCount) * W; // full-width centre edge (closing-lane outer, −n)
-          const innerOff = (R / 2 - exitCount) * W; // survivors' boundary (gore inner, downstream)
-          gores.push({
-            // Same primitive as the bidirectional lane drop — only the ANCHOR
-            // differs (centre edge here, kerb there). A point at the centre edge
-            // upstream (outer === inner), widening to outer..inner downstream.
-            ...laneClosureGore(entry, exit, size, {
-              outerEntry: kerbOff,
-              innerEntry: kerbOff,
-              outerExit: kerbOff,
-              innerExit: innerOff,
-            }),
-            clipId: `gore-${this.coordId}-${entry}-${exit}`,
-          });
+          // NO Sperrfläche on a one-way drop (user call, 2026-08-20): with the
+          // recovery taper on the tile after the gore the surface already reads
+          // as a smooth motorway narrowing, and the hatched bay — which used to
+          // end in a hard white bar right where the tarmac carries on — fought
+          // that. The closing lane is plain tarmac; the merge arrows below and
+          // the tapering centre edge line are the drop's whole signage.
           // Merge arrows in the still-open part of the closing lane, leaning toward
           // the through lanes (the merge direction).
           const laneOff = (R / 2 + 0.5 - entryCount) * W; // closing lane centre (−n side)

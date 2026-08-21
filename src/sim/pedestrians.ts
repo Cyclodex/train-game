@@ -7,8 +7,9 @@ import { oppositePort } from "@/sim/topology";
 import {
   hasFootway,
   hasRailCrossing,
-  pavementOffsetFor,
+  pavementOffsetEndsFor,
   planWalk,
+  planWalkFromKerb,
   roadThrough,
   sideOfPlot,
 } from "@/tiles/footway";
@@ -91,6 +92,20 @@ export interface PedestrianSim {
   // when there is no pavement route — the caller then falls back to its clock,
   // so a board with no footways behaves exactly as it did before they existed.
   request(fromPlot: string, toPlot: string): string | null;
+  // A walk that starts at a stretch of kerb rather than at a building — the last
+  // leg of a driven journey, from the space the car stopped in to the door.
+  //
+  // `at` — where the car actually stopped — is REQUIRED, and that is deliberate.
+  // It was optional, the one caller never passed it, and the driver duly
+  // materialised at the middle of the road tile (i.e. out in the carriageway)
+  // and stepped sideways onto the pavement. Anybody who knows which bay the car
+  // is in knows where the car is, so make them hand it over.
+  requestFromKerb(
+    roadTile: string,
+    bank: Port,
+    toPlot: string,
+    at: { x: number; y: number },
+  ): string | null;
   step(dt: number): void;
   status(id: string): "walking" | "arrived";
   release(id: string): void;
@@ -183,11 +198,13 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     // the doubling back is expressed by running `t` back down again, not by
     // bending the curve.
     const to = exit === entry ? oppositePort(entry) : exit;
-    // A side is fixed to the street; this offset is relative to the walker's
-    // direction of travel. Walking the street back the other way flips it — see
-    // `pavementOffsetFor`.
-    const off = pavementOffsetFor(level[tileId], side, entry, to) / 100;
-    const p = laneSegmentPointAt(entry, to, 1, off, off, t);
+    // A side is fixed to the street; these offsets are relative to the walker's
+    // direction of travel, and there are TWO of them — the band tapers between
+    // its seam-agreed ends wherever kerbside parking pushes it out, and the
+    // sampler has taken a pair of offsets since the cars first needed lane
+    // tapering. One number here and the walker cuts the corner the paint takes.
+    const { offEntry, offExit } = pavementOffsetEndsFor(level, tileId, side, entry, to);
+    const p = laneSegmentPointAt(entry, to, 1, offEntry / 100, offExit / 100, t);
     return { x: x + p.x, y: y + p.y, headingDeg: p.tangentDeg };
   }
 
@@ -236,7 +253,12 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     fromPlot: string,
     toPlot: string,
     tiles: string[],
-    sides: (1 | -1)[]
+    sides: (1 | -1)[],
+    // Where the walk actually STARTS, in ground units, when it does not start at
+    // a building. Somebody getting out of a parked car begins at the car, not at
+    // the middle of a plot — and there is no plot at that end of the journey to
+    // take a centre from.
+    headAt?: { x: number; y: number }
   ): WalkStep[] | null {
     const steps: WalkStep[] = [];
     interface Run {
@@ -358,14 +380,19 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     // start on the pavement they are already standing beside.
     const head = parseCoordId(fromPlot);
     const tail = parseCoordId(toPlot);
-    if (fromPlot !== tiles[0]) {
+    // A head stub exists where the walk STARTS off the pavement: at a plot's
+    // door (fromPlot beyond the first street tile), or — even ON the first
+    // street tile — at a parked car (`headAt`), so the figure gets out at the
+    // car and walks to the band instead of materialising on it. A street-tile
+    // endpoint with no car needs none (both-pavement endpoints).
+    if (fromPlot !== tiles[0] || headAt) {
       steps.unshift({
         kind: "stub",
         tileId: fromPlot,
         x: head.x,
         y: head.y,
         side: sides[0],
-        from: { x: head.x + 0.5, y: head.y + 0.5 },
+        from: headAt ?? { x: head.x + 0.5, y: head.y + 0.5 },
         to: pointOf(steps[0], 0),
       });
     }
@@ -415,23 +442,54 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     );
   }
 
+  // Turn a planned route into a walker on the pavement. Shared so the two ways
+  // of starting a walk cannot drift apart in speed, capacity or step building.
+  function admit(
+    fromId: string,
+    toPlot: string,
+    route: { tiles: string[]; sides: (1 | -1)[] },
+    headAt?: { x: number; y: number },
+  ): string | null {
+    if (walkers.size >= MAX_WALKERS) return null;
+    if (route.tiles.length === 0) return null;
+    const steps = buildSteps(fromId, toPlot, route.tiles, route.sides, headAt);
+    if (!steps) return null;
+    const id = `walk${nextId++}`;
+    walkers.set(id, {
+      id,
+      steps,
+      index: 0,
+      progress: 0,
+      speed: baseSpeed * (1 - SPEED_SPREAD + rng() * 2 * SPEED_SPREAD),
+      waitedSec: 0,
+    });
+    return id;
+  }
+
   return {
     request(fromPlot: string, toPlot: string): string | null {
-      if (walkers.size >= MAX_WALKERS) return null;
       const route = planWalk(level, fromPlot, toPlot);
-      if (!route || route.tiles.length === 0) return null;
-      const steps = buildSteps(fromPlot, toPlot, route.tiles, route.sides);
-      if (!steps) return null;
-      const id = `walk${nextId++}`;
-      walkers.set(id, {
-        id,
-        steps,
-        index: 0,
-        progress: 0,
-        speed: baseSpeed * (1 - SPEED_SPREAD + rng() * 2 * SPEED_SPREAD),
-        waitedSec: 0,
-      });
-      return id;
+      if (!route) return null;
+      return admit(fromPlot, toPlot, route);
+    },
+
+    // THE WALK FROM THE CAR. `roadTile`+`bank` say which stretch of kerb the
+    // driver is standing at (the bay their car is in); `at` is where the car
+    // actually stopped, so the figure appears beside it rather than snapping to
+    // the middle of the tile.
+    //
+    // Null — no pavement, no route, too many walkers — is not a failure: the
+    // caller charges the leg as time instead, exactly as it did before anybody
+    // was drawn doing it.
+    requestFromKerb(
+      roadTile: string,
+      bank: Port,
+      toPlot: string,
+      at: { x: number; y: number },
+    ): string | null {
+      const route = planWalkFromKerb(level, roadTile, bank, toPlot);
+      if (!route) return null;
+      return admit(roadTile, toPlot, route, at);
     },
 
     step(dt: number) {

@@ -164,8 +164,15 @@ export function stallFits(
   // rows are closed — which is the right default for every caller that has no
   // driver in hand at all (the capacity probes, ambient traffic, a test).
   permit?: string | null,
+  // Will this driver settle for the bare kerb? Only somebody who has run out of
+  // real options says yes, which is why the default is no: informal space must
+  // stay invisible to ambient traffic, to the first-choice search, and to the
+  // capacity a P sign reports, or a town with kerb everywhere would never show
+  // a car park as worth building.
+  informal = false,
 ): boolean {
   if (!vehicleCanPark(kind)) return false;
+  if (row.informal && !informal) return false;
   if (!bayAdmits(kind, bayClassOf(row))) return false;
   if (!permitAdmits(row, permit)) return false;
   const bodyPx = specLength(vehicleSpec(kind, carLength)) * tileSize;
@@ -229,9 +236,27 @@ export interface ParkingRegistry {
   // a street of houses is a full car park to a stranger and an empty one to the
   // residents, and a router that could not tell them apart would send every
   // passing car to park on somebody's hardstanding.
-  openFacilities(kind: VehicleKind, permit?: string | null): ParkingFacility[];
-  capacity(facilityId: string, kind?: VehicleKind, permit?: string | null): number;
-  freeCount(facilityId: string, kind?: VehicleKind, permit?: string | null): number;
+  //
+  // `informal` opens the bare kerb (`ParkingRow.informal`) to this question.
+  // Default off everywhere, so the last resort stays a last resort: ambient
+  // traffic never aims at it and a P sign never counts it.
+  openFacilities(
+    kind: VehicleKind,
+    permit?: string | null,
+    informal?: boolean,
+  ): ParkingFacility[];
+  capacity(
+    facilityId: string,
+    kind?: VehicleKind,
+    permit?: string | null,
+    informal?: boolean,
+  ): number;
+  freeCount(
+    facilityId: string,
+    kind?: VehicleKind,
+    permit?: string | null,
+    informal?: boolean,
+  ): number;
   info(ref: StallRef): StallInfo | undefined;
   // Take a stall for `carId`. False when someone got there first — the caller
   // then keeps driving, which is exactly what a real driver does.
@@ -258,6 +283,7 @@ export interface ParkingRegistry {
     carId: string,
     minT?: number,
     permit?: string | null,
+    informal?: boolean,
   ): StallRef | null;
   // The manoeuvre curve for a stall, in TILE units (size 1). `laneOff` is the
   // car's lateral lane offset in tile units; `tStart` anchors the curve at the
@@ -311,7 +337,12 @@ export interface ParkingRegistry {
   // leaves the map.
   aim(facilityId: string, carId: string): void;
   unaim(carId: string): void;
-  availableFor(facilityId: string, kind: VehicleKind, permit?: string | null): number;
+  availableFor(
+    facilityId: string,
+    kind: VehicleKind,
+    permit?: string | null,
+    informal?: boolean,
+  ): number;
   aimedAt(facilityId: string): number;
 
   // The dwell range this facility's cars draw from, in seconds. Authored per
@@ -383,6 +414,7 @@ export function createParkingRegistry(
     ref: StallRef,
     kind: VehicleKind | undefined,
     permit?: string | null,
+    informal = false,
   ): boolean {
     const info = infoOf(ref);
     if (!info) return false;
@@ -393,9 +425,11 @@ export function createParkingRegistry(
     // takes this branch: it always names the kind it is routing (`availableFor`),
     // so a car is still never sent to a car park that only has lorry space.
     if (kind === undefined) {
-      return CAPACITY_PROBES.some(k => stallFits(k, info.row, carLength, tileSize, permit));
+      return CAPACITY_PROBES.some(k =>
+        stallFits(k, info.row, carLength, tileSize, permit, informal),
+      );
     }
-    return stallFits(kind, info.row, carLength, tileSize, permit);
+    return stallFits(kind, info.row, carLength, tileSize, permit, informal);
   }
 
   function count(
@@ -403,12 +437,13 @@ export function createParkingRegistry(
     kind: VehicleKind | undefined,
     freeOnly: boolean,
     permit?: string | null,
+    informal = false,
   ): number {
     const f = byId.get(facilityId);
     if (!f) return 0;
     let n = 0;
     for (const ref of f.stalls) {
-      if (!fitsKind(ref, kind, permit)) continue;
+      if (!fitsKind(ref, kind, permit, informal)) continue;
       if (freeOnly && occupants.has(stallId(ref))) continue;
       n++;
     }
@@ -421,15 +456,17 @@ export function createParkingRegistry(
     facilityOfTile: tileId => facilityByTile.get(tileId) ?? null,
     any: () => facilities.length > 0,
 
-    openFacilities(kind, permit) {
+    openFacilities(kind, permit, informal) {
       // "Open" means a space that is free AND not already spoken for — the whole
       // point of the aim token. A car park with two spaces and two cars on their
       // way to it is full as far as a third driver is concerned.
-      return facilities.filter(f => this.availableFor(f.id, kind, permit) > 0);
+      return facilities.filter(f => this.availableFor(f.id, kind, permit, informal) > 0);
     },
 
-    capacity: (facilityId, kind, permit) => count(facilityId, kind, false, permit),
-    freeCount: (facilityId, kind, permit) => count(facilityId, kind, true, permit),
+    capacity: (facilityId, kind, permit, informal) =>
+      count(facilityId, kind, false, permit, informal),
+    freeCount: (facilityId, kind, permit, informal) =>
+      count(facilityId, kind, true, permit, informal),
 
     info: infoOf,
 
@@ -453,8 +490,11 @@ export function createParkingRegistry(
       for (const target of aims.values()) if (target === facilityId) n++;
       return n;
     },
-    availableFor(facilityId, kind, permit) {
-      return Math.max(0, count(facilityId, kind, true, permit) - this.aimedAt(facilityId));
+    availableFor(facilityId, kind, permit, informal) {
+      return Math.max(
+        0,
+        count(facilityId, kind, true, permit, informal) - this.aimedAt(facilityId),
+      );
     },
     dwellOf(facilityId) {
       return dwells.get(facilityId);
@@ -465,14 +505,14 @@ export function createParkingRegistry(
     },
 
 
-    pickStallOn(tileId, from, kind, carId, minT = 0, permit) {
+    pickStallOn(tileId, from, kind, carId, minT = 0, permit, informal = false) {
       const cell = level[tileId];
       if (!cell?.parking?.rows?.length) return null;
       const free: StallRef[] = [];
       for (const row of cell.parking.rows) {
         if (row.from !== from || row.count <= 0) continue;
         const side = rowSide(row);
-        if (!stallFits(kind, row, carLength, tileSize, permit)) continue;
+        if (!stallFits(kind, row, carLength, tileSize, permit, informal)) continue;
         for (let i = 0; i < row.count; i++) {
           const ref: StallRef = { tileId, from: row.from, side, index: i };
           if (occupants.has(stallId(ref))) continue;

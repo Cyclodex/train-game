@@ -136,6 +136,7 @@ import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
 import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
 import { parkinglot } from "@/levels/test/scenarios/parkinglot";
+import { parkpass } from "@/levels/test/scenarios/parkpass";
 import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
 import { busstops } from "@/levels/test/scenarios/busstops";
 import { buslayby } from "@/levels/test/scenarios/buslayby";
@@ -247,7 +248,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, parkpass, busstops, buslayby],
       },
     ],
   },

@@ -49,6 +49,19 @@ import {
 import type { Car, RoadEntry, VehicleKind } from "./road";
 
 // A body point as `road.ts` samples it — only the fields the gates below read.
+// How far a driver who has just given up will look, in tiles, when their trip
+// carries no radius of its own (an ambient car that acquired an address, or a
+// requested one dispatched before parking existed). Six tiles is the commuter's
+// own radius — see PARK_SEARCH_TILES in `road.ts`.
+const PARK_GIVEUP_TILES = 6;
+
+// ...and how far they will look when the alternative is not parking at all. Big
+// enough to cover any board this game builds, because at this point the question
+// has stopped being "is this a reasonable walk" and become "is there anywhere on
+// this map" — and a long walk is a bad outcome a player can see and fix, where a
+// vanishing car is not an outcome at all.
+const PARK_LAST_RESORT_TILES = 64;
+
 export interface ParkingBodyPoint {
   tileId: string;
   entry: Port;
@@ -249,9 +262,12 @@ export function createParkingPhases(deps: ParkingDeps) {
     // straight past their own hardstanding at a street of drives it reads as
     // full — which is exactly what a stranger sees, and they are not a stranger.
     permit?: string | null,
-  ): { turns: RouteTurn[]; facilityId: string } | null {
+    // Settle for the bare kerb. Only ever true on the SECOND pass, after a
+    // search for real parking has come back with nothing — see `planParkingNear`.
+    informal = false,
+  ): { turns: RouteTurn[]; facilityId: string; informal: boolean } | null {
     const near = parking
-      .openFacilities(kind, permit)
+      .openFacilities(kind, permit, informal)
       .map(f => ({ f, d: facilityDistance(f, target) }))
       .filter(e => e.d <= maxTiles)
       // Nearest first, ties by id so a board dispatches identically every run.
@@ -268,13 +284,42 @@ export function createParkingPhases(deps: ParkingDeps) {
             "probe",
             0,
             permit,
+            informal,
           ) !== null,
       );
       if (goals.length === 0) continue;
       const plan = planRouteToGoals(level, coord, entry, goals, cls);
-      if (plan.goal) return { turns: plan.turns, facilityId: f.id };
+      if (plan.goal) return { turns: plan.turns, facilityId: f.id, informal };
     }
     return null;
+  }
+
+  /**
+   * Somewhere to leave the car near `target` — REAL PARKING FIRST, the bare kerb
+   * only if there is none.
+   *
+   * Two passes, and the order is the whole rule. A driver takes a proper space
+   * when one is going; the roadside is what they settle for, and a search that
+   * offered both at once would send people to the kerb outside the gate rather
+   * than into the half-empty car park behind it, because the kerb is nearer.
+   *
+   * Null only when there is genuinely nothing within reach — no bay, no drive,
+   * not even a stretch of street. The caller then drives to the address, which
+   * is the old behaviour and now the rare case rather than the common one.
+   */
+  function planParkingNear(
+    coord: Coordinates,
+    entry: Port,
+    kind: VehicleKind,
+    cls: VehicleClass,
+    target: Coordinates,
+    maxTiles: number,
+    permit?: string | null,
+  ): { turns: RouteTurn[]; facilityId: string; informal: boolean } | null {
+    return (
+      planParkingTripNear(coord, entry, kind, cls, target, maxTiles, permit, false) ??
+      planParkingTripNear(coord, entry, kind, cls, target, maxTiles, permit, true)
+    );
   }
 
   // Every approach of a tile, as router goals. "Standing on that tile" is the
@@ -319,6 +364,11 @@ export function createParkingPhases(deps: ParkingDeps) {
       car.id,
       car.headProgress,
       car.parkPermit,
+      // A car only gets here because it AIMED at this facility, and it only ever
+      // aims at informal kerb after real parking came back empty. Passing the
+      // flag through is what lets it actually take the space it was sent to;
+      // without it the driver arrives at the kerb it chose and cannot see it.
+      car.parkInformal,
     );
     if (!ref) return;
     if (!parking.claim(ref, car.id)) return;
@@ -827,7 +877,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     // full houses and gives up.
     const parkPlan =
       goal && car.parkWish !== null
-        ? planParkingTripNear(
+        ? planParkingNear(
             head.coord,
             entryPort,
             car.kind,
@@ -861,6 +911,7 @@ export function createParkingPhases(deps: ParkingDeps) {
     // The wish is spent — granted or not. Leaving it set would make the car
     // re-plan for a space every time it stopped anywhere for the rest of the run.
     car.parkWish = null;
+    car.parkInformal = parkPlan?.informal ?? false;
     if (parkPlan) parking.aim(parkPlan.facilityId, car.id);
     car.enteredTarget = false;
     car.lanePivot = null;
@@ -1083,14 +1134,55 @@ export function createParkingPhases(deps: ParkingDeps) {
     car.enteredTarget = false;
     car.parkTries += 1;
     parkingGiveUps += 1;
-    const retry =
-      car.parkTries < PARKING.maxTries
-        ? planParkingTrip(coord, entry, car.kind, cls, car.parkTarget)
-        : null;
+    // WHERE DOES A DRIVER LOOK NEXT, and it depends on who they are.
+    //
+    //  · A REQUESTED car is somebody going somewhere. They look again NEAR THE
+    //    ADDRESS THEY ARE GOING TO, with their own permit, and will take the
+    //    kerb this time. Sending them to `planParkingTrip` — the ambient
+    //    planner, which picks a car park anywhere on the map weighted by how big
+    //    it is — meant a commuter who could not park at the works set off for a
+    //    lot on the far side of town, which is not a thing anybody does.
+    //  · AMBIENT traffic has no address, so any open car park will do; that is
+    //    what `planParkingTrip` is for, and it stays.
+    const goal = car.tripGoal;
+    const outOfTries = car.parkTries >= PARKING.maxTries;
+    const retry = outOfTries
+      ? null
+      : goal
+        ? // A LAST, WIDER LOOK before giving up. The ordinary radius is what
+          // somebody will WALK; this one is what they will settle for rather
+          // than not park at all, and it exists because the space a driver was
+          // dispatched to can be taken by somebody else while they are still on
+          // their way to it. Losing that race used to end with the car deleted
+          // at the address — measured at 1 car in 30 on a saturated
+          // `/test/homeparking`, down from 12 before the kerb existed, and this
+          // closes it.
+          (planParkingNear(
+            coord,
+            entry,
+            car.kind,
+            cls,
+            parseCoordId(goal.tileId),
+            car.parkWish ?? PARK_GIVEUP_TILES,
+            car.parkPermit,
+          ) ??
+          planParkingNear(
+            coord,
+            entry,
+            car.kind,
+            cls,
+            parseCoordId(goal.tileId),
+            PARK_LAST_RESORT_TILES,
+            car.parkPermit,
+          ))
+        : planParkingTrip(coord, entry, car.kind, cls, car.parkTarget);
     if (retry) {
       car.routePlan = retry.turns;
       car.routeStep = 0;
       car.parkTarget = retry.facilityId;
+      // `planParkingTrip` (the ambient branch) never returns informal kerb, so a
+      // plan without the flag is by construction a real space.
+      car.parkInformal = "informal" in retry ? retry.informal === true : false;
       parking.aim(retry.facilityId, car.id); // move the token to the new target
     } else {
       const away = planRoute(level, coord, entry, allMapExits, routeRng, cls);
@@ -1098,6 +1190,7 @@ export function createParkingPhases(deps: ParkingDeps) {
       car.routeStep = 0;
       car.destination = away.destination;
       car.parkTarget = null;
+      car.parkInformal = false;
       parking.unaim(car.id); // gave up on parking — stop holding a space
     }
   }
@@ -1105,6 +1198,7 @@ export function createParkingPhases(deps: ParkingDeps) {
   return {
     planParkingTrip,
     planParkingTripNear,
+    planParkingNear,
     giveUpAndReplan,
     claimStallHere,
     releaseStall,

@@ -4,6 +4,7 @@ import { TileCell } from "@/tiles/model";
 import { TestScenario } from "@/levels/test/scenario";
 import type { ParkingRow } from "@/tiles/parking";
 import { deriveWorkplaceParking } from "@/tiles/workplaceParking";
+import { deriveKerbOverflow } from "@/tiles/kerbOverflow";
 import { deriveHomeParking } from "@/tiles/homeParking";
 import { citizensModeWith } from "@/modes/citizens";
 
@@ -144,7 +145,12 @@ base[`0,2`] = works();
 // houses front onto. Neither pass will touch a bank the other has spent — that
 // is what "idempotent, and it leaves an authored row alone" buys — so the two
 // compose without either knowing the other exists.
-const level = deriveHomeParking(deriveWorkplaceParking(base));
+// ...and finally the bare kerb, which is what the driver who finds all of that
+// taken settles for. It goes LAST because it takes whatever bank is left, and it
+// paints nothing at all — the only sign of it is a car standing at the roadside
+// where there is no bay. Without it those drivers used to be DELETED at the
+// address, in full view, half a tile into the street.
+const level = deriveKerbOverflow(deriveHomeParking(deriveWorkplaceParking(base)));
 
 export const homeparking: TestScenario = {
   id: "homeparking",

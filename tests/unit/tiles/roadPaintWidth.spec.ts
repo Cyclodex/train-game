@@ -9,9 +9,11 @@ import {
   twoWay,
 } from "@/tiles/lanes";
 
-// The painted width of a road tile, per end. `Tile.vue`'s `roadPaths` feeds
-// `laneCountAt` through these two functions and multiplies by the lane width, so
-// what they return IS the tarmac on screen.
+// The painted width of a road tile, per end. These two functions are the
+// primitives behind the street profile's `roadEdgeFrac`/`seamPaintLanes`, which
+// is what `Tile.vue`'s `roadPaths` now reads for its ribbon widths — so what
+// they return IS the tarmac on screen (the profile sweep's paint-parity case
+// pins that equivalence board-wide).
 //
 // This file exists because of one recurring class of bug: a MIN-2 FLOOR applied
 // in one branch and not another, which makes the same 1-lane one-way road two
