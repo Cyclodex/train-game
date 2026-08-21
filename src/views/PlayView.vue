@@ -356,40 +356,20 @@
         </div>
       </transition>
     </div>
-    <!-- The build tool's ONE piece of chrome (design doc §5.5): a toggle. While
-         armed, the tiles grow the editor's edge zones and the route gesture
-         owns the left drag; the cost rides the ghost preview, not this button. -->
-    <div v-if="canBuild" class="build-dock">
+    <!-- In-play building, Transport-Fever style: a slim handle flush with the
+         bottom edge while you just watch, and the EDITOR'S dock (BuildDock)
+         when you build — same three rows, same muscle memory, but carrying only
+         the verbs the sim can charge and execute in play. Esc or ✕ puts the
+         tools away again. -->
+    <div v-if="canBuild" class="play-build">
+      <!-- Undo is an ACTION, not a mode: it reverses the last PURCHASE (full
+           refund, no fee) and only appears while there is one to take back —
+           in both dock states, because the mistake is usually noticed after
+           the tools are put down. While the dock is open it DOCKS (actions
+           slot): nothing may stack above the dock, that is board a click can
+           no longer reach. -->
       <button
-        class="build-toggle"
-        :class="{ 'build-toggle--on': buildArmed }"
-        data-testid="build-toggle"
-        :title="buildToggleTitle"
-        @click="toggleBuild"
-      >
-        <span class="build-toggle__icon">🛤️</span>
-        <span>{{ buildArmed ? "Building — Esc finishes" : "Build" }}</span>
-      </button>
-      <!-- Bulldoze rides alongside Build rather than inside it: they are
-           opposite verbs on the same board, and burying the undo in a sub-mode
-           of the thing that caused the mistake is exactly where a player will
-           not look for it. Only one can be armed at a time. -->
-      <button
-        class="build-toggle build-toggle--raze"
-        :class="{ 'build-toggle--on': razeArmed }"
-        data-testid="raze-toggle"
-        :title="razeToggleTitle"
-        @click="toggleRaze"
-      >
-        <span class="build-toggle__icon">🧨</span>
-        <span>{{ razeArmed ? "Bulldozing — click track" : "Bulldoze" }}</span>
-      </button>
-      <!-- Undo is a THIRD control, not a mode: it reverses the last PURCHASE
-           rather than acting on the board, which is why it can be free while
-           Bulldoze costs. It only appears while there is a purchase to take
-           back, so it never sits there as a dead button. -->
-      <button
-        v-if="canUndoBuild"
+        v-if="!dockOpen && canUndoBuild"
         class="build-toggle build-toggle--undo"
         data-testid="undo-build"
         :title="undoTitle"
@@ -398,6 +378,47 @@
         <span class="build-toggle__icon">↩︎</span>
         <span>Undo {{ undoLabel }}</span>
       </button>
+      <button
+        v-if="!dockOpen"
+        class="build-handle"
+        data-testid="build-toggle"
+        :title="buildToggleTitle"
+        @click="openDock"
+      >
+        <span class="build-handle__icon">🛠️</span>
+        <span>Build</span>
+        <span class="build-handle__chev">▴</span>
+      </button>
+      <BuildDock
+        v-else
+        compact
+        closable
+        :categories="playDockCategories"
+        :cat="playCat"
+        :tab="playTabId"
+        :active-item-key="activeItemKey"
+        :hint="playHint"
+        :help="playHelp"
+        :breadcrumb="playBreadcrumb"
+        :has-options="false"
+        @select-cat="onDockCat"
+        @select-tab="onDockTab"
+        @select-item="onDockItem"
+        @close="closeDock"
+      >
+        <template #actions>
+          <button
+            v-if="canUndoBuild"
+            class="dock-undo"
+            data-testid="undo-build"
+            :title="undoTitle"
+            @click="undoBuild"
+          >
+            <span>↩︎</span>
+            <span>Undo {{ undoLabel }}</span>
+          </button>
+        </template>
+      </BuildDock>
     </div>
     <!-- The jam nudge. Collisions are impossible here by construction, so
          DEADLOCK is the failure this game actually has, and without a word it
@@ -822,6 +843,7 @@ import CitizenInspector from "@/components/CitizenInspector.vue";
 import PersonPin from "@/components/PersonPin.vue";
 import GoalList from "@/components/GoalList.vue";
 import MenuDrawer from "@/components/MenuDrawer.vue";
+import BuildDock, { type BuildDockCategoryView } from "@/components/BuildDock.vue";
 import { levelBounds } from "@/tiles/bounds";
 import { CHROME_INSETS, type Camera, type Size } from "@/camera";
 import { switchFanScale } from "@/tiles/switchFan";
@@ -834,6 +856,44 @@ const EDGES: Port[] = [
   Position.Right,
   Position.Bottom,
   Position.Left,
+];
+
+// The in-play build dock's tool tree: the editor's BuildDock shape, carrying
+// only the verbs the sim can charge and execute during play — routing track
+// (game.buildRoute) and bulldozing it (game.bulldoze). New play verbs (roads,
+// stations…) become new tabs/categories HERE, and which modes see which
+// categories is a per-mode decision layered on `playDockCategories`; today
+// every mode with `controls.build` gets the full (two-verb) set.
+type PlayDockCat = "rail" | "raze";
+const PLAY_DOCK: BuildDockCategoryView[] = [
+  {
+    id: "rail",
+    icon: "🚆",
+    label: "Rail",
+    accent: "#e3a63e",
+    shortcut: "",
+    tabs: [
+      {
+        id: "track",
+        label: "Track",
+        items: [{ key: "connect", icon: "🛤️", label: "Track" }],
+      },
+    ],
+  },
+  {
+    id: "raze",
+    icon: "🧨",
+    label: "Bulldozer",
+    accent: "#e0705e",
+    shortcut: "",
+    tabs: [
+      {
+        id: "raze",
+        label: "Bulldoze",
+        items: [{ key: "raze", icon: "🧨", label: "Bulldoze" }],
+      },
+    ],
+  },
 ];
 
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
@@ -900,7 +960,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { BuildDock, Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -1428,6 +1488,67 @@ class PlayView extends Vue {
     // set it after.
     if (this.buildArmed) this.toggleBuild();
     this.razeArmed = true;
+  }
+
+  // --- the play build dock (TF-style collapsed handle ⇄ the editor's dock) ---
+  // Collapsed is the DEFAULT: a slim handle flush with the bottom edge, so a
+  // player who only wants to watch (or a phone screen) gives up almost nothing.
+  // Opening the dock always arms a tool — the dock exists to build, and an open
+  // dock with no armed tool is a click that does nothing.
+  dockOpen = false;
+  playCat: PlayDockCat = "rail";
+
+  get playDockCategories(): BuildDockCategoryView[] {
+    return PLAY_DOCK;
+  }
+  get playTabId(): string {
+    return this.playCat === "raze" ? "raze" : "track";
+  }
+  get activeItemKey(): string {
+    return this.buildArmed ? "connect" : this.razeArmed ? "raze" : "";
+  }
+  get playHint(): string {
+    return this.razeArmed
+      ? "Click a piece of track to remove it."
+      : "Click an edge, then click tiles to route track — Esc finishes.";
+  }
+  // The full pricing paragraphs already exist as the old buttons' tooltips;
+  // behind the dock's ? they finally have a place a phone can reach.
+  get playHelp(): string {
+    return this.razeArmed ? this.razeToggleTitle : this.buildToggleTitle;
+  }
+  get playBreadcrumb(): string {
+    return this.razeArmed ? "Bulldozer → Bulldoze" : "Rail → Track";
+  }
+
+  openDock(): void {
+    this.dockOpen = true;
+    this.armCat(this.playCat);
+  }
+  closeDock(): void {
+    // Putting the tools away disarms through toggleBuild's EXIT path, so a
+    // half-drawn route is abandoned (not silently laid and charged).
+    if (this.buildArmed) this.toggleBuild();
+    this.razeArmed = false;
+    this.dockOpen = false;
+  }
+  onDockCat(id: string): void {
+    this.playCat = id === "raze" ? "raze" : "rail";
+    this.armCat(this.playCat);
+  }
+  onDockTab(): void {
+    // One tab per category today — nothing to switch.
+  }
+  onDockItem(): void {
+    // One item per tab today: re-arm the open category (a no-op while armed).
+    this.armCat(this.playCat);
+  }
+  private armCat(cat: PlayDockCat): void {
+    if (cat === "raze") {
+      if (!this.razeArmed) this.toggleRaze();
+    } else if (!this.buildArmed) {
+      this.toggleBuild();
+    }
   }
 
   // Clicking a tile while Bulldoze is armed. Refusals (a depot, or track a
@@ -2048,10 +2169,20 @@ class PlayView extends Vue {
       }
       return;
     }
-    if (!this.buildArmed) return;
+    if (!this.buildArmed) {
+      // Bulldozing (or an idle dock): Esc puts the tools away entirely.
+      if (e.key === "Escape" && this.dockOpen) this.closeDock();
+      return;
+    }
     if (e.key === "Escape") {
+      // First Esc finishes the open route; an Esc with nothing pending closes
+      // the dock — "Esc finishes, Esc again puts the tools away".
+      const s = this.routeCtrl.state;
+      const gestureOpen =
+        s.routeStarted || s.armed !== null || s.pendingId !== null;
       this.routeCtrl.finishRoute();
       this.settleBuildGesture();
+      if (!gestureOpen) this.closeDock();
     }
     if (e.code === "Space" && !this.spaceHeld) {
       this.spaceHeld = true;
@@ -2464,16 +2595,83 @@ export default toNative(PlayView);
 // was too small for the wider Build label and overlapped it by 76px. Laying
 // them out in a flex row makes the arrangement independent of either label's
 // width, so nothing has to be re-guessed when the wording changes.
-.build-dock {
+// The play build chrome: a column that stacks Undo above whichever build
+// surface is showing — the collapsed handle or the opened dock. The wrapper
+// hugs the bottom EDGE while collapsed (the handle is a tab growing out of the
+// screen edge, TF's slim-bar manner) and lifts a step while the dock is open.
+.play-build {
   position: fixed;
   z-index: 2000;
-  bottom: 18px;
+  bottom: 0;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   max-width: calc(100vw - 24px);
+  pointer-events: none; // wrapper transparent; children re-enable
+
+  > * {
+    pointer-events: auto;
+  }
 }
+// Undo, docked (the actions slot): the same verb as the floating pill, shrunk
+// to the dock's scale.
+.dock-undo {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  font: 700 12px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #cfe6d6;
+  background: transparent;
+  border: 1px solid rgba(95, 211, 154, 0.5);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: rgba(95, 211, 154, 0.16);
+  }
+}
+// The collapsed state: one slim tab flush with the bottom edge. Deliberately
+// quieter than the old floating pill — while you only watch, the chrome should
+// cost as close to nothing as it can.
+.build-handle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px 9px;
+  font: 700 13px/1 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  color: #eef2f6;
+  background: linear-gradient(
+    160deg,
+    rgba(28, 34, 42, 0.88),
+    rgba(18, 22, 28, 0.88)
+  );
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+
+  &:hover {
+    border-color: rgba(95, 211, 154, 0.55);
+  }
+}
+.build-handle__icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.build-handle__chev {
+  font-size: 10px;
+  color: #8fa3b3;
+}
+// The Undo pill keeps the old chrome's livery — it is the one control that
+// survives from the pill row, and it must read the same in both dock states.
 .build-toggle {
   display: flex;
   align-items: center;
@@ -2495,19 +2693,6 @@ export default toNative(PlayView);
   &:hover {
     border-color: rgba(95, 211, 154, 0.55);
   }
-}
-.build-toggle--on {
-  color: #0d1117;
-  background: linear-gradient(90deg, #f5d97a, #d6a93c);
-  border-color: rgba(245, 217, 122, 0.8);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(245, 217, 122, 0.45);
-}
-// Bulldoze differs from Build only in its armed livery — the row places it.
-.build-toggle--raze.build-toggle--on {
-  color: #1a0e0e;
-  background: linear-gradient(90deg, #f2a488, #d9663f);
-  border-color: rgba(242, 164, 136, 0.8);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 18px rgba(217, 102, 63, 0.45);
 }
 // Undo is not a mode, so it never gets the armed treatment — it is a plain
 // action that appears only while there is a purchase to take back.

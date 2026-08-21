@@ -307,7 +307,9 @@ test.describe("Train game", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator(".zone--finish")).toHaveCount(0);
     expect(await balance()).toBe(start - 2000);
-    await page.getByTestId("build-toggle").click();
+    // Second Esc (nothing pending any more) puts the tools away entirely.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("build-toggle")).toBeVisible();
 
     // Dispatch the waiting train; it crosses the bought track and delivers.
     await page.locator(".fare-pin").click();
@@ -363,34 +365,36 @@ test.describe("Train game", () => {
   });
 
   test("tycoon: Build and Bulldoze are never both armed", async ({ page }) => {
-    // They are opposite verbs claiming the same left click, so two lit at once
-    // means a tile click has two meanings. The first version only disarmed one
-    // way round — Build → Bulldoze was handled, Bulldoze → Build was not — so
-    // this asserts BOTH orders.
+    // They are opposite verbs claiming the same left click, so two armed at
+    // once means a tile click has two meanings. In the dock they are
+    // CATEGORIES, and a category switch re-arms — so the proof that Build is
+    // really off while Bulldoze holds the click is the edge-zone overlay
+    // (which exists exactly while the track tool is armed) going away.
     await page.goto("/#/play?mode=tycoon&board=buildgap");
     await page.getByRole("button", { name: "Start", exact: true }).click();
-    const build = page.getByTestId("build-toggle");
-    const raze = page.getByTestId("raze-toggle");
-    const on = /build-toggle--on/;
 
-    await build.click();
-    await expect(build).toHaveClass(on);
-    await expect(raze).not.toHaveClass(on);
+    // Opening the dock arms the track tool: the zones own the board. (The
+    // overlay is PER TILE, so presence is asserted via first(), absence via
+    // count 0.)
+    await page.getByTestId("build-toggle").click();
+    await expect(page.getByTestId("dock-item-connect")).toHaveClass(/on/);
+    await expect(page.locator(".build-overlay").first()).toBeVisible();
 
-    // Build → Bulldoze
-    await raze.click();
-    await expect(raze).toHaveClass(on);
-    await expect(build).not.toHaveClass(on);
+    // Build → Bulldoze: the bulldozer arms, and the build overlay is GONE.
+    await page.getByTestId("dock-cat-raze").click();
+    await expect(page.getByTestId("dock-item-raze")).toHaveClass(/on/);
+    await expect(page.locator(".build-overlay")).toHaveCount(0);
 
-    // Bulldoze → Build: the direction that was broken.
-    await build.click();
-    await expect(build).toHaveClass(on);
-    await expect(raze).not.toHaveClass(on);
+    // Bulldoze → Build: the direction that was broken in the pill era.
+    await page.getByTestId("dock-cat-rail").click();
+    await expect(page.getByTestId("dock-item-connect")).toHaveClass(/on/);
+    await expect(page.locator(".build-overlay").first()).toBeVisible();
 
-    // Each still turns itself off.
-    await build.click();
-    await expect(build).not.toHaveClass(on);
-    await expect(raze).not.toHaveClass(on);
+    // ✕ puts the tools away: no dock, no armed verb, the handle is back.
+    await page.getByTestId("build-dock-close").click();
+    await expect(page.locator(".build-overlay")).toHaveCount(0);
+    await expect(page.getByTestId("dock-item-connect")).toHaveCount(0);
+    await expect(page.getByTestId("build-toggle")).toBeVisible();
   });
 
   test("tycoon: undo takes back a misdrag free, bulldoze charges to clear", async ({
@@ -420,8 +424,9 @@ test.describe("Train game", () => {
       await zone("2,1", 1).click();
       await zone("5,1", 3).click();
       await expect.poll(balance).toBe(budget - 2000);
-      await page.keyboard.press("Escape");
-      await page.getByTestId("build-toggle").click();
+      await page.keyboard.press("Escape"); // finish the open route…
+      await page.keyboard.press("Escape"); // …and put the tools away
+      await expect(page.getByTestId("build-toggle")).toBeVisible();
     };
 
     // --- undo: the whole purchase comes back, and costs nothing -------------
@@ -443,7 +448,9 @@ test.describe("Train game", () => {
     // --- bulldoze: clearing track COSTS, and never pays back ----------------
     await buyTheGap();
     const afterBuild = await balance();
-    await page.getByTestId("raze-toggle").click();
+    // The bulldozer lives in the dock: open it, then arm the raze category.
+    await page.getByTestId("build-toggle").click();
+    await page.getByTestId("dock-cat-raze").click();
     await page.locator('.level-tile[data-coord="3,1"]').click();
     await expect.poll(balance).toBe(afterBuild - 300); // the demolition fee
     await expect(page.locator('.level-tile[data-coord="3,1"] .tile')).toHaveCount(0);
@@ -483,8 +490,8 @@ test.describe("Train game", () => {
     await page
       .locator('.level-tile[data-coord="5,1"] .zone[data-port="3"]')
       .click();
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // finish the open route…
+    await page.keyboard.press("Escape"); // …and put the tools away
 
     await expect(page.getByTestId("undo-build")).toBeVisible();
     await page.locator(".fare-pin").click(); // send the train
@@ -633,8 +640,8 @@ test.describe("Train game", () => {
     await zone("4,1", 3).click(); // West=Left=3
     await expect.poll(async () => (await money()).taxPerYear).toBe(600);
     await expect(page.locator(".score-calendar")).toContainText("$600/yr");
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // finish the open route…
+    await page.keyboard.press("Escape"); // …and put the tools away
 
     // A year here lasts 10 sim-seconds; run at 4x and watch one turn. The
     // balance steps down by exactly the annual figure, and the date follows.
@@ -686,8 +693,8 @@ test.describe("Train game", () => {
     await zone("1,1", 1).click();
     await zone("4,1", 3).click();
     await expect.poll(async () => (await money()).balance).toBe(budget - 2000);
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // finish the open route…
+    await page.keyboard.press("Escape"); // …and put the tools away
     await expect(page.locator(".score-calendar")).toContainText("$1,200/yr");
     // Not in trouble yet — $3,000 covers the next bill comfortably.
     await expect(page.locator(".score-calendar")).not.toHaveClass(/--broke/);
@@ -797,7 +804,7 @@ test.describe("Train game", () => {
     expect(await trackSpent()).toBe(7000); // Esc lays nothing chargeable
     // The railway now costs something to hold: 7 pieces at $150 a year.
     await expect(page.locator(".score-calendar")).toContainText("$1,050/yr");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // nothing pending: puts the tools away
 
     // The bought junction renders and carries merged switch arms (a junction
     // without arms would stop a train dead on it).
@@ -913,8 +920,8 @@ test.describe("Train game", () => {
     await zone("2,4", 2).click();
     await zone("6,4", 2).click();
     await expect.poll(trackSpent).toBe(5000);
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // finish the open route…
+    await page.keyboard.press("Escape"); // …and put the tools away
 
     // Send everything, then let the trap spring.
     const pins = page.locator(".fare-pin");
@@ -948,8 +955,8 @@ test.describe("Train game", () => {
     await zone("3,5", 3).click();
     await zone("2,5", 2).click();
     await expect.poll(trackSpent).toBe(6000);
-    await page.keyboard.press("Escape");
-    await page.getByTestId("build-toggle").click();
+    await page.keyboard.press("Escape"); // finish the open route…
+    await page.keyboard.press("Escape"); // …and put the tools away
 
     // And it goes: nobody is stranded on 2,5 any more, and the train has left.
     await expect
