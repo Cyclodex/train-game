@@ -1572,6 +1572,37 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   leave, and are replaced by people who may also lack cars. Population holds
   steady while the town self-selects for drivers, so `access` shows the failure
   only as a DIP — assert on the minimum over a run, never the end state.
+- **THE BIKE HAS ITS RETURN HALF** (2026-08-22, destination-parking task 1).
+  `Citizen.parkedBike` is `parkedCar`'s sibling ({tripId, at, tileId}): a bike
+  trip to work/shop dispatches with a park ask (`bikeParkTiles` = 2 — its OWN
+  tiny radius, never `PARK_SEARCH_TILES`/`homeParkTiles`; the class gate makes
+  the same ask land only on `BayClass "bike"` stands), the stand is HELD for
+  the dwell (the road sim's `HELD_DWELL_SEC` requested-trip contract, owner's
+  return ends it), and going home `resume`s the SAME bike, retired at the door
+  — the shed; home bike parking has no scarcity by design, so `parkedBike`
+  never points home.
+    · `parkedBike.at` is a PLOT id for a plain ride and a STATION id for
+      bike-and-ride — the reversed quote looks the station up by it.
+    · Bike-and-ride's return is the quote REVERSED (`ModeQuote.bikeReturn` /
+      `Trip.bikeReturn`): walk to a platform, train to the racked bike, walk
+      platform→rack, `mountParkedBike` rides it home. Offered INSTEAD of the
+      outbound shape while the bike is racked; the plain-bike quote also
+      refuses ("no-bike") whenever the one bike is not at `fromId` — the
+      one-bike invariant that keeps a second dispatch from overwriting the
+      record and stranding a held stand.
+    · NO free stand at dispatch → the park-asking request returns null and the
+      citizen layer retries WITHOUT the ask (lock at the door, bike retired) —
+      the deliberate, findable fallback task 3 turns into visible wild parking.
+      A car never gets that retry: nowhere to park means the car does not set
+      off.
+    · A bike mode never resumes the parked CAR and vice versa (separate
+      fields, `mine = bikeMode ? parkedBike : parkedCar`); send-it-after-them,
+      refusal and abandon all mirror the car via `sendBikeAway`; emigrants'
+      bikes are sent home too. `citizenStats.bikesParked` is the headless
+      observable (no at-home twin — the shed holds no record).
+    · Mode PRICING is unchanged in task 1: the bike still quotes no parking
+      cost (bikes eat walk-or-drive share, never transit —
+      `citizenBikes.spec.ts` pins it); the search-seconds reality is task 3.
 
 ## LIFE STAGES & DAILY ROUTINES (2026-08-04)
 - Everybody used to get the same three numbers (`outHour`/`backHour`/`shopHour`),

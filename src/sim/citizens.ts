@@ -200,6 +200,12 @@ export interface Trip {
   // which train, but only the other way round, and a pin following one named
   // person needs the arrow pointing this way.
   trainId: string | null;
+  // The RETURN half of bike-and-ride: this journey opens on foot, rides the
+  // train, and ends on the bike already racked at `toStation`. The places the
+  // legs differ from the outbound shape read this — dispatch (no vehicle
+  // leaves with them), alighting (walk to the rack, not toward the door) and
+  // the end of that walk (saddle up and ride, never queue again).
+  bikeReturn: boolean;
 }
 
 /** Why a mode is not on offer for a particular journey. */
@@ -253,6 +259,12 @@ export interface ModeQuote {
   chosen: boolean;
   /** Set when this mode is not on offer at all; `estimateSec` is then Infinity. */
   unavailable?: ModeRefusal;
+  /**
+   * The bike-and-ride RETURN shape: this journey opens on a walk to the
+   * platform and ends on the bike already racked at `toStation`. Quoted when
+   * (and only when) the rider's one bike is standing at a station's rack.
+   */
+  bikeReturn?: boolean;
 }
 
 /**
@@ -301,6 +313,22 @@ export interface Citizen {
     tripId: string; // the road sim's trip (which is also the car's id)
     at: string; // the plot they parked FOR — where they will come back from
     tileId: string; // the road tile the car is standing on
+  } | null;
+  // THEIR BIKE, standing in a rack somewhere while they are not on it — the
+  // exact contract the car above has, for the other vehicle. The stand is held
+  // for the whole stay (the dwell is the citizen's, not a timer's) and the
+  // same bike is the one that rides home at going-home time.
+  //
+  // `at` is where they will come back for it, and it is deliberately TWO kinds
+  // of place: the PLOT a plain bike trip rode to, or the STATION whose rack
+  // holds a bike-and-ride bike — the return leg reaches that one by train, and
+  // the station id is what the reversed quote looks up. Never their home: at
+  // home the bike sleeps in the shed, which is free by design, so there is
+  // nothing to hold and nothing to record.
+  parkedBike: {
+    tripId: string; // the road sim's trip (which is also the bike's id)
+    at: string; // plot id (plain bike) or station id (bike-and-ride)
+    tileId: string; // the road tile the rack is on
   } | null;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
@@ -401,6 +429,16 @@ export interface CitizenTuning {
   // across town — see the dispatch rule in `startTrip`, which is where the
   // measured 12-of-12-bays-at-03:00 failure came from.
   homeParkTiles: number;
+  // How far from the door a rack is still worth wheeling the bike to, in tiles.
+  //
+  // Deliberately its OWN dial and deliberately tiny — a third of the commuter
+  // car's radius (PARK_SEARCH_TILES = 6, road.ts), because half of why the
+  // bike wins the short hops is that it stops AT the destination: a stand two
+  // streets away spends that edge on foot. Past this, the rider does what
+  // riders do — locks it to the nearest thing at the door instead (today the
+  // invisible fallback in `startTrip`; the destination-parking design's task 3
+  // turns that into visible wild parking).
+  bikeParkTiles: number;
   // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
   //
   // A plot-to-plot straight line is not a journey. The real one goes down the
@@ -489,6 +527,8 @@ export const DEFAULT_TUNING: CitizenTuning = {
   // Your own drive is one tile away (it is on the road tile your house fronts
   // onto), so 2 is "my drive, or the kerb at the end of the road".
   homeParkTiles: 2,
+  // The stand at the gate, or the one round the corner — nothing further.
+  bikeParkTiles: 2,
   walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
@@ -634,6 +674,11 @@ export interface CitizenStats {
   // the only way to see that cycle from a headless run. One number could not:
   // it reads the same at both ends of the day.
   carsAtHome: number;
+  // ...and the bikes: citizens whose bike is standing in a rack right now,
+  // holding its stand against every other rider — the same observable, for the
+  // other vehicle. No at-home twin, because the shed is free by design and a
+  // bike at home is simply not recorded at all.
+  bikesParked: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -1002,6 +1047,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       stage,
       routine: makeRoutine(stage, habitRng),
       parkedCar: null,
+      parkedBike: null,
       unhappyDays: 0,
       stuckUntil: 0,
       recent: [],
@@ -1031,6 +1077,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // emigrated is a space that can never be used again, and on a board people
     // are leaving that is one lost space per lost commuter.
     sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
+    // ...and the same for the bike and its rack stand, one lost stand per lost
+    // rider.
+    sendBikeAway(c, plotOf(c.home)?.roadTile ?? null);
     people.delete(c.id);
   }
 
@@ -1208,8 +1257,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
     // BIKE. The missing middle: rides the ROAD network (same one-component rule
     // and the same detour factor as the car — a bike does not fly), pays the
-    // same door-to-kerb access as every mode, and pays NO parking penalty —
-    // a bike locks at the door, which is half of why it wins the short hops.
+    // same door-to-kerb access as every mode, and pays NO parking penalty in
+    // the quote — the stand is at the door or the bike locks to the nearest
+    // thing there, which is half of why it wins the short hops. (The dispatch
+    // really does rack it now, `bikeParkTiles`; task 3 of the destination-
+    // parking design prices the search when every stand is taken.)
     // The gate is DISTANCE, and it is per-rider: `bikeRangeOf` turns their own
     // keenness into how far they will ride at all — most people a few tiles,
     // the sporty tail across the board. No slog curve past a patience point
@@ -1217,7 +1269,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const bikeRange = bikeRangeOf(c.profile.bikeAffinity);
     const bikeSec =
       (d * tuning.roadDetour) / tuning.bikeSpeed + tuning.bikeSaddleSec + accessSec;
-    if (!c.profile.bikeOwner) refuse("bike", "no-bike");
+    // THE BIKE MUST BE AT HAND. Ownership says a bike exists; `parkedBike`
+    // says where it actually stands, and somebody whose bike is racked across
+    // town cannot ride it from here however keen they are. One bike per person
+    // is the invariant everything downstream leans on — a second dispatch
+    // would overwrite the record and strand a held stand for the day.
+    const bikeAtHand = c.parkedBike === null || c.parkedBike.at === fromId;
+    if (!c.profile.bikeOwner || !bikeAtHand) refuse("bike", "no-bike");
     else if (from.roadComponent === null || from.roadComponent !== to.roadComponent)
       refuse("bike", "no-road-link");
     else if (d > bikeRange) refuse("bike", "too-far");
@@ -1285,16 +1343,68 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       });
     }
 
-    // BIKE & RIDE. Ride to the station's rack, lock the bike, WALK to the
-    // platform, ride in — the park-and-ride template on two wheels. The ride to
-    // the rack is bounded by the rider's own range exactly like a plain bike
-    // trip; the rack→platform leg is a WALK and is priced as one (the rack is
-    // within the station's walking reach by construction —
+    // BIKE & RIDE, the RETURN half first: when the rider's one bike is already
+    // standing at a station's rack (racked there this morning), the journey is
+    // the outbound shape REVERSED — walk to a platform, ride the train to the
+    // bike, saddle up, ride the last stretch home. Quoted INSTEAD of the
+    // outbound shape, because with the bike racked over there, riding a second
+    // one up to a rack is not on offer to anybody.
+    const rackBack = c.parkedBike ? bikeAndRideByStation.get(c.parkedBike.at) : undefined;
+    const rackBackCoord = rackBack ? stationCoord.get(rackBack.station) : undefined;
+    if (rackBack) {
+      if (!transit) refuse("bikeAndRide", "no-railway");
+      else if (!board) refuse("bikeAndRide", "no-station-in-reach");
+      else if (board === rackBack.station) refuse("bikeAndRide", "same-station");
+      else if (!transit.connects(board, rackBack.station))
+        refuse("bikeAndRide", "no-service");
+      // The ride HOME is range-gated exactly as the ride up was — Chebyshev,
+      // the station-neighbourhood measure. Beyond it, the other modes compete
+      // and the racked bike waits (the road sim's backstop dwell self-heals a
+      // stand nobody ever comes back for).
+      else if (!rackBackCoord || chebyshev(to, rackBackCoord) > bikeRange)
+        refuse("bikeAndRide", "too-far");
+      else {
+        const access = walkToStation(from, board) / tuning.walkSpeed;
+        const rackWalk = 1 / tuning.walkSpeed;
+        const ride =
+          manhattan(stationCoord.get(board) as { x: number; y: number }, rackBackCoord) /
+          tuning.trainSpeed;
+        // The bike leg carries the bike costs — the saddle charge (unlocking
+        // is unlocking, whichever end of the day) and the journey's one
+        // door-to-kerb allowance, which the outbound shape also charges on its
+        // bike leg.
+        const rideHome =
+          (manhattan(rackBackCoord, to) * tuning.roadDetour) / tuning.bikeSpeed +
+          tuning.bikeSaddleSec +
+          accessSec;
+        const sec = access + tuning.assumedHeadwaySec + ride + rackWalk + rideHome;
+        out.push({
+          mode: "bikeAndRide",
+          estimateSec: sec,
+          cost: sec * ((c.profile.transitAffinity + bikeCostOf(c)) / 2),
+          station: board,
+          toStation: rackBack.station,
+          approachSec: access,
+          chosen: false,
+          bikeReturn: true,
+        });
+      }
+      return out;
+    }
+
+    // BIKE & RIDE, outbound. Ride to the station's rack, rack the bike, WALK
+    // to the platform, ride in — the park-and-ride template on two wheels. The
+    // ride to the rack is bounded by the rider's own range exactly like a
+    // plain bike trip; the rack→platform leg is a WALK and is priced as one
+    // (the rack is within the station's walking reach by construction —
     // `bikeAndRideStationsOf` uses the WALK radius).
     const br = transit && c.profile.bikeOwner ? nearestBikeAndRide(from) : null;
     const brCoord = br ? stationCoord.get(br.station) : undefined;
     if (!transit || !alight) refuse("bikeAndRide", "no-railway");
-    else if (!c.profile.bikeOwner) refuse("bikeAndRide", "no-bike");
+    // The at-hand gate again: `rackBack` above caught a bike racked at a
+    // station; this catches one standing at some OTHER plot — you cannot ride
+    // to a rack on a bike you do not have with you.
+    else if (!c.profile.bikeOwner || !bikeAtHand) refuse("bikeAndRide", "no-bike");
     else if (from.roadComponent === null || !br || !brCoord)
       refuse("bikeAndRide", "no-rack");
     // CHEBYSHEV, like every station-reach measure in this codebase (the walk
@@ -1373,6 +1483,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       if (c.parkedCar && c.parkedCar.at === fromId && c.parkedCar.at !== c.home) {
         sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
       }
+      // The bike under the same rule — a refused journey must not strand a
+      // rack stand either (the home case cannot arise: the shed holds no
+      // record).
+      if (c.parkedBike && c.parkedBike.at === fromId && c.parkedBike.at !== c.home) {
+        sendBikeAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
+      }
       remember(c, {
         purpose,
         mode: null,
@@ -1417,8 +1533,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // Which leg the journey opens on: wheels roll out of the gate (a bike is
       // a driving-shaped leg — it is a vehicle in traffic), everything else
       // walks first. Exhaustive by TravelMode so a new mode cannot fall
-      // through to a wrong default.
-      leg: FIRST_LEG[option.mode],
+      // through to a wrong default. The one exception is the bike-and-ride
+      // RETURN shape, whose bike is at the FAR end of a train ride — it opens
+      // on the walk to the platform.
+      leg: option.bikeReturn ? "walking" : FIRST_LEG[option.mode],
       legRemaining: option.approachSec,
       station: option.station,
       toStation: option.toStation,
@@ -1429,6 +1547,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       carSec: 0,
       walkTrip: null,
       trainId: null,
+      bikeReturn: option.bikeReturn ?? false,
     };
     // A driving leg becomes an ACTUAL CAR on the board whenever the road sim can
     // dispatch one: this person is now a vehicle in traffic, and their journey
@@ -1436,12 +1555,21 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // street blocked, the road at its cap) the leg stays on its clock, which is
     // exactly what it always was.
     const trip = c.trip;
+    // The bike-and-ride RETURN shape opens on FOOT — the bike is at the far
+    // end of a train ride, and mounting it is `mountParkedBike`'s moment, not
+    // dispatch's.
     const wheeled =
-      trip.mode === "car" ||
-      trip.mode === "parkAndRide" ||
-      trip.mode === "bike" ||
-      trip.mode === "bikeAndRide";
+      !trip.bikeReturn &&
+      (trip.mode === "car" ||
+        trip.mode === "parkAndRide" ||
+        trip.mode === "bike" ||
+        trip.mode === "bikeAndRide");
     if (driving && wheeled) {
+      // Which VEHICLE this citizen becomes out there — and, below, which
+      // parked one is theirs to resume. A bike mode never touches the parked
+      // CAR and a car mode never the parked BIKE: different vehicle, different
+      // field, and the types keep the two from ever crossing.
+      const bikeMode = trip.mode === "bike" || trip.mode === "bikeAndRide";
       const origin = plotOf(fromId)?.roadTile ?? null;
       const target =
         trip.mode === "car" || trip.mode === "bike"
@@ -1449,31 +1577,32 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
           : trip.mode === "bikeAndRide"
             ? (bikeAndRideByStation.get(option.station ?? "")?.roadTile ?? null)
             : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
-      // THEIR OWN CAR IS ALREADY HERE. Somebody leaving work does not have a
-      // second car materialise on the driveway — they walk to the one they left
-      // outside this morning and drive it away. Same vehicle, same id, and the
-      // bay it was holding is handed back to the next driver looking for one.
-      const mine = c.parkedCar;
-      const parkAtEnd =
-        trip.mode === "car" && purpose === "home"
+      // THEIR OWN VEHICLE IS ALREADY HERE. Somebody leaving work does not have
+      // a second car materialise on the driveway — they walk to the one they
+      // left outside this morning and drive it away. Same vehicle, same id,
+      // and the bay (or the rack stand) it was holding is handed back to the
+      // next one looking for it.
+      const mine = bikeMode ? c.parkedBike : c.parkedCar;
+      const parkAtEnd = bikeMode
+        ? trip.mode === "bike" && purpose === "home"
+          ? // The SHED. Home bike parking has no scarcity by design — the bike
+            // is retired at the door, and `parkedBike` never points home.
+            undefined
+          : { searchTiles: tuning.bikeParkTiles }
+        : trip.mode === "car" && purpose === "home"
           ? { permit: c.home, searchTiles: tuning.homeParkTiles }
           : trip.mode === "car"
             ? {}
             : undefined;
-      // A BIKE MODE never resumes the parked CAR — different vehicle. (The
-      // bike itself is not held between journeys yet: like park & ride's car
-      // it is retired at the far end and the return leg quotes fresh. The
-      // "return half" is one debt for both modes.)
-      const bikeMode = trip.mode === "bike" || trip.mode === "bikeAndRide";
       if (
-        !bikeMode &&
         mine &&
         mine.at === fromId &&
         target &&
         driving.resume(mine.tripId, target, parkAtEnd)
       ) {
         trip.carTrip = mine.tripId;
-        c.parkedCar = null;
+        if (bikeMode) c.parkedBike = null;
+        else c.parkedCar = null;
       } else if (origin && target && origin !== target) {
         // WHO COMPETES FOR A SPACE, and it is not everybody.
         //  · Going to WORK or to the SHOPS: yes. That is the whole feature —
@@ -1499,12 +1628,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         //    a station, and a HELD bay there needs the return half too — you come
         //    back to a different platform and have to reach the car you left at
         //    the first one.
-        //  · A BIKE: no. It locks at the door (no parking cost is half of why it
-        //    wins the short hops), and the bike-and-ride bike is retired at the
-        //    rack's street on the same terms as the P+R car — the rack stalls
-        //    themselves fill with the road sim's own riders until the return
-        //    half exists for both modes.
+        //  · A BIKE: yes, at RACKS. `BayClass "bike"` is the only class that
+        //    admits one (sim/parking.ts), so the same ask that sends a car to
+        //    the staff bays sends a bike to the stands — a tiny radius
+        //    (`bikeParkTiles`), no permit, and the stand is then held for the
+        //    working day like the commuter's bay. Going HOME it asks for
+        //    nothing: the shed is free by design.
         trip.carTrip = driving.request(origin, target, parkAtEnd, bikeMode ? "bike" : "car");
+        // THE NO-RACK FALLBACK — bikes only, and deliberately so. A car with
+        // nowhere to park does not set off (the road sim refuses the dispatch
+        // and the citizen drives on a timer); a bike with every stand taken
+        // still goes, and locks at the door exactly as it did before stands
+        // were held. The destination-parking design's task 3 replaces this
+        // invisible fallback with a visible wild park.
+        if (bikeMode && parkAtEnd && trip.carTrip === null) {
+          trip.carTrip = driving.request(origin, target, undefined, "bike");
+        }
       }
     }
     // Departing from where the car is by any OTHER means still moves the car:
@@ -1527,6 +1666,21 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     ) {
       sendCarAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
     }
+    // ...and the bike under the same rule: left at a WORKPLACE rack by an
+    // owner who departs by other means, it would hold a stand somebody else
+    // needs until the backstop dwell expired. The home exemption is the SHED's
+    // — vacuously here, since a bike never parks at home at all, but written
+    // out so the mirror stays true if that ever changes. A bike racked at a
+    // STATION (bike-and-ride) is not where its owner is, so this never moves
+    // it — the reversed quote is how that one comes home.
+    if (
+      c.parkedBike &&
+      c.parkedBike.at === fromId &&
+      c.parkedBike.at !== c.home &&
+      trip.carTrip !== c.parkedBike.tripId
+    ) {
+      sendBikeAway(c, plotOf(toId)?.roadTile ?? plotOf(c.home)?.roadTile ?? null);
+    }
     // A walking leg becomes an ACTUAL PERSON on the pavement whenever a footway
     // route joins the two ends. The whole trip for a walk; the approach to the
     // platform for a rail journey.
@@ -1547,6 +1701,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     if (toTile && driving.resume(mine.tripId, toTile)) return;
     // Nowhere to send it, so it does not just get forgotten about — forgetting
     // the TRIP would leave the CAR parked, holding a space for ever.
+    driving.abandon(mine.tripId);
+  }
+
+  // The same, for the bike and its rack stand. Resumed without a park ask, so
+  // wherever it is sent it is retired at the door — home is the shed, and a
+  // stand handed back is the whole point.
+  function sendBikeAway(c: Citizen, toTile: string | null): void {
+    const mine = c.parkedBike;
+    if (!mine) return;
+    c.parkedBike = null;
+    if (!driving) return;
+    if (toTile && driving.resume(mine.tripId, toTile)) return;
     driving.abandon(mine.tripId);
   }
 
@@ -1583,6 +1749,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       if (c.parkedCar && c.parkedCar.at !== c.home) {
         sendCarAway(c, plotOf(c.home)?.roadTile ?? null);
       }
+      // ...and the bike, wherever it stands (a plot's rack or a station's):
+      // an abandoned journey must not drain the rack one stand per giving-up.
+      if (c.parkedBike) sendBikeAway(c, plotOf(c.home)?.roadTile ?? null);
       return;
     }
     c.at = t.to;
@@ -1653,6 +1822,37 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
           // costs a walk the driver never budgeted for.
           if (status === "parked") {
             const tileId = driving?.parkedAt(carTrip) ?? null;
+            // A BIKE TOOK A STAND — and keeps it for the whole stay, the
+            // contract the commuter's car established: held against every
+            // other rider until its owner comes back (`resume`), never until a
+            // timer runs out. Recorded on the bike's OWN field; a bike mode
+            // never touches `parkedCar`, nor a car mode this.
+            if (t.mode === "bike" || t.mode === "bikeAndRide") {
+              c.parkedBike = tileId
+                ? {
+                    tripId: carTrip,
+                    // Where they will come back for it: the plot a plain ride
+                    // was for, or — bike-and-ride — the STATION whose rack
+                    // this is, because the return leg reaches it by train and
+                    // the reversed quote looks the station up by this id.
+                    at: t.mode === "bike" ? t.to : (t.station ?? t.to),
+                    tileId,
+                  }
+                : null;
+              t.carTrip = null;
+              if (t.mode === "bikeAndRide") {
+                // Racked at the station: the platform is the same walk away
+                // as when the bike was retired here — only now the bike will
+                // still be standing in its rack at going-home time.
+                arriveFromDrive(c, t);
+                return;
+              }
+              // A plain ride: the stand is by the door — walk the last bit.
+              t.leg = "parking";
+              t.legRemaining = walkFromBaySec(tileId, t.to);
+              if (tileId) t.walkTrip = walking?.requestFromKerb(carTrip, t.to) ?? null;
+              return;
+            }
 
             c.parkedCar = tileId ? { tripId: carTrip, at: t.to, tileId } : null;
             t.carTrip = null;
@@ -1711,6 +1911,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         }
         if (t.mode === "walk") {
           finishTrip(c, true);
+          return;
+        }
+        // The return half's SECOND walk — platform to rack, after the ride.
+        // (Its first walk, to the boarding platform, still has `station` ≠
+        // `toStation` and falls through to the queue below.)
+        if (t.bikeReturn && t.station === t.toStation) {
+          mountParkedBike(c, t);
           return;
         }
         // Reached the platform on foot.
@@ -1785,6 +1992,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       finishTrip(c, true);
       return;
     }
+    if (t.mode === "bikeAndRide" && t.bikeReturn) {
+      // The RETURN half arrives home ON the bike — the ride ends the journey,
+      // and the bike is retired at the door (the shed).
+      finishTrip(c, true);
+      return;
+    }
     if (t.mode === "bikeAndRide") {
       // Rack → platform, ON FOOT. A real figure on the pavement where one
       // connects the rack's street to the station (`planWalk` takes a street
@@ -1805,6 +2018,48 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     t.leg = "waiting";
     t.waitedSec = 0;
     boardOrWait(c);
+  }
+
+  // The walk from the platform ended at the rack: the return half's last leg.
+  // Resume the bike racked this morning — same vehicle, same id, the stand
+  // handed back. When it is gone (the backstop dwell expired, a live edit took
+  // the rack from under it) a fresh bike from the rack's street finishes the
+  // job, and with no road at all the clock does — the same ladder every
+  // driving leg stands on, so nobody is ever stranded beside an empty rack.
+  function mountParkedBike(c: Citizen, t: Trip): void {
+    const target = plotOf(t.to)?.roadTile ?? null;
+    const rackTile = bikeAndRideByStation.get(t.toStation ?? "")?.roadTile ?? null;
+    const mine = c.parkedBike;
+    t.leg = "driving";
+    t.carSec = 0;
+    if (driving && mine && target && driving.resume(mine.tripId, target)) {
+      t.carTrip = mine.tripId;
+      c.parkedBike = null;
+      return;
+    }
+    if (mine) {
+      // Not standing there any more. Clear the record — and let the road sim
+      // tidy any remnant of the trip — before riding on by other means.
+      c.parkedBike = null;
+      driving?.abandon(mine.tripId);
+    }
+    if (driving && rackTile && target && rackTile !== target) {
+      t.carTrip = driving.request(rackTile, target, undefined, "bike");
+    }
+    if (!t.carTrip) {
+      // No vehicle to be had: the leg rides the clock, exactly like every
+      // dispatch the road refuses.
+      const dest = plotOf(t.to);
+      const from = rackTile
+        ? parseCoordId(rackTile)
+        : t.toStation
+          ? parseCoordId(t.toStation)
+          : null;
+      const dist =
+        dest && from ? manhattan(from, dest) : tuning.walkAccessTiles;
+      t.legRemaining =
+        (dist * tuning.roadDetour) / tuning.bikeSpeed + tuning.bikeSaddleSec;
+    }
   }
 
   // Giving up on a wait. The person stops counting themselves as waiting; the
@@ -1880,6 +2135,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     const t = c?.trip;
     if (!c || !t) return; // vanished mid-ride
     if (stationId === t.toStation) {
+      // The bike-and-ride RETURN: off the train and the bike is a short walk
+      // away — platform → rack, on foot, the outbound rack walk mirrored, the
+      // clock as the usual backstop. The ride home starts where it ends
+      // (`mountParkedBike`).
+      if (t.bikeReturn) {
+        const rackTile = bikeAndRideByStation.get(stationId)?.roadTile ?? null;
+        t.leg = "walking";
+        t.station = stationId;
+        t.trainId = null;
+        const dist = rackTile
+          ? Math.max(0.5, manhattan(parseCoordId(rackTile), parseCoordId(stationId)))
+          : 1;
+        t.legRemaining = dist / tuning.walkSpeed;
+        if (walking && rackTile) t.walkTrip = walking.request(stationId, rackTile);
+        return;
+      }
       const dest = plotOf(t.to);
       t.leg = "egress";
       t.station = stationId;
@@ -2202,6 +2473,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     };
     let parkedNow = 0;
     let atHomeNow = 0;
+    let bikesParkedNow = 0;
     for (const c of people.values()) {
       population += 1;
       byStage[c.stage] += 1;
@@ -2217,6 +2489,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         parkedNow += 1;
         if (c.parkedCar.at === c.home) atHomeNow += 1;
       }
+      if (c.parkedBike) bikesParkedNow += 1;
     }
     const total = TRAVEL_MODES.reduce((n, m) => n + modeTotals[m], 0);
     const share = zeroModes();
@@ -2233,6 +2506,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       onFoot: walkingNow,
       carsParked: parkedNow,
       carsAtHome: atHomeNow,
+      bikesParked: bikesParkedNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,
