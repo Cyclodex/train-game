@@ -55,7 +55,7 @@ describe("the bike rack — bike-only by its own kind", () => {
     // into ANY bay (it is the smallest body the sim builds), so the class gate
     // is the only fence — a single wrong row here is a bike wintering in a car
     // bay or a lorry crushing a rack.
-    const kinds: VehicleKind[] = ["car", "truck", "semi", "bus", "bike"];
+    const kinds: VehicleKind[] = ["car", "truck", "semi", "bus", "bike", "motorcycle"];
     const classes: BayClass[] = ["car", "lorry", "bus", "delivery", "permit", "resident", "bike"];
     for (const cls of classes) {
       expect(bayAdmits("bike", cls)).toBe(cls === "bike");
@@ -76,7 +76,7 @@ describe("the bike rack — bike-only by its own kind", () => {
     ];
     for (const row of carBays) expect(stallFits("bike", row, CAR_LEN)).toBe(false);
     // And no motor vehicle takes a stand.
-    for (const kind of ["car", "truck", "bus", "semi"] as VehicleKind[]) {
+    for (const kind of ["car", "truck", "bus", "semi", "motorcycle"] as VehicleKind[]) {
       expect(stallFits(kind, rackRow(), CAR_LEN)).toBe(false);
     }
   });
