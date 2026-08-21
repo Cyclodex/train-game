@@ -16,7 +16,7 @@ import type { ParkingRow } from "@/tiles/parking";
 const racks = (from: Position): ParkingRow => ({
   from,
   kind: "bikerack",
-  count: 6,
+  count: 12,
 });
 
 const street = () => ({

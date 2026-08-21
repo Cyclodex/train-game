@@ -3734,7 +3734,8 @@ mode, shared paths — are NOT).
   in its lane.
 - Rack depth is 0.09 (18px), NOT the plan's 0.08: `stallFits` measures the real
   body (bike 17.1px) against `stallLengthPx · 0.98`, and 16px refuses the very
-  vehicle the rack exists for. Pitch 0.09 → 11 stands/tile where 3 cars fit.
+  vehicle the rack exists for. Pitch 0.06 (12px — a bike is 9px wide) → 16
+  stands/tile where 3 cars fit; it shipped at 18px first and read half-empty.
 - `BayClass "bike"` admits bikes ONLY, and no other class admits a bike — both
   directions matter, because a bike passes every size gate there is. A rack
   cannot be `reserved` (needsBigBay would size the stands for a lorry) or

@@ -81,8 +81,8 @@ describe("the bike rack — bike-only by its own kind", () => {
     }
   });
 
-  it("packs rack density: ~11 stands where 3 cars fit, all off the carriageway", () => {
-    expect(maxStallsPerTile("bikerack")).toBeGreaterThanOrEqual(10);
+  it("packs rack density: 16 stands where 3 cars fit, all off the carriageway", () => {
+    expect(maxStallsPerTile("bikerack")).toBeGreaterThanOrEqual(16);
     expect(maxStallsPerTile("parallel")).toBeLessThanOrEqual(4);
     // The stand must hold the body the sim actually builds (the fit gate's 2%
     // margin included) — this is why the depth is 0.09 and not the plan's 0.08.

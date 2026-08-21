@@ -41,7 +41,7 @@ const street = (): TileCell => ({
 const home = (): TileCell => ({ connections: [], terrain: "urban", city: "veloheim" });
 const works = (city: string): TileCell => ({ connections: [], terrain: "industry", city });
 
-const rack = (from: Position): ParkingRow => ({ from, kind: "bikerack", count: 6 });
+const rack = (from: Position): ParkingRow => ({ from, kind: "bikerack", count: 12 });
 
 const level: Record<string, TileCell> = {};
 

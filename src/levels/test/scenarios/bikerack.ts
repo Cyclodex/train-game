@@ -21,7 +21,7 @@ const street = (): Level[string] => ({
 const rack = (from: Position): ParkingRow => ({
   from,
   kind: "bikerack",
-  count: 6,
+  count: 12,
 });
 
 const bays = (from: Position): ParkingRow => ({

@@ -434,10 +434,12 @@ const PITCH_FRAC: Record<StallKind, number> = {
   // 90° bays and wastes a third of the kerb.
   angled: 0.145,
   garage: 1, // the ramp mouth is one object, whatever the capacity
-  // 18px per stand — a bike is 9px wide, so each gets its hoop plus room to
-  // wheel in beside a parked neighbour. 11 stands per tile where 3 cars fit
-  // (parallel pitch 60px): the density argument FOR racks, made visible.
-  bikerack: 0.09,
+  // 12px per stand — a bike is 9px wide, so each hoop leaves a hand's width to
+  // wheel in beside a parked neighbour, which is what a real Anlehnbügel rank
+  // looks like. 16 stands per tile where 3 cars fit (parallel pitch 60px): the
+  // density argument FOR racks, made visible. (First shipped at 18px and it
+  // read as half-empty — the bikes are small, and the kerb had room to spare.)
+  bikerack: 0.06,
 };
 
 // A LONG bay — the lorry/coach bay. The longest single-box vehicle the sim builds

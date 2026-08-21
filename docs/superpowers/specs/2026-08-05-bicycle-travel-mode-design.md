@@ -4,8 +4,9 @@ _Status: phases A+B BUILT (2026-08-05) — the bike vehicle kind, the per-kind
 speed factor, the cycle lane and the access matrix, the editor's three-state
 lane tool, and the three `/test` scenarios (`bikemix`, `bikeovertake`,
 `cyclelane`; sim pins in `tests/unit/sim/roadBikes.spec.ts`). Phase C BUILT
-(2026-08-20) — `StallKind "bikerack"` (walk-in/walk-out, no manoeuvre, 11
-stands/tile), `BayClass "bike"` closing the class matrix both ways, the
+(2026-08-20) — `StallKind "bikerack"` (walk-in/walk-out, no manoeuvre, 16
+stands/tile — densified 2026-08-21 after playtest: 18px pitch read
+half-empty), `BayClass "bike"` closing the class matrix both ways, the
 P+R/bike-and-ride split by bay class (`bikeAndRideStationsOf`,
 `CitizenWorld.bikeAndRideStations`), the transfer (a racked bike = 1 rider on
 the platform, zero new code), and — one deviation from §5/§6 below — cycling
