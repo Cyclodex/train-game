@@ -17,12 +17,20 @@ const { Top, Right, Bottom, Left } = Position;
 // The valley, and why each place is where it is:
 //
 //   MARKTSTADT (west)  the big village. Two railway corridors run through it —
-//                      the main line at x=4 and the branch at x=11 — because the
+//                      the main line at x=4 and the branch at x=10 — because the
 //                      walking reach of a platform is two tiles, so a town wider
 //                      than five tiles needs a second station or it is not a town,
-//                      it is a ribbon. Its middle (x=7-8) is out of reach of both,
-//                      which is exactly right: that is the pedestrian core, and it
-//                      holds the school, the café and the shops.
+//                      it is a ribbon. Between them the two corridors reach every
+//                      house column: x=2, 6, 8 and 12 are each EXACTLY two tiles
+//                      from one. The only column out of reach of both is x=7, the
+//                      middle street, and nobody lives on a street. (A platform's
+//                      reach is a 5x5 box, not a column, so the last two rows of
+//                      the eastern columns — (8,16-17) and (12,16-17) — do fall
+//                      outside one; the main line's three calls cover x=2 and x=6
+//                      end to end.) The pedestrian core is the x=8 column — the
+//                      school, the café and a shop — and it sits two tiles from
+//                      the branch on purpose, which is what makes the school
+//                      reachable by a child with no car (see the ZONES note).
 //   NORDHEIM (north)   houses and a shop. NO ROAD AT ALL.
 //   WERK OST (east)    the heavy industry, where most of the valley's jobs are.
 //                      NO ROAD AT ALL.
@@ -84,10 +92,11 @@ const { Top, Right, Bottom, Left } = Position;
 // with a junction only at each END and nothing in between. So every trip across
 // the village was a lap of the whole ladder, and when a queue reached back into
 // a junction box it blocked the very stream that would have let it out. A cycle
-// of full tiles has no head to move first, and `BOX_KEEP_CLEAR_PATIENCE` (which
-// exists so a saturated ring is not gridlocked by politeness) lets the last car
-// into the box that closes the ring. Nothing clears it; the cars are there for
-// the rest of the run.
+// of full tiles has no head to move first. Nothing clears it; the cars are there
+// for the rest of the run. (An earlier draft of this note named
+// `BOX_KEEP_CLEAR_PATIENCE` as what closes the ring. Measured false — disabling
+// the valve outright reproduces the knot bit for bit — so read the mechanism
+// named below instead.)
 //
 // The fix is two changes to the plan, both below, and it needs BOTH — measured
 // on the road layer alone, a steady fleet of 40 village journeys over 900s:
@@ -98,17 +107,31 @@ const { Top, Right, Bottom, Left } = Position;
 //   + two lanes each way, no middle rung  |     649 |      80 |   40 of 40
 //   + both (what ships)                   |    2797 |       0 |    0 of 40
 //
-// CORRECTION (2026-08-21, the seed-11 investigation). The shipped row above is
-// a per-seed fact, not a guarantee. At a CONSTANT 40 concurrent journeys the
-// shipped layout still gridlocks permanently on about a third of seeds (7 of
-// 20 probed — the row above was a lucky one), and WHICH seeds freeze re-rolls
-// on any change to the sim's dynamics: an unrelated constants retune (PR #98,
-// CLIP_LANES) is what turned the guard's seed 11 red without touching a single
-// road rule. The load is the point — a constant 40 holds the village PAST its
-// stable capacity for the entire run, which the citizens board's bursty
-// demand never does. At a constant 24 the layout is clean across all 40
-// probed seeds (longest stop 24s, zero give-ups), and that is the load the
-// guard drives now.
+// CORRECTION (2026-08-21, the seed-11 investigation, re-swept when the guard
+// moved). The shipped row above is a per-seed fact, not a guarantee. At a
+// CONSTANT 40 concurrent journeys the shipped layout still gridlocks
+// permanently on most seeds — re-probed over two independent trip streams x
+// seeds 1..12, only 4 of those 24 runs come through clean — and WHICH seeds
+// freeze re-rolls on any change to the sim's dynamics: an unrelated constants
+// retune (PR #98, CLIP_LANES) is what turned the guard's seed 11 red without
+// touching a single road rule. The load is the point — a constant 40 holds the
+// village PAST its stable capacity for the entire run, which the citizens
+// board's bursty demand never does. The clean envelope ends between 24 and 30:
+// at a constant 24 all 40 probed runs come through (arrived 887-967, zero
+// give-ups, longest stand 24.25s), while at 30 two of six seeds already stand
+// for 350s. 24 is the load the guard drives.
+//
+// The table's ABSOLUTE numbers are pre-#98 as well and no longer reproduce —
+// re-run today the shipped plan lands 1345-1406 at load 40 on the seeds it
+// survives, not 2797. Read the rows against each other, never the values on
+// their own.
+//
+// AND WHAT THE GUARD ASSERTS AT 24 IS THROUGHPUT. Freeze-freedom on its own
+// cannot carry the claim: at any load both plans survive, NEITHER freezes. What
+// separates them on every seed is how much the streets CARRY — at a constant 24
+// the shipped plan lands 887-967 journeys per 900s where the old ladder never
+// once clears 700 (192-674 over twelve runs, jamming on a third of them). The
+// freeze checks stay as the backstop, not as the evidence.
 //
 // The residual supercritical knot is NOT the ladder mechanism above, and NOT
 // the box patience valve (disabling `BOX_KEEP_CLEAR_PATIENCE` outright
@@ -140,7 +163,7 @@ const { Top, Right, Bottom, Left } = Position;
 // What is LEFT is the board's own difficulty and not a jam: the give-ups that
 // remain read "5h 08m", the RAIL patience clock (`maxWaitSec`), not the car one.
 // This valley is over-populated for its railway on purpose — see above.
-// `tests/unit/sim/hinterlandTraffic.spec.ts` is the guard, and it fails on the
+// `tests/unit/levels/hinterlandTraffic.spec.ts` is the guard, and it fails on the
 // old plan. `/test/citizenday` was never affected either way (zero abandoned
 // trips, commute 0.89-0.96, before and after).
 //
@@ -260,12 +283,15 @@ function roadTiles(): Set<string> {
   const run = (x0: number, y0: number, x1: number, y1: number) => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) road.add(`${x},${y}`);
   };
-  // Marktstadt's ladder: four streets either side of the two railway corridors,
-  // rungs top and bottom. Every plot column ends up exactly one tile from a
-  // carriageway, which is what a driveway is.
-  // FIVE STREETS ALTERNATING WITH THE FOUR HOUSE COLUMNS, and the pattern is
-  // the design: rail-road-house-road-rail-road-house-road, so every column of
-  // houses is one tile from a carriageway AND two from a platform.
+  // Marktstadt's ladder: five streets alternating with the four house columns,
+  // rungs top, middle and bottom.
+  // THE COLUMN PATTERN IS THE DESIGN. Reading x=2 to x=12:
+  //
+  //   house(2) road(3) RAIL(4) road(5) house(6) road(7) house(8) road(9)
+  //   RAIL(10) road(11) house(12)
+  //
+  // so every column of houses is one tile from a carriageway — that is what a
+  // driveway is — AND exactly two from a platform.
   //
   // Both halves of that were learned the hard way. Without the middle streets,
   // the village centre was five tiles from its outer houses — one more than
@@ -289,11 +315,23 @@ function roadTiles(): Set<string> {
   // queues that made met head to head in the junction boxes at the ends and the
   // whole town centre deadlocked (see the note at the top of this file).
   //
-  // y=10 is the only row a rung can use: it must miss both railways' platforms
-  // (x=4 calls at y=7/11/15, x=10 at y=8/13), the two block signals at (4,9) and
-  // (4,17), and the zoned plots (the school at 8,8, the café at 8,12). It costs
-  // four house plots — (2,10), (6,10), (8,10) and (12,10) — and buys the ladder a
-  // second way round every jam.
+  // y=10 is the BEST row, not the only one. A rung has to miss both railways'
+  // platforms (x=4 calls at y=7/11/15, x=10 at y=8/13), the two block signals at
+  // (4,9) and (4,17), and every zoned plot INSIDE ITS OWN SPAN (the school at
+  // 8,8, the shop at 6,11, the café at 8,12, the shop at 8,15). Four rows
+  // between the existing rungs survive all three: 6, 10, 14 and 16.
+  //
+  // A rung is worth most in the middle, and the middle rows are exactly the
+  // blocked ones — y=11 carries a platform and a shop, y=12 the café. y=10 is
+  // the closest a rung gets: it splits the thirteen rows 5/8, where y=14 splits
+  // them 9/4 and y=6 and y=16 sit one and two rows off an existing rung and so
+  // split almost nothing.
+  //
+  // It lays four new road tiles. (4,10) and (10,10) fall on the two rail columns
+  // and become LEVEL CROSSINGS; only (6,10) and (8,10) are a cost — one plot out
+  // of each of those two twelve-plot columns, so TWO in all. (2,10) and (12,10)
+  // lie outside the rung's x=3..11 span and stay plots. Counting every new road
+  // tile as a lost plot is the easy mistake; half of them are rail.
   run(3, 10, 11, 10);
   run(3, 18, 23, 18); // the rung that becomes the road east to Südau
   // The southern loop: down the west street, along the bottom, back up at x=23.
@@ -366,7 +404,7 @@ const rect = (x0: number, y0: number, x1: number, y1: number): string[] => {
 const col = (x: number, y0: number, y1: number) => rect(x, y0, x, y1);
 const row = (y: number, x0: number, x1: number) => rect(x0, y, x1, y);
 
-// MARKTSTADT. Plot columns only — 3, 5, 7, 10 and 12 are streets and 4 and 11
+// MARKTSTADT. Plot columns only — 3, 5, 7, 9 and 11 are streets and 4 and 10
 // are railway.
 //
 // The works at the top of x=13 is DELIBERATELY SMALL. A village that can employ

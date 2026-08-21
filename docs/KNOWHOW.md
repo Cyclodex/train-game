@@ -1784,14 +1784,28 @@ Four rules, each measured on that board, each of which failed silently:
     every local trip into a full circuit.
   · **A per-seed zero is not a guarantee — probe a SWEEP, and probe INSIDE
     capacity** (2026-08-21). The "0 frozen at 40" above was one lucky seed
-    pair: at a CONSTANT 40 the shipped layout still freezes on ~1/3 of seeds
-    (7 of 20), and which seeds flip re-rolls on ANY dynamics change — an
-    unrelated CLIP_LANES retune (PR #98) turned the guard's seed 11 red. A
-    constant-load harness holds the network at that density forever (every
-    arrival instantly replaced), which bursty citizen demand never does; a
-    zero-freeze assertion at supercritical load asserts a coin toss. At a
-    constant 24 all 40 probed seeds are clean (longest stop 24s) and the old
-    ladder still fails — that is the guard's load now.
+    pair: at a CONSTANT 40 only 4 of 24 probed runs come through clean (two
+    independent trip streams x seeds 1..12), and which ones flip re-rolls on
+    ANY dynamics change — an unrelated CLIP_LANES retune (PR #98) turned the
+    guard's seed 11 red. A constant-load harness holds the network at that
+    density forever (every arrival instantly replaced), which bursty citizen
+    demand never does; a zero-freeze assertion at supercritical load asserts a
+    coin toss. The clean envelope ends between 24 and 30: at a constant 24 all
+    40 probed runs are clean (longest stand 24s), at 30 two of six seeds
+    already stand for 350s. 24 is the guard's load.
+  · **AND ASSERT THE THROUGHPUT, not only the freeze.** At a load both plans
+    survive NEITHER freezes, and at one neither survives BOTH do, so "nothing
+    froze" on its own never separates a layout from the one it replaced. What
+    does, on every seed: at a constant 24 the shipped plan carries 887-967
+    journeys per 900s where the old ladder never once clears 700 (192-674, and
+    it jams on a third of its seeds). The freeze checks are the backstop; the
+    number the layout actually moves is the evidence.
+  · **Do not hand-roll a PRNG for a harness — `makeRng` (mulberry32) is right
+    there.** The obvious glibc `s * 1103515245 + 12345` constants overflow the
+    double mantissa in JS and the state space collapses: measured period 10466
+    from every seed tried, against the 2^31 the arithmetic promises. It stays
+    deterministic, so nothing goes red — it is simply not the generator the test
+    believes it is sampling with.
   · **BOX–CROSSING–BOX IS A DEADLOCK TRAP.** A level crossing directly between
     two junction boxes (the rung crossing the branch: box 9,10 / crossing
     10,10 / box 11,10) couples the boxes through the rail-crossing keep-clear
@@ -1812,7 +1826,16 @@ Four rules, each measured on that board, each of which failed silently:
     x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
   · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
     the block signals (a road tile silently drops the signal authored on it) and
-    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+    the zoned plots INSIDE ITS OWN SPAN — and that normally leaves a CHOICE, not
+    one row. On hinterland four rows survive all three (6, 10, 14, 16); y=10
+    ships because a rung is worth most in the middle and the middle rows are the
+    blocked ones (y=11 platform + shop, y=12 café). Choose by how evenly the rung
+    splits the ladder: y=10 → 5/8 rows, y=14 → 9/4, y=6 and y=16 sit one and two
+    rows off an existing rung. Cost is read off the SPAN too: hinterland's rung
+    is x=3..11, so it takes exactly two plots, (6,10) and (8,10); the tiles on
+    the rail columns become level crossings and plots outside the span ((2,10),
+    (12,10)) are untouched. Counting the NEW ROAD TILES as the plot cost is the
+    easy mistake — half of them are rail.
 - **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
   `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
   and `homeparking` call it, and nothing else does. hinterland never has, so the
