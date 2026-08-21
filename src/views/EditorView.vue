@@ -1306,9 +1306,24 @@ class EditorView extends Vue {
   spaceHeld = false;
 
   onViewportPointerDown(e: PointerEvent): void {
-    if (e.button !== 1 && !(e.button === 0 && this.spaceHeld)) return;
-    e.preventDefault();
-    this.cam.onPointerDown(e);
+    // Middle-drag or space+left pans; a plain left drag belongs to the drawing
+    // tools. A single FINGER reports button 0 with no space key, so it draws too
+    // — and two fingers pinch, which is the only way to move the board on a
+    // touchscreen since neither a middle button nor a space bar exists there.
+    const pan = e.button === 1 || (e.button === 0 && this.spaceHeld);
+    if (pan) e.preventDefault();
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan });
+    // Belt and braces: the first finger of a pinch may have pressed an edge zone
+    // (the zone's handler runs before this one bubbles up), and a pinch that lays
+    // a rail would be worse than no pinch. MEASURED, so nobody re-derives it: it
+    // cannot happen TODAY, because the zones bind `@mousedown`/`@mouseup` and a
+    // `touch-action: none` surface fires no compatibility mouse events — which is
+    // also why the drawing tools cannot be used by touch at all yet. The day the
+    // zones move to pointer events (they must, for that), this line is what stops
+    // the pinch drawing.
+    if (this.cam.pinching) this.routeCtrl.clearPress();
   }
 
   onEditorKeyDown(e: KeyboardEvent): void {

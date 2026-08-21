@@ -1376,15 +1376,32 @@ class PlayView extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well.
+    //
     // …EXCEPT while the build tool is armed: then the left drag belongs to
     // drawing (edge → edge one-shot routes), exactly the editor's policy —
     // stealing it makes the board unbuildable (KNOWHOW → WORLD SIZE + CAMERA).
     // Pan stays on middle-drag or space+left, and left-pan returns the moment
     // build is disarmed.
-    if (this.buildArmed && e.button === 0 && !this.spaceHeld) return;
-    this.cam.onPointerDown(e);
+    const pan =
+      (e.button === 0 || e.button === 1) &&
+      !(this.buildArmed && e.button === 0 && !this.spaceHeld);
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch, and a pinch outranks the
+    // build tool — no tool in this app takes two fingers. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan });
+    if (this.cam.pinching) this.abandonPinchedDraw();
+  }
+  // Belt and braces, exactly as in EditorView: the first finger of a pinch may
+  // have pressed an edge zone (the zone's handler runs before this one bubbles
+  // up), and a pinch that lays a rail would be worse than no pinch. It cannot
+  // happen today — the zones bind `@mousedown`/`@mouseup`, and a
+  // `touch-action: none` surface fires no compatibility mouse events, so building
+  // by touch does not work here yet either. This is what stops a pinch drawing
+  // once they move to pointer events.
+  abandonPinchedDraw(): void {
+    if (this.buildArmed) this.routeCtrl.clearPress();
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);
