@@ -215,8 +215,9 @@ world's real size is derived from its tiles by `levelBounds`, see
 (`off`/`reserved`/`occupied` interlocking strictness), `colorSeed` (deterministic
 depot/train colour assignment), `roads` (master switch for the road layer),
 `roadScoring`, `maxCars` (road density as a % of map capacity, read live),
-`worldTheme` (persisted backdrop theme) and `plainBackdrop` (debug: strip the
-themed backdrop for flat ground). Toggle `debug` in the UI to see per-tile
+`worldTheme` (persisted backdrop theme), `plainBackdrop` (debug: strip the
+themed backdrop for flat ground) and `soundMuted` (persisted master mute for the
+audio layer, `setSoundMuted()`). Toggle `debug` in the UI to see per-tile
 coordinates and route overlays. `setWorldTheme()` mutates + persists the theme.
 
 Key files:
@@ -263,6 +264,13 @@ Key files:
   optional `fits(caps)` names the missing requirement — the picker disables
   unfit cards and PlayView's URL guard falls back rather than loading a game
   that can never engage. Boards stay multi-mode; nothing pins a board to one.
+- `src/audio/` — the synthesised sound layer (no assets): `cues.ts` is the pure
+  event→cue mapping + ambient `rollingGain` (unit-tested), `engine.ts` the Web
+  Audio singleton `gameAudio` (unlocked on first pointer/key gesture, headless
+  no-op, muted live via `gameConfig.soundMuted`). World cues fire from
+  `game.ts:handleEvents`; click cues at the click site. Feedback FX (delivery
+  pulse / bounce squash / flying fare) are `game.fx`, drawn by
+  `components/FxLayer.vue` on both boards — `/test/gamefeel` demos the lot.
 - `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
   `src/utils/meadowBackdrop.ts` owns the seeded meadow tree layout, rendered by
   `components/BackdropTrees.vue` as a world overlay ABOVE rails/trains/cars

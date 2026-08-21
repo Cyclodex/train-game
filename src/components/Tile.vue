@@ -555,6 +555,7 @@
 <script lang="ts">
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { gameAudio } from "@/audio/engine";
 import type { Game } from "@/game";
 import type { SimTrain } from "@/sim/simulation";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -2274,6 +2275,9 @@ class Tile extends Vue {
     if (!this.switchInteractive || this.isSwitchLocked) return;
     if (!this.switchArmEnabled(entry, arm)) return;
     if (!this.game.switches[this.coordId]) this.game.switches[this.coordId] = {};
+    // The clack only when the points actually move — re-clicking the armed
+    // exit changes nothing and must not sound like it did.
+    if (this.game.switches[this.coordId][entry] !== arm) gameAudio.play("switch");
     this.game.switches[this.coordId][entry] = arm;
   }
   get isSwitchLocked(): boolean {

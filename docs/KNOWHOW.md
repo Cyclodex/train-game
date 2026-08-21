@@ -114,6 +114,36 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## GAME FEEL — SOUND + FEEDBACK FX (2026-08-21)
+- Sound is synthesised Web Audio, no assets: `audio/cues.ts` (PURE event→cue
+  mapping + `rollingGain`, unit-tested) and `audio/engine.ts` (the singleton
+  `gameAudio`). World cues fire from `game.ts:handleEvents` (delivery/bounce off
+  `cuesForEvents`, "cash" pushed only when the settled fare > 0); click cues fire
+  at the click site (`game.cycleSignal`/`toggleHold` → "signal", `Tile.pickArm` →
+  "switch", only when the arm actually changes).
+- The engine is a NO-OP headless (`typeof window` guard), so `advance()`-driven
+  tests never touch it; browsers refuse pre-gesture audio, so the AudioContext is
+  created on the first pointerdown/keydown (listeners NOT `{once:true}` — iOS can
+  re-suspend a context and resuming takes another gesture). Mute is
+  `gameConfig.soundMuted` (persisted via `setSoundMuted`), read live per call.
+- The ambient rolling bed is a looped-noise gain ramped per FRAME from the count
+  of moving trains (`sim.trainVelocity`), forced to 0 while paused and in
+  `game.stop()` — real-time work lives in `frame()`, never in `advance()`.
+- Feedback FX are model data: `game.fx` (`FeedbackFx[]`) appended in
+  `handleEvents` (delivery pulse / bounce squash / cash chip with the banked
+  amount), pruned in `frame()` by WALL-CLOCK age (`FX_TTL_MS` — CSS animations
+  run in real time, whatever the speed dial says), cleared in `reset()`.
+  `FxLayer.vue` renders it in both PlayView and TestStage; `/test/gamefeel` is
+  the isolation board; `tests/unit/feedbackFx.spec.ts` drives it headlessly.
+- **A CSS animation on `transform` OVERRIDES the element's inline transform** for
+  its whole duration (animations out-cascade the style attribute). Position an
+  animated world overlay via `left`/`top` px and keep every keyframe's transform
+  self-contained (`translate(-50%,-50%) …`) — the first FxLayer cut put the world
+  position in the inline transform and every effect played at the layer origin.
+- The cash chip's flight vector is per-element CSS vars (`--fly-x/--fly-y`) read
+  by the keyframes; PlayView derives the target from the camera
+  (world = cam + screen/zoom), TestStage passes none and the chip drifts up.
+
 ## PINCH-ZOOM / TOUCH INPUT (2026-08-21)
 - Pinch lives in `cameraController.ts`, so all three boards (PlayView, EditorView,
   TestStage) get it once. Two fingers zoom AND drag; the `−/%/+` buttons stay.

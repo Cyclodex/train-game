@@ -6,6 +6,17 @@ import {
 } from "./themes";
 
 const THEME_KEY = "train-game:worldTheme";
+const SOUND_KEY = "train-game:soundMuted";
+
+// The persisted mute state. Absent (the default) means sound ON — audio is the
+// feature, muting it is the opt-out.
+function loadSoundMuted(): boolean {
+  try {
+    return localStorage.getItem(SOUND_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 // The persisted world theme, falling back to the default when storage is
 // unavailable or holds an unknown id.
@@ -69,6 +80,11 @@ export interface GameConfig {
   // the board's drop-shadow framing for a flat neutral ground, so tile geometry
   // (lane markings, gores, kerbs) reads clearly while debugging. Not persisted.
   plainBackdrop: boolean;
+  // Master mute for the game's sound layer (src/audio/). Persisted via
+  // `setSoundMuted`, like the world theme. The audio engine reads this live, so
+  // toggling it silences (or restores) everything at once, including the
+  // ambient rolling loop.
+  soundMuted: boolean;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -92,7 +108,19 @@ export const gameConfig: GameConfig = reactive({
   maxCars: 5, // % of map capacity — a quiet default (few cars on screen)
   worldTheme: loadWorldTheme(),
   plainBackdrop: false,
+  soundMuted: loadSoundMuted(),
 });
+
+// Set + persist the mute state. Views call this from the drawer's 🔊 button.
+export function setSoundMuted(muted: boolean): void {
+  gameConfig.soundMuted = muted;
+  try {
+    if (muted) localStorage.setItem(SOUND_KEY, "1");
+    else localStorage.removeItem(SOUND_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 // Set + persist the world theme. Views call this from the drawer's 🎨 button.
 export function setWorldTheme(theme: WorldTheme): void {

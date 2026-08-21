@@ -109,6 +109,7 @@ import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { faredistance } from "@/levels/test/scenarios/faredistance";
+import { gamefeel } from "@/levels/test/scenarios/gamefeel";
 import { heldby } from "@/levels/test/scenarios/heldby";
 import { buildgap } from "@/levels/test/scenarios/buildgap";
 import { taxyear } from "@/levels/test/scenarios/taxyear";
@@ -272,7 +273,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // The Tycoon economy deep-dives, one dial per board: fare decay by
       // distance, blocked routes, buying track, land prices, the tax year and
       // its bankruptcy fail state.
-      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt] },
+      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, gamefeel, heldby, buildgap, landprices, taxyear, bankrupt] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
