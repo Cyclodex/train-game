@@ -155,12 +155,13 @@ test.describe("Train game", () => {
     // Open the game-mode picker from the start overlay.
     await page.getByRole("button", { name: "Change game mode" }).click();
     await expect(page.locator(".picker-card")).toBeVisible();
-    // The picker shows a card per registered mode; pick Network.
-    await page.getByRole("button", { name: /Network/ }).click();
+    // The picker shows a card per registered mode; pick Tycoon (a mode the
+    // default board can carry — Network/Citizens are disabled there, #114).
+    await page.getByRole("button", { name: /Tycoon/ }).click();
     // The view remounts on the new mode (router-view keyed on the query).
-    await expect.poll(() => page.url()).toContain("mode=network");
+    await expect.poll(() => page.url()).toContain("mode=tycoon");
     await expect(
-      page.locator(".overlay-title", { hasText: "Network" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
   });
 
@@ -168,14 +169,14 @@ test.describe("Train game", () => {
     page,
   }) => {
     // Pick a non-default mode explicitly...
-    await page.goto("/#/play?mode=network");
+    await page.goto("/#/play?mode=tycoon");
     await expect(
-      page.locator(".overlay-title", { hasText: "Network" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
-    // ...then open /play with no mode query: it should reopen Network.
+    // ...then open /play with no mode query: it should reopen Tycoon.
     await page.goto("/#/play");
     await expect(
-      page.locator(".overlay-title", { hasText: "Network" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
   });
 
@@ -190,6 +191,39 @@ test.describe("Train game", () => {
     await expect.poll(() => page.url()).toContain("board=daily");
     await expect(
       page.locator(".overlay-title", { hasText: "Daily Challenge" })
+    ).toBeVisible();
+  });
+
+  test("the picker disables unfit modes and keeps the board (#114)", async ({
+    page,
+  }) => {
+    // objectives is a 3-tile depot lane: no stations, no towns — so Network
+    // and Citizens can't run there, and their cards say why.
+    await page.goto("/#/play?mode=puzzle&board=objectives");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    // Match on the card LABEL: "network" also appears in Citizens' description.
+    const cardLabelled = (label: string) =>
+      page
+        .locator(".mode-card")
+        .filter({ has: page.locator(".mode-card__label", { hasText: label }) });
+    const network = cardLabelled("Network");
+    await expect(network).toBeDisabled();
+    await expect(network).toContainText("Needs stations");
+    await expect(cardLabelled("Citizens")).toBeDisabled();
+    // Switching to a mode that fits keeps the board in the URL.
+    await cardLabelled("Tycoon").click();
+    await expect.poll(() => page.url()).toContain("mode=tycoon");
+    await expect.poll(() => page.url()).toContain("board=objectives");
+  });
+
+  test("an unfit mode×board URL falls back to the board's own mode (#114)", async ({
+    page,
+  }) => {
+    // Network on the station-less objectives lane can never engage; the guard
+    // resolves the board's pinned mode (puzzle) instead of loading a dead game.
+    await page.goto("/#/play?mode=network&board=objectives");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Puzzle / Dispatcher" })
     ).toBeVisible();
   });
 

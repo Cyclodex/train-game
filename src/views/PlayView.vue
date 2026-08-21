@@ -736,13 +736,23 @@
             v-for="m in modes"
             :key="m.id"
             class="mode-card"
-            :class="{ 'mode-card--active': m.id === currentModeId }"
+            :class="{
+              'mode-card--active': m.id === currentModeId,
+              'mode-card--unfit': !!modeFits[m.id],
+            }"
+            :disabled="!!modeFits[m.id]"
             @click="pickMode(m.id)"
           >
             <span class="mode-card__icon">{{ modeIcon(m.id) }}</span>
             <span class="mode-card__label">{{ m.label }}</span>
             <span class="mode-card__desc">{{ m.description }}</span>
-            <span v-if="m.id === currentModeId" class="mode-card__badge"
+            <!-- Why this mode can't run on the CURRENT board (#114): the card
+                 stays visible so the roster reads complete, with the missing
+                 requirement as the reason. -->
+            <span v-if="modeFits[m.id]" class="mode-card__unfit">{{
+              modeFits[m.id]
+            }}</span>
+            <span v-else-if="m.id === currentModeId" class="mode-card__badge"
               >Playing</span
             >
           </button>
@@ -842,6 +852,8 @@ import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default"
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
 import { dailyMode } from "@/modes/daily";
+import { sandboxMode } from "@/modes/sandbox";
+import { boardCapabilities } from "@/modes/compat";
 import { GameMode, ModeSetup } from "@/modes/types";
 import { passengerTargetOf, OVERCROWD_LIMIT } from "@/modes/network";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
@@ -999,12 +1011,40 @@ class PlayView extends Vue {
   // chip) and legacy `?mode=daily` links (old bookmarks, a persisted
   // last-mode) both run today's generated board under the daily ruleset —
   // resolveBoard promotes the board setup() generates, exactly as before.
+  //
+  // The URL guard (#114): a mode the board cannot carry — Network with no
+  // stations, Citizens with no towns — would load a game that can never
+  // engage, silently. Fall back to the board's own mode, then the default,
+  // then Sandbox (which fits anything). Unfit picker cards are disabled, so
+  // this only fires on hand-typed URLs and stale links.
   private mode = (() => {
     const requested = hashParam("mode") ?? loadLastModeId();
     if (hashParam("board") === "daily" || requested === "daily") {
       return dailyMode;
     }
-    return modeById(requested);
+    const mode = modeById(requested);
+    const level = this.board
+      ? this.board.level
+      : this.custom
+        ? this.custom.level
+        : DEFAULT_LEVEL;
+    const trains = this.board
+      ? this.board.trains
+      : this.custom
+        ? this.custom.trains
+        : defaultTrains();
+    const caps = boardCapabilities(level, buildTrainDefs(trains));
+    if (!mode.fits || mode.fits(caps) === null) return mode;
+    const fallbacks = [
+      this.board?.mode ?? (this.board?.modeId ? modeById(this.board.modeId) : null),
+      modeById(null), // the roster default
+    ];
+    for (const candidate of fallbacks) {
+      if (candidate && (!candidate.fits || candidate.fits(caps) === null)) {
+        return candidate;
+      }
+    }
+    return sandboxMode;
   })();
 
   // Resolve which board the view should use. Modes that generate their own board
@@ -1160,10 +1200,24 @@ class PlayView extends Vue {
   closePicker() {
     this.pickerOpen = false;
   }
+  // Which modes fit the CURRENT board, by reason (null = fits). Drives the
+  // picker's disabled cards; recomputed per open via the resolved level/roster.
+  get modeFits(): Record<string, string | null> {
+    const caps = boardCapabilities(this.level, buildTrainDefs(this.trains));
+    const out: Record<string, string | null> = {};
+    for (const m of this.modes) out[m.id] = m.fits?.(caps) ?? null;
+    return out;
+  }
   pickMode(id: string) {
     this.pickerOpen = false;
     if (id === this.currentModeId) return; // already playing this mode
-    this.$router.push({ name: "play", query: { mode: id } });
+    // Keep the board when switching rules over it (#114). Unfit pairs never
+    // get here — their cards are disabled. board=daily is the chip's URL:
+    // picking a mode there means leaving the daily board, so it is dropped.
+    const board = hashParam("board");
+    const query =
+      board && board !== "daily" ? { mode: id, board } : { mode: id };
+    this.$router.push({ name: "play", query });
   }
   // Today's generated board under the daily ruleset (#113): the picker's board
   // chip. The levelId is `daily:<date>`, so "already playing today's" is a
@@ -3495,6 +3549,22 @@ export default toNative(PlayView);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #f0cf72;
+}
+
+// A mode the current board can't carry (#114): still on the grid so the
+// roster reads complete, but visibly inert, with the missing requirement.
+.mode-card--unfit {
+  opacity: 0.55;
+  cursor: not-allowed;
+
+  &:hover {
+    transform: none;
+  }
+}
+.mode-card__unfit {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffb37e;
 }
 
 .event-log {

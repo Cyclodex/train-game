@@ -111,6 +111,12 @@ export interface GameMode {
   createObjective(setup: ModeSetup): ObjectiveTracker;
   createSpawner?(setup: ModeSetup): Spawner;
   hud: HudDescriptor;
+  // Why this mode cannot run on a board — a one-line reason for the picker —
+  // or null when it fits. Judged over the board's DERIVED capabilities
+  // (modes/compat.ts), so nobody maintains per-board mode lists. Omitted →
+  // the mode runs anywhere (Sandbox, and modes that generate their own board
+  // like Daily). See #114.
+  fits?(caps: import("@/modes/compat").BoardCapabilities): string | null;
 }
 
 // The default createObjective for any mode that just runs the tracker over its

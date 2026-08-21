@@ -257,7 +257,11 @@ Key files:
   mode (`?board=daily` = today's generated board under the daily ruleset);
   `time-attack.ts` is a puzzle VARIANT (a board whose trains carry `spawnAtSec`
   gets the spawner + backlog rules from Puzzle itself; `schedule.ts` holds the
-  spawner helpers); `lastMode.ts` persists the last-opened mode.
+  spawner helpers); `lastMode.ts` persists the last-opened mode. `compat.ts`
+  derives a board's capabilities (stations/depots/towns/roster) and each mode's
+  optional `fits(caps)` names the missing requirement — the picker disables
+  unfit cards and PlayView's URL guard falls back rather than loading a game
+  that can never engage. Boards stay multi-mode; nothing pins a board to one.
 - `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
   `src/utils/meadowBackdrop.ts` owns the seeded meadow tree layout, rendered by
   `components/BackdropTrees.vue` as a world overlay ABOVE rails/trains/cars
