@@ -194,10 +194,11 @@ road the player should choose: a **level crossing** (cheap, but every closure
 queues cars) or a **bridge** (expensive, no interaction), with congestion costing
 money.
 
-The counters already exist and are already scored by Crossing Keeper —
-`maxCarWaitSec`, `carsDelivered` on `Counters`. A cheap first step that needs no
-new engine work at all: make a Tycoon **star** read `maxCarWaitSec`, so the fast
-route through town costs you a star. See level 5 of the designed arc.
+The counters already exist and are filled every tick — `maxCarWaitSec`,
+`carsDelivered` on `Counters` — but since Crossing Keeper was retired in #121 no
+mode reads them. A cheap first step that needs no new engine work at all: make a
+Tycoon **star** read `maxCarWaitSec`, so the fast route through town costs you a
+star. See level 5 of the designed arc.
 
 ### 3.8 The eight campaign levels · content, not engine
 

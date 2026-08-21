@@ -64,7 +64,8 @@ a board rendered at its native tile size.
 src/
   sim/        headless simulation: trains, roads, signals, physics, objectives
   tiles/      the tile model — connections, geometry, lanes, validation, procgen
-  modes/      game modes (sandbox, puzzle, daily, time attack, crossing keeper)
+  modes/      game modes (puzzle, tycoon, network, citizens, sandbox — plus the
+              unregistered daily board source and time-attack puzzle variant)
   components/ tile, train, crossing and HUD views
   views/      PlayView, EditorView, TestView/TestStage
   levels/     the default board and the /test scenario registry

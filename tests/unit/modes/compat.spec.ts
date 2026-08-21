@@ -10,11 +10,15 @@ import { SCENARIOS, TestScenario } from "@/levels/test";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { threecities } from "@/levels/test/scenarios/threecities";
-import { DEFAULT_LEVEL } from "@/levels/default";
+import { DEFAULT_LEVEL, defaultTrains } from "@/levels/default";
+import { CAMPAIGN } from "@/campaign";
+import { TrainsDefinition } from "@/types";
 import { TrainDef } from "@/game";
 
-function defsOf(s: TestScenario): TrainDef[] {
-  return Object.values(s.trains).map(t => ({
+// Mirrors PlayView's buildTrainDefs: the same shape boardCapabilities is fed
+// in the app, so a capability derived here is the one the guard would see.
+function defsOfTrains(trains: TrainsDefinition): TrainDef[] {
+  return Object.values(trains).map(t => ({
     id: t.id,
     x: t.x,
     y: t.y,
@@ -22,6 +26,10 @@ function defsOf(s: TestScenario): TrainDef[] {
     wagonIds: (t.wagons ?? []).map(w => w.id),
     spawnAtSec: t.spawnAtSec,
   }));
+}
+
+function defsOf(s: TestScenario): TrainDef[] {
+  return defsOfTrains(s.trains);
 }
 
 describe("boardCapabilities", () => {
@@ -67,12 +75,36 @@ describe("mode fits", () => {
   it("the default board carries the default mode", () => {
     // The URL guard falls back to modeById(null); if the default mode did not
     // fit the default board, a plain /play would bounce to Sandbox.
-    const caps = boardCapabilities(DEFAULT_LEVEL, [
-      { id: "t", x: 0, y: 0, type: "people", wagonIds: [] },
-    ]);
+    //
+    // The REAL roster, not a hand-built stand-in: with a synthetic one-train
+    // array this passed even if defaultTrains() returned nothing — which is the
+    // precise regression it exists to catch, since an empty roster is exactly
+    // what makes Puzzle unfit.
+    const caps = boardCapabilities(DEFAULT_LEVEL, defsOfTrains(defaultTrains()));
+    expect(caps.trains).toBeGreaterThan(0);
     const fallback = modeById(null);
     expect(fallback.fits?.(caps) ?? null).toBeNull();
   });
+});
+
+describe("every campaign level carries the mode it pins", () => {
+  // `campaign.ts` pins its own modeId per level, independently of the
+  // scenario's — PlayView opens `?mode=<modeId>&board=<id>` and ignores
+  // `scenario.modeId`. The registry sweep above never saw those, so a campaign
+  // entry pinned to a mode its board cannot carry would be silently downgraded
+  // by the URL guard (#114): the player clicks "Lake Valley" and gets Puzzle.
+  for (const level of CAMPAIGN) {
+    it(`${level.id} fits ${level.modeId}`, () => {
+      const scenario = SCENARIOS.find(s => s.id === level.id);
+      expect(scenario, `campaign level "${level.id}" is not a registered scenario`).toBeDefined();
+      const mode = modeById(level.modeId);
+      expect(mode.id, `campaign level "${level.id}" pins an unregistered mode`).toBe(
+        level.modeId
+      );
+      const caps = boardCapabilities(scenario!.level, defsOf(scenario!));
+      expect(mode.fits?.(caps) ?? null).toBeNull();
+    });
+  }
 });
 
 describe("every pinned scenario fits its own mode", () => {

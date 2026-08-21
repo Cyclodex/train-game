@@ -16,7 +16,14 @@ import { CitizenTuning } from "@/sim/citizens";
 export interface ModeControls {
   switches: boolean; // flip junction switches
   signalHolds: boolean; // hold/release + force-green signals
-  crossingGate: boolean; // manual level-crossing gate (Crossing Keeper, later)
+  // Manual level-crossing gate. FALSE IN EVERY SHIPPED MODE since Crossing
+  // Keeper was retired from the picker (#121), and nothing in the view reads it
+  // any more — the worst-car-wait readout it used to gate was removed with the
+  // mode. The flag (and the `maxCarWaitSec`/`carsDelivered`/`crossingIncidents`
+  // counters in `sim/objectives.ts`, which the road frame still fills every
+  // tick) stays for the road-scoring mode that revives them; see
+  // `docs/road-future-improvements.md` §1.
+  crossingGate: boolean;
   build: boolean; // edit the board (Sandbox)
   // Trains wait in their depot until the player sends them (Tycoon). This is the
   // ONLY switch that turns the sim's `waitForDispatch` on — leave it false and

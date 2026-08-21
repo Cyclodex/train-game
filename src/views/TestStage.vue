@@ -34,14 +34,18 @@
         />
         <span class="stage-cars-val">{{ config.maxCars === 0 ? "off" : config.maxCars + "%" }}</span>
       </label>
-      <span class="stage-deliveries">
-        Delivered {{ delivered }} / {{ totalTrains }}
-      </span>
       <!-- The mode's live scoreboard (#115): the stage auto-starts its run and
            shows no blocking overlays, so a scenario that demonstrates a MODE
-           carries its objective here — timer, star pips, outcome. Every piece
-           is gated by the mode's own HUD descriptor, so free-play demos
-           (Sandbox, Citizens) show none of it. -->
+           carries its objective here — deliveries, timer, star pips, outcome.
+           Every piece is gated by the mode's own HUD descriptor, so free-play
+           demos (Sandbox, Citizens) show none of it. The delivery card obeys
+           the same gate as the rest: Network sets `deliveries: false,
+           passengers: true` to REPLACE it, and ungated it showed a meaningless
+           "Delivered 0 / 1" (network asks for 0 deliveries and its trains never
+           park) right beside the passenger count it was meant to replace. -->
+      <span v-if="hud.deliveries" class="stage-deliveries">
+        Delivered {{ delivered }} / {{ totalTrains }}
+      </span>
       <span v-if="hud.passengers" class="stage-passengers" title="Passengers carried">
         🧍 {{ passengersCarried }}
       </span>
@@ -56,8 +60,20 @@
           >★</span
         >
       </span>
-      <span v-if="phase === 'won'" class="stage-phase stage-phase--won">✔ Won</span>
-      <span v-else-if="phase === 'lost'" class="stage-phase stage-phase--lost" :title="lostReason">
+      <!-- The outcome chip belongs to the end-overlay's job — announcing that
+           the run is over — so it obeys `hud.endOverlay` like every other
+           piece. Today the two modes that declare `endOverlay: false` are the
+           endless ones and can never terminate, so this changes nothing on
+           screen; ungated it was a hole in the stated invariant, waiting for
+           the first finite mode that wants no result screen. -->
+      <span v-if="hud.endOverlay && phase === 'won'" class="stage-phase stage-phase--won">
+        ✔ Won
+      </span>
+      <span
+        v-else-if="hud.endOverlay && phase === 'lost'"
+        class="stage-phase stage-phase--lost"
+        :title="lostReason"
+      >
         ✖ Lost
       </span>
       <span v-if="money.enabled" class="stage-money" title="Balance">

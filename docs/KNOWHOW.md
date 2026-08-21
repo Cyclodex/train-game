@@ -2270,6 +2270,66 @@ Four rules, each measured on that board, each of which failed silently:
   `generateTerrain` allows itself — the same reason applies to an authored board:
   the build tool has to have somewhere to go.
 
+## THE MODE ROSTER (#113/#114/#115 + review round, 2026-08-21)
+- `MODES` (`modes/index.ts`) is the PICKER, not the mode list: five pillars
+  (puzzle, tycoon, network, citizens, sandbox). Two rulesets ship UNREGISTERED —
+  **Daily** is a BOARD SOURCE (`?board=daily`, the picker's chip) and **Time
+  Attack** is a PUZZLE VARIANT any roster with a `spawnAtSec` triggers. Neither
+  is reachable through `modeById`; both are imported directly where needed.
+- `?board=daily` WINS over an explicit `?mode=` (`?mode=sandbox&board=daily`
+  runs the daily ruleset). The daily board IS the daily ruleset.
+- BOARD CAPABILITIES ARE DERIVED, never stored per board:
+  `boardCapabilities(level, trains)` (`modes/compat.ts`) counts stations, depots,
+  bus stops, homes, workplaces off the tiles + roster; a mode declares
+  `fits(caps)` and the picker greys unfit cards while the URL guard downgrades
+  unfit pairs. So a board built in the editor is judged exactly like an authored
+  one, and no author maintains a per-board mode list.
+- The derivation is NOT free (walks every tile, floods the towns, rolls a
+  per-plot RNG). Test `mode.fits` for EXISTENCE first and short-circuit — Sandbox
+  and every no-`fits` mount must not pay for it.
+- THE PICKER MUST JUDGE THE BOARD THE PICK LANDS ON, not the one on screen.
+  `pickMode` carries `?board=` across, EXCEPT `daily`, which it drops (picking a
+  ruleset there means leaving today's board) — so on the daily board fitness is
+  judged against `custom ?? DEFAULT_LEVEL`. Judged against the daily blob it
+  LIED: generated boards nearly always have a town, so Citizens showed enabled
+  and the click landed on the town-less default and downgraded to Puzzle.
+- PERSIST THE REQUESTED MODE, NOT THE RESOLVED ONE (`saveLastModeId` in
+  PlayView's `mounted`). Saving the guard's fallback erases the preference: play
+  Network on a station board, open plain `/play` once, and Network never reopens.
+- RUSH CAP ≥ THE BOARD'S OWN BACKLOG. `objectives.ts` seeds `active` from
+  `initialActiveTrains` and fails on the FIRST `observe()` once it exceeds
+  `fail.maxActiveTrains` — so `Math.max(MAX_ACTIVE_TRAINS, initialActive + 1)`,
+  or a board with 5 unscheduled trains plus one scheduled arrival is lost at t=0.
+  Since #113 nobody opts into this ruleset; a `spawnAtSec` anywhere triggers it.
+- `campaign.ts` pins its OWN `modeId` per level, independent of the scenario's
+  (PlayView ignores `scenario.modeId`). `compat.spec.ts` sweeps CAMPAIGN as well
+  as SCENARIOS, so a mismatched entry fails CI instead of silently downgrading.
+- `crossingGate` (`ModeControls`) is DECLARED BUT UNREAD since Crossing Keeper
+  was retired (#121): every mode sets it false and the worst-car-wait HUD it
+  gated is gone. `maxCarWaitSec`/`carsDelivered`/`crossingIncidents` are still
+  filled every tick and read by NOTHING — no mode scores the road layer.
+
+## THE /test MODE GALLERY (#115, 2026-08-21)
+- `challenges/modes` is ONE DEMO PER RULESET, each actually running it (six:
+  `daily`, `objectives`→puzzle, `dispatch`→tycoon, `networkmode`, `threecities`
+  →citizens, `timeattack`). That is MORE than the picker roster — the two
+  unregistered rulesets bracket the four objective-carrying pillars. Sandbox
+  needs no card: it is the stage's default, so a card would demo the absence of
+  rules. `scenarioCoverage.spec.ts` pins BOTH halves — no mode twice AND every
+  registered non-Sandbox mode present (one half alone let a new mode ship
+  card-less and stay green).
+- `TestStage` renders the mode's SCOREBOARD on the control strip (there are no
+  overlays at /test and the stage auto-starts), and EVERY piece is gated by the
+  mode's `HudDescriptor` — deliveries included. Network sets
+  `deliveries:false, passengers:true` to REPLACE the delivery card; ungated it
+  showed a meaningless `Delivered 0 / 1` beside the passenger count.
+- THE DAILY SCENARIO PINS A DATE, NOT A SEED (`dailyModeFor("2026-06-15")`, and
+  the same in `daily.spec.ts`). Pinning the date exercises the whole
+  date→seed→board→colours pipeline; pinning a seed would skip the half that
+  actually varies. Only the "resolves the date at setup time" case runs `today`.
+- `createGame` takes the VIEW's colours and ignores the ones `setup()` returns,
+  so a scenario whose mode pins colours must repeat them in `scenario.colors`.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.

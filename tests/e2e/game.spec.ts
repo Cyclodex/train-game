@@ -1,4 +1,16 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page, Locator } from "@playwright/test";
+
+// A mode card in the picker, matched on its LABEL element rather than on the
+// button's accessible name. The accessible name is label + description + unfit
+// reason all run together, so a bare /Network/ also matches Citizens' "Build the
+// network they will actually use" — a strict-mode violation the day someone
+// capitalises a word in a description. Anchor on `.mode-card__label` and the
+// match is exactly the card it names.
+function modeCard(page: Page, label: string): Locator {
+  return page
+    .locator(".mode-card")
+    .filter({ has: page.locator(".mode-card__label", { hasText: label }) });
+}
 
 test.describe("Train game", () => {
   test("boots, renders the level and runs trains without console errors", async ({
@@ -157,7 +169,7 @@ test.describe("Train game", () => {
     await expect(page.locator(".picker-card")).toBeVisible();
     // The picker shows a card per registered mode; pick Tycoon (a mode the
     // default board can carry — Network/Citizens are disabled there, #114).
-    await page.getByRole("button", { name: /Tycoon/ }).click();
+    await modeCard(page, "Tycoon").click();
     // The view remounts on the new mode (router-view keyed on the query).
     await expect.poll(() => page.url()).toContain("mode=tycoon");
     await expect(
@@ -178,6 +190,43 @@ test.describe("Train game", () => {
     await expect(
       page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
+  });
+
+  test("the URL guard's fallback does not erase the remembered mode", async ({
+    page,
+  }) => {
+    // Network fits the station board...
+    await page.goto("/#/play?mode=network&board=networkmode");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Network" })
+    ).toBeVisible();
+    // ...a plain /play lands on the station-less default, where the guard has
+    // to downgrade to Puzzle. That downgrade must not become the PREFERENCE.
+    await page.goto("/#/play");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Puzzle" })
+    ).toBeVisible();
+    // Back to a board that carries Network, with no ?mode=: the remembered
+    // mode is still Network, so it reopens.
+    await page.goto("/#/play?board=networkmode");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Network" })
+    ).toBeVisible();
+  });
+
+  test("on the daily board the picker judges the board a pick LANDS on", async ({
+    page,
+  }) => {
+    // pickMode DROPS ?board=daily (picking a ruleset there means leaving
+    // today's board), so the navigation lands on the default board — which has
+    // no towns and no stations. Judged against the daily blob instead, Citizens
+    // showed enabled on most days and the click silently downgraded to Puzzle.
+    await page.goto("/#/play?board=daily");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    await expect(modeCard(page, "Citizens")).toBeDisabled();
+    await expect(modeCard(page, "Network")).toBeDisabled();
+    // Puzzle and Tycoon do fit the default board, so they stay clickable.
+    await expect(modeCard(page, "Tycoon")).toBeEnabled();
   });
 
   test("the picker's Today's-challenge chip opens the daily board (#113)", async ({
@@ -201,17 +250,12 @@ test.describe("Train game", () => {
     // and Citizens can't run there, and their cards say why.
     await page.goto("/#/play?mode=puzzle&board=objectives");
     await page.getByRole("button", { name: "Change game mode" }).click();
-    // Match on the card LABEL: "network" also appears in Citizens' description.
-    const cardLabelled = (label: string) =>
-      page
-        .locator(".mode-card")
-        .filter({ has: page.locator(".mode-card__label", { hasText: label }) });
-    const network = cardLabelled("Network");
+    const network = modeCard(page, "Network");
     await expect(network).toBeDisabled();
     await expect(network).toContainText("Needs stations");
-    await expect(cardLabelled("Citizens")).toBeDisabled();
+    await expect(modeCard(page, "Citizens")).toBeDisabled();
     // Switching to a mode that fits keeps the board in the URL.
-    await cardLabelled("Tycoon").click();
+    await modeCard(page, "Tycoon").click();
     await expect.poll(() => page.url()).toContain("mode=tycoon");
     await expect.poll(() => page.url()).toContain("board=objectives");
   });
