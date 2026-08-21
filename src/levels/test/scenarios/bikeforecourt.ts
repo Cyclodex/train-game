@@ -18,9 +18,10 @@ import { deriveWorkplaceBikeRacks } from "@/tiles/workplaceBikeRacks";
 // traffic is bike-heavy and the stands keep a workday-ish dwell, so the rack
 // FILLS and stays full — the 🚲 chip goes red — while later riders pass the
 // works with nowhere to lean. That gap is deliberate (six stands against a
-// workforce), and it is what task 3's wild parking will make visible on the
-// pavement. The occasional car takes a staff bay, so the two ranks read side
-// by side: cars lying along the kerb, bikes nosed into their hoops.
+// workforce), and `/test/bikeoverflow` is what it looks like once wild parking
+// makes it visible on the pavement. The occasional car takes a staff bay, so
+// the two ranks read side by side: cars lying along the kerb, bikes nosed
+// into their hoops.
 //
 // Design: docs/superpowers/specs/2026-08-21-bike-destination-parking-design.md
 const street = (): TileCell => ({

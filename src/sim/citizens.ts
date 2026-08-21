@@ -206,6 +206,12 @@ export interface Trip {
   // leaves with them), alighting (walk to the rack, not toward the door) and
   // the end of that walk (saddle up and ride, never queue again).
   bikeReturn: boolean;
+  // This bike set off KNOWING every stand in reach was taken (the park-asking
+  // dispatch was refused, the ride went ahead anyway). On arrival the bike is
+  // wild-parked instead of racked, and the search seconds are charged — see
+  // the arrival branch in `advanceTrip`. A trip that lost its stand MID-ride
+  // reaches the same fate through `wantedSpace` instead of this flag.
+  wildPark?: boolean;
 }
 
 /** Why a mode is not on offer for a particular journey. */
@@ -329,6 +335,13 @@ export interface Citizen {
     tripId: string; // the road sim's trip (which is also the bike's id)
     at: string; // plot id (plain bike) or station id (bike-and-ride)
     tileId: string; // the road tile the rack is on
+    // LEFT LEANING, not racked. Every stand in reach was taken, so the bike
+    // stands loose at the destination's frontage — no rack stand held, no
+    // road-sim vehicle either (that was retired at the address): the record
+    // IS the bike until its owner comes back for it. The renderer draws
+    // these on the pavement, which is the whole point — a full rack has to
+    // LOOK like a full rack from across the board.
+    wild?: boolean;
   } | null;
   // Consecutive days spent miserable — the emigration trigger.
   unhappyDays: number;
@@ -435,10 +448,20 @@ export interface CitizenTuning {
   // car's radius (PARK_SEARCH_TILES = 6, road.ts), because half of why the
   // bike wins the short hops is that it stops AT the destination: a stand two
   // streets away spends that edge on foot. Past this, the rider does what
-  // riders do — locks it to the nearest thing at the door instead (today the
-  // invisible fallback in `startTrip`; the destination-parking design's task 3
-  // turns that into visible wild parking).
+  // riders do — leaves it leaning at the door instead: the WILD PARK, the
+  // `startTrip` fallback the destination-parking design's task 3 made visible.
   bikeParkTiles: number;
+  // What arriving with every stand taken costs: the ride past the full rack,
+  // the look down the side street, and then leaning the bike against whatever
+  // is nearest. The bike's `parkSearchSec`, deliberately smaller — a bike can
+  // be leant on anything, a car cannot. Charged to the JOURNEY when the bike
+  // wild-parks, which is where it belongs by canon: the seconds land in the
+  // trip's own score and therefore in the rider's mood. That IS the
+  // "reputation" cost of a works with no bike parking — no standing stat, and
+  // the player's lever is the rack tool. It rises mildly with the clutter
+  // already leaning there (`wildSearchSec`), so the tenth bike pays more than
+  // the first — a gate drowning in bikes is slower to leave one at.
+  bikeSearchSec: number;
   // DOOR TO KERB, in tiles, paid once at each end of a JOURNEY.
   //
   // A plot-to-plot straight line is not a journey. The real one goes down the
@@ -529,6 +552,10 @@ export const DEFAULT_TUNING: CitizenTuning = {
   homeParkTiles: 2,
   // The stand at the gate, or the one round the corner — nothing further.
   bikeParkTiles: 2,
+  // Well under the car's 24: leaning a bike is quicker than circling a block,
+  // but 15s on a 2-4 tile journey is still a fifth of the trip — noticeable in
+  // the score, which is the point.
+  bikeSearchSec: 15,
   walkAccessTiles: 2.5,
   walkMaxTiles: 6,
   walkImpatience: 0.5,
@@ -548,6 +575,15 @@ export const DEFAULT_TUNING: CitizenTuning = {
     retired: 0.15,
   },
 };
+
+// The crowd surcharge on a wild park (`wildSearchSec`): each bike already
+// leaning at the frontage adds a couple of seconds to the search, capped so a
+// gate drowning in bikes reads "slow" and never "impossible" — slow, never
+// strand, the ladder's whole rule. At the cap the search is 15+10=25s, on the
+// order of the car's `parkSearchSec` (24s) — which is right: by then the rider
+// is threading a forecourt as congested as any full car park.
+const WILD_CROWD_SEC_EACH = 2;
+const WILD_CROWD_CAP = 5;
 
 // The rail world, as the citizen sim is allowed to touch it. Omitted → transit
 // and park & ride are simply not available, which is exactly right for a
@@ -679,6 +715,12 @@ export interface CitizenStats {
   // other vehicle. No at-home twin, because the shed is free by design and a
   // bike at home is simply not recorded at all.
   bikesParked: number;
+  // ...and how many of THOSE are wild-parked — leaning at a frontage because
+  // every stand in reach was taken. A subset of `bikesParked`. The number a
+  // player acts on with the rack tool: zero means the racks are coping, and a
+  // rising count is the same fact the pavement clutter shows, as a figure a
+  // headless run can read. Per-tile detail is `wildBikes()`.
+  bikesWild: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -715,6 +757,13 @@ export interface CitizenSim {
    * they have no journey to price.
    */
   quoteFor(citizenId: string, fromId?: string, toId?: string): ModeQuote[] | null;
+  /**
+   * Every wild-parked bike on the board: whose it is, the plot (or station) it
+   * was left FOR, and the road tile it leans at. The single source both the
+   * renderer (the pavement clutter) and the tests read — derived straight from
+   * the citizens' own records, so it cannot drift from the model.
+   */
+  wildBikes(): { citizenId: string; at: string; tileId: string }[];
   stats(): CitizenStats;
   // Sim seconds elapsed, and the day/hour derived from it.
   now(): number;
@@ -1257,18 +1306,32 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
 
     // BIKE. The missing middle: rides the ROAD network (same one-component rule
     // and the same detour factor as the car — a bike does not fly), pays the
-    // same door-to-kerb access as every mode, and pays NO parking penalty in
-    // the quote — the stand is at the door or the bike locks to the nearest
-    // thing there, which is half of why it wins the short hops. (The dispatch
-    // really does rack it now, `bikeParkTiles`; task 3 of the destination-
-    // parking design prices the search when every stand is taken.)
+    // same door-to-kerb access as every mode, and normally pays NO parking
+    // penalty in the quote — the stand is at the door, which is half of why it
+    // wins the short hops.
+    //
+    // ...UNLESS the destination's frontage already has bikes leaning wild at
+    // it, which is the one thing a rider can see before setting off: wild
+    // bikes at the gate mean the rack is full, and the quote prices the search
+    // they are about to pay (`wildSearchSec`, the same figure the arrival
+    // charges). Deliberately CONSERVATIVE — evidence only, never speculation:
+    // a board whose racks are coping quotes exactly as before, so the bike
+    // keeps eating walk-or-drive share and never transit share (bicycle spec
+    // §6, pinned in citizenBikes.spec.ts). The FIRST rider to find the rack
+    // full pays unquoted, and that gap between estimate and stopwatch is the
+    // mood mechanic working as designed.
     // The gate is DISTANCE, and it is per-rider: `bikeRangeOf` turns their own
     // keenness into how far they will ride at all — most people a few tiles,
     // the sporty tail across the board. No slog curve past a patience point
     // like the walk: the range IS the patience, already personal.
     const bikeRange = bikeRangeOf(c.profile.bikeAffinity);
+    const destFrontage = plotOf(toId)?.roadTile ?? null;
+    const wildAtDest = destFrontage ? wildBikesAt(destFrontage) : 0;
     const bikeSec =
-      (d * tuning.roadDetour) / tuning.bikeSpeed + tuning.bikeSaddleSec + accessSec;
+      (d * tuning.roadDetour) / tuning.bikeSpeed +
+      tuning.bikeSaddleSec +
+      accessSec +
+      (wildAtDest > 0 ? wildSearchSec(wildAtDest) : 0);
     // THE BIKE MUST BE AT HAND. Ownership says a bike exists; `parkedBike`
     // says where it actually stands, and somebody whose bike is racked across
     // town cannot ride it from here however keen they are. One bike per person
@@ -1635,14 +1698,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         //    working day like the commuter's bay. Going HOME it asks for
         //    nothing: the shed is free by design.
         trip.carTrip = driving.request(origin, target, parkAtEnd, bikeMode ? "bike" : "car");
-        // THE NO-RACK FALLBACK — bikes only, and deliberately so. A car with
-        // nowhere to park does not set off (the road sim refuses the dispatch
-        // and the citizen drives on a timer); a bike with every stand taken
-        // still goes, and locks at the door exactly as it did before stands
-        // were held. The destination-parking design's task 3 replaces this
-        // invisible fallback with a visible wild park.
+        // THE WILD-PARK FALLBACK — bikes only, and deliberately so. A car
+        // with nowhere to park does not set off (the road sim refuses the
+        // dispatch and the citizen drives on a timer); a bike with every
+        // stand taken still goes — nobody stays home because the rack is
+        // full — and on arrival it is left LEANING at the destination's
+        // frontage instead of racked: `wildPark` marks the trip, and the
+        // arrival branch in `advanceTrip` writes the `wild` record and
+        // charges the search seconds. Visible, costed, never stranding —
+        // the bottom rung of the same ladder the car's informal kerb is.
         if (bikeMode && parkAtEnd && trip.carTrip === null) {
           trip.carTrip = driving.request(origin, target, undefined, "bike");
+          if (trip.carTrip !== null) trip.wildPark = true;
         }
       }
     }
@@ -1714,6 +1781,30 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     if (!driving) return;
     if (toTile && driving.resume(mine.tripId, toTile)) return;
     driving.abandon(mine.tripId);
+  }
+
+  // How many bikes already lean wild at this road tile. Derived from the
+  // citizens' own records on every ask, never cached: a count with its own
+  // ledger would need clearing at every one of the half-dozen places a record
+  // dies, and the first missed one leaks a phantom bike for the rest of the
+  // run. The scan is O(people) and the askers are rare (a quote's bike row,
+  // an arrival) — the honest version is also the cheap one.
+  function wildBikesAt(tileId: string): number {
+    let n = 0;
+    for (const p of people.values()) {
+      if (p.parkedBike?.wild && p.parkedBike.tileId === tileId) n += 1;
+    }
+    return n;
+  }
+
+  // What leaning a bike here costs, in journey seconds, given how many already
+  // lean at this frontage: the flat search (`bikeSearchSec`), plus a few
+  // seconds per bike already in the way, capped — clutter slows the search
+  // mildly, it never turns a lean into a second commute. Deterministic, a
+  // pure function of the count: the same question gives the same answer on
+  // the next frame, per the no-RNG-at-read-time canon.
+  function wildSearchSec(countAlready: number): number {
+    return tuning.bikeSearchSec + Math.min(countAlready, WILD_CROWD_CAP) * WILD_CROWD_SEC_EACH;
   }
 
   function remember(c: Citizen, o: TripOutcome): void {
@@ -1867,16 +1958,69 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
             return;
           }
           if (status === "arrived") {
+            // Read the verdict BEFORE the release: `release` clears the road
+            // sim's trip record, and `wantedSpace` on a cleared trip answers
+            // false — asked in the old order, the search charge below could
+            // never fire through the real wiring (mocks answered regardless,
+            // which is how the ordering hid).
+            const wanted = driving?.wantedSpace(carTrip) ?? false;
             driving?.release(carTrip);
             t.carTrip = null;
             // No bay was to be had anywhere near, so the car was retired at the
             // address — the driver "found something down the road". They still
             // pay for the hunt, because that is what circling a full street IS,
             // and it is the number a player can act on by building a car park.
-            if (t.mode === "car" && driving?.wantedSpace(carTrip)) {
+            if (t.mode === "car" && wanted) {
               t.leg = "parking";
               t.legRemaining = tuning.parkSearchSec;
               return;
+            }
+            // A BIKE WITH NOWHERE TO RACK — dispatched knowing it (`wildPark`,
+            // the startTrip fallback) or having lost its stand mid-ride
+            // (`wanted`: it went looking and arrived empty-handed). It is not
+            // deleted and its rider is not stranded: the bike is left LEANING
+            // at the frontage — a `wild` record on the citizen, no rack stand
+            // held, no road-sim vehicle (that was retired at the address just
+            // now; the renderer draws the record) — and the search seconds are
+            // charged as a parking leg, priced UP by the clutter already
+            // there. Those seconds land in the journey's score and so in the
+            // rider's mood: the reputation cost of a works with no bike
+            // parking, on the one channel canon allows.
+            //
+            // NEVER GOING HOME — the shed exemption, and it is load-bearing,
+            // not belt-and-braces: `wantedSpace` is per-TRIP in the road sim
+            // and survives the evening resume, so the morning's "I looked for
+            // a stand" is still true when the same vehicle arrives at its
+            // owner's door — without this guard every bike commute home ended
+            // wild-parked on its own doorstep (`parkedBike` pointing home,
+            // which the record's contract forbids).
+            if (
+              (t.mode === "bike" || t.mode === "bikeAndRide") &&
+              (t.wildPark || wanted) &&
+              t.purpose !== "home"
+            ) {
+              const tileId =
+                t.mode === "bike"
+                  ? (plotOf(t.to)?.roadTile ?? null)
+                  : (bikeAndRideByStation.get(t.station ?? "")?.roadTile ?? null);
+              if (tileId) {
+                t.leg = "parking";
+                t.legRemaining = wildSearchSec(wildBikesAt(tileId));
+                c.parkedBike = {
+                  tripId: carTrip,
+                  // Where they will come back for it — same rule as a racked
+                  // bike: the plot a plain ride was for, or the station whose
+                  // (full) rack a bike-and-ride aimed at, which is what the
+                  // reversed return quote looks up.
+                  at: t.mode === "bike" ? t.to : (t.station ?? t.to),
+                  tileId,
+                  wild: true,
+                };
+                return;
+              }
+              // No frontage tile to lean it at (the plot lost its road under a
+              // live edit): nothing to record, nothing to draw — fall through
+              // and arrive, exactly the old invisible retirement.
             }
             arriveFromDrive(c, t);
             return;
@@ -2474,6 +2618,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let parkedNow = 0;
     let atHomeNow = 0;
     let bikesParkedNow = 0;
+    let bikesWildNow = 0;
     for (const c of people.values()) {
       population += 1;
       byStage[c.stage] += 1;
@@ -2489,7 +2634,10 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         parkedNow += 1;
         if (c.parkedCar.at === c.home) atHomeNow += 1;
       }
-      if (c.parkedBike) bikesParkedNow += 1;
+      if (c.parkedBike) {
+        bikesParkedNow += 1;
+        if (c.parkedBike.wild) bikesWildNow += 1;
+      }
     }
     const total = TRAVEL_MODES.reduce((n, m) => n + modeTotals[m], 0);
     const share = zeroModes();
@@ -2507,6 +2655,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       carsParked: parkedNow,
       carsAtHome: atHomeNow,
       bikesParked: bikesParkedNow,
+      bikesWild: bikesWildNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,
@@ -2538,6 +2687,15 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     citizensOf(plotId: string) {
       const out: Citizen[] = [];
       for (const c of people.values()) if (c.home === plotId || c.work === plotId) out.push(c);
+      return out;
+    },
+    wildBikes() {
+      const out: { citizenId: string; at: string; tileId: string }[] = [];
+      for (const c of people.values()) {
+        if (c.parkedBike?.wild) {
+          out.push({ citizenId: c.id, at: c.parkedBike.at, tileId: c.parkedBike.tileId });
+        }
+      }
       return out;
     },
     quoteFor(citizenId: string, fromId?: string, toId?: string) {

@@ -3,6 +3,7 @@ import { itSlow } from "./support/tier";
 import { createGame } from "@/game";
 import { citizensMode } from "@/modes/citizens";
 import { citizenbike } from "@/levels/test/scenarios/citizenbike";
+import { bikeoverflow } from "@/levels/test/scenarios/bikeoverflow";
 import { buildCitizenWorld } from "@/tiles/cities";
 import {
   createCitizenSim,
@@ -429,23 +430,35 @@ describe("the return half — the bike persists at the far end", () => {
     }
   });
 
-  it("the no-rack fallback: park refused at dispatch, the bike still goes and locks at the door", () => {
+  it("the wild park: park refused at dispatch, the bike still goes and is left leaning at the frontage", () => {
     const world = buildCitizenWorld(citizenbike.level, 7);
     const { port, calls } = mockDriving({ parkRefused: true });
     const sim = createCitizenSim({ world, seed: 7, driving: port });
 
-    let everParked = false;
+    // plot id -> its frontage road tile, from the same world the sim reads.
+    const frontage = new Map(world.plots.map(p => [p.id, p.roadTile]));
+    let wildRecordRight = false;
+    let peakWildStats = 0;
     let completedByBike = false;
     for (let t = 0; t < 130; t += 0.2) {
       sim.step(0.2);
       for (const c of sim.citizens()) {
-        if (c.parkedBike) everParked = true;
+        // The record is the bike now: wild-flagged, standing at the DESTINATION
+        // plot's own frontage road tile, findable through the headless
+        // observable and the stats count alike.
+        if (c.parkedBike?.wild && c.parkedBike.at !== c.home) {
+          if (c.parkedBike.tileId === frontage.get(c.parkedBike.at)) wildRecordRight = true;
+          expect(
+            sim.wildBikes().some(w => w.citizenId === c.id && w.tileId === c.parkedBike?.tileId)
+          ).toBe(true);
+        }
         if (c.recent.some(o => o.mode === "bike" && o.failed === null)) completedByBike = true;
       }
+      peakWildStats = Math.max(peakWildStats, sim.stats().bikesWild);
     }
     // The fallback pair, findable in the call log: a park-asking bike dispatch
-    // answered null, immediately retried WITHOUT the park ask — today's
-    // lock-at-the-door behaviour (task 3 replaces it with wild parking).
+    // answered null, immediately retried WITHOUT the park ask — the ride still
+    // happens; only the arrival changed.
     const i = calls.requests.findIndex(r => r.kind === "bike" && r.park);
     expect(i).toBeGreaterThanOrEqual(0);
     const retry = calls.requests[i + 1];
@@ -453,9 +466,178 @@ describe("the return half — the bike persists at the far end", () => {
     expect(retry?.park).toBeNull();
     expect(retry?.from).toBe(calls.requests[i].from);
     expect(retry?.to).toBe(calls.requests[i].to);
-    // No stand was ever held — and the trips still completed.
-    expect(everParked).toBe(false);
+    // Bikes WERE left leaning — visibly, at the right tile — and the trips
+    // still completed: slow, never strand.
+    expect(wildRecordRight).toBe(true);
+    expect(peakWildStats).toBeGreaterThan(0);
     expect(completedByBike).toBe(true);
+  });
+
+  it("the search seconds are charged to the journey, and rise with the clutter already there", () => {
+    const world = buildCitizenWorld(citizenbike.level, 7);
+    const { port } = mockDriving({ parkRefused: true });
+    const sim = createCitizenSim({ world, seed: 7, driving: port });
+
+    // Watch every bike trip's parking leg open: a wild park charges at least
+    // the flat search, and later parks at an already-cluttered frontage charge
+    // MORE — the crowd surcharge, derived from the standing count.
+    const charges: { tileId: string; wildBefore: number; sec: number }[] = [];
+    const seen = new Set<string>(); // citizen ids already counted this trip
+    for (let t = 0; t < 130; t += 0.2) {
+      const wildNow = new Map<string, number>();
+      for (const w of sim.wildBikes()) {
+        wildNow.set(w.tileId, (wildNow.get(w.tileId) ?? 0) + 1);
+      }
+      sim.step(0.2);
+      for (const c of sim.citizens()) {
+        const trip = c.trip;
+        if (trip?.mode !== "bike" || trip.leg !== "parking") continue;
+        const key = `${c.id}|${trip.startedAt}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const tileId = c.parkedBike?.tileId;
+        if (!tileId || !c.parkedBike?.wild) continue;
+        charges.push({
+          tileId,
+          wildBefore: wildNow.get(tileId) ?? 0,
+          sec: trip.legRemaining,
+        });
+      }
+    }
+    expect(charges.length).toBeGreaterThan(1);
+    for (const ch of charges) {
+      // Flat search at minimum, plus the crowd surcharge for AT LEAST the
+      // bikes counted standing before the tick (another may have leant one in
+      // the same tick, which only raises the true count), capped above.
+      expect(ch.sec).toBeGreaterThanOrEqual(
+        DEFAULT_TUNING.bikeSearchSec + Math.min(ch.wildBefore, 5) * 2 - 1e-9
+      );
+      expect(ch.sec).toBeLessThanOrEqual(DEFAULT_TUNING.bikeSearchSec + 10);
+    }
+    // The rise is real on this board: some charge strictly more than the flat
+    // search because bikes were already leaning there.
+    expect(charges.some(ch => ch.wildBefore > 0 && ch.sec > DEFAULT_TUNING.bikeSearchSec)).toBe(
+      true
+    );
+  });
+
+  it("the return leg mounts from the wild tile: a fresh bike from the frontage, the record cleared", () => {
+    const world = buildCitizenWorld(citizenbike.level, 7);
+    const { port, calls } = mockDriving({ parkRefused: true });
+    const sim = createCitizenSim({ world, seed: 7, driving: port });
+
+    // citizen -> the wild record they held (tile + stale trip id).
+    const wild = new Map<string, { tripId: string; tileId: string }>();
+    let rodeHomeFromWildTile = false;
+    let homeRecordGone = false;
+    for (let t = 0; t < 130; t += 0.2) {
+      sim.step(0.2);
+      for (const c of sim.citizens()) {
+        if (c.parkedBike?.wild && !wild.has(c.id)) {
+          wild.set(c.id, { tripId: c.parkedBike.tripId, tileId: c.parkedBike.tileId });
+        }
+        const mine = wild.get(c.id);
+        if (!mine) continue;
+        const trip = c.trip;
+        // The ride home is a FRESH dispatch from the very tile the bike leans
+        // on (the wild vehicle was retired on arrival, so there is nothing to
+        // resume) — never a bike materialising anywhere else.
+        if (
+          trip?.mode === "bike" &&
+          trip.to === c.home &&
+          trip.carTrip &&
+          trip.carTrip !== mine.tripId &&
+          calls.requests.some(
+            r => r.kind === "bike" && !r.park && r.from === mine.tileId && r.to !== mine.tileId
+          )
+        ) {
+          rodeHomeFromWildTile = true;
+        }
+        if (rodeHomeFromWildTile && c.at === c.home && !c.trip && !c.parkedBike) {
+          homeRecordGone = true;
+        }
+      }
+    }
+    expect(rodeHomeFromWildTile).toBe(true);
+    // Home again with the record cleared — the leaning bike is off the board
+    // the moment its owner takes it.
+    expect(homeRecordGone).toBe(true);
+    // ...and nothing ever resumed the retired wild vehicle: resume was tried
+    // and refused (the mock only resumes parked trips), the fallback carried on.
+    expect(calls.resumes.some(r => [...wild.values()].some(w => w.tripId === r.id))).toBe(false);
+  });
+
+  it("the quote prices the search only on the evidence of standing wild bikes — conservative by design", () => {
+    const world = buildCitizenWorld(citizenbike.level, 7);
+    const sim = createCitizenSim({
+      world,
+      seed: 7,
+      driving: mockDriving({ parkRefused: true }).port,
+    });
+    // The SAME town, untouched: seeded identically, so every citizen and every
+    // profile matches — the honest "before" for any quote, with zero wild
+    // bikes standing anywhere.
+    const fresh = createCitizenSim({ world, seed: 7 });
+
+    // Let the town wild-park at its workplaces...
+    for (let t = 0; t < 60; t += 0.2) sim.step(0.2);
+    const wildByTile = new Map<string, number>();
+    for (const w of sim.wildBikes()) {
+      wildByTile.set(w.tileId, (wildByTile.get(w.tileId) ?? 0) + 1);
+    }
+    expect(wildByTile.size).toBeGreaterThan(0);
+
+    // ...then price a ride TO a cluttered frontage for someone whose bike is
+    // at hand, against the identical untouched town.
+    let compared = 0;
+    for (const plot of world.plots) {
+      if (!plot.roadTile || !wildByTile.has(plot.roadTile)) continue;
+      const count = wildByTile.get(plot.roadTile)!;
+      for (const c of sim.citizens()) {
+        if (!c.profile.bikeOwner || c.parkedBike || c.home === plot.id) continue;
+        const after = (sim.quoteFor(c.id, c.home, plot.id) ?? []).find(q => q.mode === "bike");
+        const before = (fresh.quoteFor(c.id, c.home, plot.id) ?? []).find(
+          q => q.mode === "bike"
+        );
+        if (!after || !before || after.unavailable || before.unavailable) continue;
+        // The surcharge is exactly the figure an arrival would be charged:
+        // bikeSearchSec plus the capped crowd seconds for the standing count.
+        expect(after.estimateSec - before.estimateSec).toBeCloseTo(
+          DEFAULT_TUNING.bikeSearchSec + Math.min(count, 5) * 2,
+          5
+        );
+        compared += 1;
+        if (compared >= 3) break;
+      }
+      if (compared >= 3) break;
+    }
+    expect(compared).toBeGreaterThan(0);
+
+    // Conservative: a frontage with NO wild bikes quotes exactly as the
+    // untouched town does — the bike keeps its no-parking-cost edge until the
+    // clutter is standing evidence.
+    let cleanCompared = 0;
+    for (const plot of world.plots) {
+      if (!plot.roadTile || wildByTile.has(plot.roadTile)) continue;
+      for (const c of sim.citizens()) {
+        if (!c.profile.bikeOwner || c.parkedBike || c.home === plot.id) continue;
+        const after = (sim.quoteFor(c.id, c.home, plot.id) ?? []).find(q => q.mode === "bike");
+        const before = (fresh.quoteFor(c.id, c.home, plot.id) ?? []).find(
+          q => q.mode === "bike"
+        );
+        if (!after || !before || after.unavailable || before.unavailable) continue;
+        expect(after.estimateSec).toBeCloseTo(before.estimateSec, 5);
+        cleanCompared += 1;
+        break;
+      }
+      if (cleanCompared > 0) break;
+    }
+    expect(cleanCompared).toBeGreaterThan(0);
+  });
+
+  it("bikeSearchSec is its own dial — the bike's search, well under the car's", () => {
+    expect(DEFAULT_TUNING.bikeSearchSec).toBe(15);
+    expect(DEFAULT_TUNING.bikeSearchSec).toBeLessThan(DEFAULT_TUNING.parkSearchSec);
   });
 
   it("bike & ride: the racked bike is held all day and the return trip rides it home", () => {
@@ -512,6 +694,38 @@ describe("the return half — the bike persists at the far end", () => {
     // The resume was the racked bike, released after the ride home ended.
     const heldIds = new Set(held.values());
     expect(calls.resumes.some(r => heldIds.has(r.id))).toBe(true);
+  });
+
+  itSlow("the bikeoverflow board: the mini-rack saturates and wild bikes lean at the gate, posed for drawing", async () => {
+    // The scenario end to end, exactly as /test/bikeoverflow runs it: the
+    // citizens mode's own setup, the real road sim underneath, ambient riders
+    // competing for the six derived stands. The wild bikes must show up BOTH
+    // as model records (stats/wildBikes — what the tests read) and as posed
+    // renderer bodies (game.wildBikes — what the board draws), because the two
+    // are one source and this is the pin that keeps them so.
+    const game = createGame(
+      bikeoverflow.level,
+      [],
+      200,
+      bikeoverflow.mode!,
+      1,
+      undefined,
+      bikeoverflow.traffic,
+      bikeoverflow.id
+    );
+    let peakWild = 0;
+    let posedMatchesModel = false;
+    run(game, 360, () => {
+      const bodies = game.wildBikes.length;
+      if (bodies > peakWild) peakWild = bodies;
+      if (bodies > 0 && bodies === game.citizenStats.bikesWild) {
+        posedMatchesModel = true;
+      }
+    });
+    // Several riders found every stand taken and left the bike leaning — the
+    // clutter the board exists to show.
+    expect(peakWild).toBeGreaterThanOrEqual(3);
+    expect(posedMatchesModel).toBe(true);
   });
 
   itSlow("on the real road sim, the whole circle closes: rack stand claimed, held, resumed, retired", async () => {

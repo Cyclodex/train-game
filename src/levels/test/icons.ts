@@ -90,6 +90,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   carroute: "🗺️",
   // Streets — parking
   bikeforecourt: "🚲",
+  bikeoverflow: "🚳",
   // Streets — curves
   carcircle: "🔄",
   carscurve: "🛤️",

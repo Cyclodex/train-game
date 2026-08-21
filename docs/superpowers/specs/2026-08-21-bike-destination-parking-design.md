@@ -1,7 +1,12 @@
 # Bike destination parking — where the bicycle stands all day
 
 Date: 2026-08-21
-Status: approved plan, implementation starting (three tasks, this branch)
+Status: BUILT — all three tasks shipped on this branch. Task 1 (the return
+half: `Citizen.parkedBike`, the held stand, the reversed B+R quote) and task 2
+(`tiles/workplaceBikeRacks.ts`, `/test/bikeforecourt`) 2026-08-21/22; task 3
+(wild parking: `parkedBike.wild`, `bikeSearchSec` charged to the journey, the
+evidence-only quote surcharge, leaning-bike rendering, `/test/bikeoverflow`)
+2026-08-22. Pins in `tests/unit/citizenBikes.spec.ts`.
 
 ## The question
 
