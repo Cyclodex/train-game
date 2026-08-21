@@ -308,6 +308,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     — an optional `TileCell.profile` preset (boulevard / shared-surface / tree
     strip) biasing the resolver per tile, seams still reconciling both sides
     (see the design doc's "authoring seam" section).
+19. **Build-dock IA redesign (Transport-Fever-grade)** — SHIPPED 2026-08-21,
+    including the mobile pass (collapsed drawer, dock-aware camera fit,
+    scrollable item rows). The editor dock is now four categories (Rail / Road /
+    Terrain / Bulldozer) with tabs separating the verbs, parking under Road,
+    traffic-light modes as pick-then-apply items, a layer-scoped bulldozer, one
+    options slot with a live road cross-section, one-line hints with ? help,
+    and 1–4 shortcuts. Spec (+ what deviated):
+    `docs/superpowers/specs/2026-08-21-build-ui-redesign-design.md`. Remaining
+    follow-up from its §8: PlayView's in-play build toggle adopting BuildDock.
 
 ## Recently landed (kept for context)
 

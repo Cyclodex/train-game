@@ -1,7 +1,13 @@
 import { markRaw, reactive, ref, Ref } from "vue";
 import { Position, ActiveIntersection, Coordinates } from "@/types";
 import { Level, partnersOf, armExit, defaultArmFor, parseCoordId, samePair, PortPair, Port } from "@/tiles/model";
-import { stationDemandOf, parkAndRideTargets } from "@/tiles/catchment";
+import {
+  stationDemandOf,
+  busStopDemandOf,
+  busStopTiles,
+  parkAndRideTargets,
+  walkLinksOf,
+} from "@/tiles/catchment";
 import { stationNames } from "@/tiles/stationNames";
 import { planRailRoute } from "@/sim/railRouter";
 import { addConnection, isBlankCell, removeConnection } from "@/tiles/editOps";
@@ -15,16 +21,19 @@ import {
   TrainState,
   BlockReason,
 } from "@/sim/simulation";
+import { Rider, StationDemand, TransitLayer, createTransit } from "@/sim/transit";
 import { createRoadSim, roadEntries, TrafficConfig, CarSample } from "@/sim/road";
-import { buildCitizenWorld } from "@/tiles/cities";
+import { buildCitizenWorld, PlotKind } from "@/tiles/cities";
 import { createPedestrianSim, PedestrianSim, WalkerSample } from "@/sim/pedestrians";
 import {
   DEFAULT_TUNING,
   Citizen,
   CityState,
   CitizenSim,
+  LifeStage,
   TravelMode,
   TripOutcome,
+  TripPurpose,
   createCitizenSim,
 } from "@/sim/citizens";
 import { bankFor, facilityOf, rowFor } from "@/tiles/parking";
@@ -108,7 +117,36 @@ export interface LineView {
   name: string;
   stops: string[];
   trains: string[];
+  // The buses running it. A line does not care what serves it (#90), so the
+  // panel counts both and "nothing runs this" means neither.
+  buses: string[];
   colour: string;
+  // WHAT CAN RUN IT, from the stops on it: platforms make a rail line, kerbs a
+  // bus line, and an empty line has no kind yet — the first stop decides.
+  //
+  // A line must never mix the two. No train can call at a kerb and no bus can
+  // drive to a platform, so a mixed line is one its own vehicle silently fails
+  // to run (`requestTrip` from a platform returns null, for ever). The
+  // intermodal journey is TWO lines meeting at a walk link (D5), never one line
+  // pretending to be both — so this is the model's word on it, and the panel
+  // and the board both read it rather than each deciding for themselves.
+  kind: "rail" | "road" | null;
+}
+
+// A bus as the panel sees it.
+export interface BusView {
+  id: string;
+  lineId?: string;
+  passengers: number;
+  // Its seats, so the panel can read "3/12" rather than a bare count.
+  seats: number;
+  // The ROAD CAR it is driving right now, when it is on the board. A bus has two
+  // ids — its own in the panel, its car's on the tarmac — and this is the join
+  // between them: the load gauge is keyed by the car, because that is what the
+  // renderer holds.
+  carId?: string;
+  // Where it is standing, when it is on the board at all.
+  tileId?: string;
 }
 
 // Strong, well-separated hues that read against ballast and grass alike. Not
@@ -233,7 +271,13 @@ function roadCarCapacity(level: Level, tileSize: number): number {
 // `${carId}#${segmentIndex}` so Vue reuses DOM nodes per box; `widthPx` sizes
 // the sprite to the segment's length and `part` selects its style.
 export interface RoadCar {
+  // The drawn UNIT's id, `<vehicleId>#<unit>` — a semi is two of these.
   id: string;
+  // The vehicle the unit belongs to, which is what the sim knows it as. The
+  // load gauge hangs off this: it belongs to the bus, not to a segment of it.
+  vehicleId: string;
+  // Which unit of that vehicle this is; 0 is the leading one.
+  unit: number;
   x: number;
   y: number;
   angle: number;
@@ -436,6 +480,14 @@ export interface Game {
   stationQueues: Record<string, number>;
   // tileId -> the destination each of them asked for, in queue order.
   stationWaiting: Record<string, string[]>;
+  // Aligned with `stationWaiting`: the colour of the LINE each waiting person
+  // boards next, "" when no service can carry them. A crowd is then read as
+  // "which line is short of vehicles", not as an anonymous pile of dots.
+  stationWaitingColours: Record<string, string[]>;
+  // HOW FULL EACH VEHICLE IS, keyed by the id the board draws it under: a
+  // train's own id, a bus's road-car id. `colour` is its line's, so a full bar
+  // names the service that needs another vehicle.
+  vehicleLoads: Record<string, { aboard: number; seats: number; colour: string }>;
   // tileId -> people per minute an UNSERVED platform would carry. Zero as soon
   // as a line reaches it. The "build here" hint on a board with no citizen
   // layer to be unhappy at you; never part of a score.
@@ -507,6 +559,9 @@ export interface Game {
   lineOverlay: {
     lineId: string | null;
     trainId: string | null;
+    // What can run the line being drawn (LineView.kind), so a tile can tell
+    // whether it is a stop this line could still take.
+    kind: "rail" | "road" | null;
     colour: string;
     order: Record<string, number>;
     path: Record<string, [Port, Port][]>;
@@ -523,6 +578,18 @@ export interface Game {
   deleteLine(lineId: string): boolean;
   // Put a train onto an existing line, or take it off with null.
   assignTrain(trainId: string, lineId: string | null): boolean;
+  // BUSES (#90). Planned exactly like trains: draw a line, buy a bus, assign
+  // it. Bought INTO service — with a line it starts running at once, without
+  // one it waits. There is no garage: a bus lives on its line and appears at
+  // its first stop.
+  buyBus(lineId?: string): string;
+  assignBus(busId: string, lineId: string | null): boolean;
+  removeBus(busId: string): boolean;
+  // Every bus, mirrored for the panel.
+  busServices: BusView[];
+  // Every bus stop on the board. The panel offers a bus only where one could
+  // actually appear.
+  busStopTiles: string[];
   // Road-traffic cars, sampled to world positions each frame for rendering.
   roadCars: RoadCar[];
   // Road-junction tile -> car id currently holding it (debug overlay). Derived
@@ -699,6 +766,9 @@ export interface CitizenHud {
   clock: string; // "07:35" — the citizens' day, not the calendar's year
   day: number;
   modeShare: Record<TravelMode, number>;
+  // Who this town is made of. `travelling` says how busy the board is right now;
+  // this says WHY it is busy at this hour rather than some other one.
+  byStage: Record<LifeStage, number>;
 }
 
 // THE INSPECTOR — one person's day, and the choice behind it.
@@ -726,11 +796,18 @@ export interface PersonCard {
   work: string | null;
   mood: number;
   carOwner: boolean;
-  // Their fixed daily times, on the in-game clock. Rolled once when they move
-  // in and never re-rolled — the schedule is a clock, not a planner.
-  leavesAt: string;
-  returnsAt: string;
-  shopsAt: string;
+  /** What stage of life they are at, and that stage in words for the panel. */
+  stage: LifeStage;
+  stageLabel: string;
+  /**
+   * Their day, in order, on the in-game clock. Rolled once when they move in and
+   * never re-rolled — a schedule is a clock, not a planner.
+   *
+   * A LIST rather than the three fixed fields it replaces, because a day is no
+   * longer three fixed things: a tradesperson has six, a retired resident four,
+   * and a child's afternoon happens every other day.
+   */
+  schedule: ScheduleLine[];
   // Right now.
   at: string;
   doing: string;
@@ -750,6 +827,16 @@ export interface PersonCard {
    * journey that caused it.
    */
   recent: TripNote[];
+}
+
+/** One line of somebody's day, as the panel prints it. */
+export interface ScheduleLine {
+  /** "07:35" — when the window opens, on the in-game clock. */
+  at: string;
+  /** "leaves for work", "drives out to a job". */
+  what: string;
+  /** False for the every-other-day entries, which the panel marks as such. */
+  daily: boolean;
 }
 
 /** One remembered journey, as a line the panel prints. */
@@ -823,7 +910,7 @@ export function boardDuration(sec: number): string {
 export interface PlotCard {
   id: string;
   city: string;
-  kind: "home" | "work" | "shop";
+  kind: PlotKind;
   density: number;
   people: number;
   capacity: number;
@@ -939,6 +1026,9 @@ export function createGame(
   // from this, so a dot's colour says which platform its person asked for —
   // a queue nobody serves is then visible as one colour piling up.
   const stationWaiting = reactive({}) as Record<string, string[]>;
+  // Aligned with `stationWaiting`: the colour of the LINE each of those people
+  // will board next, or "" when nothing can carry them. See updateStationQueues.
+  const stationWaitingColours = reactive({}) as Record<string, string[]>;
   // trainId -> the stops it serves, mirrored from the sim so the service panel
   // renders reactively. The SIM owns the line; this is a view copy, refreshed
   // whenever a line changes (it changes on player action, not per frame).
@@ -966,10 +1056,17 @@ export function createGame(
   // getter that read them directly never re-ran and the panel froze on whatever it
   // showed first. Mirrored per frame like every other live readout.
   const trainNextStops = reactive({}) as Record<string, string>;
+  // How full each vehicle is — see updateVehicleLoads.
+  const vehicleLoads = reactive({}) as Record<
+    string,
+    { aboard: number; seats: number; colour: string }
+  >;
   const retiringTrains = reactive([]) as string[];
 
-  // What each platform is CALLED. Level data, so computed once.
+  // What each stop is CALLED — platforms and kerbs alike. Level data, so
+  // computed once.
   const stationLabels = stationNames(level);
+
 
   // THE LINE OVERLAY: while a line is being edited the board shows it the way
   // Transport Fever does — a big call-order number on each stop and the route
@@ -984,6 +1081,10 @@ export function createGame(
     // The train whose panel row opened it, when one did. Only used to keep the
     // row highlighted; the drawing itself never needs it.
     trainId: null as string | null,
+    // The line's kind (LineView.kind), so a tile can tell whether it is a stop
+    // this line could still take. Without it every platform invites a click
+    // while a BUS line is open — a hollow "+" on something the click refuses.
+    kind: null as "rail" | "road" | null,
     colour: "",
     // stationTileId -> its 1-based place in the line.
     order: {} as Record<string, number>,
@@ -996,6 +1097,7 @@ export function createGame(
   function clearLineOverlay(): void {
     lineOverlay.lineId = null;
     lineOverlay.trainId = null;
+    lineOverlay.kind = null;
     lineOverlay.colour = "";
     for (const k of Object.keys(lineOverlay.order)) delete lineOverlay.order[k];
     for (const k of Object.keys(lineOverlay.path)) delete lineOverlay.path[k];
@@ -1012,6 +1114,7 @@ export function createGame(
     lineOverlay.trainId = what.trainId ?? null;
     lineOverlay.colour = lines.find(l => l.id === lineId)?.colour ?? "#f0b429";
     const stops = sim.lines().find(l => l.id === lineId)?.stops ?? [];
+    lineOverlay.kind = lineKindOf(stops);
     stops.forEach((id, i) => {
       // A stop listed twice keeps its FIRST place — the badge says when the
       // train first calls there, which is what a reader wants.
@@ -1123,7 +1226,74 @@ export function createGame(
   // later by the spawner at its spawnAtSec.
   const isScheduled = (def: TrainDef) => (def.spawnAtSec ?? 0) > 0;
 
+  // Every place a passenger can WAIT: rail platforms and bus stops alike. Since
+  // #90 a bus is planned like a train, so a stop is a node of the same network —
+  // which is why this is one list and not two, and why the transit layer below
+  // is handed it rather than reading tiles itself.
+  const busStops = busStopTiles(level);
+  const transitStops = new Set<string>([
+    ...Object.keys(level).filter(id => level[id]?.role === "station"),
+    ...busStops,
+  ]);
+
+  // The kind of vehicle a stop takes — and therefore a line's kind, which is
+  // the kind of the stops on it. See LineView.kind for why a line must not mix.
+  function stopKindOf(tileId: string): "rail" | "road" | null {
+    if (level[tileId]?.role === "station") return "rail";
+    return busStops.includes(tileId) ? "road" : null;
+  }
+  function lineKindOf(stops: readonly string[]): "rail" | "road" | null {
+    for (const s of stops) {
+      const kind = stopKindOf(s);
+      if (kind) return kind;
+    }
+    return null;
+  }
+
+  // Who turns up where. DERIVED from the ground within walking reach
+  // (tiles/catchment.ts): a town nearby means faster arrivals and a fuller
+  // platform; a lonely halt sees a trickle. The sim only executes the schedule
+  // it is handed — it stays terrain-blind. Snapshotted at construction, so a
+  // stop built mid-run queues nobody until reset.
+  //
+  // Under the citizen layer the SPAWNER is off — the people waiting are actual
+  // citizens with homes, jobs and a stopwatch running, and a second synthetic
+  // source would double-count the crowd. But the entry is still supplied,
+  // because `max` is also what CAPS the queue: without one every stop falls
+  // back to the hard cap (16), which a morning peak in a town of forty exceeds
+  // — and a commuter who cannot even JOIN the queue stands there until they
+  // give up, which reads as a broken railway when the railway is fine. An
+  // infinite interval spawns nobody, so it is a cap and nothing else.
+  function demandFor(id: string): StationDemand {
+    if (citizenSetup) {
+      return {
+        intervalSec: Number.POSITIVE_INFINITY,
+        max: CITIZEN_PLATFORM_CAP,
+        initial: 0,
+      };
+    }
+    // A kerb serves the houses around it; a station gathers a district. Giving
+    // a stop a platform's numbers makes the bus the main line and the railway
+    // an afterthought, which is backwards for a board where it is the feeder.
+    return level[id]?.role === "station"
+      ? stationDemandOf(level, id)
+      : busStopDemandOf(level, id);
+  }
+
+  // Rebuilt with the sims, never before them: a Retry has to give back the same
+  // empty platforms and the same lines the board opened with, and a layer that
+  // survived the rebuild would hand the new sim the old crowd.
+  let transit!: TransitLayer;
+
   function buildSims() {
+    transit = createTransit({
+      demand: Object.fromEntries([...transitStops].map(id => [id, demandFor(id)])),
+      isStop: (tileId: string) => transitStops.has(tileId),
+      // The intermodal edge: a bus stop and the platform beside it are one
+      // interchange, joined by a short walk (D5). Without it a kerb and a
+      // platform are separate islands however close they are drawn.
+      walkLinks: walkLinksOf(level),
+    });
     sim = createSimulation({
       level,
       depotColors,
@@ -1150,24 +1320,11 @@ export function createGame(
       // until they give up, which reads as a broken railway when the railway is
       // fine. An infinite interval spawns nobody (`advanceDemand`'s loop never
       // runs), so this is a cap and nothing else.
-      stationDemand: citizenSetup
-        ? Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [
-                id,
-                {
-                  intervalSec: Number.POSITIVE_INFINITY,
-                  max: CITIZEN_PLATFORM_CAP,
-                  initial: 0,
-                },
-              ])
-          )
-        : Object.fromEntries(
-            Object.entries(level)
-              .filter(([, cell]) => cell.role === "station")
-              .map(([id]) => [id, stationDemandOf(level, id)])
-          ),
+      // THE SHARED TRANSIT LAYER (sim/transit.ts). Made here, not inside the
+      // sim, because the ROAD sim needs the same one: a bus is planned like a
+      // train and a bus-then-train journey is ONE journey, so it must run
+      // against one set of queues and one line registry (#90).
+      transit,
       // Off for every mode but Tycoon — see ModeControls.dispatch. With it off
       // the sim builds trains in state "running" exactly as it always has.
       waitForDispatch: mode.controls.dispatch,
@@ -1276,6 +1433,7 @@ export function createGame(
     clock: "00:00",
     day: 0,
     modeShare: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+    byStage: { child: 0, worker: 0, shiftWorker: 0, tradesperson: 0, retired: 0 },
   }) as CitizenHud;
 
   function rebuildCitizens() {
@@ -1391,6 +1549,7 @@ export function createGame(
     citizenStats.clock = s.clock;
     citizenStats.day = s.day;
     citizenStats.modeShare = s.modeShare;
+    citizenStats.byStage = s.byStage;
   }
 
   // --- the inspector ----------------------------------------------------------
@@ -1420,18 +1579,24 @@ export function createGame(
     return FIRST_NAMES[(h >>> 0) % FIRST_NAMES.length];
   }
 
+  // Where a trip is HEADING, in the words the panel uses for it. One record, so
+  // "walking to school" and "driving to school" cannot drift apart.
+  const DESTINATION_TEXT: Record<TripPurpose, string> = {
+    home: "home",
+    work: "to work",
+    shop: "to the shops",
+    school: "to school",
+    leisure: "to the café",
+    callout: "out to a job",
+  };
+
   function doingOf(c: Citizen): string {
     if (!c.trip) {
       if (c.at === c.home) return "at home";
       if (c.work && c.at === c.work) return "at work";
       return "out";
     }
-    const dest =
-      c.trip.purpose === "home"
-        ? "home"
-        : c.trip.purpose === "work"
-          ? "to work"
-          : "to the shops";
+    const dest = DESTINATION_TEXT[c.trip.purpose] ?? "out";
     // On a transit trip the first timed leg is the APPROACH to the platform, not
     // the journey. Calling it "walking to work" while the chosen mode is the
     // train reads as the panel contradicting itself.
@@ -1452,6 +1617,44 @@ export function createGame(
     }
   }
 
+  // What each stage is, in two or three words. The panel says who somebody is
+  // before it says where they are going, because the routine below only makes
+  // sense once you know which life it belongs to.
+  const STAGE_LABEL: Record<LifeStage, string> = {
+    child: "School child",
+    worker: "Day job",
+    shiftWorker: "Shift work",
+    tradesperson: "Trade, on the road",
+    retired: "Retired",
+  };
+
+  // One routine entry, in words. Phrased from the person's side ("sets off for
+  // school") rather than the model's ("activity: school"), and it reads the
+  // ACTUAL routine — so a stage whose day is retuned needs nothing changed here.
+  const ACTIVITY_TEXT: Record<TripPurpose, string> = {
+    home: "heads home",
+    work: "leaves for work",
+    shop: "runs an errand",
+    school: "sets off for school",
+    leisure: "goes to the café",
+    callout: "drives out to a job",
+  };
+
+  function scheduleOf(c: Citizen): ScheduleLine[] {
+    return c.routine.map(a => ({
+      at: clockOf(a.hour),
+      // A trip to work that does NOT start at home is a tradesperson coming back
+      // between call-outs. "Leaves for work" at half eleven and again at four
+      // reads as a person with three jobs; what they are doing is returning to
+      // the yard, and the routine already says so — the activity has no `from`.
+      what:
+        a.target === "work" && a.from !== "home"
+          ? "back to the yard"
+          : (ACTIVITY_TEXT[a.target] ?? "goes out"),
+      daily: a.everyNDays <= 1,
+    }));
+  }
+
   function personCard(c: Citizen): PersonCard {
     const now = citizenSim?.now() ?? 0;
     return {
@@ -1461,9 +1664,9 @@ export function createGame(
       work: c.work,
       mood: c.mood,
       carOwner: c.profile.carOwner,
-      leavesAt: clockOf(c.outHour),
-      returnsAt: clockOf(c.backHour),
-      shopsAt: clockOf(c.shopHour),
+      stage: c.stage,
+      stageLabel: STAGE_LABEL[c.stage],
+      schedule: scheduleOf(c),
       at: c.at,
       doing: doingOf(c),
       travellingTo: c.trip?.to ?? null,
@@ -1475,10 +1678,13 @@ export function createGame(
     };
   }
 
-  const PURPOSE_TEXT: Record<string, string> = {
+  const PURPOSE_TEXT: Record<TripPurpose, string> = {
     work: "The trip to work",
     home: "The trip home",
     shop: "The errand",
+    school: "The school run",
+    leisure: "The trip to the café",
+    callout: "The call-out",
   };
 
   // One remembered journey, in words. The two numbers ARE the verdict — how
@@ -1690,6 +1896,345 @@ export function createGame(
     }
     prevStalls = cur;
   }
+
+  // --- BUS SERVICES (#90) ------------------------------------------------
+  //
+  // A bus is planned exactly like a train: you draw a LINE, you buy a bus, you
+  // assign it. What differs is only how it gets from one stop to the next —
+  // rails and interlocking there, lanes and junctions here — so the movement is
+  // the road sim's (`requestTrip` / `retarget`, which plan a real route through
+  // real traffic) and the passengers are the shared transit layer's, the same
+  // one the trains use.
+  //
+  // This runs in `advance()`, the headless world step. Not the render frame:
+  // model logic in an animation callback is invisible to a hidden tab and to
+  // every test.
+  const BUS_SEATS = 12;
+  const BUS_DWELL_SEC = 4;
+  // How long a bus may fail to get back on the road before the log says so. A
+  // busy street clears in a tick or two; a stop it can never be driven to does
+  // not, and that is the one worth a line.
+  const STRANDED_REPORT_SEC = 10;
+
+  interface BusService {
+    id: string;
+    lineId?: string;
+    // Which stop of its line it is heading for.
+    stopIndex: number;
+    // The road sim's id for the vehicle, while one is on the board.
+    carId?: string;
+    // Seconds of dwell left at the stop it is standing at.
+    dwellLeft: number;
+    manifest: Rider[];
+    // The last stop it worked. Where its riders are set down if it is withdrawn:
+    // a bus that leaves the board must not take its passengers with it.
+    lastStopId?: string;
+    // Doors closed, waiting to pull away. The dwell is OVER — so the exchange
+    // must not run again — but the road sim has not accepted the onward leg yet.
+    departing?: boolean;
+    // The stop it has failed to plan a route to, so the failure is reported once
+    // rather than every tick it retries, and how long the failure has lasted —
+    // a busy street clears in a tick or two, an unreachable stop never does.
+    strandedFor?: string;
+    strandedSec?: number;
+    // The stop it has just turned round at. It worked that stop before the
+    // turn, so the respawn there must not work it again.
+    turnedRoundAt?: string;
+  }
+  const buses: BusService[] = [];
+  let busSeq = 0;
+  // The panel's copy. The sim objects are markRaw-adjacent plain state, so a
+  // getter reading `buses` directly would never re-run — the same trap that
+  // froze the train panel's next-stop pip. Refreshed per world step.
+  const busServices = reactive([]) as BusView[];
+
+  function syncBuses(): void {
+    busServices.splice(0, busServices.length);
+    for (const b of buses) {
+      busServices.push({
+        id: b.id,
+        ...(b.lineId ? { lineId: b.lineId } : {}),
+        passengers: b.manifest.length,
+        seats: BUS_SEATS,
+        ...(b.carId ? { carId: b.carId } : {}),
+        ...(b.carId ? { tileId: roadSim.carTile(b.carId) } : {}),
+      });
+    }
+  }
+
+  // HOW FULL EVERY VEHICLE IS, trains and buses in one book, keyed by the id the
+  // BOARD draws it under — a train's own id, a bus's road-car id. The load bar
+  // rides the vehicle, so the renderer needs to look up by what it is holding.
+  //
+  // Refreshed from the world step rather than the render frame: a hidden tab
+  // must not freeze it, and a headless test has to be able to read it (KNOWHOW →
+  // the hidden-tab trap).
+  function updateVehicleLoads(): void {
+    const seen = new Set<string>();
+    const put = (id: string, aboard: number, seats: number, colour: string) => {
+      seen.add(id);
+      const cur = vehicleLoads[id];
+      if (!cur || cur.aboard !== aboard || cur.seats !== seats || cur.colour !== colour) {
+        vehicleLoads[id] = { aboard, seats, colour };
+      }
+    };
+    const colourOfLine = (lineId: string | undefined) =>
+      (lineId && lines.find(l => l.id === lineId)?.colour) || "";
+    for (const id of Object.keys(sim.trains)) {
+      const seats = sim.trainCapacity(id);
+      // A freight train has no seats and gets no bar: an empty gauge on
+      // something that was never going to carry anybody is noise.
+      if (seats <= 0) continue;
+      put(id, sim.trainPassengers(id), seats, colourOfLine(sim.lineOf(id)));
+    }
+    for (const b of buses) {
+      if (!b.carId) continue;
+      put(b.carId, b.manifest.length, BUS_SEATS, colourOfLine(b.lineId));
+    }
+    for (const id of Object.keys(vehicleLoads)) {
+      if (!seen.has(id)) delete vehicleLoads[id];
+    }
+  }
+
+  function busStopsOf(bus: BusService): string[] {
+    return (bus.lineId ? transit.stopsOfLine(bus.lineId) : undefined) ?? [];
+  }
+
+  function advanceBuses(dt: number): void {
+    for (const bus of buses) {
+      const stops = busStopsOf(bus);
+      // An unassigned bus is not a service: it sits out of the way rather than
+      // wandering, because a bus with no line has nowhere to be.
+      if (stops.length < 2) {
+        if (bus.carId) {
+          roadSim.despawn(bus.carId);
+          bus.carId = undefined;
+        }
+        continue;
+      }
+      // Not on the board yet: it starts at the line's first stop and sets off
+      // for the second. `requestTrip` spawns it there, so no separate garage
+      // machinery is needed — the line IS where a bus lives.
+      if (!bus.carId || !roadSim.hasCar(bus.carId)) {
+        const from = stops[bus.stopIndex % stops.length];
+        const to = stops[(bus.stopIndex + 1) % stops.length];
+        const id = roadSim.requestTrip(from, to, "bus", { service: true });
+        if (!id) {
+          // Usually the street is simply busy and the next tick does it, which
+          // is why this is not reported at once. But a stop the line can NEVER
+          // be driven to (a road edited away under it, a line redrawn through
+          // somewhere with no road at all) fails here for ever, and a bus
+          // silently off the board with people aboard is not something to leave
+          // the player guessing at. Reported once it has lasted long enough to
+          // mean something, and once per stranded stop — the retry runs every
+          // tick, and a line in the log every tick is noise, not a report.
+          bus.strandedSec = (bus.strandedSec ?? 0) + dt;
+          if (bus.strandedSec > STRANDED_REPORT_SEC && bus.strandedFor !== to) {
+            bus.strandedFor = to;
+            logBusHold(bus, to, from);
+          }
+          continue;
+        }
+        bus.carId = id;
+        bus.strandedFor = undefined;
+        bus.strandedSec = 0;
+        bus.departing = false;
+        // It is standing at the first stop with its doors open, so it works it
+        // before pulling away. Without this the origin stop is served only on
+        // the second lap — and on a two-stop line that is every other call.
+        // Unless it has just TURNED ROUND here: it worked this stop a moment
+        // ago, and a second exchange would board the same queue twice.
+        if (bus.turnedRoundAt !== from) callAt(bus, from);
+        bus.turnedRoundAt = undefined;
+        bus.stopIndex = (bus.stopIndex + 1) % stops.length;
+        continue;
+      }
+      if (roadSim.tripStatus(bus.carId) !== "arrived") {
+        bus.departing = false;
+        continue;
+      }
+
+      // Standing at a stop. Dwell first — the doors take time and a crowded
+      // kerb takes longer, exactly as a platform does.
+      if (!bus.departing) {
+        if (bus.dwellLeft <= 0) {
+          const at = roadSim.carTile(bus.carId);
+          if (!at) continue;
+          const r = callAt(bus, at);
+          bus.dwellLeft = BUS_DWELL_SEC + r.boarded * 0.4;
+          continue;
+        }
+        bus.dwellLeft -= dt;
+        if (bus.dwellLeft > 0) continue;
+        // Doors closed. From here on it is LEAVING, whatever the road says — so
+        // a failed departure retries the route and never re-opens the doors.
+        bus.departing = true;
+      }
+
+      // On to the next stop. Calling anywhere on the line moves the cursor PAST
+      // that stop, the same rule a train follows. Recomputing it from where the
+      // bus stands makes this idempotent, which a retry depends on.
+      const at = roadSim.carTile(bus.carId);
+      const here = at ? stops.indexOf(at) : -1;
+      if (here >= 0) bus.stopIndex = (here + 1) % stops.length;
+      const next = stops[bus.stopIndex];
+      // `retarget` REFUSES rather than teleporting the bus, and that answer has
+      // to be acted on: the trip stays "arrived" with the dwell run out, so a
+      // bus that ignored it re-ran the exchange at the same kerb every
+      // BUS_DWELL_SEC — boarding the queue again, logging a call that never
+      // happened.
+      if (roadSim.retarget(bus.carId, next)) {
+        bus.strandedFor = undefined;
+        bus.departing = false;
+        continue;
+      }
+
+      // NO WAY ONWARD FROM THE LANE IT IS STANDING IN — a terminus. The router
+      // plans lane by lane and there is no U-turn, so a line that ends in a
+      // dead end leaves the bus facing a wall.
+      //
+      // It TURNS ROUND AT THE STOP: taken off the board here and put back on
+      // here, facing whichever way the next leg needs. What it must not do is
+      // what it used to: keep driving with a stale plan, off the end of the
+      // map, to be re-spawned at the FAR stop — the bus appeared to sit at the
+      // halt for ever and then teleport across the board. Reported as "buses
+      // move super slowly at a bus station", which is what a vanishing act
+      // looks like from the outside.
+      //
+      // The stop cursor goes back to the stop it is standing at, so the respawn
+      // above starts THIS leg rather than skipping to the next one — and the
+      // respawn is told the stop has just been WORKED, or turning round would
+      // open the doors a second time at a kerb the bus never left.
+      roadSim.despawn(bus.carId);
+      bus.carId = undefined;
+      if (here >= 0) bus.stopIndex = here;
+      bus.turnedRoundAt = at;
+    }
+  }
+
+  // The bus works a stop: everyone off who wanted here, everyone on who this
+  // line can help. `lastStopId` is remembered because a withdrawn bus has to set
+  // its riders down SOMEWHERE, and this is the last place it stood.
+  function callAt(bus: BusService, stopId: string) {
+    const r = transit.exchange({
+      stopId,
+      lineId: bus.lineId,
+      capacity: BUS_SEATS,
+      manifest: bus.manifest,
+    });
+    bus.lastStopId = stopId;
+    busEvents.push({ stopId, ...r });
+    return r;
+  }
+
+  // Set a withdrawn bus's riders down instead of deleting them, exactly as a
+  // RETIRING train does (`dumpAll` in simulation.ts): they are better off at a
+  // stop than in a shed, and passengers who simply vanish are a loss the player
+  // never sees and the delivery count never explains.
+  //
+  // Also on a REASSIGNMENT: a rider's `off` was decided from the line the bus
+  // was running (D7), so a bus that changes line would carry them to a stop it
+  // no longer calls at — for ever.
+  function setDownAll(bus: BusService): void {
+    if (bus.manifest.length === 0) return;
+    const at = stopUnder(bus) ?? bus.lastStopId;
+    if (!at) return; // it has never called anywhere, so nobody is aboard
+    const r = transit.exchange({
+      stopId: at,
+      lineId: bus.lineId,
+      capacity: BUS_SEATS,
+      manifest: bus.manifest,
+      dumpAll: true,
+    });
+    busEvents.push({ stopId: at, ...r });
+  }
+
+  // The stop the bus is standing at, if it is standing at one at all.
+  function stopUnder(bus: BusService): string | undefined {
+    if (!bus.carId || !roadSim.hasCar(bus.carId)) return undefined;
+    const at = roadSim.carTile(bus.carId);
+    return at && busStopsOf(bus).includes(at) ? at : undefined;
+  }
+
+  // A stop the line can no longer reach, said ONCE per hold: the retry runs
+  // every tick and a line in the log every tick is noise, not a report.
+  function logBusHold(bus: BusService, to: string, at: string | undefined): void {
+    const where = at ? ` at ${stationLabels[at] ?? at}` : "";
+    eventLog.push({
+      id: logSeq++,
+      time: clock,
+      kind: "blocked",
+      trainId: bus.id,
+      text: `held${where} — no route to ${stationLabels[to] ?? to}`,
+    });
+  }
+
+  // Order a bus. Like a train it is bought INTO service — with a line it
+  // starts running it at once, without one it waits to be assigned. There is no
+  // garage to queue in: a bus lives on its line, and appears at its first stop.
+  function buyBus(lineId?: string): string {
+    busSeq += 1;
+    const id = `bus${busSeq}`;
+    buses.push({ id, lineId, stopIndex: 0, dwellLeft: 0, manifest: [] });
+    syncLines();
+    syncBuses();
+    return id;
+  }
+
+  function assignBus(busId: string, lineId: string | null): boolean {
+    const bus = buses.find(b => b.id === busId);
+    if (!bus) return false;
+    if (lineId !== null && !transit.lines().some(l => l.id === lineId)) return false;
+    const had = bus.lineId;
+    // Everyone off first, while it is still on the line they boarded for and
+    // still standing where they can be set down.
+    if (had !== (lineId ?? undefined)) setDownAll(bus);
+    bus.lineId = lineId ?? undefined;
+    bus.stopIndex = 0;
+    bus.departing = false;
+    bus.strandedFor = undefined;
+    // It re-plans from wherever it is on its next tick; taking it off a line
+    // takes it off the road, because a bus with no line has nowhere to be.
+    if (bus.carId && !bus.lineId) {
+      roadSim.despawn(bus.carId);
+      bus.carId = undefined;
+    }
+    transit.touch();
+    if (had && had !== bus.lineId) pruneLineIfUnused(had);
+    syncLines();
+    syncBuses();
+    return true;
+  }
+
+  // Scrap a bus. There is no orderly "run to the depot" verb yet — a bus has no
+  // shed to run to — so this is the only one, and it is not the emergency the
+  // train's `scrapTrain` is.
+  function removeBus(busId: string): boolean {
+    const at = buses.findIndex(b => b.id === busId);
+    if (at < 0) return false;
+    const bus = buses[at];
+    // Its riders get off at the kerb rather than disappearing with the vehicle.
+    setDownAll(bus);
+    if (bus.carId) roadSim.despawn(bus.carId);
+    buses.splice(at, 1);
+    if (bus.lineId) pruneLineIfUnused(bus.lineId);
+    syncLines();
+    syncBuses();
+    return true;
+  }
+
+  // A line is only swept when NOTHING runs it — and "nothing" now has to count
+  // buses as well as trains, or withdrawing the last train would delete a line
+  // a bus is still working.
+  function pruneLineIfUnused(lineId: string): void {
+    if (sim.trainsOnLine(lineId).length > 0) return;
+    if (buses.some(b => b.lineId === lineId)) return;
+    transit.pruneLine(lineId);
+  }
+
+  // What the buses did this tick, so the log and the citizen layer see a bus
+  // call exactly as they see a train's dwell.
+  const busEvents: { stopId: string; boarded: number; alighted: number; changing: number; boardedTags: string[]; alightedTags: string[] }[] = [];
 
   function updateParking() {
     const held = roadSim.parkingOccupancy();
@@ -2054,12 +2599,16 @@ export function createGame(
     return Math.max(1, Math.round(60 / d.intervalSec));
   }
 
-  // Mirror each station's live platform queue for the crowd render. Vue's
-  // reactive set is a no-op while the count is unchanged, so this is cheap.
+  // Mirror each STOP's live queue for the crowd render — platforms and kerbs
+  // alike, because since #90 a bus stop is a node of the same network and its
+  // waiting people are just as real. Vue's reactive set is a no-op while the
+  // count is unchanged, so this is cheap.
   function updateStationQueues() {
     for (const id of Object.keys(level)) {
-      if (level[id]?.role !== "station") {
+      if (!transitStops.has(id)) {
         if (id in stationQueues) delete stationQueues[id];
+        if (id in stationWaiting) delete stationWaiting[id];
+        if (id in stationWaitingColours) delete stationWaitingColours[id];
         continue;
       }
       stationQueues[id] = sim.stationQueue(id);
@@ -2069,6 +2618,22 @@ export function createGame(
       const cur = stationWaiting[id];
       if (!cur || cur.length !== waiting.length || waiting.some((d, i) => cur[i] !== d)) {
         stationWaiting[id] = waiting;
+      }
+      // THE COLOUR OF THE LINE THEY ARE WAITING FOR, one per person. Computed
+      // here rather than in the view: the answer comes from the line graph,
+      // which is engine work. Recomputed even when the QUEUE is unchanged,
+      // because redrawing a line changes what these people are waiting for
+      // without anybody joining or leaving the queue — and written back only on
+      // a real difference, so Vue still re-renders a platform only when its
+      // crowd actually looks different. A person no service can carry gets ""
+      // and is drawn neutral.
+      const colours = waiting.map(dest => {
+        const lineId = dest ? sim.lineFrom(id, dest) : undefined;
+        return (lineId && lines.find(l => l.id === lineId)?.colour) || "";
+      });
+      const curC = stationWaitingColours[id];
+      if (!curC || curC.length !== colours.length || colours.some((c, i) => curC[i] !== c)) {
+        stationWaitingColours[id] = colours;
       }
     }
   }
@@ -2216,7 +2781,7 @@ export function createGame(
           existing.widthPx = widthPx;
           existing.part = unit.part;
         } else {
-          roadCars.push({ id, x, y, angle, widthPx, part: unit.part });
+          roadCars.push({ id, vehicleId: s.id, unit: u, x, y, angle, widthPx, part: unit.part });
         }
       }
     }
@@ -2385,6 +2950,35 @@ export function createGame(
   // asking the sim alone reports "no line" for a train the player has just
   // routed — and `trainInit` carries `def.line` over when it finally rolls out,
   // so the definition is the honest answer until then.
+  // A VEHICLE WEARS ITS LINE'S COLOUR — on a board where a line is the plan.
+  //
+  // The liveries used to come from the depot-matching palette, which on a
+  // service board says nothing: `/test/transfer` had a yellow train working the
+  // green line and a green train working the yellow one, each collecting dots of
+  // the OTHER colour. The dots are already coloured by the line somebody is
+  // waiting for, so tying the vehicle to the same colour makes the board read at
+  // a glance: green train, green dots, green row in the panel.
+  //
+  // Only where lines ARE the game (`hud.passengers`). In the classic modes a
+  // train's colour is a RULE — it has to match the depot it delivers to — and
+  // repainting it would break the mechanic rather than explain it. A vehicle
+  // with no line keeps its own livery either way: that is the only identity it
+  // has.
+  function liveryOf(trainId: string): string {
+    const own = assignedColors.trainColors[trainId] ?? trainColors[trainId];
+    if (!mode.hud.passengers) return own;
+    const lineId = sim.trains[trainId] ? sim.lineOf(trainId) : undefined;
+    const line = lineId ? lines.find(l => l.id === lineId) : undefined;
+    return line?.colour ?? own;
+  }
+
+  function syncLiveries(): void {
+    for (const id of Object.keys(trainColors)) {
+      const want = liveryOf(id);
+      if (trainColors[id] !== want) trainColors[id] = want;
+    }
+  }
+
   function syncLine(trainId: string): void {
     const stops = sim.trains[trainId]
       ? sim.trainLine(trainId)
@@ -2406,9 +3000,14 @@ export function createGame(
         name: line.name,
         stops: [...line.stops],
         trains: sim.trainsOnLine(line.id),
+        buses: buses.filter(b => b.lineId === line.id).map(b => b.id),
         colour: LINE_COLOURS[i % LINE_COLOURS.length],
+        kind: lineKindOf(line.stops),
       });
     }
+    // The lines have just been rebuilt, so the liveries that follow them can be
+    // brought into step — after `lines`, because that is what liveryOf reads.
+    syncLiveries();
     for (const id of Object.keys(stationLines)) delete stationLines[id];
     for (const line of lines) {
       for (const stop of line.stops) {
@@ -2811,6 +3410,16 @@ export function createGame(
     // Park & ride: whoever just pulled into a stall within walking reach of a
     // station is now standing on its platform.
     transferParkedArrivals();
+    // The bus services: dwell, exchange passengers, drive on to the next stop.
+    busEvents.length = 0;
+    advanceBuses(scaled);
+    syncBuses();
+    // How full each vehicle is: a MODEL fact (who is aboard, how many seats),
+    // so it is refreshed with the world and not with the render frame. Put in
+    // `frame()` it would freeze in a hidden tab and be invisible to a headless
+    // test — which is exactly what happened on the first cut, and what the
+    // comment on updateVehicleLoads claimed it had avoided.
+    updateVehicleLoads();
     // Ordered trains roll out of the shed as it clears, in the order bought.
     releasePendingTrains();
     // Fold the road's crossing-flow snapshot into the observation so the
@@ -3253,6 +3862,8 @@ export function createGame(
     occupied,
     stationQueues,
     stationWaiting,
+    stationWaitingColours,
+    vehicleLoads,
     stationLatent,
     cities,
     citizenStats,
@@ -3281,6 +3892,11 @@ export function createGame(
     lineOverlay,
     setLineOverlay,
     lines,
+    buyBus,
+    assignBus,
+    removeBus,
+    busServices,
+    busStopTiles: busStops,
     createLine,
     setLineStops,
     renameLine,

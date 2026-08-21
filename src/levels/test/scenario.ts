@@ -17,6 +17,15 @@ export interface TestScenario {
   // Pin depot/train colours (e.g. to force a depot-mismatch bounce). When
   // omitted, createGame's seeded auto-assignment is used.
   colors?: ColorAssignment;
+  // BUS LINES THE BOARD OPENS WITH — each an ordered list of bus-stop tiles,
+  // and each given one bus.
+  //
+  // A train can be authored into a scenario (`mkLineTrain` puts it in a depot
+  // with its line), and a bus had no equivalent: `busrail` is the board about
+  // buses and it opened with no bus on it, so the mechanic it exists to show was
+  // invisible until the visitor drew a line and bought one. A demo has to
+  // demonstrate.
+  busLines?: string[][];
   // Explicit grid size; defaults to the level's derived extents.
   size?: { cols: number; rows: number };
   // Per-level road-traffic settings (busyness + vehicle mix). Omitted → the

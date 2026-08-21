@@ -24,6 +24,7 @@ import {
 import type { Lane, LaneKind } from "@/tiles/lanes";
 import { isRoadJunction, isOneWayStraight, lanesFrom, laneUsableBy, turnKind } from "@/tiles/lanes";
 import { cycleJunctionSignal as nextJunctionSignal } from "@/sim/junctionSignal";
+import type { JunctionSignal } from "@/sim/junctionSignal";
 import { needsBridge, needsTunnel } from "@/tiles/terrain";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -276,6 +277,94 @@ export function cycleJunctionSignalMode(cell: TileCell): TileCell {
     return { ...rest };
   }
   return { ...cell, signal: next };
+}
+
+// Set a road junction's traffic-signal mode DIRECTLY — the dock's "pick a mode,
+// click junctions to apply" verb, as opposed to cycleJunctionSignalMode's
+// click-to-advance. "off" is stored as an absent `signal` (same round-trip rule
+// as the cycle), and a non-junction hands back the SAME cell so callers can
+// tell a refusal from a change. Applying the mode a junction already has is a
+// no-op too (reference-equal), so a repeat click never dirties the level.
+export function setJunctionSignalMode(cell: TileCell, sig: JunctionSignal): TileCell {
+  if (!isRoadJunction(cell.road)) return cell;
+  const cur = cell.signal ?? { mode: "off" };
+  if (cur.mode === sig.mode && !!cur.busPriority === !!sig.busPriority) return cell;
+  if (sig.mode === "off") {
+    const { signal: _drop, ...rest } = cell;
+    return rest;
+  }
+  return {
+    ...cell,
+    signal: { mode: sig.mode, ...(sig.busPriority ? { busPriority: true } : {}) },
+  };
+}
+
+// --- Layer-scoped erase --------------------------------------------------------
+// The bulldozer's filter: remove ONE layer of a cell, leaving the others
+// standing. "all" is not spelled here — deleting the whole cell is the caller's
+// one-liner — so every value of this type is a real partial erase.
+export type EraseLayer = "rail" | "road" | "parking" | "terrain";
+
+// Erase one layer of a cell. Each arm drops exactly the fields that layer owns;
+// a structure (bridge/tunnel) goes with the LAST line it carried, mirroring
+// removeConnection/removeRoad, and goes too when the ground under it stops
+// demanding one (terrain erase). Callers should drop the cell from the level
+// when the result `isBlankCell`.
+export function eraseLayer(cell: TileCell, layer: EraseLayer): TileCell {
+  if (layer === "rail") {
+    const {
+      connections: _c,
+      role: _r,
+      stationName: _n,
+      signals: _s,
+      flyover: _f,
+      defaultArms: _a,
+      ...rest
+    } = cell;
+    const next: TileCell = { ...rest, connections: [] };
+    // The structure goes with the last line it carried (see removeConnection).
+    if (!next.road?.length) {
+      delete next.bridge;
+      delete next.tunnel;
+    }
+    return next;
+  }
+  if (layer === "road") {
+    const {
+      road: _road,
+      signal: _sig,
+      roadPriority: _p,
+      footway: _fw,
+      footCrossing: _fc,
+      // Parking rows live ON the road (kerbs, aisles) — ripping the street out
+      // takes the car park with it, or the rows would orphan and the validator
+      // would flag a tile the bulldozer "cleaned".
+      parking: _park,
+      ...rest
+    } = cell;
+    const next: TileCell = { ...rest };
+    if (next.connections.length === 0) {
+      delete next.bridge;
+      delete next.tunnel;
+    }
+    return next;
+  }
+  if (layer === "parking") {
+    const { parking: _drop, ...rest } = cell;
+    return rest;
+  }
+  // terrain: back to flat grass. The structures go too — a bridge needs the
+  // water (and a tunnel the rock) it crosses; over plain grass the line just
+  // runs on the ground.
+  const {
+    terrain: _t,
+    height: _h,
+    city: _city,
+    bridge: _b,
+    tunnel: _tu,
+    ...rest
+  } = cell;
+  return rest;
 }
 
 // --- Road layer editing -------------------------------------------------------

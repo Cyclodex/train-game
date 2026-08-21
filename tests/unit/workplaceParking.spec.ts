@@ -142,11 +142,18 @@ describe("a commuter's car takes a space and holds it", () => {
     // silently converts every bay on the board into a permanent obstacle, and
     // the board still looks fine for the first few minutes. Watching the same
     // stall change hands is the only thing that tells the two apart.
+    // COUNT THE CARS PARKED AWAY FROM HOME, not every parked car. `carsParked`
+    // includes the one standing in its owner's own drive, and since life stages
+    // landed there is no longer a moment when every household's car is out at
+    // once — the shift worker's car is at home while the day worker's is at the
+    // works, and then the other way round. Measured here: the total never falls
+    // below 1, while the away-from-home count peaks at 9 and still returns to 0.
+    // The bay cycle is intact; the old gauge just stopped being able to see it.
     const game = newGame(workparking, { secPerDay: 240 });
     let peak = 0;
     let everEmptiedAfterUse = false;
     run(game, 1600, () => {
-      const held = game.citizenStats.carsParked;
+      const held = game.citizenStats.carsParked - game.citizenStats.carsAtHome;
       peak = Math.max(peak, held);
       if (peak > 0 && held === 0) everEmptiedAfterUse = true;
     });

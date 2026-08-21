@@ -106,7 +106,7 @@ describe("three cities: the citizens commute on the real railway", () => {
     expect(s.population).toBeGreaterThan(120); // opened around 110 and grew
   });
 
-  it("empties the commuter towns when no train ever runs — and spares the one that walks", () => {
+  it("marks down the commuter towns when no train ever runs — and spares the one that walks", () => {
     // The same board and the same people, with no trains on it at all. This is
     // the pair to the test above, and together they are the mode: the ONLY
     // difference between a board that grows and a board that hollows out is
@@ -135,9 +135,25 @@ describe("three cities: the citizens commute on the real railway", () => {
     // a person does — but it is still a failed commute, and it still lands on
     // the town's mood with the same weight.
     expect(game.citizenStats.tripsRefused).toBeGreaterThan(50);
-    // EASTFIELD is twenty tiles from the works and there is no other way to
-    // cover that: its commute simply cannot be made, and it empties out.
-    expect(after.Eastfield).toBeLessThan(before.Eastfield / 2);
+    // WHAT A DEAD RAILWAY COSTS IS THE COMMUTE BAR, NOT THE HEADCOUNT — and
+    // that changed when life stages landed. A quarter of every town is now
+    // children and retired residents whose whole day is a walk to the shops and
+    // back, journeys this board makes perfectly well with no train on it at all.
+    // They are happy, they pull the mean mood up, and newcomers keep arriving
+    // for the cheap houses faster than the stranded commuters give up and leave.
+    // Measured on this board, same seed, only the stage mix changed:
+    //
+    //   all workers   Westfield 47 -> 22   Eastfield 43 -> 30
+    //   life stages   Westfield 47 -> 72   Eastfield 43 -> 56
+    //
+    // So the population is a BLUNTED indicator here and the bars are the sharp
+    // one. Eastfield is twenty tiles from the works with no way to cover it, and
+    // its commute score says exactly that while Steinbach, which walks, sits at
+    // the top of the scale.
+    expect(after.Eastfield).toBeGreaterThan(0);
+    const commuteOf = (name: string) =>
+      game.cities.find(c => c.name === name)?.happiness.commute ?? 1;
+    expect(commuteOf("Eastfield")).toBeLessThan(commuteOf("Westfield"));
     // WESTFIELD does not, and that is D10 rather than a weaker model. Its
     // people no longer set out for a train that does not exist; they walk (a
     // long, graceless walk that their mood notices) or they stay at home. What
@@ -155,6 +171,40 @@ describe("three cities: the citizens commute on the real railway", () => {
     for (const c of stranded) {
       expect(c.happiness.commute).toBeLessThan(steinbach?.happiness.commute ?? 1);
     }
+  });
+
+  it("still hollows out a town when everybody in it has a commute at stake", () => {
+    // THE CONTROL FOR THE TEST ABOVE, and the reason that one no longer asserts
+    // a collapse. Same board, same seed, same dead railway — the ONLY difference
+    // is that every resident is a worker, so every resident has a journey the
+    // missing trains would have carried.
+    //
+    // Without the children and the retired holding the average up, the model
+    // punishes a dead railway exactly as it always did: both commuter towns lose
+    // a third or more of their people while the town that walks to work grows.
+    // If this ever goes green while the mixed board also grows, the failure is
+    // in the model and not in the mix.
+    const allWorkers = citizensModeWith({
+      secPerDay: 300,
+      stageMix: { child: 0, worker: 1, shiftWorker: 0, tradesperson: 0, retired: 0 },
+    });
+    const game = createGame(
+      threecities.level,
+      [], // no trains
+      200,
+      allWorkers,
+      1,
+      threecities.colors,
+      undefined,
+      "threecities"
+    );
+    const before = Object.fromEntries(game.cities.map(c => [c.name, c.population]));
+    run(game, 3000);
+    const after = Object.fromEntries(game.cities.map(c => [c.name, c.population]));
+
+    expect(after.Westfield).toBeLessThan(before.Westfield * 0.7);
+    expect(after.Eastfield).toBeLessThan(before.Eastfield * 0.8);
+    expect(after.Steinbach).toBeGreaterThan(before.Steinbach);
   });
 
   it("leaves every other mode exactly as it was — no cities, no citizen layer", () => {

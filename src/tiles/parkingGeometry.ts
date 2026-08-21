@@ -407,3 +407,50 @@ export function busStopGeometry(
     ]),
   };
 }
+
+// WHERE THE PEOPLE WAITING FOR A BUS STAND.
+//
+// A platform draws its queue along the platform slab; a kerb had nothing, so a
+// halt with six people waiting looked exactly like an empty one (the HUD counted
+// them and the board did not show them). Same dots, same colours, different
+// furniture — they queue on the VERGE beside the shelter, behind the yellow
+// line, in the direction the bus arrives from.
+//
+// Written in the row's own (along, out) frame like everything else here, so it
+// lands correctly whichever edge of the tile the halt is on.
+export function busStopQueueSpots(
+  row: ParkingRow,
+  size: number,
+  kerbPx: number,
+  count: number,
+): Pt[] {
+  const f = rowFrame(row, size);
+  const big = needsBigBay(row.reserved);
+  const pitch = stallPitchPx(row.kind, size, big);
+  const depth = stallDepthPx(row.kind, size, big);
+  const near = bayNearPx(row, size, kerbPx);
+  const first = stallPose(row, 0, size, kerbPx);
+  const a0 = first.t * size - pitch / 2;
+  const a1 = a0 + pitch * row.count;
+  // Out on the verge, past the shelter AND past the stop's sign chip, which is
+  // HTML drawn over the tile and reaches about 0.13 of a tile out from the kerb
+  // — measured, because at 0.115 the front of the queue sat exactly on its lower
+  // edge and the first person waiting was invisible.
+  const out = near + depth + size * 0.155;
+  const spots: Pt[] = [];
+  for (let i = 0; i < count; i++) {
+    // The queue stands PAST the stop's sign, which is where the room is: a halt
+    // sits at the head of its tile, so a queue growing back from the shelter ran
+    // off the tile's own edge at twelve people (caught by the geometry test, not
+    // by a board). It also keeps the crowd clear of the sign chip, which is
+    // drawn over the tile and would otherwise hide the front of the queue.
+    //
+    // THREE ranks deep, so a busy stop bunches up instead of marching away down
+    // the street.
+    const rank = i % 3;
+    const step = Math.floor(i / 3);
+    const along = a1 + size * 0.04 + step * size * 0.05;
+    spots.push(f.at(along, out + rank * size * 0.04));
+  }
+  return spots;
+}

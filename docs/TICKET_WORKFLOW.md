@@ -115,6 +115,16 @@ debug-free by construction.
 Non-visual changes (sim math, pathfinding, types, tooling) don't need a
 screenshot — say "N/A — not visible on the board" on the PR checklist instead.
 
+**A screenshot proves what you saw; a link lets the reviewer see it themselves.**
+So a PR body also names the pages the change touches — the `/test/<id>` scenario
+for the mechanic in isolation, the `/#/play?…` board when a mode or level is
+involved. Write them as ordinary **localhost** links (never inside a code fence):
+`deploy.yml` rewrites every `http://localhost:<port>/…` in the body to this PR's
+deployed preview — `https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…` —
+as soon as that preview is live, and again on every later push. The reviewer
+clicks and plays; nobody has to check out the branch. Comments are left alone,
+so paste the preview URL yourself when you link from one.
+
 ## Automation (Claude Code GitHub Action)
 
 Stages 3–4 are automated via workflows in `.github/workflows/`:

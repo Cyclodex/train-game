@@ -84,10 +84,11 @@
 
 // ---- Meadow (default) -------------------------------------------------------
 // Rolling green countryside dotted with little trees; the board sits raised on
-// it. The trees are a procedurally generated, seamless SVG tile (varied size,
+// it. The trees are a procedurally generated, seeded scatter (varied size,
 // shape, tint and jittered placement — see `src/utils/meadowBackdrop.ts`),
-// supplied via the `--meadow-trees` custom property on #app and laid over a
-// soft grass gradient. A faint mottling breaks up the flat ground colour.
+// rendered by `components/BackdropTrees.vue` as a world overlay in the CANOPY
+// z band, so a crown overlapping a rail or a road sits above the traffic
+// passing under it. A faint mottling breaks up the flat ground colour.
 // BEYOND the world: the far distance. Deliberately trees-free and low contrast —
 // it is fixed to the viewport, so anything with recognisable scale (a tree the
 // same size as a tree on the board) would sit still while the board pans and
@@ -103,17 +104,12 @@
 }
 
 // THE WORLD's own ground. Painted on the board element itself, which the camera
-// transforms — so the trees pan and scale with the tiles they stand between,
-// instead of the board sliding over a fixed forest. Same seamless tile as before
-// (`--meadow-trees`), just attached to the thing it belongs to.
+// transforms — so the ground pans and scales with the tiles. The trees that
+// used to be a background layer here render via <BackdropTrees> inside the
+// board instead, above the rails/trains/cars (the canopy band).
 .theme-meadow .world .level {
   background-color: #6aac6a;
-  background-image:
-    var(--meadow-trees),
-    linear-gradient(160deg, #8ecb8e, #6aac6a);
-  background-size:
-    680px 680px,
-    100% 100%;
+  background-image: linear-gradient(160deg, #8ecb8e, #6aac6a);
 }
 .theme-meadow .world .level {
   border-radius: 10px;

@@ -42,6 +42,18 @@ export type TerrainKind =
   | "urban"
   | "industry";
 
+// What a plot of town ground is FOR. Normally DERIVED (industry → work, urban →
+// homes with a parade of shops at the centre; see tiles/cities.ts), which is why
+// every board written before cities existed has land use for free. It lives here
+// rather than in `cities.ts` because `TileCell.zone` can now state it outright,
+// and a type a tile carries is tile data.
+//
+// `school` and `leisure` are the two that CANNOT be derived: no terrain says
+// "school", and a café is not distinguishable from a corner shop by its ground.
+// They exist because a town whose only reasons to travel are work and shopping
+// has exactly two busy hours a day — see the life-stages design.
+export type PlotKind = "home" | "work" | "shop" | "school" | "leisure";
+
 export interface TileCell {
   connections: PortPair[];
   // What the cell DOES in the simulation, beyond carrying track. A depot is a
@@ -136,6 +148,17 @@ export interface TileCell {
   // read those as one place — and for naming a town explicitly. Ignored on any
   // cell that is not plot ground.
   city?: string;
+  // What this plot is FOR, stated outright instead of derived from the terrain.
+  //
+  // The escape hatch land use has always needed, and only ever an OVERRIDE: a
+  // cell without it means exactly what it meant before (`tiles/cities.ts` reads
+  // the ground). It exists because two plot kinds cannot be derived — a school
+  // and a café both stand on plain urban ground — and inventing a `TerrainKind`
+  // for each would make them a property of the SOIL, which they are not.
+  //
+  // Ignored on any cell that is not plot ground (rail, road and parking tiles
+  // are the street, not an address).
+  zone?: PlotKind;
   // Road-priority for junction arbitration: 0 = side road (default), 1 = main road.
   roadPriority?: number;
   // Street-junction traffic signals (ROAD / cars only). When present and not
