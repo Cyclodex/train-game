@@ -114,6 +114,70 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## PINCH-ZOOM / TOUCH INPUT (2026-08-21)
+- Pinch lives in `cameraController.ts`, so all three boards (PlayView, EditorView,
+  TestStage) get it once. Two fingers zoom AND drag; the `−/%/+` buttons stay.
+- **Every view must hand the controller EVERY pointer**, saying only whether that
+  pointer may pan: `cam.onPointerDown(e, { pan })`. Returning early on a pointer
+  the view does not want (what all three used to do) hides the SECOND finger from
+  the camera, and the editor — where one finger belongs to the connect tool and
+  never pans — could then not be moved by touch at all. A pinch outranks every
+  tool: nothing in this app takes two fingers.
+- **Zoom about the PREVIOUS midpoint, then pan by the midpoint's travel.** The
+  other order (zoom about the new midpoint, then pan) leaks
+  `delta * (1/oldZoom - 1/newZoom)` every frame, so the board slides out from
+  under the fingers on any pinch that also drifts — which is all of them. Proved
+  in `tests/unit/cameraController.spec.ts` as a world-point invariant, not as a
+  number.
+- **Never read `e.movementX` for a drag.** It is undefined-or-zero for touch
+  pointers in several engines, so a one-finger drag moved the board by nothing on
+  a phone. The controller tracks `clientX/Y` itself — identical for a mouse
+  (the pointer is never locked here) and the only thing that exists for a finger.
+- Ending a touch gesture has three cases, all of them live: 3→2 fingers must
+  RE-BASELINE the span (a different pair spans a different distance, and without
+  it the board jumps); 2→1 hands the pan to the finger still down (lifting a thumb
+  and dragging on is ordinary map handling); and the LAST finger up must clear
+  `state.panning` even when no pointer ever owned the pan, or the board keeps the
+  grabbing cursor and swallows every click from then on.
+- **The build/edit edge zones are bound to `@mousedown`/`@mouseup`, not pointer
+  events** (`EditorView.vue`, `PlayView.vue`). A `touch-action: none` surface
+  fires NO compatibility mouse events — measured: a touch drag over a zone
+  delivers `pointerdown`/`touchstart`/`pointerup` and nothing else. So the
+  drawing tools cannot be used by touch at all yet. Moving them to pointer events
+  is what unlocks that; the `cam.pinching` → `clearPress()` guard in both views
+  is already in place for the day it happens.
+- `MIN_ZOOM` is still 0.15, so `fitWorld()` on a landscape phone (a ~170px-tall
+  viewport) cannot show a big world whole — pinch and pan reach the rest.
+
+## PHONE LAYOUT (2026-08-21) — the /test gallery, and one grid trap
+- ONE breakpoint pair for the whole app: `@media (max-width: 700px), (max-height:
+  500px)`. `_hud.scss`, `BuildDock.vue`, `EditorView.vue`, `TestView.vue` and
+  `TestStage.vue` all use it. The height clause is not decoration — a landscape
+  phone is 812x375, wide but shorter than anything the desktop layout assumes.
+- **A grid item whose children are ALL `position:absolute` contributes ZERO
+  content height, so an `auto` row track cannot see its `aspect-ratio`.** While
+  the rows still fit the container nothing shows; the moment they do not, Chrome
+  collapses every track to a slice of the leftover space and the items OVERLAP.
+  Measured on `/test` at 375px: 45px tracks under 214px cards — the gallery was a
+  stack of stripes with every title and description buried under the next card,
+  and it looked fine on a desktop because four columns fit their three rows.
+  Fix: `grid-auto-rows: max-content` on the grid (`.card-grid`, TestView.vue).
+  Reach for it on ANY scrolling grid of aspect-ratio cards.
+- A breadcrumb crumb needs `white-space: nowrap` + ellipsis, or a narrow header
+  tears "One-way & lanes" into four stacked lines of one word each. Wrap BETWEEN
+  crumbs (`flex-wrap` on the row), never inside one.
+- `.stage-controls` wraps at every width, not just on phones: it is ~700px of
+  chips, so an 800px window already clipped the right-hand readouts off-screen.
+- Prose panels get a `max-height` in `vh` + `overflow-y: auto` on small screens.
+  `/test/roadlanemerge`'s description is a paragraph and took HALF a phone screen,
+  pushing the board out of view; capped at 24vh it scrolls inside its own panel
+  and nothing is hidden.
+- Scenario descriptions carry paths (`/test/lanedrop`) and arrows (`1→3→1`) with no
+  space to break at — `.card-desc` needs `overflow-wrap: anywhere`.
+- Touch pan works on the board (pointer events cover touch, `touch-action: none`);
+  there is NO pinch-zoom — mobile zooms with the −/%/+ buttons. `MIN_ZOOM` is 0.15,
+  so on a landscape phone a big world stays clipped and must be panned.
+
 ## ROLLING STOCK ART (procedural SVG, 2026-07-26)
 - Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
   `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
@@ -279,7 +343,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `<TileGround layer="scatter">` at z-index 1 — above every patch (z0), below
   rails (z2); a road (z1, later DOM in its own cell) still paints over its own
   cell's scenery. Ground layer keeps only patch+rim+marks. Placement tests
-  parse BOTH layers.
+  parse EVERY layer (ground + scatter + structures).
+- **BUILDINGS ARE NOT SCATTER** (2026-08-21): what people BUILT renders on its
+  own `<TileGround layer="structures">` (`tileStructuresSvg`) at **z7**, above
+  the walkers AND the cars (both z6); scenery — trees, bushes, boulders, ridges
+  — stays `scatter` at z1. Reported as "people walk over the houses": a
+  citizen's first leg is the STUB from their own front door to the kerb
+  (`sim/pedestrians.ts`), which crosses the plot the house stands on, so at z1
+  the figure slid across the roof. Only urban/industry emit structures; a tile's
+  art is one `GroundArt` = {ground, scatter, structures, canopy} out of one
+  cached build, so the split costs no extra placement pass.
+    · Lifting a roof over the TRAFFIC is safe for the same reason the canopy
+      layer is: placement already keeps every footprint off the rails and roads
+      of its own cell AND its four side-neighbours (`corridorsFor`), and each
+      placed building pushes its own footprint on as a blocker. A roof can
+      therefore never cover a car, a train or a carriageway — verified on
+      `/test/townscape` (level crossing, booms, cars, a consist: none clipped).
+    · Same z as `.tile-canopy`, mounted BEFORE it in all three boards (Play,
+      Editor, TestStage), so within a cell a crown still overhangs the roof.
+      Across cells DOM order decides — only visible where a forest tile's
+      overhanging crown reaches onto an urban tile drawn later.
+    · The two things that had to come UP with it: PlayView's `.build-overlay`
+      (z5 → z8, or a preview rail drawn through a plot vanished under a roof)
+      and the station NAMEPLATE + latent hint (z5 → z9, because…)
+    · …**the station building is a building too** — `.station-building` went
+      z3 → z7 for the identical reason: it stands in the strip between the outer
+      platform and the tile edge, which is exactly the ground a passenger walks
+      to reach the halt. It is laid clear of the rails (`utils/stationArt.ts`),
+      so nothing that moves is hidden by the lift.
+    · /test scenario: `citizenhouse`. To PROVE it, don't wait for a lucky frame:
+      poll `__game.pedestrians` for one inside a plot's px band, set
+      `paused.value = true` in the SAME evaluate, then shoot the frame twice —
+      once as-is and once with `.tile-structures{z-index:1}` injected. Same
+      walker, same pixel, only the layer.
 - GLADES (2026-07-27): forest trees are rejected where `forestDensityAt` — 
   value noise over a 3-tile WORLD lattice, world-seeded so a clearing never
   traces the grid — runs low; just-over-the-bar rolls keep a low `bush()`, so
@@ -318,9 +414,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
-  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
-  renders its ground/scatter a SECOND time above the trains, clipped to the
-  tile, as the bore's roof (see TUNNELS).
+  and rails (2), so scenery never covers track. TWO EXCEPTIONS, both deliberate:
+  a tunnel cell renders its ground/scatter a SECOND time above the trains,
+  clipped to the tile, as the bore's roof (see TUNNELS); and the `structures`
+  layer (z7) draws the town's buildings above the traffic (see BUILDINGS ARE NOT
+  SCATTER). Neither can cover track — a bore's roof IS the tile, and a building
+  is placed clear of every corridor.
 - BACKDROP TREES ARE CANOPY TOO (2026-08-21): the meadow theme's seeded tree
   scatter is NOT a CSS background any more — it was `--meadow-trees` under the
   board, which put every crown BEHIND the rails/trains/cars laid over it. It is
@@ -1324,8 +1423,10 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       connected" and as "the sidewalk is drawn on top of the people" — the
       second was the notch cutting past a walker, NOT a z-order problem: paving
       is z1 and `.pedestrian` is z6, and a pixel probe over the rendered board
-      confirms nothing paints over a walker (the only near-misses are two
-      walkers 3px apart, which the model allows on purpose).
+      confirms no GROUND layer paints over a walker (the only near-misses are
+      two walkers 3px apart, which the model allows on purpose). Since
+      2026-08-21 exactly one thing deliberately does: `.tile-structures` (z7),
+      the houses themselves — see BUILDINGS ARE NOT SCATTER.
     · Verify layer bugs with PIXELS, not `elementsFromPoint`: every tile layer is
       `pointer-events: none`, so hit-testing cannot see them at all. And PAUSE
       the board first (`__game.paused.value = true`) — a rect read one frame and
@@ -1660,10 +1761,11 @@ Four rules, each measured on that board, each of which failed silently:
   together they are fatal: every trip across the village is a LAP of the whole
   ladder, and a queue long enough to reach back into a junction box blocks the
   stream that would have let it out. That is a cycle of full tiles with no head
-  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
-  not gridlocked by politeness) is what lets the last car into the box that
-  closes it. It does not clear: measured, 42 of 46 cars standing still for the
-  rest of a six-day run, one for 354 unbroken seconds.
+  to move first. It does not clear: measured, 42 of 46 cars standing still for
+  the rest of a six-day run, one for 354 unbroken seconds. (An earlier version
+  of this note blamed `BOX_KEEP_CLEAR_PATIENCE` for closing the ring — measured
+  false on the shipped layout: disabling the valve outright reproduces the
+  seed-11 knot bit for bit. The real closer is below.)
   · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
     after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
     car never arrives, with the town's Work bar pinned at 0.00 while its
@@ -1680,6 +1782,42 @@ Four rules, each measured on that board, each of which failed silently:
     the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
     and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
     every local trip into a full circuit.
+  · **A per-seed zero is not a guarantee — probe a SWEEP, and probe INSIDE
+    capacity** (2026-08-21). The "0 frozen at 40" above was one lucky seed
+    pair: at a CONSTANT 40 only 4 of 24 probed runs come through clean (two
+    independent trip streams x seeds 1..12), and which ones flip re-rolls on
+    ANY dynamics change — an unrelated CLIP_LANES retune (PR #98) turned the
+    guard's seed 11 red. A constant-load harness holds the network at that
+    density forever (every arrival instantly replaced), which bursty citizen
+    demand never does; a zero-freeze assertion at supercritical load asserts a
+    coin toss. The clean envelope ends between 24 and 30: at a constant 24 all
+    40 probed runs are clean (longest stand 24s), at 30 two of six seeds
+    already stand for 350s. 24 is the guard's load.
+  · **AND ASSERT THE THROUGHPUT, not only the freeze.** At a load both plans
+    survive NEITHER freezes, and at one neither survives BOTH do, so "nothing
+    froze" on its own never separates a layout from the one it replaced. What
+    does, on every seed: at a constant 24 the shipped plan carries 887-967
+    journeys per 900s where the old ladder never once clears 700 (192-674, and
+    it jams on a third of its seeds). The freeze checks are the backstop; the
+    number the layout actually moves is the evidence.
+  · **Do not hand-roll a PRNG for a harness — `makeRng` (mulberry32) is right
+    there.** The obvious glibc `s * 1103515245 + 12345` constants overflow the
+    double mantissa in JS and the state space collapses: measured period 10466
+    from every seed tried, against the 2^31 the arithmetic promises. It stays
+    deterministic, so nothing goes red — it is simply not the generator the test
+    believes it is sampling with.
+  · **BOX–CROSSING–BOX IS A DEADLOCK TRAP.** A level crossing directly between
+    two junction boxes (the rung crossing the branch: box 9,10 / crossing
+    10,10 / box 11,10) couples the boxes through the rail-crossing keep-clear
+    — which is patience-less by design (`won't roll onto a rail crossing`,
+    road.spec) and demands room past the far edge. Two opposing streams plus
+    one conflicting turner close a wait-cycle in which every hold is locally
+    correct (keep-clear → full tile → arbiter-refused box → follower → turner
+    → back). Diagnose knots by labelling `bind()` calls in `clearAhead` and
+    dumping each frozen car's binding gate — the wait-for graph names the
+    cycle in one run. Retracting the rung to avoid the crossings measured
+    WORSE (11/20 seeds frozen): connectivity outweighs the trap. The real fix
+    is a sim mechanism (spillback / wait-cycle resolution) — open ticket.
   · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
     straight or bend whose neighbour has a different lane count (the renderer
     paints it red); a junction fans and merges unequal arms by design and is
@@ -1688,7 +1826,16 @@ Four rules, each measured on that board, each of which failed silently:
     x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
   · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
     the block signals (a road tile silently drops the signal authored on it) and
-    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+    the zoned plots INSIDE ITS OWN SPAN — and that normally leaves a CHOICE, not
+    one row. On hinterland four rows survive all three (6, 10, 14, 16); y=10
+    ships because a rung is worth most in the middle and the middle rows are the
+    blocked ones (y=11 platform + shop, y=12 café). Choose by how evenly the rung
+    splits the ladder: y=10 → 5/8 rows, y=14 → 9/4, y=6 and y=16 sit one and two
+    rows off an existing rung. Cost is read off the SPAN too: hinterland's rung
+    is x=3..11, so it takes exactly two plots, (6,10) and (8,10); the tiles on
+    the rail columns become level crossings and plots outside the span ((2,10),
+    (12,10)) are untouched. Counting the NEW ROAD TILES as the plot cost is the
+    easy mistake — half of them are rail.
 - **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
   `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
   and `homeparking` call it, and nothing else does. hinterland never has, so the
