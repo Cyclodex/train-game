@@ -15,13 +15,14 @@ import {
   traverse,
   routeToNextSignal,
 } from "./network";
-import { RailPlan, planRailRoute, reachableStations } from "./railRouter";
+import { RailPlan, RailStep, planRailRoute, reachableStations } from "./railRouter";
 import {
   Rider,
   SimLine,
   StationDemand,
   StopperService,
   TransitLayer,
+  TransitSnapshot,
   createTransit,
 } from "./transit";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -350,6 +351,54 @@ export interface UnitChord {
   rear: SampledUnit;
 }
 
+// --- save / load --------------------------------------------------------------
+//
+// A snapshot is plain JSON data: everything `step(dt)` reads that a player
+// action or elapsed time has moved. Derived fields (unitOffsets, bodyLength,
+// lookAhead, a plan's exitAt index) are NOT carried — they are pure functions
+// of what is, and are recomputed on restore. Reservations ARE carried:
+// re-deriving them would claim blocks a train had not yet claimed (a train
+// reserves only when it physically crosses), changing who yields to whom.
+// `blockStates` is dropped — the next tick re-derives it, at the cost of one
+// re-emitted `blocked` event per held train (a log line, no state).
+export interface SimTrainSnapshot {
+  id: string;
+  color: string;
+  type: "people" | "fraight";
+  wagonCount: number;
+  speed: number;
+  velocity: number;
+  accel: number;
+  brake: number;
+  unitLengths: number[];
+  coupling: number;
+  state: TrainState;
+  path: Segment[];
+  headIndex: number;
+  headProgress: number;
+  dwellRemaining: number;
+  dwelledAtIndex: number;
+  capacity: number;
+  manifest: Rider[];
+  lineId?: string;
+  lineIndex: number;
+  // The committed route, as its steps; `exitAt` is rebuilt from them. Kept
+  // verbatim rather than replanned: replanning mid-leg from the current head
+  // can tie-break differently than the plan the train is already driving.
+  plan?: { goal: string; steps: RailStep[] };
+  retiring?: boolean;
+}
+
+export interface SimSnapshot {
+  trains: SimTrainSnapshot[];
+  // claim key -> reserving train id.
+  reservations: Record<string, string>;
+  // `${tileId}:${exitPort}` keys of player-forced signals.
+  manualHold: string[];
+  manualProceed: string[];
+  transit: TransitSnapshot;
+}
+
 export interface Simulation {
   trains: Record<string, SimTrain>;
   step(dt: number): SimEvent[];
@@ -480,6 +529,12 @@ export interface Simulation {
   // Mutually exclusive with the Stop hold.
   forceProceed(tileId: string, exitPort: Port): void;
   isProceedForced(tileId: string, exitPort: Port): boolean;
+  // Save/load (docs/superpowers/specs/2026-08-21-save-load-design.md).
+  // `restore` expects a sim built from the SAME level/switch config the
+  // snapshot was taken against; it mutates in place (the `trains` record and
+  // the shared transit layer keep their identity).
+  snapshot(): SimSnapshot;
+  restore(snap: SimSnapshot): void;
 }
 
 // Cruise speed in tiles/sec. Exported because the fare model prices a delivery
@@ -1712,6 +1767,119 @@ export function createSimulation(config: SimConfig): Simulation {
         manualProceed.add(key);
         manualHold.delete(key); // force-green and hold are mutually exclusive
       }
+    },
+    snapshot(): SimSnapshot {
+      return {
+        trains: Object.keys(trains)
+          .sort()
+          .map(id => {
+            const t = trains[id];
+            return {
+              id: t.id,
+              color: t.color,
+              type: t.type,
+              wagonCount: t.wagonCount,
+              speed: t.speed,
+              velocity: t.velocity,
+              accel: t.accel,
+              brake: t.brake,
+              unitLengths: [...t.unitLengths],
+              coupling: t.coupling,
+              state: t.state,
+              path: t.path.map(s => ({
+                coord: { ...s.coord },
+                entryPort: s.entryPort,
+                exitPort: s.exitPort,
+              })),
+              headIndex: t.headIndex,
+              headProgress: t.headProgress,
+              dwellRemaining: t.dwellRemaining,
+              dwelledAtIndex: t.dwelledAtIndex,
+              capacity: t.capacity,
+              manifest: t.manifest.map(r => ({ ...r })),
+              ...(t.lineId !== undefined ? { lineId: t.lineId } : {}),
+              lineIndex: t.lineIndex,
+              ...(t.plan
+                ? {
+                    plan: {
+                      goal: t.plan.goal,
+                      steps: t.plan.steps.map(s => ({ ...s })),
+                    },
+                  }
+                : {}),
+              ...(t.retiring ? { retiring: true } : {}),
+            };
+          }),
+        reservations: Object.fromEntries(reservations),
+        manualHold: [...manualHold].sort(),
+        manualProceed: [...manualProceed].sort(),
+        transit: transit.snapshot(),
+      };
+    },
+    restore(snap: SimSnapshot) {
+      // Lines first: the trains below reference their ids.
+      transit.restore(snap.transit);
+      // The exposed `trains` record keeps its identity — callers hold it.
+      for (const id of Object.keys(trains)) delete trains[id];
+      for (const t of snap.trains) {
+        const { unitOffsets, bodyLength } = computeBody(t.unitLengths, t.coupling);
+        const lookAhead = t.brake > 0 ? t.speed ** 2 / (2 * t.brake) + 1 : 1;
+        let plan: RailPlan | undefined;
+        if (t.plan) {
+          const exitAt = new Map<string, Port>();
+          for (const s of t.plan.steps) {
+            exitAt.set(`${s.tileId}:${s.entryPort}`, s.exitPort);
+          }
+          plan = {
+            goal: t.plan.goal,
+            steps: t.plan.steps.map(s => ({ ...s })),
+            exitAt,
+          };
+        }
+        trains[t.id] = {
+          id: t.id,
+          color: t.color,
+          type: t.type,
+          wagonCount: t.wagonCount,
+          speed: t.speed,
+          velocity: t.velocity,
+          accel: t.accel,
+          brake: t.brake,
+          lookAhead,
+          unitLengths: [...t.unitLengths],
+          coupling: t.coupling,
+          unitOffsets,
+          bodyLength,
+          state: t.state,
+          path: t.path.map(s => ({
+            coord: { ...s.coord },
+            entryPort: s.entryPort,
+            exitPort: s.exitPort,
+          })),
+          headIndex: t.headIndex,
+          headProgress: t.headProgress,
+          dwellRemaining: t.dwellRemaining,
+          dwelledAtIndex: t.dwelledAtIndex,
+          capacity: t.capacity,
+          manifest: t.manifest.map(r => ({ ...r })),
+          ...(t.lineId !== undefined ? { lineId: t.lineId } : {}),
+          lineIndex: t.lineIndex,
+          ...(plan ? { plan } : {}),
+          ...(t.retiring ? { retiring: true } : {}),
+        };
+      }
+      reservations.clear();
+      for (const [key, owner] of Object.entries(snap.reservations)) {
+        reservations.set(key, owner);
+      }
+      manualHold.clear();
+      for (const key of snap.manualHold) manualHold.add(key);
+      manualProceed.clear();
+      for (const key of snap.manualProceed) manualProceed.add(key);
+      // Re-derived on the next tick; the one cost is a re-emitted `blocked`
+      // event per train that is still held (a log line, not state).
+      // (transit.restore above already invalidated the line-graph memo.)
+      blockStates.clear();
     },
   };
 }

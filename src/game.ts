@@ -15,6 +15,7 @@ import type { RouteStep } from "@/tiles/routePlanner";
 import {
   createSimulation,
   Simulation,
+  SimSnapshot,
   SampledUnit,
   UnitChord,
   SimEvent,
@@ -72,6 +73,7 @@ import { GameLogEntry, toLogEntry } from "@/gameLog";
 import { GameMode } from "@/modes/types";
 import {
   GoalSpec,
+  ObjectiveSnapshot,
   ObjectiveState,
   Observation,
   goalsOf,
@@ -80,6 +82,8 @@ import {
   createEconomy,
   createFareBook,
   CLEARING_COST_PER_TILE,
+  EconomySnapshot,
+  FareBookSnapshot,
   TRACK_COST_PER_TILE,
 } from "@/sim/economy";
 import { terrainBuildFactor } from "@/tiles/terrain";
@@ -451,6 +455,53 @@ function sameHold(a: FareHold | undefined, b: FareHold | undefined): boolean {
 // clear the sprite and the depot roof without leaving the tile.
 const FARE_BADGE_LIFT = 0.34;
 
+// --- save / load (Spielstand) ------------------------------------------------
+//
+// A GameSave is the whole running game as plain JSON: the board (live AND the
+// pristine copy Retry resets to — restoring starting capital while keeping
+// bought track would be free money), the roster, the pinned colours, the sim
+// snapshot and every closure counter createGame owns. What is deliberately NOT
+// in it is anything a pure function of the above rebuilds: road traffic
+// (respawned from the same seed), bus positions, derived tile lists.
+// Design: docs/superpowers/specs/2026-08-21-save-load-design.md.
+export const SAVE_VERSION = 1;
+
+export interface GameSave {
+  version: number;
+  name: string;
+  savedAt: number; // wall clock, display only — never fed to the sim
+  modeId: string;
+  levelId: string;
+  colorSeed: number;
+  level: Level;
+  pristineLevel: Level;
+  trains: TrainDef[];
+  colors: ColorAssignment;
+  switches: Record<string, Record<number, ActiveIntersection>>;
+  sim: SimSnapshot;
+  objective: ObjectiveSnapshot;
+  game: {
+    clock: number;
+    deliveries: number;
+    manualHoldTotal: number;
+    manualGreenTotal: number;
+    tilesBuiltTotal: number;
+    trackSpentTotal: number;
+    leviesBilled: number;
+    taxPaidTotal: number;
+    unpaidTaxTotal: number;
+    boughtPieces: string[];
+    boughtCount: number;
+    queuedTrainIds: string[];
+    // The bus roster, by line. Positions and riders aboard are not restored
+    // (v1 limitation): each bus is re-bought onto its line and starts at the
+    // line's first stop, exactly like a fresh purchase.
+    buses: { lineId?: string }[];
+    economy?: EconomySnapshot;
+    fares?: FareBookSnapshot;
+  };
+}
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -690,6 +741,12 @@ export interface Game {
   startObjective(): void;
   // Win/Lose -> Ready with the same seed, for Retry (a true do-over).
   reset(): void;
+  // Save/load (Spielstand). `captureSave` serializes the running game;
+  // `restoreSave` expects a game FRESHLY created from the save's level, trains,
+  // mode and colours (PlayView's load path) and overwrites the moving state.
+  // See docs/superpowers/specs/2026-08-21-save-load-design.md.
+  captureSave(name: string): GameSave;
+  restoreSave(save: GameSave): void;
   toggleHold(tileId: string, exitPort: Position): void;
   isHeld(tileId: string, exitPort: Position): boolean;
   forceProceed(tileId: string, exitPort: Position): void;
@@ -3344,6 +3401,12 @@ export function createGame(
   let leviesBilled = 0;
   let taxPaidTotal = 0;
   let unpaidTaxTotal = 0;
+  // Road throughput delivered BEFORE the road sim was last rebuilt. The road
+  // sim is deliberately not saved (it respawns from its seed), but its
+  // cumulative `carsDelivered` is reported as an ABSOLUTE into the objective
+  // counters — without this offset the first post-load tick would overwrite a
+  // restored counter with the fresh sim's zero.
+  let carsDeliveredBase = 0;
 
   // --- coach-marks (the teaching layer, src/coach.ts) ------------------------
   // The controller sequences a board's authored hints against cumulative run
@@ -3581,7 +3644,7 @@ export function createGame(
     // automatic crossing can't produce an incident, so the delta stays 0.
     const rf = roadSim.frame();
     obs.maxCarWaitSec = rf.maxCarWaitSec;
-    obs.carsDelivered = rf.carsDelivered;
+    obs.carsDelivered = carsDeliveredBase + rf.carsDelivered;
     obs.crossingIncidentDelta = 0;
     roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
     roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
@@ -3984,6 +4047,180 @@ export function createGame(
     return res;
   }
 
+  // --- save / load (Spielstand) ----------------------------------------------
+  // Plain-data deep copy. Level/switches/defs are all JSON-safe by construction
+  // (the same property `pristineLevel` already relies on).
+  function deepCopy<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function captureSave(name: string): GameSave {
+    return {
+      version: SAVE_VERSION,
+      name,
+      savedAt: Date.now(),
+      modeId: mode.id,
+      levelId,
+      colorSeed,
+      level: deepCopy(level),
+      pristineLevel: deepCopy(pristineLevel),
+      trains: deepCopy(trainDefs),
+      colors: {
+        depotColors: { ...depotColors },
+        // Live colours (bought trains included), with the seeded base colours
+        // winning for the original roster — the live record is repainted to
+        // line colours in passenger modes, and the base is the honest livery.
+        // ONLY trains that still have a definition: `forgetTrain` never prunes
+        // `trainColors` (the removal animation still reads it), and a dead id
+        // carried into a save resurrects as a permanent ghost row in the
+        // service panel of the loaded game (`removedTrains` starts empty).
+        trainColors: Object.fromEntries(
+          Object.entries({ ...trainColors, ...assignedColors.trainColors }).filter(
+            ([id]) => defById[id] !== undefined
+          )
+        ),
+      },
+      switches: deepCopy(switches),
+      sim: sim.snapshot(),
+      objective: tracker.snapshot(),
+      game: {
+        clock,
+        deliveries: deliveries.value,
+        manualHoldTotal,
+        manualGreenTotal,
+        tilesBuiltTotal,
+        trackSpentTotal,
+        leviesBilled,
+        taxPaidTotal,
+        unpaidTaxTotal,
+        boughtPieces: [...boughtPieces].sort(),
+        boughtCount,
+        queuedTrainIds: [...queuedTrains],
+        buses: buses.map(b => ({ ...(b.lineId ? { lineId: b.lineId } : {}) })),
+        ...(economy ? { economy: economy.snapshot() } : {}),
+        ...(fares ? { fares: fares.snapshot() } : {}),
+      },
+    };
+  }
+
+  // Overwrite the moving state of a game FRESHLY built from this save's level,
+  // trains, mode and colours — the LOAD PATH ONLY. PlayView passes exactly
+  // those to createGame, and that matters: plenty of state is derived at
+  // construction and NOT re-derived here (catchment demand and transit stops,
+  // parking sign tiles, road junction/extent caches, station/depot lists,
+  // unit ids, fare specs). Applying a save whose board differs from the one
+  // this game was built from would leave all of those describing the wrong
+  // world, silently. The level content is still re-asserted below, but only
+  // because on the load path `level` and `save.level` alias each other.
+  function restoreSave(save: GameSave): void {
+    // The board, live and pristine. Writes go through the RAW level object
+    // (the one the sim indexes); the levelVersion bump at the end notifies
+    // the views. The pristine copy must follow the SAVE's own opening state:
+    // Retry after a load restores the starting capital, and keeping track
+    // that capital already bought would be free money.
+    //
+    // COPY BEFORE CLEARING: on the load path the game was CREATED from
+    // `save.level`, so `level` and `save.level` are the same object — deleting
+    // the keys first and copying "from the save" after would copy from an
+    // emptied board (measured: every spawned train dead on an exitPort:null).
+    const savedLevel = deepCopy(save.level);
+    const savedPristine = deepCopy(save.pristineLevel);
+    const savedSwitches = deepCopy(save.switches);
+    for (const id of Object.keys(level)) delete level[id];
+    Object.assign(level, savedLevel);
+    for (const id of Object.keys(pristineLevel)) delete pristineLevel[id];
+    Object.assign(pristineLevel, savedPristine);
+    for (const id of Object.keys(switches)) delete switches[id];
+    for (const [id, arms] of Object.entries(savedSwitches)) {
+      switches[id] = arms;
+    }
+    signalTiles = Object.entries(level)
+      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+      .map(([id]) => id);
+
+    sim.restore(save.sim);
+
+    // Trains bought while their shed was busy: back into the queue (they have
+    // defs and DOM, but no sim entry — the sim snapshot never contained them).
+    pendingTrains.length = 0;
+    queuedTrains.splice(0, queuedTrains.length);
+    for (const id of save.game.queuedTrainIds) {
+      const def = defById[id];
+      if (!def) continue;
+      pendingTrains.push(def);
+      queuedTrains.push(id);
+    }
+
+    // Buses: the roster survives, the positions do not (v1) — each is re-bought
+    // onto its line and starts at the line's first stop like a fresh purchase.
+    for (const b of buses) {
+      if (b.carId) roadSim.despawn(b.carId);
+    }
+    buses.length = 0;
+    busSeq = 0;
+    for (const b of save.game.buses) buyBus(b.lineId);
+
+    tracker.restore(save.objective);
+    if (economy && save.game.economy) economy.restore(save.game.economy);
+    if (fares && save.game.fares) fares.restore(save.game.fares);
+
+    clock = save.game.clock;
+    deliveries.value = save.game.deliveries;
+    manualHoldTotal = save.game.manualHoldTotal;
+    manualGreenTotal = save.game.manualGreenTotal;
+    lastHoldTotal = manualHoldTotal;
+    lastGreenTotal = manualGreenTotal;
+    tilesBuiltTotal = save.game.tilesBuiltTotal;
+    lastTilesBuiltTotal = tilesBuiltTotal;
+    trackSpentTotal = save.game.trackSpentTotal;
+    leviesBilled = save.game.leviesBilled;
+    taxPaidTotal = save.game.taxPaidTotal;
+    unpaidTaxTotal = save.game.unpaidTaxTotal;
+    boughtPieces.clear();
+    for (const key of save.game.boughtPieces) boughtPieces.add(key);
+    boughtCount = save.game.boughtCount;
+
+    // The spawner is a pure schedule cursor: re-arm it and run it forward to
+    // the saved elapsed time in one step. The returned defs are discarded —
+    // every already-spawned train lives in the sim snapshot (and injectTrain
+    // guards against a double-spawn anyway).
+    spawner?.reset();
+    const elapsed = save.objective.counters.elapsedSec;
+    if (spawner && elapsed > 0) spawner.step(elapsed);
+
+    // The road sim restarts from zero (not saved); carry the delivered total
+    // forward so the restored counter is not clobbered on the next tick.
+    carsDeliveredBase = save.objective.counters.carsDelivered ?? 0;
+
+    // A load ends the undo window and any open overlay; the log starts over
+    // (its entries reference a run this session never played).
+    setLastBuild(null);
+    clearLineOverlay();
+    // The save's roster IS the roster: nothing in it is removed, so a stale
+    // removal list (from this game's own pre-restore life) must not hide a
+    // train the restore just brought back.
+    removedTrains.splice(0, removedTrains.length);
+    eventLog.splice(0, eventLog.length);
+    for (const id of Object.keys(reservations)) delete reservations[id];
+    for (const id of Object.keys(occupied)) delete occupied[id];
+    for (const id of Object.keys(stationQueues)) delete stationQueues[id];
+    for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+    for (const id of Object.keys(stationLatent)) delete stationLatent[id];
+    roadCars.splice(0, roadCars.length);
+    roadFrame.maxCarWaitSec = 0;
+    roadFrame.carWaitTotalSec = 0;
+    roadFrame.carsDelivered = 0;
+    gridlock.sec = 0;
+    gridlock.stuck = false;
+    prevStalls = new Set();
+
+    for (const def of trainDefs) syncLine(def.id);
+    syncLines();
+    refreshObjective();
+    refreshMoney();
+    levelVersion.value++;
+  }
+
   return {
     // A GETTER, not a snapshot. `reset()` calls `buildSims()`, which REPLACES
     // the simulation object; `sim,` captured the one that existed when
@@ -4104,6 +4341,8 @@ export function createGame(
       tracker.start();
       refreshObjective();
     },
+    captureSave,
+    restoreSave,
     reset() {
       // Un-buy the track first, so buildSims() below reads the board's opening
       // state: Retry restores the starting capital, and keeping the laid track
@@ -4144,6 +4383,7 @@ export function createGame(
       leviesBilled = 0;
       taxPaidTotal = 0;
       unpaidTaxTotal = 0;
+      carsDeliveredBase = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];
