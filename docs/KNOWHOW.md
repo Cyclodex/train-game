@@ -2399,6 +2399,44 @@ Four rules, each measured on that board, each of which failed silently:
 - It is a SCREEN (`/campaign`), not a mode: a `GameMode` is a ruleset with a
   `setup()` to run, a campaign is an index over boards.
 
+## COACH-MARKS (the teaching layer, 2026-08-21)
+- `src/coach.ts` is the whole system: a headless controller (one mark at a time,
+  authored order, `phase === "playing"` only) plus per-board hint lists keyed by
+  board id exactly like `TycoonTuning` (`boardIdOf`), so /play and /test teach
+  the same lesson. `game.ts` steps it LAST in `advance()` and mirrors the active
+  mark into reactive `game.coach` — the whole flow is unit-testable headlessly
+  (`tests/unit/coach.spec.ts`).
+- A MARK IS DISMISSED BY DOING THE THING, never by a button. `done` predicates
+  read CUMULATIVE run facts (`tilesBuilt`, dispatch count, arm-changed flag,
+  deliveries), which is also what auto-completes a mark whose verb the player
+  performed before it was shown. The done set survives Retry (`newRun`); the
+  run facts reset with it.
+- Marks are FILTERED BY `mode.controls` up front (`CoachMarkSpec.needs`): a hint
+  that teaches a disabled verb could never be dismissed — a dead end, not a
+  lesson. No `HudDescriptor` field was added (the five mode hud-shape specs
+  stay untouched); coach data is board-keyed, not mode-keyed.
+- A SWITCH FLIP HAS NO HANDLER TO COUNT IN — `Tile.vue pickArm` writes
+  `game.switches` directly. Detected by per-tick arm-value diff over keys
+  present in BOTH snapshots: a build merging fresh junction entries in
+  (`applyEdits`) adds KEYS, and new keys are deliberately not a flip. Arms
+  re-written with their CURRENT value are indistinguishable from untouched —
+  the lakevalley-open e2e flips a genuinely unused arm (2,2 entered from E)
+  to teach the verb observably.
+- `CoachMark.vue` is world chrome like a fare pin (absolute in `.level`, z 40,
+  counter-scaled by zoom like PersonPin). `pointer-events: none` is
+  LOAD-BEARING: the action is the dismissal, so the bubble must never swallow
+  the click it is asking for. Train anchors ride `game.fareBadges` (frame-
+  refreshed) with a `homeTile` fallback — a mode without fares has NO badges.
+- `npm run shot -- <scenarioId>` CLIPS TO THE TILE BBOX, so a bubble floating
+  above the board's top tile row is cut out of the picture while being
+  perfectly visible in the app. Shoot the ROUTE (`'#/test/<id>'`, full
+  viewport) instead — and in Git Bash prefix `MSYS_NO_PATHCONV=1`, or the
+  leading `#/` is rewritten to `C:/Program Files/Git/…` before node sees it.
+- WHERE IT GOES NEXT: the two-tier concept (these scripted lessons + TF-style
+  once-per-player first-encounter hints — seen-store, triggers, HUD anchors,
+  dwell dismissal) is designed in
+  `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`.
+
 ## GOALS ON THE READY CARD (M9, 2026-07-27)
 - A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
   over `zeroCounters()`, and most goals hold trivially there — "no signal was
