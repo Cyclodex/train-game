@@ -259,6 +259,22 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     return graph;
   }
 
+  // A line may name the same stop MORE THAN ONCE — A→C→B→C is a real service
+  // shape (out via C, back via C; Transport Fever draws them all the time).
+  // What it may not do is name the same stop TWICE IN A ROW: the vehicle is
+  // already standing there, and a doubled call would work the same queue twice.
+  // The line is a CYCLE, so the wrap-around pair (last → first) is a
+  // consecutive pair too. Normalised here, at the one door every stop list
+  // comes through, so no author or UI can express the nonsense case.
+  function normalizeStops(stops: string[]): string[] {
+    const out: string[] = [];
+    for (const s of stops) {
+      if (out[out.length - 1] !== s) out.push(s);
+    }
+    while (out.length > 1 && out[0] === out[out.length - 1]) out.pop();
+    return out;
+  }
+
   function addLine(stops: string[], name?: string): SimLine {
     lineSeq += 1;
     const id = `line-${lineSeq}`;
@@ -286,7 +302,8 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       // Find-or-create by stop list. Two vehicles authored with the same stops,
       // or a player who draws the same route twice, mean the same SERVICE — not
       // two lines that happen to look alike.
-      const key = stops.join(">");
+      const wanted = normalizeStops(stops);
+      const key = wanted.join(">");
       for (const id of lineOrder) {
         const line = lines[id];
         if (line && line.stops.join(">") === key) {
@@ -295,14 +312,14 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
           return line;
         }
       }
-      const made = addLine(stops, name);
+      const made = addLine(wanted, name);
       if (pinned) made.pinned = true;
       return made;
     },
     setLineStops(lineId: string, stops: string[]) {
       const line = lines[lineId];
       if (!line) return false;
-      line.stops = [...stops];
+      line.stops = normalizeStops(stops);
       touch();
       return true;
     },

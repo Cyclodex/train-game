@@ -1689,15 +1689,19 @@ class PlayView extends Vue {
       this.editingLineId ? { lineId: this.editingLineId } : null
     );
   }
-  // A click on a station while a line is being drawn: append it, or remove it
-  // if it is already a stop. Order is click order, which is the order the
-  // trains on it will call at them.
+  // A click on a station while a line is being drawn: APPEND it. Order is
+  // click order, which is the order the trains on it will call — and the same
+  // station may be clicked again later in the sequence (A, C, B, C is a real
+  // service: out via C, back via C — the Transport-Fever shape). The one
+  // exception is the LAST stop: clicking it again takes it back off, which is
+  // both the undo gesture (drawing is append + take-back, so any mistake is
+  // reversible from the end) and what keeps a doubled call (C, C) impossible
+  // to draw. The transit layer normalises that case away anyway.
   editLineAt(tileId: string): void {
     const id = this.editingLineId;
     if (!id) return;
     const stops = [...(this.game.lines.find(l => l.id === id)?.stops ?? [])];
-    const at = stops.indexOf(tileId);
-    if (at >= 0) stops.splice(at, 1);
+    if (stops.length && stops[stops.length - 1] === tileId) stops.pop();
     else stops.push(tileId);
     this.game.setLineStops(id, stops);
   }

@@ -563,7 +563,10 @@ export interface Game {
     // whether it is a stop this line could still take.
     kind: "rail" | "road" | null;
     colour: string;
-    order: Record<string, number>;
+    // stationTileId -> its call position(s) as the badge's label. A line may
+    // call at a stop twice (A→C→B→C), and then the badge carries both places
+    // ("2·4") — one number would hide the revisit the player just drew.
+    order: Record<string, string>;
     path: Record<string, [Port, Port][]>;
   };
   setLineOverlay(what: { lineId?: string; trainId?: string } | null): void;
@@ -1092,8 +1095,8 @@ export function createGame(
     // while a BUS line is open — a hollow "+" on something the click refuses.
     kind: null as "rail" | "road" | null,
     colour: "",
-    // stationTileId -> its 1-based place in the line.
-    order: {} as Record<string, number>,
+    // stationTileId -> its 1-based place(s) in the line, joined for the badge.
+    order: {} as Record<string, string>,
     // The SEGMENTS the line runs over, per tile: the (entry, exit) pairs a
     // train actually drives. Not merely the tile ids — on a junction that
     // would light every arm, including the depot spur the line never takes.
@@ -1122,9 +1125,13 @@ export function createGame(
     const stops = sim.lines().find(l => l.id === lineId)?.stops ?? [];
     lineOverlay.kind = lineKindOf(stops);
     stops.forEach((id, i) => {
-      // A stop listed twice keeps its FIRST place — the badge says when the
-      // train first calls there, which is what a reader wants.
-      if (!(id in lineOverlay.order)) lineOverlay.order[id] = i + 1;
+      // A stop listed twice carries BOTH places ("2·4"): a revisit is a fact
+      // about the line the player just drew, and a badge showing only the
+      // first call would make the second look like it never registered.
+      const place = String(i + 1);
+      lineOverlay.order[id] = lineOverlay.order[id]
+        ? `${lineOverlay.order[id]}·${place}`
+        : place;
     });
     const addSegment = (tileId: string, a: Port, b: Port) => {
       const at = (lineOverlay.path[tileId] ??= []);
@@ -2069,13 +2076,20 @@ export function createGame(
         bus.departing = true;
       }
 
-      // On to the next stop. Calling anywhere on the line moves the cursor PAST
-      // that stop, the same rule a train follows. Recomputing it from where the
-      // bus stands makes this idempotent, which a retry depends on.
+      // On to the next stop. The cursor steps forward only when the bus is
+      // standing AT the stop it was bound for — the same in-order rule a train
+      // follows. NEVER recompute it from `indexOf`: a line may name the same
+      // stop twice (A→C→B→C), and the first occurrence would swallow the
+      // second. Still idempotent for the retry below: once advanced, the kerb
+      // under the bus no longer matches the new target (the transit layer
+      // normalises doubled calls away), so a failed departure cannot advance
+      // it again.
       const at = roadSim.carTile(bus.carId);
-      const here = at ? stops.indexOf(at) : -1;
-      if (here >= 0) bus.stopIndex = (here + 1) % stops.length;
-      const next = stops[bus.stopIndex];
+      const arrivedAtTarget = !!at && at === stops[bus.stopIndex % stops.length];
+      if (arrivedAtTarget) {
+        bus.stopIndex = (bus.stopIndex + 1) % stops.length;
+      }
+      const next = stops[bus.stopIndex % stops.length];
       // `retarget` REFUSES rather than teleporting the bus, and that answer has
       // to be acted on: the trip stays "arrived" with the dwell run out, so a
       // bus that ignored it re-ran the exchange at the same kerb every
@@ -2105,7 +2119,12 @@ export function createGame(
       // open the doors a second time at a kerb the bus never left.
       roadSim.despawn(bus.carId);
       bus.carId = undefined;
-      if (here >= 0) bus.stopIndex = here;
+      // Step the cursor BACK to the stop it is standing at (undoing the
+      // advance above), never via `indexOf` — with a stop named twice on the
+      // line, indexOf finds the first occurrence and the second leg vanishes.
+      if (arrivedAtTarget) {
+        bus.stopIndex = (bus.stopIndex - 1 + stops.length) % stops.length;
+      }
       bus.turnedRoundAt = at;
     }
   }

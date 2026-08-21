@@ -1055,8 +1055,29 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each
   station comes round once a lap; **a there-and-back shuttle** can only reverse
-  at a depot, so it needs one at each end and serves intermediate stations
-  TWICE a round trip (once each way). Both are covered by tests.
+  at a depot, so it needs one at each end. Both are covered by tests.
+- THE ORDER IS THE CONTRACT (2026-08-21, the Transport-Fever rule): a lined
+  train calls ONLY at the stop it is currently bound for and runs past every
+  other platform — its own line's included — and the cursor simply steps +1 on
+  each call. The old rule (call at ANY of the line's stops when passing,
+  cursor re-derived by `indexOf`) broke two ways at once: on a ring, a stop
+  whose route led past the others was NEVER reached (every en-route platform
+  hijacked the cursor — "the train never goes to A"), and a stop named twice
+  on a line was swallowed (indexOf finds the first occurrence). NEVER
+  reintroduce indexOf-based cursor recovery — the bus cursor in game.ts
+  (`advanceBuses`) follows the identical rule, including the terminus
+  turn-round stepping BACK by one instead of re-finding itself.
+- A LINE MAY NAME A STOP TWICE — A→C→B→C is out via C, back via C, and since
+  the strict order above it is also the ONLY way to serve an intermediate
+  station in both directions of a shuttle (a train bound for A no longer calls
+  at C just for standing on the way). Never twice in a ROW: `normalizeStops`
+  (sim/transit.ts, the one door every stop list enters by — createLine AND
+  setLineStops) collapses consecutive duplicates and the wrap-around pair
+  (last → first is consecutive too, a line is a cycle). The line editor
+  (PlayView `editLineAt`) APPENDS on click; clicking the LAST stop takes it
+  back off (the undo gesture — a mid-list stop is removed by popping back to
+  it). Overlay badges carry every call position ("2·4"), keyed per station.
+  `/test/linerevisit` is the shape in isolation; pins in `lines.spec.ts`.
 - Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
   any of these platforms in one call, but a station only gets served once a
   lap. Size the towns against the lap, or the overflow fail fires on a board
@@ -2256,6 +2277,14 @@ Four rules, each measured on that board, each of which failed silently:
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
 ## PARKING (cars stop, 2026-07-26)
+- WHOLE-FRACTION PITCHES REPEAT AT THE SEAM (2026-08-21): a packed row starts
+  at the tile's leading edge, so only a pitch that divides the tile exactly
+  fills it — `parallel` is 1/3 (three bays, no orphaned stub of kerb that read
+  as a fourth bay cut off mid-box) and `bikerack` 1/16. Two parking tiles side
+  by side then repeat as one continuous rank. A non-dividing pitch leaves a
+  stub the apron's seam extension paves anyway, which is the "cut-off bay"
+  playtest report. The truck/coach that would "fit" the roomier 66.7px box is
+  still refused by the bay-CLASS gate, not by size.
 - THE PAINT LIVES IN `TileParking.vue`, not `Tile.vue` (moved 2026-07-27). It needs
   THREE z-layers and cannot be dropped in at one point, so it is one component
   with a `layer` prop the caller places three times: `apron` (under the road's own
