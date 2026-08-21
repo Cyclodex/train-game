@@ -28,6 +28,7 @@ import {
   manoeuvreAt,
   stallId,
   stallPose,
+  stallWalkIn,
   type ManoeuvrePath,
   type StallRef,
 } from "@/tiles/parking";
@@ -4119,6 +4120,43 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             part: spec.segments[0].part,
           });
           return { id: c.id, units, laneIndex: c.laneIndex, laneCount: 1, destination: c.destination };
+        }
+        // A WALKED-IN stall (the bike rack) has no manoeuvre curve at all — the
+        // bike goes straight from the kerb to `parked` — so the parked pose comes
+        // from the stall itself: the same `stallPose` the painted rack is drawn
+        // from, so the bike and its stand can never disagree.
+        if (c.phase === "parked" && c.stall) {
+          const info = parking.info(c.stall);
+          if (info && stallWalkIn(info.row.kind)) {
+            const pose = stallPose(info.row, c.stall.index, 1, info.kerb);
+            const rad = (pose.angleDeg * Math.PI) / 180;
+            const half = spec.segments[0].length / 2;
+            const mk = (sign: number): CarSample => ({
+              coord: c.path[c.headIndex].coord,
+              entryPort: c.path[c.headIndex].entryPort,
+              exitPort: null,
+              t: 0,
+              pose: {
+                tx: pose.x + Math.cos(rad) * half * sign,
+                ty: pose.y + Math.sin(rad) * half * sign,
+                headingDeg: pose.angleDeg,
+              },
+            });
+            return {
+              id: c.id,
+              units: [
+                {
+                  front: mk(1),
+                  rear: mk(-1),
+                  lengthTiles: spec.segments[0].length,
+                  part: spec.segments[0].part,
+                },
+              ],
+              laneIndex: c.laneIndex,
+              laneCount: 1,
+              destination: c.destination,
+            };
+          }
         }
         let lead = 0; // arc distance from the head to this segment's leading edge
         for (const seg of spec.segments) {

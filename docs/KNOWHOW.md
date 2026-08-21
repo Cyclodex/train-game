@@ -1055,8 +1055,29 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each
   station comes round once a lap; **a there-and-back shuttle** can only reverse
-  at a depot, so it needs one at each end and serves intermediate stations
-  TWICE a round trip (once each way). Both are covered by tests.
+  at a depot, so it needs one at each end. Both are covered by tests.
+- THE ORDER IS THE CONTRACT (2026-08-21, the Transport-Fever rule): a lined
+  train calls ONLY at the stop it is currently bound for and runs past every
+  other platform — its own line's included — and the cursor simply steps +1 on
+  each call. The old rule (call at ANY of the line's stops when passing,
+  cursor re-derived by `indexOf`) broke two ways at once: on a ring, a stop
+  whose route led past the others was NEVER reached (every en-route platform
+  hijacked the cursor — "the train never goes to A"), and a stop named twice
+  on a line was swallowed (indexOf finds the first occurrence). NEVER
+  reintroduce indexOf-based cursor recovery — the bus cursor in game.ts
+  (`advanceBuses`) follows the identical rule, including the terminus
+  turn-round stepping BACK by one instead of re-finding itself.
+- A LINE MAY NAME A STOP TWICE — A→C→B→C is out via C, back via C, and since
+  the strict order above it is also the ONLY way to serve an intermediate
+  station in both directions of a shuttle (a train bound for A no longer calls
+  at C just for standing on the way). Never twice in a ROW: `normalizeStops`
+  (sim/transit.ts, the one door every stop list enters by — createLine AND
+  setLineStops) collapses consecutive duplicates and the wrap-around pair
+  (last → first is consecutive too, a line is a cycle). The line editor
+  (PlayView `editLineAt`) APPENDS on click; clicking the LAST stop takes it
+  back off (the undo gesture — a mid-list stop is removed by popping back to
+  it). Overlay badges carry every call position ("2·4"), keyed per station.
+  `/test/linerevisit` is the shape in isolation; pins in `lines.spec.ts`.
 - Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
   any of these platforms in one call, but a station only gets served once a
   lap. Size the towns against the lap, or the overflow fail fires on a board
@@ -2310,6 +2331,14 @@ Four rules, each measured on that board, each of which failed silently:
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
 ## PARKING (cars stop, 2026-07-26)
+- WHOLE-FRACTION PITCHES REPEAT AT THE SEAM (2026-08-21): a packed row starts
+  at the tile's leading edge, so only a pitch that divides the tile exactly
+  fills it — `parallel` is 1/3 (three bays, no orphaned stub of kerb that read
+  as a fourth bay cut off mid-box) and `bikerack` 1/16. Two parking tiles side
+  by side then repeat as one continuous rank. A non-dividing pitch leaves a
+  stub the apron's seam extension paves anyway, which is the "cut-off bay"
+  playtest report. The truck/coach that would "fit" the roomier 66.7px box is
+  still refused by the bay-CLASS gate, not by size.
 - THE PAINT LIVES IN `TileParking.vue`, not `Tile.vue` (moved 2026-07-27). It needs
   THREE z-layers and cannot be dropped in at one point, so it is one component
   with a `layer` prop the caller places three times: `apron` (under the road's own
@@ -3812,8 +3841,9 @@ of the above; read that section first.
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
 ## BICYCLES (phase A+B — the slow kind and the cycle lane, 2026-08-05)
-Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phases
-C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT built).
+Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phase C
+— racks + bike-and-ride — is built, see the next section; C′/D — the citizen
+mode, shared paths — are NOT).
 - `VehicleKind "bike"` is the FIRST kind with its own pace: `KIND_SPEED`
   (road.ts, bike 0.45) scales the cruise draw at BOTH spawn sites; before it,
   every kind drew from the same `carSpeed ± spread` band and only length
@@ -3834,9 +3864,9 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
 - DETERMINISM: "bike" carries no default mix weight, so `pickKind`'s draw
   sequence is unchanged on every pre-bike seeded board (pinned in
   roadBikes.spec.ts). Bikes appear only where `traffic.mix` opts in.
-- `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
-  SIZE gate would pass a bike into any car bay — the class gate is the only
-  fence. Racks are phase C; until then a bike on a parking trip could only fail.
+- `vehicleCanPark` admits bikes since phase C (racks exist) — and racks are the
+  ONLY place they may stop: the SIZE gate would pass a bike into any car bay, so
+  the bay-CLASS gate is the only fence (see BICYCLES phase C below).
 - A bike NEVER rides an inner lane: `preferredLane` short-circuits for bikes to
   the kerb-most cycle lane (else kerb-most usable lane) — no exit-lane settle,
   no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
@@ -3911,6 +3941,103 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   forced left), `/test/cyclebend` + `/test/cycleoneway` (the paint on the other
   two road shapes); sim pins in `roadBikes.spec.ts`, paint pins in
   `roadGeometry.spec.ts`.
+
+## BICYCLES phase C — the rack and bike-and-ride (2026-08-20)
+- `StallKind "bikerack"` = the busstop's MIRROR: `stallWalkIn` (tiles/parking.ts)
+  is the one predicate — no manoeuvre curve in EITHER direction (the rider stops
+  at the kerb abeam the stand, `startTOf` returns `info.t`, `exitsForward` is
+  false, `beginEntering` short-circuits straight to `parked` with
+  `parkPath = null`). A halt keeps its road body (`parkOnLane`); a rack drops it
+  (ordinary parked invariant, zero body points) — that pair of predicates is the
+  whole difference between the two no-manoeuvre kinds.
+- A parked WALK-IN vehicle has no curve for `sample()`'s parked branch (it keys
+  on `parkPath`), so road.ts has a second branch that poses it straight from
+  `stallPose(row, index, 1, info.kerb)` — same source as the painted hoops, so
+  bike and stand cannot disagree. Forget it and a racked bike renders standing
+  in its lane.
+- Rack depth is 0.09 (18px), NOT the plan's 0.08: `stallFits` measures the real
+  body (bike 17.1px) against `stallLengthPx · 0.98`, and 16px refuses the very
+  vehicle the rack exists for. Pitch 0.06 (12px — a bike is 9px wide) → 16
+  stands/tile where 3 cars fit; it shipped at 18px first and read half-empty.
+- `BayClass "bike"` admits bikes ONLY, and no other class admits a bike — both
+  directions matter, because a bike passes every size gate there is. A rack
+  cannot be `reserved` (needsBigBay would size the stands for a lorry) or
+  `resident` (the resident class only admits cars → dead stands);
+  `validateParking` refuses both.
+- THE P+R TRAP (predicted by the survey, real): `parkAndRideStationsOf`
+  qualified a station on ANY parking row in reach — the first rack would have
+  made its station a car P+R target with nowhere for a car to park. It filters
+  by bay class now (`bayAdmits("car", bayClassOf(row))`), and
+  `bikeAndRideStationsOf` is the bike sibling (same WALK radius: the
+  rack→platform leg is a walk). `CitizenWorld.bikeAndRideStations` carries it
+  for phase C′.
+- CYCLING REACH IS A RANGE, NOT A CONSTANT (`BIKE_RANGE_TILES`
+  {typical 5, max 9} + `bikeRangeOf(affinity)`, tiles/catchment.ts): most riders
+  take the bike for short hops, a sporty tail rides far — per-rider willingness
+  is drawn from the band (C′ feeds `bikeAffinity` in), targeting/reachability
+  asks `max`. Never widen the shared WALK_RADIUS_TILES instead — it also feeds
+  station demand and P+R, and inflating it re-prices every station.
+- The transfer needed ZERO new code: a rack stall going free→taken within walk
+  reach injects `transferSizeOf` = 1 rider (the default arm — only a bus stop
+  returns a busload). Pinned in parkAndRide.spec.ts ("arrived BY BIKE").
+- `/test/bikerack` (rack + kerb bays side by side, classes never cross),
+  `/test/bikeandride` (the rack feeds the platform); pins in `bikeRack.spec.ts`.
+
+## BICYCLES phase C′ — citizens ride bikes (2026-08-21)
+- `TravelMode "bike"` + `"bikeAndRide"`. EVERY `Record<TravelMode, number>` is
+  now built by `zeroModes()` and summed by ITERATING `TRAVEL_MODES`
+  (citizens.ts) — the hand-written literals/sums were the spec's named silent-
+  under-report risk, and the one literal left is game.ts's HUD seed. Adding a
+  mode = the union + TRAVEL_MODES + the UI label maps (CityPanel rows/colours,
+  CitizenInspector MODE_LABEL/ICON — Records, so the compiler chases you).
+- OWNERSHIP GATES, AFFINITY SHAPES: `profile.bikeOwner` (tuning.bikeOwnership
+  0.7) says whether the modes exist; `profile.bikeAffinity` (0..1 keenness)
+  does double duty — perceived cost via `bikeCostOf` (mapped into the SAME
+  0.7–1.4 band the other affinities draw from) and the rider's own RANGE via
+  `bikeRangeOf`. The range IS the patience: no slog curve, a hard per-rider
+  distance gate ("too-far").
+- `bikeSaddleSec` (6s flat, bike legs only) is what keeps the bike off the
+  one-tile hop — WITHOUT re-pricing the shared `walkAccessTiles` charge, which
+  stays equal across modes (the spec's explicit rule). Without it bikes beat
+  the walk from d=1 and `/test/citizenwalk` fell to a 38% walk share.
+- BIKE quote = walk template + car's road-component rule + roadDetour at
+  `bikeSpeed` 0.45 (1.8× walk, 0.75× car), NO parkPenaltySec (a bike locks at
+  the door — half of why it wins the short hops). BIKE-AND-RIDE = the P+R
+  template on two wheels: ride to `nearestBikeAndRide` (CHEBYSHEV against the
+  range, like every station-reach measure; the ride itself is priced at full
+  detoured length), lock, WALK to the platform, train, egress. New refusals
+  "no-bike"/"no-rack"; "too-far" is shared (each mode's own reach ran out).
+- A CYCLING CITIZEN IS A BIKE: `DrivingPort.request` gained `kind?: "car" |
+  "bike"` (game.ts passes it to `roadSim.requestTrip`); `FIRST_LEG` maps both
+  bike modes to a driving-shaped leg. A bike mode NEVER resumes the parked CAR
+  (`bikeMode` guard in startTrip). Like P+R's car, the B+R bike is retired at
+  the rack's street — the rack STALLS fill with the road sim's own riders; the
+  held-stall "return half" is one open debt for both modes.
+- THE RACK→PLATFORM LEG IS WALKED, never teleported (`arriveFromDrive`, mode
+  bikeAndRide): leg "walking" timed from the real rack tile + a REAL walker.
+  Two footway extensions made that possible, and they fix more than bikes:
+  · `planWalk` endpoints now take a STREET TILE itself (start on its own
+    pavement, both sides seeded — side changes still only at crossings) and a
+    STATION (nearest street beside it — before this, every "walk to the
+    platform" silently fell back to a clock because a station tile is not an
+    `isAddress`).
+  · buildSteps: no driveway stub for a street-tile endpoint (a stub starts at
+    the tile CENTRE = the middle of the carriageway), and the degenerate
+    single-tile single-SIDE walk gets a 0.45–0.55 shuffle so it has steps at
+    all. Only single-side: a step costs fixed TIME, and padding one in front
+    of a zebra held the walker past the kerb-wait the crossing tests measure.
+- KNOCK-ON SHARES, all deliberate (the spec's acceptance: bikes eat
+  WALK-OR-DRIVE share, never transit's): `/test/citizenwalk` walk share 0.89 →
+  ~0.62 (walk+bike > 0.7 pinned instead), citizencars strandings ~55 → high
+  40s (a bike rescues some of the carless — refusal pin now >35), citizenchoice
+  produces FOUR answers (bike joins walk/car/train). `stats().cycling` +
+  HUD 🚴 count the trade against `driving`.
+- `/test/citizenbike` is the flagship: houses 3+ tiles from the platform
+  (transit refused "no-station-in-reach"), rack under the station, workshop up
+  the road, works town rail-only. Pins in `tests/unit/citizenBikes.spec.ts` —
+  including "offered ⇔ bikeRangeOf(affinity) reaches the rack, exactly" and
+  the two end-to-end runs (real bikes; the rack walk observed with a live
+  `walkTrip`).
 
 ## BIKES vs MOTORCYCLES + THE WIDE STREET (#99, 2026-08-21)
 - The old "bike" split in two. The BIKE keeps the slow kerb-bound behaviour and

@@ -6,6 +6,7 @@ import { workparking } from "@/levels/test/scenarios/workparking";
 import { citizencars } from "@/levels/test/scenarios/citizencars";
 import { cyclelane } from "@/levels/test/scenarios/cyclelane";
 import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
+import { widestreet } from "@/levels/test/scenarios/widestreet";
 import { deriveKerbOverflow, kerbOverflowTiles, KERB_SPACES } from "@/tiles/kerbOverflow";
 import { levelBounds } from "@/tiles/bounds";
 import {
@@ -136,6 +137,11 @@ describe("the kerb is derived from the street", () => {
     // changes the scenario not at all.
     expect(kerbOverflowTiles(cyclelane.level)).toEqual([]);
     expect(deriveKerbOverflow(cyclelane.level)).toEqual(cyclelane.level);
+    // A wide street's unmarked SHOULDER (#106) is ridden exactly like a cycle
+    // lane — `bikeLaneIndices` covers both — so a widestreet grows no informal
+    // space either. Guarding only kind "cycle" was the gap the review flagged
+    // once wide streets landed: a car on the shoulder is a car on the bikes.
+    expect(kerbOverflowTiles(widestreet.level)).toEqual([]);
     // Per BANK, not per tile: the one-way's kerb side (right of travel,
     // Bottom) is green, but its far bank is legitimate kerb and keeps its
     // spaces — blanket-skipping the tile would have thrown that kerb away.

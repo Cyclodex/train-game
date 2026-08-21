@@ -20,6 +20,7 @@ import {
   stallPitchPx,
   stallPose,
   stallOnLane,
+  stallWalkIn,
   garageExitFrom,
   needsBigBay,
   layByTaperPx,
@@ -186,7 +187,39 @@ export function stallOutlinePath(
   // American wide street you park along. The apron and the outer kerb line are
   // deliberately still drawn: without them the parked cars would sit on grass.
   if (row.marking === "none" && !ghost) return "";
+  // A RACK is not painted as bays either: nobody paints a white box around a
+  // bike stand. Its stalls are the hoops themselves (`bikeRackGeometry`), which
+  // are VISIBLE furniture — so unlike informal/unmarked stalls it needs no
+  // debug ghost, and the skip is unconditional.
+  if (stallWalkIn(row.kind)) return "";
   return poly(stallBoxPoints(row, index, size, kerbPx));
+}
+
+// --- Bike racks ---------------------------------------------------------------
+
+// The rack's furniture: one HOOP (an Anlehnbügel seen from above — a short bar
+// the bike leans against) per stall, drawn on the apron. Placed from the same
+// `stallPose` the sim parks the bike at, so a stand and the bike standing at it
+// can never disagree. The hoop sits a whisker downstream of the stall's centre:
+// the bike leans ON it, not through it.
+export function bikeRackGeometry(
+  row: ParkingRow,
+  size: number,
+  kerbPx: number,
+): { hoops: string[] } {
+  const f = rowFrame(row, size);
+  const near = bayNearPx(row, size, kerbPx);
+  const depth = stallDepthPx(row.kind, size);
+  const hoops: string[] = [];
+  for (let i = 0; i < row.count; i++) {
+    const pose = stallPose(row, i, size, kerbPx);
+    const along = pose.t * size + pose.pitchPx * 0.28;
+    // The bar runs out from the kerb, spanning the middle of the stand's depth.
+    hoops.push(
+      poly([f.at(along, near + depth * 0.18), f.at(along, near + depth * 0.82)], false),
+    );
+  }
+  return { hoops };
 }
 
 // The kerb line along the OUTER edge of an apron — where the parking strip meets

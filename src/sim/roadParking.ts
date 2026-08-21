@@ -42,6 +42,7 @@ import {
   REVERSE_PACE,
   rowSide,
   canReverseIn,
+  stallWalkIn,
   turnsInAcrossKerb,
   type EntryStyle,
 } from "@/tiles/parking";
@@ -127,9 +128,9 @@ export interface CourtesyClaim {
 }
 
 // The lane-access class of a vehicle. Pure, so it lives here rather than being
-// lent by road.ts.
+// lent by road.ts — kept in lockstep with road.ts's `vehicleClassOf`.
 function clsOf(car: Car): VehicleClass {
-  return car.kind === "bus" ? "bus" : "car";
+  return car.kind === "bus" ? "bus" : car.kind === "bike" ? "bike" : "car";
 }
 
 function laneOf(car: Car): number {
@@ -559,6 +560,22 @@ export function createParkingPhases(deps: ParkingDeps) {
       car.phase = "parked";
       car.velocity = 0;
       car.manoeuvre = 1;
+      car.dwellLeft = drawDwell(car);
+      return;
+    }
+    // A WALKED-IN stall (the bike rack) is the halt's mirror image: no curve
+    // either, but OFF the lane. The rider stops at the kerb abeam the stand and
+    // the bike is wheeled in — phase goes straight to `parked`, which zeroes the
+    // road body (the ordinary parked invariant), so the lane is free at once.
+    // `headProgress` stays frozen where the rider stopped, exactly where the
+    // bike re-enters the road when the stay is over.
+    const stallKind = parking.info(car.stall!)?.row.kind;
+    if (stallKind && stallWalkIn(stallKind)) {
+      car.phase = "parked";
+      car.velocity = 0;
+      car.manoeuvre = 1;
+      car.parkPath = null;
+      car.parkedReverse = false;
       car.dwellLeft = drawDwell(car);
       return;
     }

@@ -2,6 +2,7 @@ import type { Level, PlotKind, TileCell } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { WALK_RADIUS_TILES } from "@/tiles/catchment";
 import { rowsOf } from "@/tiles/parking";
+import { bayAdmits, bayClassOf } from "@/sim/parking";
 import { makeRng } from "@/utils/globalHelpers";
 
 // Cities and plots: what the MAP says about where people live and work.
@@ -123,6 +124,11 @@ export interface CitizenWorld {
   plots: WorldPlot[];
   cities: CitySpec[];
   parkAndRideStations: ParkAndRideStation[];
+  // The bike-and-ride sibling: stations with a RACK in walking reach. Same
+  // shape — ride there, lock the bike, walk to the platform. Consumed by the
+  // citizen model's `TravelMode "bikeAndRide"` (phase C′); derived here so the
+  // planner and the transfer agree about which stations qualify.
+  bikeAndRideStations: ParkAndRideStation[];
 }
 
 // --- what counts as a plot -----------------------------------------------------
@@ -424,18 +430,43 @@ function roadNear(
 
 /**
  * Stations a driver can leave the car at and continue by rail: a station with
- * parking within its own walking reach. The same rule `game.ts` already uses to
- * decide that a parked car's occupant joins a platform queue — stated once here
- * so the citizen who *plans* a park-and-ride and the transfer that *happens*
- * agree about which stations qualify.
+ * CAR parking within its own walking reach. The same rule `game.ts` already uses
+ * to decide that a parked car's occupant joins a platform queue — stated once
+ * here so the citizen who *plans* a park-and-ride and the transfer that
+ * *happens* agree about which stations qualify.
+ *
+ * BY BAY CLASS, not by "any parking row": a station whose only nearby parking
+ * is a bike rack (or a bus stop, or a lorry lay-by) is not somewhere a citizen
+ * can leave the CAR, and counting it would silently turn every rack-equipped
+ * station into a car P+R target the moment racks existed.
  */
 export function parkAndRideStationsOf(level: Level): ParkAndRideStation[] {
+  return stationsWithParkingFor("car", level);
+}
+
+/**
+ * The bike-and-ride sibling: stations with a BIKE-admitting row (a rack) within
+ * walking reach — ride to the station, lock the bike, walk to the platform. The
+ * rack→platform leg is a WALK, which is why the radius here stays
+ * WALK_RADIUS_TILES; how far a citizen will *ride* to get to the rack is the
+ * separate, per-rider question (`BIKE_RANGE_TILES` / `bikeRangeOf`).
+ */
+export function bikeAndRideStationsOf(level: Level): ParkAndRideStation[] {
+  return stationsWithParkingFor("bike", level);
+}
+
+function stationsWithParkingFor(
+  kind: "car" | "bike",
+  level: Level,
+): ParkAndRideStation[] {
   const components = roadComponents(level);
   const out: ParkAndRideStation[] = [];
   for (const [id, cell] of Object.entries(level)) {
     if (cell.role !== "station") continue;
     const { x, y } = parseCoordId(id);
-    if (hasNeighbourWithin(level, x, y, WALK_RADIUS_TILES, c => rowsOf(c).length > 0)) {
+    const admits = (c: TileCell) =>
+      rowsOf(c).some(row => bayAdmits(kind, bayClassOf(row)));
+    if (hasNeighbourWithin(level, x, y, WALK_RADIUS_TILES, admits)) {
       const near = roadNear(level, components, x, y, WALK_RADIUS_TILES);
       out.push({ station: id, roadComponent: near.component, roadTile: near.tile });
     }
@@ -460,5 +491,10 @@ export function buildCitizenWorld(level: Level, seed = 1): CitizenWorld {
       stationsInReach: stationsInReachOf(level, p.x, p.y),
     };
   });
-  return { plots, cities, parkAndRideStations: parkAndRideStationsOf(level) };
+  return {
+    plots,
+    cities,
+    parkAndRideStations: parkAndRideStationsOf(level),
+    bikeAndRideStations: bikeAndRideStationsOf(level),
+  };
 }

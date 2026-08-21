@@ -387,7 +387,16 @@ describe("citizens walk where you can see them", () => {
     // The rendered figures ARE the walking citizens — one dot each, no more.
     expect(peakDots).toBe(peakOnFoot);
     // ...and this board is about walking: almost nobody's job needs a car.
-    expect(game.citizenStats.modeShare.walk).toBeGreaterThan(0.7);
+    // Since phase C′ the keener cyclists take the 2–4 tile trips by BIKE — the
+    // slice the bicycle plan explicitly promised them ("the winner for the 2–4
+    // tile trips that are currently walk-or-drive") — so walking's share came
+    // down from ~0.89 to ~0.62 here. What must stay true is that ACTIVE travel
+    // owns this board and the walk is still its biggest single mode; a car
+    // town it is not.
+    expect(game.citizenStats.modeShare.walk).toBeGreaterThan(0.5);
+    expect(
+      game.citizenStats.modeShare.walk + game.citizenStats.modeShare.bike
+    ).toBeGreaterThan(0.7);
     expect(game.citizenStats.tripsRefused).toBe(0);
   });
 

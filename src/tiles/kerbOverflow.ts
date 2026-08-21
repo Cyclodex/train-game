@@ -1,7 +1,7 @@
 import type { Level, TileCell, Port } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
 import { oppositePort, neighborCoord } from "@/sim/topology";
-import { cycleLaneIndices, isOneWayStraight } from "@/tiles/lanes";
+import { bikeLaneIndices, isOneWayStraight } from "@/tiles/lanes";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { levelBounds } from "@/tiles/bounds";
 import {
@@ -85,14 +85,17 @@ export function deriveKerbOverflow(level: Level, opts: KerbOverflowOptions = {})
     const cell = level[tileId];
     if (!canCarryKerb(level, tileId, cell)) continue;
     const taken = new Set<Port>(rowsOf(cell).map(bankOf));
-    // THE KERB IS THE BIKE'S where an approach carries a cycle lane (#87): the
-    // half-width green strip is painted on that stream's kerb side and its
-    // bikes ride it, so a car left there would stand ON the cycle lane and a
+    // THE KERB IS THE BIKE'S where an approach carries a cycle lane (#87) OR a
+    // wide street's shoulder (#106) — `bikeLaneIndices` is the one query for
+    // both, because both are ridden the same way: on the kerb side of their
+    // stream. A car left there would stand ON the strip the bikes ride and a
     // car pulling in would cut across it. Per BANK, not per tile: a one-way
     // street with a cycle lane on one side keeps its other, legitimate kerb.
+    // (Guarding only kind "cycle" was the gap the review flagged once wide
+    // streets landed.)
     const bikeBanks = new Set<Port>();
     for (const lane of cell.road ?? []) {
-      if (cycleLaneIndices(cell.road, lane.from).length > 0) {
+      if (bikeLaneIndices(cell.road, lane.from).length > 0) {
         bikeBanks.add(bankFor(lane.from, "right"));
       }
     }

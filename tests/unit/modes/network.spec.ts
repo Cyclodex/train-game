@@ -628,7 +628,7 @@ describe("the line overlay", () => {
     game.setLineOverlay({ trainId: "circle" });
     const stops = networkmode.trains.circle.line ?? [];
     stops.forEach((id, i) => {
-      expect(game.lineOverlay.order[id]).toBe(i + 1);
+      expect(game.lineOverlay.order[id]).toBe(String(i + 1));
     });
     // The ring's tiles are drawn, and each carries the SEGMENTS driven.
     expect(Object.keys(game.lineOverlay.path).length).toBeGreaterThan(stops.length);
