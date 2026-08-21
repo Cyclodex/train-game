@@ -87,7 +87,7 @@
 
       <!-- THE COMPARISON. Every way of making this journey, priced. -->
       <h4 class="inspector__h4">
-        {{ person.travellingTo ? "This journey" : "Their commute" }}, every way
+        {{ person.travellingTo ? "This journey" : "Their trip to work" }}, every way
       </h4>
       <table class="inspector__modes">
         <tr v-for="m in modes" :key="m.mode" :class="{ 'is-chosen': m.chosen, 'is-off': !!m.why }">
@@ -104,7 +104,7 @@
       </table>
       <p v-if="modes.length > 0 && !modes.some(m => m.chosen)" class="inspector__stranded">
         No way to make this journey at all — they give up, and the city's
-        <b>access</b> score takes it.
+        <b>connection</b> score takes it.
       </p>
       <p class="inspector__foot">
         Journey times are on the town's own clock, the same one at the top of

@@ -118,19 +118,19 @@ class CityPanel extends Vue {
     return [
       {
         key: "commute",
-        label: "Commute",
+        label: "Work",
         value: city.happiness.commute,
         title: "How getting to work is going",
       },
       {
         key: "errands",
-        label: "Errands",
+        label: "Shopping",
         value: city.happiness.errands,
         title: "How getting to the shops is going",
       },
       {
         key: "access",
-        label: "Access",
+        label: "Connection",
         value: city.happiness.access,
         title: "Whether the journey can be made at all",
       },

@@ -16,7 +16,7 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 //     each person's exact departure is their own.
 //  2. **Mode share.** The short hops inside a town are walked; the cross-map
 //     commutes are the train slice. That slice IS the network's report card.
-//  3. **Happiness, then population.** Trains running → the commute bar rises,
+//  3. **Happiness, then population.** Trains running → the Work bar rises,
 //     newcomers arrive and plots densify. Let both trains sit in their depots
 //     for a few days and watch the same board hollow out.
 //
