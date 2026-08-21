@@ -320,6 +320,7 @@
         class="score-calendar"
         :class="{ 'score-calendar--broke': taxUnaffordable }"
         :title="calendarTitle"
+        data-coach-slot="calendar"
       >
         📅 {{ dateLabel }}
         <span class="score-tax">🏛 {{ taxPerYearLabel }}/yr</span>
