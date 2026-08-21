@@ -16,7 +16,14 @@ import { CitizenTuning } from "@/sim/citizens";
 export interface ModeControls {
   switches: boolean; // flip junction switches
   signalHolds: boolean; // hold/release + force-green signals
-  crossingGate: boolean; // manual level-crossing gate (Crossing Keeper, later)
+  // Manual level-crossing gate. FALSE IN EVERY SHIPPED MODE since Crossing
+  // Keeper was retired from the picker (#121), and nothing in the view reads it
+  // any more — the worst-car-wait readout it used to gate was removed with the
+  // mode. The flag (and the `maxCarWaitSec`/`carsDelivered`/`crossingIncidents`
+  // counters in `sim/objectives.ts`, which the road frame still fills every
+  // tick) stays for the road-scoring mode that revives them; see
+  // `docs/road-future-improvements.md` §1.
+  crossingGate: boolean;
   build: boolean; // edit the board (Sandbox)
   // Trains wait in their depot until the player sends them (Tycoon). This is the
   // ONLY switch that turns the sim's `waitForDispatch` on — leave it false and
@@ -58,9 +65,13 @@ export interface EconomySetup extends EconomySpec {
 // people, and the station spawn schedule keeps working exactly as before.
 //
 // Present → the board's towns are populated with citizens who live, work,
-// choose how to travel and judge the result. The synthetic per-station demand
-// (`stationDemandOf`) is turned OFF in that case, because the citizens ARE the
-// demand and two sources would double-count the platform.
+// choose how to travel and judge the result. Demand is ADDITIVE since #117:
+// the derived per-station schedule is reinterpreted as EDGE demand (travellers
+// imported from off-map) and scaled by the per-stop `TileCell.edgeDemand`
+// dial, whose DEFAULT under the citizen layer is 0 — so a board that says
+// nothing behaves as before, and a board that sets the dial runs citizens and
+// edge riders on one platform. No double-counting: the queue tells them apart
+// by tags, never by exclusion.
 export interface CitizenSetup {
   // Overrides on the citizen sim's tuning (day length, speeds, patience). The
   // day length is the genre dial — see sim/citizens.ts DEFAULT_TUNING.
@@ -111,6 +122,12 @@ export interface GameMode {
   createObjective(setup: ModeSetup): ObjectiveTracker;
   createSpawner?(setup: ModeSetup): Spawner;
   hud: HudDescriptor;
+  // Why this mode cannot run on a board — a one-line reason for the picker —
+  // or null when it fits. Judged over the board's DERIVED capabilities
+  // (modes/compat.ts), so nobody maintains per-board mode lists. Omitted →
+  // the mode runs anywhere (Sandbox, and modes that generate their own board
+  // like Daily). See #114.
+  fits?(caps: import("@/modes/compat").BoardCapabilities): string | null;
 }
 
 // The default createObjective for any mode that just runs the tracker over its

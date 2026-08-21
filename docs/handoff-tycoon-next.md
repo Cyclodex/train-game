@@ -30,8 +30,10 @@ size.
   the `DOMAINS` tree. The registry test validates every map, so a broken one
   fails CI. The exception is anything that only exists on `/play`: `TestStage`
   renders no start/end overlay and calls `startObjective()` in `mounted()`, so
-  the Ready card, the campaign and any coach-mark **cannot** appear there. Say so
-  explicitly rather than adding a scenario that shows nothing.
+  the Ready card and the campaign **cannot** appear there. (Coach-marks CAN:
+  they gate on `phase === "playing"`, which the stage enters in `mounted()` —
+  `/test/coachmarks` shows them live.) Say so explicitly rather than adding a
+  scenario that shows nothing.
 - **Visual change ⇒ a screenshot**, before/after into `docs/verify/<topic>/`.
 - **No AI attribution in commit messages** (`KNOWHOW` → WORKFLOW).
 - Commit your scoped change as soon as it is done and green. Other sessions edit
@@ -91,9 +93,22 @@ crashes, production chains, reversing trains.
 
 ## 3. The open items
 
-### 3.1 Coach-marks / a teaching system · **M** · start here
+### 3.1 Coach-marks / a teaching system · **DONE 2026-08-21**
 
-**We have no tutorial mechanism at all.** Level 1 of the campaign introduces
+Built as specified below: `src/coach.ts` (headless controller + per-board hint
+lists keyed like `TycoonTuning`), `CoachMark.vue` (a fare-pin-style bubble,
+`pointer-events: none`), stepped by `game.advance()` so the flow is
+unit-testable. Hints on all three campaign boards, dismissed by performing the
+action; the done set survives Retry. `/test/coachmarks` demonstrates it in
+isolation (the stage CAN show marks — they gate on `phase === "playing"`, which
+the stage enters in `mounted()`; only Ready-card/campaign chrome cannot appear
+there). E2e: the lakevalley-open loop asserts appear → advance → silent.
+`KNOWHOW` → COACH-MARKS. **Where it goes next** — the two-tier concept
+(scripted lessons + TF-style once-per-player first-encounter hints):
+`docs/superpowers/specs/2026-08-22-teaching-depth-design.md`. The original
+brief, kept for context:
+
+Level 1 of the campaign introduces
 build, dispatch and switch simultaneously and explains none of them. With the
 campaign in place, this is what stands between "three boards in a list" and a
 game that teaches you to play it.
@@ -194,10 +209,11 @@ road the player should choose: a **level crossing** (cheap, but every closure
 queues cars) or a **bridge** (expensive, no interaction), with congestion costing
 money.
 
-The counters already exist and are already scored by Crossing Keeper —
-`maxCarWaitSec`, `carsDelivered` on `Counters`. A cheap first step that needs no
-new engine work at all: make a Tycoon **star** read `maxCarWaitSec`, so the fast
-route through town costs you a star. See level 5 of the designed arc.
+The counters already exist and are filled every tick — `maxCarWaitSec`,
+`carsDelivered` on `Counters` — but since Crossing Keeper was retired in #121 no
+mode reads them. A cheap first step that needs no new engine work at all: make a
+Tycoon **star** read `maxCarWaitSec`, so the fast route through town costs you a
+star. See level 5 of the designed arc.
 
 ### 3.8 The eight campaign levels · content, not engine
 

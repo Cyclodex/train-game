@@ -30,7 +30,7 @@ Key files:
 
 ### How it is used right now
 
-Only **Crossing Keeper** (`src/modes/crossing-keeper.ts`) treats the road layer as a scoring mechanic. The other modes (Puzzle, Time Attack, Daily, Sandbox) render roads but do not win/lose on road state. `roadScoring` exists but is mostly unexercised.
+**No mode scores the road layer.** Crossing Keeper was the only one that did, and it was retired in #121 (`src/modes/crossing-keeper.ts` is deleted); the picker's five pillars — Puzzle, Tycoon, Network, Citizens, Sandbox — render roads but do not win/lose on road state. The counters survive untouched (`maxCarWaitSec`, `carsDelivered`, `crossingIncidents` on `Counters`, filled by the road frame every tick), and `ModeControls.crossingGate` is still in the contract, so a road-scoring mode is mode authoring plus a HUD overlay, not engine work. `roadScoring` exists but is unexercised.
 
 The road layer has stopped being the bottleneck; the bottleneck is now turning it into a game.
 

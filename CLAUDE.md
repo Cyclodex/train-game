@@ -20,8 +20,9 @@ the per-tile SVG path.
 It has since grown a parallel **road layer** — multi-lane roads carrying cars,
 trucks and buses, with lane-aware junctions, junction traffic signals and
 level crossings where road meets rail (`src/sim/road*.ts`, `src/tiles/lanes.ts`)
-— and a **game-modes framework** (`src/modes/`: sandbox, puzzle, daily, time
-attack, crossing keeper) layered over the same simulation, plus swappable world
+— and a **game-modes framework** (`src/modes/`: puzzle, tycoon, network,
+citizens, sandbox in the picker; daily as a board source and time attack as a
+board-driven puzzle variant) layered over the same simulation, plus swappable world
 **themes** (`src/themes.ts`). The road layer is gated by `gameConfig.roads`.
 
 It started life as the Emergency Room team's `vue-base` starter (see README).
@@ -251,8 +252,17 @@ Key files:
   `ScenarioThumb.vue` (static test-gallery preview).
 - `src/modes/` — the game-modes framework. `types.ts` defines the `GameMode`
   contract (setup, controls gating, `createObjective`, optional `Spawner`, HUD);
-  `index.ts` is the registry; one file per mode (`sandbox`, `puzzle`, `daily`,
-  `time-attack`, `crossing-keeper`); `lastMode.ts` persists the last-opened mode.
+  `index.ts` is the registry — the five picker pillars (`puzzle`, `tycoon`,
+  `network`, `citizens`, `sandbox`). `daily.ts` is a BOARD SOURCE, not a picker
+  mode (`?board=daily` = today's generated board under the daily ruleset);
+  `time-attack.ts` is a puzzle VARIANT (a board whose trains carry `spawnAtSec`
+  gets the spawner + backlog rules from Puzzle itself; `schedule.ts` holds the
+  spawner helpers); `lastMode.ts` persists the last-REQUESTED mode (not the one
+  the URL guard resolved, or a fallback would erase the preference). `compat.ts`
+  derives a board's capabilities (stations/depots/towns/roster) and each mode's
+  optional `fits(caps)` names the missing requirement — the picker disables
+  unfit cards and PlayView's URL guard falls back rather than loading a game
+  that can never engage. Boards stay multi-mode; nothing pins a board to one.
 - `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
   `src/utils/meadowBackdrop.ts` owns the seeded meadow tree layout, rendered by
   `components/BackdropTrees.vue` as a world overlay ABOVE rails/trains/cars

@@ -45,6 +45,9 @@
         <span class="drawer-btn__val">{{ themeIcon }}</span>
       </button>
       <div class="drawer-divider"></div>
+      <button v-if="canSave" class="drawer-btn" @click="openSaves">
+        <span>💾</span><span>Saves</span>
+      </button>
       <router-link class="drawer-btn" to="/editor">
         <span>✏️</span><span>Editor</span>
       </router-link>
@@ -332,14 +335,6 @@
           ⚠ can't pay next year — deliver, or clear surplus track
         </span>
       </div>
-      <div
-        v-if="showCrossingFlow"
-        class="score-crossing"
-        :class="crossingFlowClass"
-        title="Longest car wait at a crossing"
-      >
-        🚗 {{ crossingWaitLabel }}
-      </div>
       <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
         <span
           v-for="s in stars"
@@ -506,6 +501,10 @@
           :switch-interactive="switchesEnabled && !buildArmed && !razeArmed"
           :switches-visible="switchesEnabled"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />
@@ -648,6 +647,11 @@
         :badge="badge"
         @send="onFareClick(badge)"
       />
+      <!-- The coach-mark: one anchored hint at a time, dismissed by performing
+           the action it teaches (src/coach.ts). Absolutely positioned world
+           chrome like the fare pins, and pointer-events:none so it can never
+           swallow the click that would dismiss it. -->
+      <CoachMark :zoom="camera.zoom" />
       <!-- Build cost tag: rides the hovered tile while the ghost route is up —
            Train Valley's live "-2000$" (M2). Absolutely positioned like the
            fare pins (a box-generating direct child of .level would become a
@@ -747,18 +751,97 @@
             v-for="m in modes"
             :key="m.id"
             class="mode-card"
-            :class="{ 'mode-card--active': m.id === currentModeId }"
+            :class="{
+              'mode-card--active': m.id === currentModeId,
+              'mode-card--unfit': !!modeFits[m.id],
+            }"
+            :disabled="!!modeFits[m.id]"
             @click="pickMode(m.id)"
           >
             <span class="mode-card__icon">{{ modeIcon(m.id) }}</span>
             <span class="mode-card__label">{{ m.label }}</span>
             <span class="mode-card__desc">{{ m.description }}</span>
-            <span v-if="m.id === currentModeId" class="mode-card__badge"
+            <!-- Why this mode can't run on the CURRENT board (#114): the card
+                 stays visible so the roster reads complete, with the missing
+                 requirement as the reason. -->
+            <span v-if="modeFits[m.id]" class="mode-card__unfit">{{
+              modeFits[m.id]
+            }}</span>
+            <span v-else-if="m.id === currentModeId" class="mode-card__badge"
               >Playing</span
             >
           </button>
         </div>
+        <!-- Daily is a board source, not a ruleset (#113): today's generated
+             board, the same for every player, run under the daily ruleset. A
+             chip below the mode cards rather than a sixth card, because it
+             answers "which board" while the cards answer "which rules". -->
+        <button
+          class="overlay-btn"
+          :class="{ 'overlay-btn--ghost': !isDailyActive }"
+          @click="pickDaily"
+        >
+          📅 Today's challenge{{ isDailyActive ? " — playing" : "" }}
+        </button>
         <button class="overlay-btn overlay-btn--ghost" @click="closePicker">
+          Close
+        </button>
+      </div>
+    </div>
+    <!-- The Spielstand overlay: named save slots for the RUNNING game — trains
+         mid-leg, money, objective progress (saveStore.ts + game.captureSave).
+         Loading navigates to ?save=<id>, which remounts this view against the
+         save. The `autosave` slot is written on leave while a run is live. -->
+    <div v-if="savesOpen" class="game-overlay" @click.self="closeSaves">
+      <div class="picker-card saves-card">
+        <h2 class="overlay-title">Saved games</h2>
+        <div class="saves-new">
+          <input
+            v-model="saveName"
+            class="saves-name"
+            data-testid="save-name"
+            placeholder="Name this save…"
+            @keyup.enter="saveGame()"
+          />
+          <button class="overlay-btn" data-testid="save-now" @click="saveGame()">
+            💾 Save
+          </button>
+        </div>
+        <div v-if="saveSlots.length" class="saves-list">
+          <div v-for="s in saveSlots" :key="s.id" class="saves-row">
+            <span class="saves-info">
+              <b>{{ s.name }}</b>
+              <span class="saves-sub">
+                {{ modeIcon(s.modeId) }} {{ savedAtLabel(s) }}
+                <template v-if="!s.compatible"> · incompatible version</template>
+              </span>
+            </span>
+            <button
+              class="overlay-btn saves-act"
+              :disabled="!s.compatible"
+              :title="s.compatible ? 'Resume this save' : 'Saved by an older version'"
+              @click="loadSlot(s.id)"
+            >
+              Load
+            </button>
+            <button
+              class="overlay-btn overlay-btn--ghost saves-act"
+              title="Overwrite this slot with the current game"
+              @click="overwriteSlot(s.id)"
+            >
+              ↻
+            </button>
+            <button
+              class="overlay-btn overlay-btn--ghost saves-act"
+              title="Delete this save"
+              @click="removeSlot(s.id)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <p v-else class="overlay-desc">No saved games yet.</p>
+        <button class="overlay-btn overlay-btn--ghost" @click="closeSaves">
           Close
         </button>
       </div>
@@ -837,10 +920,24 @@ import {
   createRouteDrawController,
   type RouteDrawController,
 } from "@/routeDrawController";
-import { createGame, FareBadge, Game, RoadCar, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, GameSave, RoadCar, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
+import {
+  AUTOSAVE_ID,
+  SaveMeta,
+  deleteSave,
+  getSave,
+  listSaves,
+  putSave,
+  slotIdFor,
+  stageLoad,
+  takeStagedLoad,
+} from "@/saveStore";
 import { modeById, MODES } from "@/modes/index";
+import { dailyMode, dailyModeFor } from "@/modes/daily";
+import { sandboxMode } from "@/modes/sandbox";
+import { boardCapabilities } from "@/modes/compat";
 import { GameMode, ModeSetup } from "@/modes/types";
 import { passengerTargetOf, OVERCROWD_LIMIT } from "@/modes/network";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
@@ -848,6 +945,7 @@ import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
+import CoachMark from "@/components/CoachMark.vue";
 import FarePin from "@/components/FarePin.vue";
 import CityPanel from "@/components/CityPanel.vue";
 import CitizenInspector from "@/components/CitizenInspector.vue";
@@ -907,6 +1005,29 @@ const PLAY_DOCK: BuildDockCategoryView[] = [
   },
 ];
 
+// The inverse of `buildTrainDefs`: a TrainsDefinition rebuilt from the mode
+// shape, for @Provide()/totalTrains when the defs are the source of truth (a
+// mode-generated board, a resumed save). One mapping for both callers, so a
+// TrainDef field added later cannot silently exist on one path only.
+function trainsDefinitionOf(defs: TrainDef[]): TrainsDefinition {
+  const out: TrainsDefinition = {};
+  for (const def of defs) {
+    out[def.id] = {
+      id: def.id,
+      x: def.x,
+      y: def.y,
+      status: TrainStatus.LeavingDepot,
+      type: def.type,
+      wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
+      routeDestinations: (def.destinations ?? []).map(to => ({ to })),
+      currentRouteDestination: 0,
+      ...(def.line?.length ? { line: [...def.line] } : {}),
+      ...(def.spawnAtSec !== undefined ? { spawnAtSec: def.spawnAtSec } : {}),
+    };
+  }
+  return out;
+}
+
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
     id: t.id,
@@ -953,25 +1074,17 @@ function resolveBoard(
     // Reconstruct a TrainsDefinition from the TrainDef[] the mode produced.
     // The view only uses TrainsDefinition for `totalTrains` (key count) and
     // for @Provide(); the actual sim is driven from TrainDef[] in createGame.
-    const genTrains: TrainsDefinition = {};
-    for (const def of setup.trains) {
-      genTrains[def.id] = {
-        id: def.id,
-        x: def.x,
-        y: def.y,
-        status: TrainStatus.LeavingDepot,
-        type: def.type,
-        wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
-        routeDestinations: [],
-        currentRouteDestination: 0,
-      };
-    }
-    return { level: setup.level, trains: genTrains, levelId: setup.levelId, setup };
+    return {
+      level: setup.level,
+      trains: trainsDefinitionOf(setup.trains),
+      levelId: setup.levelId,
+      setup,
+    };
   }
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { BuildDock, Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { BuildDock, CoachMark, Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -979,10 +1092,28 @@ class PlayView extends Vue {
   // Whether the debug activity-log panel is collapsed to just its header.
   logMinimized = false;
 
+  // A saved game to resume, from `?save=<slotId>` (the Spielstand overlay's
+  // Load button navigates here). It wins over `?board=`/custom outright: the
+  // save carries its own level, roster, mode and colours, and mixing in the
+  // URL's board would restore state onto a world it was never taken from.
+  // Null when the slot is absent or from an incompatible save version.
+  private pendingSave: GameSave | null = (() => {
+    // The STAGED copy first: loadSlot stages the save it listed before it
+    // navigates, because the OLD PlayView unmounts (and writes its
+    // leave-autosave) before this initializer runs — reading the store here
+    // would hand back the state the player just left, not the slot they
+    // clicked. `?save=` alone still works (deep link, refresh).
+    const staged = takeStagedLoad();
+    if (staged) return staged;
+    const id = hashParam("save");
+    return id ? getSave(id) : null;
+  })();
+
   // An optional named board from `?board=<scenarioId>` — lets any test-world
   // scenario be played as a real game (e.g. a small, deterministic puzzle).
   // Returns null unless the id matches a registered scenario.
   private board = (() => {
+    if (this.pendingSave) return null;
     const id = hashParam("board");
     if (!id) return null;
     return SCENARIOS.some(s => s.id === id) ? scenarioById(id) : null;
@@ -990,16 +1121,103 @@ class PlayView extends Vue {
 
   // Read per instance (not at module load) so a level built in the editor and
   // handed over right before navigation is picked up on this mount.
-  private custom = this.board ? null : takeCustomLevel();
+  private custom = this.board || this.pendingSave ? null : takeCustomLevel();
 
-  // The active mode: an explicit ?mode= wins; otherwise reopen the mode the
-  // player last used (persisted), falling back to the default.
-  private mode = modeById(hashParam("mode") ?? loadLastModeId());
+  // What the URL (or the persisted preference) ASKED for, before the fitness
+  // guard below has its say. Kept separately because it — not the resolved
+  // mode — is what gets persisted on mount (see `mounted`).
+  private requestedModeId = hashParam("mode") ?? loadLastModeId();
+
+  // The active mode. `?board=daily` wins outright: the daily board IS the daily
+  // ruleset, so picking it overrides any ?mode= alongside it (`?mode=sandbox&
+  // board=daily` runs the daily ruleset). Otherwise an explicit ?mode= wins,
+  // then the mode the player last used (persisted), then the default. Daily is
+  // a board source since #113, not a picker mode: `?board=daily` (the picker's
+  // chip) and legacy `?mode=daily` links (old bookmarks, a persisted
+  // last-mode) both run today's generated board under the daily ruleset —
+  // resolveBoard promotes the board setup() generates, exactly as before.
+  //
+  // The URL guard (#114): a mode the board cannot carry — Network with no
+  // stations, Citizens with no towns — would load a game that can never
+  // engage, silently. Fall back to the board's own mode, then the default,
+  // then Sandbox (which fits anything). Unfit picker cards are disabled, so
+  // this only fires on hand-typed URLs and stale links.
+  private mode = (() => {
+    // A save resumes under the mode it was taken in — no fitness guard: the
+    // pair ran together when it was saved, so it fits by construction.
+    if (this.pendingSave) {
+      const id = this.pendingSave.modeId;
+      if (id === dailyMode.id) {
+        // Pin the ruleset to the SAVE's calendar day (levelId "daily:<date>"),
+        // not to today: daily.setup() ignores its context and regenerates from
+        // the date, so an unpinned mode loaded tomorrow would build tomorrow's
+        // objective spec (deliveries target, stars) over the saved board.
+        const date = this.pendingSave.levelId.startsWith("daily:")
+          ? this.pendingSave.levelId.slice("daily:".length)
+          : undefined;
+        return date ? dailyModeFor(date) : dailyMode;
+      }
+      return modeById(id);
+    }
+    const requested = this.requestedModeId;
+    if (hashParam("board") === "daily" || requested === "daily") {
+      return dailyMode;
+    }
+    const mode = modeById(requested);
+    // Cheap exit BEFORE the capabilities are derived: deriving them walks every
+    // tile, floods the towns and rolls a per-plot RNG, and a mode that declares
+    // no requirements (Sandbox) can never be refused by it.
+    if (!mode.fits) return mode;
+    const level = this.board
+      ? this.board.level
+      : this.custom
+        ? this.custom.level
+        : DEFAULT_LEVEL;
+    const trains = this.board
+      ? this.board.trains
+      : this.custom
+        ? this.custom.trains
+        : defaultTrains();
+    const caps = boardCapabilities(level, buildTrainDefs(trains));
+    if (mode.fits(caps) === null) return mode;
+    const fallbacks = [
+      this.board?.mode ?? (this.board?.modeId ? modeById(this.board.modeId) : null),
+      modeById(null), // the roster default
+    ];
+    for (const candidate of fallbacks) {
+      if (candidate && (!candidate.fits || candidate.fits(caps) === null)) {
+        return candidate;
+      }
+    }
+    return sandboxMode;
+  })();
 
   // Resolve which board the view should use. Modes that generate their own board
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
   // and promotes the generated board so the renderer and sim agree.
   private _resolved = (() => {
+    // Resuming a save: the save IS the board. The game gets the save's own
+    // (cloned) level and roster; `resolveBoard` is bypassed because a
+    // generating mode (Daily) must NOT generate a fresh board over a saved
+    // one — mode.setup still runs inside createGame against these inputs.
+    if (this.pendingSave) {
+      const savedLevel = structuredClone(this.pendingSave.level);
+      const savedDefs = structuredClone(this.pendingSave.trains);
+      const levelId = this.pendingSave.levelId;
+      const setup = this.mode.setup({
+        level: savedLevel,
+        trains: savedDefs,
+        levelId,
+      });
+      // Daily's setup generates its own board; pin the SAVED one back over it
+      // so the sim, the renderer and the restore all agree on one world.
+      return {
+        level: savedLevel,
+        trains: trainsDefinitionOf(savedDefs),
+        levelId,
+        setup: { ...setup, level: savedLevel, trains: savedDefs, levelId },
+      };
+    }
     // CLONE the board before the game gets it. `this.board` is the scenario
     // registry's module-level singleton (and `this.custom` can be the editor's
     // live reactive level), while build-in-play writes through `applyEdits`
@@ -1039,10 +1257,16 @@ class PlayView extends Vue {
       this._resolved.setup.trains,
       gameConfig.tileSize,
       this.mode,
-      gameConfig.colorSeed,
-      // When the mode pinned colours (Daily's deterministic assignment), honour
-      // them so depot/train colours match the generated board exactly.
-      this._resolved.setup.colors,
+      // A save resumes on its own colour seed, so anything still derived from
+      // it (road spawns) replays the saved run's world, not today's setting.
+      this.pendingSave?.colorSeed ?? gameConfig.colorSeed,
+      // When the save pinned colours (it always does — bought trains carry
+      // palette colours no seed reproduces), or the mode did (Daily's
+      // deterministic assignment), or the BOARD did (a /test scenario played
+      // via ?board= — its pinned pairs are what make it solvable: the seeded
+      // assignment is reachability-blind, and on a board with disabled turns
+      // it can home a train on a depot it can never reach), honour them.
+      this.pendingSave?.colors ?? this._resolved.setup.colors ?? this.board?.colors,
       DEFAULT_TRAFFIC,
       this._resolved.levelId,
       // Live car cap from the menu setting, read each spawn attempt.
@@ -1064,18 +1288,36 @@ class PlayView extends Vue {
     this.boundKeyup = e => this.handleBuildKeyup(e);
     window.addEventListener("keydown", this.boundKeydown);
     window.addEventListener("keyup", this.boundKeyup);
-    // Remember the mode we ended up in, so a later plain /play reopens it.
-    saveLastModeId(this.mode.id);
+    // Remember the mode the player ASKED for, so a later plain /play reopens
+    // it. The requested id, not the resolved one: when the fitness guard (#114)
+    // downgrades an unfit mode×board pair, saving the fallback would silently
+    // erase the preference — play Network on a station board, open plain /play
+    // once, and Network would never reopen even on boards that carry it. Only
+    // a KNOWN id is persisted, so a typo'd ?mode= does not become the memory.
+    const asked = this.requestedModeId;
+    const known = asked !== null && (asked === dailyMode.id || MODES.some(m => m.id === asked));
+    saveLastModeId(known ? asked : this.mode.id);
     this.best = loadBest(this.levelId);
+    // A refresh/close skips beforeUnmount entirely; the browser hook keeps the
+    // autosave honest there too (a synchronous localStorage write is allowed).
+    window.addEventListener("beforeunload", this.writeAutosave);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
-    // The bus lines this board was authored with (`?board=<scenario>`), each
-    // with a bus on it — the same seeding /test does, so a board plays the way
-    // it demonstrates. A train comes with the level; a bus lives on its line,
-    // so it can only be placed once the line exists.
-    for (const stops of this.board?.busLines ?? []) {
-      this.game.buyBus(this.game.createLine(stops));
+    if (this.pendingSave) {
+      // Resume: the save carries the whole moving state — trains mid-leg,
+      // money, tracker phase, bus roster. Nothing else may run first: seeding
+      // scenario bus lines or auto-starting the objective would double what
+      // the save is about to restore.
+      this.game.restoreSave(this.pendingSave);
+    } else {
+      // The bus lines this board was authored with (`?board=<scenario>`), each
+      // with a bus on it — the same seeding /test does, so a board plays the way
+      // it demonstrates. A train comes with the level; a bus lives on its line,
+      // so it can only be placed once the line exists.
+      for (const stops of this.board?.busLines ?? []) {
+        this.game.buyBus(this.game.createLine(stops));
+      }
+      if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     }
-    if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     // Test hook: expose the live game so e2e can read simulation state without
     // depending on Vue's internal instance shape.
     (window as unknown as { __game?: Game }).__game = this.game;
@@ -1132,13 +1374,18 @@ class PlayView extends Vue {
     return this.game.mode.id;
   }
 
+  // One per mode the drawer can be showing — which is the picker roster PLUS
+  // Daily: it is not a picker card (it is the "Today's challenge" chip), but it
+  // IS a reachable active mode, and the drawer renders `modeIcon(currentModeId)`
+  // beside its label. Drop the entry and playing today's challenge shows the
+  // fallback 🚆 next to "Daily Challenge" while the chip still shows 📅.
   private modeIcons: Record<string, string> = {
     puzzle: "🧩",
     tycoon: "💰",
-    "crossing-keeper": "🚧",
-    "time-attack": "⏱️",
-    daily: "📅",
+    network: "🚉",
+    citizens: "🏙️",
     sandbox: "🏖️",
+    daily: "📅",
   };
   modeIcon(id: string): string {
     return this.modeIcons[id] ?? "🚆";
@@ -1150,10 +1397,55 @@ class PlayView extends Vue {
   closePicker() {
     this.pickerOpen = false;
   }
+  // The board a pick will actually LAND on — which is normally the board on
+  // screen, because pickMode carries `?board=` across. The exception is the
+  // daily board: picking a ruleset there means LEAVING today's board, so
+  // pickMode drops the param and the navigation lands on the custom/default
+  // board instead. Judging fitness against the daily blob there made the picker
+  // lie: a generated board almost always has a town, so Citizens showed
+  // ENABLED, and clicking it landed on the town-less default where the URL
+  // guard silently downgraded to Puzzle — the exact bait-and-switch #114 exists
+  // to prevent.
+  private get pickTargetBoard(): { level: Level; trains: TrainsDefinition } {
+    if (hashParam("board") !== "daily") {
+      return { level: this.level, trains: this.trains };
+    }
+    const custom = takeCustomLevel();
+    return custom
+      ? { level: custom.level, trains: custom.trains }
+      : { level: DEFAULT_LEVEL, trains: defaultTrains() };
+  }
+  // Which modes fit the board a pick would land on, by reason (null = fits).
+  // Drives the picker's disabled cards; recomputed per open via the resolved
+  // level/roster.
+  get modeFits(): Record<string, string | null> {
+    const target = this.pickTargetBoard;
+    const caps = boardCapabilities(target.level, buildTrainDefs(target.trains));
+    const out: Record<string, string | null> = {};
+    for (const m of this.modes) out[m.id] = m.fits?.(caps) ?? null;
+    return out;
+  }
   pickMode(id: string) {
     this.pickerOpen = false;
     if (id === this.currentModeId) return; // already playing this mode
-    this.$router.push({ name: "play", query: { mode: id } });
+    // Keep the board when switching rules over it (#114). Unfit pairs never
+    // get here — their cards are disabled. board=daily is the chip's URL:
+    // picking a mode there means leaving the daily board, so it is dropped.
+    const board = hashParam("board");
+    const query =
+      board && board !== "daily" ? { mode: id, board } : { mode: id };
+    this.$router.push({ name: "play", query });
+  }
+  // Today's generated board under the daily ruleset (#113): the picker's board
+  // chip. The levelId is `daily:<date>`, so "already playing today's" is a
+  // prefix check rather than a mode comparison.
+  get isDailyActive(): boolean {
+    return this.levelId.startsWith("daily:");
+  }
+  pickDaily() {
+    this.pickerOpen = false;
+    if (this.isDailyActive) return;
+    this.$router.push({ name: "play", query: { board: "daily" } });
   }
 
   @Watch("phase")
@@ -1196,21 +1488,12 @@ class PlayView extends Vue {
   get earnedStars(): number {
     return this.stars.filter(s => s.earned).length;
   }
-  // The crossing-flow readout (Crossing Keeper): the live worst car wait. Shown
-  // only when the mode controls the crossing gate, so other modes' HUDs are
-  // unchanged. The colour ramps amber→red as the wait climbs (the live tension).
-  get showCrossingFlow(): boolean {
-    return this.game.mode.controls.crossingGate;
-  }
-  get crossingWaitLabel(): string {
-    return this.game.roadFrame.maxCarWaitSec.toFixed(0) + "s";
-  }
-  get crossingFlowClass(): string {
-    const w = this.game.roadFrame.maxCarWaitSec;
-    if (w >= 18) return "score-crossing--bad";
-    if (w >= 8) return "score-crossing--warn";
-    return "";
-  }
+  // The crossing-flow readout is gone with Crossing Keeper (#121): every
+  // remaining mode declares `crossingGate: false`, so the worst-car-wait chip
+  // and its amber→red ramp were unreachable markup. `game.roadFrame
+  // .maxCarWaitSec` and the `maxCarWaitSec`/`carsDelivered`/`crossingIncidents`
+  // counters in `sim/objectives.ts` are untouched — a future road-scoring mode
+  // re-reads them and paints its own overlay.
   get lostReason(): string {
     return this.game.objective.lostReason ?? "";
   }
@@ -1250,7 +1533,87 @@ class PlayView extends Vue {
     if (badge.waiting) this.game.dispatch(badge.trainId);
   }
 
+  // ---- Save / load (Spielstand) -----------------------------------------
+  // Named slots in localStorage (saveStore.ts). The overlay is the whole verb
+  // set: save under a new name, overwrite a slot, load one (navigates to
+  // `?save=<id>`, which remounts this view against the save), delete one.
+  savesOpen = false;
+  saveName = "";
+  saveSlots: SaveMeta[] = [];
+
+  // The citizen layer is not serialized (v1 — see the save/load spec), so a
+  // citizens game offers no save UI rather than a save that lies.
+  get canSave(): boolean {
+    return !this.game.citizenStats.enabled;
+  }
+
+  openSaves() {
+    this.saveSlots = listSaves();
+    this.savesOpen = true;
+  }
+  closeSaves() {
+    this.savesOpen = false;
+  }
+
+  private defaultSaveName(): string {
+    return `${this.game.mode.label} · ${new Date().toLocaleString()}`;
+  }
+
+  saveGame() {
+    if (!this.canSave) return;
+    const name = this.saveName.trim() || this.defaultSaveName();
+    putSave(slotIdFor(name), this.game.captureSave(name));
+    this.saveName = "";
+    this.saveSlots = listSaves();
+  }
+
+  overwriteSlot(id: string) {
+    if (!this.canSave) return;
+    const existing = this.saveSlots.find(s => s.id === id);
+    putSave(id, this.game.captureSave(existing?.name ?? id));
+    this.saveSlots = listSaves();
+  }
+
+  loadSlot(id: string) {
+    const save = getSave(id);
+    if (!save) return; // incompatible/vanished slot — the button was disabled
+    this.savesOpen = false;
+    // STAGE the save before navigating: this view's own beforeUnmount writes
+    // the leave-autosave first, so reading the store from the next mount would
+    // hand the autosave slot the state the player just left. The staged copy
+    // is exactly what the list showed when they clicked.
+    stageLoad(save);
+    // The nonce remounts the view even when the same slot is loaded twice in
+    // a row — the router-view is keyed on the full path.
+    this.$router.push({
+      name: "play",
+      query: { save: id, t: Date.now().toString() },
+    });
+  }
+
+  removeSlot(id: string) {
+    deleteSave(id);
+    this.saveSlots = listSaves();
+  }
+
+  savedAtLabel(s: SaveMeta): string {
+    return new Date(s.savedAt).toLocaleString();
+  }
+
+  // Autosave on leave: a running game survives navigating away (the editor,
+  // the picker, a board switch) — and, via the `beforeunload` hook below, a
+  // tab refresh or close — without the player having thought about it. Only
+  // while the objective is live: a Ready screen or a finished run is not
+  // progress worth clobbering the autosave slot with.
+  private writeAutosave = () => {
+    if (this.canSave && this.phase === "playing") {
+      putSave(AUTOSAVE_ID, this.game.captureSave("Autosave"));
+    }
+  };
+
   beforeUnmount() {
+    this.writeAutosave();
+    window.removeEventListener("beforeunload", this.writeAutosave);
     this.game.stop();
     window.removeEventListener("resize", this.onWindowResize);
     window.removeEventListener("keydown", this.boundKeydown);
@@ -1383,15 +1746,32 @@ class PlayView extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well.
+    //
     // …EXCEPT while the build tool is armed: then the left drag belongs to
     // drawing (edge → edge one-shot routes), exactly the editor's policy —
     // stealing it makes the board unbuildable (KNOWHOW → WORLD SIZE + CAMERA).
     // Pan stays on middle-drag or space+left, and left-pan returns the moment
     // build is disarmed.
-    if (this.buildArmed && e.button === 0 && !this.spaceHeld) return;
-    this.cam.onPointerDown(e);
+    const pan =
+      (e.button === 0 || e.button === 1) &&
+      !(this.buildArmed && e.button === 0 && !this.spaceHeld);
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch, and a pinch outranks the
+    // build tool — no tool in this app takes two fingers. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan });
+    if (this.cam.pinching) this.abandonPinchedDraw();
+  }
+  // Belt and braces, exactly as in EditorView: the first finger of a pinch may
+  // have pressed an edge zone (the zone's handler runs before this one bubbles
+  // up), and a pinch that lays a rail would be worse than no pinch. It cannot
+  // happen today — the zones bind `@mousedown`/`@mouseup`, and a
+  // `touch-action: none` surface fires no compatibility mouse events, so building
+  // by touch does not work here yet either. This is what stops a pinch drawing
+  // once they move to pointer events.
+  abandonPinchedDraw(): void {
+    if (this.buildArmed) this.routeCtrl.clearPress();
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);
@@ -2823,14 +3203,16 @@ export default toNative(PlayView);
   font-size: 18px;
   line-height: 1;
 }
-// The edge hit-zone overlay: above the rails, but BELOW the road cars (6) and
-// the fare pins (8) so a waiting train stays dispatchable mid-build.
+// The edge hit-zone overlay, above every piece of board art the ghost route can
+// cross — including the town's roofs (`.tile-structures`, z7), which at the old
+// z5 covered a preview rail drawn through a plot. The fare pins stay above it,
+// so a waiting train is still dispatchable mid-build.
 .build-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 5;
+  z-index: 8;
 }
 // Edge hit-zones + wedge cues, matching the editor's look so the gesture reads
 // as the same tool (both stylesheets are scoped, so the rules can't be shared).
@@ -3149,19 +3531,6 @@ export default toNative(PlayView);
     transform: translateX(0);
   }
 }
-.score-crossing {
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: #8fd19e; // calm green while traffic flows
-  transition: color 0.3s ease;
-}
-.score-crossing--warn {
-  color: #e6c34a; // amber as a wait builds
-}
-.score-crossing--bad {
-  color: #e2574c; // red when a car is stuck dangerously long
-}
 /* --- the service panel (network mode) ---
    The player's whole verb set in this mode: which trains run which stops, and
    ordering another when the service cannot keep up. Sits under the score card
@@ -3464,6 +3833,67 @@ export default toNative(PlayView);
   color: #eef2f6;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
 }
+// The Spielstand overlay: a narrower picker card with a name row on top and
+// one row per slot below it.
+.saves-card {
+  width: min(560px, 92vw);
+}
+.saves-new {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+.saves-name {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef2f6;
+  font: inherit;
+  &::placeholder {
+    color: rgba(238, 242, 246, 0.45);
+  }
+}
+.saves-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.saves-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+.saves-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+.saves-sub {
+  font-size: 12px;
+  color: rgba(238, 242, 246, 0.55);
+}
+// Slot-row buttons are compact: the picker's overlay-btn is sized for a card
+// footer, not for three of them beside every row.
+.saves-act {
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 13px;
+}
 .mode-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -3517,6 +3947,22 @@ export default toNative(PlayView);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #f0cf72;
+}
+
+// A mode the current board can't carry (#114): still on the grid so the
+// roster reads complete, but visibly inert, with the missing requirement.
+.mode-card--unfit {
+  opacity: 0.55;
+  cursor: not-allowed;
+
+  &:hover {
+    transform: none;
+  }
+}
+.mode-card__unfit {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffb37e;
 }
 
 .event-log {

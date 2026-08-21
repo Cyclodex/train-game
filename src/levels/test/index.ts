@@ -20,6 +20,9 @@ import { citizenrail } from "@/levels/test/scenarios/citizenrail";
 import { citizenchoice } from "@/levels/test/scenarios/citizenchoice";
 import { citizencrossback } from "@/levels/test/scenarios/citizencrossback";
 import { citizenday } from "@/levels/test/scenarios/citizenday";
+import { citizenhouse } from "@/levels/test/scenarios/citizenhouse";
+import { busride } from "@/levels/test/scenarios/busride";
+import { edgedemand } from "@/levels/test/scenarios/edgedemand";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -106,6 +109,7 @@ import { keepcrossingclear } from "@/levels/test/scenarios/keepcrossingclear";
 import { crossingkeeper } from "@/levels/test/scenarios/crossingkeeper";
 import { objectives } from "@/levels/test/scenarios/objectives";
 import { timeattack } from "@/levels/test/scenarios/timeattack";
+import { coachmarks } from "@/levels/test/scenarios/coachmarks";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { faredistance } from "@/levels/test/scenarios/faredistance";
 import { heldby } from "@/levels/test/scenarios/heldby";
@@ -113,6 +117,7 @@ import { buildgap } from "@/levels/test/scenarios/buildgap";
 import { taxyear } from "@/levels/test/scenarios/taxyear";
 import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
+import { saveload } from "@/levels/test/scenarios/saveload";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { linerevisit } from "@/levels/test/scenarios/linerevisit";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
@@ -189,7 +194,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback, citizenday] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, linerevisit, catchment, parkandride, busfeeder, busrail, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback, citizenday, citizenhouse, busride, edgedemand] },
       {
         id: "crossings",
         label: "Crossings",
@@ -258,7 +263,29 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, landprices, taxyear, bankrupt, daily, networkmode, linerevisit] },
+      // One demo per RULESET, each actually RUNNING it (the /test stage honours
+      // `modeId`/`mode`; a scenario without one runs Sandbox — which is why
+      // Sandbox itself needs no entry). That is more than the picker roster:
+      // the four picker modes that carry an objective (Puzzle, Tycoon, Network,
+      // Citizens) sit in the middle, bracketed by the two rulesets #113 took
+      // OUT of the picker but kept as gameplay — Daily (a board source:
+      // `?board=daily`) first, Time Attack (a Puzzle variant driven by
+      // `spawnAtSec`) last. Crossing Keeper is gone entirely (#121); its board
+      // lives on under Trains → Crossings as a mechanic demo.
+      // `scenarioCoverage.spec.ts` pins both halves: no mode twice, and every
+      // objective-carrying picker mode present.
+      { id: "modes", label: "Game modes", scenarios: [daily, objectives, dispatch, networkmode, threecities, timeattack] },
+      // The Tycoon deep-dives, one dial per board: fare decay by distance,
+      // blocked routes, buying track, land prices, the tax year and its
+      // bankruptcy fail state — plus the coach-marks that teach the mode's
+      // verbs (a second tycoon board, so it lives here rather than in the
+      // one-demo-per-mode gallery above).
+      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks] },
+      // The save/load round-trip board (docs/superpowers/specs/
+      // 2026-08-21-save-load-design.md): the level the snapshot/restore unit
+      // tests run on, and — via /#/play?board=saveload — a small deterministic
+      // game to exercise the save/load UI on.
+      { id: "save", label: "Save & load", scenarios: [saveload] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable

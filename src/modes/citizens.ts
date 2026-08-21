@@ -124,6 +124,13 @@ export const citizensMode: GameMode = {
   createObjective(setup): ObjectiveTracker {
     return createObjectiveTracker(setup.objective);
   },
+  fits(caps) {
+    // The mode IS the population: without homes there is nobody, and without
+    // a workplace nobody has anywhere to go — the board would just sit there.
+    return caps.homes > 0 && caps.workplaces > 0
+      ? null
+      : "Needs towns with homes and workplaces";
+  },
   hud: {
     deliveries: true,
     timer: false,

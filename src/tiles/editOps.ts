@@ -311,6 +311,16 @@ export type EraseLayer = "rail" | "road" | "parking" | "terrain";
 // demanding one (terrain erase). Callers should drop the cell from the level
 // when the result `isBlankCell`.
 export function eraseLayer(cell: TileCell, layer: EraseLayer): TileCell {
+  // The edge-demand dial belongs to the STOP (a station role, or a busstop
+  // row), so it goes when the last stop on the tile does — left behind, a new
+  // stop built on the same ground would silently inherit an off-map schedule
+  // nobody authored and no editor surface can even reveal.
+  const dropOrphanedDial = (next: TileCell): TileCell => {
+    const isStop =
+      next.role === "station" || next.parking?.rows?.some(r => r.kind === "busstop");
+    if (!isStop) delete next.edgeDemand;
+    return next;
+  };
   if (layer === "rail") {
     const {
       connections: _c,
@@ -327,7 +337,7 @@ export function eraseLayer(cell: TileCell, layer: EraseLayer): TileCell {
       delete next.bridge;
       delete next.tunnel;
     }
-    return next;
+    return dropOrphanedDial(next);
   }
   if (layer === "road") {
     const {
@@ -347,11 +357,11 @@ export function eraseLayer(cell: TileCell, layer: EraseLayer): TileCell {
       delete next.bridge;
       delete next.tunnel;
     }
-    return next;
+    return dropOrphanedDial(next);
   }
   if (layer === "parking") {
     const { parking: _drop, ...rest } = cell;
-    return rest;
+    return dropOrphanedDial({ ...rest });
   }
   // terrain: back to flat grass. The structures go too — a bridge needs the
   // water (and a tunnel the rock) it crosses; over plain grass the line just

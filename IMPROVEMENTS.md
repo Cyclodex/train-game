@@ -50,15 +50,20 @@ files involved.
 - A parallel **road simulation** carries cars/trucks/buses on directed lanes with
   lane changes, overtaking, lane-aware routing, junction arbitration, junction
   traffic signals and bus lanes.
-- A **game-modes framework** (`src/modes/`) layers objectives over the same sim:
-  sandbox, puzzle, daily, time attack, crossing keeper and **tycoon** (money,
-  waiting trains, decaying fares, build-for-cash) — with stars, fail predicates
-  and per-level best-result persistence (`src/objectiveStore.ts`).
+- A **game-modes framework** (`src/modes/`) layers objectives over the same sim.
+  Five picker pillars since #113: puzzle, **tycoon** (money, waiting trains,
+  decaying fares, build-for-cash), network, citizens, sandbox — with stars,
+  fail predicates and per-level best-result persistence
+  (`src/objectiveStore.ts`). Daily is a board source (`?board=daily`), time
+  attack a board-driven puzzle variant (`spawnAtSec`), and crossing keeper is
+  retired from the picker (its crossing counters live on in `sim/objectives.ts`).
 - Depot/train colours are **deterministic and solvable** (`utils/colorAssignment.ts`,
   seeded by `gameConfig.colorSeed`), not random.
 
-**The biggest gap is no longer the objective loop — it is that only one mode
-(crossing keeper) scores the road layer at all.** See
+**The biggest gap is no longer the objective loop — it is that NO mode scores the
+road layer at all.** Crossing Keeper was the one that did, and it was retired in
+#121; the counters it fed (`maxCarWaitSec`, `carsDelivered`,
+`crossingIncidents`) are still filled every tick and read by nothing. See
 `docs/road-future-improvements.md` §1.
 
 **Worlds are no longer capped** (2026-07-25). A board is as big as its content

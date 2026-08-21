@@ -1,32 +1,23 @@
 import { TestScenario } from "@/levels/test/scenario";
-import { generateLevel } from "@/tiles/generate";
-import { trainsFromRoutes } from "@/levelStore";
+import { dailyBoardFor, dailyModeFor } from "@/modes/daily";
 
-// Fixed seed for the scenario so the validation test is deterministic across
-// runs (never depends on today's date). This seed reliably produces a valid
-// 7×6 board with three depot pairs via generateLevel's retry-guarded build.
-const FIXED_SEED = 20260615;
+// A pinned calendar date, so the board, the colours and the ruleset are all
+// deterministic across runs and CI — the real Daily is exactly this scenario
+// with todayString() as the date. Pinning the DATE (not a raw seed) means the
+// scenario exercises the whole date→seed→board→colours pipeline the mode runs.
+const DATE = "2026-06-15";
+const board = dailyBoardFor(DATE);
 
-const generated = generateLevel(FIXED_SEED, {
-  width: 7,
-  height: 6,
-  depotPairs: 3,
-});
-
-// Derive trains from the generated routes using the same helper the editor uses
-// (levelStore.trainsFromRoutes), giving alternating people/fraight + 2 wagons.
-const trainsDef = trainsFromRoutes(generated.routes);
-
-// Cast the TrainsDefinition from trainsFromRoutes to the shape TestScenario
-// expects (TrainsDefinition === Record<string, TrainObject>). The generated
-// trains carry routeDestinations from the routes, so scenarioRoutes() can
-// derive the TrainRoute[] for the connectivity validation test.
 export const daily: TestScenario = {
   id: "daily",
-  name: "Daily Challenge (fixed seed)",
+  name: "Daily Challenge (pinned date)",
   description:
-    "Date-seeded generated board in isolation: a valid 7×6 loop with three trains, " +
-    "one per depot pair — demonstrates procgen without depending on today's date.",
-  level: generated.level,
-  trains: trainsDef,
+    "The real Daily ruleset on the 2026-06-15 board: date-seeded procgen, pinned " +
+    "colours, deliver all three trains — timer and stars live on the stage strip.",
+  level: board.level,
+  trains: board.trainsDef,
+  // The mode's own deterministic assignment, pinned here because createGame
+  // takes the view's colours and ignores the ones setup() returns.
+  colors: board.colors,
+  mode: dailyModeFor(DATE),
 };

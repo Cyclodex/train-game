@@ -43,6 +43,15 @@ const ARROW_T_START = 0.05;
 // visibly diverge, while still stopping short of the neighbours' stubs.
 const ARROW_T_END_REST = 0.35;
 const ARROW_T_END_OPEN = 0.65;
+// The CLICK target runs further along the curve than the arrow it belongs to.
+// The drawn arrow is deliberately a short stub (above), and a stub is a small
+// thing to hit on a zoomed-out board — the player said so. The invisible hit
+// path keeps going toward the exit, so the whole approach the arrow points down
+// is clickable, while the picture stays as quiet as it was. It stops at the tile
+// centre at rest (four resting fans then meet at one point instead of crossing)
+// and short of the far edge when open (so it never spills onto the neighbour).
+const HIT_T_END_REST = 0.5;
+const HIT_T_END_OPEN = 0.78;
 // Train Valley head proportions (the A1 block head): a big flat-backed triangle
 // that is a large share of the whole arrow. Length along the curve and half-width
 // across it, in tile px. On a very short arrow the head caps at 45% of the run so
@@ -182,6 +191,12 @@ export interface FanArm {
   shaft: string;
   /** The head at the edge the train leaves by. */
   head: string;
+  /**
+   * The invisible click target: the same rail curve, run further out than the
+   * drawn arrow (see `HIT_T_END_*`). Kept apart from `shaft` so the picture can
+   * stay a short stub while the target stays big.
+   */
+  hit: string;
 }
 
 // One entry's arms as drawable arrows.
@@ -205,17 +220,77 @@ export function fanArms(
   return ARMS.filter(
     arm =>
       armReachable(connections, entry, arm) && (expanded || activeArm === arm)
-  ).map(arm => ({
-    arm,
-    on: activeArm === arm,
-    ...railArrow(
-      entry,
-      armExit(entry, arm)!,
-      size,
-      ARROW_T_START,
-      expanded ? ARROW_T_END_OPEN : ARROW_T_END_REST
-    ),
-  }));
+  ).map(arm => {
+    const exit = armExit(entry, arm)!;
+    return {
+      arm,
+      on: activeArm === arm,
+      ...railArrow(
+        entry,
+        exit,
+        size,
+        ARROW_T_START,
+        expanded ? ARROW_T_END_OPEN : ARROW_T_END_REST
+      ),
+      hit: railArrow(
+        entry,
+        exit,
+        size,
+        ARROW_T_START,
+        expanded ? HIT_T_END_OPEN : HIT_T_END_REST
+      ).shaft,
+    };
+  });
+}
+
+// PAINT ORDER. SVG has no z-index: the last thing drawn wins, so the order the
+// arms and fans come out of here IS their stacking. Both ranks exist because
+// arrows on one tile genuinely overlap — the arms of one fan all converge on
+// their shared entry point, and on a cross the four fans cross mid-tile.
+//
+// Sort with a STABLE sort (JS `Array.sort` is): equal ranks keep their natural
+// Left/Straight/Right and entry order, which is what the fan reads as.
+
+// Within one fan: the SET arm goes on top. Painted in plain arm order instead,
+// a switch set to its Left arm gets its black arrow sliced in half by the white
+// Straight ghost drawn after it — the player saw exactly that and reported the
+// active route as being "behind the other arrow".
+//
+// Hover is deliberately NOT ranked here. Re-sorting on hover would move the
+// element out from under the pointer, and a pointerleave/pointerenter loop with
+// it; the hovered arm is told apart by colour instead.
+export function armPaintRank(a: { on: boolean }): number {
+  return a.on ? 1 : 0;
+}
+
+// Across fans: the one being aimed goes on top — a train is due on it
+// (`armed`), or the pointer opened it (`open`) — and the ones that stepped back
+// (`muted`) go to the bottom. These ranks are idempotent under a re-fired
+// pointer event, so the re-sort cannot oscillate.
+export function fanPaintRank(f: {
+  armed: boolean;
+  open: boolean;
+  muted: boolean;
+}): number {
+  if (f.armed) return 3;
+  if (f.open) return 2;
+  return f.muted ? 0 : 1;
+}
+
+// The arm a click on the ALREADY-SET arrow advances to: the next reachable one,
+// wrapping. Clicking a specific arm still throws straight there (that is the
+// whole point of drawing one arrow per exit) — but the set arrow used to be a
+// dead target, and it is the biggest, nearest thing to aim at, so it now does
+// the obvious thing and steps the switch on.
+export function nextArm(
+  connections: PortPair[],
+  entry: Port,
+  current: ActiveIntersection | undefined
+): ActiveIntersection | null {
+  const reachable = ARMS.filter(arm => armReachable(connections, entry, arm));
+  if (!reachable.length) return null;
+  const i = current === undefined ? -1 : reachable.indexOf(current);
+  return reachable[(i + 1) % reachable.length];
 }
 
 // The counter-scale applied to the arrows' STROKE widths (and their hit areas)

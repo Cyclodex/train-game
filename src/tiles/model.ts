@@ -67,6 +67,21 @@ export interface TileCell {
   // → a derived letter (see tiles/stationNames.ts), which keeps every older
   // board working and still gives the panel something to print.
   stationName?: string;
+  // EDGE DEMAND at this stop: the share (0..1, >1 = hotter than derived) of the
+  // catchment-derived spawn schedule that arrives from OFF-MAP — travellers the
+  // map imports rather than explains. Authored, per stop tile, because it is
+  // the one demand fact the map cannot derive: how much world exists beyond its
+  // border at this platform. Only meaningful on a stop (a `station` role or a
+  // busstop row); ignored elsewhere.
+  //
+  // Absent means a DEFAULT that preserves every board written before it
+  // existed: 1 (the full derived schedule — the old synthetic demand) on a
+  // board without the citizen layer, 0 (the map explains all demand) on a board
+  // with it. An explicit value wins in both worlds, which is what makes demand
+  // ADDITIVE: citizens and edge riders share one platform, told apart by queue
+  // tags, never double-counted. See issue #117 and
+  // docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md.
+  edgeDemand?: number;
   // The ground under this cell. Absent = grass. See tiles/terrain.ts and
   // docs/superpowers/specs/2026-07-25-terrain-as-tile-data-design.md.
   terrain?: TerrainKind;

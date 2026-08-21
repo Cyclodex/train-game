@@ -68,6 +68,50 @@ describe("feature test world coverage", () => {
     }
   });
 
+  // The mode gallery, resolved once. A missing domain/category is reported as a
+  // readable failure rather than a TypeError from a `!` on undefined — this is
+  // the node a category rename breaks first, so it has to say WHICH node is
+  // gone, not just where the stack unwound.
+  function modeGallery() {
+    const domain = DOMAINS.find(d => d.id === "challenges");
+    expect(domain, 'no domain "challenges" in the DOMAINS tree').toBeDefined();
+    const category = domain?.categories.find(c => c.id === "modes");
+    expect(category, 'no category "challenges/modes" in the DOMAINS tree').toBeDefined();
+    return category!.scenarios;
+  }
+
+  it("challenges/modes is a mode gallery: every entry runs a mode, no mode twice", () => {
+    // The category exists to show each game mode in isolation (#115). An entry
+    // without a mode silently demos Sandbox instead of what its card claims,
+    // and two entries for one mode crowd out the single-demo-per-mode promise.
+    // (Sandbox and any deliberately unlisted mode are allowed to be absent.)
+    const seen = new Set<string>();
+    for (const s of modeGallery()) {
+      const modeId = s.mode?.id ?? s.modeId;
+      expect(modeId, `scenario "${s.id}" in challenges/modes runs no mode`).toBeTruthy();
+      expect(seen.has(modeId!), `mode "${modeId}" has two demos in challenges/modes`).toBe(false);
+      seen.add(modeId!);
+    }
+  });
+
+  it("challenges/modes demos EVERY objective-carrying picker mode (#115)", () => {
+    // The other half of "exactly one scenario per mode": no-mode-twice alone
+    // let a NEW mode ship with no card at all and CI stay green, so the
+    // gallery's headline promise was only half held.
+    //
+    // Exempt: Sandbox — it IS the stage's default, so a card for it would
+    // demo the absence of rules. Every other registered mode needs an entry.
+    const EXEMPT = new Set(["sandbox"]);
+    const demoed = new Set(modeGallery().map(s => s.mode?.id ?? s.modeId));
+    for (const m of MODES) {
+      if (EXEMPT.has(m.id)) continue;
+      expect(
+        demoed.has(m.id),
+        `mode "${m.id}" is in the picker but has no demo in challenges/modes`
+      ).toBe(true);
+    }
+  });
+
   it("pins scenarios only to game modes that are actually registered", () => {
     // A scenario may run under a specific mode via `modeId` (e.g. the time-attack
     // scenario). If that id drifts from the modes registry the scenario silently

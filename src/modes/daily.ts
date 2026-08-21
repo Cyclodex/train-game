@@ -1,7 +1,8 @@
 import { GameMode, ModeContext, ModeSetup, objectiveFromSpec } from "@/modes/types";
 import { Counters, StarSpec } from "@/sim/objectives";
 import { generateLevel } from "@/tiles/generate";
-import { assignColors } from "@/utils/colorAssignment";
+import { Level } from "@/tiles/model";
+import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { makeRng } from "@/utils/globalHelpers";
 import { trainsFromRoutes } from "@/levelStore";
 import { TrainDef } from "@/game";
@@ -83,65 +84,87 @@ function toTrainDefs(trains: ReturnType<typeof trainsFromRoutes>): TrainDef[] {
   }));
 }
 
+// Everything one date determines: the board, the trains and the pinned colours.
+// Shared by the mode's setup() and the /test scenario, so the gallery's pinned
+// day is byte-for-byte the game a player would have gotten on that date.
+export interface DailyBoard {
+  date: string;
+  levelId: string;
+  level: Level;
+  // The scenario shape (TrainsDefinition) and the mode shape (TrainDef[]) of
+  // the same roster — both derived from the generated routes.
+  trainsDef: ReturnType<typeof trainsFromRoutes>;
+  trains: TrainDef[];
+  colors: ColorAssignment;
+}
+
+export function dailyBoardFor(date: string): DailyBoard {
+  const seed = dateToSeed(date);
+  const generated = generateLevel(seed, {
+    width: DAILY_WIDTH,
+    height: DAILY_HEIGHT,
+    depotPairs: DAILY_DEPOT_PAIRS,
+  });
+  const trainsDef = trainsFromRoutes(generated.routes);
+  const trains = toTrainDefs(trainsDef);
+  // Assign colours deterministically from the same seed so every player gets
+  // identical depot/train colours. A second makeRng call with the same seed
+  // produces the same stream as the first — colours are reproducible.
+  const colors = assignColors(generated.level, trains, makeRng(seed));
+  return { date, levelId: dailyLevelId(date), level: generated.level, trainsDef, trains, colors };
+}
+
 // Daily / Score Challenge: a date maps to a stable seed → same board for every
 // player on the same day. Wraps Puzzle's objective (deliver all + 3 stars) on a
 // freshly generated board. `setup()` ignores the context's board entirely and
 // derives its own from the date seed.
-export const dailyMode: GameMode = {
-  id: "daily",
-  label: "Daily Challenge",
-  description:
-    "Today's puzzle — the same board for every player. Route all trains home, " +
-    "earn stars for speed, restraint, and perfect colour-matching.",
+//
+// `dailyModeFor(date)` is the same ruleset with the calendar pinned — the /test
+// scenario runs a fixed day so CI and the gallery never depend on today. With
+// no argument the date is resolved AT SETUP TIME (todayString()), so a session
+// that survives midnight still generates the new day on its next setup.
+export function dailyModeFor(date?: string): GameMode {
+  return {
+    id: "daily",
+    label: "Daily Challenge",
+    description:
+      "Today's puzzle — the same board for every player. Route all trains home, " +
+      "earn stars for speed, restraint, and perfect colour-matching.",
 
-  setup(_: ModeContext): ModeSetup {
-    const date = todayString();
-    const seed = dateToSeed(date);
-    const levelId = dailyLevelId(date);
+    setup(_: ModeContext): ModeSetup {
+      const board = dailyBoardFor(date ?? todayString());
+      return {
+        levelId: board.levelId,
+        level: board.level,
+        trains: board.trains,
+        colors: board.colors,
+        objective: {
+          deliveriesRequired: board.trains.length,
+          stars: dailyStars(board.trains.length),
+        },
+      };
+    },
 
-    const generated = generateLevel(seed, {
-      width: DAILY_WIDTH,
-      height: DAILY_HEIGHT,
-      depotPairs: DAILY_DEPOT_PAIRS,
-    });
+    controls: {
+      switches: true,
+      signalHolds: true,
+      crossingGate: false,
+      build: false,
+      dispatch: false,
+    },
 
-    const trainsDef = trainsFromRoutes(generated.routes);
-    const trainDefs = toTrainDefs(trainsDef);
+    createObjective: objectiveFromSpec,
 
-    // Assign colours deterministically from the same seed so every player gets
-    // identical depot/train colours. A second makeRng call with the same seed
-    // produces the same stream as the first — colours are reproducible.
-    const colors = assignColors(generated.level, trainDefs, makeRng(seed));
+    hud: {
+      deliveries: true,
+      timer: true,
+      stars: true,
+      startOverlay: true,
+      endOverlay: true,
+      money: false,
+    },
+  };
+}
 
-    return {
-      levelId,
-      level: generated.level,
-      trains: trainDefs,
-      colors,
-      objective: {
-        deliveriesRequired: trainDefs.length,
-        stars: dailyStars(trainDefs.length),
-      },
-    };
-  },
-
-  controls: {
-    switches: true,
-    signalHolds: true,
-    crossingGate: false,
-    build: false,
-    dispatch: false,
-  },
-
-  createObjective: objectiveFromSpec,
-
-  hud: {
-    deliveries: true,
-    timer: true,
-    stars: true,
-    startOverlay: true,
-    endOverlay: true,
-    money: false,
-  },
-};
+export const dailyMode: GameMode = dailyModeFor();
 

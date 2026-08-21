@@ -471,4 +471,8 @@ export const tycoonMode: GameMode = {
     endOverlay: true,
     money: true,
   },
+  fits(caps) {
+    // The whole loop is fares on dispatched trains; build alone earns nothing.
+    return caps.trains > 0 ? null : "Needs a train to dispatch";
+  },
 };

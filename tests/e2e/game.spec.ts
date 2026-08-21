@@ -1,4 +1,16 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page, Locator } from "@playwright/test";
+
+// A mode card in the picker, matched on its LABEL element rather than on the
+// button's accessible name. The accessible name is label + description + unfit
+// reason all run together, so a bare /Network/ also matches Citizens' "Build the
+// network they will actually use" — a strict-mode violation the day someone
+// capitalises a word in a description. Anchor on `.mode-card__label` and the
+// match is exactly the card it names.
+function modeCard(page: Page, label: string): Locator {
+  return page
+    .locator(".mode-card")
+    .filter({ has: page.locator(".mode-card__label", { hasText: label }) });
+}
 
 test.describe("Train game", () => {
   test("boots, renders the level and runs trains without console errors", async ({
@@ -155,12 +167,13 @@ test.describe("Train game", () => {
     // Open the game-mode picker from the start overlay.
     await page.getByRole("button", { name: "Change game mode" }).click();
     await expect(page.locator(".picker-card")).toBeVisible();
-    // The picker shows a card per registered mode; pick Time Attack.
-    await page.getByRole("button", { name: /Time Attack/ }).click();
+    // The picker shows a card per registered mode; pick Tycoon (a mode the
+    // default board can carry — Network/Citizens are disabled there, #114).
+    await modeCard(page, "Tycoon").click();
     // The view remounts on the new mode (router-view keyed on the query).
-    await expect.poll(() => page.url()).toContain("mode=time-attack");
+    await expect.poll(() => page.url()).toContain("mode=tycoon");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
   });
 
@@ -168,14 +181,93 @@ test.describe("Train game", () => {
     page,
   }) => {
     // Pick a non-default mode explicitly...
-    await page.goto("/#/play?mode=time-attack");
+    await page.goto("/#/play?mode=tycoon");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
     ).toBeVisible();
-    // ...then open /play with no mode query: it should reopen Time Attack.
+    // ...then open /play with no mode query: it should reopen Tycoon.
     await page.goto("/#/play");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Tycoon" })
+    ).toBeVisible();
+  });
+
+  test("the URL guard's fallback does not erase the remembered mode", async ({
+    page,
+  }) => {
+    // Network fits the station board...
+    await page.goto("/#/play?mode=network&board=networkmode");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Network" })
+    ).toBeVisible();
+    // ...a plain /play lands on the station-less default, where the guard has
+    // to downgrade to Puzzle. That downgrade must not become the PREFERENCE.
+    await page.goto("/#/play");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Puzzle" })
+    ).toBeVisible();
+    // Back to a board that carries Network, with no ?mode=: the remembered
+    // mode is still Network, so it reopens.
+    await page.goto("/#/play?board=networkmode");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Network" })
+    ).toBeVisible();
+  });
+
+  test("on the daily board the picker judges the board a pick LANDS on", async ({
+    page,
+  }) => {
+    // pickMode DROPS ?board=daily (picking a ruleset there means leaving
+    // today's board), so the navigation lands on the default board — which has
+    // no towns and no stations. Judged against the daily blob instead, Citizens
+    // showed enabled on most days and the click silently downgraded to Puzzle.
+    await page.goto("/#/play?board=daily");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    await expect(modeCard(page, "Citizens")).toBeDisabled();
+    await expect(modeCard(page, "Network")).toBeDisabled();
+    // Puzzle and Tycoon do fit the default board, so they stay clickable.
+    await expect(modeCard(page, "Tycoon")).toBeEnabled();
+  });
+
+  test("the picker's Today's-challenge chip opens the daily board (#113)", async ({
+    page,
+  }) => {
+    await page.goto("/#/play?mode=puzzle");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    await page.getByRole("button", { name: /Today's challenge/ }).click();
+    // Daily is a board source now: the chip navigates to ?board=daily, and the
+    // view runs today's generated board under the daily ruleset.
+    await expect.poll(() => page.url()).toContain("board=daily");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Daily Challenge" })
+    ).toBeVisible();
+  });
+
+  test("the picker disables unfit modes and keeps the board (#114)", async ({
+    page,
+  }) => {
+    // objectives is a 3-tile depot lane: no stations, no towns — so Network
+    // and Citizens can't run there, and their cards say why.
+    await page.goto("/#/play?mode=puzzle&board=objectives");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    const network = modeCard(page, "Network");
+    await expect(network).toBeDisabled();
+    await expect(network).toContainText("Needs stations");
+    await expect(modeCard(page, "Citizens")).toBeDisabled();
+    // Switching to a mode that fits keeps the board in the URL.
+    await modeCard(page, "Tycoon").click();
+    await expect.poll(() => page.url()).toContain("mode=tycoon");
+    await expect.poll(() => page.url()).toContain("board=objectives");
+  });
+
+  test("an unfit mode×board URL falls back to the board's own mode (#114)", async ({
+    page,
+  }) => {
+    // Network on the station-less objectives lane can never engage; the guard
+    // resolves the board's pinned mode (puzzle) instead of loading a dead game.
+    await page.goto("/#/play?mode=network&board=objectives");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Puzzle / Dispatcher" })
     ).toBeVisible();
   });
 
@@ -750,7 +842,16 @@ test.describe("Train game", () => {
     // switching, dispatching all three trains, the win screen, and the ledger
     // adding up.
     await page.goto("/#/play?mode=tycoon&board=lakevalley-open");
+    // Nothing floats over the Ready card — the coach only teaches a live run.
+    await expect(page.getByTestId("coach-mark")).toHaveCount(0);
     await page.getByRole("button", { name: "Start", exact: true }).click();
+
+    // The teaching layer (src/coach.ts): level 1's first lesson is the build,
+    // pinned over the gap in the ring, the moment the run starts.
+    await expect(page.getByTestId("coach-mark")).toHaveAttribute(
+      "data-coach-id",
+      "build-ring"
+    );
 
     const balance = () =>
       page.evaluate(() => (window as any).__game.money.balance as number);
@@ -817,6 +918,21 @@ test.describe("Train game", () => {
       )
       .toBe(7);
 
+    // Building was the dismissal: the coach has moved on to the dispatch
+    // lesson, riding the waiting train's fare pin.
+    await expect(page.getByTestId("coach-mark")).toHaveAttribute(
+      "data-coach-id",
+      "dispatch-train"
+    );
+    // The switch lesson's dismissal is a changed ARM. The routing table below
+    // mostly re-writes default values (which no observer can distinguish from
+    // untouched), so teach the verb explicitly first on an arm no train in
+    // this choreography ever reads: 2,2 entered from the East.
+    await page.evaluate(() => {
+      const g = (window as any).__game;
+      g.switches["2,2"][1] = (g.switches["2,2"][1] + 1) % 3;
+    });
+
     // Route the three trains on disjoint paths (the rebuilt ring is the
     // passing loop): blue east along the trunk, red down the east side and
     // west along the bought ring into the yellow station, yellow up the west
@@ -838,6 +954,10 @@ test.describe("Train game", () => {
 
     // Dispatch all three by clicking their fare pins, then run fast.
     for (const pin of await page.locator(".fare-pin").all()) await pin.click();
+    // Every verb has now been performed, so the coach has nothing left to
+    // teach — the dispatch dismissed its own mark, and the switch lesson
+    // auto-completed on the arm change above.
+    await expect(page.getByTestId("coach-mark")).toHaveCount(0);
     await page.evaluate(() => {
       (window as any).__game.speed.value = 4;
     });

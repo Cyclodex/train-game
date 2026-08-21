@@ -113,6 +113,16 @@ export const networkMode: GameMode = {
     dispatch: false,
   },
   createObjective: objectiveFromSpec,
+  fits(caps) {
+    // People appear at stations; without one the passenger target can never
+    // move. The carrier can be a train already in service, a depot to order
+    // one from, or a bus network — any of the three keeps the board playable.
+    if (caps.stations === 0) return "Needs stations for passengers to gather at";
+    if (caps.trains === 0 && caps.depots === 0 && caps.busStops === 0) {
+      return "Needs a train, a depot or bus stops to carry them";
+    }
+    return null;
+  },
   hud: {
     // The passenger card replaces the delivery card here: what the player is
     // steering is people carried, and showing both would be the HUD density

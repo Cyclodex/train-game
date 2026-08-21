@@ -34,8 +34,47 @@
         />
         <span class="stage-cars-val">{{ config.maxCars === 0 ? "off" : config.maxCars + "%" }}</span>
       </label>
-      <span class="stage-deliveries">
+      <!-- The mode's live scoreboard (#115): the stage auto-starts its run and
+           shows no blocking overlays, so a scenario that demonstrates a MODE
+           carries its objective here — deliveries, timer, star pips, outcome.
+           Every piece is gated by the mode's own HUD descriptor, so free-play
+           demos (Sandbox, Citizens) show none of it. The delivery card obeys
+           the same gate as the rest: Network sets `deliveries: false,
+           passengers: true` to REPLACE it, and ungated it showed a meaningless
+           "Delivered 0 / 1" (network asks for 0 deliveries and its trains never
+           park) right beside the passenger count it was meant to replace. -->
+      <span v-if="hud.deliveries" class="stage-deliveries">
         Delivered {{ delivered }} / {{ totalTrains }}
+      </span>
+      <span v-if="hud.passengers" class="stage-passengers" title="Passengers carried">
+        🧍 {{ passengersCarried }}
+      </span>
+      <span v-if="hud.timer" class="stage-timer" title="Elapsed time">
+        ⏱ {{ timeLabel }}
+      </span>
+      <span v-if="hud.stars && objectiveStars.length" class="stage-stars" :title="starsTitle">
+        <span
+          v-for="s in objectiveStars"
+          :key="s.id"
+          :class="['stage-star', { 'stage-star--earned': s.earned }]"
+          >★</span
+        >
+      </span>
+      <!-- The outcome chip belongs to the end-overlay's job — announcing that
+           the run is over — so it obeys `hud.endOverlay` like every other
+           piece. Today the two modes that declare `endOverlay: false` are the
+           endless ones and can never terminate, so this changes nothing on
+           screen; ungated it was a hole in the stated invariant, waiting for
+           the first finite mode that wants no result screen. -->
+      <span v-if="hud.endOverlay && phase === 'won'" class="stage-phase stage-phase--won">
+        ✔ Won
+      </span>
+      <span
+        v-else-if="hud.endOverlay && phase === 'lost'"
+        class="stage-phase stage-phase--lost"
+        :title="lostReason"
+      >
+        ✖ Lost
       </span>
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
@@ -119,6 +158,10 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />
@@ -190,6 +233,10 @@
         :badge="badge"
         @send="onFareClick(badge)"
       />
+      <!-- The coach-mark (src/coach.ts): the stage runs the same game, so a
+           board with a hint list teaches here too — /test/coachmarks is the
+           mechanic's isolation scenario. -->
+      <CoachMark :zoom="camera.zoom" />
       <!-- The meadow theme's backdrop trees: one world overlay in the canopy
            band, above rails/trains/cars (see components/BackdropTrees.vue).
            Absolutely positioned, so it is not a grid ITEM (KNOWHOW → RENDER
@@ -234,10 +281,12 @@ import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, FareBadge, Game, MoneyState, RoadCar, TrainDef } from "@/game";
+import { StarState } from "@/sim/objectives";
 import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
+import CoachMark from "@/components/CoachMark.vue";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
 import CityPanel from "@/components/CityPanel.vue";
@@ -264,7 +313,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { Crossing, FarePin, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { CoachMark, Crossing, FarePin, CityPanel, CitizenInspector, PersonPin } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;
@@ -373,9 +422,12 @@ class TestStage extends Vue {
     // Left drag pans — the gesture everyone already knows from a map, and the
     // only one available on a trackpad or a touchscreen. Middle drag pans too,
     // so the same muscle memory works here and in the editor (where left has to
-    // stay with the drawing tools).
-    if (e.button !== 0 && e.button !== 1) return;
-    this.cam.onPointerDown(e);
+    // stay with the drawing tools). A single finger reports button 0, so it pans
+    // as well; two fingers pinch, which the camera works out for itself.
+    //
+    // EVERY pointer is handed over, even the ones that may not pan: the camera
+    // has to see a second finger to recognise a pinch. See cameraController.ts.
+    this.cam.onPointerDown(e, { pan: e.button === 0 || e.button === 1 });
   }
   onViewportPointerMove(e: PointerEvent): void {
     this.cam.onPointerMove(e);
@@ -571,6 +623,37 @@ class TestStage extends Vue {
   get totalTrains(): number {
     return Object.keys(this.trains).length;
   }
+
+  // --- the mode's objective, compact (#115) ---------------------------------
+  // The stage auto-starts every scenario and has no start/end overlays, so a
+  // mode demo's scoreboard lives on the control strip instead. Each piece is
+  // gated by the mode's own HUD descriptor. Star pips are LIVE state: a
+  // restraint star ("hands off") starts earned and dims when forfeited.
+  get hud() {
+    return this.game.mode.hud;
+  }
+  get objectiveStars(): StarState[] {
+    return this.game.objective.stars;
+  }
+  get starsTitle(): string {
+    return this.objectiveStars
+      .map(s => `${s.earned ? "★" : "☆"} ${s.label}`)
+      .join("\n");
+  }
+  get phase(): string {
+    return this.game.objective.phase;
+  }
+  get lostReason(): string {
+    return this.game.objective.lostReason ?? "";
+  }
+  get timeLabel(): string {
+    const t =
+      this.game.objective.timeLeftSec ?? this.game.objective.counters.elapsedSec;
+    return t.toFixed(1) + "s";
+  }
+  get passengersCarried(): number {
+    return this.game.objective.counters.passengersDelivered ?? 0;
+  }
   get recentLog() {
     return this.game.eventLog.slice(-60).reverse();
   }
@@ -636,7 +719,9 @@ export default toNative(TestStage);
 .stage-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  row-gap: 8px;
 }
 .stage-button {
   padding: 8px 16px;
@@ -662,6 +747,10 @@ export default toNative(TestStage);
 // same dark chip the buttons carry, so the whole bar reads on any backdrop.
 .stage-cars,
 .stage-deliveries,
+.stage-passengers,
+.stage-timer,
+.stage-stars,
+.stage-phase,
 .stage-money,
 .stage-calendar {
   padding: 7px 12px;
@@ -692,6 +781,31 @@ export default toNative(TestStage);
   font-size: 13px;
   font-weight: 600;
 }
+.stage-passengers,
+.stage-timer {
+  color: #eaf1f7;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stage-stars {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+.stage-star--earned {
+  color: #ffd873;
+}
+.stage-phase {
+  font-size: 13px;
+  font-weight: 800;
+}
+.stage-phase--won {
+  color: #5fd39a;
+}
+.stage-phase--lost {
+  color: #ff8a80;
+}
 .stage-money {
   color: #ffd873;
   font-size: 14px;
@@ -706,6 +820,38 @@ export default toNative(TestStage);
 }
 .stage-calendar--broke {
   color: #e2574c; // next year's bill is more than there is in hand
+}
+
+// ---- Phone / short-screen layout -------------------------------------------
+//
+// The same breakpoint pair as the rest of the HUD. The bar is ~700px of chips; on
+// a 375px screen it wrapped into four rows of desktop-sized buttons and left the
+// board a sliver. Shrinking the chips (and the cars slider, the widest single
+// item) brings it back to two rows and gives the world its height back — which is
+// exactly what a landscape phone needs as well, hence the height clause.
+@media (max-width: 700px), (max-height: 500px) {
+  .test-stage {
+    gap: 8px;
+    padding: 0 8px 8px;
+  }
+  .stage-controls {
+    gap: 6px;
+    row-gap: 6px;
+  }
+  .stage-button {
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .stage-cars,
+  .stage-deliveries,
+  .stage-money,
+  .stage-calendar {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+  .stage-cars-range {
+    width: 84px;
+  }
 }
 .level {
   display: grid;

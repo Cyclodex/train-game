@@ -217,6 +217,16 @@ export interface ObjectiveTracker {
   observe(obs: Observation, dt: number): void;
   state(): ObjectiveState;
   reset(): void;
+  // Save/load: the tracker's whole moving state. The SPEC is construction-time
+  // data (the mode rebuilds it), so only phase + counters travel.
+  snapshot(): ObjectiveSnapshot;
+  restore(snap: ObjectiveSnapshot): void;
+}
+
+export interface ObjectiveSnapshot {
+  phase: GamePhase;
+  counters: Counters;
+  lostReason?: string;
 }
 
 function zeroCounters(): Counters {
@@ -379,6 +389,20 @@ export function createObjectiveTracker(spec: ObjectiveSpec): ObjectiveTracker {
       phase = "ready";
       counters = zeroCounters();
       lostReason = undefined;
+    },
+    snapshot() {
+      return {
+        phase,
+        counters: { ...counters },
+        ...(lostReason !== undefined ? { lostReason } : {}),
+      };
+    },
+    restore(snap) {
+      phase = snap.phase;
+      // Over zeroed defaults, so a save missing a late-added counter still
+      // restores to a complete Counters object.
+      counters = { ...zeroCounters(), ...snap.counters };
+      lostReason = snap.lostReason;
     },
   };
 }

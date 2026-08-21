@@ -114,6 +114,70 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## PINCH-ZOOM / TOUCH INPUT (2026-08-21)
+- Pinch lives in `cameraController.ts`, so all three boards (PlayView, EditorView,
+  TestStage) get it once. Two fingers zoom AND drag; the `−/%/+` buttons stay.
+- **Every view must hand the controller EVERY pointer**, saying only whether that
+  pointer may pan: `cam.onPointerDown(e, { pan })`. Returning early on a pointer
+  the view does not want (what all three used to do) hides the SECOND finger from
+  the camera, and the editor — where one finger belongs to the connect tool and
+  never pans — could then not be moved by touch at all. A pinch outranks every
+  tool: nothing in this app takes two fingers.
+- **Zoom about the PREVIOUS midpoint, then pan by the midpoint's travel.** The
+  other order (zoom about the new midpoint, then pan) leaks
+  `delta * (1/oldZoom - 1/newZoom)` every frame, so the board slides out from
+  under the fingers on any pinch that also drifts — which is all of them. Proved
+  in `tests/unit/cameraController.spec.ts` as a world-point invariant, not as a
+  number.
+- **Never read `e.movementX` for a drag.** It is undefined-or-zero for touch
+  pointers in several engines, so a one-finger drag moved the board by nothing on
+  a phone. The controller tracks `clientX/Y` itself — identical for a mouse
+  (the pointer is never locked here) and the only thing that exists for a finger.
+- Ending a touch gesture has three cases, all of them live: 3→2 fingers must
+  RE-BASELINE the span (a different pair spans a different distance, and without
+  it the board jumps); 2→1 hands the pan to the finger still down (lifting a thumb
+  and dragging on is ordinary map handling); and the LAST finger up must clear
+  `state.panning` even when no pointer ever owned the pan, or the board keeps the
+  grabbing cursor and swallows every click from then on.
+- **The build/edit edge zones are bound to `@mousedown`/`@mouseup`, not pointer
+  events** (`EditorView.vue`, `PlayView.vue`). A `touch-action: none` surface
+  fires NO compatibility mouse events — measured: a touch drag over a zone
+  delivers `pointerdown`/`touchstart`/`pointerup` and nothing else. So the
+  drawing tools cannot be used by touch at all yet. Moving them to pointer events
+  is what unlocks that; the `cam.pinching` → `clearPress()` guard in both views
+  is already in place for the day it happens.
+- `MIN_ZOOM` is still 0.15, so `fitWorld()` on a landscape phone (a ~170px-tall
+  viewport) cannot show a big world whole — pinch and pan reach the rest.
+
+## PHONE LAYOUT (2026-08-21) — the /test gallery, and one grid trap
+- ONE breakpoint pair for the whole app: `@media (max-width: 700px), (max-height:
+  500px)`. `_hud.scss`, `BuildDock.vue`, `EditorView.vue`, `TestView.vue` and
+  `TestStage.vue` all use it. The height clause is not decoration — a landscape
+  phone is 812x375, wide but shorter than anything the desktop layout assumes.
+- **A grid item whose children are ALL `position:absolute` contributes ZERO
+  content height, so an `auto` row track cannot see its `aspect-ratio`.** While
+  the rows still fit the container nothing shows; the moment they do not, Chrome
+  collapses every track to a slice of the leftover space and the items OVERLAP.
+  Measured on `/test` at 375px: 45px tracks under 214px cards — the gallery was a
+  stack of stripes with every title and description buried under the next card,
+  and it looked fine on a desktop because four columns fit their three rows.
+  Fix: `grid-auto-rows: max-content` on the grid (`.card-grid`, TestView.vue).
+  Reach for it on ANY scrolling grid of aspect-ratio cards.
+- A breadcrumb crumb needs `white-space: nowrap` + ellipsis, or a narrow header
+  tears "One-way & lanes" into four stacked lines of one word each. Wrap BETWEEN
+  crumbs (`flex-wrap` on the row), never inside one.
+- `.stage-controls` wraps at every width, not just on phones: it is ~700px of
+  chips, so an 800px window already clipped the right-hand readouts off-screen.
+- Prose panels get a `max-height` in `vh` + `overflow-y: auto` on small screens.
+  `/test/roadlanemerge`'s description is a paragraph and took HALF a phone screen,
+  pushing the board out of view; capped at 24vh it scrolls inside its own panel
+  and nothing is hidden.
+- Scenario descriptions carry paths (`/test/lanedrop`) and arrows (`1→3→1`) with no
+  space to break at — `.card-desc` needs `overflow-wrap: anywhere`.
+- Touch pan works on the board (pointer events cover touch, `touch-action: none`);
+  there is NO pinch-zoom — mobile zooms with the −/%/+ buttons. `MIN_ZOOM` is 0.15,
+  so on a landscape phone a big world stays clipped and must be panned.
+
 ## ROLLING STOCK ART (procedural SVG, 2026-07-26)
 - Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
   `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
@@ -279,7 +343,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `<TileGround layer="scatter">` at z-index 1 — above every patch (z0), below
   rails (z2); a road (z1, later DOM in its own cell) still paints over its own
   cell's scenery. Ground layer keeps only patch+rim+marks. Placement tests
-  parse BOTH layers.
+  parse EVERY layer (ground + scatter + structures).
+- **BUILDINGS ARE NOT SCATTER** (2026-08-21): what people BUILT renders on its
+  own `<TileGround layer="structures">` (`tileStructuresSvg`) at **z7**, above
+  the walkers AND the cars (both z6); scenery — trees, bushes, boulders, ridges
+  — stays `scatter` at z1. Reported as "people walk over the houses": a
+  citizen's first leg is the STUB from their own front door to the kerb
+  (`sim/pedestrians.ts`), which crosses the plot the house stands on, so at z1
+  the figure slid across the roof. Only urban/industry emit structures; a tile's
+  art is one `GroundArt` = {ground, scatter, structures, canopy} out of one
+  cached build, so the split costs no extra placement pass.
+    · Lifting a roof over the TRAFFIC is safe for the same reason the canopy
+      layer is: placement already keeps every footprint off the rails and roads
+      of its own cell AND its four side-neighbours (`corridorsFor`), and each
+      placed building pushes its own footprint on as a blocker. A roof can
+      therefore never cover a car, a train or a carriageway — verified on
+      `/test/townscape` (level crossing, booms, cars, a consist: none clipped).
+    · Same z as `.tile-canopy`, mounted BEFORE it in all three boards (Play,
+      Editor, TestStage), so within a cell a crown still overhangs the roof.
+      Across cells DOM order decides — only visible where a forest tile's
+      overhanging crown reaches onto an urban tile drawn later.
+    · The two things that had to come UP with it: PlayView's `.build-overlay`
+      (z5 → z8, or a preview rail drawn through a plot vanished under a roof)
+      and the station NAMEPLATE + latent hint (z5 → z9, because…)
+    · …**the station building is a building too** — `.station-building` went
+      z3 → z7 for the identical reason: it stands in the strip between the outer
+      platform and the tile edge, which is exactly the ground a passenger walks
+      to reach the halt. It is laid clear of the rails (`utils/stationArt.ts`),
+      so nothing that moves is hidden by the lift.
+    · /test scenario: `citizenhouse`. To PROVE it, don't wait for a lucky frame:
+      poll `__game.pedestrians` for one inside a plot's px band, set
+      `paused.value = true` in the SAME evaluate, then shoot the frame twice —
+      once as-is and once with `.tile-structures{z-index:1}` injected. Same
+      walker, same pixel, only the layer.
 - GLADES (2026-07-27): forest trees are rejected where `forestDensityAt` — 
   value noise over a 3-tile WORLD lattice, world-seeded so a clearing never
   traces the grid — runs low; just-over-the-bar rolls keep a low `bush()`, so
@@ -318,9 +414,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
-  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
-  renders its ground/scatter a SECOND time above the trains, clipped to the
-  tile, as the bore's roof (see TUNNELS).
+  and rails (2), so scenery never covers track. TWO EXCEPTIONS, both deliberate:
+  a tunnel cell renders its ground/scatter a SECOND time above the trains,
+  clipped to the tile, as the bore's roof (see TUNNELS); and the `structures`
+  layer (z7) draws the town's buildings above the traffic (see BUILDINGS ARE NOT
+  SCATTER). Neither can cover track — a bore's roof IS the tile, and a building
+  is placed clear of every corridor.
 - BACKDROP TREES ARE CANOPY TOO (2026-08-21): the meadow theme's seeded tree
   scatter is NOT a CSS background any more — it was `--meadow-trees` under the
   board, which put every crown BEHIND the rails/trains/cars laid over it. It is
@@ -956,6 +1055,66 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   returns the counts a dwell event reports. Boarding asks the NETWORK, never a
   single line's stop list.
 
+## DEMAND IS ADDITIVE — citizens + edge riders (#117, 2026-08-21)
+- The per-mode XOR is GONE: `demandFor` (game.ts) no longer turns the derived
+  spawn schedule off under the citizen layer. It scales it by a per-stop dial,
+  `TileCell.edgeDemand` — the share of the catchment-derived schedule that is
+  EDGE demand (travellers imported from off-map). Defaults preserve every old
+  board: 1 without citizens (the old synthetic demand), 0 with them (the map
+  explains everybody). `??`, never `||` — an authored 0 must mean OFF.
+- No double-counting BY TAGS, not by exclusion: a citizen queues under their own
+  id, an edge rider is anonymous, and `boardedTags`/`alightedTags` name exactly
+  who moved. The two compete only for seats and platform room — the game.
+- The dial scales `intervalSec` (by division) and `initial`; NEVER `max`. Under
+  citizens the cap stays ≥ `CITIZEN_PLATFORM_CAP`, or a morning peak re-hits the
+  "commuter cannot even join the queue" failure the cap exists to prevent.
+- CITIZENS RIDE BUSES (#111 step 1): a plot's `stationsInReach` are BOARDING
+  POINTS — rail stations AND busstop rows (`boardingPointsInReachOf`,
+  tiles/cities.ts). The citizen transit port binds to the SHARED transit layer
+  (`transit.enqueue`/`dequeue`/`serves`), and `busEvents` (game.ts) holds bus
+  calls directly IN the DwellEvent shape (`trainId` = the bus id) — no
+  translation layer to drift. The mirror is vehicle-agnostic — `riders` keys
+  by vehicle id.
+- Bus calls reach the citizen sim ONE TICK LATE (`advanceBuses` runs after
+  `citizenSim.step` in `advance()`); tests stepping in large chunks step once
+  more before asserting a boarding. Three corollaries, each learned the hard
+  way: bus events are PREPENDED to the rail events (they are the older tick —
+  appended, a stale bus alight replays over a fresher train boarding at an
+  interchange); the buffer is cleared only on a tick the citizen sim consumed
+  (`scaled > 0` — `step(0)` skips the mirror, and start() after stop() begins
+  with advance(0)); and reset() clears the buffer AND every bus manifest, or
+  the old world's riders exchange into the new world's ledger.
+- ARRIVAL vs CHANGE is told by the EVENT (`DwellEvent.changingTags`, filled by
+  `transit.exchange`), never by comparing stations: a rider whose destination
+  is one walk-link past the platform is walked home by the transit layer and
+  ARRIVES without the stations matching — reading that as a change left them
+  waiting at a queue that no longer held them.
+- A citizen who GIVES UP waiting is withdrawn from the queue
+  (`TransitPort.dequeue` → `transit.dequeue`). Left behind, the tag was a
+  ghost the next vehicle boarded, corrupting whatever trip the person had
+  moved on to.
+- EVERY bus-withdrawal path sets riders down (`setDownAll`): assignBus(null),
+  removeBus, the stops<2 despawn in advanceBuses, AND game.deleteLine (which
+  takes the line's buses off via assignBus AFTER sim.deleteLine — before, and
+  pruneLineIfUnused sweeps the line out from under the delete). A citizen in a
+  seat is driven only by events; a surviving manifest is a person frozen
+  forever.
+- `edgeDemand` is SANITISED (`edgeShareOf`, clamp 0..EDGE_DEMAND_MAX): the
+  dial divides a spawn interval, and an interval driven to 0 (authored
+  Infinity on imported JSON) never leaves `advanceDemand`'s catch-up loop.
+  `latentDemandAt` scales by the same share, so the unserved-platform badge
+  cannot promise a crowd the dial has turned off. `eraseLayer` drops the dial
+  when the tile's last stop goes.
+- The transit quote still prices a bus leg at TRAIN speed/headway — a recorded
+  approximation, not an oversight (per-kind ride speed needs the line kind).
+  P&R/B+R alights are chosen by CONNECTIVITY over all of the destination's
+  boarding points (`bestAlightFrom`) — the single nearest point can be an
+  unserved kerb since bus stops joined the pool.
+- Boards: `/test/busride` (citizens on a bus, no rails at all — dead before
+  #117), `/test/edgedemand` (both crowds on one platform). Design:
+  `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —
+  also the epic's roadmap (passenger fares, vehicle costs, mode convergence).
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get
@@ -1324,8 +1483,10 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       connected" and as "the sidewalk is drawn on top of the people" — the
       second was the notch cutting past a walker, NOT a z-order problem: paving
       is z1 and `.pedestrian` is z6, and a pixel probe over the rendered board
-      confirms nothing paints over a walker (the only near-misses are two
-      walkers 3px apart, which the model allows on purpose).
+      confirms no GROUND layer paints over a walker (the only near-misses are
+      two walkers 3px apart, which the model allows on purpose). Since
+      2026-08-21 exactly one thing deliberately does: `.tile-structures` (z7),
+      the houses themselves — see BUILDINGS ARE NOT SCATTER.
     · Verify layer bugs with PIXELS, not `elementsFromPoint`: every tile layer is
       `pointer-events: none`, so hit-testing cannot see them at all. And PAUSE
       the board first (`__game.paused.value = true`) — a rect read one frame and
@@ -1727,10 +1888,11 @@ Four rules, each measured on that board, each of which failed silently:
   together they are fatal: every trip across the village is a LAP of the whole
   ladder, and a queue long enough to reach back into a junction box blocks the
   stream that would have let it out. That is a cycle of full tiles with no head
-  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
-  not gridlocked by politeness) is what lets the last car into the box that
-  closes it. It does not clear: measured, 42 of 46 cars standing still for the
-  rest of a six-day run, one for 354 unbroken seconds.
+  to move first. It does not clear: measured, 42 of 46 cars standing still for
+  the rest of a six-day run, one for 354 unbroken seconds. (An earlier version
+  of this note blamed `BOX_KEEP_CLEAR_PATIENCE` for closing the ring — measured
+  false on the shipped layout: disabling the valve outright reproduces the
+  seed-11 knot bit for bit. The real closer is below.)
   · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
     after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
     car never arrives, with the town's Work bar pinned at 0.00 while its
@@ -1747,6 +1909,42 @@ Four rules, each measured on that board, each of which failed silently:
     the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
     and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
     every local trip into a full circuit.
+  · **A per-seed zero is not a guarantee — probe a SWEEP, and probe INSIDE
+    capacity** (2026-08-21). The "0 frozen at 40" above was one lucky seed
+    pair: at a CONSTANT 40 only 4 of 24 probed runs come through clean (two
+    independent trip streams x seeds 1..12), and which ones flip re-rolls on
+    ANY dynamics change — an unrelated CLIP_LANES retune (PR #98) turned the
+    guard's seed 11 red. A constant-load harness holds the network at that
+    density forever (every arrival instantly replaced), which bursty citizen
+    demand never does; a zero-freeze assertion at supercritical load asserts a
+    coin toss. The clean envelope ends between 24 and 30: at a constant 24 all
+    40 probed runs are clean (longest stand 24s), at 30 two of six seeds
+    already stand for 350s. 24 is the guard's load.
+  · **AND ASSERT THE THROUGHPUT, not only the freeze.** At a load both plans
+    survive NEITHER freezes, and at one neither survives BOTH do, so "nothing
+    froze" on its own never separates a layout from the one it replaced. What
+    does, on every seed: at a constant 24 the shipped plan carries 887-967
+    journeys per 900s where the old ladder never once clears 700 (192-674, and
+    it jams on a third of its seeds). The freeze checks are the backstop; the
+    number the layout actually moves is the evidence.
+  · **Do not hand-roll a PRNG for a harness — `makeRng` (mulberry32) is right
+    there.** The obvious glibc `s * 1103515245 + 12345` constants overflow the
+    double mantissa in JS and the state space collapses: measured period 10466
+    from every seed tried, against the 2^31 the arithmetic promises. It stays
+    deterministic, so nothing goes red — it is simply not the generator the test
+    believes it is sampling with.
+  · **BOX–CROSSING–BOX IS A DEADLOCK TRAP.** A level crossing directly between
+    two junction boxes (the rung crossing the branch: box 9,10 / crossing
+    10,10 / box 11,10) couples the boxes through the rail-crossing keep-clear
+    — which is patience-less by design (`won't roll onto a rail crossing`,
+    road.spec) and demands room past the far edge. Two opposing streams plus
+    one conflicting turner close a wait-cycle in which every hold is locally
+    correct (keep-clear → full tile → arbiter-refused box → follower → turner
+    → back). Diagnose knots by labelling `bind()` calls in `clearAhead` and
+    dumping each frozen car's binding gate — the wait-for graph names the
+    cycle in one run. Retracting the rung to avoid the crossings measured
+    WORSE (11/20 seeds frozen): connectivity outweighs the trap. The real fix
+    is a sim mechanism (spillback / wait-cycle resolution) — open ticket.
   · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
     straight or bend whose neighbour has a different lane count (the renderer
     paints it red); a junction fans and merges unequal arms by design and is
@@ -1755,7 +1953,16 @@ Four rules, each measured on that board, each of which failed silently:
     x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
   · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
     the block signals (a road tile silently drops the signal authored on it) and
-    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+    the zoned plots INSIDE ITS OWN SPAN — and that normally leaves a CHOICE, not
+    one row. On hinterland four rows survive all three (6, 10, 14, 16); y=10
+    ships because a rung is worth most in the middle and the middle rows are the
+    blocked ones (y=11 platform + shop, y=12 café). Choose by how evenly the rung
+    splits the ladder: y=10 → 5/8 rows, y=14 → 9/4, y=6 and y=16 sit one and two
+    rows off an existing rung. Cost is read off the SPAN too: hinterland's rung
+    is x=3..11, so it takes exactly two plots, (6,10) and (8,10); the tiles on
+    the rail columns become level crossings and plots outside the span ((2,10),
+    (12,10)) are untouched. Counting the NEW ROAD TILES as the plot cost is the
+    easy mistake — half of them are rail.
 - **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
   `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
   and `homeparking` call it, and nothing else does. hinterland never has, so the
@@ -2190,6 +2397,110 @@ Four rules, each measured on that board, each of which failed silently:
   `generateTerrain` allows itself — the same reason applies to an authored board:
   the build tool has to have somewhere to go.
 
+## THE MODE ROSTER (#113/#114/#115 + review round, 2026-08-21)
+- `MODES` (`modes/index.ts`) is the PICKER, not the mode list: five pillars
+  (puzzle, tycoon, network, citizens, sandbox). Two rulesets ship UNREGISTERED —
+  **Daily** is a BOARD SOURCE (`?board=daily`, the picker's chip) and **Time
+  Attack** is a PUZZLE VARIANT any roster with a `spawnAtSec` triggers. Neither
+  is reachable through `modeById`; both are imported directly where needed.
+- `?board=daily` WINS over an explicit `?mode=` (`?mode=sandbox&board=daily`
+  runs the daily ruleset). The daily board IS the daily ruleset.
+- BOARD CAPABILITIES ARE DERIVED, never stored per board:
+  `boardCapabilities(level, trains)` (`modes/compat.ts`) counts stations, depots,
+  bus stops, homes, workplaces off the tiles + roster; a mode declares
+  `fits(caps)` and the picker greys unfit cards while the URL guard downgrades
+  unfit pairs. So a board built in the editor is judged exactly like an authored
+  one, and no author maintains a per-board mode list.
+- The derivation is NOT free (walks every tile, floods the towns, rolls a
+  per-plot RNG). Test `mode.fits` for EXISTENCE first and short-circuit — Sandbox
+  and every no-`fits` mount must not pay for it.
+- THE PICKER MUST JUDGE THE BOARD THE PICK LANDS ON, not the one on screen.
+  `pickMode` carries `?board=` across, EXCEPT `daily`, which it drops (picking a
+  ruleset there means leaving today's board) — so on the daily board fitness is
+  judged against `custom ?? DEFAULT_LEVEL`. Judged against the daily blob it
+  LIED: generated boards nearly always have a town, so Citizens showed enabled
+  and the click landed on the town-less default and downgraded to Puzzle.
+- PERSIST THE REQUESTED MODE, NOT THE RESOLVED ONE (`saveLastModeId` in
+  PlayView's `mounted`). Saving the guard's fallback erases the preference: play
+  Network on a station board, open plain `/play` once, and Network never reopens.
+- RUSH CAP ≥ THE BOARD'S OWN BACKLOG. `objectives.ts` seeds `active` from
+  `initialActiveTrains` and fails on the FIRST `observe()` once it exceeds
+  `fail.maxActiveTrains` — so `Math.max(MAX_ACTIVE_TRAINS, initialActive + 1)`,
+  or a board with 5 unscheduled trains plus one scheduled arrival is lost at t=0.
+  Since #113 nobody opts into this ruleset; a `spawnAtSec` anywhere triggers it.
+- `campaign.ts` pins its OWN `modeId` per level, independent of the scenario's
+  (PlayView ignores `scenario.modeId`). `compat.spec.ts` sweeps CAMPAIGN as well
+  as SCENARIOS, so a mismatched entry fails CI instead of silently downgrading.
+- `crossingGate` (`ModeControls`) is DECLARED BUT UNREAD since Crossing Keeper
+  was retired (#121): every mode sets it false and the worst-car-wait HUD it
+  gated is gone. `maxCarWaitSec`/`carsDelivered`/`crossingIncidents` are still
+  filled every tick and read by NOTHING — no mode scores the road layer.
+
+## THE /test MODE GALLERY (#115, 2026-08-21)
+- `challenges/modes` is ONE DEMO PER RULESET, each actually running it (six:
+  `daily`, `objectives`→puzzle, `dispatch`→tycoon, `networkmode`, `threecities`
+  →citizens, `timeattack`). That is MORE than the picker roster — the two
+  unregistered rulesets bracket the four objective-carrying pillars. Sandbox
+  needs no card: it is the stage's default, so a card would demo the absence of
+  rules. `scenarioCoverage.spec.ts` pins BOTH halves — no mode twice AND every
+  registered non-Sandbox mode present (one half alone let a new mode ship
+  card-less and stay green).
+- `TestStage` renders the mode's SCOREBOARD on the control strip (there are no
+  overlays at /test and the stage auto-starts), and EVERY piece is gated by the
+  mode's `HudDescriptor` — deliveries included. Network sets
+  `deliveries:false, passengers:true` to REPLACE the delivery card; ungated it
+  showed a meaningless `Delivered 0 / 1` beside the passenger count.
+- THE DAILY SCENARIO PINS A DATE, NOT A SEED (`dailyModeFor("2026-06-15")`, and
+  the same in `daily.spec.ts`). Pinning the date exercises the whole
+  date→seed→board→colours pipeline; pinning a seed would skip the half that
+  actually varies. Only the "resolves the date at setup time" case runs `today`.
+- `createGame` takes the VIEW's colours and ignores the ones `setup()` returns,
+  so a scenario whose mode pins colours must repeat them in `scenario.colors`.
+
+## SAVE / LOAD — Spielstand (2026-08-21)
+- Spec: `docs/superpowers/specs/2026-08-21-save-load-design.md`. Layers:
+  `sim.snapshot()/restore()` (simulation.ts, + transit/objectives/economy
+  snapshots), `game.captureSave()/restoreSave()` (game.ts, `GameSave` +
+  `SAVE_VERSION`), `saveStore.ts` (localStorage slots), PlayView (`?save=<id>`
+  resume, Saves overlay in the drawer, autosave slot on leave while playing).
+- THE RULE: everything `step(dt)` reads that a player action or elapsed time
+  moved is snapshotted VERBATIM; derived fields (unitOffsets, lookAhead,
+  plan.exitAt) are recomputed. RESERVATIONS TRAVEL — re-deriving them would
+  claim blocks a train had not yet claimed (a train reserves only when it
+  crosses) and change who yields to whom. A train's committed `plan` travels
+  as its steps: replanning mid-leg can tie-break differently.
+- Round-trip exactness (step N, save, restore, step M == step N+M, bit-equal)
+  is asserted over FULL snapshots: `tests/unit/sim/saveRestore.spec.ts` (sim),
+  `tests/unit/gameSave.spec.ts` (game: tycoon fares, dispatch gate, time-attack
+  spawner fast-forward, retry-after-load). The spawner is a pure cursor:
+  restore = `reset()` + one `step(elapsedSec)`, returned defs discarded.
+- NOT snapshotted, by design: road traffic (rebuilt from the same seed, cars
+  restart at t=0), bus positions/riders aboard (roster re-bought onto lines),
+  the citizen layer (save UI hidden in Citizens mode, v1), the undo window,
+  the event log. `blockStates` is dropped → one re-emitted `blocked` log line
+  per held train after a load. The citizen layer's held parking claims ride on
+  this: `parkedCar`/`parkedBike` (incl. wild bikes) live inside the citizen sim
+  + road sim + parking registry, ALL freshly constructed on the load path
+  (`restoreSave` targets a game freshly built from the save), so a stall can
+  never survive a load as "taken" with its owner forgotten. Whoever lifts the
+  v1 gate must either snapshot those claims or keep this rebuild property.
+- ALIASING TRAP: on the load path the game is CREATED from `save.level`, so
+  `level === save.level` inside `restoreSave` — copy the save's level BEFORE
+  clearing the live one, or you restore an empty board (measured: every train
+  dead on `exitPort: null`). Same reason the save carries `pristineLevel`:
+  Retry after a load must reset to the SAVE's opening board, or restoring
+  starting capital alongside kept bought track is free money.
+- `saveStore.read()` treats localStorage as the SOURCE and the in-memory map
+  only as the no-storage fallback: a cache-first read served a stale slot to a
+  second tab, and stale state restored silently is the worst save failure.
+- `?board=` NOW HONOURS `scenario.colors` in PlayView (same pins /test uses).
+  Found via saveload: the seeded assignment is reachability-blind, and on a
+  board with disabled turns it homed a train on a depot it could never reach —
+  the board bounced forever, no save/load involved.
+- The demo/round-trip board is `/test/challenges/save/saveload` (a signalled
+  pure-cross contention pocket, puzzle mode, pinned colours), playable at
+  `/#/play?board=saveload`.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.
@@ -2219,6 +2530,44 @@ Four rules, each measured on that board, each of which failed silently:
   cached computeds over a non-reactive source — it would freeze at its first read.
 - It is a SCREEN (`/campaign`), not a mode: a `GameMode` is a ruleset with a
   `setup()` to run, a campaign is an index over boards.
+
+## COACH-MARKS (the teaching layer, 2026-08-21)
+- `src/coach.ts` is the whole system: a headless controller (one mark at a time,
+  authored order, `phase === "playing"` only) plus per-board hint lists keyed by
+  board id exactly like `TycoonTuning` (`boardIdOf`), so /play and /test teach
+  the same lesson. `game.ts` steps it LAST in `advance()` and mirrors the active
+  mark into reactive `game.coach` — the whole flow is unit-testable headlessly
+  (`tests/unit/coach.spec.ts`).
+- A MARK IS DISMISSED BY DOING THE THING, never by a button. `done` predicates
+  read CUMULATIVE run facts (`tilesBuilt`, dispatch count, arm-changed flag,
+  deliveries), which is also what auto-completes a mark whose verb the player
+  performed before it was shown. The done set survives Retry (`newRun`); the
+  run facts reset with it.
+- Marks are FILTERED BY `mode.controls` up front (`CoachMarkSpec.needs`): a hint
+  that teaches a disabled verb could never be dismissed — a dead end, not a
+  lesson. No `HudDescriptor` field was added (the five mode hud-shape specs
+  stay untouched); coach data is board-keyed, not mode-keyed.
+- A SWITCH FLIP HAS NO HANDLER TO COUNT IN — `Tile.vue pickArm` writes
+  `game.switches` directly. Detected by per-tick arm-value diff over keys
+  present in BOTH snapshots: a build merging fresh junction entries in
+  (`applyEdits`) adds KEYS, and new keys are deliberately not a flip. Arms
+  re-written with their CURRENT value are indistinguishable from untouched —
+  the lakevalley-open e2e flips a genuinely unused arm (2,2 entered from E)
+  to teach the verb observably.
+- `CoachMark.vue` is world chrome like a fare pin (absolute in `.level`, z 40,
+  counter-scaled by zoom like PersonPin). `pointer-events: none` is
+  LOAD-BEARING: the action is the dismissal, so the bubble must never swallow
+  the click it is asking for. Train anchors ride `game.fareBadges` (frame-
+  refreshed) with a `homeTile` fallback — a mode without fares has NO badges.
+- `npm run shot -- <scenarioId>` CLIPS TO THE TILE BBOX, so a bubble floating
+  above the board's top tile row is cut out of the picture while being
+  perfectly visible in the app. Shoot the ROUTE (`'#/test/<id>'`, full
+  viewport) instead — and in Git Bash prefix `MSYS_NO_PATHCONV=1`, or the
+  leading `#/` is rewritten to `C:/Program Files/Git/…` before node sees it.
+- WHERE IT GOES NEXT: the two-tier concept (these scripted lessons + TF-style
+  once-per-player first-encounter hints — seen-store, triggers, HUD anchors,
+  dwell dismissal) is designed in
+  `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`.
 
 ## GOALS ON THE READY CARD (M9, 2026-07-27)
 - A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate
@@ -2503,7 +2852,8 @@ Four rules, each measured on that board, each of which failed silently:
   · `headProgress` is FROZEN at the peel-off point for the whole stay, so
     `sampleAtArc` keeps working and `resumeFromStall` knows where to rejoin.
   · advanceParking ZEROES `waitSeconds`/`waitedSec`. Left to accrue, a dwell beside
-    a crossing FAILS crossing-keeper (30s `maxCarWaitSec`) while behaving perfectly.
+    a crossing trips any `maxCarWaitSec` fail (30s in the retired crossing-keeper
+    mode; the counter lives on in sim/objectives.ts) while behaving perfectly.
   · Filter non-driving cars out of `waitingCarsAt` (else a phantom claimant with
     waitSeconds→∞ owns the arbiter's starvation guard) and parked out of
     `laneClearForChange` (it reads frozen `headProgress`, not body points).
@@ -3553,12 +3903,33 @@ of the above; read that section first.
   width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
   on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
   capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
-- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
-  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
-  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
-  the "strange black dot" the player asked about; with entry-anchored arrows it
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths take
+  clicks — TWO per arm: the shaft (`.switch-hit`, `pointer-events: stroke`, 34px
+  zoom-scaled) and the head (`.switch-hit--head`, `pointer-events: all`, the head
+  is a filled TRIANGLE and is not part of the shaft, so it needs its own). The
+  shaft target is NOT the drawn arrow: `FanArm.hit` is the same rail curve run
+  further out (`HIT_T_END_REST/OPEN` vs `ARROW_T_END_*`), because the arrow is a
+  short stub by design and a stub is a poor thing to hit. Measured at a fitted
+  `/test/switch-fan` (zoom 0.88): drawn arrow 24px, target 41x28px, covering the
+  whole arrow. There is NO hub dot — the old `.switch-hub` circle was the
+  "strange black dot" the player asked about; with entry-anchored arrows it
   marked nothing. `switchHubAt` survives for the EDITOR, which centres its
   authored-arm cycle zone on that point.
+- PAINT ORDER IS THE WHOLE STACKING STORY — SVG has no z-index, so what `Tile.vue`
+  emits last wins. Two ranks, both in `switchFan.ts`: `armPaintRank` puts the SET
+  arm last within a fan, `fanPaintRank` puts the fan being aimed (armed > open >
+  plain > muted) last among fans. Without the first, a switch set to its Left arm
+  had its black arrow SLICED IN HALF by the white Straight ghost that plain arm
+  order draws after it — the player reported the active route as "behind the
+  other arrow". Without the second, which arrow buries which is just Position
+  enum order, i.e. it depends on which edge the train happens to come from.
+  Hover is deliberately NOT ranked: re-sorting on hover moves the element out
+  from under the pointer and bounces pointerenter/pointerleave forever. The
+  hit-paths ride in the SAME groups and therefore the same order — the arrows are
+  `pointer-events: none`, so a later arrow can never cover an earlier target, and
+  where the arms of one fan converge on their shared entry point the SET one wins
+  (a click there means "step this switch on"). Select arms by `data-arm` in
+  tests, never by `nth()`: the DOM order is stacking order, not L/S/R order.
 - TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
   the build tool's `.zone` edge targets and eat the click that would lay track
   (the old edge-hugging box was too small to notice). PlayView passes
@@ -3590,16 +3961,30 @@ of the above; read that section first.
   regardless of `switchLockMode` — and only then reads the markRaw'd
   `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
   proxied, so nothing would re-render.
-- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
-  widget could only cycle, which is why reaching a specific exit on a 4-way took
-  up to three clicks and a guess.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`). The old widget could only
+  cycle, which is why reaching a specific exit on a 4-way took up to three clicks
+  and a guess — so don't bring that back as the only gesture. But clicking the arm
+  that is ALREADY SET does cycle: `pickArm` sends it to `nextArm()` (the next
+  REACHABLE arm, wrapping, so it never lands on a hole). That is what makes a
+  RESTING switch throwable at all — at rest a fan draws ONE arrow, so the set
+  arrow is the only target on the tile, and it used to be a dead one. `pickArm`
+  also pins `openEntry` to that entry: on a touch screen there is no hover to
+  hold the fan open.
+- TRAP when verifying switch clicks in a browser: a train approaching the junction
+  RESERVES it, `isSwitchLocked` bolts the points, and `pickArm` silently no-ops —
+  a probe that clicks and reads `game.switches` then looks like a broken hit-test.
+  Set `game.paused.value = true` first. (The other half of the same trap: a
+  hidden/collapsed automation tab reports `innerWidth 0`, so the camera fits to
+  nothing and every target measures a few px. `switchFan.spec.ts` and `shoot.mjs`
+  both drive a real 1280x800 viewport.)
 - EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
   `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
   `defaultArms` and persists, a different verb from the live throw. Its
   `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
   re-deriving it.
 - Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
-  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery,
+  and separately that clicking the arrow already set steps the switch on.
 
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
