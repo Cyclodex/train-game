@@ -788,6 +788,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const placeRng = makeRng(seed);
   const profileRng = makeRng((seed ^ 0x9e3779b9) >>> 0);
   const habitRng = makeRng((seed ^ 0x517cc1b7) >>> 0);
+  // The BIKE fields draw from their own stream, exactly why the streams are
+  // separate at all: adding two draws per profile to `profileRng` would shift
+  // every later citizen's patience, affinities and stage on every seeded
+  // board — a whole town reshaped by the existence of bicycles.
+  const bikeRng = makeRng((seed ^ 0x85ebca6b) >>> 0);
 
   const plotById = new Map<string, WorldPlot>();
   for (const p of world.plots) plotById.set(p.id, p);
@@ -899,8 +904,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // The bike, by stage: a CHILD very likely has one (it is how children get
     // about at all), a tradesperson does not haul tools on two wheels to a
     // job, the retired keep one less often. Keenness is uniform — how far it
-    // gets ridden is `bikeAffinity`'s business, not ownership's.
-    const bikeRoll = profileRng();
+    // gets ridden is `bikeAffinity`'s business, not ownership's. From the
+    // bike stream, so these two draws shift nobody else's profile.
+    const bikeRoll = bikeRng();
     const bikeOwner =
       stage === "tradesperson"
         ? false
@@ -912,7 +918,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       walkPatience: stage === "retired" ? patience * 0.7 : patience,
       transitAffinity: transit,
       carAffinity: stage === "tradesperson" ? car * 0.6 : car,
-      bikeAffinity: profileRng(),
+      bikeAffinity: bikeRng(),
     };
   }
 

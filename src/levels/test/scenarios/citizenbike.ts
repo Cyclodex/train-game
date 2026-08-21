@@ -73,10 +73,12 @@ level[`${STATION_W},${STREET_Y}`] = {
 };
 
 // The houses — deliberately THREE OR MORE TILES from the boarding station, so
-// walking to the platform is out of reach and the rack is the way in. The ride
-// to it is 4–7 tiles: within range for keen cyclists, beyond it for reluctant
-// ones — the per-rider range visible on one street.
+// walking to the platform is out of reach and the rack is the way in. Two
+// neighbourhoods on one street: the west end's ride to the rack is 4–7 tiles
+// (keen cyclists only), the east end's is 3–4 (most owners) — the per-rider
+// range visible on a single street.
 for (let x = 0; x <= 3; x++) level[`${x},${PLOT_Y}`] = home();
+for (let x = 8; x <= 9; x++) level[`${x},${PLOT_Y}`] = home();
 
 // The workshop up the road: the plain-bike commute (and the walk/drive it
 // competes against). One plot only, so `assignJob`'s nearest-six draw sends a

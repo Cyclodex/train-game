@@ -32,7 +32,11 @@ function newGame() {
     })),
     200,
     citizensMode,
-    1,
+    // Seed 7, both here and in the direct sims below: the citizen town it
+    // deals shows every fact at once (bike commutes chosen, bikeless refused,
+    // bike-and-ride offered AND out of range) — seed 1's rolls happen to hand
+    // almost every worker a high ownership draw on this small board.
+    7,
     citizenbike.colors,
     undefined,
     citizenbike.id
@@ -49,10 +53,10 @@ function run(game: ReturnType<typeof createGame>, seconds: number, onTick?: () =
 describe("the six-mode quote", () => {
   // A quote-only sim: no ports needed, `quoteModes` prices from the world alone.
   function quoteSim() {
-    const world = buildCitizenWorld(citizenbike.level, 1);
+    const world = buildCitizenWorld(citizenbike.level, 7);
     return createCitizenSim({
       world,
-      seed: 1,
+      seed: 7,
       // A transit port that says "the line serves everything" — the quotes
       // under test are the bike ones; rail service itself has its own specs.
       transit: { enqueue: () => true, connects: (a, b) => a !== b },
@@ -186,21 +190,21 @@ describe("citizens ride real bikes", () => {
     // The direct-sim version, so the trip's own legs are observable: a
     // bikeAndRide journey must pass through leg "walking" WITH a live walker
     // (`walkTrip` set) after its riding leg — the no-teleport guarantee.
-    const world = buildCitizenWorld(citizenbike.level, 1);
+    const world = buildCitizenWorld(citizenbike.level, 7);
     const s = citizenbike.size!;
     const roadSim = createRoadSim({
       level: citizenbike.level,
       width: s.cols,
       height: s.rows,
-      seed: 1,
+      seed: 7,
       carSpeed: 0.5,
       carLength: 0.19,
       maxCars: 10,
     });
-    const pedSim = createPedestrianSim({ level: citizenbike.level, seed: 1 });
+    const pedSim = createPedestrianSim({ level: citizenbike.level, seed: 7 });
     const sim = createCitizenSim({
       world,
-      seed: 1,
+      seed: 7,
       transit: { enqueue: () => true, connects: (a, b) => a !== b },
       driving: {
         request: (from, to, park, kind) =>
