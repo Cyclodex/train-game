@@ -68,6 +68,23 @@ describe("feature test world coverage", () => {
     }
   });
 
+  it("challenges/modes is a mode gallery: every entry runs a mode, no mode twice", () => {
+    // The category exists to show each game mode in isolation (#115). An entry
+    // without a mode silently demos Sandbox instead of what its card claims,
+    // and two entries for one mode crowd out the single-demo-per-mode promise.
+    // (Sandbox and any deliberately unlisted mode are allowed to be absent.)
+    const category = DOMAINS.find(d => d.id === "challenges")!.categories.find(
+      c => c.id === "modes"
+    )!;
+    const seen = new Set<string>();
+    for (const s of category.scenarios) {
+      const modeId = s.mode?.id ?? s.modeId;
+      expect(modeId, `scenario "${s.id}" in challenges/modes runs no mode`).toBeTruthy();
+      expect(seen.has(modeId!), `mode "${modeId}" has two demos in challenges/modes`).toBe(false);
+      seen.add(modeId!);
+    }
+  });
+
   it("pins scenarios only to game modes that are actually registered", () => {
     // A scenario may run under a specific mode via `modeId` (e.g. the time-attack
     // scenario). If that id drifts from the modes registry the scenario silently

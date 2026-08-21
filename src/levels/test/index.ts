@@ -187,7 +187,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback, citizenday] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, linerevisit, catchment, parkandride, busfeeder, busrail, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback, citizenday] },
       {
         id: "crossings",
         label: "Crossings",
@@ -256,7 +256,15 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, landprices, taxyear, bankrupt, daily, networkmode, linerevisit] },
+      // One demo per game mode, in the mode picker's order, each RUNNING its
+      // mode (the /test stage honours `modeId`/`mode`; a scenario without one
+      // runs Sandbox — which is why Sandbox itself needs no entry). Crossing
+      // Keeper is deliberately absent for now (#112 deprioritised).
+      { id: "modes", label: "Game modes", scenarios: [daily, objectives, dispatch, networkmode, threecities, timeattack] },
+      // The Tycoon economy deep-dives, one dial per board: fare decay by
+      // distance, blocked routes, buying track, land prices, the tax year and
+      // its bankruptcy fail state.
+      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
