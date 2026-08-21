@@ -3672,12 +3672,33 @@ of the above; read that section first.
   width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
   on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
   capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
-- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
-  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
-  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
-  the "strange black dot" the player asked about; with entry-anchored arrows it
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths take
+  clicks — TWO per arm: the shaft (`.switch-hit`, `pointer-events: stroke`, 34px
+  zoom-scaled) and the head (`.switch-hit--head`, `pointer-events: all`, the head
+  is a filled TRIANGLE and is not part of the shaft, so it needs its own). The
+  shaft target is NOT the drawn arrow: `FanArm.hit` is the same rail curve run
+  further out (`HIT_T_END_REST/OPEN` vs `ARROW_T_END_*`), because the arrow is a
+  short stub by design and a stub is a poor thing to hit. Measured at a fitted
+  `/test/switch-fan` (zoom 0.88): drawn arrow 24px, target 41x28px, covering the
+  whole arrow. There is NO hub dot — the old `.switch-hub` circle was the
+  "strange black dot" the player asked about; with entry-anchored arrows it
   marked nothing. `switchHubAt` survives for the EDITOR, which centres its
   authored-arm cycle zone on that point.
+- PAINT ORDER IS THE WHOLE STACKING STORY — SVG has no z-index, so what `Tile.vue`
+  emits last wins. Two ranks, both in `switchFan.ts`: `armPaintRank` puts the SET
+  arm last within a fan, `fanPaintRank` puts the fan being aimed (armed > open >
+  plain > muted) last among fans. Without the first, a switch set to its Left arm
+  had its black arrow SLICED IN HALF by the white Straight ghost that plain arm
+  order draws after it — the player reported the active route as "behind the
+  other arrow". Without the second, which arrow buries which is just Position
+  enum order, i.e. it depends on which edge the train happens to come from.
+  Hover is deliberately NOT ranked: re-sorting on hover moves the element out
+  from under the pointer and bounces pointerenter/pointerleave forever. The
+  hit-paths ride in the SAME groups and therefore the same order — the arrows are
+  `pointer-events: none`, so a later arrow can never cover an earlier target, and
+  where the arms of one fan converge on their shared entry point the SET one wins
+  (a click there means "step this switch on"). Select arms by `data-arm` in
+  tests, never by `nth()`: the DOM order is stacking order, not L/S/R order.
 - TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
   the build tool's `.zone` edge targets and eat the click that would lay track
   (the old edge-hugging box was too small to notice). PlayView passes
@@ -3709,16 +3730,30 @@ of the above; read that section first.
   regardless of `switchLockMode` — and only then reads the markRaw'd
   `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
   proxied, so nothing would re-render.
-- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
-  widget could only cycle, which is why reaching a specific exit on a 4-way took
-  up to three clicks and a guess.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`). The old widget could only
+  cycle, which is why reaching a specific exit on a 4-way took up to three clicks
+  and a guess — so don't bring that back as the only gesture. But clicking the arm
+  that is ALREADY SET does cycle: `pickArm` sends it to `nextArm()` (the next
+  REACHABLE arm, wrapping, so it never lands on a hole). That is what makes a
+  RESTING switch throwable at all — at rest a fan draws ONE arrow, so the set
+  arrow is the only target on the tile, and it used to be a dead one. `pickArm`
+  also pins `openEntry` to that entry: on a touch screen there is no hover to
+  hold the fan open.
+- TRAP when verifying switch clicks in a browser: a train approaching the junction
+  RESERVES it, `isSwitchLocked` bolts the points, and `pickArm` silently no-ops —
+  a probe that clicks and reads `game.switches` then looks like a broken hit-test.
+  Set `game.paused.value = true` first. (The other half of the same trap: a
+  hidden/collapsed automation tab reports `innerWidth 0`, so the camera fits to
+  nothing and every target measures a few px. `switchFan.spec.ts` and `shoot.mjs`
+  both drive a real 1280x800 viewport.)
 - EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
   `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
   `defaultArms` and persists, a different verb from the live throw. Its
   `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
   re-deriving it.
 - Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
-  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery,
+  and separately that clicking the arrow already set steps the switch on.
 
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`
