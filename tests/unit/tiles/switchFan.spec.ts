@@ -9,6 +9,9 @@ import {
   switchHubAt,
   fanArms,
   armReachable,
+  armPaintRank,
+  fanPaintRank,
+  nextArm,
   railArrow,
   switchFanScale,
 } from "@/tiles/switchFan";
@@ -183,6 +186,89 @@ describe("switch fan geometry", () => {
   it("draws nothing at rest for an entry with no arm set", () => {
     const cross = expandKind("cross", 0);
     expect(fanArms(cross.connections, Left, SIZE, undefined)).toEqual([]);
+  });
+
+  // The click target is deliberately NOT the drawn arrow: the arrow is a short
+  // stub by design, and a stub is hard to hit on a zoomed-out board (the player
+  // reported exactly that). The target follows the same rail, further out.
+  it("gives every arm a hit path longer than the arrow it belongs to", () => {
+    const cross = expandKind("cross", 0);
+    const len = (d: string) => {
+      const ps = points(d);
+      return ps.slice(1).reduce((sum, p, i) => sum + dist(p, ps[i]), 0);
+    };
+    for (const expanded of [false, true]) {
+      const arms = fanArms(
+        cross.connections,
+        Left,
+        SIZE,
+        ActiveIntersection.Straight,
+        expanded
+      );
+      expect(arms.length).toBeGreaterThan(0);
+      for (const a of arms) {
+        // Same curve, same start — only the crop differs.
+        expect(points(a.hit)[0]).toEqual(points(a.shaft)[0]);
+        expect(len(a.hit), `arm ${a.arm} expanded=${expanded}`).toBeGreaterThan(
+          len(a.shaft)
+        );
+        // …and it stops inside the tile, so it never spills onto the neighbour.
+        const tip = points(a.hit).at(-1)!;
+        expect(Math.min(tip.x, tip.y)).toBeGreaterThan(0);
+        expect(Math.max(tip.x, tip.y)).toBeLessThan(SIZE);
+      }
+    }
+  });
+
+  // SVG has no z-index — the last thing drawn wins. The player caught the
+  // consequence: a switch set to its Left arm had its black arrow sliced in half
+  // by the white Straight ghost, which plain arm order draws after it.
+  it("paints the set arm last and the fan being aimed on top", () => {
+    const cross = expandKind("cross", 0);
+    const arms = fanArms(cross.connections, Left, SIZE, ActiveIntersection.Left, true);
+    const painted = [...arms].sort((a, b) => armPaintRank(a) - armPaintRank(b));
+    expect(painted.at(-1)!.arm).toBe(ActiveIntersection.Left);
+    // Equal ranks keep their authored Left/Straight/Right order (stable sort).
+    expect(painted.slice(0, -1).map(a => a.arm)).toEqual([
+      ActiveIntersection.Straight,
+      ActiveIntersection.Right,
+    ]);
+    // Only `on` may rank an arm. Hover must NOT: re-sorting would move the
+    // element out from under the pointer and bounce enter/leave forever.
+    expect(armPaintRank({ on: true })).toBeGreaterThan(armPaintRank({ on: false }));
+
+    const fans = [
+      { entry: Top, armed: false, open: false, muted: true },
+      { entry: Right, armed: false, open: false, muted: false },
+      { entry: Bottom, armed: true, open: true, muted: false },
+      { entry: Left, armed: false, open: true, muted: false },
+    ];
+    expect(
+      [...fans].sort((a, b) => fanPaintRank(a) - fanPaintRank(b)).map(f => f.entry)
+    ).toEqual([Top, Right, Left, Bottom]);
+  });
+
+  // Clicking the arrow that is already set used to be a dead target — and at
+  // rest it is the ONLY arrow drawn, so it is the fattest, nearest thing to aim
+  // at. It now steps the switch on, exactly as clicking the next arrow would.
+  it("cycles to the next reachable arm, skipping the ones this tile cannot route", () => {
+    const cross = expandKind("cross", 0);
+    const { Left: L, Straight: S, Right: R } = ActiveIntersection;
+    expect(nextArm(cross.connections, Left, L)).toBe(S);
+    expect(nextArm(cross.connections, Left, S)).toBe(R);
+    expect(nextArm(cross.connections, Left, R)).toBe(L); // wraps
+
+    // A T-junction offers two exits per entry; the cycle is over those two
+    // only, so it never parks on an arm the tile cannot route.
+    const tee = expandKind("tjunction", 0); // trunk Left-Right, branch to Top
+    expect(armReachable(tee.connections, Left, R)).toBe(false);
+    expect(nextArm(tee.connections, Left, L)).toBe(S); // L (→Top) → S (→Right)
+    expect(nextArm(tee.connections, Left, S)).toBe(L); // wraps past the missing R
+
+    // An entry with nothing set yet lands on the first reachable arm.
+    expect(nextArm(cross.connections, Left, undefined)).toBe(L);
+    // An entry this tile cannot route at all has nowhere to go.
+    expect(nextArm(tee.connections, Bottom, undefined)).toBeNull();
   });
 
   it("counter-scales only once the board is zoomed out, and never runaway", () => {
