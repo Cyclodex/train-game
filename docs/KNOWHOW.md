@@ -4417,6 +4417,40 @@ mode, shared paths — are NOT).
   still the binding constraint on a busy machine, and "make it faster, don't raise
   the limit" was too strong a rule for a HANG GUARD).
 
+## PERF BENCH + STRESS BOARDS (2026-08-22)
+- `docs/PERFORMANCE.md` is the perf canon: instruments, dated baseline table,
+  where the time goes (with file:line receipts), the improvement plan. Update
+  its baseline/history when a change moves the numbers.
+- Instruments: `/test/perfworld` (40x28, 8 trains, 160-car traffic) and
+  `/test/perfcity` (same skeleton + citizens/buses/stations/parking — the
+  "everything" board), measured by `PERF=1 npx vitest run
+  tests/unit/perf/perfBench.spec.ts` (skips entirely without PERF=1, so CI
+  never pays). It times `game.advance(1/60)` headless — the reliable meter.
+- The scaling law: the ROAD sim is the perf dial. ~1ms/tick at 50 cars,
+  ~2.8 at 100, ~12 at 200, ~120 at 357 (congestion collapse). Rail is noise
+  (8 trains on 40x28 = 0.3ms/tick). Citizens' MORNING RUSH doubles the tick
+  (perfcity 13→37ms) — "the game got slow" can simply be 07:00 in town.
+- Unsolved hot spots, in leverage order (details + fixes in PERFORMANCE.md):
+  all-pairs candidate scans in clearAhead/junction arbitration (the memo+prune
+  of SIM HOT PATH made pairs cheap, not fewer); the crossing-closed predicate
+  (`occupiedBy` = full train scan building a Set PER CALL, ~630 calls/tick);
+  the fillFast spawn storm (every entry re-plans a BFS route every tick for
+  ever on a jammed board — measured 2-6x tick cost in the browser); per-frame
+  mirrors that walk EVERY level tile (`updateReservations`); `roadCars.find`
+  per unit per frame on a reactive array; native `getPointAtLength` per
+  coupler per frame.
+- BROWSER MEASUREMENT TRAPS: a hidden automation tab doesn't just stop rAF —
+  Chrome deprioritises the whole renderer, so wall-clock timings there are
+  several-fold pessimistic and the Self-Profiling API barely samples. Real
+  browser numbers need a visible window. Dev serves `Document-Policy:
+  js-profiling` (vite.config.ts) so `new Profiler(...)` works; PlayView
+  exposes `window.__game` (e2e hook) — `stop()`, patch rAF to capture the
+  frame callback, `start()`, then pump frames manually with synthetic
+  timestamps to drive the loop in a hidden tab at all.
+- PlayView always passes DEFAULT_TRAFFIC + the density slider; a scenario's
+  authored `traffic` tuning applies in /test (TestStage) but NOT on
+  /#/play?board=… — the two routes measure different traffic configs.
+
 ## A RED SIM TEST THAT IS NOT A BUG — READ THE FAILURE LINE FIRST (2026-08-02)
 - `sim/parking.spec.ts` (or any long-run sim case) failing on `master` with a
   DIFFERENT COUNT EACH RUN — 2 one time, 6 the next — is the signature. Before

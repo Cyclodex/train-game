@@ -308,6 +308,18 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     hash (`docs/KNOWHOW.md` → SIM HOT PATH), which has survived both rounds
     unchanged. **Not** by cutting the long-run cases' seeds or ticks — that was
     weighed and rejected, see TEST TIERS.
+    unchanged. **Measured now** (2026-08-22, `docs/PERFORMANCE.md`): the road
+    tick is the game's perf ceiling — ~1ms at 50 cars, ~12ms at 200, ~120ms at
+    357 — and three NEW hot spots sit beside the pair scans, each cheaper to
+    fix than the index: (a) the crossing-closed predicate (`occupiedBy` is a
+    full train scan allocating a Set per call, ~630 calls/tick — build the
+    closed-tile set once per tick instead); (b) the fillFast spawn storm
+    (every entry re-plans a BFS route every tick for ever on a jammed board —
+    add a per-entry cooldown); (c) render mirrors that walk every level tile
+    per frame (`updateReservations`) and the `roadCars.find` per unit per
+    frame. Baselines, receipts and the full ordered plan: `docs/PERFORMANCE.md`;
+    bench: `PERF=1 npx vitest run tests/unit/perf/perfBench.spec.ts` on the
+    `/test/perfworld` + `/test/perfcity` stress boards.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
