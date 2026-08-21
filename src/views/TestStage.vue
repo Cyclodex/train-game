@@ -119,6 +119,10 @@
           :coord-id="cell.key"
           class="tile-component"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />

@@ -2530,15 +2530,18 @@ export default toNative(Tile);
   stroke-linecap: round;
 }
 /* The building, on the strip between the outer platform and the tile edge.
-   Same z as the platforms it belongs to and declared after them, so it paints
-   over the slab's outer edge where the canopy reaches across it; under the
-   trains, which have a layer of their own. `transform-origin` is the art's own
-   top-left corner, because `stationBuilding` reasons in that frame. */
+   z7 — the same band the town's own roofs live on (`.tile-structures` in
+   TileGround.vue) and for the same reason: it is a BUILDING, and a passenger
+   walking up to the station crosses the strip it stands on, so at the
+   platforms' z3 the figure slid over its roof. Like every other roof it is
+   laid clear of the rails (see stationArt.ts), so nothing that moves is hidden
+   by lifting it. `transform-origin` is the art's own top-left corner, because
+   `stationBuilding` reasons in that frame. */
 .station-building {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 3;
+  z-index: 7;
   transform-origin: 0 0;
   pointer-events: none;
   overflow: visible;
@@ -2605,7 +2608,7 @@ export default toNative(Tile);
   transform: translateX(-50%);
   /* top/left/transform above are the fallback; `stationLatentStyle` overrides
      them so the hint follows the name plate. */
-  z-index: 5;
+  z-index: 9; // rides with the name plate, above the station building (z7)
   white-space: nowrap;
   padding: 1px 6px;
   border-radius: 6px;
@@ -2629,7 +2632,10 @@ export default toNative(Tile);
   top: 4px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 5;
+  // z9: a LABEL, and it has to clear the board art it sits on. The station
+  // building beneath it is z7 and stands in the very strip the plate hangs
+  // over, so anything lower is a name half-hidden behind a roof.
+  z-index: 9;
   display: flex;
   align-items: center;
   gap: 4px;
