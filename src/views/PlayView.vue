@@ -1001,9 +1001,16 @@ class PlayView extends Vue {
   // handed over right before navigation is picked up on this mount.
   private custom = this.board ? null : takeCustomLevel();
 
-  // The active mode: an explicit ?mode= wins; otherwise reopen the mode the
-  // player last used (persisted), falling back to the default. Daily is a
-  // board source since #113, not a picker mode: `?board=daily` (the picker's
+  // What the URL (or the persisted preference) ASKED for, before the fitness
+  // guard below has its say. Kept separately because it — not the resolved
+  // mode — is what gets persisted on mount (see `mounted`).
+  private requestedModeId = hashParam("mode") ?? loadLastModeId();
+
+  // The active mode. `?board=daily` wins outright: the daily board IS the daily
+  // ruleset, so picking it overrides any ?mode= alongside it (`?mode=sandbox&
+  // board=daily` runs the daily ruleset). Otherwise an explicit ?mode= wins,
+  // then the mode the player last used (persisted), then the default. Daily is
+  // a board source since #113, not a picker mode: `?board=daily` (the picker's
   // chip) and legacy `?mode=daily` links (old bookmarks, a persisted
   // last-mode) both run today's generated board under the daily ruleset —
   // resolveBoard promotes the board setup() generates, exactly as before.
@@ -1014,11 +1021,15 @@ class PlayView extends Vue {
   // then Sandbox (which fits anything). Unfit picker cards are disabled, so
   // this only fires on hand-typed URLs and stale links.
   private mode = (() => {
-    const requested = hashParam("mode") ?? loadLastModeId();
+    const requested = this.requestedModeId;
     if (hashParam("board") === "daily" || requested === "daily") {
       return dailyMode;
     }
     const mode = modeById(requested);
+    // Cheap exit BEFORE the capabilities are derived: deriving them walks every
+    // tile, floods the towns and rolls a per-plot RNG, and a mode that declares
+    // no requirements (Sandbox) can never be refused by it.
+    if (!mode.fits) return mode;
     const level = this.board
       ? this.board.level
       : this.custom
@@ -1030,7 +1041,7 @@ class PlayView extends Vue {
         ? this.custom.trains
         : defaultTrains();
     const caps = boardCapabilities(level, buildTrainDefs(trains));
-    if (!mode.fits || mode.fits(caps) === null) return mode;
+    if (mode.fits(caps) === null) return mode;
     const fallbacks = [
       this.board?.mode ?? (this.board?.modeId ? modeById(this.board.modeId) : null),
       modeById(null), // the roster default
@@ -1111,8 +1122,15 @@ class PlayView extends Vue {
     this.boundKeyup = e => this.handleBuildKeyup(e);
     window.addEventListener("keydown", this.boundKeydown);
     window.addEventListener("keyup", this.boundKeyup);
-    // Remember the mode we ended up in, so a later plain /play reopens it.
-    saveLastModeId(this.mode.id);
+    // Remember the mode the player ASKED for, so a later plain /play reopens
+    // it. The requested id, not the resolved one: when the fitness guard (#114)
+    // downgrades an unfit mode×board pair, saving the fallback would silently
+    // erase the preference — play Network on a station board, open plain /play
+    // once, and Network would never reopen even on boards that carry it. Only
+    // a KNOWN id is persisted, so a typo'd ?mode= does not become the memory.
+    const asked = this.requestedModeId;
+    const known = asked !== null && (asked === dailyMode.id || MODES.some(m => m.id === asked));
+    saveLastModeId(known ? asked : this.mode.id);
     this.best = loadBest(this.levelId);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
     // The bus lines this board was authored with (`?board=<scenario>`), each
@@ -1179,12 +1197,18 @@ class PlayView extends Vue {
     return this.game.mode.id;
   }
 
+  // One per mode the drawer can be showing — which is the picker roster PLUS
+  // Daily: it is not a picker card (it is the "Today's challenge" chip), but it
+  // IS a reachable active mode, and the drawer renders `modeIcon(currentModeId)`
+  // beside its label. Drop the entry and playing today's challenge shows the
+  // fallback 🚆 next to "Daily Challenge" while the chip still shows 📅.
   private modeIcons: Record<string, string> = {
     puzzle: "🧩",
     tycoon: "💰",
     network: "🚉",
     citizens: "🏙️",
     sandbox: "🏖️",
+    daily: "📅",
   };
   modeIcon(id: string): string {
     return this.modeIcons[id] ?? "🚆";
@@ -1196,10 +1220,30 @@ class PlayView extends Vue {
   closePicker() {
     this.pickerOpen = false;
   }
-  // Which modes fit the CURRENT board, by reason (null = fits). Drives the
-  // picker's disabled cards; recomputed per open via the resolved level/roster.
+  // The board a pick will actually LAND on — which is normally the board on
+  // screen, because pickMode carries `?board=` across. The exception is the
+  // daily board: picking a ruleset there means LEAVING today's board, so
+  // pickMode drops the param and the navigation lands on the custom/default
+  // board instead. Judging fitness against the daily blob there made the picker
+  // lie: a generated board almost always has a town, so Citizens showed
+  // ENABLED, and clicking it landed on the town-less default where the URL
+  // guard silently downgraded to Puzzle — the exact bait-and-switch #114 exists
+  // to prevent.
+  private get pickTargetBoard(): { level: Level; trains: TrainsDefinition } {
+    if (hashParam("board") !== "daily") {
+      return { level: this.level, trains: this.trains };
+    }
+    const custom = takeCustomLevel();
+    return custom
+      ? { level: custom.level, trains: custom.trains }
+      : { level: DEFAULT_LEVEL, trains: defaultTrains() };
+  }
+  // Which modes fit the board a pick would land on, by reason (null = fits).
+  // Drives the picker's disabled cards; recomputed per open via the resolved
+  // level/roster.
   get modeFits(): Record<string, string | null> {
-    const caps = boardCapabilities(this.level, buildTrainDefs(this.trains));
+    const target = this.pickTargetBoard;
+    const caps = boardCapabilities(target.level, buildTrainDefs(target.trains));
     const out: Record<string, string | null> = {};
     for (const m of this.modes) out[m.id] = m.fits?.(caps) ?? null;
     return out;
