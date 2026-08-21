@@ -82,6 +82,12 @@ export interface Exchange {
   changing: number;
   boardedTags: string[];
   alightedTags: string[];
+  // Of the alighted tags, WHO was re-queued to wait for an onward service —
+  // as against having ARRIVED (set down at their destination, or walked the
+  // last hop by the layer itself). The citizen mirror needs the distinction:
+  // treating a walked-home arrival as a change left the person "waiting" at a
+  // platform whose queue no longer held them.
+  changingTags: string[];
 }
 
 export interface ExchangeRequest {
@@ -146,6 +152,12 @@ export interface TransitLayer {
   waiting(stopId: string): string[];
   // Queue ONE person who has already decided where they are going.
   enqueue(stopId: string, dest: string, tag?: string): boolean;
+  // Withdraw ONE tagged person from a queue — somebody who gave up waiting.
+  // Without this the entry stayed behind as a ghost: the next vehicle boarded
+  // the tag of a person who had long since walked away, and the mirror then
+  // corrupted whatever trip they had moved on to. False when nobody with that
+  // tag waits there.
+  dequeue(stopId: string, tag: string): boolean;
   // Anonymous demand: `count` people who will each be given a destination the
   // network can actually serve. Returns how many were queued.
   addPassengers(stopId: string, count: number): number;
@@ -174,6 +186,24 @@ export interface TransitLayer {
   // The unassigned vehicles, as services over what they can reach. Set by each
   // sim; the graph asks for them whenever it rebuilds.
   setStoppers(source: string, stoppers: () => StopperService[]): void;
+
+  // --- save / load ----------------------------------------------------------
+  // Everything a save must carry to resume exactly: the line registry (with
+  // its id sequence, so future lines cannot collide), who is waiting where,
+  // the spawn clocks and destination cursors, and the delivered total. Plain
+  // JSON data. `restore` mutates IN PLACE — game.ts shares one transit object
+  // between the rail and road sims, so the identity must survive.
+  snapshot(): TransitSnapshot;
+  restore(snap: TransitSnapshot): void;
+}
+
+export interface TransitSnapshot {
+  lines: SimLine[]; // in creation order, `pinned` included
+  lineSeq: number;
+  queues: Record<string, Waiting[]>;
+  spawnClocks: Record<string, number>;
+  destCursors: Record<string, number>;
+  delivered: number;
 }
 
 export interface TransitConfig {
@@ -385,6 +415,14 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       queues.set(stopId, q);
       return true;
     },
+    dequeue(stopId: string, tag: string) {
+      const q = queues.get(stopId);
+      if (!q) return false;
+      const at = q.findIndex(w => w.tag === tag);
+      if (at < 0) return false;
+      q.splice(at, 1);
+      return true;
+    },
     addPassengers(stopId: string, count: number) {
       if (!isStop(stopId) || count <= 0) return 0;
       const cap = demand[stopId]?.max ?? hardCap;
@@ -445,6 +483,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       // Each with WHERE they will wait: here, or the far end of a walk.
       const changing: (Waiting & { at: string })[] = [];
       const alightedTags: string[] = [];
+      const changingTags: string[] = [];
       const boardedTags: string[] = [];
       let alighted = 0;
 
@@ -471,6 +510,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         // the railway one more time before anybody counted them.
         if (on === rider.final) deliveredTotal += 1;
         else {
+          if (rider.tag !== undefined) changingTags.push(rider.tag);
           changing.push({
             dest: rider.final,
             ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
@@ -521,7 +561,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         queues.set(stopId, left);
       }
 
-      return { boarded, alighted, changing: changing.length, boardedTags, alightedTags };
+      return { boarded, alighted, changing: changing.length, boardedTags, alightedTags, changingTags };
     },
     delivered() {
       return deliveredTotal;
@@ -531,6 +571,44 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     },
     setStoppers(source: string, stoppers: () => StopperService[]) {
       stopperSources.set(source, stoppers);
+      touch();
+    },
+    snapshot(): TransitSnapshot {
+      return {
+        lines: lineOrder
+          .map(id => lines[id])
+          .filter(Boolean)
+          .map(l => ({ ...l, stops: [...l.stops] })),
+        lineSeq,
+        queues: Object.fromEntries(
+          [...queues].map(([id, q]) => [id, q.map(w => ({ ...w }))])
+        ),
+        spawnClocks: Object.fromEntries(spawnClocks),
+        destCursors: Object.fromEntries(destCursors),
+        delivered: deliveredTotal,
+      };
+    },
+    restore(snap: TransitSnapshot) {
+      for (const id of Object.keys(lines)) delete lines[id];
+      lineOrder.length = 0;
+      for (const l of snap.lines) {
+        lines[l.id] = { ...l, stops: [...l.stops] };
+        lineOrder.push(l.id);
+      }
+      lineSeq = snap.lineSeq;
+      queues.clear();
+      for (const [id, q] of Object.entries(snap.queues)) {
+        queues.set(id, q.map(w => ({ ...w })));
+      }
+      spawnClocks.clear();
+      for (const [id, c] of Object.entries(snap.spawnClocks)) {
+        spawnClocks.set(id, c);
+      }
+      destCursors.clear();
+      for (const [id, c] of Object.entries(snap.destCursors)) {
+        destCursors.set(id, c);
+      }
+      deliveredTotal = snap.delivered;
       touch();
     },
   };

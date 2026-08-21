@@ -424,7 +424,13 @@
           'switch-fan--muted': sw.muted,
         }"
       >
-        <g v-for="a in sw.arms" :key="'a' + a.arm">
+        <!-- Arms in STACKING order — the set one last, both to draw and to hit
+             (`armPaintRank`). The arrows are `pointer-events: none`, so an arm
+             drawn later can never cover an earlier one's target; where two arms
+             of one fan DO overlap (they all converge on the shared entry point)
+             the set one wins, because a click there means "step this switch on",
+             and an alternative is picked out along its own run or by its head. -->
+        <g v-for="a in sw.arms" :key="'a' + a.arm" :data-arm="a.arm">
           <path class="switch-arm-casing" :class="{ 'is-on': a.on }" :d="a.shaft" />
           <path
             class="switch-arm"
@@ -436,10 +442,20 @@
             :class="{ 'is-on': a.on, 'is-hover': a.hover }"
             :d="a.head"
           />
-          <!-- The target is the whole arrow, not a 3px bulb. -->
+          <!-- The target is the arrow's whole curve, run FURTHER than the arrow
+               is drawn (`a.hit`) plus its head: the arrow is a short stub on
+               purpose, and a stub is a poor thing to hit on a zoomed-out board. -->
           <path
             class="switch-hit"
-            :d="a.shaft"
+            :d="a.hit"
+            @click.stop="pickArm(sw.entry, a.arm)"
+            @pointerenter="hoverArm(sw.entry, a.arm)"
+            @pointerleave="hoverArm(null, null)"
+            @pointerover="openSwitchFan(sw.entry)"
+          />
+          <path
+            class="switch-hit switch-hit--head"
+            :d="a.head"
             @click.stop="pickArm(sw.entry, a.arm)"
             @pointerenter="hoverArm(sw.entry, a.arm)"
             @pointerleave="hoverArm(null, null)"
@@ -559,7 +575,12 @@ import { gameAudio } from "@/audio/engine";
 import type { Game } from "@/game";
 import type { SimTrain } from "@/sim/simulation";
 import { getCoordinatesId } from "@/utils/tileHelpers";
-import { fanArms } from "@/tiles/switchFan";
+import {
+  fanArms,
+  armPaintRank,
+  fanPaintRank,
+  nextArm,
+} from "@/tiles/switchFan";
 import { Position, ActiveIntersection, Route } from "@/types";
 import {
   Level,
@@ -2227,7 +2248,7 @@ class Tile extends Vue {
     const size = this.config.tileSize;
     const approach = this.approachEntry;
     const hovered = this.hoveredArm;
-    return this.junctionEntries.map(entry => {
+    const widgets = this.junctionEntries.map(entry => {
       // A fan opens — showing the routes it is NOT set to — for the entry a
       // train is arriving by, or the one the pointer is on. Both are the moment
       // the player is choosing rather than reading, and only one opens at a time.
@@ -2244,7 +2265,9 @@ class Tile extends Vue {
       }));
       return {
         entry,
-        arms,
+        // Painted in stacking order — the SET arm last, so it can never end up
+        // sliced in half by a ghost drawn after it. See `armPaintRank`.
+        arms: [...arms].sort((a, b) => armPaintRank(a) - armPaintRank(b)),
         // "Armed" is the TRAIN case only — it drives the glow. "Open" covers
         // both ways a fan expands (train due, or pointer on it) and drives the
         // full-strength paint.
@@ -2253,6 +2276,10 @@ class Tile extends Vue {
         muted: approach !== null && entry !== approach,
       };
     });
+    // And the fans among themselves: the one being aimed on top of the ones
+    // that stepped back. Without this the stacking is just enum order, so which
+    // arrow buries which depends on which edge the train happens to come from.
+    return widgets.sort((a, b) => fanPaintRank(a) - fanPaintRank(b));
   }
 
   hoverArm(entry: Position | null, arm: ActiveIntersection | null) {
@@ -2271,14 +2298,32 @@ class Tile extends Vue {
   // Throw the points straight to the arm that was clicked. The old widget could
   // only cycle, so reaching a specific exit on a 4-way took up to three clicks
   // and a guess about which bulb meant what.
+  //
+  // Clicking the arm that is ALREADY set steps the switch on to the next
+  // reachable one instead — same as if the next arrow had been clicked. At rest
+  // that arrow is the only one drawn and the only target, so this is what makes
+  // a switch throwable without first opening its fan; it also stops the fattest,
+  // nearest thing to aim at from being a dead target.
   pickArm(entry: Position, arm: ActiveIntersection) {
     if (!this.switchInteractive || this.isSwitchLocked) return;
     if (!this.switchArmEnabled(entry, arm)) return;
+    const next =
+      this.activeArm(entry) === arm
+        ? nextArm(this.tile.connections, entry, arm)
+        : arm;
+    if (next === null) return;
     if (!this.game.switches[this.coordId]) this.game.switches[this.coordId] = {};
-    // The clack only when the points actually move — re-clicking the armed
-    // exit changes nothing and must not sound like it did.
-    if (this.game.switches[this.coordId][entry] !== arm) gameAudio.play("switch");
-    this.game.switches[this.coordId][entry] = arm;
+    // The clack only when the points actually MOVE. Gated on `next`, not on the
+    // clicked `arm`: clicking the armed exit now steps on to the following one,
+    // so the arm clicked and the arm set are routinely different — and the one
+    // case that still changes nothing (a switch with a single reachable exit,
+    // where nextArm hands back what is already set) must stay silent.
+    if (this.game.switches[this.coordId][entry] !== next) gameAudio.play("switch");
+    this.game.switches[this.coordId][entry] = next;
+    // Keep the fan open on the entry just thrown: on a touch screen there is no
+    // hover to hold it, and after a cycle the player wants to see what the other
+    // options were.
+    this.openEntry = entry;
   }
   get isSwitchLocked(): boolean {
     switch (this.config.switchLockMode) {
@@ -3029,12 +3074,24 @@ $signal-offset: 20px;
 .switch-hit {
   fill: none;
   stroke: transparent;
-  // Grows as the board zooms out, so the target stays tappable even though the
-  // arrow it follows is shrinking with the tile.
-  stroke-width: calc(26px * var(--switch-scale, 1));
+  // Comfortably wider than the 19px casing it covers, and it grows as the board
+  // zooms out, so the target stays tappable even though the arrow it follows is
+  // shrinking with the tile. Its LENGTH is `FanArm.hit`, which runs further down
+  // the curve than the drawn arrow — the arrow is a stub on purpose, but a stub
+  // is a poor thing to hit.
+  stroke-width: calc(34px * var(--switch-scale, 1));
   stroke-linecap: round;
   pointer-events: stroke;
   cursor: pointer;
+}
+// The head is the part of the arrow the eye aims at, and it is a filled
+// polygon, not part of the shaft — so it needs its own target (plus a margin of
+// transparent stroke around it).
+.switch-hit--head {
+  fill: transparent;
+  stroke-width: calc(14px * var(--switch-scale, 1));
+  stroke-linejoin: round;
+  pointer-events: all;
 }
 // In the editor the arrows are a picture of the AUTHORED arm; the editor's own
 // zones own the clicks.

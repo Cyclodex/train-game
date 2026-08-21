@@ -37,6 +37,7 @@ import { Game, PersonFix } from "@/game";
 const GLYPH: Record<PersonFix["on"], string> = {
   foot: "🚶",
   car: "🚗",
+  bus: "🚌",
   train: "🚆",
   platform: "🕒",
   indoors: "🏠",
@@ -44,6 +45,7 @@ const GLYPH: Record<PersonFix["on"], string> = {
 const WHERE: Record<PersonFix["on"], string> = {
   foot: "on foot",
   car: "in a car",
+  bus: "on the bus",
   train: "on the train",
   platform: "waiting on the platform",
   indoors: "indoors",

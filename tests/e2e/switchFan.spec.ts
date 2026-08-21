@@ -40,9 +40,12 @@ test.describe("junction switch fan", () => {
     await west.locator(".switch-hit").first().dispatchEvent("pointerover");
     await expect(west.locator(".switch-arm")).toHaveCount(3);
 
-    // Arms are always ordered Left, Straight, Right; from the west entry the
-    // Right arm exits Bottom, which is the green depot the train belongs to.
-    await west.locator(".switch-hit").nth(2).dispatchEvent("click");
+    // From the west entry the Right arm (ActiveIntersection.Right = 2) exits
+    // Bottom, which is the green depot the train belongs to. Select it by
+    // `data-arm`, not by position: the arms are painted in STACKING order (the
+    // set one last, so a ghost cannot slice it in half), which is not the
+    // authored Left/Straight/Right order.
+    await west.locator('[data-arm="2"] .switch-hit').first().dispatchEvent("click");
 
     // Position.Left is 3; ActiveIntersection.Right is 2.
     await expect
@@ -59,6 +62,34 @@ test.describe("junction switch fan", () => {
     expect(
       await page.evaluate(() => (window.__game as LiveGame).sim.trainTileId("train1"))
     ).toBe("2,2");
+
+    expect(errors, errors.join("\n")).toEqual([]);
+  });
+
+  // The other half of the gesture. At REST a fan draws ONE arrow — the route it
+  // is set to — so that arrow is the only target on the tile; clicking it used
+  // to be a no-op, which made a resting switch look inert. It now steps on to
+  // the next reachable arm, the same as clicking that arm would have.
+  test("clicking the arrow already set steps the switch on", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", err => errors.push(err.message));
+
+    await page.goto("/#/test/switch-fan");
+    await page.waitForFunction(() => !!window.__game, null, { timeout: 15000 });
+
+    // The north fan (Position.Top is 0) — no train is due on it, so it is at
+    // rest with exactly one arrow drawn.
+    const north = page.locator('.switch-fan[data-entry="0"]');
+    await expect(north.locator(".switch-arm")).toHaveCount(1);
+    const set = () =>
+      page.evaluate(() => (window.__game as LiveGame).switches["2,1"][0]);
+    const before = await set();
+
+    // Click the SET arrow itself (it is the one drawn, hence the only target).
+    await north.locator(".switch-hit").first().dispatchEvent("click");
+    await expect.poll(set).not.toBe(before);
+    // Still a reachable arm of the cross — cycling never lands on a hole.
+    expect([0, 1, 2]).toContain(await set());
 
     expect(errors, errors.join("\n")).toEqual([]);
   });

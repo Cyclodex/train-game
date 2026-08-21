@@ -1119,6 +1119,66 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   returns the counts a dwell event reports. Boarding asks the NETWORK, never a
   single line's stop list.
 
+## DEMAND IS ADDITIVE — citizens + edge riders (#117, 2026-08-21)
+- The per-mode XOR is GONE: `demandFor` (game.ts) no longer turns the derived
+  spawn schedule off under the citizen layer. It scales it by a per-stop dial,
+  `TileCell.edgeDemand` — the share of the catchment-derived schedule that is
+  EDGE demand (travellers imported from off-map). Defaults preserve every old
+  board: 1 without citizens (the old synthetic demand), 0 with them (the map
+  explains everybody). `??`, never `||` — an authored 0 must mean OFF.
+- No double-counting BY TAGS, not by exclusion: a citizen queues under their own
+  id, an edge rider is anonymous, and `boardedTags`/`alightedTags` name exactly
+  who moved. The two compete only for seats and platform room — the game.
+- The dial scales `intervalSec` (by division) and `initial`; NEVER `max`. Under
+  citizens the cap stays ≥ `CITIZEN_PLATFORM_CAP`, or a morning peak re-hits the
+  "commuter cannot even join the queue" failure the cap exists to prevent.
+- CITIZENS RIDE BUSES (#111 step 1): a plot's `stationsInReach` are BOARDING
+  POINTS — rail stations AND busstop rows (`boardingPointsInReachOf`,
+  tiles/cities.ts). The citizen transit port binds to the SHARED transit layer
+  (`transit.enqueue`/`dequeue`/`serves`), and `busEvents` (game.ts) holds bus
+  calls directly IN the DwellEvent shape (`trainId` = the bus id) — no
+  translation layer to drift. The mirror is vehicle-agnostic — `riders` keys
+  by vehicle id.
+- Bus calls reach the citizen sim ONE TICK LATE (`advanceBuses` runs after
+  `citizenSim.step` in `advance()`); tests stepping in large chunks step once
+  more before asserting a boarding. Three corollaries, each learned the hard
+  way: bus events are PREPENDED to the rail events (they are the older tick —
+  appended, a stale bus alight replays over a fresher train boarding at an
+  interchange); the buffer is cleared only on a tick the citizen sim consumed
+  (`scaled > 0` — `step(0)` skips the mirror, and start() after stop() begins
+  with advance(0)); and reset() clears the buffer AND every bus manifest, or
+  the old world's riders exchange into the new world's ledger.
+- ARRIVAL vs CHANGE is told by the EVENT (`DwellEvent.changingTags`, filled by
+  `transit.exchange`), never by comparing stations: a rider whose destination
+  is one walk-link past the platform is walked home by the transit layer and
+  ARRIVES without the stations matching — reading that as a change left them
+  waiting at a queue that no longer held them.
+- A citizen who GIVES UP waiting is withdrawn from the queue
+  (`TransitPort.dequeue` → `transit.dequeue`). Left behind, the tag was a
+  ghost the next vehicle boarded, corrupting whatever trip the person had
+  moved on to.
+- EVERY bus-withdrawal path sets riders down (`setDownAll`): assignBus(null),
+  removeBus, the stops<2 despawn in advanceBuses, AND game.deleteLine (which
+  takes the line's buses off via assignBus AFTER sim.deleteLine — before, and
+  pruneLineIfUnused sweeps the line out from under the delete). A citizen in a
+  seat is driven only by events; a surviving manifest is a person frozen
+  forever.
+- `edgeDemand` is SANITISED (`edgeShareOf`, clamp 0..EDGE_DEMAND_MAX): the
+  dial divides a spawn interval, and an interval driven to 0 (authored
+  Infinity on imported JSON) never leaves `advanceDemand`'s catch-up loop.
+  `latentDemandAt` scales by the same share, so the unserved-platform badge
+  cannot promise a crowd the dial has turned off. `eraseLayer` drops the dial
+  when the tile's last stop goes.
+- The transit quote still prices a bus leg at TRAIN speed/headway — a recorded
+  approximation, not an oversight (per-kind ride speed needs the line kind).
+  P&R/B+R alights are chosen by CONNECTIVITY over all of the destination's
+  boarding points (`bestAlightFrom`) — the single nearest point can be an
+  unserved kerb since bus stops joined the pool.
+- Boards: `/test/busride` (citizens on a bus, no rails at all — dead before
+  #117), `/test/edgedemand` (both crowds on one platform). Design:
+  `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —
+  also the epic's roadmap (passenger fares, vehicle costs, mode convergence).
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get
@@ -2393,6 +2453,45 @@ Four rules, each measured on that board, each of which failed silently:
   actually varies. Only the "resolves the date at setup time" case runs `today`.
 - `createGame` takes the VIEW's colours and ignores the ones `setup()` returns,
   so a scenario whose mode pins colours must repeat them in `scenario.colors`.
+
+## SAVE / LOAD — Spielstand (2026-08-21)
+- Spec: `docs/superpowers/specs/2026-08-21-save-load-design.md`. Layers:
+  `sim.snapshot()/restore()` (simulation.ts, + transit/objectives/economy
+  snapshots), `game.captureSave()/restoreSave()` (game.ts, `GameSave` +
+  `SAVE_VERSION`), `saveStore.ts` (localStorage slots), PlayView (`?save=<id>`
+  resume, Saves overlay in the drawer, autosave slot on leave while playing).
+- THE RULE: everything `step(dt)` reads that a player action or elapsed time
+  moved is snapshotted VERBATIM; derived fields (unitOffsets, lookAhead,
+  plan.exitAt) are recomputed. RESERVATIONS TRAVEL — re-deriving them would
+  claim blocks a train had not yet claimed (a train reserves only when it
+  crosses) and change who yields to whom. A train's committed `plan` travels
+  as its steps: replanning mid-leg can tie-break differently.
+- Round-trip exactness (step N, save, restore, step M == step N+M, bit-equal)
+  is asserted over FULL snapshots: `tests/unit/sim/saveRestore.spec.ts` (sim),
+  `tests/unit/gameSave.spec.ts` (game: tycoon fares, dispatch gate, time-attack
+  spawner fast-forward, retry-after-load). The spawner is a pure cursor:
+  restore = `reset()` + one `step(elapsedSec)`, returned defs discarded.
+- NOT snapshotted, by design: road traffic (rebuilt from the same seed, cars
+  restart at t=0), bus positions/riders aboard (roster re-bought onto lines),
+  the citizen layer (save UI hidden in Citizens mode, v1), the undo window,
+  the event log. `blockStates` is dropped → one re-emitted `blocked` log line
+  per held train after a load.
+- ALIASING TRAP: on the load path the game is CREATED from `save.level`, so
+  `level === save.level` inside `restoreSave` — copy the save's level BEFORE
+  clearing the live one, or you restore an empty board (measured: every train
+  dead on `exitPort: null`). Same reason the save carries `pristineLevel`:
+  Retry after a load must reset to the SAVE's opening board, or restoring
+  starting capital alongside kept bought track is free money.
+- `saveStore.read()` treats localStorage as the SOURCE and the in-memory map
+  only as the no-storage fallback: a cache-first read served a stale slot to a
+  second tab, and stale state restored silently is the worst save failure.
+- `?board=` NOW HONOURS `scenario.colors` in PlayView (same pins /test uses).
+  Found via saveload: the seeded assignment is reachability-blind, and on a
+  board with disabled turns it homed a train on a depot it could never reach —
+  the board bounced forever, no save/load involved.
+- The demo/round-trip board is `/test/challenges/save/saveload` (a signalled
+  pure-cross contention pocket, puzzle mode, pinned colours), playable at
+  `/#/play?board=saveload`.
 
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
@@ -3774,12 +3873,33 @@ of the above; read that section first.
   width is `calc(Npx * var(--switch-scale, 1))`, which PlayView/TestStage publish
   on `.level` from `switchFanScale(camera.zoom)` — below 50% zoom it thickens,
   capped 1.7x. Anything rendering `Tile.vue` without that var just gets 1.
-- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths
-  (`pointer-events: stroke`, width also zoom-scaled) take clicks. There is NO hub
-  dot and NO cycle gesture in play any more — the old `.switch-hub` circle was
-  the "strange black dot" the player asked about; with entry-anchored arrows it
+- The `.switch-layer` svg is `pointer-events: none`; only the arm hit-paths take
+  clicks — TWO per arm: the shaft (`.switch-hit`, `pointer-events: stroke`, 34px
+  zoom-scaled) and the head (`.switch-hit--head`, `pointer-events: all`, the head
+  is a filled TRIANGLE and is not part of the shaft, so it needs its own). The
+  shaft target is NOT the drawn arrow: `FanArm.hit` is the same rail curve run
+  further out (`HIT_T_END_REST/OPEN` vs `ARROW_T_END_*`), because the arrow is a
+  short stub by design and a stub is a poor thing to hit. Measured at a fitted
+  `/test/switch-fan` (zoom 0.88): drawn arrow 24px, target 41x28px, covering the
+  whole arrow. There is NO hub dot — the old `.switch-hub` circle was the
+  "strange black dot" the player asked about; with entry-anchored arrows it
   marked nothing. `switchHubAt` survives for the EDITOR, which centres its
   authored-arm cycle zone on that point.
+- PAINT ORDER IS THE WHOLE STACKING STORY — SVG has no z-index, so what `Tile.vue`
+  emits last wins. Two ranks, both in `switchFan.ts`: `armPaintRank` puts the SET
+  arm last within a fan, `fanPaintRank` puts the fan being aimed (armed > open >
+  plain > muted) last among fans. Without the first, a switch set to its Left arm
+  had its black arrow SLICED IN HALF by the white Straight ghost that plain arm
+  order draws after it — the player reported the active route as "behind the
+  other arrow". Without the second, which arrow buries which is just Position
+  enum order, i.e. it depends on which edge the train happens to come from.
+  Hover is deliberately NOT ranked: re-sorting on hover moves the element out
+  from under the pointer and bounces pointerenter/pointerleave forever. The
+  hit-paths ride in the SAME groups and therefore the same order — the arrows are
+  `pointer-events: none`, so a later arrow can never cover an earlier target, and
+  where the arms of one fan converge on their shared entry point the SET one wins
+  (a click there means "step this switch on"). Select arms by `data-arm` in
+  tests, never by `nth()`: the DOM order is stacking order, not L/S/R order.
 - TRAP: those hit-paths run ACROSS the tile, so on a junction they sit on top of
   the build tool's `.zone` edge targets and eat the click that would lay track
   (the old edge-hugging box was too small to notice). PlayView passes
@@ -3811,16 +3931,30 @@ of the above; read that section first.
   regardless of `switchLockMode` — and only then reads the markRaw'd
   `sim.trains[id].path[headIndex]`. Do not read the sim directly: it is never
   proxied, so nothing would re-render.
-- Clicking an arm THROWS STRAIGHT THERE (`pickArm`) — the only gesture. The old
-  widget could only cycle, which is why reaching a specific exit on a 4-way took
-  up to three clicks and a guess.
+- Clicking an arm THROWS STRAIGHT THERE (`pickArm`). The old widget could only
+  cycle, which is why reaching a specific exit on a 4-way took up to three clicks
+  and a guess — so don't bring that back as the only gesture. But clicking the arm
+  that is ALREADY SET does cycle: `pickArm` sends it to `nextArm()` (the next
+  REACHABLE arm, wrapping, so it never lands on a hole). That is what makes a
+  RESTING switch throwable at all — at rest a fan draws ONE arrow, so the set
+  arrow is the only target on the tile, and it used to be a dead one. `pickArm`
+  also pins `openEntry` to that entry: on a touch screen there is no hover to
+  hold the fan open.
+- TRAP when verifying switch clicks in a browser: a train approaching the junction
+  RESERVES it, `isSwitchLocked` bolts the points, and `pickArm` silently no-ops —
+  a probe that clicks and reads `game.switches` then looks like a broken hit-test.
+  Set `game.paused.value = true` first. (The other half of the same trap: a
+  hidden/collapsed automation tab reports `innerWidth 0`, so the camera fits to
+  nothing and every target measures a few px. `switchFan.spec.ts` and `shoot.mjs`
+  both drive a real 1280x800 viewport.)
 - EDITOR: `EditorView` passes `:switch-interactive="false"` and paints its OWN
   `.switch-zone` (r=22) at `switchHubAt`'s point — that zone cycles the AUTHORED
   `defaultArms` and persists, a different verb from the live throw. Its
   `switchPoint()` must track `SWITCH_INSET`; it imports the constant rather than
   re-deriving it.
 - Scenario: `/test/switch-fan` (all-pairs cross, authored to start pointing the
-  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery.
+  WRONG way). E2E `switchFan.spec.ts` drives point-to-open → click → delivery,
+  and separately that clicking the arrow already set steps the switch on.
 
 ## JUNCTIONS
 - AUTHORING a 4-way cross: every arm must list every OTHER arm in its `to`

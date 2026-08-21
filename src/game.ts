@@ -15,9 +15,11 @@ import type { RouteStep } from "@/tiles/routePlanner";
 import {
   createSimulation,
   Simulation,
+  SimSnapshot,
   SampledUnit,
   UnitChord,
   SimEvent,
+  DwellEvent,
   TrainState,
   BlockReason,
 } from "@/sim/simulation";
@@ -73,6 +75,7 @@ import { gameAudio } from "@/audio/engine";
 import { GameMode } from "@/modes/types";
 import {
   GoalSpec,
+  ObjectiveSnapshot,
   ObjectiveState,
   Observation,
   goalsOf,
@@ -81,6 +84,8 @@ import {
   createEconomy,
   createFareBook,
   CLEARING_COST_PER_TILE,
+  EconomySnapshot,
+  FareBookSnapshot,
   TRACK_COST_PER_TILE,
 } from "@/sim/economy";
 import { terrainBuildFactor } from "@/tiles/terrain";
@@ -472,6 +477,53 @@ export interface FeedbackFx {
 // fill-mode until the prune collects them.
 export const FX_TTL_MS = 3000;
 
+// --- save / load (Spielstand) ------------------------------------------------
+//
+// A GameSave is the whole running game as plain JSON: the board (live AND the
+// pristine copy Retry resets to — restoring starting capital while keeping
+// bought track would be free money), the roster, the pinned colours, the sim
+// snapshot and every closure counter createGame owns. What is deliberately NOT
+// in it is anything a pure function of the above rebuilds: road traffic
+// (respawned from the same seed), bus positions, derived tile lists.
+// Design: docs/superpowers/specs/2026-08-21-save-load-design.md.
+export const SAVE_VERSION = 1;
+
+export interface GameSave {
+  version: number;
+  name: string;
+  savedAt: number; // wall clock, display only — never fed to the sim
+  modeId: string;
+  levelId: string;
+  colorSeed: number;
+  level: Level;
+  pristineLevel: Level;
+  trains: TrainDef[];
+  colors: ColorAssignment;
+  switches: Record<string, Record<number, ActiveIntersection>>;
+  sim: SimSnapshot;
+  objective: ObjectiveSnapshot;
+  game: {
+    clock: number;
+    deliveries: number;
+    manualHoldTotal: number;
+    manualGreenTotal: number;
+    tilesBuiltTotal: number;
+    trackSpentTotal: number;
+    leviesBilled: number;
+    taxPaidTotal: number;
+    unpaidTaxTotal: number;
+    boughtPieces: string[];
+    boughtCount: number;
+    queuedTrainIds: string[];
+    // The bus roster, by line. Positions and riders aboard are not restored
+    // (v1 limitation): each bus is re-bought onto its line and starts at the
+    // line's first stop, exactly like a fresh purchase.
+    buses: { lineId?: string }[];
+    economy?: EconomySnapshot;
+    fares?: FareBookSnapshot;
+  };
+}
+
 export interface Game {
   sim: Simulation;
   tileSize: number;
@@ -714,6 +766,12 @@ export interface Game {
   startObjective(): void;
   // Win/Lose -> Ready with the same seed, for Retry (a true do-over).
   reset(): void;
+  // Save/load (Spielstand). `captureSave` serializes the running game;
+  // `restoreSave` expects a game FRESHLY created from the save's level, trains,
+  // mode and colours (PlayView's load path) and overwrites the moving state.
+  // See docs/superpowers/specs/2026-08-21-save-load-design.md.
+  captureSave(name: string): GameSave;
+  restoreSave(save: GameSave): void;
   toggleHold(tileId: string, exitPort: Position): void;
   isHeld(tileId: string, exitPort: Position): boolean;
   forceProceed(tileId: string, exitPort: Position): void;
@@ -895,7 +953,7 @@ export interface PersonFix {
   x: number;
   y: number;
   /** What is carrying them — the pin labels itself with this. */
-  on: "foot" | "car" | "train" | "platform" | "indoors";
+  on: "foot" | "car" | "bus" | "train" | "platform" | "indoors";
 }
 
 /** One row of the "what would each way take?" table. */
@@ -1305,28 +1363,64 @@ export function createGame(
   // it is handed — it stays terrain-blind. Snapshotted at construction, so a
   // stop built mid-run queues nobody until reset.
   //
-  // Under the citizen layer the SPAWNER is off — the people waiting are actual
-  // citizens with homes, jobs and a stopwatch running, and a second synthetic
-  // source would double-count the crowd. But the entry is still supplied,
-  // because `max` is also what CAPS the queue: without one every stop falls
+  // Demand is ADDITIVE (#117): a stop carries EDGE demand — the derived spawn
+  // schedule, reinterpreted as travellers the map imports from off-board — on
+  // top of whatever citizens the map explains. The two share one queue and are
+  // told apart by tags (a citizen waits under their own id; an edge rider is
+  // anonymous), so neither can double-count the other; they compete only for
+  // seats and platform room, which is the game.
+  //
+  // `TileCell.edgeDemand` is the per-stop dial: the share of the derived
+  // schedule that is edge traffic. The DEFAULT is what dissolves the old
+  // per-mode XOR without moving a single existing board: 1 (the full schedule
+  // — the old synthetic demand) where there is no citizen layer, 0 (the map
+  // explains everything) where there is one.
+  //
+  // Whatever the share, `max` survives as the CAP: under the citizen layer it
+  // is at least CITIZEN_PLATFORM_CAP, because without one every stop falls
   // back to the hard cap (16), which a morning peak in a town of forty exceeds
   // — and a commuter who cannot even JOIN the queue stands there until they
-  // give up, which reads as a broken railway when the railway is fine. An
-  // infinite interval spawns nobody, so it is a cap and nothing else.
-  function demandFor(id: string): StationDemand {
-    if (citizenSetup) {
-      return {
-        intervalSec: Number.POSITIVE_INFINITY,
-        max: CITIZEN_PLATFORM_CAP,
-        initial: 0,
-      };
+  // give up, which reads as a broken railway when the railway is fine.
+  // The sanitised edge share for a stop. `??` semantics, never `||` — an
+  // authored 0 must mean OFF even where the default is 1 — and CLAMPED,
+  // because the dial divides a spawn interval: an interval driven to 0 (an
+  // authored Infinity, or a large enough number) never leaves
+  // `advanceDemand`'s catch-up loop, and level JSON is imported raw.
+  const EDGE_DEMAND_MAX = 10;
+  function edgeShareOf(id: string): number {
+    const raw = level[id]?.edgeDemand;
+    if (typeof raw !== "number" || !Number.isFinite(raw)) {
+      return citizenSetup ? 0 : 1;
     }
+    return Math.min(Math.max(raw, 0), EDGE_DEMAND_MAX);
+  }
+
+  function demandFor(id: string): StationDemand {
     // A kerb serves the houses around it; a station gathers a district. Giving
     // a stop a platform's numbers makes the bus the main line and the railway
     // an afterthought, which is backwards for a board where it is the feeder.
-    return level[id]?.role === "station"
-      ? stationDemandOf(level, id)
-      : busStopDemandOf(level, id);
+    const derived =
+      level[id]?.role === "station"
+        ? stationDemandOf(level, id)
+        : busStopDemandOf(level, id);
+    // Under the citizen layer the cap is the citizen cap, full stop — the
+    // derived caps top out at 16 (catchment.ts), far below it, so writing a
+    // Math.max here would only advertise a derived-can-win case that cannot
+    // occur.
+    const max = citizenSetup ? CITIZEN_PLATFORM_CAP : derived.max;
+    const share = edgeShareOf(id);
+    if (!(share > 0)) {
+      return { intervalSec: Number.POSITIVE_INFINITY, max, initial: 0 };
+    }
+    return {
+      // The share scales the RATE by division — half the share, twice the gap
+      // between arrivals — and the opening crowd multiplicatively. Never the
+      // cap: a dial that could quietly lower `max` would re-introduce the
+      // queue-join failure the cap exists to prevent.
+      intervalSec: derived.intervalSec / share,
+      max,
+      initial: Math.min(Math.round((derived.initial ?? 0) * share), max),
+    };
   }
 
   // Rebuilt with the sims, never before them: a Retry has to give back the same
@@ -1523,14 +1617,17 @@ export function createGame(
         seed: citizenSetup.seed ?? colorSeed,
         tuning: citizenSetup.tuning,
         // The two things the citizen sim pushes back into the world: a person
-        // who chose the train becomes a passenger on a real platform, under
-        // their own name and bound for where THEY are going — the rail sim then
-        // carries them there, changing trains if it has to, and says on its
-        // dwell events who it moved. One ledger, not two.
+        // who chose transit becomes a passenger at a real boarding point —
+        // a platform or a bus kerb, under their own name and bound for where
+        // THEY are going. Bound to the SHARED transit layer, not the rail sim
+        // (#117 step 1): the queues, the line graph and the walk links span
+        // rail and bus alike, so `connects` answers over the whole network and
+        // whichever carrier calls says on its dwell events who it moved. One
+        // ledger, not two.
         transit: {
-          enqueue: (stationId, dest, tag) =>
-            sim.enqueuePassenger(stationId, dest, tag),
-          connects: (from, to) => sim.serves(from, to),
+          enqueue: (stationId, dest, tag) => transit.enqueue(stationId, dest, tag),
+          dequeue: (stationId, tag) => transit.dequeue(stationId, tag),
+          connects: (from, to) => transit.serves(from, to),
         },
         // ...and a person who chose to drive becomes an actual car on the
         // actual street, subject to every queue, junction and level crossing on
@@ -1828,19 +1925,38 @@ export function createGame(
       const w = pedestrianSim?.sample().find(sample => sample.id === trip.walkTrip);
       if (w) return { id, x: w.x * tileSize, y: w.y * tileSize, on: "foot" };
     }
-    if (trip?.carTrip) {
+    // A road vehicle's live position — the citizen's own car, or the bus they
+    // are riding. The trip id IS the car id (road.ts `trips.set`), so both are
+    // lookups against the same sample.
+    const roadFix = (carId: string): { x: number; y: number } | null => {
       for (const car of roadSim.sample()) {
-        if (car.id !== trip.carTrip) continue;
+        if (car.id !== carId) continue;
         const unit = car.units[0];
         if (!unit) break;
         const cls: VehicleClass =
           unit.part === "bus" ? "bus" : unit.part === "bike" ? "bike" : "car";
-        const p = positionRoadUnit(
+        return positionRoadUnit(
           unit,
           unit.front.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.front, car.laneIndex, cls),
           unit.rear.pose ? ZERO_LANE_OFFSET : couplerOffsets(unit.rear, car.laneIndex, cls)
         );
-        return { id, x: p.x, y: p.y, on: "car" };
+      }
+      return null;
+    };
+    if (trip?.carTrip) {
+      const p = roadFix(trip.carTrip);
+      if (p) return { id, x: p.x, y: p.y, on: "car" };
+    }
+    // Riding a BUS: `trainId` holds the vehicle id whatever the species (the
+    // mirror is vehicle-agnostic), so a miss in the rail roster is looked up
+    // in the bus fleet before falling through to "indoors".
+    if (trip?.trainId && !sim.trains[trip.trainId]) {
+      const bus = buses.find(b => b.id === trip.trainId);
+      if (bus?.carId && roadSim.hasCar(bus.carId)) {
+        const p = roadFix(bus.carId);
+        if (p) return { id, x: p.x, y: p.y, on: "bus" };
+        const at = roadSim.carTile(bus.carId);
+        if (at) return { id, ...centreOf(at), on: "bus" };
       }
     }
     if (trip?.trainId && sim.trains[trip.trainId]) {
@@ -2057,8 +2173,13 @@ export function createGame(
     for (const bus of buses) {
       const stops = busStopsOf(bus);
       // An unassigned bus is not a service: it sits out of the way rather than
-      // wandering, because a bus with no line has nowhere to be.
+      // wandering, because a bus with no line has nowhere to be. Riders go
+      // FIRST, while the bus is still standing somewhere they can be set down
+      // — a line edited below two stops used to despawn the car with the
+      // manifest still aboard, and a citizen in a seat is driven only by
+      // events, so nobody aboard would ever arrive, fail, or move again.
       if (stops.length < 2) {
+        setDownAll(bus);
         if (bus.carId) {
           roadSim.despawn(bus.carId);
           bus.carId = undefined;
@@ -2188,7 +2309,7 @@ export function createGame(
       manifest: bus.manifest,
     });
     bus.lastStopId = stopId;
-    busEvents.push({ stopId, ...r });
+    busEvents.push({ type: "dwell", trainId: bus.id, tileId: stopId, ...r });
     return r;
   }
 
@@ -2211,7 +2332,7 @@ export function createGame(
       manifest: bus.manifest,
       dumpAll: true,
     });
-    busEvents.push({ stopId: at, ...r });
+    busEvents.push({ type: "dwell", trainId: bus.id, tileId: at, ...r });
   }
 
   // The stop the bus is standing at, if it is standing at one at all.
@@ -2297,9 +2418,13 @@ export function createGame(
     transit.pruneLine(lineId);
   }
 
-  // What the buses did this tick, so the log and the citizen layer see a bus
-  // call exactly as they see a train's dwell.
-  const busEvents: { stopId: string; boarded: number; alighted: number; changing: number; boardedTags: string[]; alightedTags: string[] }[] = [];
+  // What the buses did this tick, held in the SAME dwell-event shape a train
+  // emits (`trainId` = the bus id, `tileId` = the stop), so the citizen sim
+  // mirrors a bus call exactly as it mirrors a train's — one event language
+  // for every carrier, with no translation layer to drift when DwellEvent
+  // grows a field. The vehicle id is load-bearing: the mirror keeps
+  // who-is-aboard per VEHICLE id and never asks what species the vehicle is.
+  const busEvents: DwellEvent[] = [];
 
   function updateParking() {
     const held = roadSim.parkingOccupancy();
@@ -2656,12 +2781,16 @@ export function createGame(
   }
 
   // How many people an hour this platform's catchment would produce if a
-  // service ever called here. Derived from the same catchment the real spawn
-  // rate comes from, so the readout and the demand cannot disagree.
+  // service ever called here. Derived from the same catchment — and scaled by
+  // the same edge share — the real spawn rate comes from, so the readout and
+  // the demand cannot disagree: a station whose dial is 0 must not advertise
+  // a crowd that will never turn up.
   function latentDemandAt(tileId: string): number {
+    const share = edgeShareOf(tileId);
+    if (!(share > 0)) return 0;
     const d = stationDemandOf(level, tileId);
     if (!Number.isFinite(d.intervalSec) || d.intervalSec <= 0) return 0;
-    return Math.max(1, Math.round(60 / d.intervalSec));
+    return Math.max(1, Math.round((60 / d.intervalSec) * share));
   }
 
   // Mirror each STOP's live queue for the crowd render — platforms and kerbs
@@ -3096,6 +3225,18 @@ export function createGame(
   function deleteLine(lineId: string): boolean {
     const running = sim.trainsOnLine(lineId);
     if (!sim.deleteLine(lineId)) return false;
+    // The BUSES that ran it are taken off it too (`assignBus(id, null)` — the
+    // same path the panel uses), which sets their riders down at the last stop
+    // they called at (`setDownAll` falls back to `lastStopId` once the line is
+    // gone) and parks the bus. Without this, deleting a line stranded whoever
+    // was aboard: a citizen in a seat is driven only by events, and a bus with
+    // no line never calls anywhere again. After sim.deleteLine on purpose —
+    // unassigning first lets `pruneLineIfUnused` sweep an unpinned line out
+    // from under the delete, which would then report false for a line that
+    // did just vanish.
+    for (const bus of buses.filter(b => b.lineId === lineId)) {
+      assignBus(bus.id, null);
+    }
     for (const trainId of running) {
       const def = defById[trainId];
       if (def) def.line = undefined;
@@ -3290,6 +3431,12 @@ export function createGame(
   let leviesBilled = 0;
   let taxPaidTotal = 0;
   let unpaidTaxTotal = 0;
+  // Road throughput delivered BEFORE the road sim was last rebuilt. The road
+  // sim is deliberately not saved (it respawns from its seed), but its
+  // cumulative `carsDelivered` is reported as an ABSOLUTE into the objective
+  // counters — without this offset the first post-load tick would overwrite a
+  // restored counter with the fresh sim's zero.
+  let carsDeliveredBase = 0;
 
   // --- coach-marks (the teaching layer, src/coach.ts) ------------------------
   // The controller sequences a board's authored hints against cumulative run
@@ -3472,7 +3619,22 @@ export function createGame(
       // tick late.
       pedestrianSim?.step(scaled);
       pedestrianClaims = pedestrianSim?.claimedCrossings() ?? [];
-      citizenSim.step(scaled, simEvents);
+      // The bus calls join the railway's events in the same dwell shape, so a
+      // citizen on a bus is mirrored exactly like one on a train. `busEvents`
+      // still holds the PREVIOUS tick's calls here (advanceBuses runs below),
+      // so a bus boarding reaches the citizen one frame late — one frame of a
+      // dwell measured in seconds, and the price of not reordering the frame
+      // around it (advanceBuses genuinely needs this tick's road step). Tests
+      // that step in large chunks step once more. Two details are load-bearing:
+      //  · bus events go FIRST — they are the OLDER tick, and the mirror
+      //    processes in order, so appending them would replay a stale bus
+      //    alight over a fresher train boarding at an interchange;
+      //  · no allocation when there are none, which is most ticks on most
+      //    boards — this is the rAF hot path.
+      citizenSim.step(
+        scaled,
+        busEvents.length ? [...busEvents, ...simEvents] : simEvents
+      );
       refreshCitizens();
       updatePedestrians();
     }
@@ -3505,7 +3667,12 @@ export function createGame(
     // station is now standing on its platform.
     transferParkedArrivals();
     // The bus services: dwell, exchange passengers, drive on to the next stop.
-    busEvents.length = 0;
+    // The event buffer is cleared only on a tick the citizen sim actually
+    // consumed: `citizenSim.step` returns without mirroring when dt is 0 (a
+    // start() after stop() begins with advance(0)), and clearing regardless
+    // would drop a pending boarding on the floor — the rider aboard in the
+    // transit ledger, the citizen forever "waiting" in the mirror.
+    if (scaled > 0) busEvents.length = 0;
     advanceBuses(scaled);
     syncBuses();
     // How full each vehicle is: a MODEL fact (who is aboard, how many seats),
@@ -3521,7 +3688,7 @@ export function createGame(
     // automatic crossing can't produce an incident, so the delta stays 0.
     const rf = roadSim.frame();
     obs.maxCarWaitSec = rf.maxCarWaitSec;
-    obs.carsDelivered = rf.carsDelivered;
+    obs.carsDelivered = carsDeliveredBase + rf.carsDelivered;
     obs.crossingIncidentDelta = 0;
     roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
     roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
@@ -3956,6 +4123,184 @@ export function createGame(
     return res;
   }
 
+  // --- save / load (Spielstand) ----------------------------------------------
+  // Plain-data deep copy. Level/switches/defs are all JSON-safe by construction
+  // (the same property `pristineLevel` already relies on).
+  function deepCopy<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  function captureSave(name: string): GameSave {
+    return {
+      version: SAVE_VERSION,
+      name,
+      savedAt: Date.now(),
+      modeId: mode.id,
+      levelId,
+      colorSeed,
+      level: deepCopy(level),
+      pristineLevel: deepCopy(pristineLevel),
+      trains: deepCopy(trainDefs),
+      colors: {
+        depotColors: { ...depotColors },
+        // Live colours (bought trains included), with the seeded base colours
+        // winning for the original roster — the live record is repainted to
+        // line colours in passenger modes, and the base is the honest livery.
+        // ONLY trains that still have a definition: `forgetTrain` never prunes
+        // `trainColors` (the removal animation still reads it), and a dead id
+        // carried into a save resurrects as a permanent ghost row in the
+        // service panel of the loaded game (`removedTrains` starts empty).
+        trainColors: Object.fromEntries(
+          Object.entries({ ...trainColors, ...assignedColors.trainColors }).filter(
+            ([id]) => defById[id] !== undefined
+          )
+        ),
+      },
+      switches: deepCopy(switches),
+      sim: sim.snapshot(),
+      objective: tracker.snapshot(),
+      game: {
+        clock,
+        deliveries: deliveries.value,
+        manualHoldTotal,
+        manualGreenTotal,
+        tilesBuiltTotal,
+        trackSpentTotal,
+        leviesBilled,
+        taxPaidTotal,
+        unpaidTaxTotal,
+        boughtPieces: [...boughtPieces].sort(),
+        boughtCount,
+        queuedTrainIds: [...queuedTrains],
+        buses: buses.map(b => ({ ...(b.lineId ? { lineId: b.lineId } : {}) })),
+        ...(economy ? { economy: economy.snapshot() } : {}),
+        ...(fares ? { fares: fares.snapshot() } : {}),
+      },
+    };
+  }
+
+  // Overwrite the moving state of a game FRESHLY built from this save's level,
+  // trains, mode and colours — the LOAD PATH ONLY. PlayView passes exactly
+  // those to createGame, and that matters: plenty of state is derived at
+  // construction and NOT re-derived here (catchment demand and transit stops,
+  // parking sign tiles, road junction/extent caches, station/depot lists,
+  // unit ids, fare specs). Applying a save whose board differs from the one
+  // this game was built from would leave all of those describing the wrong
+  // world, silently. The level content is still re-asserted below, but only
+  // because on the load path `level` and `save.level` alias each other.
+  function restoreSave(save: GameSave): void {
+    // The board, live and pristine. Writes go through the RAW level object
+    // (the one the sim indexes); the levelVersion bump at the end notifies
+    // the views. The pristine copy must follow the SAVE's own opening state:
+    // Retry after a load restores the starting capital, and keeping track
+    // that capital already bought would be free money.
+    //
+    // COPY BEFORE CLEARING: on the load path the game was CREATED from
+    // `save.level`, so `level` and `save.level` are the same object — deleting
+    // the keys first and copying "from the save" after would copy from an
+    // emptied board (measured: every spawned train dead on an exitPort:null).
+    const savedLevel = deepCopy(save.level);
+    const savedPristine = deepCopy(save.pristineLevel);
+    const savedSwitches = deepCopy(save.switches);
+    for (const id of Object.keys(level)) delete level[id];
+    Object.assign(level, savedLevel);
+    for (const id of Object.keys(pristineLevel)) delete pristineLevel[id];
+    Object.assign(pristineLevel, savedPristine);
+    for (const id of Object.keys(switches)) delete switches[id];
+    for (const [id, arms] of Object.entries(savedSwitches)) {
+      switches[id] = arms;
+    }
+    signalTiles = Object.entries(level)
+      .filter(([, tile]) => tile.signals && tile.signals.length > 0)
+      .map(([id]) => id);
+
+    sim.restore(save.sim);
+
+    // Trains bought while their shed was busy: back into the queue (they have
+    // defs and DOM, but no sim entry — the sim snapshot never contained them).
+    pendingTrains.length = 0;
+    queuedTrains.splice(0, queuedTrains.length);
+    for (const id of save.game.queuedTrainIds) {
+      const def = defById[id];
+      if (!def) continue;
+      pendingTrains.push(def);
+      queuedTrains.push(id);
+    }
+
+    // Buses: the roster survives, the positions do not (v1) — each is re-bought
+    // onto its line and starts at the line's first stop like a fresh purchase.
+    for (const b of buses) {
+      if (b.carId) roadSim.despawn(b.carId);
+    }
+    buses.length = 0;
+    busSeq = 0;
+    for (const b of save.game.buses) buyBus(b.lineId);
+
+    tracker.restore(save.objective);
+    if (economy && save.game.economy) economy.restore(save.game.economy);
+    if (fares && save.game.fares) fares.restore(save.game.fares);
+
+    clock = save.game.clock;
+    deliveries.value = save.game.deliveries;
+    manualHoldTotal = save.game.manualHoldTotal;
+    manualGreenTotal = save.game.manualGreenTotal;
+    lastHoldTotal = manualHoldTotal;
+    lastGreenTotal = manualGreenTotal;
+    tilesBuiltTotal = save.game.tilesBuiltTotal;
+    lastTilesBuiltTotal = tilesBuiltTotal;
+    trackSpentTotal = save.game.trackSpentTotal;
+    leviesBilled = save.game.leviesBilled;
+    taxPaidTotal = save.game.taxPaidTotal;
+    unpaidTaxTotal = save.game.unpaidTaxTotal;
+    boughtPieces.clear();
+    for (const key of save.game.boughtPieces) boughtPieces.add(key);
+    boughtCount = save.game.boughtCount;
+
+    // The spawner is a pure schedule cursor: re-arm it and run it forward to
+    // the saved elapsed time in one step. The returned defs are discarded —
+    // every already-spawned train lives in the sim snapshot (and injectTrain
+    // guards against a double-spawn anyway).
+    spawner?.reset();
+    const elapsed = save.objective.counters.elapsedSec;
+    if (spawner && elapsed > 0) spawner.step(elapsed);
+
+    // The road sim restarts from zero (not saved); carry the delivered total
+    // forward so the restored counter is not clobbered on the next tick.
+    carsDeliveredBase = save.objective.counters.carsDelivered ?? 0;
+
+    // A load ends the undo window and any open overlay; the log starts over
+    // (its entries reference a run this session never played).
+    setLastBuild(null);
+    clearLineOverlay();
+    // The save's roster IS the roster: nothing in it is removed, so a stale
+    // removal list (from this game's own pre-restore life) must not hide a
+    // train the restore just brought back.
+    removedTrains.splice(0, removedTrains.length);
+    eventLog.splice(0, eventLog.length);
+    // ...and the board's transient feedback with it, for the same reason: a
+    // delivery ring or a fare still flying belongs to the run that was on
+    // screen a moment ago, not to the one just loaded.
+    fx.splice(0, fx.length);
+    for (const id of Object.keys(reservations)) delete reservations[id];
+    for (const id of Object.keys(occupied)) delete occupied[id];
+    for (const id of Object.keys(stationQueues)) delete stationQueues[id];
+    for (const id of Object.keys(stationWaiting)) delete stationWaiting[id];
+    for (const id of Object.keys(stationLatent)) delete stationLatent[id];
+    roadCars.splice(0, roadCars.length);
+    roadFrame.maxCarWaitSec = 0;
+    roadFrame.carWaitTotalSec = 0;
+    roadFrame.carsDelivered = 0;
+    gridlock.sec = 0;
+    gridlock.stuck = false;
+    prevStalls = new Set();
+
+    for (const def of trainDefs) syncLine(def.id);
+    syncLines();
+    refreshObjective();
+    refreshMoney();
+    levelVersion.value++;
+  }
+
   return {
     // A GETTER, not a snapshot. `reset()` calls `buildSims()`, which REPLACES
     // the simulation object; `sim,` captured the one that existed when
@@ -4080,6 +4425,8 @@ export function createGame(
       tracker.start();
       refreshObjective();
     },
+    captureSave,
+    restoreSave,
     reset() {
       // Un-buy the track first, so buildSims() below reads the board's opening
       // state: Retry restores the starting capital, and keeping the laid track
@@ -4120,6 +4467,7 @@ export function createGame(
       leviesBilled = 0;
       taxPaidTotal = 0;
       unpaidTaxTotal = 0;
+      carsDeliveredBase = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       fx.splice(0, fx.length);
@@ -4133,8 +4481,17 @@ export function createGame(
       clearLineOverlay();
       for (const def of trainDefs) syncLine(def.id);
       syncLines();
-      // The town starts over too: same seed, same people, same jobs.
+      // The town starts over too: same seed, same people, same jobs. The bus
+      // calls of the tick before the reset go with it — the citizen feed reads
+      // `busEvents` one tick late (see advance()), and the first tick of the
+      // new world must not mirror the old world's last exchange. The riders
+      // still ABOARD each bus go too: the buses outlive the reset, and a
+      // surviving manifest would be set down into the fresh transit layer's
+      // delivered count (and its stale tags into the fresh citizen sim) at the
+      // first call of the new run.
       rebuildCitizens();
+      busEvents.length = 0;
+      for (const bus of buses) bus.manifest.length = 0;
       prevStalls = new Set();
       roadCars.splice(0, roadCars.length);
       roadFrame.maxCarWaitSec = 0;
