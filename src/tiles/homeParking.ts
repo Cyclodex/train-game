@@ -9,6 +9,7 @@ import { plotsOf } from "@/tiles/cities";
 import {
   bankFor,
   bankOf,
+  kerbRunClash,
   rowsOf,
   validateParking,
   type ParkingCell,
@@ -141,6 +142,13 @@ export function deriveHomeParking(level: Level, opts: HomeParkingOptions = {}): 
       // lying along the kerb is just parked outside.
       kind: "perpendicular",
       count: spaces,
+      // BEHIND THE PAVEMENT, which the car crosses to reach it — the street
+      // cross-section rule, and the real shape of a driveway: the dropped kerb
+      // is the car's to cross, the pavement is the pedestrian's, and neither
+      // moves for the other. One lane width is exactly the pavement strip; the
+      // apron already paves across an across-kerb row's gap from the road kerb
+      // (`apronNearPx`), so this is also what paints the crossover.
+      gap: 1,
       // CENTRED on the frontage, which is the opposite of what the staff ranks
       // want. A workplace forecourt packs to the tile edge so a run of them down
       // one street reads as one continuous parking edge; a drive must NOT do
@@ -239,6 +247,14 @@ function frontageFor(
         : ["right"];
       for (const side of sides) {
         if (bankFor(from, side) !== bank) continue;
+        // ONE KERB RUN, ONE SIDE OF THE PAVEMENT (`kerbRunClash`): a drive sits
+        // behind the band and kerbside parking in front of it, and next to each
+        // other the band would have to taper across the drive's bays to reach
+        // the rank next door. A house whose whole frontage is spoken for that
+        // way gets no drive — its residents park on the street like everybody
+        // else's overspill, which is exactly what living beside a parking rank
+        // is like.
+        if (kerbRunClash(level, tileId, from, bank, "across")) continue;
         return { tileId, from, side, bank };
       }
     }

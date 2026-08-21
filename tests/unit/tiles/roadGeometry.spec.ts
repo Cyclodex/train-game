@@ -369,12 +369,17 @@ describe("oneWayStraightMarkingPaths (kerb-anchored one-way straights)", () => {
     expect(yOf(marks[0].d)).toBeCloseTo(100 - 0.5 * LANE_W, 3);
   });
 
-  it("a lane drop stops the survivor dividers before the closing lane", () => {
-    // 3 lanes in, 2 out on a 3-wide run: only the k=1 divider is a survivor
-    // line; the closing lane's boundary is the gore's job.
+  it("a lane drop keeps the closing lane's divider to the seam", () => {
+    // 3 lanes in, 2 out on a 3-wide run: the k=1 survivor divider AND the
+    // closing lane's k=2 boundary, both full length. The lane is real tarmac
+    // to the end of this tile — the recovery taper lives on the next one —
+    // and since the hatched Sperrfläche was dropped (2026-08-20) nothing else
+    // draws that boundary, so a divider stopping mid-tile would read as a
+    // painting mistake.
     const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 3, 3, 2);
-    expect(marks).toHaveLength(1);
+    expect(marks).toHaveLength(2);
     expect(yOf(marks[0].d)).toBeCloseTo(100 + (1.5 - 1) * LANE_W, 3);
+    expect(yOf(marks[1].d)).toBeCloseTo(100 + (1.5 - 2) * LANE_W, 3);
   });
 
   it("a widening fans the new dividers out from the entry-side edge", () => {

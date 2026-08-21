@@ -3,6 +3,7 @@ import { Position } from "@/types";
 import { Level } from "@/tiles/model";
 import { nWayLanes } from "@/tiles/lanes";
 import { createRoadSim, type TrafficConfig } from "@/sim/road";
+import { worstSweptOverlap } from "../support/roadSim";
 import { carqueue } from "@/levels/test/scenarios/carqueue";
 import { overtakeloop } from "@/levels/test/scenarios/overtakeloop";
 import { overtaketwolane } from "@/levels/test/scenarios/overtaketwolane";
@@ -49,54 +50,10 @@ describe("createRoadSim — overtaking & swept-body collision robustness (#39)",
     });
   }
 
-  // A car is ~20px wide in a ~28px lane, so two same-direction bodies physically
-  // CLIP when their lane centres are closer than ~0.71 lane. The swept-body check
-  // treats two bodies as overlapping when, on the same tile and travel direction,
-  // their LONGITUDINAL extents intersect AND their LATERAL (continuous lanePos)
-  // extents are within that body width — a true 2D body overlap. Mid lane-change
-  // bodies are laterally offset, so a clean pass (the car eases clear before
-  // drawing level) registers no overlap, while a real clip does.
-  const CLIP_LANES_TEST = 0.7; // a hair under the body-width ratio, for margin
-  function worstSweptOverlap(sim: ReturnType<typeof createRoadSim>): number {
-    type Ext = { id: string; tMin: number; tMax: number; lMin: number; lMax: number };
-    // Group body extents per car, keyed by tile + travel direction (entry port),
-    // so only same-direction bodies on one tile are compared. Opposing lanes and
-    // crossing junction streams are handled by their own gates/tests.
-    const groups = new Map<string, Map<string, Ext>>();
-    for (const body of sim.bodies()) {
-      for (const p of body.points) {
-        const key = `${p.tileId}|${p.entry}`;
-        let perCar = groups.get(key);
-        if (!perCar) groups.set(key, (perCar = new Map()));
-        const e = perCar.get(body.id);
-        if (!e) perCar.set(body.id, { id: body.id, tMin: p.t, tMax: p.t, lMin: p.lanePos, lMax: p.lanePos });
-        else {
-          e.tMin = Math.min(e.tMin, p.t);
-          e.tMax = Math.max(e.tMax, p.t);
-          e.lMin = Math.min(e.lMin, p.lanePos);
-          e.lMax = Math.max(e.lMax, p.lanePos);
-        }
-      }
-    }
-    let worst = 0;
-    for (const perCar of groups.values()) {
-      const arr = [...perCar.values()];
-      for (let i = 0; i < arr.length; i++) {
-        for (let j = i + 1; j < arr.length; j++) {
-          const a = arr[i];
-          const b = arr[j];
-          const longOverlap = Math.min(a.tMax, b.tMax) - Math.max(a.tMin, b.tMin);
-          // Lateral centre separation between the two bodies (0 if their lanePos
-          // extents already intersect).
-          const latSep = Math.max(0, Math.max(a.lMin, b.lMin) - Math.min(a.lMax, b.lMax));
-          // Only a 2D overlap counts: longitudinally overlapping AND laterally
-          // within a body width.
-          if (longOverlap > worst && latSep < CLIP_LANES_TEST) worst = longOverlap;
-        }
-      }
-    }
-    return worst;
-  }
+  // The swept-body overlap measure is the SHARED helper (support/roadSim.ts) —
+  // this file used to carry a private copy, whose hard-coded 0.7 threshold went
+  // stale the day the sprites slimmed (2026-08-21) while the shared one derived
+  // itself from the body-width constants. One measure, one source.
 
   // The acceptance criterion: a fixed deterministic run of each busy/junction
   // scenario never lets two bodies overlap on ANY tick.

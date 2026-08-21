@@ -35,7 +35,7 @@
         :d="s.d"
         class="parking-bay"
         :class="[
-          { 'parking-bay--taken': s.occupied },
+          { 'parking-bay--taken': s.occupied, 'parking-bay--ghost': s.ghost },
           p.reserved ? 'parking-bay--' + p.reserved : '',
         ]"
       />
@@ -79,6 +79,16 @@
         <path :d="p.garageOut.mouth" class="parking-garage-mouth" />
         <path :d="p.garageOut.arrow" class="parking-garage-arrow" />
       </template>
+      <!-- A bike rack's stands: one hoop per stall instead of painted bays —
+           nobody outlines a white box around an Anlehnbügel. -->
+      <template v-if="p.rack">
+        <path
+          v-for="(h, hi) in p.rack.hoops"
+          :key="'rk' + pi + '_' + hi"
+          :d="h"
+          class="bike-rack-hoop"
+        />
+      </template>
     </template>
   </template>
 
@@ -121,6 +131,7 @@ import {
   stallOutlinePath,
   garageGeometry,
   busStopGeometry,
+  bikeRackGeometry,
   busStopQueueSpots,
 } from "@/tiles/parkingGeometry";
 import { rowsOf, rowSide, stallId, facilityOf } from "@/tiles/parking";
@@ -212,12 +223,13 @@ class TileParking extends Vue {
     // the paint is what tells a player at a glance which tarmac is theirs to
     // park on, and the rules are invisible without it.
     priv: boolean;
-    stalls: { d: string; key: string; occupied: boolean }[];
+    stalls: { d: string; key: string; occupied: boolean; ghost: boolean }[];
     garage: ReturnType<typeof garageGeometry> | null;
     garageOut: ReturnType<typeof garageGeometry> | null;
     bus: ReturnType<typeof busStopGeometry> | null;
     // A HALT stands in the lane and so needs a sign; a LAY-BY has a bay to mark.
     busHalt: boolean;
+    rack: ReturnType<typeof bikeRackGeometry> | null;
     waiting: { x: number; y: number; fill: string; title: string }[];
   }[] {
     if (!this.config.roads) return [];
@@ -229,14 +241,20 @@ class TileParking extends Vue {
     return rows.map(row => {
       const kerb = this.kerbFor(coord, row.from);
       const side = rowSide(row);
-      const stalls: { d: string; key: string; occupied: boolean }[] = [];
+      // DEBUG GHOSTS: an informal or unmarked stall paints nothing for the
+      // player (that is its point), which also makes it impossible to inspect —
+      // "why is that car standing there?" has no visible answer. With the debug
+      // overlay on, such stalls draw as dashed ghost boxes instead.
+      const ghost = this.config.debug && (!!row.informal || row.marking === "none");
+      const stalls: { d: string; key: string; occupied: boolean; ghost: boolean }[] = [];
       if (row.kind !== "garage") {
         for (let i = 0; i < row.count; i++) {
           const key = stallId({ tileId: this.coordId, from: row.from, side, index: i });
           stalls.push({
-            d: stallOutlinePath(row, i, size, kerb),
+            d: stallOutlinePath(row, i, size, kerb, this.config.debug),
             key,
             occupied: !!occupancy?.[key],
+            ghost,
           });
         }
       }
@@ -254,6 +272,7 @@ class TileParking extends Vue {
             ? busStopGeometry(row, size, kerb)
             : null,
         busHalt: row.kind === "busstop",
+        rack: row.kind === "bikerack" ? bikeRackGeometry(row, size, kerb) : null,
         waiting: row.kind === "busstop" ? this.waitingAt(row, size, kerb) : [],
         garage: row.kind === "garage" ? garageGeometry(row, size, kerb, "in") : null,
         // The second driveway. A garage a car can only reverse out of reads as a
@@ -282,11 +301,13 @@ class TileParking extends Vue {
     const coord = parseCoordId(this.coordId);
     const row = rows[0];
     const anchor = parkingSignAnchor(row, size, this.kerbFor(coord, row.from));
-    // A bus stop is an H, not a P. Both signs count the same way, but a car-park
-    // P over a bus stop reads as somewhere to leave your car, which is the one
-    // thing it is not.
+    // A bus stop is an H, not a P — and a bike rack is a bike pictogram, not a
+    // P either. All three signs count the same way, but a car-park P over
+    // either reads as somewhere to leave your CAR, which is the one thing they
+    // are not.
     const isStop = rows.every(r => r.kind === "busstop" || r.reserved === "bus");
-    const mark = isStop ? "H" : "P";
+    const isRack = rows.every(r => r.kind === "bikerack");
+    const mark = isStop ? "H" : isRack ? "🚲" : "P";
     return {
       x: anchor.x,
       y: anchor.y,
@@ -355,6 +376,15 @@ export default toNative(TileParking);
   fill: rgba(255, 255, 255, 0.03);
   stroke-dasharray: 7 4;
 }
+/* DEBUG GHOST: an informal / unmarked stall, visible only with the debug
+   overlay on. Cyan to match the overlay's other diagnostics, dashed and
+   unfilled so it cannot be mistaken for painted parking. */
+.parking-bay--ghost {
+  fill: none;
+  stroke: rgba(80, 220, 255, 0.75);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+}
 /* Bus stops. A lay-by is the same SIZE and OUTLINE as the lorry bay beside it and
    a halt has no outline at all, so neither can be told apart by shape — the
    yellow kerb marking is what says "bus", exactly as it does on a real street. */
@@ -408,6 +438,14 @@ export default toNative(TileParking);
   fill: rgba(70, 190, 150, 0.22);
   stroke: #bff3e2;
   stroke-dasharray: 7 4;
+}
+/* A bike rack's stands. Galvanised-steel grey, one bar per stall — the row of
+   hoops is what says "bikes park here" the way bay lines say it for cars. */
+.bike-rack-hoop {
+  fill: none;
+  stroke: #c8ced6;
+  stroke-width: 2.4;
+  stroke-linecap: round;
 }
 /* The garage ramp: a dark mouth under the building, with a chevron pointing in.
    A car that drives to a bare kerb and vanishes reads as a despawn BUG — the

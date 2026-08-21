@@ -1810,15 +1810,19 @@ class PlayView extends Vue {
       this.editingLineId ? { lineId: this.editingLineId } : null
     );
   }
-  // A click on a station while a line is being drawn: append it, or remove it
-  // if it is already a stop. Order is click order, which is the order the
-  // trains on it will call at them.
+  // A click on a station while a line is being drawn: APPEND it. Order is
+  // click order, which is the order the trains on it will call — and the same
+  // station may be clicked again later in the sequence (A, C, B, C is a real
+  // service: out via C, back via C — the Transport-Fever shape). The one
+  // exception is the LAST stop: clicking it again takes it back off, which is
+  // both the undo gesture (drawing is append + take-back, so any mistake is
+  // reversible from the end) and what keeps a doubled call (C, C) impossible
+  // to draw. The transit layer normalises that case away anyway.
   editLineAt(tileId: string): void {
     const id = this.editingLineId;
     if (!id) return;
     const stops = [...(this.game.lines.find(l => l.id === id)?.stops ?? [])];
-    const at = stops.indexOf(tileId);
-    if (at >= 0) stops.splice(at, 1);
+    if (stops.length && stops[stops.length - 1] === tileId) stops.pop();
     else stops.push(tileId);
     this.game.setLineStops(id, stops);
   }
@@ -2447,11 +2451,22 @@ export default toNative(PlayView);
   top: 0;
   left: 0;
   // width is set inline per vehicle segment (car/truck/cab/trailer lengths).
-  height: 20px;
+  // 16px — sim/laneOffset.ts CAR_BODY_WIDTH_FRAC, keep in lockstep. Sized so
+  // the width ratio to a 28px lane matches a real street (~0.57); at the old
+  // 20px a car passing an informally parked one clipped through it.
+  height: 16px;
   border-radius: 4px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   will-change: transform;
   overflow: hidden;
+}
+// Buses and lorries are genuinely wider than cars (LARGE_BODY_WIDTH_FRAC —
+// 2.55m against 1.8m on a real street); the bike below stays its slim self.
+.road-car--bus,
+.road-car--truck,
+.road-car--cab,
+.road-car--trailer {
+  height: 18px;
 }
 // In debug mode cars are clickable to inspect their route.
 /* Debug: the car id pinned to the sprite (counter-rotated so it stays

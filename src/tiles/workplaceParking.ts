@@ -8,6 +8,7 @@ import { plotsOf, type PlotKind } from "@/tiles/cities";
 import {
   bankFor,
   bankOf,
+  kerbRunClash,
   rowsOf,
   validateParking,
   type ParkingCell,
@@ -122,6 +123,10 @@ export function deriveWorkplaceParking(
         if (taken.has(bank)) continue;
         const n = neighborCoord(coord, bank);
         if (!n || !workplace.has(getCoordinatesId(n))) continue;
+        // ONE KERB RUN, ONE SIDE OF THE PAVEMENT: a staff rank is kerbside
+        // parking, and beside an across-kerb rank on the same flank the band
+        // cannot pass in front of one and behind the other (`kerbRunClash`).
+        if (kerbRunClash(level, tileId, from, bank, "parallel")) continue;
         taken.add(bank);
         const rows = additions.get(tileId) ?? [];
         rows.push({

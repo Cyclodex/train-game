@@ -20,6 +20,7 @@ import {
   stallPitchPx,
   stallPose,
   stallOnLane,
+  stallWalkIn,
   garageExitFrom,
   needsBigBay,
   layByTaperPx,
@@ -123,6 +124,12 @@ export function parkingApronPath(
   size: number,
   kerbPx: number,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal) return "";
   if (row.kind === "garage") return "";
   if (stallOnLane(row.kind)) return ""; // no bay, so no apron to pave
   const f = rowFrame(row, size);
@@ -157,7 +164,17 @@ export function stallOutlinePath(
   index: number,
   size: number,
   kerbPx: number,
+  // DEBUG ONLY: draw the box even where the player must never see one — an
+  // informal or unmarked stall. The debug overlay passes true so the invisible
+  // spaces become inspectable (a dashed ghost); nothing else may.
+  ghost = false,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal && !ghost) return "";
   if (row.kind === "garage") return "";
   // A HALT has no bay to outline — it is a length of kerb, and its depth is zero
   // by definition. Drawing one anyway produces a DEGENERATE box: zero long and a
@@ -169,8 +186,40 @@ export function stallOutlinePath(
   // painted, which is the entire difference between a European bay rank and an
   // American wide street you park along. The apron and the outer kerb line are
   // deliberately still drawn: without them the parked cars would sit on grass.
-  if (row.marking === "none") return "";
+  if (row.marking === "none" && !ghost) return "";
+  // A RACK is not painted as bays either: nobody paints a white box around a
+  // bike stand. Its stalls are the hoops themselves (`bikeRackGeometry`), which
+  // are VISIBLE furniture — so unlike informal/unmarked stalls it needs no
+  // debug ghost, and the skip is unconditional.
+  if (stallWalkIn(row.kind)) return "";
   return poly(stallBoxPoints(row, index, size, kerbPx));
+}
+
+// --- Bike racks ---------------------------------------------------------------
+
+// The rack's furniture: one HOOP (an Anlehnbügel seen from above — a short bar
+// the bike leans against) per stall, drawn on the apron. Placed from the same
+// `stallPose` the sim parks the bike at, so a stand and the bike standing at it
+// can never disagree. The hoop sits a whisker downstream of the stall's centre:
+// the bike leans ON it, not through it.
+export function bikeRackGeometry(
+  row: ParkingRow,
+  size: number,
+  kerbPx: number,
+): { hoops: string[] } {
+  const f = rowFrame(row, size);
+  const near = bayNearPx(row, size, kerbPx);
+  const depth = stallDepthPx(row.kind, size);
+  const hoops: string[] = [];
+  for (let i = 0; i < row.count; i++) {
+    const pose = stallPose(row, i, size, kerbPx);
+    const along = pose.t * size + pose.pitchPx * 0.28;
+    // The bar runs out from the kerb, spanning the middle of the stand's depth.
+    hoops.push(
+      poly([f.at(along, near + depth * 0.18), f.at(along, near + depth * 0.82)], false),
+    );
+  }
+  return { hoops };
 }
 
 // The kerb line along the OUTER edge of an apron — where the parking strip meets
@@ -181,6 +230,12 @@ export function parkingKerbPath(
   size: number,
   kerbPx: number,
 ): string {
+  // INFORMAL KERB HAS NO PAINT — none of it, and that is the point rather than an
+  // omission. This is the stretch of roadside a driver stops on when there is
+  // nowhere else; marking it would turn it into a bay, and painting an apron
+  // down every street on the board would make the whole town look as though its
+  // roads had been widened. The car standing there is the only thing to see.
+  if (row.informal) return "";
   if (row.kind === "garage") return "";
   // Same for a HALT: its kerb IS the road's own, and `busStopGeometry` paints the
   // yellow marking on it. A second white line here would just double it.

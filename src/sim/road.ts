@@ -12,7 +12,7 @@ import {
 } from "./junctionSignal";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneSegmentLength } from "./pathGeometry";
-import { laneIndexAcrossSeam } from "./laneOffset";
+import { LANE_WIDTH_FRAC, LARGE_BODY_WIDTH_FRAC, laneIndexAcrossSeam } from "./laneOffset";
 import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, planRouteToGoals, RouteTurn } from "./roadRouter";
@@ -22,7 +22,16 @@ import {
   type ParkingRegistry,
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
-import { manoeuvreAt, stallId, type ManoeuvrePath, type StallRef } from "@/tiles/parking";
+import {
+  bankFor,
+  bankOf,
+  manoeuvreAt,
+  stallId,
+  stallPose,
+  stallWalkIn,
+  type ManoeuvrePath,
+  type StallRef,
+} from "@/tiles/parking";
 import { buildConflictMatrix, conflictKey, sameEntryConflict } from "./roadJunction";
 import {
   ActiveMovement,
@@ -467,6 +476,12 @@ export interface Car {
   // The car park this trip is aimed at (facility id), or null for a through trip
   // that just drives across the map, as every car did before parking existed.
   parkTarget: string | null;
+  // IS THE SPACE IT IS AIMING FOR JUST THE KERB? True only for a car that looked
+  // for real parking, found none, and settled for the roadside
+  // (`ParkingRow.informal`). Carried on the car because the claim happens tiles
+  // and seconds after the plan that chose it, and without it the driver arrives
+  // at the very kerb it was sent to and cannot see the space.
+  parkInformal: boolean;
   // HOW FAR from `tripGoal` this car will look for a space when it NEXT plans a
   // route, or null for a car that is simply driving to an address.
   //
@@ -792,6 +807,20 @@ export interface RoadSim {
   // This is how far the driver has to WALK, and charging that walk is the whole
   // reason a car park two streets away is worse than the space at the gate.
   tripParkedAt(tripId: string): string | null;
+  // ...and the kerb it is against, for actually WALKING that leg on a pavement:
+  // the tile, the bank the bay hugs (which pavement the driver steps onto) and
+  // `at`, the car's own resting position in world tile units — so the figure
+  // appears beside the car rather than at the middle of the carriageway.
+  tripParkedKerb(
+    tripId: string,
+  ): { tileId: string; bank: Port; at: { x: number; y: number } } | null;
+  // Every informally parked car right now, as (tile, kerb bank) pairs. An
+  // informal car stands HALF ON THE KERB (no bay exists — see stallPose), so
+  // its road-side half protrudes into the kerb lane; the renderer reads this
+  // to ease passing traffic toward the centre on exactly these banks (the
+  // squeeze). Duplicates possible when two cars share a stretch — callers set
+  // membership, they don't count.
+  informalParked(): { tileId: string; bank: Port }[];
   // The owner is back. The car gives up its bay — waiting in it, with no road
   // body and no right of way, until the traffic genuinely leaves a gap — and
   // then drives to `toTileId`, where the trip finally reads "arrived".
@@ -985,15 +1014,16 @@ const LANE_SETTLE = 1e-3;
 // `laneDropUrgent`) — it must get out — but never the one-lane cap.
 const LANE_CHANGE_SETTLE = 1.2;
 // Lateral separation (in lanes) below which two same-direction bodies physically
-// CLIP — a car's rendered width (~20px) over the lane width (~28px) is ~0.71 lane,
-// so bodies whose lane centres are closer than this overlap sideways. Used by the
-// swept-body overlap-recovery clamp in clearAhead: a car that ends up within this
-// of another (a half-finished overtake pull-out/return, or two cars merged onto
-// one lane) is held its following gap behind that body so the overlap can't
-// persist. Set at the true body-width ratio so steady traffic a full lane apart is
-// never gated, but anything closer is — this is also the threshold the swept-body
-// test asserts against.
-const CLIP_LANES = 0.72;
+// CLIP — the WIDEST rendered body (a bus/lorry, LARGE_BODY_WIDTH_FRAC) over the
+// lane width, so bodies whose lane centres are closer than this overlap
+// sideways. Used by the swept-body overlap-recovery clamp in clearAhead: a car
+// that ends up within this of another (a half-finished overtake pull-out/return,
+// or two cars merged onto one lane) is held its following gap behind that body
+// so the overlap can't persist. DERIVED from the true body-width ratio (not a
+// literal, which is how it silently went stale when the sprites slimmed) so
+// steady traffic a full lane apart is never gated, but anything closer is —
+// this is also the threshold the swept-body test asserts against.
+const CLIP_LANES = LARGE_BODY_WIDTH_FRAC / LANE_WIDTH_FRAC;
 // How many tiles ahead a car looks for the junction it must be lane-sorted for,
 // so it starts moving into its turn lane with room to spare (sub-project F).
 const TURN_LANE_LOOKAHEAD = 4;
@@ -3161,6 +3191,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkInformal: false,
       parkWish: null,
       parkPermit: null,
       stall: null,
@@ -3290,8 +3321,34 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       // outside a works are usually ON the works' own street, and settling the
       // trip there would delete the car half a tile before it parked.
       const parkPlan = wantsPark
-        ? phases.planParkingTripNear(from, startPort, kind, cls, to, searchTiles, req.permit)
+        ? phases.planParkingNear(from, startPort, kind, cls, to, searchTiles, req.permit)
         : null;
+      // NOWHERE TO PARK MEANS YOU DO NOT SET OFF. Not a real bay, not a drive,
+      // not even a stretch of kerb within reach — so there is no journey to
+      // make by car, and refusing here is the honest end of the ladder.
+      //
+      // The alternative was what this replaces: dispatch anyway, drive to the
+      // address, and be DELETED on arrival — a car popping out of existence in
+      // the middle of the street, which is the one thing the board must never
+      // show. Measured on `/test/homeparking` with the works saturated, that was
+      // 12 of 30 dispatched cars.
+      //
+      // Refusing is not stranding anybody. `requestTrip` returning null is the
+      // long-standing "no car could be dispatched" path (no route, blocked
+      // street, fleet full): the citizen layer falls back to driving on a timer,
+      // so the journey still happens and still takes time — there is simply no
+      // vehicle on the board for it. Which is exactly right, because in a town
+      // with nowhere to park, that trip is the one you do not make by car.
+      //
+      // ...BUT THAT IS A VERDICT ON THE WHOLE STREET, NOT ON THIS ONE APPROACH,
+      // which is why it is `continue` and never `return`. `planParkingNear`
+      // searches from `(tile, entry)`, so what a driver can reach depends on
+      // WHICH WAY THEY PULL OUT — a space one street east is invisible to the
+      // westbound approach, and the ports are tried in a fixed order with no
+      // idea where the parking is. Returning here turned away a driver who
+      // could have parked by turning the other way out of their own street.
+      // The loop running out of ports is the real refusal, at the bottom.
+      if (wantsPark && !parkPlan) continue;
       let turns: RouteTurn[];
       let goalPort: Port | null;
       if (parkPlan) {
@@ -3339,6 +3396,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       car.overtaker = driverRng() < overtakeFraction && cls !== "bus" && cls !== "bike";
       car.tripGoal = { tileId: toTileId, entryPort: goalPort };
       car.parkTarget = parkPlan?.facilityId ?? null;
+      car.parkInformal = parkPlan?.informal ?? false;
       car.parkPermit = req.permit ?? null;
       if (req.service) car.service = true;
       cars.push(car);
@@ -3493,6 +3551,36 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     return car?.stall?.tileId ?? null;
   }
 
+  // WHERE THE DRIVER IS STANDING when they get out: the tile, the kerb their bay
+  // hugs, and the spot itself. The bank is what decides which pavement they are
+  // on, and it cannot be worked out from the tile alone — a street with a bay on
+  // each side has two.
+  //
+  // `at` is the CAR, in world tile units, and it is not a nicety: a walker given
+  // only a tile is put at its centre, and the centre of a road tile is the middle
+  // of the carriageway. The driver appeared standing in the traffic and stepped
+  // sideways onto the pavement. It comes from the stall's own pose, which is
+  // where the manoeuvre ends and therefore where the car is resting.
+  function tripParkedKerb(
+    tripId: string,
+  ): { tileId: string; bank: Port; at: { x: number; y: number } } | null {
+    if (trips.get(tripId)?.status !== "parked") return null;
+    const car = cars.find(c => c.id === tripId);
+    if (!car?.stall) return null;
+    const info = parking.info(car.stall);
+    if (!info) return null;
+    // Tile units (size 1), the same frame `pathFor` builds its manoeuvre curves
+    // in and the same one the walkers use — never px, which would be right in
+    // the sim and 200x wrong in the renderer.
+    const pose = stallPose(info.row, car.stall.index, 1, info.kerb);
+    const coord = parseCoordId(car.stall.tileId);
+    return {
+      tileId: car.stall.tileId,
+      bank: bankOf(info.row),
+      at: { x: coord.x + pose.x, y: coord.y + pose.y },
+    };
+  }
+
   // Take the car off the board outright, wherever it is. The caller has decided
   // it has no owner any more — somebody emigrated, or gave up on the journey and
   // there is nowhere left to send it.
@@ -3582,6 +3670,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null,
       parkTarget: null,
+      parkInformal: false,
       parkWish: null,
       parkPermit: null,
       stall: null,
@@ -3706,6 +3795,7 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       phase: "driving",
       tripGoal: null, // ambient traffic: it drives off the map, not to an address
       parkTarget,
+      parkInformal: false,
       parkWish: null,
       // Ambient traffic never holds a permit — nobody merely passing through has
       // a drive on this street — so every private row stays invisible to it.
@@ -3946,6 +4036,15 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
       return trips.get(tripId)?.wantedSpace ?? false;
     },
     tripParkedAt,
+    tripParkedKerb,
+    informalParked(): { tileId: string; bank: Port }[] {
+      const out: { tileId: string; bank: Port }[] = [];
+      for (const c of cars) {
+        if (c.phase !== "parked" || !c.parkInformal || !c.stall) continue;
+        out.push({ tileId: c.stall.tileId, bank: bankFor(c.stall.from, c.stall.side) });
+      }
+      return out;
+    },
     releaseTrip,
     abandonTrip,
     clearFinishedTrip(tripId: string) {
@@ -4021,6 +4120,43 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
             part: spec.segments[0].part,
           });
           return { id: c.id, units, laneIndex: c.laneIndex, laneCount: 1, destination: c.destination };
+        }
+        // A WALKED-IN stall (the bike rack) has no manoeuvre curve at all — the
+        // bike goes straight from the kerb to `parked` — so the parked pose comes
+        // from the stall itself: the same `stallPose` the painted rack is drawn
+        // from, so the bike and its stand can never disagree.
+        if (c.phase === "parked" && c.stall) {
+          const info = parking.info(c.stall);
+          if (info && stallWalkIn(info.row.kind)) {
+            const pose = stallPose(info.row, c.stall.index, 1, info.kerb);
+            const rad = (pose.angleDeg * Math.PI) / 180;
+            const half = spec.segments[0].length / 2;
+            const mk = (sign: number): CarSample => ({
+              coord: c.path[c.headIndex].coord,
+              entryPort: c.path[c.headIndex].entryPort,
+              exitPort: null,
+              t: 0,
+              pose: {
+                tx: pose.x + Math.cos(rad) * half * sign,
+                ty: pose.y + Math.sin(rad) * half * sign,
+                headingDeg: pose.angleDeg,
+              },
+            });
+            return {
+              id: c.id,
+              units: [
+                {
+                  front: mk(1),
+                  rear: mk(-1),
+                  lengthTiles: spec.segments[0].length,
+                  part: spec.segments[0].part,
+                },
+              ],
+              laneIndex: c.laneIndex,
+              laneCount: 1,
+              destination: c.destination,
+            };
+          }
         }
         let lead = 0; // arc distance from the head to this segment's leading edge
         for (const seg of spec.segments) {

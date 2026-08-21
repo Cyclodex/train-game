@@ -32,7 +32,14 @@ import type { ParkingRow } from "@/tiles/parking";
 
 const wide = () => ({ connections: [], road: nWayLanes(Position.Left, Position.Right, 2) });
 const street = () => ({ connections: [], road: twoWay(Position.Left, Position.Right) });
-const aisle = () => ({ connections: [], road: [oneWay(Position.Left, Position.Right)] });
+// The aisle carries no pavement (a car park has none); the STREET ranks below
+// keep theirs and sit behind it, which is what a forecourt beside a real street
+// does — the cross-section rule, both ways round, on one board.
+const aisle = () => ({
+  connections: [],
+  footway: "none" as const,
+  road: [oneWay(Position.Left, Position.Right)],
+});
 
 const row = (r: ParkingRow): ParkingRow => r;
 
@@ -58,8 +65,10 @@ export const parkvariants: TestScenario = {
         label: "Schrägparken",
         dwellSec: [8, 16],
         rows: [
-          row({ from: Position.Left, kind: "angled", count: 6 }),
-          row({ from: Position.Right, kind: "angled", count: 6 }),
+          // BEHIND the pavement (gap: one lane width = the pavement strip), and
+          // the cars cross it on the apron — a forecourt, not a widened road.
+          row({ from: Position.Left, kind: "angled", count: 6, gap: 1 }),
+          row({ from: Position.Right, kind: "angled", count: 6, gap: 1 }),
         ],
       },
     },
@@ -73,8 +82,8 @@ export const parkvariants: TestScenario = {
         label: "Marktplatz",
         dwellSec: [10, 20],
         rows: [
-          row({ from: Position.Left, kind: "perpendicular", count: 7 }),
-          row({ from: Position.Right, kind: "perpendicular", count: 7 }),
+          row({ from: Position.Left, kind: "perpendicular", count: 7, gap: 1 }),
+          row({ from: Position.Right, kind: "perpendicular", count: 7, gap: 1 }),
         ],
       },
     },

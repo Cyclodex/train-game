@@ -3,6 +3,7 @@ import { oneWay } from "@/tiles/lanes";
 import { TileCell } from "@/tiles/model";
 import { TestScenario } from "@/levels/test/scenario";
 import { deriveWorkplaceParking } from "@/tiles/workplaceParking";
+import { deriveKerbOverflow } from "@/tiles/kerbOverflow";
 
 const { Top, Right, Bottom, Left } = Position;
 
@@ -104,7 +105,11 @@ base[`0,3`] = works();
 // straight one-way street is all the map has to say. Applied here, in the
 // scenario's own data, so the board a test loads and the board a player sees
 // are the same board.
-const level = deriveWorkplaceParking(base);
+// ...and the bare kerb behind it, so the drivers who find all three bays taken
+// leave the car at the roadside and walk, instead of evaporating at the gate.
+// It paints nothing: what you see is cars standing further and further from the
+// works as the morning goes on, which is the shortfall made visible.
+const level = deriveKerbOverflow(deriveWorkplaceParking(base));
 
 export const workparking: TestScenario = {
   id: "workparking",

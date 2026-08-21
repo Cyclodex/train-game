@@ -1060,8 +1060,29 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - Two line shapes, and the difference matters when authoring:
   **a ring** needs no turn-back, so the board needs exactly ONE depot and each
   station comes round once a lap; **a there-and-back shuttle** can only reverse
-  at a depot, so it needs one at each end and serves intermediate stations
-  TWICE a round trip (once each way). Both are covered by tests.
+  at a depot, so it needs one at each end. Both are covered by tests.
+- THE ORDER IS THE CONTRACT (2026-08-21, the Transport-Fever rule): a lined
+  train calls ONLY at the stop it is currently bound for and runs past every
+  other platform — its own line's included — and the cursor simply steps +1 on
+  each call. The old rule (call at ANY of the line's stops when passing,
+  cursor re-derived by `indexOf`) broke two ways at once: on a ring, a stop
+  whose route led past the others was NEVER reached (every en-route platform
+  hijacked the cursor — "the train never goes to A"), and a stop named twice
+  on a line was swallowed (indexOf finds the first occurrence). NEVER
+  reintroduce indexOf-based cursor recovery — the bus cursor in game.ts
+  (`advanceBuses`) follows the identical rule, including the terminus
+  turn-round stepping BACK by one instead of re-finding itself.
+- A LINE MAY NAME A STOP TWICE — A→C→B→C is out via C, back via C, and since
+  the strict order above it is also the ONLY way to serve an intermediate
+  station in both directions of a shuttle (a train bound for A no longer calls
+  at C just for standing on the way). Never twice in a ROW: `normalizeStops`
+  (sim/transit.ts, the one door every stop list enters by — createLine AND
+  setLineStops) collapses consecutive duplicates and the wrap-around pair
+  (last → first is consecutive too, a line is a cycle). The line editor
+  (PlayView `editLineAt`) APPENDS on click; clicking the LAST stop takes it
+  back off (the undo gesture — a mid-list stop is removed by popping back to
+  it). Overlay badges carry every call position ("2·4"), keyed per station.
+  `/test/linerevisit` is the shape in isolation; pins in `lines.spec.ts`.
 - Crowd peak ≈ arrival rate × LAP TIME, not capacity: a 24-seat train empties
   any of these platforms in one call, but a station only gets served once a
   lap. Size the towns against the lap, or the overflow fail fires on a board
@@ -1199,6 +1220,59 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
     · `isPlotGround` — town ground with nothing built across it. What holds
       PEOPLE. Nobody lives on the carriageway.
   Before the split, a street through a town read as two towns.
+- **THE STREET PROFILE (2026-08-20).** `tiles/streetProfile.ts` is the single
+  lateral truth of a street: per SEAM, per FLANK (the seam's two perpendicular
+  ports), the ordered strips centreline→out: carriageway → kerbside parking →
+  verge → pavement. Resolved at seams because seams are where two tiles must
+  AGREE (symmetric by construction — that agreement IS the connectedness of
+  every band); a tile's interior is linear interpolation between its two seam
+  profiles, one taper rule for every layer at once.
+    · CONSUMERS: pavement paint (`footway.ts bandsFor`) and walkers
+      (`pavementOffsetEndsFor`) read `FlankProfile.pavement`; the surface paint
+      reads `seamPaintLanes` (`Tile.vue` roadPaths — the junction-adopts /
+      min-seam pairing now lives ONLY in `roadEdgeFrac`). The cars stay on
+      `sim/laneOffset.ts` (hot path) and the parking kerb stays `parking.ts
+      kerbOffsetPx` — both PINNED to the profile by the sweep
+      (`tests/unit/tiles/streetProfile.spec.ts`): pavement parity, paint
+      parity, car-band parity, seam symmetry, strip invariants, and a
+      synthetic street×parking×footway matrix — all board-wide over every
+      registered scenario. Move either side alone and CI names the board+tile.
+    · ACROSS-KERB parking (drives, forecourts) is deliberately NOT a strip: it
+      lies beyond the pavement on the property side and never moves the band
+      (the cross-section rule, `docs/superpowers/specs/2026-08-20-street-cross-
+      section-design.md`). Bare kerb (`row.informal`) paints nothing and moves
+      nothing either.
+    · ONE-WAY CENTRE RULE (2026-08-20, second pass): the tarmac a stream brings
+      to a seam is the tarmac it had — the ENTRY edge adopts the upstream
+      one-way's own count, the EXIT edge carries the tile's own. So a gore
+      shuts its lane at full width on the tile that owns it, the NEXT tile
+      paints the recovery taper back down, and every one-way↔one-way seam
+      agrees by construction (the old stepped exit edge was the one asymmetry
+      the symmetry sweep had to exempt — and a visible pavement JUMP at every
+      lane drop). A merging car sits INSIDE gore/recovery tarmac (containment,
+      not equality — see the car-band case); markings keep the min-based REAL
+      lane counts. A one-way drop paints NO Sperrfläche (user call, same day):
+      the hatched bay ended in a hard white bar right where the recovery
+      tarmac carries on, so the closing lane is plain tarmac, its boundary
+      divider runs dashed to the seam, and the tapering edge line + merge
+      arrows are the whole signage. Two-way reducer gores are untouched.
+    · Three pre-existing absurdities the parity oracle surfaced: (a) a WIDE
+      junction arm (kerb past 0.5 − band) used to clamp the pavement band
+      INSIDE the carriageway and paint tarmac over it — the profile answers
+      `pavement: null` (no room is no pavement; the walkers keep the clamp
+      fallback so their sampler stays total); (b) deep gapped bays near the
+      tile edge clamped the band into the bay — also null now; (c) the walkers
+      never had the paint's kerb-anchored ONE-WAY branch, so people and paint
+      quietly disagreed on every one-way lane-drop run — the migration put the
+      walkers on the paint's numbers (uniform runs unchanged, so nothing
+      visibly moved).
+    · UNITS: profile = tile fractions; footway = ground units of 100 (×100);
+      parking = px at tileSize. LANE 0.14 / VERGE 0.04 / PAVEMENT 0.08 — the
+      lockstep with footway's PAVEMENT_GAP/WIDTH is itself a sweep assertion.
+    · `parking.ts kerbOffsetPx` keeps its min-2 floor; `roadEdgeFrac` (like
+      the pavement always did) does not. They differ only on 1-lane one-way
+      BENDS, where no parking row is legal anyway — documented at
+      `roadEdgeFrac`.
 - **FOOTWAYS (2026-08-02).** `TileCell.footway?: "both" | "none"` is the fifth
   tile axis and only ever an OPT-OUT — every street has pavements unless it says
   "none", so boards written before footways existed grew them for free.
@@ -1227,18 +1301,19 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       drawn its true ONE lane wide, so flooring at two floats the band half a lane
       out with a strip of bare ground behind the kerb (`/test/citizencars`).
     · **The band is seam-matched PER END, not per tile** (`pavementPaths` takes the
-      LEVEL, not just the cell). The tarmac meets its neighbour flush —
-      `roadSeamPaintTotal` narrows a road toward a narrower neighbour and
-      `junctionArmPaintTotal` makes a junction arm adopt the street it opens onto
-      — so a pavement measured from the tile alone jogs sideways at exactly the
-      seams the kerb it follows does not. Use `roadKerbEdge` / `roadCurveKerbEdgeTapered`
-      with SIGNED per-end offsets and `side = 1`; both taper for free.
+      LEVEL, not just the cell). The tarmac meets its neighbour flush, so a
+      pavement measured from the tile alone jogs sideways at exactly the seams
+      the kerb it follows does not. Since 2026-08-20 the per-end numbers come
+      from THE STREET PROFILE (above) — `bandsFor` just reads
+      `FlankProfile.pavement` at each seam; the seam rules live in
+      `roadEdgeFrac`, nowhere else. Draw with `roadKerbEdge` /
+      `roadCurveKerbEdgeTapered`, SIGNED per-end offsets, `side = 1`.
     · **A ONE-WAY street is the one road not symmetric about its centreline.** It
       kerb-anchors the run's widest lane count, so lanes open and close on the
-      CENTRE side while the kerb runs dead straight — each pavement has to follow
-      its OWN edge (`kerb + pad` / `inner − pad`), and a centred ±half puts the
-      kerb-side band on the tarmac. `/test/footwaywidth` is the isolation board
-      for all of this: a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
+      CENTRE side while the kerb runs dead straight — each pavement follows its
+      OWN flank of the profile, and a centred ±half puts the kerb-side band on
+      the tarmac. `/test/footwaywidth` is the isolation board for all of this:
+      a 1-lane one-way, a 2-lane bend, and a 3→1 taper.
     · **PAVING IS ITS OWN LAYER** (`TileGround layer="paving"`, z1) — driveways
       and pavements, above EVERY tile's ground patch and not just their own. A
       terrain patch's corners are jittered OFF the tile grid on purpose, so a
@@ -1579,6 +1654,47 @@ Four rules, each measured on that board, each of which failed silently:
   omit them and the trains sit in their sheds while the probe reports "transit
   0%" and you go looking for a bug in the citizens. Copy `buildTrainDefs` from
   `TestStage.vue`.
+- **A LADDER OF SINGLE-FILE STREETS WITH A JUNCTION ONLY AT EACH END DEADLOCKS**
+  (2026-08-21). Marktstadt was five streets thirteen rows long, one lane each
+  way, rungs at the top and the bottom and nothing between. Two things follow and
+  together they are fatal: every trip across the village is a LAP of the whole
+  ladder, and a queue long enough to reach back into a junction box blocks the
+  stream that would have let it out. That is a cycle of full tiles with no head
+  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
+  not gridlocked by politeness) is what lets the last car into the box that
+  closes it. It does not clear: measured, 42 of 46 cars standing still for the
+  rest of a six-day run, one for 354 unbroken seconds.
+  · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
+    after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
+    car never arrives, with the town's commute bar pinned at 0.00 while its
+    neighbours recover. Car mode share sagging (0.20 → 0.11) is the same fact.
+  · **Look for FROZEN cars, not slow ones, and read `velocity` — NOT `speed`.**
+    `RoadSim.cars()` reports both; `speed` is the driver's preferred cruise and
+    is CONSTANT while the car stands still, so a stuck-car probe written against
+    it says "0 stopped" over a totally deadlocked town. That cost an hour.
+  · **The fix is capacity, and it takes BOTH halves.** A middle rung (shorter
+    trips, a second way round every jam) and two lanes each way inside the town
+    (somewhere for a blocked turn to be). Measured on the road layer alone, a
+    fleet of 40 village trips over 900s: old 436 arrived / 40 frozen; rung only
+    887 / 40; wide only 649 / 40; **both 2797 arrived / 0 frozen**. End to end,
+    the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
+    and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
+    every local trip into a full circuit.
+  · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
+    straight or bend whose neighbour has a different lane count (the renderer
+    paints it red); a junction fans and merges unequal arms by design and is
+    exempt on both sides. So a "wide town centre" zone has to have junctions at
+    its every boundary with the single-lane country roads — Marktstadt's zone is
+    x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
+  · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
+    the block signals (a road tile silently drops the signal authored on it) and
+    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+- **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
+  `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
+  and `homeparking` call it, and nothing else does. hinterland never has, so the
+  17 bays it *would* derive there were never on the board any of the jam
+  measurements came from. `workplaceParkingTiles(level)` tells you what a board
+  would get; `rowsOf(level[id])` tells you what it actually HAS.
 
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
@@ -2278,6 +2394,14 @@ Four rules, each measured on that board, each of which failed silently:
   identical in Puzzle (measured: both modes 0 delivered / 3 mismatches at 60s) —
   don't read it as a Tycoon routing bug when a headless run never completes.
 ## PARKING (cars stop, 2026-07-26)
+- WHOLE-FRACTION PITCHES REPEAT AT THE SEAM (2026-08-21): a packed row starts
+  at the tile's leading edge, so only a pitch that divides the tile exactly
+  fills it — `parallel` is 1/3 (three bays, no orphaned stub of kerb that read
+  as a fourth bay cut off mid-box) and `bikerack` 1/16. Two parking tiles side
+  by side then repeat as one continuous rank. A non-dividing pitch leaves a
+  stub the apron's seam extension paves anyway, which is the "cut-off bay"
+  playtest report. The truck/coach that would "fit" the roomier 66.7px box is
+  still refused by the bay-CLASS gate, not by size.
 - THE PAINT LIVES IN `TileParking.vue`, not `Tile.vue` (moved 2026-07-27). It needs
   THREE z-layers and cannot be dropped in at one point, so it is one component
   with a `layer` prop the caller places three times: `apron` (under the road's own
@@ -2975,6 +3099,146 @@ of the above; read that section first.
   facility came back zero and the chip read "P VOLL" — a car park, standing empty,
   announcing it is full. Nobody signs their own driveway. Mixed tiles still sign,
   with their public number.
+## THE PAVEMENT GOES ROUND THE PARKING (2026-08-05)
+- **A BAY STARTS AT THE KERB AND REACHES OUTWARD — WHICH IS WHERE THE PAVEMENT
+  WAS.** Both the paint (`pavementPaths` → `bandsFor`) and the people
+  (`pavementOffsetFor`) were offset from the CARRIAGEWAY alone
+  (`roadHalfUnits + PAVEMENT_PAD`), so the footway ran under the parked cars.
+  Measured on `/test/homeparking`: EVERY parking tile overlapped by 8 units,
+  which is the band's entire width (bay 14→27 kerbside, 14→38 for a drive,
+  against a pavement at 18→26). Now +4 clear on all of them.
+- `parkingOutsetUnits(cell, bank)` is the shared fix and BOTH callers must use
+  it: paint and people disagreeing is people walking beside the pavement.
+- **ONLY WHAT YOU CAN SEE PUSHES IT OUT** (2026-08-20). The first cut counted
+  every row, and `row.informal` — bare kerb, derived onto NEARLY EVERY STRAIGHT
+  STREET (`tiles/kerbOverflow.ts`), painting nothing — is a `parallel` row, so it
+  contributed 13 units on roads with no visible parking at all. Every pavement on
+  the board came away from its carriageway and lay in the ground as a free grey
+  ribbon; `/test/homeparking` showed it on the outer ring, the inner ring and both
+  sides. `parkingOutsetUnits` skips `informal` as it skips `busstop`.
+  · **A ONE-SIDED TEST IS WHY IT SHIPPED.** "the band clears every bay" passes
+    just as happily when the band has left the street entirely. The guard is the
+    OTHER side too: on every bank of every street, the pavement's near edge is
+    exactly `PAVEMENT_GAP` from the last solid thing on that bank (kerb, or the
+    bay standing at it) — `parkingWalk.spec.ts` → "never floats off into the
+    verge either", measured at exactly 4.0 on all 28 banks of
+    `/test/homeparking`.
+- **PER BANK, NOT PER TILE.** A street with a drive on one side and bare kerb on
+  the other has two pavements at two distances; pushing both by the wider leaves
+  the empty side's band floating in the verge. `bankOfSide` converts the walker
+  model's ±1 to the parking model's Port (`bankFor(through.from, "right"|"left")`).
+- **THE KERB IS THE BIKE'S** (2026-08-20, PR #98 × #87). A cycle lane rides the
+  kerb side of its stream (`bankFor(from, "right")`), so `deriveKerbOverflow`
+  lays no informal space on a bank whose approach has `cycleLaneIndices` — a car
+  left there would stand ON the green strip. Per BANK here too: a one-way with a
+  kerb-side cycle lane keeps its far bank's spaces (`kerbOverflow.spec.ts`).
+- **BODY WIDTHS ARE SIM CONSTANTS, NOT CSS LORE** (2026-08-21). A car is
+  `CAR_BODY_WIDTH_FRAC` (16px), a bus/lorry `LARGE_BODY_WIDTH_FRAC` (18px) —
+  `sim/laneOffset.ts`, mirrored by the `.road-car` CSS in PlayView/TestStage.
+  Sized so width÷lane matches a real street (~0.57); at the old 20px (0.71) a
+  car passing an informally parked one clipped through it. `CLIP_LANES`
+  (road.ts) and the SQUEEZE cap (laneGeometry.ts, 5px = half-lane − widest
+  half-body, with a module-load assert) are DERIVED from them — the literals
+  are what went stale last time. **The body-overlap oracle**
+  (`tests/unit/roadBodyOverlap.spec.ts` on `/test/parkpass`) rebuilds the
+  exact renderer pipeline headless and asserts no two rendered bodies ever
+  interpenetrate — moving×moving and moving×parked — with a self-test pinning
+  that the OLD geometry would have failed it. Manoeuvres never needed a fix:
+  `entering`/`leaving` carry road bodies (traffic already waits); only
+  `parked` is deliberately body-less, and the slim widths + squeeze make
+  passing it clean.
+- Clamped to `MAX_PAVEMENT_OFFSET` (50 − half the band) or a lorry lay-by, at 55
+  units deep on its own, puts the pavement half a tile into the neighbour.
+- A `busstop` is exempt: the vehicle never leaves the carriageway, so there is
+  nothing between kerb and pavement to walk around.
+- Ground units are HALF of tile pixels (100 per tile against 200) — every
+  conversion between the parking geometry and this file crosses that factor.
+
+## THE WALK FROM THE CAR (2026-08-05)
+- The bay-to-door leg (`Leg = "parking"`) was a pure COUNTDOWN of
+  `walkFromBaySec`: the cost was modelled and the person was not, so a car park
+  fed nobody into the building it served. It is a real walker now.
+- **A WALK CANNOT START AT A PLOT HERE, and that is why it needed a new entry
+  point.** `planWalk` resolves a plot to `accessTileOf` (the street it fronts
+  onto) plus `sideOfPlot` (which bank its BUILDING stands on). A parked car has
+  neither: it is already on the road tile, and which pavement it is beside is
+  decided by the bank its bay hugs. Hence `sideOfBank` + `planWalkFromKerb`
+  (`tiles/footway.ts`), and `pedestrians.requestFromKerb`.
+  · A street with a bay on EACH side has two banks, so the tile alone cannot
+    answer the question — pinned by a test that the two banks come back as
+    opposite pavements.
+  · `sideOfBank` and `sideOfPlot` must AGREE where a drive and its house share a
+    bank, or somebody walks across the road to reach the house their own car is
+    parked outside.
+- **THE PORT TAKES THE CAR'S TRIP ID, NOT A TILE** (`WalkingPort
+  .requestFromKerb(carTripId, toPlot)`). `game.ts` resolves it through
+  `roadSim.tripParkedKerb`, which keeps banks, sides and bay geometry entirely
+  out of the citizen layer — the same line terrain-blindness is drawn on.
+  · **AND A TILE IS NOT ENOUGH TO STAND SOMEBODY IN**: `tripParkedKerb` also
+    returns `at`, the car's own resting pose (`stallPose` at the stall's kerb, in
+    world TILE units), and `pedestrians.requestFromKerb` takes it as a REQUIRED
+    argument. It was optional, the one caller never passed it, and the walker was
+    duly placed at the tile's centre — which is the middle of the carriageway, so
+    the driver appeared standing in the traffic and stepped sideways out of it.
+    An optional argument with one caller is a dead argument; make it required.
+- The leg now ends when the WALKER arrives, with `legRemaining` kept as the
+  backstop (same rule as the `walking` leg): no pavement, no route, or a pavement
+  deleted underfoot falls back to the clock rather than stranding anybody.
+- Only ONE walk per journey is ever live: the `walking` leg sets `walkTrip` for
+  the approach to a platform, and the `parking` leg sets it for the last stretch.
+  They cannot overlap — a car trip has no platform approach.
+
+## THE KERB (nowhere to park, 2026-08-05)
+- **A REQUESTED CAR IS DELETED WHEN IT REACHES ITS ADDRESS**
+  (`settleRequestedTrips`, half a tile in). That is the generic "arrived"
+  retirement, NOT a parking rule — but a commuter with nowhere to park used to be
+  dispatched as a plain address trip and retired there, so cars POPPED OUT OF
+  EXISTENCE mid-street. Measured on a saturated `/test/homeparking` (commuters at
+  every house → the works): 8/15/30 cars dispatched → **1/2/12 vanished**.
+  · And `parkingFrame().givenUp` was ZERO for them: they never reached the
+    give-up path at all. Nothing was free when they were DISPATCHED, so
+    `planParkingTripNear` returned null and they were sent to the address. Fixing
+    only `giveUpAndReplan` would have fixed nothing.
+- **`ParkingRow.informal` IS THE BARE KERB** (`tiles/kerbOverflow.ts`, derived
+  LAST, after the forecourts and the drives take their banks). Two `parallel`
+  spaces on whatever kerb is left. Same numbers now read 0/0/1 vanished.
+  · IT PAINTS NOTHING — no apron, no bay lines, no kerb line, no P sign (all four
+    return early on `row.informal`), AND IT MOVES NOTHING: `parkingOutsetUnits`
+    (`tiles/footway.ts`) must skip it too, or every pavement on the board steps
+    13 units into the verge. This is not polish: the pass touches nearly every
+    street, so anything a row does to its tile, it does to the whole board.
+  · INVISIBLE UNLESS ASKED FOR: `stallFits(..., informal)` defaults FALSE, so
+    ambient traffic, the first-choice search and `capacity` (hence the P sign) all
+    look straight past it. `planParkingNear` = real parking first, kerb only if
+    that comes back empty — offering both at once sends drivers to the kerb
+    outside the gate instead of the half-empty car park behind it.
+  · NOT ON A ROAD OPENING THAT STOPS INSIDE THE MAP. `openingInsideLot`
+    (`sim/road.ts`) treats an opening on any parking tile as being inside a car
+    park and refuses to spawn/despawn there — right for an aisle, fatal here,
+    because a stub that happened to be a spawn point would silently go quiet.
+    Off-grid openings are exempt in that function already, so border streets keep
+    both their kerb and their traffic.
+- **NOWHERE TO PARK MEANS YOU DO NOT SET OFF.** `requestTrip` returns null when
+  `park` was asked for and nothing — bay, drive or kerb — is in reach. That is the
+  long-standing "no car could be dispatched" path, so the citizen still travels,
+  on a timer, with no vehicle on the board. Refusing is not stranding; dispatching
+  a car in order to delete it is a lie.
+  · **BUT ASK EVERY WAY OUT OF THE STREET FIRST** — `continue`, never `return`,
+    inside the `approachPorts` loop. `planParkingNear` searches from
+    `(tile, entry)`, so a space to the east is invisible to the westbound
+    approach, and the ports are tried in a fixed ascending order that knows
+    nothing about where the parking is. Returning on the first failure refused
+    drivers who only had to turn the other way out of their own street. The loop
+    running out of ports is the real refusal.
+- `giveUpAndReplan` used to retry through `planParkingTrip` — the AMBIENT planner,
+  any car park on the map weighted by size — even for a commuter. So somebody who
+  could not park at the works set off for a lot across town. A car with a
+  `tripGoal` now retries NEAR THAT GOAL with its own permit, then once more at
+  `PARK_LAST_RESORT_TILES`.
+- The cost of a shortfall is now a WALK, not a penalty constant:
+  `walkFromBaySec` measures from the stall the car really took, and on the rush
+  above the spread was 1→4 tiles from the gate.
+
 - `citizenStats.carsAtHome` vs `carsParked` is the DAY/NIGHT observable; one
   number cannot show the cycle because it reads the same at both ends of the day.
 - `TestScenario.mode` (a mode OBJECT, beating `modeId`) exists for boards whose
@@ -3640,8 +3904,9 @@ of the above; read that section first.
   Long bodies use full-occupancy sampling (trailer straddling a junction blocks).
 
 ## BICYCLES (phase A+B — the slow kind and the cycle lane, 2026-08-05)
-Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phases
-C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT built).
+Plan: `docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md` (phase C
+— racks + bike-and-ride — is built, see the next section; C′/D — the citizen
+mode, shared paths — are NOT).
 - `VehicleKind "bike"` is the FIRST kind with its own pace: `KIND_SPEED`
   (road.ts, bike 0.45) scales the cruise draw at BOTH spawn sites; before it,
   every kind drew from the same `carSpeed ± spread` band and only length
@@ -3662,9 +3927,9 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
 - DETERMINISM: "bike" carries no default mix weight, so `pickKind`'s draw
   sequence is unchanged on every pre-bike seeded board (pinned in
   roadBikes.spec.ts). Bikes appear only where `traffic.mix` opts in.
-- `vehicleCanPark` excludes bikes (like semis): no bay class admits one and the
-  SIZE gate would pass a bike into any car bay — the class gate is the only
-  fence. Racks are phase C; until then a bike on a parking trip could only fail.
+- `vehicleCanPark` admits bikes since phase C (racks exist) — and racks are the
+  ONLY place they may stop: the SIZE gate would pass a bike into any car bay, so
+  the bay-CLASS gate is the only fence (see BICYCLES phase C below).
 - A bike NEVER rides an inner lane: `preferredLane` short-circuits for bikes to
   the kerb-most cycle lane (else kerb-most usable lane) — no exit-lane settle,
   no keep-right delay — and it is EXEMPT from the left-turn "innermost" lane
@@ -3739,6 +4004,103 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   forced left), `/test/cyclebend` + `/test/cycleoneway` (the paint on the other
   two road shapes); sim pins in `roadBikes.spec.ts`, paint pins in
   `roadGeometry.spec.ts`.
+
+## BICYCLES phase C — the rack and bike-and-ride (2026-08-20)
+- `StallKind "bikerack"` = the busstop's MIRROR: `stallWalkIn` (tiles/parking.ts)
+  is the one predicate — no manoeuvre curve in EITHER direction (the rider stops
+  at the kerb abeam the stand, `startTOf` returns `info.t`, `exitsForward` is
+  false, `beginEntering` short-circuits straight to `parked` with
+  `parkPath = null`). A halt keeps its road body (`parkOnLane`); a rack drops it
+  (ordinary parked invariant, zero body points) — that pair of predicates is the
+  whole difference between the two no-manoeuvre kinds.
+- A parked WALK-IN vehicle has no curve for `sample()`'s parked branch (it keys
+  on `parkPath`), so road.ts has a second branch that poses it straight from
+  `stallPose(row, index, 1, info.kerb)` — same source as the painted hoops, so
+  bike and stand cannot disagree. Forget it and a racked bike renders standing
+  in its lane.
+- Rack depth is 0.09 (18px), NOT the plan's 0.08: `stallFits` measures the real
+  body (bike 17.1px) against `stallLengthPx · 0.98`, and 16px refuses the very
+  vehicle the rack exists for. Pitch 0.06 (12px — a bike is 9px wide) → 16
+  stands/tile where 3 cars fit; it shipped at 18px first and read half-empty.
+- `BayClass "bike"` admits bikes ONLY, and no other class admits a bike — both
+  directions matter, because a bike passes every size gate there is. A rack
+  cannot be `reserved` (needsBigBay would size the stands for a lorry) or
+  `resident` (the resident class only admits cars → dead stands);
+  `validateParking` refuses both.
+- THE P+R TRAP (predicted by the survey, real): `parkAndRideStationsOf`
+  qualified a station on ANY parking row in reach — the first rack would have
+  made its station a car P+R target with nowhere for a car to park. It filters
+  by bay class now (`bayAdmits("car", bayClassOf(row))`), and
+  `bikeAndRideStationsOf` is the bike sibling (same WALK radius: the
+  rack→platform leg is a walk). `CitizenWorld.bikeAndRideStations` carries it
+  for phase C′.
+- CYCLING REACH IS A RANGE, NOT A CONSTANT (`BIKE_RANGE_TILES`
+  {typical 5, max 9} + `bikeRangeOf(affinity)`, tiles/catchment.ts): most riders
+  take the bike for short hops, a sporty tail rides far — per-rider willingness
+  is drawn from the band (C′ feeds `bikeAffinity` in), targeting/reachability
+  asks `max`. Never widen the shared WALK_RADIUS_TILES instead — it also feeds
+  station demand and P+R, and inflating it re-prices every station.
+- The transfer needed ZERO new code: a rack stall going free→taken within walk
+  reach injects `transferSizeOf` = 1 rider (the default arm — only a bus stop
+  returns a busload). Pinned in parkAndRide.spec.ts ("arrived BY BIKE").
+- `/test/bikerack` (rack + kerb bays side by side, classes never cross),
+  `/test/bikeandride` (the rack feeds the platform); pins in `bikeRack.spec.ts`.
+
+## BICYCLES phase C′ — citizens ride bikes (2026-08-21)
+- `TravelMode "bike"` + `"bikeAndRide"`. EVERY `Record<TravelMode, number>` is
+  now built by `zeroModes()` and summed by ITERATING `TRAVEL_MODES`
+  (citizens.ts) — the hand-written literals/sums were the spec's named silent-
+  under-report risk, and the one literal left is game.ts's HUD seed. Adding a
+  mode = the union + TRAVEL_MODES + the UI label maps (CityPanel rows/colours,
+  CitizenInspector MODE_LABEL/ICON — Records, so the compiler chases you).
+- OWNERSHIP GATES, AFFINITY SHAPES: `profile.bikeOwner` (tuning.bikeOwnership
+  0.7) says whether the modes exist; `profile.bikeAffinity` (0..1 keenness)
+  does double duty — perceived cost via `bikeCostOf` (mapped into the SAME
+  0.7–1.4 band the other affinities draw from) and the rider's own RANGE via
+  `bikeRangeOf`. The range IS the patience: no slog curve, a hard per-rider
+  distance gate ("too-far").
+- `bikeSaddleSec` (6s flat, bike legs only) is what keeps the bike off the
+  one-tile hop — WITHOUT re-pricing the shared `walkAccessTiles` charge, which
+  stays equal across modes (the spec's explicit rule). Without it bikes beat
+  the walk from d=1 and `/test/citizenwalk` fell to a 38% walk share.
+- BIKE quote = walk template + car's road-component rule + roadDetour at
+  `bikeSpeed` 0.45 (1.8× walk, 0.75× car), NO parkPenaltySec (a bike locks at
+  the door — half of why it wins the short hops). BIKE-AND-RIDE = the P+R
+  template on two wheels: ride to `nearestBikeAndRide` (CHEBYSHEV against the
+  range, like every station-reach measure; the ride itself is priced at full
+  detoured length), lock, WALK to the platform, train, egress. New refusals
+  "no-bike"/"no-rack"; "too-far" is shared (each mode's own reach ran out).
+- A CYCLING CITIZEN IS A BIKE: `DrivingPort.request` gained `kind?: "car" |
+  "bike"` (game.ts passes it to `roadSim.requestTrip`); `FIRST_LEG` maps both
+  bike modes to a driving-shaped leg. A bike mode NEVER resumes the parked CAR
+  (`bikeMode` guard in startTrip). Like P+R's car, the B+R bike is retired at
+  the rack's street — the rack STALLS fill with the road sim's own riders; the
+  held-stall "return half" is one open debt for both modes.
+- THE RACK→PLATFORM LEG IS WALKED, never teleported (`arriveFromDrive`, mode
+  bikeAndRide): leg "walking" timed from the real rack tile + a REAL walker.
+  Two footway extensions made that possible, and they fix more than bikes:
+  · `planWalk` endpoints now take a STREET TILE itself (start on its own
+    pavement, both sides seeded — side changes still only at crossings) and a
+    STATION (nearest street beside it — before this, every "walk to the
+    platform" silently fell back to a clock because a station tile is not an
+    `isAddress`).
+  · buildSteps: no driveway stub for a street-tile endpoint (a stub starts at
+    the tile CENTRE = the middle of the carriageway), and the degenerate
+    single-tile single-SIDE walk gets a 0.45–0.55 shuffle so it has steps at
+    all. Only single-side: a step costs fixed TIME, and padding one in front
+    of a zebra held the walker past the kerb-wait the crossing tests measure.
+- KNOCK-ON SHARES, all deliberate (the spec's acceptance: bikes eat
+  WALK-OR-DRIVE share, never transit's): `/test/citizenwalk` walk share 0.89 →
+  ~0.62 (walk+bike > 0.7 pinned instead), citizencars strandings ~55 → high
+  40s (a bike rescues some of the carless — refusal pin now >35), citizenchoice
+  produces FOUR answers (bike joins walk/car/train). `stats().cycling` +
+  HUD 🚴 count the trade against `driving`.
+- `/test/citizenbike` is the flagship: houses 3+ tiles from the platform
+  (transit refused "no-station-in-reach"), rack under the station, workshop up
+  the road, works town rail-only. Pins in `tests/unit/citizenBikes.spec.ts` —
+  including "offered ⇔ bikeRangeOf(affinity) reaches the rack, exactly" and
+  the two end-to-end runs (real bikes; the rack walk observed with a live
+  `walkTrip`).
 
 ## BIKES vs MOTORCYCLES + THE WIDE STREET (#99, 2026-08-21)
 - The old "bike" split in two. The BIKE keeps the slow kerb-bound behaviour and

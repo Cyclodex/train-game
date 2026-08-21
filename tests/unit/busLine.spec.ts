@@ -140,7 +140,7 @@ describe("a bus runs a line", () => {
     // The overlay is what the tiles read. It must carry the kind, or every
     // platform offers itself while a bus line is being drawn.
     expect(game.lineOverlay.kind).toBe("road");
-    expect(game.lineOverlay.order[WEST]).toBe(1);
+    expect(game.lineOverlay.order[WEST]).toBe("1");
 
     game.setLineOverlay(null);
     expect(game.lineOverlay.kind).toBeNull();

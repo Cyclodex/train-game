@@ -229,14 +229,22 @@ function build(): Level {
   // In off the avenue at LOT_IN_X, east along the aisle, back out at LOT_OUT_X.
   // The loop is not decoration: there is no U-turn anywhere in the lane model, so
   // a dead-ended aisle would trap any driver who found the car park full.
+  // Car-park tiles carry no pavement (`footway: "none"`) — an aisle has none,
+  // and the cross-section rule would otherwise push the ranks a strip outward.
   const lotOnly = (x: number, y: number, lanes: Lane[]) =>
-    put(x, y, { connections: [], road: lanes, parking: { facility: "lot" } });
+    put(x, y, {
+      connections: [],
+      footway: "none" as const,
+      road: lanes,
+      parking: { facility: "lot" },
+    });
 
   lotOnly(LOT_IN_X, 4, [oneWay(Top, Bottom)]);
   lotOnly(LOT_IN_X, LOT_AISLE_Y, [oneWay(Top, Right)]);
   for (let x = LOT_IN_X + 1; x < LOT_OUT_X; x++) {
     put(x, LOT_AISLE_Y, {
       connections: [],
+      footway: "none" as const,
       road: [oneWay(Left, Right)],
       parking: {
         facility: "lot",

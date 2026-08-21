@@ -99,6 +99,13 @@ export function crossingRoadSpan(p: {
   downIsJunction: boolean;
   upIsJunction: boolean;
   runMax: number;
+  // ONE-WAY only: the lane count of the same-direction one-way straight
+  // neighbour UPSTREAM of the entry seam, 0/absent when the feeder is anything
+  // else. The centre-side surface adopts it at the entry edge (streetProfile
+  // `oneWayCentreBand`): after a gore the crossing tile carries the recovery
+  // taper, so its mid-tile span — and the boom lengths derived from it — match
+  // the tarmac actually painted under them.
+  upstreamCount?: number;
 }): RoadSpan {
   const W = p.size * LANE_WIDTH_FRAC;
 
@@ -119,15 +126,14 @@ export function crossingRoadSpan(p: {
   const m = Math.max(p.downLanes, p.upLanes, 1);
   const R = Math.max(p.runMax, m);
   const crossEntry = down ? p.crossDown : p.crossUp;
-  const crossExit = down ? p.crossUp : p.crossDown;
   const jEntry = down ? p.downIsJunction : p.upIsJunction;
-  const jExit = down ? p.upIsJunction : p.downIsJunction;
   const entryCount = !jEntry && crossEntry > 0 ? Math.min(m, crossEntry) : m;
-  const exitCount = !jExit && crossExit > 0 ? Math.min(m, crossExit) : m;
   const kerb = (R / 2) * W;
-  // The closing lane keeps its tarmac across a narrowing tile, so the inner edge
-  // runs at the wider of the two ends on the exit side; take the mid-tile value.
-  const inner = kerb - ((entryCount + Math.max(entryCount, exitCount)) / 2) * W;
+  // Entry edge adopts the upstream one-way's own count (recovery taper after a
+  // gore); exit edge is this tile's own — the profile's one-way centre rule.
+  // Mid-tile is their average.
+  const entryBand = p.upstreamCount && p.upstreamCount > 0 ? p.upstreamCount : entryCount;
+  const inner = kerb - ((entryBand + m) / 2) * W;
   const lanes = (kerb - inner) / W;
   return down
     ? { xMin: -kerb, xMax: -inner, lanes, flow: "down" }

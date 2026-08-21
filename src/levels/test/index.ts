@@ -89,6 +89,9 @@ import { cyclelane } from "@/levels/test/scenarios/cyclelane";
 import { bikeleftturn } from "@/levels/test/scenarios/bikeleftturn";
 import { cyclebend } from "@/levels/test/scenarios/cyclebend";
 import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
+import { bikerack } from "@/levels/test/scenarios/bikerack";
+import { bikeandride } from "@/levels/test/scenarios/bikeandride";
+import { citizenbike } from "@/levels/test/scenarios/citizenbike";
 import { widestreet } from "@/levels/test/scenarios/widestreet";
 import { motorcycles } from "@/levels/test/scenarios/motorcycles";
 import { bikedetour } from "@/levels/test/scenarios/bikedetour";
@@ -111,6 +114,7 @@ import { taxyear } from "@/levels/test/scenarios/taxyear";
 import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
+import { linerevisit } from "@/levels/test/scenarios/linerevisit";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
 import { hinterland } from "@/levels/test/scenarios/hinterland";
 import { terrain } from "@/levels/test/scenarios/terrain";
@@ -132,6 +136,7 @@ import { lakevalley } from "@/levels/test/scenarios/lakevalley";
 import { lakevalleyOpen } from "@/levels/test/scenarios/lakevalley-open";
 import { parkingkerb } from "@/levels/test/scenarios/parkingkerb";
 import { parkinglot } from "@/levels/test/scenarios/parkinglot";
+import { parkpass } from "@/levels/test/scenarios/parkpass";
 import { parkinglorry } from "@/levels/test/scenarios/parkinglorry";
 import { busstops } from "@/levels/test/scenarios/busstops";
 import { buslayby } from "@/levels/test/scenarios/buslayby";
@@ -182,7 +187,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback, citizenday] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback, citizenday] },
       {
         id: "crossings",
         label: "Crossings",
@@ -233,7 +238,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "cycling",
         label: "Cycling",
-        scenarios: [bikemix, bikeovertake, cyclelane, cyclebend, cycleoneway, bikeleftturn, widestreet, motorcycles, bikedetour],
+        scenarios: [bikemix, bikeovertake, cyclelane, cyclebend, cycleoneway, bikeleftturn, bikerack, bikeandride, widestreet, motorcycles, bikedetour],
       },
       {
         id: "routing",
@@ -243,7 +248,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, parkpass, busstops, buslayby],
       },
     ],
   },
@@ -251,7 +256,7 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, landprices, taxyear, bankrupt, daily, networkmode] },
+      { id: "modes", label: "Game modes", scenarios: [objectives, timeattack, dispatch, faredistance, heldby, buildgap, landprices, taxyear, bankrupt, daily, networkmode, linerevisit] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable

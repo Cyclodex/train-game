@@ -1,5 +1,6 @@
 import { createRoadSim, roadEntries } from "@/sim/road";
 import type { TrafficConfig } from "@/sim/road";
+import { LANE_WIDTH_FRAC, LARGE_BODY_WIDTH_FRAC } from "@/sim/laneOffset";
 import type { Level } from "@/tiles/model";
 import type { Position } from "@/types";
 
@@ -41,14 +42,17 @@ export function simFor(scenario: ScenarioLike, seed: number) {
   });
 }
 
-// A car is ~20px wide in a ~28px lane, so two same-direction bodies physically
-// CLIP when their lane centres are closer than ~0.71 lane. The swept-body check
-// treats two bodies as overlapping when, on the same tile and travel direction,
-// their LONGITUDINAL extents intersect AND their LATERAL (continuous lanePos)
-// extents are within that body width — a true 2D body overlap. Mid lane-change
-// bodies are laterally offset, so a clean pass (the car eases clear before drawing
-// level) registers no overlap, while a real clip does.
-const CLIP_LANES_TEST = 0.7; // a hair under the body-width ratio, for margin
+// Two same-direction bodies physically CLIP when their lane centres are closer
+// than the WIDEST body's width over the lane width — DERIVED from the same
+// constants the sim's own CLIP_LANES uses (sim/laneOffset.ts), so the sprites
+// slimming can never leave this test asserting against phantom 20px bodies (the
+// stale-literal trap the 2026-08-21 slimming actually sprang). The swept-body
+// check treats two bodies as overlapping when, on the same tile and travel
+// direction, their LONGITUDINAL extents intersect AND their LATERAL (continuous
+// lanePos) extents are within that body width — a true 2D body overlap. Mid
+// lane-change bodies are laterally offset, so a clean pass (the car eases clear
+// before drawing level) registers no overlap, while a real clip does.
+const CLIP_LANES_TEST = LARGE_BODY_WIDTH_FRAC / LANE_WIDTH_FRAC - 0.02; // a hair under, for margin
 
 export function worstSweptOverlap(sim: ReturnType<typeof createRoadSim>): number {
   type Ext = { id: string; tMin: number; tMax: number; lMin: number; lMax: number };
