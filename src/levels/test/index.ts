@@ -257,10 +257,17 @@ export const DOMAINS: ScenarioDomain[] = [
     id: "challenges",
     label: "Challenges",
     categories: [
-      // One demo per game mode, in the mode picker's order, each RUNNING its
-      // mode (the /test stage honours `modeId`/`mode`; a scenario without one
-      // runs Sandbox — which is why Sandbox itself needs no entry). Crossing
-      // Keeper is deliberately absent for now (#112 deprioritised).
+      // One demo per RULESET, each actually RUNNING it (the /test stage honours
+      // `modeId`/`mode`; a scenario without one runs Sandbox — which is why
+      // Sandbox itself needs no entry). That is more than the picker roster:
+      // the four picker modes that carry an objective (Puzzle, Tycoon, Network,
+      // Citizens) sit in the middle, bracketed by the two rulesets #113 took
+      // OUT of the picker but kept as gameplay — Daily (a board source:
+      // `?board=daily`) first, Time Attack (a Puzzle variant driven by
+      // `spawnAtSec`) last. Crossing Keeper is gone entirely (#121); its board
+      // lives on under Trains → Crossings as a mechanic demo.
+      // `scenarioCoverage.spec.ts` pins both halves: no mode twice, and every
+      // objective-carrying picker mode present.
       { id: "modes", label: "Game modes", scenarios: [daily, objectives, dispatch, networkmode, threecities, timeattack] },
       // The Tycoon economy deep-dives, one dial per board: fare decay by
       // distance, blocked routes, buying track, land prices, the tax year and

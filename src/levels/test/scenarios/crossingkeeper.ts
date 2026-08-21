@@ -12,8 +12,11 @@ const road = { connections: [], road: fromPairs([[Left, Right]]) };
 // cars accrue patience; once the train parks at its matching depot the gate
 // reopens and the queue flushes. The train DOES arrive at a colour-matched depot,
 // so the board is winnable (deliveriesRequired === 1) — unlike `keepcrossingclear`
-// (which bounces forever to keep a gate cycling). This is the scenario for the
-// Crossing-Keeper mode: deliver the train without letting a car wait too long.
+// (which bounces forever to keep a gate cycling). It was built for the
+// Crossing-Keeper mode, which was retired from the picker in #121; the board now
+// runs the stage's default (Sandbox) and demonstrates the CROSSING MECHANIC —
+// gate closes on reservation, queue accrues patience, gate reopens on arrival.
+// It is the board a future road-scoring mode should be pinned to.
 //
 //   Rail (vertical):  depot (1,0) → crossing (1,1) → straight (1,2) → depot (1,3)
 //   Road (horizontal): edge (0,1) → crossing (1,1) → edge (2,1)

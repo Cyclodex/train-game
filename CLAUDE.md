@@ -257,7 +257,8 @@ Key files:
   mode (`?board=daily` = today's generated board under the daily ruleset);
   `time-attack.ts` is a puzzle VARIANT (a board whose trains carry `spawnAtSec`
   gets the spawner + backlog rules from Puzzle itself; `schedule.ts` holds the
-  spawner helpers); `lastMode.ts` persists the last-opened mode. `compat.ts`
+  spawner helpers); `lastMode.ts` persists the last-REQUESTED mode (not the one
+  the URL guard resolved, or a fallback would erase the preference). `compat.ts`
   derives a board's capabilities (stations/depots/towns/roster) and each mode's
   optional `fits(caps)` names the missing requirement — the picker disables
   unfit cards and PlayView's URL guard falls back rather than loading a game

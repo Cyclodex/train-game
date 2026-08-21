@@ -60,8 +60,10 @@ files involved.
 - Depot/train colours are **deterministic and solvable** (`utils/colorAssignment.ts`,
   seeded by `gameConfig.colorSeed`), not random.
 
-**The biggest gap is no longer the objective loop — it is that only one mode
-(crossing keeper) scores the road layer at all.** See
+**The biggest gap is no longer the objective loop — it is that NO mode scores the
+road layer at all.** Crossing Keeper was the one that did, and it was retired in
+#121; the counters it fed (`maxCarWaitSec`, `carsDelivered`,
+`crossingIncidents`) are still filled every tick and read by nothing. See
 `docs/road-future-improvements.md` §1.
 
 **Worlds are no longer capped** (2026-07-25). A board is as big as its content
