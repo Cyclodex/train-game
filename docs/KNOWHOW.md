@@ -2393,6 +2393,10 @@ Four rules, each measured on that board, each of which failed silently:
   perfectly visible in the app. Shoot the ROUTE (`'#/test/<id>'`, full
   viewport) instead — and in Git Bash prefix `MSYS_NO_PATHCONV=1`, or the
   leading `#/` is rewritten to `C:/Program Files/Git/…` before node sees it.
+- WHERE IT GOES NEXT: the two-tier concept (these scripted lessons + TF-style
+  once-per-player first-encounter hints — seen-store, triggers, HUD anchors,
+  dwell dismissal) is designed in
+  `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`.
 
 ## GOALS ON THE READY CARD (M9, 2026-07-27)
 - A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate

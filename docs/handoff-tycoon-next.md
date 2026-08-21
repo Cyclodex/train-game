@@ -103,7 +103,10 @@ action; the done set survives Retry. `/test/coachmarks` demonstrates it in
 isolation (the stage CAN show marks — they gate on `phase === "playing"`, which
 the stage enters in `mounted()`; only Ready-card/campaign chrome cannot appear
 there). E2e: the lakevalley-open loop asserts appear → advance → silent.
-`KNOWHOW` → COACH-MARKS. The original brief, kept for context:
+`KNOWHOW` → COACH-MARKS. **Where it goes next** — the two-tier concept
+(scripted lessons + TF-style once-per-player first-encounter hints):
+`docs/superpowers/specs/2026-08-22-teaching-depth-design.md`. The original
+brief, kept for context:
 
 Level 1 of the campaign introduces
 build, dispatch and switch simultaneously and explains none of them. With the
