@@ -619,7 +619,9 @@ export default toNative(TestStage);
 .stage-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+  row-gap: 8px;
 }
 .stage-button {
   padding: 8px 16px;
@@ -689,6 +691,38 @@ export default toNative(TestStage);
 }
 .stage-calendar--broke {
   color: #e2574c; // next year's bill is more than there is in hand
+}
+
+// ---- Phone / short-screen layout -------------------------------------------
+//
+// The same breakpoint pair as the rest of the HUD. The bar is ~700px of chips; on
+// a 375px screen it wrapped into four rows of desktop-sized buttons and left the
+// board a sliver. Shrinking the chips (and the cars slider, the widest single
+// item) brings it back to two rows and gives the world its height back — which is
+// exactly what a landscape phone needs as well, hence the height clause.
+@media (max-width: 700px), (max-height: 500px) {
+  .test-stage {
+    gap: 8px;
+    padding: 0 8px 8px;
+  }
+  .stage-controls {
+    gap: 6px;
+    row-gap: 6px;
+  }
+  .stage-button {
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .stage-cars,
+  .stage-deliveries,
+  .stage-money,
+  .stage-calendar {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
+  .stage-cars-range {
+    width: 84px;
+  }
 }
 .level {
   display: grid;

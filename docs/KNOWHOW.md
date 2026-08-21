@@ -114,6 +114,35 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## PHONE LAYOUT (2026-08-21) — the /test gallery, and one grid trap
+- ONE breakpoint pair for the whole app: `@media (max-width: 700px), (max-height:
+  500px)`. `_hud.scss`, `BuildDock.vue`, `EditorView.vue`, `TestView.vue` and
+  `TestStage.vue` all use it. The height clause is not decoration — a landscape
+  phone is 812x375, wide but shorter than anything the desktop layout assumes.
+- **A grid item whose children are ALL `position:absolute` contributes ZERO
+  content height, so an `auto` row track cannot see its `aspect-ratio`.** While
+  the rows still fit the container nothing shows; the moment they do not, Chrome
+  collapses every track to a slice of the leftover space and the items OVERLAP.
+  Measured on `/test` at 375px: 45px tracks under 214px cards — the gallery was a
+  stack of stripes with every title and description buried under the next card,
+  and it looked fine on a desktop because four columns fit their three rows.
+  Fix: `grid-auto-rows: max-content` on the grid (`.card-grid`, TestView.vue).
+  Reach for it on ANY scrolling grid of aspect-ratio cards.
+- A breadcrumb crumb needs `white-space: nowrap` + ellipsis, or a narrow header
+  tears "One-way & lanes" into four stacked lines of one word each. Wrap BETWEEN
+  crumbs (`flex-wrap` on the row), never inside one.
+- `.stage-controls` wraps at every width, not just on phones: it is ~700px of
+  chips, so an 800px window already clipped the right-hand readouts off-screen.
+- Prose panels get a `max-height` in `vh` + `overflow-y: auto` on small screens.
+  `/test/roadlanemerge`'s description is a paragraph and took HALF a phone screen,
+  pushing the board out of view; capped at 24vh it scrolls inside its own panel
+  and nothing is hidden.
+- Scenario descriptions carry paths (`/test/lanedrop`) and arrows (`1→3→1`) with no
+  space to break at — `.card-desc` needs `overflow-wrap: anywhere`.
+- Touch pan works on the board (pointer events cover touch, `touch-action: none`);
+  there is NO pinch-zoom — mobile zooms with the −/%/+ buttons. `MIN_ZOOM` is 0.15,
+  so on a landscape phone a big world stays clipped and must be panned.
+
 ## ROLLING STOCK ART (procedural SVG, 2026-07-26)
 - Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
   `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
