@@ -129,6 +129,9 @@ lean — prune as much as you add. This file only stays useful if every task ten
 - The ambient rolling bed is a looped-noise gain ramped per FRAME from the count
   of moving trains (`sim.trainVelocity`), forced to 0 while paused and in
   `game.stop()` — real-time work lives in `frame()`, never in `advance()`.
+  TUNE IT FOR LAPTOP SPEAKERS: lowpassed noise at 180Hz/gain 0.02 is inaudible
+  on small speakers — the bed sits at 320Hz cutoff, gain 0.055–0.14, with a
+  2.8Hz LFO on the FILTER frequency (never the gain: a gain LFO hums at rest).
 - Feedback FX are model data: `game.fx` (`FeedbackFx[]`) appended in
   `handleEvents` (delivery pulse / bounce squash / cash chip with the banked
   amount), pruned in `frame()` by WALL-CLOCK age (`FX_TTL_MS` — CSS animations

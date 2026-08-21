@@ -32,10 +32,12 @@ export function cuesForEvents(events: SimEvent[]): SoundCue[] {
 
 // Ambient rolling-loop volume from how many trains are moving. Silent with the
 // board at rest; a soft floor for the first train; each further train adds a
-// diminishing step, capped so a busy board hums rather than roars.
-export const ROLLING_BASE = 0.02;
-export const ROLLING_STEP = 0.008;
-export const ROLLING_CAP = 0.05;
+// diminishing step, capped so a busy board hums rather than roars. Tuned
+// against laptop speakers: the first cut (base 0.02, lowpass 180Hz) was
+// inaudible on anything without a woofer.
+export const ROLLING_BASE = 0.055;
+export const ROLLING_STEP = 0.022;
+export const ROLLING_CAP = 0.14;
 
 export function rollingGain(movingTrains: number): number {
   if (movingTrains <= 0) return 0;

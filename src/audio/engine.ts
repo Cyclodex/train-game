@@ -52,19 +52,31 @@ function createAudioEngine(): AudioEngine {
     master = ctx.createGain();
     master.gain.value = 0.9;
     master.connect(ctx.destination);
-    // The ambient rolling bed: looped noise through a low lowpass, silent until
+    // The ambient rolling bed: looped noise through a lowpass, silent until
     // setMovingTrains ramps it up. Runs forever; its GAIN is the on/off switch.
+    // The cutoff sits at 320Hz — low enough to read as rumble, high enough that
+    // laptop speakers actually reproduce it (the first cut's 180Hz at gain 0.02
+    // was inaudible on small speakers) — and a slow LFO wobbles the cutoff so
+    // the bed surges like wheels on rail rather than hissing statically. The
+    // LFO rides the FILTER, not the gain, so it is perfectly silent at gain 0.
     const src = ctx.createBufferSource();
     src.buffer = noise();
     src.loop = true;
     const lp = ctx.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.value = 180;
-    lp.Q.value = 0.4;
+    lp.frequency.value = 320;
+    lp.Q.value = 0.7;
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = 2.8;
+    const lfoDepth = ctx.createGain();
+    lfoDepth.gain.value = 90; // Hz of cutoff wobble either side of 320
+    lfo.connect(lfoDepth).connect(lp.frequency);
     rolling = ctx.createGain();
     rolling.gain.value = 0;
     src.connect(lp).connect(rolling).connect(master);
     src.start();
+    lfo.start();
   }
 
   // Register the unlock listeners exactly once, from the first engine call made
