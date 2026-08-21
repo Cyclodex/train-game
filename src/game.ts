@@ -1274,28 +1274,49 @@ export function createGame(
   // it is handed — it stays terrain-blind. Snapshotted at construction, so a
   // stop built mid-run queues nobody until reset.
   //
-  // Under the citizen layer the SPAWNER is off — the people waiting are actual
-  // citizens with homes, jobs and a stopwatch running, and a second synthetic
-  // source would double-count the crowd. But the entry is still supplied,
-  // because `max` is also what CAPS the queue: without one every stop falls
+  // Demand is ADDITIVE (#117): a stop carries EDGE demand — the derived spawn
+  // schedule, reinterpreted as travellers the map imports from off-board — on
+  // top of whatever citizens the map explains. The two share one queue and are
+  // told apart by tags (a citizen waits under their own id; an edge rider is
+  // anonymous), so neither can double-count the other; they compete only for
+  // seats and platform room, which is the game.
+  //
+  // `TileCell.edgeDemand` is the per-stop dial: the share of the derived
+  // schedule that is edge traffic. The DEFAULT is what dissolves the old
+  // per-mode XOR without moving a single existing board: 1 (the full schedule
+  // — the old synthetic demand) where there is no citizen layer, 0 (the map
+  // explains everything) where there is one.
+  //
+  // Whatever the share, `max` survives as the CAP: under the citizen layer it
+  // is at least CITIZEN_PLATFORM_CAP, because without one every stop falls
   // back to the hard cap (16), which a morning peak in a town of forty exceeds
   // — and a commuter who cannot even JOIN the queue stands there until they
-  // give up, which reads as a broken railway when the railway is fine. An
-  // infinite interval spawns nobody, so it is a cap and nothing else.
+  // give up, which reads as a broken railway when the railway is fine.
   function demandFor(id: string): StationDemand {
-    if (citizenSetup) {
-      return {
-        intervalSec: Number.POSITIVE_INFINITY,
-        max: CITIZEN_PLATFORM_CAP,
-        initial: 0,
-      };
-    }
     // A kerb serves the houses around it; a station gathers a district. Giving
     // a stop a platform's numbers makes the bus the main line and the railway
     // an afterthought, which is backwards for a board where it is the feeder.
-    return level[id]?.role === "station"
-      ? stationDemandOf(level, id)
-      : busStopDemandOf(level, id);
+    const derived =
+      level[id]?.role === "station"
+        ? stationDemandOf(level, id)
+        : busStopDemandOf(level, id);
+    // `??`, never `||`: an authored 0 must mean OFF even where the default is 1.
+    const share = level[id]?.edgeDemand ?? (citizenSetup ? 0 : 1);
+    const max = citizenSetup
+      ? Math.max(CITIZEN_PLATFORM_CAP, derived.max)
+      : derived.max;
+    if (!(share > 0)) {
+      return { intervalSec: Number.POSITIVE_INFINITY, max, initial: 0 };
+    }
+    return {
+      // The share scales the RATE by division — half the share, twice the gap
+      // between arrivals — and the opening crowd multiplicatively. Never the
+      // cap: a dial that could quietly lower `max` would re-introduce the
+      // queue-join failure the cap exists to prevent.
+      intervalSec: derived.intervalSec / share,
+      max,
+      initial: Math.min(Math.round((derived.initial ?? 0) * share), max),
+    };
   }
 
   // Rebuilt with the sims, never before them: a Retry has to give back the same
@@ -1492,14 +1513,16 @@ export function createGame(
         seed: citizenSetup.seed ?? colorSeed,
         tuning: citizenSetup.tuning,
         // The two things the citizen sim pushes back into the world: a person
-        // who chose the train becomes a passenger on a real platform, under
-        // their own name and bound for where THEY are going — the rail sim then
-        // carries them there, changing trains if it has to, and says on its
-        // dwell events who it moved. One ledger, not two.
+        // who chose transit becomes a passenger at a real boarding point —
+        // a platform or a bus kerb, under their own name and bound for where
+        // THEY are going. Bound to the SHARED transit layer, not the rail sim
+        // (#117 step 1): the queues, the line graph and the walk links span
+        // rail and bus alike, so `connects` answers over the whole network and
+        // whichever carrier calls says on its dwell events who it moved. One
+        // ledger, not two.
         transit: {
-          enqueue: (stationId, dest, tag) =>
-            sim.enqueuePassenger(stationId, dest, tag),
-          connects: (from, to) => sim.serves(from, to),
+          enqueue: (stationId, dest, tag) => transit.enqueue(stationId, dest, tag),
+          connects: (from, to) => transit.serves(from, to),
         },
         // ...and a person who chose to drive becomes an actual car on the
         // actual street, subject to every queue, junction and level crossing on
@@ -2157,7 +2180,7 @@ export function createGame(
       manifest: bus.manifest,
     });
     bus.lastStopId = stopId;
-    busEvents.push({ stopId, ...r });
+    busEvents.push({ busId: bus.id, stopId, ...r });
     return r;
   }
 
@@ -2180,7 +2203,7 @@ export function createGame(
       manifest: bus.manifest,
       dumpAll: true,
     });
-    busEvents.push({ stopId: at, ...r });
+    busEvents.push({ busId: bus.id, stopId: at, ...r });
   }
 
   // The stop the bus is standing at, if it is standing at one at all.
@@ -2267,8 +2290,26 @@ export function createGame(
   }
 
   // What the buses did this tick, so the log and the citizen layer see a bus
-  // call exactly as they see a train's dwell.
-  const busEvents: { stopId: string; boarded: number; alighted: number; changing: number; boardedTags: string[]; alightedTags: string[] }[] = [];
+  // call exactly as they see a train's dwell. `busId` is load-bearing: the
+  // citizen mirror keeps who-is-aboard per VEHICLE id and never asks what
+  // species the vehicle is, so a call without one could strand its riders.
+  const busEvents: { busId: string; stopId: string; boarded: number; alighted: number; changing: number; boardedTags: string[]; alightedTags: string[] }[] = [];
+
+  // This tick's bus calls, in the dwell-event shape the citizen sim already
+  // mirrors (`trainId` = the bus id). One event language for every carrier —
+  // the citizen layer learns nothing new to learn the buses.
+  function busDwells(): SimEvent[] {
+    return busEvents.map(e => ({
+      type: "dwell" as const,
+      trainId: e.busId,
+      tileId: e.stopId,
+      boarded: e.boarded,
+      alighted: e.alighted,
+      changing: e.changing,
+      boardedTags: e.boardedTags,
+      alightedTags: e.alightedTags,
+    }));
+  }
 
   function updateParking() {
     const held = roadSim.parkingOccupancy();
@@ -3373,7 +3414,13 @@ export function createGame(
       // tick late.
       pedestrianSim?.step(scaled);
       pedestrianClaims = pedestrianSim?.claimedCrossings() ?? [];
-      citizenSim.step(scaled, simEvents);
+      // The bus calls join the railway's events in the same dwell shape, so a
+      // citizen on a bus is mirrored exactly like one on a train. `busEvents`
+      // still holds the PREVIOUS tick's calls here (advanceBuses runs below),
+      // so a bus boarding reaches the citizen one frame late — one frame of a
+      // dwell measured in seconds, and the price of not reordering the frame
+      // around it. Tests that step in large chunks step once more.
+      citizenSim.step(scaled, [...simEvents, ...busDwells()]);
       refreshCitizens();
       updatePedestrians();
     }

@@ -1055,6 +1055,35 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   returns the counts a dwell event reports. Boarding asks the NETWORK, never a
   single line's stop list.
 
+## DEMAND IS ADDITIVE — citizens + edge riders (#117, 2026-08-21)
+- The per-mode XOR is GONE: `demandFor` (game.ts) no longer turns the derived
+  spawn schedule off under the citizen layer. It scales it by a per-stop dial,
+  `TileCell.edgeDemand` — the share of the catchment-derived schedule that is
+  EDGE demand (travellers imported from off-map). Defaults preserve every old
+  board: 1 without citizens (the old synthetic demand), 0 with them (the map
+  explains everybody). `??`, never `||` — an authored 0 must mean OFF.
+- No double-counting BY TAGS, not by exclusion: a citizen queues under their own
+  id, an edge rider is anonymous, and `boardedTags`/`alightedTags` name exactly
+  who moved. The two compete only for seats and platform room — the game.
+- The dial scales `intervalSec` (by division) and `initial`; NEVER `max`. Under
+  citizens the cap stays ≥ `CITIZEN_PLATFORM_CAP`, or a morning peak re-hits the
+  "commuter cannot even join the queue" failure the cap exists to prevent.
+- CITIZENS RIDE BUSES (#111 step 1): a plot's `stationsInReach` are BOARDING
+  POINTS — rail stations AND busstop rows (`boardingPointsInReachOf`,
+  tiles/cities.ts). The citizen transit port binds to the SHARED transit layer
+  (`transit.enqueue`/`serves`), and bus calls are fed to `citizenSim.step` in
+  the same dwell-event shape a train emits (`trainId` = the bus id; `busDwells`
+  in game.ts). The mirror is vehicle-agnostic — `riders` keys by vehicle id.
+- Bus calls reach the citizen sim ONE TICK LATE (`advanceBuses` runs after
+  `citizenSim.step` in `advance()`); tests stepping in large chunks step once
+  more before asserting a boarding.
+- The transit quote still prices a bus leg at TRAIN speed/headway — a recorded
+  approximation, not an oversight (per-kind ride speed needs the line kind).
+- Boards: `/test/busride` (citizens on a bus, no rails at all — dead before
+  #117), `/test/edgedemand` (both crowds on one platform). Design:
+  `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —
+  also the epic's roadmap (passenger fares, vehicle costs, mode convergence).
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get

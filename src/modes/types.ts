@@ -65,9 +65,13 @@ export interface EconomySetup extends EconomySpec {
 // people, and the station spawn schedule keeps working exactly as before.
 //
 // Present → the board's towns are populated with citizens who live, work,
-// choose how to travel and judge the result. The synthetic per-station demand
-// (`stationDemandOf`) is turned OFF in that case, because the citizens ARE the
-// demand and two sources would double-count the platform.
+// choose how to travel and judge the result. Demand is ADDITIVE since #117:
+// the derived per-station schedule is reinterpreted as EDGE demand (travellers
+// imported from off-map) and scaled by the per-stop `TileCell.edgeDemand`
+// dial, whose DEFAULT under the citizen layer is 0 — so a board that says
+// nothing behaves as before, and a board that sets the dial runs citizens and
+// edge riders on one platform. No double-counting: the queue tells them apart
+// by tags, never by exclusion.
 export interface CitizenSetup {
   // Overrides on the citizen sim's tuning (day length, speeds, patience). The
   // day length is the genre dial — see sim/citizens.ts DEFAULT_TUNING.

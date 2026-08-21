@@ -1,6 +1,6 @@
 import type { Level, PlotKind, TileCell } from "@/tiles/model";
 import { parseCoordId } from "@/tiles/model";
-import { WALK_RADIUS_TILES } from "@/tiles/catchment";
+import { WALK_RADIUS_TILES, isBusStop } from "@/tiles/catchment";
 import { rowsOf } from "@/tiles/parking";
 import { bayAdmits, bayClassOf } from "@/sim/parking";
 import { makeRng } from "@/utils/globalHelpers";
@@ -107,7 +107,10 @@ export interface WorldPlot extends PlotSpec {
   // appears when they set off, and where a visitor's pulls up. `null` = no road
   // in reach, which is the same thing as `hasRoad: false`.
   roadTile: string | null;
-  // Station tiles within walking reach of this plot.
+  // BOARDING POINTS within walking reach of this plot: rail platforms AND bus
+  // stops (see `boardingPointsInReachOf`). The name predates the buses; the
+  // citizen sim treats every entry as "a place a service calls", which is why
+  // widening the list was the whole of teaching citizens to ride a bus.
   stationsInReach: string[];
 }
 
@@ -344,13 +347,22 @@ function hasNeighbourWithin(
   return false;
 }
 
-/** Station tiles within walking reach of (x,y) — the same radius as catchment. */
-export function stationsInReachOf(level: Level, x: number, y: number): string[] {
+/**
+ * BOARDING POINTS within walking reach of (x,y) — the same radius as catchment.
+ *
+ * A boarding point is anywhere the shared transit layer can queue a passenger:
+ * a rail platform (`role: "station"`) OR a bus stop (a `busstop` row). One
+ * list, because to the person planning a journey they are the same thing — a
+ * place a service calls — and the line graph (`sim/transit.ts`) already spans
+ * rail lines, bus lines and the walk links between them. Filtering this to
+ * stations was what kept citizens off the buses (#117 / #111 step 1).
+ */
+export function boardingPointsInReachOf(level: Level, x: number, y: number): string[] {
   const out: string[] = [];
   for (let dy = -WALK_RADIUS_TILES; dy <= WALK_RADIUS_TILES; dy++) {
     for (let dx = -WALK_RADIUS_TILES; dx <= WALK_RADIUS_TILES; dx++) {
       const id = `${x + dx},${y + dy}`;
-      if (level[id]?.role === "station") out.push(id);
+      if (level[id]?.role === "station" || isBusStop(level, id)) out.push(id);
     }
   }
   return out.sort();
@@ -488,7 +500,7 @@ export function buildCitizenWorld(level: Level, seed = 1): CitizenWorld {
       hasRoad: near.component !== null,
       roadComponent: near.component,
       roadTile: near.tile,
-      stationsInReach: stationsInReachOf(level, p.x, p.y),
+      stationsInReach: boardingPointsInReachOf(level, p.x, p.y),
     };
   });
   return {
