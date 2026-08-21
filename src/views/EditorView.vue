@@ -209,6 +209,10 @@
           class="tile-component"
           :switch-interactive="false"
         />
+        <!-- The town's BUILDINGS, above the traffic (see TileGround.vue) — same
+             layer the play board draws them on, so what you build here is what
+             you get there. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Canopies overhanging a line (see TileGround.vue). The editor's own
              overlay sits at z30, so every handle stays clickable and visible. -->
         <TileGround :coord-id="cell.key" layer="canopy" />

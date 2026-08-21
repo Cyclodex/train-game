@@ -506,6 +506,10 @@
           :switch-interactive="switchesEnabled && !buildArmed && !razeArmed"
           :switches-visible="switchesEnabled"
         />
+        <!-- The town's BUILDINGS, drawn above the walkers and the cars so a
+             resident leaving their own front door passes behind the house
+             instead of over its roof. See TileGround.vue. -->
+        <TileGround :coord-id="cell.key" layer="structures" />
         <!-- Forest canopies overhanging a line, drawn ABOVE the trains so a
              train passes under the foliage. See TileGround.vue. -->
         <TileGround :coord-id="cell.key" layer="canopy" />
@@ -2769,14 +2773,16 @@ export default toNative(PlayView);
   font-size: 18px;
   line-height: 1;
 }
-// The edge hit-zone overlay: above the rails, but BELOW the road cars (6) and
-// the fare pins (8) so a waiting train stays dispatchable mid-build.
+// The edge hit-zone overlay, above every piece of board art the ghost route can
+// cross — including the town's roofs (`.tile-structures`, z7), which at the old
+// z5 covered a preview rail drawn through a plot. The fare pins stay above it,
+// so a waiting train is still dispatchable mid-build.
 .build-overlay {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  z-index: 5;
+  z-index: 8;
 }
 // Edge hit-zones + wedge cues, matching the editor's look so the gesture reads
 // as the same tool (both stylesheets are scoped, so the rules can't be shared).

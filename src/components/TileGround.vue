@@ -37,6 +37,7 @@ import {
   tileCanopySvg,
   tileGroundSvg,
   tileScatterSvg,
+  tileStructuresSvg,
 } from "@/tiles/terrain";
 import { accessPathSvg, accessPortOf } from "@/tiles/access";
 import { crossingPaths, pavementPaths } from "@/tiles/footway";
@@ -59,13 +60,19 @@ import { crossingPaths, pavementPaths } from "@/tiles/footway";
 //    order decides — and the later tile won, chewing a notch out of the
 //    pavement at EVERY tile seam. A pavement that stops short of the boundary
 //    is not a pavement; it is a row of paving slabs.
-//  - "scatter": the standing objects (trees, buildings, boulders, ridges) at
-//    z1, ABOVE every tile's patch fill. The split exists because tiles render
-//    in DOM order: a later tile's opaque patch used to decapitate any canopy
-//    that legitimately overhung the seam. With all patches below all scatter,
-//    an overhanging crown survives — which is also what lets deep-forest trees
+//  - "scatter": the standing SCENERY (trees, boulders, ridges) at z1, ABOVE
+//    every tile's patch fill. The split exists because tiles render in DOM
+//    order: a later tile's opaque patch used to decapitate any canopy that
+//    legitimately overhung the seam. With all patches below all scatter, an
+//    overhanging crown survives — which is also what lets deep-forest trees
 //    stand right on a shared seam. Still under roads/rails (later DOM, z>=1).
 //  - "markings": paint ON the tarmac (the zebra), above the road surface (z2).
+//  - "structures": what people BUILT — houses, terraces, blocks, works sheds —
+//    at z7, ABOVE the walkers and the cars (both z6). A building is TALL, and a
+//    citizen's walk starts at their own front door and crosses the plot to the
+//    kerb: down at z1 with the scenery, the figure slid over the roof on its
+//    way out. See the .tile-structures rule for why lifting it over the traffic
+//    is safe.
 //  - "canopy": forest crowns overhanging a corridor, above the trains (z5).
 //
 // Cosmetic only: nothing here feeds the simulation. See tiles/terrain.ts.
@@ -79,7 +86,7 @@ class TileGround extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ type: String, required: true }) coordId!: string;
   @Prop({ type: String, default: "ground" })
-  layer!: "ground" | "paving" | "scatter" | "canopy" | "markings";
+  layer!: "ground" | "paving" | "scatter" | "structures" | "canopy" | "markings";
 
   units = GROUND_UNITS;
 
@@ -209,9 +216,11 @@ class TileGround extends Vue {
     const build =
       this.layer === "canopy"
         ? tileCanopySvg
-        : this.layer === "scatter"
-          ? tileScatterSvg
-          : tileGroundSvg;
+        : this.layer === "structures"
+          ? tileStructuresSvg
+          : this.layer === "scatter"
+            ? tileScatterSvg
+            : tileGroundSvg;
     return build(
       kind,
       this.coordId,
@@ -243,6 +252,7 @@ export default toNative(TileGround);
 .tile-ground,
 .tile-paving,
 .tile-scatter,
+.tile-structures,
 .tile-canopy,
 .tile-markings {
   position: absolute;
@@ -282,6 +292,28 @@ export default toNative(TileGround);
   // tarmac. A zebra on a level crossing therefore sits under the rails, which
   // is the right way round.
   z-index: 2;
+}
+// BUILDINGS, above the traffic. Everything else a tile stands on its ground is
+// scatter at z1; a house is not. A citizen's walk starts at their own front
+// door and crosses the plot to the kerb, so at z1 the figure slid across the
+// roof on its way out — reported as "people walk over the houses". At z7 they
+// step out from BEHIND the house, and anyone whose route passes a plot is
+// hidden by it and comes out the other side, which is what a town seen from
+// above should look like.
+//
+// Safe over the traffic because placement already forbids the overlap:
+// `corridorsFor` feeds every rail and road of the cell AND its four
+// side-neighbours into the keep-out, and each placed building pushes its own
+// footprint on as a blocker — so no roof can cover a train, a car or a stretch
+// of carriageway. Same argument the canopy layer already runs on.
+//
+// Same z as `.tile-canopy` and mounted BEFORE it in every view, so within a
+// cell a crown still overhangs the roof beside it. Across cells DOM order
+// decides, which only shows where a forest tile's overhanging crown reaches
+// onto an urban tile drawn later — a roof edging over a branch tip, not worth
+// a band of its own.
+.tile-structures {
+  z-index: 7;
 }
 .tile-canopy {
   // Above the rails (z2), the trains (wagons z3 / loco z4) AND the road cars
