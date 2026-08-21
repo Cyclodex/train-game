@@ -169,8 +169,10 @@ export interface Corridor {
   half: number;
 }
 
-// Rails sit `railDistanceFromPath` (7px of 200 = 3.5 units) either side of the
-// centreline, on sleepers a little wider — ~8 units of track edge to edge.
+// Rails sit `railDistanceFromPath` (5.5px of 200 = 2.75 units) either side of
+// the centreline, on sleepers a little wider — ~8 units of track edge to edge.
+// This half-width follows the SLEEPER, not the rail, so moving the rails in or
+// out does not change what the right-of-way clears.
 const RAIL_HALF = 8;
 // One lane is 14 units wide (roadGeometry's size * 0.14); a road's half-width
 // is its widest approach, since each direction's lanes sit on their own side.

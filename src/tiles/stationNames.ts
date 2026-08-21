@@ -47,5 +47,16 @@ export function stationNames(level: Level): Record<string, string> {
         ? LETTERS[at]
         : `${LETTERS[Math.floor(at / 26) - 1]}${LETTERS[at % 26]}`);
   });
+  // A BUS STOP is a stop on a line too (#90), so it needs a name for the same
+  // reason a platform does — a bus line that reads "6,4 → 2,4" is a list of
+  // coordinates, not a timetable. Its name is the one already authored on the
+  // facility (the sign on the board says the same thing), falling back to the
+  // kerb's own letter-free id rather than inventing a second naming scheme.
+  for (const id of Object.keys(level)) {
+    if (id in out) continue;
+    const rows = level[id]?.parking?.rows;
+    if (!rows?.some(r => r.kind === "busstop")) continue;
+    out[id] = level[id]?.parking?.label ?? id;
+  }
   return out;
 }

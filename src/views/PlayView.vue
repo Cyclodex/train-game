@@ -113,6 +113,18 @@
         >
           + Train
         </button>
+        <!-- A bus is planned exactly like a train (#90). It needs no depot:
+             a bus lives on its line and appears at its first stop, so the
+             only thing that gates the order is having a stop to appear at. -->
+        <button
+          v-if="hasBusStops"
+          class="service-buy"
+          :disabled="!canBuyBus"
+          :title="buyBusTitle"
+          @click="buyBus"
+        >
+          + Bus
+        </button>
       </div>
       <!-- THE LINES. A line is a plan and stands on its own: you draw it
            before you own anything to run it, and it survives the last train
@@ -133,16 +145,21 @@
           </template>
           <span v-else class="service-idle">no stops yet</span>
         </span>
+        <!-- What RUNS it. A line does not care what serves it, so this counts
+             trains and buses together and "nothing" means neither. -->
         <span
           class="service-runners"
-          :class="{ 'service-runners--none': l.trains.length === 0 }"
+          :class="{ 'service-runners--none': l.trains.length + l.buses.length === 0 }"
           :title="
-            l.trains.length
-              ? `${l.trains.length} train(s) running this line`
+            l.trains.length + l.buses.length
+              ? `${l.trains.length} train(s), ${l.buses.length} bus(es) running this line`
               : 'Nothing is running this line — people will wait for it'
           "
-          >{{ l.trains.length }}🚆</span
         >
+          <template v-if="l.trains.length">{{ l.trains.length }}🚆</template>
+          <template v-if="l.buses.length">{{ l.buses.length }}🚌</template>
+          <template v-if="l.trains.length + l.buses.length === 0">0</template>
+        </span>
         <button
           class="service-edit"
           :class="{ 'service-edit--on': editingLineId === l.id }"
@@ -166,6 +183,7 @@
                clears, so the queue is visible instead of the button looking
                like it did nothing. -->
           <span v-if="t.queued" class="service-queued" title="Waiting in the shed">🏠</span>
+          <span v-if="t.load" class="service-load" :title="`${t.load} aboard`">{{ t.load }}</span>
         </span>
         <!-- The stops as PLACES, not numbers: a line reads "A → C → D", and
              the one the train is heading for is lit. Hovering gives the tile
@@ -192,7 +210,10 @@
           @change="assignTrain(t.id, $event)"
         >
           <option value="">— no line —</option>
-          <option v-for="l in game.lines" :key="l.id" :value="l.id">
+          <!-- Only lines a TRAIN can actually run: a rail line, or one still
+               empty. Offering a bus line here would strand the train on stops
+               it has no rails to reach. -->
+          <option v-for="l in linesFor('rail')" :key="l.id" :value="l.id">
             {{ l.name }}
           </option>
         </select>
@@ -212,8 +233,43 @@
           {{ t.retiring ? "↩" : "✕" }}
         </button>
       </div>
+      <!-- THE BUSES. Same row shape as a train: what it is, what it carries,
+           which line it runs. It has no depot to be withdrawn to, so there is
+           one removal verb rather than the train's two. -->
+      <div v-for="b in game.busServices" :key="b.id" class="service-line">
+        <span class="service-livery service-livery--bus">🚌</span>
+        <span class="service-id">{{ b.id }}</span>
+        <span class="service-stops">
+          <span v-if="b.lineId" class="service-stop"
+            >{{ busLineName(b) }} — {{ b.passengers }}/{{ b.seats }} aboard</span
+          >
+          <span v-else class="service-idle">no line</span>
+        </span>
+        <select
+          class="service-assign"
+          :value="b.lineId ?? ''"
+          title="Put this bus onto a line"
+          @change="assignBus(b.id, $event)"
+        >
+          <option value="">— no line —</option>
+          <!-- The mirror of the train's list: bus lines and empty ones only. -->
+          <option v-for="l in linesFor('road')" :key="l.id" :value="l.id">
+            {{ l.name }}
+          </option>
+        </select>
+        <button
+          class="service-retire"
+          title="Take this bus off the road"
+          @click="game.removeBus(b.id)"
+        >
+          ✕
+        </button>
+      </div>
+      <!-- The hint names what is CLICKABLE right now, which changes once the
+           first stop fixes the line's kind: a rail line takes platforms, a bus
+           line takes kerbs, and never both. -->
       <p v-if="editingLineId" class="service-hint">
-        Click stations on the board to build <b>{{ editingLineName }}</b> —
+        Click {{ pickHint }} on the board to build <b>{{ editingLineName }}</b> —
         click a stop again to remove it.
       </p>
     </div>
@@ -404,7 +460,7 @@
         :class="{
           'level-tile--build-glow': buildArmed && buildGlowId === cell.key,
           'level-tile--razeable': razeArmed && canRaze(cell.key),
-          'level-tile--pickable': lineEditing && isStationTile(cell.key),
+          'level-tile--pickable': isPickable(cell.key),
         }"
         :style="{
           width: config.tileSize + 'px',
@@ -503,7 +559,7 @@
         </svg>
       </div>
       <div
-        v-for="car in roadCars"
+        v-for="car in roadCarsView"
         :key="car.id"
         :class="['road-car', `road-car--${car.part}`, { 'road-car--inspect': config.debug }]"
         :style="{
@@ -516,6 +572,15 @@
         @click.stop="onCarClick(car.id)"
       >
         <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
+        <!-- A SERVICE VEHICLE'S LOAD, the same gauge a train wears (Train.vue).
+             Only a bus running a line has one: an ordinary car is somebody's own
+             journey, not a service with seats to sell. -->
+        <span v-if="car.load" class="vehicle-load" :title="car.load.title">
+          <span
+            class="vehicle-load-fill"
+            :style="{ width: car.load.pct + '%', background: car.load.colour }"
+          />
+        </span>
         <span
           v-if="config.debug && car.part !== 'trailer'"
           class="road-car-id"
@@ -740,7 +805,7 @@ import {
   createRouteDrawController,
   type RouteDrawController,
 } from "@/routeDrawController";
-import { createGame, FareBadge, Game, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, RoadCar, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
@@ -932,6 +997,13 @@ class PlayView extends Vue {
     saveLastModeId(this.mode.id);
     this.best = loadBest(this.levelId);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
+    // The bus lines this board was authored with (`?board=<scenario>`), each
+    // with a bus on it — the same seeding /test does, so a board plays the way
+    // it demonstrates. A train comes with the level; a bus lives on its line,
+    // so it can only be placed once the line exists.
+    for (const stops of this.board?.busLines ?? []) {
+      this.game.buyBus(this.game.createLine(stops));
+    }
     if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     // Test hook: expose the live game so e2e can read simulation state without
     // depending on Vue's internal instance shape.
@@ -1380,11 +1452,53 @@ class PlayView extends Vue {
   get editingLineName(): string {
     return this.game.lines.find(l => l.id === this.editingLineId)?.name ?? "";
   }
+  get pickHint(): string {
+    const kind = this.lineKindOf(this.editingLineId);
+    if (kind === "rail") return "stations";
+    if (kind === "road") return "bus stops";
+    return this.hasBusStops ? "stations or bus stops" : "stations";
+  }
   lineIdOf(trainId: string): string {
     return this.game.lines.find(l => l.trains.includes(trainId))?.id ?? "";
   }
+  // The lines a vehicle of this kind can run: its own kind, plus any line still
+  // empty — an empty line has no kind yet, and buying the vehicle first is a
+  // perfectly ordinary order of doing things.
+  linesFor(kind: "rail" | "road"): { id: string; name: string }[] {
+    return this.game.lines.filter(l => {
+      const k = this.lineKindOf(l.id);
+      return k === null || k === kind;
+    });
+  }
   isStationTile(tileId: string): boolean {
     return this.level[tileId]?.role === "station";
+  }
+  isBusStopTile(tileId: string): boolean {
+    return this.game.busStopTiles.includes(tileId);
+  }
+  // What KIND of vehicle can serve a stop: a platform is rail, a kerb is road.
+  stopKindOf(tileId: string): "rail" | "road" | null {
+    if (this.isStationTile(tileId)) return "rail";
+    if (this.isBusStopTile(tileId)) return "road";
+    return null;
+  }
+  // A LINE has a kind too — the kind of the stops on it — and an empty one has
+  // none yet, so the first click decides. A line must not MIX the two: no train
+  // can call at a kerb and no bus can call at a platform, so a mixed line is one
+  // its own vehicle can never run (the bus simply never spawns, silently). The
+  // intermodal journey is two lines meeting at a walk link (D5), not one line
+  // pretending to be both.
+  lineKindOf(lineId: string | null): "rail" | "road" | null {
+    return this.game.lines.find(l => l.id === lineId)?.kind ?? null;
+  }
+  // A tile you may click right now to add to (or remove from) the line open in
+  // the panel.
+  isPickable(tileId: string): boolean {
+    if (!this.lineEditing) return false;
+    const kind = this.stopKindOf(tileId);
+    if (!kind) return false;
+    const lineKind = this.lineKindOf(this.editingLineId);
+    return lineKind === null || lineKind === kind;
   }
   // The service, as the panel shows it: every train with its stops and the one
   // it is heading for right now.
@@ -1395,6 +1509,8 @@ class PlayView extends Vue {
     nextStop?: string;
     queued: boolean;
     retiring: boolean;
+    // "3/16" for a passenger train, "" for anything with no seats.
+    load: string;
   }[] {
     return Object.keys(this.game.trainColors)
       .filter(id => !this.game.removedTrains.includes(id))
@@ -1408,6 +1524,7 @@ class PlayView extends Vue {
         nextStop: this.game.trainNextStops[id],
         queued: this.game.queuedTrains.includes(id),
         retiring: this.game.retiringTrains.includes(id),
+        load: this.loadLabel(id),
       }));
   }
   // Ordering only needs a depot to exist. A busy one does not refuse the sale
@@ -1415,12 +1532,84 @@ class PlayView extends Vue {
   // clears (Transport Fever's rule: a full depot delays the departure, not the
   // purchase).
   get canBuyTrain(): boolean {
+    // A bus line open in the panel: the train would be bought straight onto
+    // stops it cannot reach, so the order is refused rather than silently
+    // producing a train that never moves.
+    if (this.lineKindOf(this.editingLineId) === "road") return false;
     return this.game.depotTiles.length > 0;
   }
   get buyTitle(): string {
+    if (this.lineKindOf(this.editingLineId) === "road") {
+      return "The line you are editing is a bus line — buy a bus for it";
+    }
     return this.canBuyTrain
       ? "Order another train, in service on the line you are editing"
       : "This board has no depot to build a train in";
+  }
+  // A bus needs no depot: it lives on its line and appears at its first stop.
+  // What it does need is somewhere to appear — a board with no bus stops has
+  // no bus service to plan, so the button is not offered at all.
+  get hasBusStops(): boolean {
+    return this.game.busStopTiles.length > 0;
+  }
+  get canBuyBus(): boolean {
+    // The mirror of canBuyTrain: a rail line open means the bus would be bought
+    // onto platforms it cannot drive to.
+    if (this.lineKindOf(this.editingLineId) === "rail") return false;
+    return this.hasBusStops;
+  }
+  get buyBusTitle(): string {
+    if (this.lineKindOf(this.editingLineId) === "rail") {
+      return "The line you are editing is a rail line — buy a train for it";
+    }
+    return this.editingLineId
+      ? "Order a bus, in service on the line you are editing"
+      : "Order a bus — assign it to a line to put it to work";
+  }
+  buyBus(): void {
+    // Bought onto the line being drawn, when one is: that is almost always why
+    // you are buying. Otherwise it waits on the roster to be assigned.
+    this.game.buyBus(this.editingLineId ?? undefined);
+  }
+  busLineName(b: { lineId?: string }): string {
+    return this.game.lines.find(l => l.id === b.lineId)?.name ?? "";
+  }
+  // The same number the gauge on the board draws, for the panel row: a vehicle
+  // is easier to compare in a list than to chase across the map.
+  loadLabel(vehicleId: string): string {
+    const at = this.game.vehicleLoads?.[vehicleId];
+    return at && at.seats > 0 ? `${at.aboard}/${at.seats}` : "";
+  }
+  // The cars as the board draws them, each carrying its own load gauge (or none).
+  // The gauge is attached HERE rather than looked up per binding in the
+  // template: the markup needs it three times, and vue-tsc cannot narrow a
+  // function call to non-null across three separate calls.
+  get roadCarsView(): (RoadCar & {
+    load: { pct: number; colour: string; title: string } | null;
+  })[] {
+    return this.roadCars.map(car => ({
+      // The gauge belongs to the VEHICLE and rides its leading unit: a semi is
+      // drawn as a cab and a trailer, and two gauges on one lorry would be two
+      // lorries as far as the eye is concerned.
+      ...car,
+      load: car.unit === 0 ? this.carLoad(car.vehicleId) : null,
+    }));
+  }
+  // The load gauge for a road vehicle, or null for one that is not a service.
+  // Keyed by the CAR's id, which is what a bus is drawn under — `vehicleLoads`
+  // is written that way for exactly this lookup.
+  carLoad(carId: string): { pct: number; colour: string; title: string } | null {
+    const at = this.game.vehicleLoads?.[carId];
+    if (!at || at.seats <= 0) return null;
+    return {
+      pct: Math.max(0, Math.min(100, Math.round((at.aboard / at.seats) * 100))),
+      colour: at.colour || "#cbd5e1",
+      title: `${at.aboard}/${at.seats} aboard`,
+    };
+  }
+  assignBus(busId: string, ev: Event): void {
+    const lineId = (ev.target as HTMLSelectElement).value;
+    this.game.assignBus(busId, lineId === "" ? null : lineId);
   }
   buyTrain(): void {
     // A train bought while a line is open goes straight onto it — the common
@@ -1516,7 +1705,7 @@ class PlayView extends Vue {
   // means: bulldoze, edit a line, or nothing.
   onTileClicked(tileId: string): void {
     if (this.panning) return;
-    if (this.lineEditing && this.isStationTile(tileId)) {
+    if (this.isPickable(tileId)) {
       this.editLineAt(tileId);
       return;
     }
@@ -1905,6 +2094,12 @@ class PlayView extends Vue {
   // keeps a semi's cab and trailer in one livery.
   carColor(id: string): string {
     const base = id.split("#")[0];
+    // A SERVICE VEHICLE WEARS ITS LINE'S COLOUR, like the train does: the bus on
+    // the green line is green, and so are the people waiting for it and its row
+    // in the panel. An ordinary car keeps a colour from the traffic palette —
+    // it is somebody's own journey, not a service anyone is waiting for.
+    const service = this.game.vehicleLoads?.[base];
+    if (service?.colour) return service.colour;
     const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
   }
@@ -2166,6 +2361,29 @@ export default toNative(PlayView);
   left: 60%; // toward the front (local +x is the direction of travel)
   width: 26%;
   background: rgba(185, 222, 255, 0.9);
+  border-radius: 2px;
+}
+/* The load gauge on a service vehicle. Same shape and reading as a train's
+   (Train.vue) — one gauge for one meaning, whatever is carrying you. It rides
+   with the body, so it needs no counter-rotation. */
+.vehicle-load {
+  position: absolute;
+  left: 10%;
+  top: 50%;
+  width: 48%;
+  height: 7px;
+  transform: translateY(-50%);
+  // Light track, dark rim — same reasoning as the train's gauge: the empty part
+  // has to be visible against the vehicle's own paint, whatever colour that is.
+  background: rgba(236, 242, 248, 0.85);
+  border: 1px solid rgba(12, 16, 22, 0.75);
+  border-radius: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.vehicle-load-fill {
+  display: block;
+  height: 100%;
   border-radius: 2px;
 }
 // A rigid truck's cab is only the front of its longer body, so its windscreen is
@@ -2766,6 +2984,14 @@ export default toNative(PlayView);
   opacity: 0.75;
   font-size: 11px;
 }
+/* "3/16" beside a vehicle's id: the same reading as the gauge on the board, in
+   a form you can compare down a list. */
+.service-load {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
 .service-idle {
   color: #8b939c;
   font-style: italic;
@@ -2787,6 +3013,15 @@ export default toNative(PlayView);
 /* How many trains run a line. Zero is a legitimate state — the plan stands
    whether or not anything serves it — but it is the thing to fix, so it is
    coloured as a warning rather than left to look like any other number. */
+/* A bus has no livery colour of its own — it belongs to whichever line it is
+   assigned to, and that line already wears the colour. The glyph is enough to
+   tell the row apart from a train's. */
+.service-livery--bus {
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+}
 .service-runners {
   font-size: 11px;
   color: #b9c0c8;

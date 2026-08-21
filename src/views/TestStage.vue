@@ -124,7 +124,7 @@
         <TileGround :coord-id="cell.key" layer="canopy" />
       </div>
       <div
-        v-for="car in roadCars"
+        v-for="car in roadCarsView"
         :key="car.id"
         :class="['road-car', `road-car--${car.part}`, { 'road-car--inspect': config.debug }]"
         :style="{
@@ -137,6 +137,15 @@
         @click.stop="onCarClick(car.id)"
       >
         <span v-if="car.part !== 'trailer'" class="road-car-glass"></span>
+        <!-- The load gauge a service vehicle wears, the same one the play board
+             draws (PlayView.vue): a scenario that shows buses has to show what
+             they are carrying, or /test/busrail is a bus-shaped rectangle. -->
+        <span v-if="car.load" class="vehicle-load" :title="car.load.title">
+          <span
+            class="vehicle-load-fill"
+            :style="{ width: car.load.pct + '%', background: car.load.colour }"
+          />
+        </span>
         <span
           v-if="config.debug && car.part !== 'trailer'"
           class="road-car-id"
@@ -213,7 +222,7 @@ import { Component, Inject, Prop, Provide, Vue, toNative } from "vue-facing-deco
 import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
-import { createGame, FareBadge, Game, MoneyState, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, MoneyState, RoadCar, TrainDef } from "@/game";
 import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
@@ -377,6 +386,13 @@ class TestStage extends Vue {
     this.$nextTick(() => this.fitWorld());
     window.addEventListener("resize", this.onWindowResize);
     this.game.start();
+    // The bus lines the board was authored with, each with a bus on it. A train
+    // arrives with the level (it sits in a depot); a bus lives on its line, so
+    // there is nothing to place until the line exists — which is why this is
+    // here and not in the level data.
+    for (const stops of this.scenario.busLines ?? []) {
+      this.game.buyBus(this.game.createLine(stops));
+    }
     // The test world has no start overlay, so drive the objective to Playing
     // immediately — this is what lets mode mechanics that only run while live
     // (e.g. Time Attack's scheduled spawner) actually fire.
@@ -431,8 +447,29 @@ class TestStage extends Vue {
   // Stable colour per vehicle from the number in its base id (car0, car1, …). The
   // render id is `${carId}#${segment}`, so strip the segment suffix first — this
   // keeps a semi's cab and trailer in one livery.
+  // The cars with their gauges attached, and a service vehicle painted in its
+  // line's colour — both exactly as the play board does them (PlayView.vue).
+  get roadCarsView(): (RoadCar & {
+    load: { pct: number; colour: string; title: string } | null;
+  })[] {
+    return this.roadCars.map(car => ({
+      ...car,
+      load: car.unit === 0 ? this.carLoad(car.vehicleId) : null,
+    }));
+  }
+  carLoad(carId: string): { pct: number; colour: string; title: string } | null {
+    const at = this.game.vehicleLoads?.[carId];
+    if (!at || at.seats <= 0) return null;
+    return {
+      pct: Math.max(0, Math.min(100, Math.round((at.aboard / at.seats) * 100))),
+      colour: at.colour || "#cbd5e1",
+      title: `${at.aboard}/${at.seats} aboard`,
+    };
+  }
   carColor(id: string): string {
     const base = id.split("#")[0];
+    const service = this.game.vehicleLoads?.[base];
+    if (service?.colour) return service.colour;
     const n = parseInt(base.replace(/\D/g, ""), 10) || 0;
     return this.carPalette[n % this.carPalette.length];
   }
@@ -749,6 +786,27 @@ export default toNative(TestStage);
 }
 // A rigid truck's cab is only the front of its longer body, so its windscreen is
 // a small pane right at the nose rather than a wide window like a car's.
+/* The service vehicle's load gauge — same shape and reasoning as the play
+   board's (PlayView.vue): a light trough so the empty part reads against the
+   vehicle's own paint, riding with the body so it needs no counter-rotation. */
+.vehicle-load {
+  position: absolute;
+  left: 10%;
+  top: 50%;
+  width: 48%;
+  height: 7px;
+  transform: translateY(-50%);
+  background: rgba(236, 242, 248, 0.85);
+  border: 1px solid rgba(12, 16, 22, 0.75);
+  border-radius: 3px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.vehicle-load-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
 .road-car--truck .road-car-glass {
   left: 76%;
   width: 13%;

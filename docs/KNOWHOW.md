@@ -565,11 +565,22 @@ lean — prune as much as you add. This file only stays useful if every task ten
   coordinates nobody can match to the board.
 - The name is an HTML plate, NOT SVG text: a fixed shield cannot size itself to
   a word, and the first cut crushed "Nordstadt" into 18px.
-- `game.lineOverlay` (set via `setLineOverlay(trainId | null)`) is what the
-  board draws while a line is edited: a big call-order badge per stop, a
-  hollow "+" on the stations you could still add, and the route along the
+- `game.lineOverlay` (set via `setLineOverlay({lineId} | {trainId} | null)`) is
+  what the board draws while a line is edited: a big call-order badge per stop,
+  a hollow "+" on the stops you could still add, and the route along the
   metals. It is ENGINE work — the route is planned with the same
   `planRailRoute` the trains drive, so the picture cannot disagree with them.
+- IT DIED SILENTLY FOR FOUR WEEKS (found 2026-08-20). `Tile.vue` gated the badge
+  and the route on `overlay.trainId`, from when a line was edited from a TRAIN's
+  row; D11 made the LINE the thing you edit and `setLineOverlay({lineId})`
+  leaves `trainId` null — so nothing drew at all, on any line, and no test
+  noticed because the overlay's DATA was still correct. Gate a view on "is the
+  overlay open", never on which door opened it.
+- The hollow "+" is an OFFER, so it only appears on a stop the open line could
+  actually take (`overlay.kind`); a stop already on the line keeps its number
+  regardless, because that is a fact rather than an invitation.
+- The badge is its OWN svg layer, not a group inside the station layer: a bus
+  stop is a stop too (#90), and that layer only renders for a platform.
 - The overlay stores the SEGMENTS driven per tile (`[entry, exit][]`), never
   just tile ids: on a junction, tile-level lighting paints every arm — the
   depot spur included — and the drawn line then shows a route the train never
@@ -754,6 +765,191 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - A lineless train no longer dumps its whole load at the next call. It carries
   each rider to the station they named (`off = final`), because a stopper calls
   everywhere it passes and can promise that. Only a RETIRING train dumps.
+
+## A BUS IS PLANNED LIKE A TRAIN (#90, 2026-08-05)
+- Draw a LINE, buy a bus, assign it. The line registry, the queues and the
+  boarding exchange are the shared `sim/transit.ts` — only the MOVEMENT differs,
+  and that stays with each sim (metals and interlocking vs lanes and junctions).
+- The road sim gained a SERVICE vehicle: one that stays on the board when it
+  arrives instead of ceasing to be traffic, plus `retarget(carId, toTile)` to
+  send it on from where it stands. An ordinary `requestTrip` still removes the
+  vehicle on arrival — the citizen got home — but a bus that vanished at every
+  stop would be a different bus each leg.
+- A bus is dispatched to its FIRST stop and works it before pulling away. It
+  spawns there with its doors open; without the call, that stop is skipped once,
+  at the start.
+- A line is a CYCLE for a bus exactly as for a train (`% stops.length`): past
+  the last stop it wraps to the first, and it runs for ever. There is no end of
+  shift and no garage — a bus lives on its line.
+- `pruneLineIfUnused` counts trains AND buses. Withdrawing the last train must
+  not delete a line a bus is still working.
+- A WITHDRAWN BUS SETS ITS RIDERS DOWN (`setDownAll`, 2026-08-20). `removeBus`
+  and `assignBus(id, null)` used to drop the manifest with the vehicle: people
+  the player was carrying, gone, with nothing in the count to explain it. It
+  mirrors the retiring train's `dumpAll` and dumps at the stop under the bus,
+  else the last one it worked (`lastStopId`). Reassigning to ANOTHER line dumps
+  too — `off` was decided from the old line (D7), so those riders would be
+  carried to a stop the bus no longer calls at, for ever.
+- `retarget`'s BOOLEAN MUST BE ACTED ON (2026-08-20). It fails when the bus
+  cannot be routed on from the lane it stands in. Ignoring it left the trip
+  "arrived" with the dwell run out, so the next tick re-ran the exchange at the
+  same kerb: the queue boarded again, and a call that never happened went in the
+  log, every `BUS_DWELL_SEC`. Three responses, in order:
+    · a TERMINUS turns round at the stop (despawn + respawn there, cursor left
+      pointing at that stop). The router plans lane by lane with no U-turn, so a
+      line that ends in a dead end otherwise drove off the map;
+    · the respawn must NOT work the stop again (`turnedRoundAt`) — it was worked
+      a moment ago, and the doors would open twice at a kerb the bus never left;
+    · a stop that cannot be driven to AT ALL fails the respawn's `requestTrip`
+      for ever, which leaves the bus off the board with people aboard. Logged
+      once per stranded stop (`strandedFor`), never once per tick.
+  `departing` marks "doors shut, still trying", so no path back into the dwell
+  can re-open them.
+- A LINE'S STOPS ARE THE PLAYER'S, and nothing stops them naming a tile nobody
+  can wait at. Destinations are therefore drawn only from real stops
+  (`nextDestination` filters on `isStop`) — the graph may carry the node, it is
+  just not somewhere to ask for.
+- A bus stop is `TileCell.parking` with a `busstop` row. TWO STOPS MUST NOT
+  SHARE A `facility` ID: the parking layer treats one id as one facility, so
+  they pool capacity and show a single sign — the first cut of `busrail` read
+  "H 2/2" once instead of a halt at each end. Pinned by
+  `busLine.spec.ts` → "makes two halts two facilities, not one pooled stop",
+  which shows both halves: distinct ids give two one-stall facilities, a shared
+  id gives one facility spanning both ends of the street.
+- A LINE HAS A KIND (`LineView.kind`, 2026-08-20): `rail` from platforms, `road`
+  from kerbs, `null` until its first stop. It must never MIX — no train can call
+  at a kerb and no bus can drive to a platform, and a mixed line fails SILENTLY
+  (the bus's `requestTrip` from a platform returns null for ever, so it simply
+  never appears). D5's intermodal journey is TWO lines meeting at a walk link,
+  never one line pretending to be both. The kind lives in `game.ts` and both the
+  panel and the board read it; deriving it twice is how the two drift apart.
+- THE MODEL SUPPORTING A THING IS NOT THE FEATURE (2026-08-20). #90 shipped with
+  `createLine([kerb, kerb])` proved by tests, and NO WAY TO DO IT IN THE BROWSER:
+  the line editor gated clicks on `role === "station"`, so bus stops were not
+  pickable and the whole feature was unreachable by a player. A headless test
+  calling the verb directly cannot see that. When a feature is a player ACTION,
+  the check is doing it in the UI — `npm run dev` and a Playwright pass over the
+  actual clicks, not just the game verb.
+
+## THE COLOUR OF A WAITING PASSENGER (2026-08-20)
+- A dot on a platform (or now a kerb) wears the COLOUR OF THE LINE it is waiting
+  for — `game.stationWaitingColours`, aligned with `stationWaiting`. It used to
+  be a hash of the DESTINATION, which told the player nothing they could act on:
+  six colours collide over a board of destinations, and "four people want to go
+  to the orange place" is not something you can build. The line they need is.
+- `lineGraph.lineFrom(at, to)` is the primitive: which service they board next,
+  by the same "strictly closer" rule `alightFor` uses for where to get OFF.
+- A WALK IS NOT A SERVICE, and this is the rule that matters (found by the
+  colours, 2026-08-20). Walk links sit in the graph as services calling at both
+  ends — that is what makes a kerb and a platform one network — so a journey made
+  ENTIRELY of walking counted as "reachable" and produced passengers: people
+  queued at Ostbahnhof for a kerb two tiles away, waiting for a train that will
+  never call at a road. They had no line to be coloured by, which is how they
+  were spotted. Every demand gate now asks for a real RIDE (`firstRideFrom` in
+  transit.ts steps over `walk:` ids).
+  · A vehicle with NO line still counts as a ride. Where nobody has drawn
+    anything the lineless vehicles ARE the network, and every board written
+    before lines rests on that — 18 tests said so when the first cut demanded a
+    drawn line. Such a passenger is drawn NEUTRAL: no line to blame for the wait.
+- A bus stop draws its queue too (`busStopQueueSpots`). It never did: the crowd
+  came off the platform slabs, which a kerb has none of, so a halt with six
+  people looked identical to an empty one while the HUD counted them.
+  · The dots stand PAST the stop, on the verge: a halt sits at the head of its
+    tile, so a queue growing backwards ran off the tile's own edge at twelve
+    people, and the sign chip (HTML, drawn over the tile, ~0.13 of a tile out)
+    covered the front of the queue at anything less than 0.155 out.
+
+## HOW FULL A VEHICLE IS (2026-08-20)
+- `game.vehicleLoads[id] = {aboard, seats, colour}` — trains and buses in ONE
+  book, so the gauge on the board and the "n/seats" in the panel cannot disagree.
+- KEYED BY WHAT THE BOARD DRAWS IT UNDER: a train's own id, a bus's ROAD CAR id.
+  A bus has two identities (`bus1` in the panel, `car7` on the tarmac) and
+  `BusView.carId` is the join. `RoadCar` carries `vehicleId`/`unit` for the same
+  reason — the rendered id is `<vehicleId>#<unit>`, and a gauge belongs to the
+  vehicle, on its leading unit (a semi is two units, not two lorries).
+- REFRESHED IN THE WORLD STEP, not the frame. It is a model fact; in `frame()`
+  it froze in a hidden tab and was invisible to headless tests — the first cut
+  did exactly that, with a comment claiming otherwise. The test caught it.
+- The gauge is a LIGHT trough with a dark rim, not a dark one: it sits on a
+  locomotive, which is dark grey, and a dark trough made an almost-empty train
+  read as no gauge at all.
+- Its fill is the LINE's colour, falling back to the vehicle's livery when it
+  runs no line — a full bar is a complaint about a service, and it should point
+  at the same colour the panel row and the platform pips use.
+- No seats, no gauge: a freight train never carried anybody, and an empty gauge
+  on it is noise.
+
+## THE WALK BETWEEN A KERB AND A PLATFORM (D5, 2026-08-05)
+- `walkLinksOf(level)` pairs every bus stop with the stations within
+  `WALK_RADIUS_TILES`. The transit layer feeds them to the graph as services
+  calling at both ends — nothing ever RUNS them, so they only decide what is
+  reachable and where to change.
+- A walk has to MOVE people, not merely connect them: when a rider changes at a
+  stop, `walkOnward` asks whether the next hop is a walk and re-queues them at
+  the FAR end. Left standing at the kerb they would wait for ever for a train
+  that does not call at a road.
+- Board geometry is therefore load-bearing. On `busrail` the interchange kerb is
+  directly under the platform, one tile (inside the radius, so the network
+  joins) and Altstadt is four from every platform (outside it, so the bus is the
+  only way in). Move either and the board stops demonstrating anything.
+- **A WALK IS A STEP OF A JOURNEY, NEVER A JOURNEY** (2026-08-20, review of
+  #90). Three rules, and the first cut of the walk had only the middle one:
+    · `nextDestination` never offers a stop ONE WALK LINK AWAY
+      (`walkOnlyReach`). Nobody becomes a passenger to get somewhere they can
+      walk to — and walking them there would have scored a delivery the player
+      never earned. Measured on `busrail` as the gallery ships it: every SECOND
+      Hauptbahnhof passenger was sent to the kerb outside, nothing could move
+      them, the queue hit its cap — and `advanceDemand` stops generating AT the
+      cap, so the platform died. After: 54/103/176 delivered per 300s window,
+      the platforms peaking at 3 rather than pinned on their cap of 8.
+    · Anyone WAITING whose next hop is a walk takes it (`walkWaiting`, run from
+      `advanceDemand`). Only riders getting off a vehicle used to walk, which
+      left a journey that BEGINS on foot unstartable: no vehicle boards them
+      (their first hop is not a ride, and `alightFor`'s strictly-closer rule
+      refuses them), so they stood there for ever.
+    · A walk that ENDS at the rider's destination is a DELIVERY. Treating it as
+      a change re-queued them at their own destination — a state `enqueue`
+      itself forbids — so every Altstadt rider sat at Hauptbahnhof and rode one
+      pointless extra lap before anybody counted them.
+- A WALKER GOES PAST THE CAP, exactly like a CHANGE (D8). A cap is a limit on
+  the SPAWNER, not on how many people may stand at a kerb, and holding walkers
+  back recreates the very starvation this fixes: with the cap applied to them,
+  `busrail`'s Hauptbahnhof sat at 8/8 for an entire run — its Altstadt-bound
+  people could not walk to the full kerb, and a stop at its cap generates
+  nobody. The cost is a kerb queue with no bound when the bus service is too
+  thin to clear it; that is the SIGNAL (buy another bus), and kerbs do not feed
+  the overcrowd fail predicate — `worstStationQueue` counts platforms only.
+- ONE WALK LINK IS ONE WALK. `walkOnlyReach` is the direct neighbours, never a
+  transitive closure: `walkLinksOf` pairs a kerb with the platform beside it and
+  says nothing about two platforms that happen to share a kerb. Chaining them
+  made all of `busrail`'s railway "walkable", every station dropped out of every
+  pool, and the board delivered NOBODY — 0 in 400s. Caught only because the
+  board changed under the fix mid-review; on the old straight-street board no
+  two stations shared a kerb, so nothing showed it.
+- The invariant to hold on to: NO PASSENGER IS EVER CREATED THAT NO MECHANISM
+  CAN MOVE. Every hop of every offered journey is either a ride (a line, or a
+  stopper) or a walk, and both now have something that performs them.
+
+## THE TRANSIT LAYER — ONE FOR BOTH SIMS (2026-08-05)
+- `sim/transit.ts` owns the LINE registry, the line-graph memo, the QUEUES, the
+  spawn demand and the boarding EXCHANGE. All of it used to be private to
+  `createSimulation`, which was fine while "vehicle that carries passengers"
+  meant a train. A bus is planned the same way (#90) and a bus-then-train
+  journey is ONE journey — two copies would be the shadow-queue mistake again.
+- `createSimulation` takes an optional `transit`; without one it makes its own,
+  so every unit test and every road-less board is unchanged. `game.ts` will make
+  one and hand it to both sims.
+- The layer never learns what a stop IS. `isStop` is injected, and each sim
+  contributes its unassigned vehicles through `setStoppers(source, fn)` — keyed
+  by source, so rail and road contribute independently and neither can clobber
+  the other.
+- A matched DEPOT arrival is NOT an exchange. "Everyone home" ends every ride
+  aboard and counts them all, whatever they asked for; routing it through
+  `exchange` read them as CHANGING at a depot and re-queued them somewhere no
+  service will ever call — 3 delivered became 0. It calls `transit.deliver(n)`.
+- `exchange` MUTATES the manifest array it is given (the caller owns it) and
+  returns the counts a dwell event reports. Boarding asks the NETWORK, never a
+  single line's stop list.
 
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
@@ -1297,6 +1493,88 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   steady while the town self-selects for drivers, so `access` shows the failure
   only as a DIP — assert on the minimum over a run, never the end state.
 
+## LIFE STAGES & DAILY ROUTINES (2026-08-04)
+- Everybody used to get the same three numbers (`outHour`/`backHour`/`shopHour`),
+  so a board had TWO SPIKES AND ELEVEN DEAD HOURS. A citizen now has
+  `stage: LifeStage` + `routine: Activity[]` — a list of `{target, from?, hour,
+  windowH, everyNDays, lastDay}` rolled once at move-in. Five stages: `child`,
+  `worker`, `shiftWorker`, `tradesperson`, `retired`.
+  Measured on `/test/citizenday`, busiest "travelling" per in-game hour, same map
+  and seed, only the mix changed: **at 14:00 and 15:00 an all-worker town has
+  NOBODY out at all** where the mixed one has 17. Trough/peak 0.00 → 0.19, and
+  the peaks barely move — same people, spread over the hours they would use.
+- `TripPurpose` IS the activity target (`home|work|shop|school|leisure|callout`),
+  so there is no second `purpose` field to keep in step. Still only THREE topics:
+  school/callout → `commute`, leisure → `errands`. A fourth `Topic` would drag
+  `CityHappiness`, `recompute()` and the panel behind it to say nothing new.
+- **Resolve a target when the activity FIRES, never at move-in.** The nearest shop
+  fills up, a call-out is a different address every day, a school may not exist.
+- **`everyNDays` parity must include the ACTIVITY INDEX**
+  (`(dayIndex + hashId(id) + i) % n`). Leave it out and all of one person's
+  every-other-day activities land on the same days — the empty-day bug in
+  miniature.
+- **`from` (anchor an activity to where it starts) is not polish.** The old errand
+  rolled 10:00–19:00 and was gated on being at home, so for most workers the
+  window opened while they were at their desk and THE TRIP NEVER HAPPENED. A trip
+  home never carries `from`, so wherever the day left somebody they can get back.
+- `TileCell.zone?: PlotKind` overrides the derived kind, applied AFTER the shop
+  ranking so zoning a school does not promote some other house into the parade.
+  `PlotKind` lives in `tiles/model.ts` now (it is tile data), re-exported from
+  `tiles/cities.ts`. **A school's capacity is its TEACHERS, not its pupils** —
+  capacity on a non-home plot is JOBS and `reviewDay` gates growth on
+  `freeJobs > 0`, so a 160-pupil school hands every town imaginary employment.
+- `CitizenTuning.stageMix` replaces `joblessShare`. Tests that want one life say
+  `stageMix: { worker: 1, … }`.
+- **POPULATION IS A BLUNTED SIGNAL ON A STRANDED BOARD NOW; THE BARS ARE THE
+  SHARP ONE.** A quarter of every town is children and retired residents whose
+  whole day is a local walk — journeys that succeed with no railway at all. They
+  are happy, they pull the mean mood up, and newcomers keep arriving faster than
+  the stranded commuters leave. Measured on threecities with NO trains, same
+  seed, only the mix changed:
+
+  | | Westfield | Eastfield | Steinbach (walks) |
+  |---|---|---|---|
+  | all workers | 47 → 22 | 43 → 30 | 21 → 84 |
+  | life stages | 47 → **72** | 43 → **56** | 21 → 84 |
+
+  The failure is still perfectly visible — Eastfield's commute bar reads 0.53
+  against Steinbach's 1.00 — it just is not visible in the headcount. Assert on
+  `happiness.commute`/`access`, and keep an ALL-WORKER control run beside it
+  (`citizensModeWith({ stageMix: { worker: 1, … } })`) so a real weakening of the
+  model cannot hide behind the non-commuter floor. This is the same CHURN the
+  road-only note below describes, amplified.
+
+## BIG CITIZEN BOARDS (`/test/hinterland`, 35x24, 2026-08-04)
+Four rules, each measured on that board, each of which failed silently:
+- **A house column three tiles from BOTH railway corridors strands everyone in it
+  without a car** — no walk (`walkMaxTiles: 4`), no car, no station in reach, so
+  every trip out is REFUSED. The tell is the red Access bar on the city card.
+  Lay a village as `rail · road · house · road · rail`: every column one tile
+  from a carriageway AND two from a platform. A town is at most as wide as its
+  lines can serve.
+- **Past a point, MORE TRAINS MAKE A RAILWAY CARRY LESS.** Six services on a
+  single-track theta spent the day holding each other at signals: rail share fell
+  38% → 4% and a six-day headless run took SEVEN TIMES longer. On single track a
+  service is a block; buy wagons, not trains. (4 x 10 wagons ships.)
+- **A DAILY trip must be a LOCAL trip.** With one café in the valley every retired
+  resident of the far village rode three quarters of the ring for a coffee every
+  day, gave up, and the village fell 136 → 32 in six days. Make the SCARCE thing
+  the twice-a-day one (the school), never the daily one.
+- **A pure dormitory dies.** Villages whose every job is a lap away lost half
+  their people. Two industrial plots each and all three villages bottom out on
+  day three and then GROW AGAIN with their happiness. A place needs a reason to
+  stay as well as a reason to travel.
+- A ring is one-directional, so the way HOME is the long way round. Watch
+  `maxTransfers` (6): a return leg past seven platforms fails outright.
+- Build a big board's road net from a SET OF COORDINATES and derive each tile's
+  lanes from which neighbours are road (2 arms → `twoWay`, more → every arm to
+  every other). Hand-authoring `twoWay(L,R)+twoWay(T,B)` at a crossroads makes a
+  junction nobody can turn at; deriving it cannot.
+- A `TrainDef` built for a headless test MUST carry `destinations` and `line` —
+  omit them and the trains sit in their sheds while the probe reports "transit
+  0%" and you go looking for a bug in the citizens. Copy `buildTrainDefs` from
+  `TestStage.vue`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate
@@ -1544,6 +1822,32 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
+
+## EDITOR: the three-row build dock (2026-08-21)
+- The dock is `BuildDock.vue` (presentational; EditorView owns ALL state):
+  categories Rail / Road / Terrain / Bulldozer → tabs separating the verbs →
+  items. Brush-like tools (terrain kinds, stall kinds, road widths 1L/2L/3L,
+  traffic-light modes, bulldozer scopes) are ITEMS carrying their parameter —
+  several items share one `Tool`, and `isActiveItem` matches on the PARAMETER,
+  or every sibling lights up together.
+- Traffic lights are pick-then-apply (`setJunctionSignalMode`), NOT the old
+  6-state cycle (`cycleJunctionSignalMode` survives for back-compat). The
+  lights tab default-arms Two-phase via a pre-seeded `itemByTab` entry — its
+  first item is Off, and arming Off by default makes the first junction click
+  DELETE lights.
+- The bulldozer is layer-scoped: `eraseLayer(cell, "rail"|"road"|"parking"|
+  "terrain")` in editOps. Road erase takes `parking` with it (rows sit on the
+  kerbs of the street being removed); a structure (bridge/tunnel) goes with the
+  LAST line it carried, and terrain erase drops it too (no bridge over grass).
+  "Everything" is the caller's `delete level[id]`, not an EraseLayer value.
+- The dock has a FIXED width (880px desktop) so the category row never shifts
+  when tabs of different widths open; the camera's bottom inset is MEASURED off
+  `.build-dock-wrap` (the old constant 128 predates the three-row dock).
+- Keys 1–4 pick categories (guarded: not from INPUT/TEXTAREA, not with a
+  modifier); each category remembers its last tab + item per session.
+- e2e tests must open the right TAB before clicking a tool button — Depot is
+  Rail→Stations, Signal Rail→Signalling, the erase ✕ handles are Bulldozer
+  (default filter Everything; rail ✕ only shows for scope all|rail).
 
 ## EDITOR: heights & flyover tools (2026-07-31)
 - The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —
@@ -2788,9 +3092,39 @@ of the above; read that section first.
   Lane-graph overlay code must stay identical to it. Cyan ≠ painted dash/gore at a
   seam ⇒ the PAINT is the bug. Overlay is the diagnostic for all road geometry.
 
+## TRACK PROPORTIONS (2026-08-20)
+- Anchor the track's look on REAL numbers — standard gauge 1435mm on a 2600mm
+  sleeper, i.e. the rails at **55% of the sleeper's half-length**. Everything is
+  drawn in `TileRail.vue`: the sleeper band is the centreline stroked 20px
+  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1.6px grey.
+- RAIL STROKE 1.6, not the old 1. A 1px grey hairline all but disappears into
+  the sleeper band at normal board zoom — the track read as bare sleepers with
+  no metal on it. `Tile.vue`'s `.deck-rail` (the flyover deck's own track) must
+  carry the SAME width, or the line changes weight where it climbs onto the deck.
+- `railDistanceFromPath` = HALF THE GAUGE in px, and 20/2 × 0.55 = **5.5**. It was
+  7 (70%), which left a 3px sleeper end past the rail and read as "rails sitting
+  on the sleeper tips" — the user spotted it by eye before the maths was done.
+- The terrain keep-out (`terrain.ts RAIL_HALF = 8` units) follows the SLEEPER,
+  not the rail, so re-gauging does not move the cleared right-of-way.
+- SLEEPER PITCH IS DELIBERATELY COARSE. Real pitch would be ~"2.5 3" (600mm
+  centres at 1px = 130mm), roughly twice as many sleepers. Tried and rejected:
+  it looks right at a macro crop and blurs into a solid dark band at the normal
+  board zoom, where the track loses its railway texture. Judge any sleeper/rail
+  weight change at BOARD scale (`npm run shot -- railcurves --scale 2`), not
+  only on a zoomed crop.
+
 ## CURVES — rail ≠ road (the #1 trap)
-- RAIL curve = quadratic Bézier through TILE CENTRE (`Q centre`). `geometry.ts
-  railPathsFor`, `pathGeometry.ts segmentPathD`.
+- RAIL curve CENTRELINE (the sleeper bed, the path a train drives) = quadratic
+  Bézier through TILE CENTRE (`Q centre`). `pathGeometry.ts segmentPathD`.
+- The two RAILS are a TRUE PARALLEL OFFSET of that quad — every sample pushed ⟂
+  to ITS OWN tangent, emitted as a 24-leg polyline (`geometry.ts railPathsFor`).
+  NOT a `Q` with offset endpoints (2026-08-20 fix): offsetting only the endpoints,
+  ⟂ to the CHORD, with the control point left at the tile centre, gave (a) HALF
+  GAUGE at the apex — 14px at the ports, 7px mid-bend, the rails visibly merging
+  into one line through every curve — and (b) a ~5px SIDEWAYS JOG at every seam,
+  since a Left↔Bottom curve started its rail at (−4.95, 104.95) while the abutting
+  straight put its own at (0, 107). Same rule as the road (next-but-one bullet):
+  offset the SAMPLED centreline, never the control point. `/test/railcurves`.
 - ROAD turn = 90° CIRCULAR ARC around the WRAPPED TILE CORNER, r=size/2, tangent
   at port edges (`A r r 0 0 sweep`). `roadSegmentPathD`, `turnCornerPoint` (=pa+pb−c).
   Centre-quad bulged into the junction box — fixed bug. Don't merge road turn → rail quad.
@@ -2800,7 +3134,8 @@ of the above; read that section first.
   overlap on curves. `scaleX` sprite-foreshorten was REVERTED (user hated it) —
   wrong cause. Kept: chord render (`UnitChord{front,rear}`) + `BOGIE_INSET_FRAC=0.2`.
 - Constant-width road curve: offset the SAMPLED centreline ⟂ (`laneOffsetPointAt`),
-  never the Bézier control point (pinches apex).
+  never the Bézier control point (pinches apex). Holds for RAIL too — the rail
+  gauge is the same problem and had the same bug for a year (see above).
 - Turn-LANE path = corner FILLET of the two lane lines (`pathGeometry.ts
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
@@ -3785,6 +4120,24 @@ C/C′/D — racks, bike-and-ride, the citizen mode, shared paths — are NOT bu
   break has no conflict to find.
 - And when it does break: the fix is usually in YOUR code, not their test. Ask
   what the other session's assertion was trying to say, and make that true.
+- WRITE LOCALHOST LINKS IN A PR BODY ANYWAY (2026-08-08). The hand-back links are
+  written against the dev server because that is where the author was looking,
+  and a reviewer has no dev server — so `deploy.yml` rewrites them after the PR
+  preview deploys: `http://localhost:<port>/…` ->
+  `https://cyclodex.github.io/train-game/pr-preview/pr-<N>/…`. Same paths, same
+  hash routes. It runs on EVERY push to the PR, so links added later are caught
+  too, and it is idempotent (the trailing slash is part of the match, so a
+  rewritten URL no longer matches).
+  · It runs on `edited` too, as its OWN job with no build behind it. A body is
+    very often written AFTER the push that deployed the preview (it was on the
+    PR this shipped on), and a rewrite bolted to the deploy job leaves those
+    links dead until someone happens to push again. No loop: an edit made with
+    GITHUB_TOKEN does not itself trigger a workflow.
+  · BODY ONLY. Comments are a conversation with a timestamp; rewriting posted
+    words after the fact reads worse than a stale link — paste preview URLs
+    there yourself.
+  · Fork PRs never reach the step: their token cannot push to gh-pages, so the
+    whole preview job is skipped.
 - TRAP — DO NOT EDIT SOURCE WITH A PYTHON SCRIPT unless you write it back in
   BINARY. `io.open(p, "w")` on Windows translates every `\n` to `\r\n`, so a
   one-line change rewrites the WHOLE FILE as CRLF. It is invisible in the editor

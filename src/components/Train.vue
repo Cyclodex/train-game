@@ -51,6 +51,22 @@ class Train extends Vue {
   wagonArt(wagonId: string): string {
     return wagonSvg(this.type, this.trainColor, freightVariantFor(wagonId));
   }
+
+  // The load gauge, or null for anything that carries no passengers (a freight
+  // train, and any board with no transit at all — game.vehicleLoads simply has
+  // no entry). Its colour is the LINE's, not the livery's: a full bar is a
+  // complaint about a service, and it should point at the same colour the panel
+  // and the platform pips use. A vehicle with no line falls back to its own
+  // livery, which is the only identity it has.
+  get load(): { pct: number; colour: string; title: string } | null {
+    const at = this.game.vehicleLoads?.[this.trainObject.id];
+    if (!at || at.seats <= 0) return null;
+    return {
+      pct: Math.max(0, Math.min(100, Math.round((at.aboard / at.seats) * 100))),
+      colour: at.colour || this.trainColor,
+      title: `${at.aboard}/${at.seats} aboard`,
+    };
+  }
 }
 
 export default toNative(Train);
@@ -60,6 +76,15 @@ export default toNative(Train);
   <div class="train-composition">
     <div :id="trainObject.id" class="train train-locomotive">
       <svg class="train-art" :viewBox="locoBox" v-html="locoArt" />
+      <!-- HOW FULL IT IS, on the roof: a gauge that fills in the line's colour.
+           You could see a crowd on a platform and a count in the panel, but
+           never whether the train that just left had room for them. -->
+      <span v-if="load" class="train-load" :title="load.title">
+        <span
+          class="train-load-fill"
+          :style="{ width: load.pct + '%', background: load.colour }"
+        />
+      </span>
       <span v-if="config.debug" class="train-debug">{{ trainObject.id }}</span>
     </div>
     <template v-if="trainObject.wagons">
@@ -133,6 +158,32 @@ export default toNative(Train);
   height: 100%;
   overflow: visible;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+}
+
+/* The load gauge: a thin bar laid along the locomotive's roof. It rides WITH the
+   unit — no counter-rotation, unlike the debug id — because a gauge along the
+   body reads as belonging to the vehicle from any heading, while a label has to
+   stay upright to be read at all. */
+.train-load {
+  position: absolute;
+  left: 16%;
+  top: 50%;
+  width: 68%;
+  height: 8px;
+  transform: translateY(-50%);
+  // A LIGHT track with a dark rim, not a dark one: the gauge sits on the
+  // locomotive, which is dark grey, and a dark trough on a dark body left the
+  // empty part invisible — an almost-empty train read as no gauge at all.
+  background: rgba(236, 242, 248, 0.85);
+  border: 1px solid rgba(12, 16, 22, 0.75);
+  border-radius: 4px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.train-load-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
 }
 
 .train-debug {
