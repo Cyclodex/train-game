@@ -98,6 +98,37 @@ const { Top, Right, Bottom, Left } = Position;
 //   + two lanes each way, no middle rung  |     649 |      80 |   40 of 40
 //   + both (what ships)                   |    2797 |       0 |    0 of 40
 //
+// CORRECTION (2026-08-21, the seed-11 investigation). The shipped row above is
+// a per-seed fact, not a guarantee. At a CONSTANT 40 concurrent journeys the
+// shipped layout still gridlocks permanently on about a third of seeds (7 of
+// 20 probed — the row above was a lucky one), and WHICH seeds freeze re-rolls
+// on any change to the sim's dynamics: an unrelated constants retune (PR #98,
+// CLIP_LANES) is what turned the guard's seed 11 red without touching a single
+// road rule. The load is the point — a constant 40 holds the village PAST its
+// stable capacity for the entire run, which the citizens board's bursty
+// demand never does. At a constant 24 the layout is clean across all 40
+// probed seeds (longest stop 24s, zero give-ups), and that is the load the
+// guard drives now.
+//
+// The residual supercritical knot is NOT the ladder mechanism above, and NOT
+// the box patience valve (disabling `BOX_KEEP_CLEAR_PATIENCE` outright
+// reproduces the seed-11 knot bit for bit). It lives where the rung crosses
+// the branch line: a LEVEL CROSSING directly between two junction boxes —
+// box (9,10), crossing (10,10), box (11,10). The rail-crossing keep-clear
+// ("never rest straddling the rails", road.ts) has no patience valve and
+// demands room past the crossing's far edge, so it couples the two boxes into
+// one mutual-exclusion zone; two opposing streams and one turner close a
+// wait-cycle through it in which every hold is locally correct: eastbound
+// cars inside box (9,10) wait for room past the crossing; that room is held
+// by cars the arbiter refuses at box (11,10) because the box is full; the box
+// is full of cars following a westbound turner pinned off the rails whose
+// turn conflicts with the eastbound cars inside box (9,10). The same trap is
+// authored at (3..5,10) over the main line. Retracting the rung to x=5..9 (no
+// crossings, T junctions) measured WORSE — 11 of 20 seeds frozen, throughput
+// down everywhere — the rung's connectivity outweighs its trap. Raising this
+// ceiling needs a sim mechanism (spillback control / wait-cycle resolution),
+// not another street.
+//
 // and end to end on the citizens board, six days at `secPerDay: 900`:
 //
 //   Marktstadt commute | before 0.24 0.00 0.06 0.04 0.01 0.08

@@ -1660,10 +1660,11 @@ Four rules, each measured on that board, each of which failed silently:
   together they are fatal: every trip across the village is a LAP of the whole
   ladder, and a queue long enough to reach back into a junction box blocks the
   stream that would have let it out. That is a cycle of full tiles with no head
-  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
-  not gridlocked by politeness) is what lets the last car into the box that
-  closes it. It does not clear: measured, 42 of 46 cars standing still for the
-  rest of a six-day run, one for 354 unbroken seconds.
+  to move first. It does not clear: measured, 42 of 46 cars standing still for
+  the rest of a six-day run, one for 354 unbroken seconds. (An earlier version
+  of this note blamed `BOX_KEEP_CLEAR_PATIENCE` for closing the ring — measured
+  false on the shipped layout: disabling the valve outright reproduces the
+  seed-11 knot bit for bit. The real closer is below.)
   · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
     after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
     car never arrives, with the town's commute bar pinned at 0.00 while its
@@ -1680,6 +1681,28 @@ Four rules, each measured on that board, each of which failed silently:
     the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
     and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
     every local trip into a full circuit.
+  · **A per-seed zero is not a guarantee — probe a SWEEP, and probe INSIDE
+    capacity** (2026-08-21). The "0 frozen at 40" above was one lucky seed
+    pair: at a CONSTANT 40 the shipped layout still freezes on ~1/3 of seeds
+    (7 of 20), and which seeds flip re-rolls on ANY dynamics change — an
+    unrelated CLIP_LANES retune (PR #98) turned the guard's seed 11 red. A
+    constant-load harness holds the network at that density forever (every
+    arrival instantly replaced), which bursty citizen demand never does; a
+    zero-freeze assertion at supercritical load asserts a coin toss. At a
+    constant 24 all 40 probed seeds are clean (longest stop 24s) and the old
+    ladder still fails — that is the guard's load now.
+  · **BOX–CROSSING–BOX IS A DEADLOCK TRAP.** A level crossing directly between
+    two junction boxes (the rung crossing the branch: box 9,10 / crossing
+    10,10 / box 11,10) couples the boxes through the rail-crossing keep-clear
+    — which is patience-less by design (`won't roll onto a rail crossing`,
+    road.spec) and demands room past the far edge. Two opposing streams plus
+    one conflicting turner close a wait-cycle in which every hold is locally
+    correct (keep-clear → full tile → arbiter-refused box → follower → turner
+    → back). Diagnose knots by labelling `bind()` calls in `clearAhead` and
+    dumping each frozen car's binding gate — the wait-for graph names the
+    cycle in one run. Retracting the rung to avoid the crossings measured
+    WORSE (11/20 seeds frozen): connectivity outweighs the trap. The real fix
+    is a sim mechanism (spillback / wait-cycle resolution) — open ticket.
   · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
     straight or bend whose neighbour has a different lane count (the renderer
     paints it red); a junction fans and merges unequal arms by design and is
