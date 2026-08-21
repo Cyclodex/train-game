@@ -750,6 +750,9 @@ export interface CitizenHud {
   travelling: number;
   // How many of this board's people are a car on the road at this instant.
   driving: number;
+  // ...how many are a bike on the road — the trade against `driving` is the
+  // bicycle phase's whole point, so both numbers show.
+  cycling: number;
   // ...and how many are a figure on a pavement.
   onFoot: number;
   // ...and how many have a car standing in a bay right now, holding it against
@@ -896,12 +899,15 @@ export interface PlotCard {
 }
 
 const REFUSAL_TEXT: Record<string, string> = {
-  "too-far": "too far to walk",
+  // "too-far" is shared by walking AND cycling: each mode's own reach ran out.
+  "too-far": "further than they will go",
   "no-car": "no car",
+  "no-bike": "no bike",
   "no-road-link": "no road joins the two ends",
   "no-railway": "no railway",
   "no-station-in-reach": "no station within reach",
   "no-park-and-ride": "no park & ride in reach",
+  "no-rack": "no bike rack at a station in reach",
   "same-station": "same station both ends",
 };
 
@@ -1402,6 +1408,7 @@ export function createGame(
     population: 0,
     travelling: 0,
     driving: 0,
+    cycling: 0,
     onFoot: 0,
     carsParked: 0,
     carsAtHome: 0,
@@ -1410,7 +1417,7 @@ export function createGame(
     tripsAbandoned: 0,
     clock: "00:00",
     day: 0,
-    modeShare: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+    modeShare: { walk: 0, car: 0, bike: 0, transit: 0, parkAndRide: 0, bikeAndRide: 0 },
   }) as CitizenHud;
 
   function rebuildCitizens() {
@@ -1463,8 +1470,10 @@ export function createGame(
         // actual street, subject to every queue, junction and level crossing on
         // the way. Their journey time is whatever the traffic gives them.
         driving: {
-          request: (fromTileId, toTileId, park) =>
-            roadSim.requestTrip(fromTileId, toTileId, "car", {
+          // `kind` is which vehicle this citizen becomes out there — a cycling
+          // citizen is a real bike in traffic, the way a driving one is a car.
+          request: (fromTileId, toTileId, park, kind) =>
+            roadSim.requestTrip(fromTileId, toTileId, kind ?? "car", {
               // The PRESENCE of the object is the ask. A commuter going to work
               // passes `{}` — park anywhere near the office; somebody going home
               // passes their address and a short radius, which is what opens
@@ -1505,6 +1514,7 @@ export function createGame(
     citizenStats.population = s.population;
     citizenStats.travelling = s.travelling;
     citizenStats.driving = s.driving;
+    citizenStats.cycling = s.cycling;
     citizenStats.onFoot = s.onFoot;
     citizenStats.carsParked = s.carsParked;
     citizenStats.carsAtHome = s.carsAtHome;

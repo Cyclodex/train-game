@@ -284,8 +284,21 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
       const doubleBack = prevTile !== null && prevTile === nextTile;
 
       // Half a tile where a driveway joins, a whole tile where the pavement runs on.
-      const tStart = prevTile ? 0 : 0.5;
-      const tEnd = doubleBack ? 0 : nextTile ? 1 : 0.5;
+      let tStart = prevTile ? 0 : 0.5;
+      let tEnd = doubleBack ? 0 : nextTile ? 1 : 0.5;
+      // BOTH ends join mid-tile ON ONE PAVEMENT: the whole walk lives on this
+      // one tile (a street-tile endpoint whose goal's driveway is the same
+      // tile — the bike rack directly under its platform). A zero-length leg
+      // would leave no steps at all and refuse the walk; a short shuffle along
+      // the kerb keeps the walker real and hands the stub a point to leave
+      // from. ONLY the single-side case: a same-tile CROSSING (sides change)
+      // already gets its cross step, and a step costs fixed TIME — padding one
+      // in front of a zebra held the walker past the kerb-wait the crossing
+      // tests measure.
+      if (runs.length === 1 && run.sides.length === 1 && tStart === tEnd) {
+        tStart = 0.45;
+        tEnd = 0.55;
+      }
 
       // Walking this tile means walking over the tracks. Only a leg that starts
       // at the tile BOUNDARY is marked: that is where the walker can stand and
@@ -337,26 +350,36 @@ export function createPedestrianSim(config: PedestrianSimConfig): PedestrianSim 
     // The driveway stubs at each end aim at the pavement's own start/end point,
     // so the path meets the kerb exactly rather than stopping at the bare tile
     // edge and making the walker jump sideways at the seam.
+    //
+    // NO STUB where the endpoint IS the street tile itself (a walk that starts
+    // at the kerb — dismounting at the bike rack): the tile's centre is the
+    // middle of the carriageway, and a stub from there would materialise the
+    // walker on the tarmac and march them across it with no crossing. They
+    // start on the pavement they are already standing beside.
     const head = parseCoordId(fromPlot);
     const tail = parseCoordId(toPlot);
-    steps.unshift({
-      kind: "stub",
-      tileId: fromPlot,
-      x: head.x,
-      y: head.y,
-      side: sides[0],
-      from: { x: head.x + 0.5, y: head.y + 0.5 },
-      to: pointOf(steps[0], 0),
-    });
-    steps.push({
-      kind: "stub",
-      tileId: toPlot,
-      x: tail.x,
-      y: tail.y,
-      side: sides[sides.length - 1],
-      from: pointOf(steps[steps.length - 1], 1),
-      to: { x: tail.x + 0.5, y: tail.y + 0.5 },
-    });
+    if (fromPlot !== tiles[0]) {
+      steps.unshift({
+        kind: "stub",
+        tileId: fromPlot,
+        x: head.x,
+        y: head.y,
+        side: sides[0],
+        from: { x: head.x + 0.5, y: head.y + 0.5 },
+        to: pointOf(steps[0], 0),
+      });
+    }
+    if (toPlot !== tiles[tiles.length - 1]) {
+      steps.push({
+        kind: "stub",
+        tileId: toPlot,
+        x: tail.x,
+        y: tail.y,
+        side: sides[sides.length - 1],
+        from: pointOf(steps[steps.length - 1], 1),
+        to: { x: tail.x + 0.5, y: tail.y + 0.5 },
+      });
+    }
     return steps;
   }
 

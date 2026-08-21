@@ -134,14 +134,18 @@ import { TravelMode } from "@/sim/citizens";
 const MODE_LABEL: Record<TravelMode, string> = {
   walk: "Walk",
   car: "Drive",
+  bike: "Cycle",
   transit: "Train",
   parkAndRide: "Park & ride",
+  bikeAndRide: "Bike & ride",
 };
 const MODE_ICON: Record<TravelMode, string> = {
   walk: "🚶",
   car: "🚗",
+  bike: "🚴",
   transit: "🚆",
   parkAndRide: "🅿️",
+  bikeAndRide: "🚲",
 };
 
 @Component({ emits: ["close", "pin"] })

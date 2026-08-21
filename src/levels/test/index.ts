@@ -89,6 +89,7 @@ import { cyclebend } from "@/levels/test/scenarios/cyclebend";
 import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
 import { bikerack } from "@/levels/test/scenarios/bikerack";
 import { bikeandride } from "@/levels/test/scenarios/bikeandride";
+import { citizenbike } from "@/levels/test/scenarios/citizenbike";
 import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
@@ -177,7 +178,7 @@ export const DOMAINS: ScenarioDomain[] = [
       { id: "signals", label: "Signals & switches", scenarios: [signals, switchDefault, switchFan] },
       { id: "junctions", label: "Junctions", scenarios: [junction, cross, flyover] },
       { id: "grades", label: "Grades", scenarios: [grades, terraces, hillsides, mountainpass] },
-      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizencrossback] },
+      { id: "stations", label: "Stations", scenarios: [station, platformstop, stationhouse, boarding, transfer, catchment, parkandride, busfeeder, busrail, threecities, citizencars, citizenwalk, citizenzebra, citizenrail, citizenchoice, citizenbike, citizencrossback] },
       {
         id: "crossings",
         label: "Crossings",

@@ -100,9 +100,16 @@ describe("the citizen inspector", () => {
       for (const p of game.inspectPlot(`${x},1`)?.residents ?? []) {
         if (!p.work) continue;
         const rows = game.compareModes(p.id);
-        // Always all four, in a stable order, so the panel's layout does not
+        // Always all six, in a stable order, so the panel's layout does not
         // jump about as the map changes under it.
-        expect(rows.map(r => r.mode)).toEqual(["walk", "car", "transit", "parkAndRide"]);
+        expect(rows.map(r => r.mode)).toEqual([
+          "walk",
+          "car",
+          "bike",
+          "transit",
+          "parkAndRide",
+          "bikeAndRide",
+        ]);
         // At most one winner. Zero is legal and meaningful: it is the model
         // refusing the journey outright, and then EVERY row must carry a
         // reason — an empty table with no explanation would be the one case a
@@ -156,11 +163,16 @@ describe("the citizen inspector", () => {
         }
       }
     }
-    expect([...won].sort()).toEqual(["car", "transit", "walk"]);
+    // The board's three founding answers still all happen — and since phase C′
+    // the bike takes its promised slice of the mid-range commutes too, so the
+    // same street now produces FOUR ways to work.
+    for (const mode of ["car", "transit", "walk", "bike"]) {
+      expect(won.has(mode)).toBe(true);
+    }
     // ...and the reason the train ever wins is on screen: the road does not go
     // there. That is the mode's central lever, spelled out for the player.
     expect(reasons).toContain("no road joins the two ends");
-    expect(reasons).toContain("too far to walk");
+    expect(reasons).toContain("further than they will go");
   });
 
   it("prices the journey somebody is ON, not their commute, while they travel", () => {

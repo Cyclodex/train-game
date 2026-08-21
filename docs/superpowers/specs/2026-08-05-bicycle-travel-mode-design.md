@@ -18,8 +18,22 @@ rail share now applies to `typical`, and the mode-share acceptance test in §6
 stands unchanged). Scenarios `/test/bikerack` + `/test/bikeandride`; pins in
 `tests/unit/sim/bikeRack.spec.ts` and `tests/unit/parkAndRide.spec.ts`. Rack
 depth shipped 0.09, not §5's ~0.08 — the fit gate measures the real 17px bike
-body against `stallLengthPx · 0.98` and 16px refuses it. Phases C′ (citizen
-travel mode) and D (shared paths) remain plans. The rest of this document is the impact survey and
+body against `stallLengthPx · 0.98` and 16px refuses it. Phase C′ BUILT
+(2026-08-21) — `TravelMode "bike"`/`"bikeAndRide"` with every mode record
+iterated from `TRAVEL_MODES` (the §6 under-report risk closed structurally),
+`bikeOwner`/`bikeAffinity` (ownership gates, affinity shapes cost AND the
+per-rider range via `bikeRangeOf` — superseding §6's single `bikeMaxTiles`),
+a cycling citizen dispatched as a REAL bike (`DrivingPort.request` kind), the
+rack→platform leg WALKED by a real pavement figure (planWalk grew street-tile
+and station endpoints — stations were silently timer-only before), and one
+number §6 did not foresee: `bikeSaddleSec` (6s, bike legs only), without which
+bikes beat the walk from one tile out and the walking boards inverted. §6's
+acceptance held: bikes eat walk-or-drive share (citizenwalk 0.89→0.62 walk,
+walk+bike >0.7; a car-only town's strandings FALL — bikes rescue some of the
+carless). B+R's bike is retired at the rack's street like P+R's car — the
+held-stall "return half" is one shared debt. Scenario `/test/citizenbike`;
+pins in `tests/unit/citizenBikes.spec.ts`. Phase D (shared paths) remains a
+plan. The rest of this document is the impact survey and
 phased design for bringing bicycles into the game: on the carriageway, in their
 own lanes, at the station, in the citizen's mode choice. It is the "phase C"
 that `2026-08-01-citizens-and-cities-design.md` §9 promised in one parenthesis

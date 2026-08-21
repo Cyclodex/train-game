@@ -261,11 +261,15 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     (`bikeAndRideStationsOf`), the racked-bike→platform transfer, and cycling
     reach as a per-rider range (`BIKE_RANGE_TILES`/`bikeRangeOf` — casual
     majority short, sporty tail far); scenarios `bikerack`/`bikeandride`.
-    Remaining: (C′) `TravelMode "bike"`/`"bikeAndRide"` in `quoteModes` — the
-    citizens spec's reserved "phase C", drawing each citizen's range via
-    `bikeRangeOf(bikeAffinity)`; (D) shared foot/bike paths, queued behind the
-    standalone-footpath axis. Files remaining: `src/sim/citizens.ts`; scenario
-    `citizenbike`.
+    **Phase C′ SHIPPED 2026-08-21**: `TravelMode "bike"`/`"bikeAndRide"` —
+    ownership gates, affinity shapes cost and per-rider range
+    (`bikeRangeOf(bikeAffinity)`), `bikeSaddleSec` keeps the bike off the
+    one-tile hop, a cycling citizen is a real bike on the road, and the
+    rack→platform leg is walked by a real figure (stations and street tiles
+    became legal walk endpoints); scenario `citizenbike`. Remaining: (D)
+    shared foot/bike paths, queued behind the standalone-footpath axis, and
+    the held-stall "return half" shared with P+R (the commuter's bike keeping
+    its rack stand all day).
 
 ## Architecture / code health
 

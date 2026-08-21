@@ -3607,6 +3607,62 @@ mode, shared paths — are NOT).
 - `/test/bikerack` (rack + kerb bays side by side, classes never cross),
   `/test/bikeandride` (the rack feeds the platform); pins in `bikeRack.spec.ts`.
 
+## BICYCLES phase C′ — citizens ride bikes (2026-08-21)
+- `TravelMode "bike"` + `"bikeAndRide"`. EVERY `Record<TravelMode, number>` is
+  now built by `zeroModes()` and summed by ITERATING `TRAVEL_MODES`
+  (citizens.ts) — the hand-written literals/sums were the spec's named silent-
+  under-report risk, and the one literal left is game.ts's HUD seed. Adding a
+  mode = the union + TRAVEL_MODES + the UI label maps (CityPanel rows/colours,
+  CitizenInspector MODE_LABEL/ICON — Records, so the compiler chases you).
+- OWNERSHIP GATES, AFFINITY SHAPES: `profile.bikeOwner` (tuning.bikeOwnership
+  0.7) says whether the modes exist; `profile.bikeAffinity` (0..1 keenness)
+  does double duty — perceived cost via `bikeCostOf` (mapped into the SAME
+  0.7–1.4 band the other affinities draw from) and the rider's own RANGE via
+  `bikeRangeOf`. The range IS the patience: no slog curve, a hard per-rider
+  distance gate ("too-far").
+- `bikeSaddleSec` (6s flat, bike legs only) is what keeps the bike off the
+  one-tile hop — WITHOUT re-pricing the shared `walkAccessTiles` charge, which
+  stays equal across modes (the spec's explicit rule). Without it bikes beat
+  the walk from d=1 and `/test/citizenwalk` fell to a 38% walk share.
+- BIKE quote = walk template + car's road-component rule + roadDetour at
+  `bikeSpeed` 0.45 (1.8× walk, 0.75× car), NO parkPenaltySec (a bike locks at
+  the door — half of why it wins the short hops). BIKE-AND-RIDE = the P+R
+  template on two wheels: ride to `nearestBikeAndRide` (CHEBYSHEV against the
+  range, like every station-reach measure; the ride itself is priced at full
+  detoured length), lock, WALK to the platform, train, egress. New refusals
+  "no-bike"/"no-rack"; "too-far" is shared (each mode's own reach ran out).
+- A CYCLING CITIZEN IS A BIKE: `DrivingPort.request` gained `kind?: "car" |
+  "bike"` (game.ts passes it to `roadSim.requestTrip`); `FIRST_LEG` maps both
+  bike modes to a driving-shaped leg. A bike mode NEVER resumes the parked CAR
+  (`bikeMode` guard in startTrip). Like P+R's car, the B+R bike is retired at
+  the rack's street — the rack STALLS fill with the road sim's own riders; the
+  held-stall "return half" is one open debt for both modes.
+- THE RACK→PLATFORM LEG IS WALKED, never teleported (`arriveFromDrive`, mode
+  bikeAndRide): leg "walking" timed from the real rack tile + a REAL walker.
+  Two footway extensions made that possible, and they fix more than bikes:
+  · `planWalk` endpoints now take a STREET TILE itself (start on its own
+    pavement, both sides seeded — side changes still only at crossings) and a
+    STATION (nearest street beside it — before this, every "walk to the
+    platform" silently fell back to a clock because a station tile is not an
+    `isAddress`).
+  · buildSteps: no driveway stub for a street-tile endpoint (a stub starts at
+    the tile CENTRE = the middle of the carriageway), and the degenerate
+    single-tile single-SIDE walk gets a 0.45–0.55 shuffle so it has steps at
+    all. Only single-side: a step costs fixed TIME, and padding one in front
+    of a zebra held the walker past the kerb-wait the crossing tests measure.
+- KNOCK-ON SHARES, all deliberate (the spec's acceptance: bikes eat
+  WALK-OR-DRIVE share, never transit's): `/test/citizenwalk` walk share 0.89 →
+  ~0.62 (walk+bike > 0.7 pinned instead), citizencars strandings ~55 → high
+  40s (a bike rescues some of the carless — refusal pin now >35), citizenchoice
+  produces FOUR answers (bike joins walk/car/train). `stats().cycling` +
+  HUD 🚴 count the trade against `driving`.
+- `/test/citizenbike` is the flagship: houses 3+ tiles from the platform
+  (transit refused "no-station-in-reach"), rack under the station, workshop up
+  the road, works town rail-only. Pins in `tests/unit/citizenBikes.spec.ts` —
+  including "offered ⇔ bikeRangeOf(affinity) reaches the rack, exactly" and
+  the two end-to-end runs (real bikes; the rack walk observed with a live
+  `walkTrip`).
+
 ## SIM HOT PATH — why the suite was slow (2026-08-01)
 - 90% of a 4m22s unit suite was THREE files (parking 250s, road 120s, sweep 83s),
   and almost all of that was ONE function. `bodyPoints(car)` — a vehicle's sampled
