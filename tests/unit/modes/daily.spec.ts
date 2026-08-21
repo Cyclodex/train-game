@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { dateToSeed, dailyMode, dailyLevelId, todayString } from "@/modes/daily";
+import {
+  dateToSeed,
+  dailyMode,
+  dailyModeFor,
+  dailyLevelId,
+  todayString,
+} from "@/modes/daily";
 import { validateLevel } from "@/tiles/validate";
 import { assignColors } from "@/utils/colorAssignment";
 import { makeRng } from "@/utils/globalHelpers";
@@ -10,6 +16,17 @@ const EMPTY_CTX = {
   trains: [],
   levelId: "ignored",
 };
+
+// The ruleset with the calendar PINNED. These cases assert the shape of a
+// generated board — its validity, its depots, its colours — and running them
+// against TODAY made CI's subject change every midnight: a red build would be
+// un-reproducible the next morning, and a seed that generated an awkward board
+// would fail for one day only. `dailyModeFor(date)` is the same ruleset with
+// the date fixed, so the assertions are about the pipeline, not about the day.
+// (`dailyMode` itself — resolving the date at setup time — is covered on its
+// own below.)
+const PINNED_DATE = "2026-06-15";
+const pinnedDaily = dailyModeFor(PINNED_DATE);
 
 // ─── dateToSeed ─────────────────────────────────────────────────────────────
 
@@ -69,28 +86,34 @@ describe("todayString", () => {
 
 describe("dailyMode setup", () => {
   it("ignores the incoming context and generates its own board", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     // Generated board is non-empty.
     expect(Object.keys(setup.level).length).toBeGreaterThan(0);
     expect(setup.trains.length).toBeGreaterThan(0);
   });
 
   it("is deterministic: calling setup twice on the same day produces identical results", () => {
-    const s1 = dailyMode.setup(EMPTY_CTX);
-    const s2 = dailyMode.setup(EMPTY_CTX);
+    const s1 = pinnedDaily.setup(EMPTY_CTX);
+    const s2 = pinnedDaily.setup(EMPTY_CTX);
     expect(JSON.stringify(s1.level)).toBe(JSON.stringify(s2.level));
     expect(JSON.stringify(s1.trains)).toBe(JSON.stringify(s2.trains));
     expect(JSON.stringify(s1.colors)).toBe(JSON.stringify(s2.colors));
     expect(s1.levelId).toBe(s2.levelId);
   });
 
-  it("levelId is daily:<YYYY-MM-DD>", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
-    expect(setup.levelId).toMatch(/^daily:\d{4}-\d{2}-\d{2}$/);
+  it("levelId is daily:<the pinned date>", () => {
+    expect(pinnedDaily.setup(EMPTY_CTX).levelId).toBe(dailyLevelId(PINNED_DATE));
+  });
+
+  it("the unpinned mode resolves the date AT SETUP TIME (today's board)", () => {
+    // The one case that must NOT be pinned: `dailyMode` takes no date, so a
+    // session that survives midnight has to generate the new day on its next
+    // setup. Only the levelId is asserted — the board itself is today's.
+    expect(dailyMode.setup(EMPTY_CTX).levelId).toBe(dailyLevelId(todayString()));
   });
 
   it("the generated board passes validateLevel with the train routes", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     // Reconstruct routes from train defs: each train's start depot → ... but
     // since the daily board only uses trainsFromRoutes (one destination each),
     // we can derive routes from the level's depots. Validate at minimum that the
@@ -101,7 +124,7 @@ describe("dailyMode setup", () => {
   });
 
   it("every train starts in a depot tile", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     for (const def of setup.trains) {
       const start = setup.level[`${def.x},${def.y}`];
       expect(start?.role).toBe("depot");
@@ -109,7 +132,7 @@ describe("dailyMode setup", () => {
   });
 
   it("colours are assigned and cover every train and depot", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     const colors = setup.colors!;
     for (const def of setup.trains) {
       expect(colors.trainColors[def.id]).toBeTruthy();
@@ -123,21 +146,20 @@ describe("dailyMode setup", () => {
   });
 
   it("objective requires delivering every train", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     expect(setup.objective.deliveriesRequired).toBe(setup.trains.length);
   });
 
   it("offers three stars: speedrun, hands-off, perfect-colours", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     const ids = (setup.objective.stars ?? []).map(s => s.id).sort();
     expect(ids).toEqual(["hands-off", "perfect-colours", "speedrun"]);
   });
 
   it("colours are deterministic from the seed (re-producing them matches)", () => {
-    const setup = dailyMode.setup(EMPTY_CTX);
+    const setup = pinnedDaily.setup(EMPTY_CTX);
     // Re-derive colours independently from the seed — they must match.
-    const today = todayString();
-    const seed = dateToSeed(today);
+    const seed = dateToSeed(PINNED_DATE);
     const rederived = assignColors(setup.level, setup.trains, makeRng(seed));
     expect(setup.colors!.depotColors).toEqual(rederived.depotColors);
     expect(setup.colors!.trainColors).toEqual(rederived.trainColors);
