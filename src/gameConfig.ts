@@ -39,6 +39,9 @@ export interface GameConfig {
   debug: boolean;
   automaticTrafficLights: boolean;
   automaticRoutePlanning: boolean;
+  // Half the rail gauge, in px: how far either rail sits from the track
+  // centreline (the sleeper band's middle). Set from the real proportion —
+  // see the default below.
   railDistanceFromPath: number;
   switchLockMode: SwitchLockMode;
   // Seed for deterministic depot/train colour assignment (see colorAssignment.ts).
@@ -76,7 +79,12 @@ export const gameConfig: GameConfig = reactive({
   debug: false,
   automaticTrafficLights: true,
   automaticRoutePlanning: false,
-  railDistanceFromPath: 7,
+  // The sleeper band is 20px wide (TileRail.vue's stroke-width), so a sleeper
+  // reaches 10px either side of the centreline. Real standard-gauge track puts
+  // the rails at 1435mm on a 2600mm sleeper — 55% of its half-length — which is
+  // 10 × 0.55 = 5.5px here. It was 7px (70%), which left barely a 3px sleeper
+  // end beyond the rail and read as the track sitting on the sleeper tips.
+  railDistanceFromPath: 5.5,
   switchLockMode: "off",
   colorSeed: 1,
   roads: true,

@@ -34,10 +34,20 @@ class MenuDrawer extends Vue {
 
   created() {
     try {
-      this.collapsed = localStorage.getItem(this.storageKey) === "1";
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.collapsed = stored === "1";
+        return;
+      }
     } catch {
       /* ignore */
     }
+    // No stored preference: a phone-sized screen starts with the drawer tucked
+    // away — expanded, it covers most of the board. The side tab reopens it,
+    // and an explicit choice (either way) is remembered above.
+    this.collapsed =
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 700px)").matches;
   }
 
   toggle() {

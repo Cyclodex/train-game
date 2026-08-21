@@ -93,7 +93,8 @@ renderer import this module, so topology is defined exactly once. See
 - `autotile.ts` — `deriveConnections()`: derive a cell's connections from its
   neighbours. Used by the generator (the editor draws connections explicitly).
 - `editOps.ts` — pure single-cell editing reducers (`toggleConnection`,
-  `setDepot`/`rotateDepot`, `toggleSignalPort`) used by the editor.
+  `setDepot`/`rotateDepot`, `toggleSignalPort`, `setJunctionSignalMode`,
+  layer-scoped `eraseLayer`) used by the editor.
 - `validate.ts` — `validateLevel()`: connectivity / dangling-track / reachable
   depots / per-train route checks.
 - `generate.ts` — `generateLevel(seed, opts)`: seeded procedural levels (a track
@@ -226,10 +227,17 @@ Key files:
 - `src/App.vue` — thin shell: `<router-view>`.
 - `src/views/PlayView.vue` — level + train definitions, creates/provides the game,
   pause/play and speed (1x/2x/4x scale the loop's `dt`), delivery count, layout.
-- `src/views/EditorView.vue` — connect/depot/signal/erase tools. Connect draws
-  rail connections explicitly (drag edge dot → edge dot; click a rail to delete);
-  signals are per-direction (click a port). Live validation, random-map button,
-  export/import, "Play this" hand-off.
+- `src/views/EditorView.vue` — the build tools behind a three-row dock
+  (`BuildDock.vue`): four categories (Rail / Road / Terrain / Bulldozer) with
+  tabs separating the verbs (Rail: Track·Stations·Signalling; Road:
+  Roads·Upgrade·Traffic lights·Parking; Terrain: Ground·Height). Road widths
+  are catalog items with a live cross-section preview; traffic-light modes are
+  pick-then-apply items; the bulldozer erases per layer (all/rail/road/parking/
+  terrain). Keys 1–4 switch categories; each remembers its last tab+tool.
+  Connect draws rail connections explicitly (drag edge dot → edge dot; a ✕
+  handle deletes one rail); signals are per-direction (click a port). Live
+  validation, random-map button, export/import, "Play this" hand-off. Design:
+  `docs/superpowers/specs/2026-08-21-build-ui-redesign-design.md`.
 - `src/game.ts` — the `createGame()` controller + rAF render loop (see above).
 - `src/sim/*` — the headless simulation (see the Simulation section).
 - `src/tiles/*` — the data-driven tile model (see the Tile model section).
@@ -238,14 +246,17 @@ Key files:
 - `src/components/Train.vue` — pure loco/wagon sprite renderer (positioned by the
   game loop).
 - Other components: `Crossing.vue` (level-crossing booms/lights),
-  `CarRouteOverlay.vue` (debug car-route line), `MenuDrawer.vue`/`ToolDock.vue`
-  (frosted-glass HUD chrome), `ScenarioThumb.vue` (static test-gallery preview).
+  `CarRouteOverlay.vue` (debug car-route line), `MenuDrawer.vue`/`BuildDock.vue`
+  (frosted-glass HUD chrome; BuildDock is the editor's three-row build dock),
+  `ScenarioThumb.vue` (static test-gallery preview).
 - `src/modes/` — the game-modes framework. `types.ts` defines the `GameMode`
   contract (setup, controls gating, `createObjective`, optional `Spawner`, HUD);
   `index.ts` is the registry; one file per mode (`sandbox`, `puzzle`, `daily`,
   `time-attack`, `crossing-keeper`); `lastMode.ts` persists the last-opened mode.
 - `src/themes.ts` — world backdrop registry (`THEMES`, `nextTheme`, `isWorldTheme`);
-  `src/utils/meadowBackdrop.ts` builds the seamless meadow backdrop SVG.
+  `src/utils/meadowBackdrop.ts` owns the seeded meadow tree layout, rendered by
+  `components/BackdropTrees.vue` as a world overlay ABOVE rails/trains/cars
+  (the canopy z band), not as a background under the board.
 - `src/objectiveStore.ts` — per-level best-result (stars/time) persistence;
   `src/gameLog.ts` — humanises `SimEvent`s into an activity log;
   `src/utils/colorAssignment.ts` — deterministic, solvable depot/train colours.

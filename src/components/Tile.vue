@@ -2452,10 +2452,12 @@ export default toNative(Tile);
   stroke-dashoffset: 2;
   stroke-linecap: butt;
 }
+/* The flyover deck's own track. Must match TileRail.vue's ground rails, or the
+   line visibly changes weight where it climbs onto the deck. */
 .deck-rail {
   fill: none;
   stroke: gray;
-  stroke-width: 1px;
+  stroke-width: 1.6px;
 }
 
 /* --- tunnel (the line is underground) ---
@@ -2650,7 +2652,7 @@ export default toNative(Tile);
   font-size: 10px;
 }
 /* The name plate on the building's front, in the HUD's own chrome (MenuDrawer /
-   ToolDock): a small dark tag, so a place name on the board and a place name in
+   BuildDock): a small dark tag, so a place name on the board and a place name in
    the panel are visibly the same kind of label. Placed by `stationPlateStyle` —
    the `top`/`left`/`transform` here are only the fallback for a station on a
    shape that has no platform strip. */

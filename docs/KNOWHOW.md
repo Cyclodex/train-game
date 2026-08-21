@@ -316,6 +316,19 @@ lean — prune as much as you add. This file only stays useful if every task ten
   and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
   renders its ground/scatter a SECOND time above the trains, clipped to the
   tile, as the bore's roof (see TUNNELS).
+- BACKDROP TREES ARE CANOPY TOO (2026-08-21): the meadow theme's seeded tree
+  scatter is NOT a CSS background any more — it was `--meadow-trees` under the
+  board, which put every crown BEHIND the rails/trains/cars laid over it. It is
+  one `<BackdropTrees>` world overlay per view (Play/Editor/TestStage, inside
+  `.level`, absolutely positioned, z7 like `.tile-canopy`), same seed + 680px
+  pattern as before (`meadowTreeLayout` in utils/meadowBackdrop.ts). A tree
+  whose BASE cell is swallowed — non-grass terrain, `parking`, a `role` plot —
+  is dropped (`backdropTreeHiddenBy`), and the forest's right-of-way rule
+  applies too: a trunk within TRUNK_CLEAR of a rail/road corridor (own cell +
+  4 side-neighbours, `backdropCorridorsAt`/`backdropTreeFelledBy`) is felled,
+  while one beside the line keeps its crown OVER the traffic. /test scenario:
+  `backdroptrees`. TestStage never had backdrop trees before; now the 🌳 BG
+  toggle governs them like the rest of the theme.
 
 ## EDITING THE WORLD WHILE IT RUNS (P0, 2026-07-26)
 - THE SIM READS THE LEVEL LIVE. `traverse`, `resolveExitPort`, `routeToNextSignal`
@@ -1480,6 +1493,88 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   steady while the town self-selects for drivers, so `access` shows the failure
   only as a DIP — assert on the minimum over a run, never the end state.
 
+## LIFE STAGES & DAILY ROUTINES (2026-08-04)
+- Everybody used to get the same three numbers (`outHour`/`backHour`/`shopHour`),
+  so a board had TWO SPIKES AND ELEVEN DEAD HOURS. A citizen now has
+  `stage: LifeStage` + `routine: Activity[]` — a list of `{target, from?, hour,
+  windowH, everyNDays, lastDay}` rolled once at move-in. Five stages: `child`,
+  `worker`, `shiftWorker`, `tradesperson`, `retired`.
+  Measured on `/test/citizenday`, busiest "travelling" per in-game hour, same map
+  and seed, only the mix changed: **at 14:00 and 15:00 an all-worker town has
+  NOBODY out at all** where the mixed one has 17. Trough/peak 0.00 → 0.19, and
+  the peaks barely move — same people, spread over the hours they would use.
+- `TripPurpose` IS the activity target (`home|work|shop|school|leisure|callout`),
+  so there is no second `purpose` field to keep in step. Still only THREE topics:
+  school/callout → `commute`, leisure → `errands`. A fourth `Topic` would drag
+  `CityHappiness`, `recompute()` and the panel behind it to say nothing new.
+- **Resolve a target when the activity FIRES, never at move-in.** The nearest shop
+  fills up, a call-out is a different address every day, a school may not exist.
+- **`everyNDays` parity must include the ACTIVITY INDEX**
+  (`(dayIndex + hashId(id) + i) % n`). Leave it out and all of one person's
+  every-other-day activities land on the same days — the empty-day bug in
+  miniature.
+- **`from` (anchor an activity to where it starts) is not polish.** The old errand
+  rolled 10:00–19:00 and was gated on being at home, so for most workers the
+  window opened while they were at their desk and THE TRIP NEVER HAPPENED. A trip
+  home never carries `from`, so wherever the day left somebody they can get back.
+- `TileCell.zone?: PlotKind` overrides the derived kind, applied AFTER the shop
+  ranking so zoning a school does not promote some other house into the parade.
+  `PlotKind` lives in `tiles/model.ts` now (it is tile data), re-exported from
+  `tiles/cities.ts`. **A school's capacity is its TEACHERS, not its pupils** —
+  capacity on a non-home plot is JOBS and `reviewDay` gates growth on
+  `freeJobs > 0`, so a 160-pupil school hands every town imaginary employment.
+- `CitizenTuning.stageMix` replaces `joblessShare`. Tests that want one life say
+  `stageMix: { worker: 1, … }`.
+- **POPULATION IS A BLUNTED SIGNAL ON A STRANDED BOARD NOW; THE BARS ARE THE
+  SHARP ONE.** A quarter of every town is children and retired residents whose
+  whole day is a local walk — journeys that succeed with no railway at all. They
+  are happy, they pull the mean mood up, and newcomers keep arriving faster than
+  the stranded commuters leave. Measured on threecities with NO trains, same
+  seed, only the mix changed:
+
+  | | Westfield | Eastfield | Steinbach (walks) |
+  |---|---|---|---|
+  | all workers | 47 → 22 | 43 → 30 | 21 → 84 |
+  | life stages | 47 → **72** | 43 → **56** | 21 → 84 |
+
+  The failure is still perfectly visible — Eastfield's commute bar reads 0.53
+  against Steinbach's 1.00 — it just is not visible in the headcount. Assert on
+  `happiness.commute`/`access`, and keep an ALL-WORKER control run beside it
+  (`citizensModeWith({ stageMix: { worker: 1, … } })`) so a real weakening of the
+  model cannot hide behind the non-commuter floor. This is the same CHURN the
+  road-only note below describes, amplified.
+
+## BIG CITIZEN BOARDS (`/test/hinterland`, 35x24, 2026-08-04)
+Four rules, each measured on that board, each of which failed silently:
+- **A house column three tiles from BOTH railway corridors strands everyone in it
+  without a car** — no walk (`walkMaxTiles: 4`), no car, no station in reach, so
+  every trip out is REFUSED. The tell is the red Access bar on the city card.
+  Lay a village as `rail · road · house · road · rail`: every column one tile
+  from a carriageway AND two from a platform. A town is at most as wide as its
+  lines can serve.
+- **Past a point, MORE TRAINS MAKE A RAILWAY CARRY LESS.** Six services on a
+  single-track theta spent the day holding each other at signals: rail share fell
+  38% → 4% and a six-day headless run took SEVEN TIMES longer. On single track a
+  service is a block; buy wagons, not trains. (4 x 10 wagons ships.)
+- **A DAILY trip must be a LOCAL trip.** With one café in the valley every retired
+  resident of the far village rode three quarters of the ring for a coffee every
+  day, gave up, and the village fell 136 → 32 in six days. Make the SCARCE thing
+  the twice-a-day one (the school), never the daily one.
+- **A pure dormitory dies.** Villages whose every job is a lap away lost half
+  their people. Two industrial plots each and all three villages bottom out on
+  day three and then GROW AGAIN with their happiness. A place needs a reason to
+  stay as well as a reason to travel.
+- A ring is one-directional, so the way HOME is the long way round. Watch
+  `maxTransfers` (6): a return leg past seven platforms fails outright.
+- Build a big board's road net from a SET OF COORDINATES and derive each tile's
+  lanes from which neighbours are road (2 arms → `twoWay`, more → every arm to
+  every other). Hand-authoring `twoWay(L,R)+twoWay(T,B)` at a crossroads makes a
+  junction nobody can turn at; deriving it cannot.
+- A `TrainDef` built for a headless test MUST carry `destinations` and `line` —
+  omit them and the trains sit in their sheds while the probe reports "transit
+  0%" and you go looking for a bug in the citizens. Copy `buildTrainDefs` from
+  `TestStage.vue`.
+
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE
   `canBuildOn` (`if (cell?.bridge) return true`), never as a second predicate
@@ -1727,6 +1822,32 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - `isBlankCell` MUST count `height` (it does now): the editor's cleanup would
   otherwise silently drop a height-only cell and flatten the hill it was part
   of.
+
+## EDITOR: the three-row build dock (2026-08-21)
+- The dock is `BuildDock.vue` (presentational; EditorView owns ALL state):
+  categories Rail / Road / Terrain / Bulldozer → tabs separating the verbs →
+  items. Brush-like tools (terrain kinds, stall kinds, road widths 1L/2L/3L,
+  traffic-light modes, bulldozer scopes) are ITEMS carrying their parameter —
+  several items share one `Tool`, and `isActiveItem` matches on the PARAMETER,
+  or every sibling lights up together.
+- Traffic lights are pick-then-apply (`setJunctionSignalMode`), NOT the old
+  6-state cycle (`cycleJunctionSignalMode` survives for back-compat). The
+  lights tab default-arms Two-phase via a pre-seeded `itemByTab` entry — its
+  first item is Off, and arming Off by default makes the first junction click
+  DELETE lights.
+- The bulldozer is layer-scoped: `eraseLayer(cell, "rail"|"road"|"parking"|
+  "terrain")` in editOps. Road erase takes `parking` with it (rows sit on the
+  kerbs of the street being removed); a structure (bridge/tunnel) goes with the
+  LAST line it carried, and terrain erase drops it too (no bridge over grass).
+  "Everything" is the caller's `delete level[id]`, not an EraseLayer value.
+- The dock has a FIXED width (880px desktop) so the category row never shifts
+  when tabs of different widths open; the camera's bottom inset is MEASURED off
+  `.build-dock-wrap` (the old constant 128 predates the three-row dock).
+- Keys 1–4 pick categories (guarded: not from INPUT/TEXTAREA, not with a
+  modifier); each category remembers its last tab + item per session.
+- e2e tests must open the right TAB before clicking a tool button — Depot is
+  Rail→Stations, Signal Rail→Signalling, the erase ✕ handles are Bulldozer
+  (default filter Everything; rail ✕ only shows for scope all|rail).
 
 ## EDITOR: heights & flyover tools (2026-07-31)
 - The HEIGHT brush (Terrain drawer → 🔼/🔽) paints ±1 per cell PER STROKE —
@@ -2971,9 +3092,39 @@ of the above; read that section first.
   Lane-graph overlay code must stay identical to it. Cyan ≠ painted dash/gore at a
   seam ⇒ the PAINT is the bug. Overlay is the diagnostic for all road geometry.
 
+## TRACK PROPORTIONS (2026-08-20)
+- Anchor the track's look on REAL numbers — standard gauge 1435mm on a 2600mm
+  sleeper, i.e. the rails at **55% of the sleeper's half-length**. Everything is
+  drawn in `TileRail.vue`: the sleeper band is the centreline stroked 20px
+  (`stroke-dasharray="4 5"`), the rails are `railPathsFor` stroked 1.6px grey.
+- RAIL STROKE 1.6, not the old 1. A 1px grey hairline all but disappears into
+  the sleeper band at normal board zoom — the track read as bare sleepers with
+  no metal on it. `Tile.vue`'s `.deck-rail` (the flyover deck's own track) must
+  carry the SAME width, or the line changes weight where it climbs onto the deck.
+- `railDistanceFromPath` = HALF THE GAUGE in px, and 20/2 × 0.55 = **5.5**. It was
+  7 (70%), which left a 3px sleeper end past the rail and read as "rails sitting
+  on the sleeper tips" — the user spotted it by eye before the maths was done.
+- The terrain keep-out (`terrain.ts RAIL_HALF = 8` units) follows the SLEEPER,
+  not the rail, so re-gauging does not move the cleared right-of-way.
+- SLEEPER PITCH IS DELIBERATELY COARSE. Real pitch would be ~"2.5 3" (600mm
+  centres at 1px = 130mm), roughly twice as many sleepers. Tried and rejected:
+  it looks right at a macro crop and blurs into a solid dark band at the normal
+  board zoom, where the track loses its railway texture. Judge any sleeper/rail
+  weight change at BOARD scale (`npm run shot -- railcurves --scale 2`), not
+  only on a zoomed crop.
+
 ## CURVES — rail ≠ road (the #1 trap)
-- RAIL curve = quadratic Bézier through TILE CENTRE (`Q centre`). `geometry.ts
-  railPathsFor`, `pathGeometry.ts segmentPathD`.
+- RAIL curve CENTRELINE (the sleeper bed, the path a train drives) = quadratic
+  Bézier through TILE CENTRE (`Q centre`). `pathGeometry.ts segmentPathD`.
+- The two RAILS are a TRUE PARALLEL OFFSET of that quad — every sample pushed ⟂
+  to ITS OWN tangent, emitted as a 24-leg polyline (`geometry.ts railPathsFor`).
+  NOT a `Q` with offset endpoints (2026-08-20 fix): offsetting only the endpoints,
+  ⟂ to the CHORD, with the control point left at the tile centre, gave (a) HALF
+  GAUGE at the apex — 14px at the ports, 7px mid-bend, the rails visibly merging
+  into one line through every curve — and (b) a ~5px SIDEWAYS JOG at every seam,
+  since a Left↔Bottom curve started its rail at (−4.95, 104.95) while the abutting
+  straight put its own at (0, 107). Same rule as the road (next-but-one bullet):
+  offset the SAMPLED centreline, never the control point. `/test/railcurves`.
 - ROAD turn = 90° CIRCULAR ARC around the WRAPPED TILE CORNER, r=size/2, tangent
   at port edges (`A r r 0 0 sweep`). `roadSegmentPathD`, `turnCornerPoint` (=pa+pb−c).
   Centre-quad bulged into the junction box — fixed bug. Don't merge road turn → rail quad.
@@ -2983,7 +3134,8 @@ of the above; read that section first.
   overlap on curves. `scaleX` sprite-foreshorten was REVERTED (user hated it) —
   wrong cause. Kept: chord render (`UnitChord{front,rear}`) + `BOGIE_INSET_FRAC=0.2`.
 - Constant-width road curve: offset the SAMPLED centreline ⟂ (`laneOffsetPointAt`),
-  never the Bézier control point (pinches apex).
+  never the Bézier control point (pinches apex). Holds for RAIL too — the rail
+  gauge is the same problem and had the same bug for a year (see above).
 - Turn-LANE path = corner FILLET of the two lane lines (`pathGeometry.ts
   turnLaneFrame`/`turnLanePointAt`): straight-in, max arc tangent to both, straight-
   out. NOT the arc lerp(offEntry,offExit)-pushed (unequal offsets kink at seam =
