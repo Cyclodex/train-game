@@ -26,7 +26,7 @@ const { Left, Right } = Position;
 //     brakes for the identical predicate (a train reserving or standing on the
 //     tile), so the booms hold up the queue and the crowd together.
 //  4. **The commute is the cost.** Every journey on this board pays for the
-//     wait, and the city card's commute bar is where it shows up.
+//     wait, and the city card's Work bar is where it shows up.
 //
 // Both depot colours are set to the SAME value while the train is set to
 // another, so it bounces back out of every depot it reaches instead of parking:

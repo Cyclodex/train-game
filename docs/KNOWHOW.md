@@ -1617,7 +1617,7 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   | all workers | 47 → 22 | 43 → 30 | 21 → 84 |
   | life stages | 47 → **72** | 43 → **56** | 21 → 84 |
 
-  The failure is still perfectly visible — Eastfield's commute bar reads 0.53
+  The failure is still perfectly visible — Eastfield's Work bar reads 0.53
   against Steinbach's 1.00 — it just is not visible in the headcount. Assert on
   `happiness.commute`/`access`, and keep an ALL-WORKER control run beside it
   (`citizensModeWith({ stageMix: { worker: 1, … } })`) so a real weakening of the
@@ -1628,7 +1628,7 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 Four rules, each measured on that board, each of which failed silently:
 - **A house column three tiles from BOTH railway corridors strands everyone in it
   without a car** — no walk (`walkMaxTiles: 4`), no car, no station in reach, so
-  every trip out is REFUSED. The tell is the red Access bar on the city card.
+  every trip out is REFUSED. The tell is the red Connection bar on the city card.
   Lay a village as `rail · road · house · road · rail`: every column one tile
   from a carriageway AND two from a platform. A town is at most as wide as its
   lines can serve.
@@ -1666,7 +1666,7 @@ Four rules, each measured on that board, each of which failed silently:
   rest of a six-day run, one for 354 unbroken seconds.
   · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
     after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
-    car never arrives, with the town's commute bar pinned at 0.00 while its
+    car never arrives, with the town's Work bar pinned at 0.00 while its
     neighbours recover. Car mode share sagging (0.20 → 0.11) is the same fact.
   · **Look for FROZEN cars, not slow ones, and read `velocity` — NOT `speed`.**
     `RoadSim.cars()` reports both; `speed` is the driver's preferred cruise and

@@ -70,7 +70,7 @@ const { Top, Right, Bottom, Left } = Position;
 // them for 354 unbroken seconds; 35 journeys a day ending "given up on after
 // 9h 36m", which is exactly `maxWaitSec * 2`, the give-up clock for a driver
 // whose car never arrives; car mode share falling 0.20 → 0.11 as the survivors
-// gave up on driving; and Marktstadt's commute bar pinned at 0.00-0.08 while
+// gave up on driving; and Marktstadt's Work bar pinned at 0.00-0.08 while
 // Nordheim recovered to 0.77 and Südau to 0.50.
 //
 // The earlier note in this file blamed `deriveWorkplaceParking`. That was wrong,
@@ -242,7 +242,7 @@ function roadTiles(): Set<string> {
   // day on a board that looked fine. And a house column three tiles from BOTH
   // railway corridors strands everyone in it who does not own a car: no walk, no
   // car, no station in reach, so every trip out of the village is refused. That
-  // is what the red Access bar on the city card means, and it is why the village
+  // is what the red Connection bar on the city card means, and it is why the village
   // is exactly as wide as its two lines can serve and not one column wider.
   run(3, 5, 3, 22); // the long west street, carrying on south to Südau
   run(5, 5, 5, 18);
