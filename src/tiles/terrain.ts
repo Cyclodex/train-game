@@ -2272,7 +2272,21 @@ function tileRng(coordId: string, seed: number): Rng {
 // its coord, the world seed or the tracks/roads through it change — none of
 // which move during play. Without this, panning a 20x14 board would redraw
 // ~280 tiles of procedural art per frame.
-const cache = new Map<string, { ground: string; scatter: string; canopy: string }>();
+/**
+ * The four render layers a tile's ground art is split across, bottom to top:
+ * the flat `ground` (patch, terraces, marks), the `scatter` that stands on it
+ * (trees, boulders, ridges), the `structures` people build (houses, terraces,
+ * blocks, works sheds) and the `canopy` that reaches out over a corridor.
+ *
+ * `structures` is a SEPARATE layer from `scatter` for one reason only: a
+ * building is TALL, and a citizen walking the stub from their own front door to
+ * the kerb crosses their plot — i.e. walks straight over the roof. Scatter
+ * renders under the traffic (z1); structures render over it (z7), so a walker
+ * disappears behind a house and comes out the other side. See TileGround.vue.
+ */
+type GroundArt = { ground: string; scatter: string; structures: string; canopy: string };
+
+const cache = new Map<string, GroundArt>();
 
 function buildCached(
   kind: TerrainKind,
@@ -2281,7 +2295,7 @@ function buildCached(
   seed: number,
   corridors: Corridor[],
   elevation?: Elevation,
-): { ground: string; scatter: string; canopy: string } {
+): GroundArt {
   const same: PatchSame = {
     top: neighbours.top === kind,
     right: neighbours.right === kind,
@@ -2751,8 +2765,9 @@ export function tileGroundSvg(
 }
 
 /**
- * The tile's STANDING objects — trees, bushes, boulders, ridges, buildings —
- * on their own layer above every tile's ground patch. The split is what stops
+ * The tile's STANDING SCENERY — trees, bushes, boulders, ridges — on its own
+ * layer above every tile's ground patch. (Buildings are NOT here: they have a
+ * layer of their own, `tileStructuresSvg`.) The split is what stops
  * the next tile's opaque patch fill (later in the DOM) decapitating a canopy
  * that legitimately overhangs the seam: patches all live below, scatter all
  * lives above. Still under the rails and roads (see TileGround.vue).
@@ -2766,6 +2781,24 @@ export function tileScatterSvg(
   elevation?: Elevation,
 ): string {
   return buildCached(kind, coordId, neighbours, seed, corridors, elevation).scatter;
+}
+
+/**
+ * The tile's BUILDINGS — houses, terraces, blocks, halls, works sheds — on
+ * their own layer ABOVE the traffic, so a citizen walking the stub between
+ * their front door and the kerb passes BEHIND the house instead of over its
+ * roof. "" for every kind but urban and industry. See TileGround.vue for the z
+ * band and tiles/terrain.ts → GroundArt for why the split exists.
+ */
+export function tileStructuresSvg(
+  kind: TerrainKind,
+  coordId: string,
+  neighbours: TerrainNeighbours = ALL_GRASS,
+  seed = 1,
+  corridors: Corridor[] = [],
+  elevation?: Elevation,
+): string {
+  return buildCached(kind, coordId, neighbours, seed, corridors, elevation).structures;
 }
 
 /**
@@ -2804,7 +2837,7 @@ function buildMeadow(
   seed: number,
   corridors: Corridor[],
   terraces = "",
-): { ground: string; scatter: string; canopy: string } {
+): GroundArt {
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
   const room = (p: Pt2): number =>
@@ -2862,6 +2895,8 @@ function buildMeadow(
     // authored on plain grass renders identically to before.
     ground: terraces + marks.join(""),
     scatter: placed.map(p => p.g).join(""),
+    // Nothing is BUILT on open grass — a thorn tree and a bush are scatter.
+    structures: "",
     canopy: "",
   };
 }
@@ -2873,14 +2908,14 @@ function buildGround(
   seed: number,
   corridors: Corridor[],
   elevation?: Elevation,
-): { ground: string; scatter: string; canopy: string } {
+): GroundArt {
   const base = GROUND[kind];
   const terraces = terraceSvg(kind, coordId, seed, elevation);
   // Grass has no ground of its own to paint, but it does have things growing on
   // it — a different build entirely, and the only one that must never emit a
   // fill (see meadowScatter).
   if (kind === "grass") return buildMeadow(coordId, seed, corridors, terraces);
-  if (!base) return { ground: terraces, scatter: "", canopy: "" };
+  if (!base) return { ground: terraces, scatter: "", structures: "", canopy: "" };
 
   const rng = tileRng(coordId, seed);
   const { x, y } = parseCoordId(coordId);
@@ -3060,6 +3095,9 @@ function buildGround(
     };
   }
   const placed: { y: number; g: string }[] = [];
+  // What people BUILT here, kept apart from what grows here: same placement,
+  // same depth sort, a layer of its own above the traffic (see GroundArt).
+  const raised: { y: number; g: string }[] = [];
   const overhead: { y: number; g: string }[] = [];
   for (let i = 0; i < count; i++) {
     // Keep objects ON the patch (see `place` above) and their footprint OFF
@@ -3110,6 +3148,9 @@ function buildGround(
         kind === "forest" && clear < FOOT.forest * scale && clear >= TRUNK_CLEAR;
       if (clear < FOOT[kind] * scale && !overhang) continue;
       let body: string;
+      // Set by the two BUILT kinds below, and the only thing that decides which
+      // layer this object lands on.
+      let structure = false;
       if (kind === "forest") {
         body = tree(rng, (overhang ? Math.max(scale, 1.05) : scale) * 0.42);
       } else if (kind === "rock") body = boulder(rng, scale);
@@ -3129,8 +3170,9 @@ function buildGround(
             : worksBuilding(rng, scale, room);
         blockers.push({ pts: [p, p], half: built.reach });
         body = built.svg;
+        structure = true;
       } else body = lily(rng, scale);
-      (overhang ? overhead : placed).push({
+      (overhang ? overhead : structure ? raised : placed).push({
         y: p.y,
         g: `<g transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})">${body}</g>`,
       });
@@ -3139,11 +3181,13 @@ function buildGround(
   }
   // Back to front, so a nearer canopy overlaps a farther one naturally.
   placed.sort((a, b) => a.y - b.y);
+  raised.sort((a, b) => a.y - b.y);
   overhead.sort((a, b) => a.y - b.y);
 
   return {
     ground: parts.join(""),
     scatter: placed.map(p => p.g).join(""),
+    structures: raised.map(p => p.g).join(""),
     canopy: overhead.map(p => p.g).join(""),
   };
 }

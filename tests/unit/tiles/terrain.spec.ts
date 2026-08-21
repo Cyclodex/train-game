@@ -25,6 +25,7 @@ import {
   tileCanopySvg,
   tileGroundSvg,
   tileScatterSvg,
+  tileStructuresSvg,
   TERRAIN_KINDS,
 } from "@/tiles/terrain";
 import { TerrainNeighbours } from "@/tiles/terrain";
@@ -528,7 +529,8 @@ describe("terrain", () => {
         for (const coord of ["6,6", "2,9", "11,4"]) {
           const svg =
             tileGroundSvg(kind, coord, around(kind), 3) +
-            tileScatterSvg(kind, coord, around(kind), 3);
+            tileScatterSvg(kind, coord, around(kind), 3) +
+            tileStructuresSvg(kind, coord, around(kind), 3);
           const coords = [...svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)];
           total += coords.length;
           const [lo, hi] = kind === "forest" ? [0, 100] : [10, 90];
@@ -557,7 +559,8 @@ describe("terrain", () => {
         for (const coord of ["6,6", "2,9", "11,4"]) {
           const svg =
             tileGroundSvg(kind, coord, around("grass"), 3) +
-            tileScatterSvg(kind, coord, around("grass"), 3);
+            tileScatterSvg(kind, coord, around("grass"), 3) +
+            tileStructuresSvg(kind, coord, around("grass"), 3);
           const [x, y] = coord.split(",").map(Number);
           const poly = patchOutlinePolygon(alone, x, y, 3);
           for (const [, px, py] of svg.matchAll(/translate\(([\d.]+) ([\d.]+)\)/g)) {
@@ -592,8 +595,14 @@ describe("terrain", () => {
       // decides them is identical either way.
       for (const kind of TERRAIN_KINDS) {
         if (kind === "grass" || kind === "forest") continue;
-        const deep = trees(tileScatterSvg(kind, "6,6", around(kind), 3));
-        const lone = trees(tileScatterSvg(kind, "6,6", around("grass"), 3));
+        const deep = trees(
+          tileScatterSvg(kind, "6,6", around(kind), 3) +
+            tileStructuresSvg(kind, "6,6", around(kind), 3),
+        );
+        const lone = trees(
+          tileScatterSvg(kind, "6,6", around("grass"), 3) +
+            tileStructuresSvg(kind, "6,6", around("grass"), 3),
+        );
         expect(deep).toBe(lone);
       }
     });
@@ -920,12 +929,12 @@ describe("terrain", () => {
       // tiles are all houses, but a town of several tiles must show something
       // with a real frontage (a terrace, a block, a hall).
       const widest = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].map(coord =>
-        Math.max(...rectWidths(tileScatterSvg("urban", coord, around("urban"), 7))),
+        Math.max(...rectWidths(tileStructuresSvg("urban", coord, around("urban"), 7))),
       );
       expect(Math.max(...widest)).toBeGreaterThan(CAR_UNITS * 2);
       // …and even the modest end of the range is no longer sub-car.
       const all = ["3,3", "4,3", "5,3", "3,4", "4,4", "5,4"].flatMap(coord =>
-        rectWidths(tileScatterSvg("urban", coord, around("urban"), 7)),
+        rectWidths(tileStructuresSvg("urban", coord, around("urban"), 7)),
       );
       const roofs = all.filter(w => w > 8); // skip chimneys and rooftop plant
       expect(Math.max(...roofs)).toBeGreaterThan(CAR_UNITS);
@@ -950,9 +959,9 @@ describe("terrain", () => {
           { from: Position.Right, to: [Position.Left], index: 0 },
         ],
       };
-      const open = rectWidths(tileScatterSvg("urban", "4,4", around("urban"), 7));
+      const open = rectWidths(tileStructuresSvg("urban", "4,4", around("urban"), 7));
       const beside = rectWidths(
-        tileScatterSvg("urban", "4,4", around("urban"), 7, corridorsFor(road)),
+        tileStructuresSvg("urban", "4,4", around("urban"), 7, corridorsFor(road)),
       );
       const big = (ws: number[]) => (ws.length ? Math.max(...ws) : 0);
       expect(big(beside)).toBeLessThan(big(open));
@@ -1052,7 +1061,7 @@ describe("terrain", () => {
       const dropsWest: Elevation = { height: 2, around: { ...flat, left: 1 } };
       for (const c of coords) {
         for (const edge of westEdges(
-          tileScatterSvg("urban", c, around("urban"), 11, [], dropsWest),
+          tileStructuresSvg("urban", c, around("urban"), 11, [], dropsWest),
         )) {
           expect(edge).toBeGreaterThan(BANK_HALF - 1);
         }
@@ -1061,7 +1070,7 @@ describe("terrain", () => {
       // …and that strip is real estate somebody would otherwise have built on,
       // so the assertion above is not vacuous.
       const before = coords.flatMap(c =>
-        westEdges(tileScatterSvg("urban", c, around("urban"), 11)).filter(
+        westEdges(tileStructuresSvg("urban", c, around("urban"), 11)).filter(
           e => e <= BANK_HALF - 1,
         ),
       );
@@ -1077,7 +1086,7 @@ describe("terrain", () => {
       const underCliff: Elevation = { height: 0, around: { ...flat, left: 2 } };
       for (const c of coords) {
         for (const edge of westEdges(
-          tileScatterSvg("urban", c, around("urban"), 11, [], underCliff),
+          tileStructuresSvg("urban", c, around("urban"), 11, [], underCliff),
         )) {
           expect(edge).toBeGreaterThan(BANK_HALF - 1);
         }
@@ -1129,7 +1138,7 @@ describe("terrain", () => {
       // corridor above is asserted directly rather than through the picture.
       for (const c of coords) {
         for (const gap of cornerGaps(
-          tileScatterSvg("urban", c, around("urban"), 11, [], nwDrops),
+          tileStructuresSvg("urban", c, around("urban"), 11, [], nwDrops),
         )) {
           expect(gap).toBeGreaterThan(BANK_HALF - 1);
         }

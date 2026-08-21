@@ -343,7 +343,39 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `<TileGround layer="scatter">` at z-index 1 — above every patch (z0), below
   rails (z2); a road (z1, later DOM in its own cell) still paints over its own
   cell's scenery. Ground layer keeps only patch+rim+marks. Placement tests
-  parse BOTH layers.
+  parse EVERY layer (ground + scatter + structures).
+- **BUILDINGS ARE NOT SCATTER** (2026-08-21): what people BUILT renders on its
+  own `<TileGround layer="structures">` (`tileStructuresSvg`) at **z7**, above
+  the walkers AND the cars (both z6); scenery — trees, bushes, boulders, ridges
+  — stays `scatter` at z1. Reported as "people walk over the houses": a
+  citizen's first leg is the STUB from their own front door to the kerb
+  (`sim/pedestrians.ts`), which crosses the plot the house stands on, so at z1
+  the figure slid across the roof. Only urban/industry emit structures; a tile's
+  art is one `GroundArt` = {ground, scatter, structures, canopy} out of one
+  cached build, so the split costs no extra placement pass.
+    · Lifting a roof over the TRAFFIC is safe for the same reason the canopy
+      layer is: placement already keeps every footprint off the rails and roads
+      of its own cell AND its four side-neighbours (`corridorsFor`), and each
+      placed building pushes its own footprint on as a blocker. A roof can
+      therefore never cover a car, a train or a carriageway — verified on
+      `/test/townscape` (level crossing, booms, cars, a consist: none clipped).
+    · Same z as `.tile-canopy`, mounted BEFORE it in all three boards (Play,
+      Editor, TestStage), so within a cell a crown still overhangs the roof.
+      Across cells DOM order decides — only visible where a forest tile's
+      overhanging crown reaches onto an urban tile drawn later.
+    · The two things that had to come UP with it: PlayView's `.build-overlay`
+      (z5 → z8, or a preview rail drawn through a plot vanished under a roof)
+      and the station NAMEPLATE + latent hint (z5 → z9, because…)
+    · …**the station building is a building too** — `.station-building` went
+      z3 → z7 for the identical reason: it stands in the strip between the outer
+      platform and the tile edge, which is exactly the ground a passenger walks
+      to reach the halt. It is laid clear of the rails (`utils/stationArt.ts`),
+      so nothing that moves is hidden by the lift.
+    · /test scenario: `citizenhouse`. To PROVE it, don't wait for a lucky frame:
+      poll `__game.pedestrians` for one inside a plot's px band, set
+      `paused.value = true` in the SAME evaluate, then shoot the frame twice —
+      once as-is and once with `.tile-structures{z-index:1}` injected. Same
+      walker, same pixel, only the layer.
 - GLADES (2026-07-27): forest trees are rejected where `forestDensityAt` — 
   value noise over a 3-tile WORLD lattice, world-seeded so a clearing never
   traces the grid — runs low; just-over-the-bar rolls keep a low `bush()`, so
@@ -382,9 +414,12 @@ lean — prune as much as you add. This file only stays useful if every task ten
   either vanishes into the ground or reads as blank paper.
 - `<TileGround>` is a SIBLING of `<Tile>` inside `.level-tile`, not a layer in it:
   ground exists on cells with nothing built on them. z-index 0 → under road (1)
-  and rails (2), so scenery never covers track. ONE EXCEPTION: a tunnel cell
-  renders its ground/scatter a SECOND time above the trains, clipped to the
-  tile, as the bore's roof (see TUNNELS).
+  and rails (2), so scenery never covers track. TWO EXCEPTIONS, both deliberate:
+  a tunnel cell renders its ground/scatter a SECOND time above the trains,
+  clipped to the tile, as the bore's roof (see TUNNELS); and the `structures`
+  layer (z7) draws the town's buildings above the traffic (see BUILDINGS ARE NOT
+  SCATTER). Neither can cover track — a bore's roof IS the tile, and a building
+  is placed clear of every corridor.
 - BACKDROP TREES ARE CANOPY TOO (2026-08-21): the meadow theme's seeded tree
   scatter is NOT a CSS background any more — it was `--meadow-trees` under the
   board, which put every crown BEHIND the rails/trains/cars laid over it. It is
@@ -1388,8 +1423,10 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
       connected" and as "the sidewalk is drawn on top of the people" — the
       second was the notch cutting past a walker, NOT a z-order problem: paving
       is z1 and `.pedestrian` is z6, and a pixel probe over the rendered board
-      confirms nothing paints over a walker (the only near-misses are two
-      walkers 3px apart, which the model allows on purpose).
+      confirms no GROUND layer paints over a walker (the only near-misses are
+      two walkers 3px apart, which the model allows on purpose). Since
+      2026-08-21 exactly one thing deliberately does: `.tile-structures` (z7),
+      the houses themselves — see BUILDINGS ARE NOT SCATTER.
     · Verify layer bugs with PIXELS, not `elementsFromPoint`: every tile layer is
       `pointer-events: none`, so hit-testing cannot see them at all. And PAUSE
       the board first (`__game.paused.value = true`) — a rect read one frame and
