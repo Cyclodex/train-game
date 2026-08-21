@@ -29,19 +29,22 @@ export interface SaveMeta {
 
 type SlotMap = Record<string, GameSave>;
 
-// In-memory copy of the store, kept in step with localStorage so a session
-// without storage (private mode / SSR) still saves and loads within itself.
+// In-memory copy of the store, so a session without storage (private mode /
+// SSR) still saves and loads within itself. localStorage is the SOURCE when it
+// works — a cache-first read served a stale slot to any second tab (and to
+// anything else writing the key), and stale state restored silently is the
+// worst failure a save system can have.
 let memory: SlotMap | null = null;
 
 function read(): SlotMap {
-  if (memory) return memory;
   try {
     const raw = localStorage.getItem(KEY);
-    memory = raw ? (JSON.parse(raw) as SlotMap) : {};
+    // No stored key: the in-memory copy still answers (a session whose
+    // setItem fails — quota, private mode — keeps its own saves).
+    return raw ? (JSON.parse(raw) as SlotMap) : (memory ?? {});
   } catch {
-    memory = {};
+    return memory ?? {};
   }
-  return memory;
 }
 
 function write(slots: SlotMap): void {

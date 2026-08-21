@@ -1226,8 +1226,11 @@ class PlayView extends Vue {
       this.pendingSave?.colorSeed ?? gameConfig.colorSeed,
       // When the save pinned colours (it always does — bought trains carry
       // palette colours no seed reproduces), or the mode did (Daily's
-      // deterministic assignment), honour them exactly.
-      this.pendingSave?.colors ?? this._resolved.setup.colors,
+      // deterministic assignment), or the BOARD did (a /test scenario played
+      // via ?board= — its pinned pairs are what make it solvable: the seeded
+      // assignment is reachability-blind, and on a board with disabled turns
+      // it can home a train on a depot it can never reach), honour them.
+      this.pendingSave?.colors ?? this._resolved.setup.colors ?? this.board?.colors,
       DEFAULT_TRAFFIC,
       this._resolved.levelId,
       // Live car cap from the menu setting, read each spawn attempt.
