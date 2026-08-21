@@ -710,7 +710,13 @@ export function stallPose(
   const t = along / size;
 
   // Lateral: out past the kerb, plus any authored verge, to the middle of the bay.
-  const lateral = sideSign * (bayNearPx(row, size, kerbPx) + depth / 2);
+  // INFORMAL kerb is the exception (2026-08-20): there is no bay — nothing is
+  // painted and the pavement never moved — so the car stands HALF ON THE KERB,
+  // centred on the kerb line itself, the way a real car is left on a street
+  // with no marked space. Centred a bay-depth out (the painted-bay pose) it
+  // stood squarely on the pavement band, which is where the report came from.
+  // Moving traffic eases around the protruding half (`laneGeometry`'s squeeze).
+  const lateral = sideSign * (row.informal ? kerbPx : bayNearPx(row, size, kerbPx) + depth / 2);
 
   const travelDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
   // Nose INTO the bay: the rest angle turns from the travel heading toward the

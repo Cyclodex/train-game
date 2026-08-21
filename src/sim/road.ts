@@ -23,6 +23,7 @@ import {
 } from "./parking";
 import { createParkingPhases, type CourtesyClaim } from "./roadParking";
 import {
+  bankFor,
   bankOf,
   manoeuvreAt,
   stallId,
@@ -781,6 +782,13 @@ export interface RoadSim {
   tripParkedKerb(
     tripId: string,
   ): { tileId: string; bank: Port; at: { x: number; y: number } } | null;
+  // Every informally parked car right now, as (tile, kerb bank) pairs. An
+  // informal car stands HALF ON THE KERB (no bay exists — see stallPose), so
+  // its road-side half protrudes into the kerb lane; the renderer reads this
+  // to ease passing traffic toward the centre on exactly these banks (the
+  // squeeze). Duplicates possible when two cars share a stretch — callers set
+  // membership, they don't count.
+  informalParked(): { tileId: string; bank: Port }[];
   // The owner is back. The car gives up its bay — waiting in it, with no road
   // body and no right of way, until the traffic genuinely leaves a gap — and
   // then drives to `toTileId`, where the trip finally reads "arrived".
@@ -3946,6 +3954,14 @@ export function createRoadSim(config: RoadSimConfig): RoadSim {
     },
     tripParkedAt,
     tripParkedKerb,
+    informalParked(): { tileId: string; bank: Port }[] {
+      const out: { tileId: string; bank: Port }[] = [];
+      for (const c of cars) {
+        if (c.phase !== "parked" || !c.parkInformal || !c.stall) continue;
+        out.push({ tileId: c.stall.tileId, bank: bankFor(c.stall.from, c.stall.side) });
+      }
+      return out;
+    },
     releaseTrip,
     abandonTrip,
     clearFinishedTrip(tripId: string) {

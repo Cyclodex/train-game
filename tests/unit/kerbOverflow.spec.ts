@@ -8,7 +8,16 @@ import { cyclelane } from "@/levels/test/scenarios/cyclelane";
 import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
 import { deriveKerbOverflow, kerbOverflowTiles, KERB_SPACES } from "@/tiles/kerbOverflow";
 import { levelBounds } from "@/tiles/bounds";
-import { rowsOf, validateParking, facilitiesOf, bankOf, rowFor } from "@/tiles/parking";
+import {
+  rowsOf,
+  validateParking,
+  facilitiesOf,
+  bankOf,
+  rowFor,
+  stallPose,
+  stallDepthPx,
+  type ParkingRow,
+} from "@/tiles/parking";
 import { createParkingRegistry, stallFits } from "@/sim/parking";
 import { pavementOffsetEndsFor, pavementPaths, roadThrough } from "@/tiles/footway";
 import { twoWay } from "@/tiles/lanes";
@@ -136,6 +145,29 @@ describe("the kerb is derived from the street", () => {
     for (const { id, row } of laid) {
       expect(bankOf(row), `informal kerb on the cycle lane's bank at ${id}`).toBe(Position.Top);
     }
+  });
+
+  it("stands an informal car HALF ON THE KERB, never out in a phantom bay", () => {
+    // A painted parallel bay is a widening of the street: its stall centres
+    // depth/2 beyond the kerb, and the pavement moves out behind it. Informal
+    // kerb paints nothing and moves nothing — centring its car a bay-depth out
+    // stood it squarely ON the pavement band (the report). It now centres on
+    // the kerb line itself: half on the kerb, half in the lane, like a real
+    // car left on an unmarked street. Moving traffic eases around the
+    // protruding half (game.ts's squeeze, capped at the centreline).
+    const base: ParkingRow = {
+      from: Position.Left,
+      side: "right",
+      kind: "parallel",
+      count: 2,
+      marking: "none",
+    };
+    const kerb = 28;
+    const informal = stallPose({ ...base, informal: true }, 0, 200, kerb);
+    const bay = stallPose(base, 0, 200, kerb);
+    // Right of eastbound travel is the Bottom bank: lateral is +y from mid.
+    expect(informal.y).toBeCloseTo(100 + kerb, 6);
+    expect(bay.y).toBeCloseTo(100 + kerb + stallDepthPx("parallel", 200) / 2, 6);
   });
 
   it("keeps off a road opening that stops inside the map, so it still spawns", () => {

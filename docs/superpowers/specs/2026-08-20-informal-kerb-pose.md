@@ -1,8 +1,13 @@
 # Where an informally parked car stands
 
-**Status: proposal (researched, not implemented).** The report: on
-`/test/homeparking` an overflow car stands ON the pavement. The debug ghosts
-(dashed cyan stall boxes, 2026-08-20) make the cause visible on any board.
+**Status: option B implemented (2026-08-21, user-approved).** The pose:
+`stallPose` centres an informal stall on the kerb line. The squeeze:
+`game.ts updateRoadCars` eases passing traffic around informally parked cars
+(read from `roadSim.informalParked()`), renderer-only, scaled away for inner
+lanes and capped at 4px — the exact bound at which no body can cross the
+centreline, per the proof in the code comment. Original report: an overflow
+car standing ON the pavement of `/test/homeparking`; the debug ghosts
+(dashed cyan stall boxes) make the cause visible on any board.
 
 ## Why it happens — two right decisions that collide
 
