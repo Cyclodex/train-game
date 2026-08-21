@@ -45,6 +45,9 @@
         <span class="drawer-btn__val">{{ themeIcon }}</span>
       </button>
       <div class="drawer-divider"></div>
+      <button v-if="canSave" class="drawer-btn" @click="openSaves">
+        <span>💾</span><span>Saves</span>
+      </button>
       <router-link class="drawer-btn" to="/editor">
         <span>✏️</span><span>Editor</span>
       </router-link>
@@ -769,6 +772,64 @@
         </button>
       </div>
     </div>
+    <!-- The Spielstand overlay: named save slots for the RUNNING game — trains
+         mid-leg, money, objective progress (saveStore.ts + game.captureSave).
+         Loading navigates to ?save=<id>, which remounts this view against the
+         save. The `autosave` slot is written on leave while a run is live. -->
+    <div v-if="savesOpen" class="game-overlay" @click.self="closeSaves">
+      <div class="picker-card saves-card">
+        <h2 class="overlay-title">Saved games</h2>
+        <div class="saves-new">
+          <input
+            v-model="saveName"
+            class="saves-name"
+            data-testid="save-name"
+            placeholder="Name this save…"
+            @keyup.enter="saveGame()"
+          />
+          <button class="overlay-btn" data-testid="save-now" @click="saveGame()">
+            💾 Save
+          </button>
+        </div>
+        <div v-if="saveSlots.length" class="saves-list">
+          <div v-for="s in saveSlots" :key="s.id" class="saves-row">
+            <span class="saves-info">
+              <b>{{ s.name }}</b>
+              <span class="saves-sub">
+                {{ modeIcon(s.modeId) }} {{ savedAtLabel(s) }}
+                <template v-if="!s.compatible"> · incompatible version</template>
+              </span>
+            </span>
+            <button
+              class="overlay-btn saves-act"
+              :disabled="!s.compatible"
+              :title="s.compatible ? 'Resume this save' : 'Saved by an older version'"
+              @click="loadSlot(s.id)"
+            >
+              Load
+            </button>
+            <button
+              class="overlay-btn overlay-btn--ghost saves-act"
+              title="Overwrite this slot with the current game"
+              @click="overwriteSlot(s.id)"
+            >
+              ↻
+            </button>
+            <button
+              class="overlay-btn overlay-btn--ghost saves-act"
+              title="Delete this save"
+              @click="removeSlot(s.id)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <p v-else class="overlay-desc">No saved games yet.</p>
+        <button class="overlay-btn overlay-btn--ghost" @click="closeSaves">
+          Close
+        </button>
+      </div>
+    </div>
     <div
       v-if="config.debug"
       class="event-log"
@@ -843,9 +904,18 @@ import {
   createRouteDrawController,
   type RouteDrawController,
 } from "@/routeDrawController";
-import { createGame, FareBadge, Game, RoadCar, TrainDef } from "@/game";
+import { createGame, FareBadge, Game, GameSave, RoadCar, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
+import {
+  AUTOSAVE_ID,
+  SaveMeta,
+  deleteSave,
+  getSave,
+  listSaves,
+  putSave,
+  slotIdFor,
+} from "@/saveStore";
 import { modeById, MODES } from "@/modes/index";
 import { dailyMode } from "@/modes/daily";
 import { sandboxMode } from "@/modes/sandbox";
@@ -988,10 +1058,21 @@ class PlayView extends Vue {
   // Whether the debug activity-log panel is collapsed to just its header.
   logMinimized = false;
 
+  // A saved game to resume, from `?save=<slotId>` (the Spielstand overlay's
+  // Load button navigates here). It wins over `?board=`/custom outright: the
+  // save carries its own level, roster, mode and colours, and mixing in the
+  // URL's board would restore state onto a world it was never taken from.
+  // Null when the slot is absent or from an incompatible save version.
+  private pendingSave: GameSave | null = (() => {
+    const id = hashParam("save");
+    return id ? getSave(id) : null;
+  })();
+
   // An optional named board from `?board=<scenarioId>` — lets any test-world
   // scenario be played as a real game (e.g. a small, deterministic puzzle).
   // Returns null unless the id matches a registered scenario.
   private board = (() => {
+    if (this.pendingSave) return null;
     const id = hashParam("board");
     if (!id) return null;
     return SCENARIOS.some(s => s.id === id) ? scenarioById(id) : null;
@@ -999,7 +1080,7 @@ class PlayView extends Vue {
 
   // Read per instance (not at module load) so a level built in the editor and
   // handed over right before navigation is picked up on this mount.
-  private custom = this.board ? null : takeCustomLevel();
+  private custom = this.board || this.pendingSave ? null : takeCustomLevel();
 
   // What the URL (or the persisted preference) ASKED for, before the fitness
   // guard below has its say. Kept separately because it — not the resolved
@@ -1021,6 +1102,12 @@ class PlayView extends Vue {
   // then Sandbox (which fits anything). Unfit picker cards are disabled, so
   // this only fires on hand-typed URLs and stale links.
   private mode = (() => {
+    // A save resumes under the mode it was taken in — no fitness guard: the
+    // pair ran together when it was saved, so it fits by construction.
+    if (this.pendingSave) {
+      const id = this.pendingSave.modeId;
+      return id === dailyMode.id ? dailyMode : modeById(id);
+    }
     const requested = this.requestedModeId;
     if (hashParam("board") === "daily" || requested === "daily") {
       return dailyMode;
@@ -1058,6 +1145,43 @@ class PlayView extends Vue {
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
   // and promotes the generated board so the renderer and sim agree.
   private _resolved = (() => {
+    // Resuming a save: the save IS the board. The game gets the save's own
+    // (cloned) level and roster; `resolveBoard` is bypassed because a
+    // generating mode (Daily) must NOT generate a fresh board over a saved
+    // one — mode.setup still runs inside createGame against these inputs.
+    if (this.pendingSave) {
+      const savedLevel = structuredClone(this.pendingSave.level);
+      const savedDefs = structuredClone(this.pendingSave.trains);
+      const levelId = this.pendingSave.levelId;
+      const setup = this.mode.setup({
+        level: savedLevel,
+        trains: savedDefs,
+        levelId,
+      });
+      // Daily's setup generates its own board; pin the SAVED one back over it
+      // so the sim, the renderer and the restore all agree on one world.
+      const genTrains: TrainsDefinition = {};
+      for (const def of savedDefs) {
+        genTrains[def.id] = {
+          id: def.id,
+          x: def.x,
+          y: def.y,
+          status: TrainStatus.LeavingDepot,
+          type: def.type,
+          wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
+          routeDestinations: (def.destinations ?? []).map(to => ({ to })),
+          currentRouteDestination: 0,
+          ...(def.line?.length ? { line: [...def.line] } : {}),
+          ...(def.spawnAtSec !== undefined ? { spawnAtSec: def.spawnAtSec } : {}),
+        };
+      }
+      return {
+        level: savedLevel,
+        trains: genTrains,
+        levelId,
+        setup: { ...setup, level: savedLevel, trains: savedDefs, levelId },
+      };
+    }
     // CLONE the board before the game gets it. `this.board` is the scenario
     // registry's module-level singleton (and `this.custom` can be the editor's
     // live reactive level), while build-in-play writes through `applyEdits`
@@ -1097,10 +1221,13 @@ class PlayView extends Vue {
       this._resolved.setup.trains,
       gameConfig.tileSize,
       this.mode,
-      gameConfig.colorSeed,
-      // When the mode pinned colours (Daily's deterministic assignment), honour
-      // them so depot/train colours match the generated board exactly.
-      this._resolved.setup.colors,
+      // A save resumes on its own colour seed, so anything still derived from
+      // it (road spawns) replays the saved run's world, not today's setting.
+      this.pendingSave?.colorSeed ?? gameConfig.colorSeed,
+      // When the save pinned colours (it always does — bought trains carry
+      // palette colours no seed reproduces), or the mode did (Daily's
+      // deterministic assignment), honour them exactly.
+      this.pendingSave?.colors ?? this._resolved.setup.colors,
       DEFAULT_TRAFFIC,
       this._resolved.levelId,
       // Live car cap from the menu setting, read each spawn attempt.
@@ -1133,14 +1260,22 @@ class PlayView extends Vue {
     saveLastModeId(known ? asked : this.mode.id);
     this.best = loadBest(this.levelId);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
-    // The bus lines this board was authored with (`?board=<scenario>`), each
-    // with a bus on it — the same seeding /test does, so a board plays the way
-    // it demonstrates. A train comes with the level; a bus lives on its line,
-    // so it can only be placed once the line exists.
-    for (const stops of this.board?.busLines ?? []) {
-      this.game.buyBus(this.game.createLine(stops));
+    if (this.pendingSave) {
+      // Resume: the save carries the whole moving state — trains mid-leg,
+      // money, tracker phase, bus roster. Nothing else may run first: seeding
+      // scenario bus lines or auto-starting the objective would double what
+      // the save is about to restore.
+      this.game.restoreSave(this.pendingSave);
+    } else {
+      // The bus lines this board was authored with (`?board=<scenario>`), each
+      // with a bus on it — the same seeding /test does, so a board plays the way
+      // it demonstrates. A train comes with the level; a bus lives on its line,
+      // so it can only be placed once the line exists.
+      for (const stops of this.board?.busLines ?? []) {
+        this.game.buyBus(this.game.createLine(stops));
+      }
+      if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     }
-    if (!this.game.mode.hud.startOverlay) this.game.startObjective();
     // Test hook: expose the live game so e2e can read simulation state without
     // depending on Vue's internal instance shape.
     (window as unknown as { __game?: Game }).__game = this.game;
@@ -1356,7 +1491,74 @@ class PlayView extends Vue {
     if (badge.waiting) this.game.dispatch(badge.trainId);
   }
 
+  // ---- Save / load (Spielstand) -----------------------------------------
+  // Named slots in localStorage (saveStore.ts). The overlay is the whole verb
+  // set: save under a new name, overwrite a slot, load one (navigates to
+  // `?save=<id>`, which remounts this view against the save), delete one.
+  savesOpen = false;
+  saveName = "";
+  saveSlots: SaveMeta[] = [];
+
+  // The citizen layer is not serialized (v1 — see the save/load spec), so a
+  // citizens game offers no save UI rather than a save that lies.
+  get canSave(): boolean {
+    return !this.game.citizenStats.enabled;
+  }
+
+  openSaves() {
+    this.saveSlots = listSaves();
+    this.savesOpen = true;
+  }
+  closeSaves() {
+    this.savesOpen = false;
+  }
+
+  private defaultSaveName(): string {
+    return `${this.game.mode.label} · ${new Date().toLocaleString()}`;
+  }
+
+  saveGame() {
+    if (!this.canSave) return;
+    const name = this.saveName.trim() || this.defaultSaveName();
+    putSave(slotIdFor(name), this.game.captureSave(name));
+    this.saveName = "";
+    this.saveSlots = listSaves();
+  }
+
+  overwriteSlot(id: string) {
+    if (!this.canSave) return;
+    const existing = this.saveSlots.find(s => s.id === id);
+    putSave(id, this.game.captureSave(existing?.name ?? id));
+    this.saveSlots = listSaves();
+  }
+
+  loadSlot(id: string) {
+    this.savesOpen = false;
+    // The nonce remounts the view even when the same slot is loaded twice in
+    // a row — the router-view is keyed on the full path.
+    this.$router.push({
+      name: "play",
+      query: { save: id, t: Date.now().toString() },
+    });
+  }
+
+  removeSlot(id: string) {
+    deleteSave(id);
+    this.saveSlots = listSaves();
+  }
+
+  savedAtLabel(s: SaveMeta): string {
+    return new Date(s.savedAt).toLocaleString();
+  }
+
   beforeUnmount() {
+    // Autosave on leave: a running game survives navigating away (the editor,
+    // the picker, a board switch) without the player having thought about it.
+    // Only while the objective is live — a Ready screen or a finished run is
+    // not progress worth clobbering the autosave slot with.
+    if (this.canSave && this.phase === "playing") {
+      putSave(AUTOSAVE_ID, this.game.captureSave("Autosave"));
+    }
     this.game.stop();
     window.removeEventListener("resize", this.onWindowResize);
     window.removeEventListener("keydown", this.boundKeydown);
@@ -3532,6 +3734,67 @@ export default toNative(PlayView);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   color: #eef2f6;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+}
+// The Spielstand overlay: a narrower picker card with a name row on top and
+// one row per slot below it.
+.saves-card {
+  width: min(560px, 92vw);
+}
+.saves-new {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0 18px;
+}
+.saves-name {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef2f6;
+  font: inherit;
+  &::placeholder {
+    color: rgba(238, 242, 246, 0.45);
+  }
+}
+.saves-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.saves-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+.saves-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+.saves-sub {
+  font-size: 12px;
+  color: rgba(238, 242, 246, 0.55);
+}
+// Slot-row buttons are compact: the picker's overlay-btn is sized for a card
+// footer, not for three of them beside every row.
+.saves-act {
+  margin: 0;
+  padding: 7px 12px;
+  font-size: 13px;
 }
 .mode-grid {
   display: grid;
