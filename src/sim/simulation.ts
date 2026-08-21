@@ -1331,8 +1331,10 @@ export function createSimulation(config: SimConfig): Simulation {
           // service will ever call.
           const alighted = matched ? train.manifest.length : 0;
           if (alighted > 0) {
+            // With the riders themselves, not a bare count: each one's journey
+            // (origin → this terminus) is what a fare is priced against.
+            transit.deliverRiders(train.manifest, tileId);
             train.manifest = [];
-            transit.deliver(alighted);
           }
           events.push({
             type: "arrived",

@@ -40,6 +40,14 @@ import { CitizenTuning } from "@/sim/citizens";
 // intercity haul, which is exactly what it looks like. The cost is that a full
 // in-game day is half an hour of real time at 1x, which is why the mode has
 // 2x/4x; a city builder is not meant to be watched a day at a sitting.
+// The town's opening treasury. Sized against the build price, not the fares:
+// one intercity line on a reference-scale board is ~26 tiles at $1,000/tile
+// plus terrain surcharges, so $40,000 buys the line that changes the board and
+// a spur beside it — and nothing more. The fares are the refill: at $2 + $3 a
+// tile, a hundred ten-tile commutes a day earn ~$3,200/day, so the next line
+// is earned in days, not minutes.
+export const CITIZENS_TREASURY = 40000;
+
 const TUNING: Partial<CitizenTuning> = {
   secPerDay: 1800,
   maxWaitSec: 180,
@@ -92,6 +100,17 @@ export const citizensMode: GameMode = {
       // visible in the panel rather than in an overlay.
       objective: { deliveriesRequired: Number.POSITIVE_INFINITY },
       citizens: { tuning: TUNING },
+      // THE FAREBOX (economy convergence phase 2): the commuting IS the
+      // income — every citizen (and edge rider) a service delivers pays a
+      // fare. And because an economy prices the BUILD verb (this mode's whole
+      // answer to every problem), the town starts with a treasury rather than
+      // an empty purse: enough for one solid intercity line on a
+      // reference-scale board (~26 tiles at $1,000 plus terrain surcharges),
+      // not enough to pave the map — from there the network has to earn its
+      // own extensions, which is the converged game's loop. No bankruptcy:
+      // an unaffordable build is refused up front, and the failure of this
+      // mode stays what it always was, a shrinking town.
+      economy: { startingBalance: CITIZENS_TREASURY },
     };
   },
   controls: {
@@ -119,7 +138,9 @@ export const citizensMode: GameMode = {
     stars: false,
     startOverlay: false,
     endOverlay: false,
-    money: false,
+    // The treasury and the takings: what building costs and what the
+    // commuters pay back. One line, per the HUD-density rule.
+    money: true,
   },
 };
 

@@ -10,6 +10,8 @@
 // and calling trains will all drain the same pool that deliveries fill, so every
 // decision stays comparable without a second tutorial.
 
+import { parseCoordId } from "@/tiles/model";
+
 // Why money moved. Kept as a closed union so the log can be grouped/filtered and
 // a typo can't invent a category. `build`/`clearing` are unused in phase 1 — the
 // in-play build tool is phase 2 — but naming them here is what stops the ledger
@@ -52,6 +54,38 @@ const DEFAULT_MAX_ENTRIES = 200;
 // cost tag can never disagree about the price. Only NEW pieces are charged —
 // re-laying a connection a tile already has is free (see `buildRoute`).
 export const TRACK_COST_PER_TILE = 1000;
+
+// --- passenger fares (phase 2 of the economy convergence) --------------------
+//
+// A DELIVERED PASSENGER PAYS — the counterpart of the per-train fare above it
+// in this file, and different in kind: the train fare is the dispatch game's
+// decaying prize, this is the converged game's income. Collected at the moment
+// the transit layer counts the delivery (once per journey, at the final stop —
+// so a fare can never be collected twice for one journey), and priced like
+// everything else here: a flag fall plus distance. Citizens and edge riders
+// pay the same — an edge rider is why importing demand is worth anything.
+//
+// Owned HERE, beside the ledger the earnings book into, so the mode, the
+// booking in game.ts and any future HUD readout can never disagree about the
+// price. Magnitudes are set against the trains' own economy: a 10-tile commute
+// pays $32, so a busy shuttle turning over a full platform earns on the order
+// of one Tycoon delivery per couple of laps — an income, not a jackpot.
+
+// The flag fall: what boarding at all is worth.
+export const PASSENGER_FARE_BOARDING = 2;
+// Per tile of JOURNEY distance — origin stop to final stop, straight-line
+// (Manhattan, the honest lower bound on a grid), so a scenic routing cannot
+// pay for itself.
+export const PASSENGER_FARE_PER_TILE = 3;
+
+// What one delivered passenger pays. Stop ids are coord ids ("x,y"), so the
+// distance is read straight off them.
+export function passengerFare(from: string, to: string): number {
+  const a = parseCoordId(from);
+  const b = parseCoordId(to);
+  const tiles = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  return PASSENGER_FARE_BOARDING + PASSENGER_FARE_PER_TILE * tiles;
+}
 
 // What it costs to TAKE ONE PIECE OF TRACK OUT — a demolition fee, not a
 // refund. Ripping up rail is work somebody has to do, so it can never pay.
