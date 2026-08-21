@@ -751,6 +751,17 @@
             >
           </button>
         </div>
+        <!-- Daily is a board source, not a ruleset (#113): today's generated
+             board, the same for every player, run under the daily ruleset. A
+             chip below the mode cards rather than a sixth card, because it
+             answers "which board" while the cards answer "which rules". -->
+        <button
+          class="overlay-btn"
+          :class="{ 'overlay-btn--ghost': !isDailyActive }"
+          @click="pickDaily"
+        >
+          📅 Today's challenge{{ isDailyActive ? " — playing" : "" }}
+        </button>
         <button class="overlay-btn overlay-btn--ghost" @click="closePicker">
           Close
         </button>
@@ -834,6 +845,7 @@ import { createGame, FareBadge, Game, RoadCar, TrainDef } from "@/game";
 import { DEFAULT_LEVEL, DEFAULT_TRAFFIC, defaultTrains } from "@/levels/default";
 import { takeCustomLevel } from "@/levelStore";
 import { modeById, MODES } from "@/modes/index";
+import { dailyMode } from "@/modes/daily";
 import { GameMode, ModeSetup } from "@/modes/types";
 import { passengerTargetOf, OVERCROWD_LIMIT } from "@/modes/network";
 import { loadLastModeId, saveLastModeId } from "@/modes/lastMode";
@@ -986,8 +998,18 @@ class PlayView extends Vue {
   private custom = this.board ? null : takeCustomLevel();
 
   // The active mode: an explicit ?mode= wins; otherwise reopen the mode the
-  // player last used (persisted), falling back to the default.
-  private mode = modeById(hashParam("mode") ?? loadLastModeId());
+  // player last used (persisted), falling back to the default. Daily is a
+  // board source since #113, not a picker mode: `?board=daily` (the picker's
+  // chip) and legacy `?mode=daily` links (old bookmarks, a persisted
+  // last-mode) both run today's generated board under the daily ruleset —
+  // resolveBoard promotes the board setup() generates, exactly as before.
+  private mode = (() => {
+    const requested = hashParam("mode") ?? loadLastModeId();
+    if (hashParam("board") === "daily" || requested === "daily") {
+      return dailyMode;
+    }
+    return modeById(requested);
+  })();
 
   // Resolve which board the view should use. Modes that generate their own board
   // (e.g. Daily) return a different level from setup(); resolveBoard detects this
@@ -1128,9 +1150,8 @@ class PlayView extends Vue {
   private modeIcons: Record<string, string> = {
     puzzle: "🧩",
     tycoon: "💰",
-    "crossing-keeper": "🚧",
-    "time-attack": "⏱️",
-    daily: "📅",
+    network: "🚉",
+    citizens: "🏙️",
     sandbox: "🏖️",
   };
   modeIcon(id: string): string {
@@ -1147,6 +1168,17 @@ class PlayView extends Vue {
     this.pickerOpen = false;
     if (id === this.currentModeId) return; // already playing this mode
     this.$router.push({ name: "play", query: { mode: id } });
+  }
+  // Today's generated board under the daily ruleset (#113): the picker's board
+  // chip. The levelId is `daily:<date>`, so "already playing today's" is a
+  // prefix check rather than a mode comparison.
+  get isDailyActive(): boolean {
+    return this.levelId.startsWith("daily:");
+  }
+  pickDaily() {
+    this.pickerOpen = false;
+    if (this.isDailyActive) return;
+    this.$router.push({ name: "play", query: { board: "daily" } });
   }
 
   @Watch("phase")

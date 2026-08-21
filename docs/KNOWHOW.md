@@ -2583,7 +2583,8 @@ Four rules, each measured on that board, each of which failed silently:
   · `headProgress` is FROZEN at the peel-off point for the whole stay, so
     `sampleAtArc` keeps working and `resumeFromStall` knows where to rejoin.
   · advanceParking ZEROES `waitSeconds`/`waitedSec`. Left to accrue, a dwell beside
-    a crossing FAILS crossing-keeper (30s `maxCarWaitSec`) while behaving perfectly.
+    a crossing trips any `maxCarWaitSec` fail (30s in the retired crossing-keeper
+    mode; the counter lives on in sim/objectives.ts) while behaving perfectly.
   · Filter non-driving cars out of `waitingCarsAt` (else a phantom claimant with
     waitSeconds→∞ owns the arbiter's starvation guard) and parked out of
     `laneClearForChange` (it reads frozen `headProgress`, not body points).

@@ -155,12 +155,12 @@ test.describe("Train game", () => {
     // Open the game-mode picker from the start overlay.
     await page.getByRole("button", { name: "Change game mode" }).click();
     await expect(page.locator(".picker-card")).toBeVisible();
-    // The picker shows a card per registered mode; pick Time Attack.
-    await page.getByRole("button", { name: /Time Attack/ }).click();
+    // The picker shows a card per registered mode; pick Network.
+    await page.getByRole("button", { name: /Network/ }).click();
     // The view remounts on the new mode (router-view keyed on the query).
-    await expect.poll(() => page.url()).toContain("mode=time-attack");
+    await expect.poll(() => page.url()).toContain("mode=network");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Network" })
     ).toBeVisible();
   });
 
@@ -168,14 +168,28 @@ test.describe("Train game", () => {
     page,
   }) => {
     // Pick a non-default mode explicitly...
-    await page.goto("/#/play?mode=time-attack");
+    await page.goto("/#/play?mode=network");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Network" })
     ).toBeVisible();
-    // ...then open /play with no mode query: it should reopen Time Attack.
+    // ...then open /play with no mode query: it should reopen Network.
     await page.goto("/#/play");
     await expect(
-      page.locator(".overlay-title", { hasText: "Time Attack / Rush" })
+      page.locator(".overlay-title", { hasText: "Network" })
+    ).toBeVisible();
+  });
+
+  test("the picker's Today's-challenge chip opens the daily board (#113)", async ({
+    page,
+  }) => {
+    await page.goto("/#/play?mode=puzzle");
+    await page.getByRole("button", { name: "Change game mode" }).click();
+    await page.getByRole("button", { name: /Today's challenge/ }).click();
+    // Daily is a board source now: the chip navigates to ?board=daily, and the
+    // view runs today's generated board under the daily ruleset.
+    await expect.poll(() => page.url()).toContain("board=daily");
+    await expect(
+      page.locator(".overlay-title", { hasText: "Daily Challenge" })
     ).toBeVisible();
   });
 
