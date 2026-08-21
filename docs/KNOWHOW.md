@@ -1574,6 +1574,47 @@ Four rules, each measured on that board, each of which failed silently:
   omit them and the trains sit in their sheds while the probe reports "transit
   0%" and you go looking for a bug in the citizens. Copy `buildTrainDefs` from
   `TestStage.vue`.
+- **A LADDER OF SINGLE-FILE STREETS WITH A JUNCTION ONLY AT EACH END DEADLOCKS**
+  (2026-08-21). Marktstadt was five streets thirteen rows long, one lane each
+  way, rungs at the top and the bottom and nothing between. Two things follow and
+  together they are fatal: every trip across the village is a LAP of the whole
+  ladder, and a queue long enough to reach back into a junction box blocks the
+  stream that would have let it out. That is a cycle of full tiles with no head
+  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
+  not gridlocked by politeness) is what lets the last car into the box that
+  closes it. It does not clear: measured, 42 of 46 cars standing still for the
+  rest of a six-day run, one for 354 unbroken seconds.
+  · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
+    after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
+    car never arrives, with the town's commute bar pinned at 0.00 while its
+    neighbours recover. Car mode share sagging (0.20 → 0.11) is the same fact.
+  · **Look for FROZEN cars, not slow ones, and read `velocity` — NOT `speed`.**
+    `RoadSim.cars()` reports both; `speed` is the driver's preferred cruise and
+    is CONSTANT while the car stands still, so a stuck-car probe written against
+    it says "0 stopped" over a totally deadlocked town. That cost an hour.
+  · **The fix is capacity, and it takes BOTH halves.** A middle rung (shorter
+    trips, a second way round every jam) and two lanes each way inside the town
+    (somewhere for a blocked turn to be). Measured on the road layer alone, a
+    fleet of 40 village trips over 900s: old 436 arrived / 40 frozen; rung only
+    887 / 40; wide only 649 / 40; **both 2797 arrived / 0 frozen**. End to end,
+    the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
+    and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
+    every local trip into a full circuit.
+  · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
+    straight or bend whose neighbour has a different lane count (the renderer
+    paints it red); a junction fans and merges unequal arms by design and is
+    exempt on both sides. So a "wide town centre" zone has to have junctions at
+    its every boundary with the single-lane country roads — Marktstadt's zone is
+    x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
+  · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
+    the block signals (a road tile silently drops the signal authored on it) and
+    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+- **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
+  `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
+  and `homeparking` call it, and nothing else does. hinterland never has, so the
+  17 bays it *would* derive there were never on the board any of the jam
+  measurements came from. `workplaceParkingTiles(level)` tells you what a board
+  would get; `rowsOf(level[id])` tells you what it actually HAS.
 
 ## BRIDGES (2026-07-28)
 - `TileCell.bridge?: true` is a STRUCTURE, and the exception lives INSIDE

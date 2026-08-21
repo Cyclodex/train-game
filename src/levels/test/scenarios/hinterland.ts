@@ -1,7 +1,7 @@
 import { Position } from "@/types";
 import { Level, PlotKind, TerrainKind, TileCell } from "@/tiles/model";
 import { expandKind } from "@/tiles/kinds";
-import { twoWay, type Lane } from "@/tiles/lanes";
+import { nWayLanes, twoWay, type Lane } from "@/tiles/lanes";
 import { terrainBlocksBuilding } from "@/tiles/terrain";
 import { TestScenario, mkLineTrain } from "@/levels/test/scenario";
 
@@ -51,33 +51,67 @@ const { Top, Right, Bottom, Left } = Position;
 // than a bug. Measured over six in-game days, untouched, nobody playing:
 //
 //   day | people | abandoned/day | Nordheim | Marktstadt | Südau
-//     0 |    302 |           158 |     0.41 |       0.41 |  0.49
-//     2 |    222 |           157 |     0.41 |       0.57 |  0.52
-//     3 |    199 |            85 |     0.46 |       0.64 |  0.60
-//     5 |    210 |            51 |     0.59 |       0.61 |  0.69
+//     1 |    291 |            59 |     0.08 |       0.47 |  0.88
+//     3 |    272 |           100 |     0.50 |       0.37 |  0.76
+//     4 |    251 |            71 |     0.42 |       0.53 |  0.32
+//     6 |    282 |            57 |     0.73 |       0.60 |  0.60
 //
-// It falls, bottoms out on day three at the level its network can actually
+// It falls, bottoms out on day four at the level its network can actually
 // carry, and then ALL THREE villages grow again with their happiness. Raising
 // that ceiling — another service, another platform, a road where there is none —
 // is the whole job. What the player must never see is the other curve: a valley
 // that falls and keeps falling, which is what this board did before each village
 // had work of its own and a café of its own.
 //
-// KNOWN, MEASURED, AND NOT YET FIXED (2026-08-21): Marktstadt's streets jam
-// against the staff bays that now derive at every workplace gate. This village
-// packs a school, a café and four shops into a tight ladder of ONE-TILE two-way
-// streets inside a CLOSED loop, so `deriveWorkplaceParking` lands 17 tiles of
-// kerbside bays in it and cars manoeuvring in and out have nowhere to drain to.
-// The tell in the model: 35 journeys a day ending "given up on after 9h 36m",
-// which is exactly `maxWaitSec * 2` — the give-up clock on a car that never
-// arrives — and Marktstadt's commute bar pinned at 0.00 while Nordheim and Südau
-// recover normally. `/test/citizenday`, whose ring road is long and carries only
-// six bays, is unaffected (zero abandoned trips, commute 0.87-0.95), so this is
-// about DENSITY, not about the mechanic.
+// THE MARKTSTADT GRIDLOCK, AND WHAT IT ACTUALLY WAS (fixed 2026-08-21).
 //
-// The fix is street layout, not tuning: one-way circulation through the village,
-// or workplaces spread out of the core. Until then read this board for the day
-// rhythm and the road/rail lever, and read the commute bar on citizenday.
+// The village used to deadlock — not slow down, DEADLOCK. Measured over six
+// headless days: 42 of the 46 cars on the board standing at a dead stop, one of
+// them for 354 unbroken seconds; 35 journeys a day ending "given up on after
+// 9h 36m", which is exactly `maxWaitSec * 2`, the give-up clock for a driver
+// whose car never arrives; car mode share falling 0.20 → 0.11 as the survivors
+// gave up on driving; and Marktstadt's commute bar pinned at 0.00-0.08 while
+// Nordheim recovered to 0.77 and Südau to 0.50.
+//
+// The earlier note in this file blamed `deriveWorkplaceParking`. That was wrong,
+// and the way it was wrong is worth keeping: THIS BOARD HAS NO DERIVED PARKING
+// AT ALL. The pass is applied in a scenario's own data (`workparking`,
+// `homeparking` call it; nothing calls it here), so the 17 kerbside bays it
+// WOULD lay were never on the board the measurements came from. The jam was the
+// street plan on its own.
+//
+// What it really was: five streets thirteen rows long, single file each way,
+// with a junction only at each END and nothing in between. So every trip across
+// the village was a lap of the whole ladder, and when a queue reached back into
+// a junction box it blocked the very stream that would have let it out. A cycle
+// of full tiles has no head to move first, and `BOX_KEEP_CLEAR_PATIENCE` (which
+// exists so a saturated ring is not gridlocked by politeness) lets the last car
+// into the box that closes the ring. Nothing clears it; the cars are there for
+// the rest of the run.
+//
+// The fix is two changes to the plan, both below, and it needs BOTH — measured
+// on the road layer alone, a steady fleet of 40 village journeys over 900s:
+//
+//   layout                                | arrived | gave up | frozen at end
+//   the old ladder                        |     436 |      88 |   40 of 40
+//   + a middle rung at y=10               |     887 |      44 |   40 of 40
+//   + two lanes each way, no middle rung  |     649 |      80 |   40 of 40
+//   + both (what ships)                   |    2797 |       0 |    0 of 40
+//
+// and end to end on the citizens board, six days at `secPerDay: 900`:
+//
+//   Marktstadt commute | before 0.24 0.00 0.06 0.04 0.01 0.08
+//                      | after  0.47 0.37 0.37 0.53 0.36 0.60
+//   abandoned/day      | before 56 120 155 121 86 67 → after 59 71 100 71 52 57
+//   car mode share     | before 0.20 → 0.11          → after 0.20 → 0.22
+//   Marktstadt on day 6| before 94 people            → after 129
+//
+// What is LEFT is the board's own difficulty and not a jam: the give-ups that
+// remain read "5h 08m", the RAIL patience clock (`maxWaitSec`), not the car one.
+// This valley is over-populated for its railway on purpose — see above.
+// `tests/unit/sim/hinterlandTraffic.spec.ts` is the guard, and it fails on the
+// old plan. `/test/citizenday` was never affected either way (zero abandoned
+// trips, commute 0.89-0.96, before and after).
 //
 // Playable at /#/play?mode=citizens&board=hinterland.
 
@@ -216,6 +250,20 @@ function roadTiles(): Set<string> {
   run(9, 5, 9, 18);
   run(11, 5, 11, 18);
   run(3, 5, 11, 5);
+  // THE MIDDLE RUNG, and it is what keeps the village moving (2026-08-21).
+  //
+  // With rungs only at y=5 and y=18 the five streets were a ladder thirteen rows
+  // long with a junction at each END and nothing in between, so EVERY trip across
+  // the village — even two doors up the next street — was a full lap of it. The
+  // queues that made met head to head in the junction boxes at the ends and the
+  // whole town centre deadlocked (see the note at the top of this file).
+  //
+  // y=10 is the only row a rung can use: it must miss both railways' platforms
+  // (x=4 calls at y=7/11/15, x=10 at y=8/13), the two block signals at (4,9) and
+  // (4,17), and the zoned plots (the school at 8,8, the café at 8,12). It costs
+  // four house plots — (2,10), (6,10), (8,10) and (12,10) — and buys the ladder a
+  // second way round every jam.
+  run(3, 10, 11, 10);
   run(3, 18, 23, 18); // the rung that becomes the road east to Südau
   // The southern loop: down the west street, along the bottom, back up at x=23.
   run(3, 22, 23, 22);
@@ -230,17 +278,43 @@ const STEP: Record<number, [number, number]> = {
   [Left]: [-1, 0],
 };
 
+// MARKTSTADT'S STREETS ARE TWO LANES EACH WAY; the valley's lanes are one.
+//
+// The village is the only place on this board with enough traffic to queue, and a
+// single file each way has no slack at all: one car waiting to turn stops the
+// street behind it, the queue backs into the junction box at the end, and the
+// stream it blocks there is the one that would have let it out. That is a
+// deadlock, not congestion — it never clears (measured: 42 of 46 cars standing
+// still for the rest of the run). A second lane gives a blocked movement
+// somewhere to be while the other one goes.
+//
+// The zone is exactly the ladder: x=3..11, y=5..18. Its only two boundaries with
+// the single-lane valley roads — (3,18) toward Südau and (11,18) toward the east
+// — are BOTH junctions, which is the rule a width change has to obey: a junction
+// fans and merges unequal arms by design, a plain straight or bend has to keep
+// its neighbour's lane count or the seam is an authoring error the renderer
+// paints red (`seamMismatch` in tiles/lanes.ts).
+const WIDE = { x0: 3, x1: 11, y0: 5, y1: 18 };
+const isTownStreet = (x: number, y: number) =>
+  x >= WIDE.x0 && x <= WIDE.x1 && y >= WIDE.y0 && y <= WIDE.y1;
+
 function lanesFor(id: string, road: Set<string>): Lane[] {
   const [x, y] = id.split(",").map(Number);
   const arms = [Top, Right, Bottom, Left].filter(p => {
     const [dx, dy] = STEP[p];
     return road.has(`${x + dx},${y + dy}`);
   });
-  if (arms.length === 2) return twoWay(arms[0], arms[1]);
+  const width = isTownStreet(x, y) ? 2 : 1;
+  if (arms.length === 2) {
+    return width === 1 ? twoWay(arms[0], arms[1]) : nWayLanes(arms[0], arms[1], width);
+  }
   // A real junction: every arm reaches every OTHER arm, so a car may turn as well
   // as go straight. Two arms is a straight or a bend; one would be a dead end,
   // which this closed network does not have.
-  return arms.map(from => ({ from, to: arms.filter(p => p !== from), index: 0 }));
+  return arms.flatMap(from => {
+    const to = arms.filter(p => p !== from);
+    return Array.from({ length: width }, (_, index) => ({ from, to, index }));
+  });
 }
 
 // --- the settlements -----------------------------------------------------------
