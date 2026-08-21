@@ -1,5 +1,6 @@
 import { expandKind } from "@/tiles/kinds";
 import { TestScenario, mkTrain } from "@/levels/test/scenario";
+import { timeAttackMode } from "@/modes/time-attack";
 
 // Time Attack's predefined schedule in isolation: three short lanes, one train
 // each, arriving on a fixed timetable (t=0, 3s, 6s) rather than all at once. The
@@ -13,9 +14,10 @@ export const timeattack: TestScenario = {
   name: "Time Attack schedule",
   description:
     "Trains arrive on a fixed timetable (t=0, 3s, 6s), each routing to its depot.",
-  // Run under Time Attack so the scheduled spawner actually injects t2/t3 (Sandbox
-  // has no spawner, so they would never appear).
-  modeId: "time-attack",
+  // Run under the Rush variant so the scheduled spawner actually injects t2/t3
+  // (Sandbox has no spawner, so they would never appear). A mode OBJECT since
+  // #113: Time Attack is a puzzle variant now, not a registered picker mode.
+  mode: timeAttackMode,
   level: {
     "0,0": expandKind("depot", 1),
     "1,0": expandKind("straight", 1),
