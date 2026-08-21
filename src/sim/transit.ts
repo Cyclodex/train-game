@@ -82,6 +82,12 @@ export interface Exchange {
   changing: number;
   boardedTags: string[];
   alightedTags: string[];
+  // Of the alighted tags, WHO was re-queued to wait for an onward service —
+  // as against having ARRIVED (set down at their destination, or walked the
+  // last hop by the layer itself). The citizen mirror needs the distinction:
+  // treating a walked-home arrival as a change left the person "waiting" at a
+  // platform whose queue no longer held them.
+  changingTags: string[];
 }
 
 export interface ExchangeRequest {
@@ -146,6 +152,12 @@ export interface TransitLayer {
   waiting(stopId: string): string[];
   // Queue ONE person who has already decided where they are going.
   enqueue(stopId: string, dest: string, tag?: string): boolean;
+  // Withdraw ONE tagged person from a queue — somebody who gave up waiting.
+  // Without this the entry stayed behind as a ghost: the next vehicle boarded
+  // the tag of a person who had long since walked away, and the mirror then
+  // corrupted whatever trip they had moved on to. False when nobody with that
+  // tag waits there.
+  dequeue(stopId: string, tag: string): boolean;
   // Anonymous demand: `count` people who will each be given a destination the
   // network can actually serve. Returns how many were queued.
   addPassengers(stopId: string, count: number): number;
@@ -385,6 +397,14 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       queues.set(stopId, q);
       return true;
     },
+    dequeue(stopId: string, tag: string) {
+      const q = queues.get(stopId);
+      if (!q) return false;
+      const at = q.findIndex(w => w.tag === tag);
+      if (at < 0) return false;
+      q.splice(at, 1);
+      return true;
+    },
     addPassengers(stopId: string, count: number) {
       if (!isStop(stopId) || count <= 0) return 0;
       const cap = demand[stopId]?.max ?? hardCap;
@@ -445,6 +465,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       // Each with WHERE they will wait: here, or the far end of a walk.
       const changing: (Waiting & { at: string })[] = [];
       const alightedTags: string[] = [];
+      const changingTags: string[] = [];
       const boardedTags: string[] = [];
       let alighted = 0;
 
@@ -471,6 +492,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         // the railway one more time before anybody counted them.
         if (on === rider.final) deliveredTotal += 1;
         else {
+          if (rider.tag !== undefined) changingTags.push(rider.tag);
           changing.push({
             dest: rider.final,
             ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
@@ -521,7 +543,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         queues.set(stopId, left);
       }
 
-      return { boarded, alighted, changing: changing.length, boardedTags, alightedTags };
+      return { boarded, alighted, changing: changing.length, boardedTags, alightedTags, changingTags };
     },
     delivered() {
       return deliveredTotal;

@@ -795,8 +795,11 @@ same machinery.
 - **The shadow queue must be popped from the event, never from the queue count.**
   `stationQueue()` also moves under the *scheduled* demand from
   `stationDemandOf`; only `DwellEvent.boarded` says how many actually left.
-  (Phase A therefore turns the synthetic schedule **off** on citizen boards — two
-  sources of passengers would double-count.)
+  (Phase A therefore turned the synthetic schedule **off** on citizen boards.
+  Superseded 2026-08-21 by #117: demand is now ADDITIVE — the schedule is edge
+  demand, scaled by the per-stop `edgeDemand` dial whose citizen-board default
+  is 0, and the tagged queues make double-counting impossible by construction.
+  See `2026-08-21-economy-demand-convergence-design.md`.)
 - **Day length is a genre dial, not a detail.** Short days make a twitchy
   throughput game; long days make a planning game. It is `secPerDay`, one number,
   and it belongs in the mode's tuning like `GENERIC_FARE_GRACE` does.

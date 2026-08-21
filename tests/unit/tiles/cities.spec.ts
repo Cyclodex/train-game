@@ -9,7 +9,7 @@ import {
   parkAndRideStationsOf,
   plotCapacity,
   plotsOf,
-  stationsInReachOf,
+  boardingPointsInReachOf,
 } from "@/tiles/cities";
 
 const town = (city?: string): TileCell => ({
@@ -97,12 +97,29 @@ describe("cities: plots", () => {
 });
 
 describe("cities: access facts", () => {
-  it("finds the stations within walking reach, and only those", () => {
+  it("finds the boarding points within walking reach, and only those", () => {
     const level: Level = {};
     block(level, 0, 0, 6, 3, () => town());
     level["3,0"] = expandKind("station", 1);
-    expect(stationsInReachOf(level, 2, 1)).toEqual(["3,0"]);
-    expect(stationsInReachOf(level, 0, 2)).toEqual([]);
+    expect(boardingPointsInReachOf(level, 2, 1)).toEqual(["3,0"]);
+    expect(boardingPointsInReachOf(level, 0, 2)).toEqual([]);
+  });
+
+  it("a bus stop is a boarding point exactly like a platform (#117 step 1)", () => {
+    const level: Level = {};
+    block(level, 0, 0, 6, 3, () => town());
+    level["3,0"] = expandKind("station", 1);
+    level["1,2"] = {
+      connections: [],
+      road: twoWay(Position.Left, Position.Right),
+      parking: {
+        facility: "halt",
+        rows: [{ from: Position.Left, kind: "busstop", count: 1 }],
+      },
+    };
+    // The plot at 2,1 reaches both; the far corner reaches only the kerb.
+    expect(boardingPointsInReachOf(level, 2, 1)).toEqual(["1,2", "3,0"]);
+    expect(boardingPointsInReachOf(level, 0, 3)).toEqual(["1,2"]);
   });
 
   it("a station only counts for park & ride when there is parking beside it", () => {
