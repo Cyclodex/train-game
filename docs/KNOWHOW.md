@@ -3040,6 +3040,21 @@ of the above; read that section first.
   lays no informal space on a bank whose approach has `cycleLaneIndices` — a car
   left there would stand ON the green strip. Per BANK here too: a one-way with a
   kerb-side cycle lane keeps its far bank's spaces (`kerbOverflow.spec.ts`).
+- **BODY WIDTHS ARE SIM CONSTANTS, NOT CSS LORE** (2026-08-21). A car is
+  `CAR_BODY_WIDTH_FRAC` (16px), a bus/lorry `LARGE_BODY_WIDTH_FRAC` (18px) —
+  `sim/laneOffset.ts`, mirrored by the `.road-car` CSS in PlayView/TestStage.
+  Sized so width÷lane matches a real street (~0.57); at the old 20px (0.71) a
+  car passing an informally parked one clipped through it. `CLIP_LANES`
+  (road.ts) and the SQUEEZE cap (laneGeometry.ts, 5px = half-lane − widest
+  half-body, with a module-load assert) are DERIVED from them — the literals
+  are what went stale last time. **The body-overlap oracle**
+  (`tests/unit/roadBodyOverlap.spec.ts` on `/test/parkpass`) rebuilds the
+  exact renderer pipeline headless and asserts no two rendered bodies ever
+  interpenetrate — moving×moving and moving×parked — with a self-test pinning
+  that the OLD geometry would have failed it. Manoeuvres never needed a fix:
+  `entering`/`leaving` carry road bodies (traffic already waits); only
+  `parked` is deliberately body-less, and the slim widths + squeeze make
+  passing it clean.
 - Clamped to `MAX_PAVEMENT_OFFSET` (50 − half the band) or a lorry lay-by, at 55
   units deep on its own, puts the pavement half a tile into the neighbour.
 - A `busstop` is exempt: the vehicle never leaves the carriageway, so there is

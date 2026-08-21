@@ -26,6 +26,7 @@ import {
 } from "@/tiles/lanes";
 import {
   LANE_WIDTH_FRAC,
+  LARGE_BODY_WIDTH_FRAC,
   laneSeamOffsetPx,
   laneOffsetConstPx,
   oneWayLaneOffsetPx,
@@ -33,6 +34,7 @@ import {
 } from "./laneOffset";
 import { neighborCoord, oppositePort, Port } from "./topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
+import { bankFor } from "@/tiles/parking";
 
 // The minimal sample shape couplerOffsets reads: the tile the coupler sits on,
 // the ports it entered/leaves through, and its continuous lateral lane position.
@@ -249,3 +251,77 @@ export function createLaneGeometry(level: Level, tileSize: number) {
 }
 
 export type LaneGeometry = ReturnType<typeof createLaneGeometry>;
+
+// THE SQUEEZE — passing traffic eases around an informally parked car.
+//
+// An informal car stands HALF ON THE KERB (stallPose), so half its body
+// protrudes into the kerb lane. Moving vehicles shift toward the centre while
+// alongside — the real residential-street move — purely in the RENDERER: a few
+// px of lateral ease change a segment's driven length by well under 0.1%, so
+// the sim keeps its unshifted lengths. Lives here (not in game.ts) so the
+// body-overlap oracle tests the exact function the renderer runs.
+//
+// NEVER INTO ONCOMING TRAFFIC, by construction rather than by checking: the
+// smallest kerb-lane centre is half a lane (14px — a 1+1 street or a 1-lane
+// one-way), and the WIDEST body is a bus/lorry at LARGE_BODY_WIDTH_FRAC (18px,
+// half-width 9), so 14 − 9 = 5px is the exact maximum shift at which no body
+// of any class ever crosses the centreline — which is why SQUEEZE_FRAC is
+// 0.025 (5px at the native tile) and not a dial. A 16px car keeps
+// 14 − 5 − 8 = 1px inside the line, and clears the parked half by
+// (28 − 8) − (14 − 5 + 8) = 3px. Inner lanes scale the shift away
+// (`1 − lanePos`), so on a multi-lane road only the kerb lane moves and lane
+// gaps stay clear. A car parked on the LEFT bank (one-way streets allow both)
+// pushes the other way, toward the kerb; a car on each side cancels to zero —
+// wedged in, hold the line.
+export const SQUEEZE_FRAC = 0.025;
+const HALF_LANE_CENTRE_FRAC = LANE_WIDTH_FRAC / 2;
+// Compile-time honesty for the proof above: the cap must never exceed
+// half-lane − widest-half-body. If a wider vehicle class ever appears, this
+// throws at module load instead of quietly clipping oncoming traffic.
+if (SQUEEZE_FRAC > HALF_LANE_CENTRE_FRAC - LARGE_BODY_WIDTH_FRAC / 2 + 1e-9) {
+  throw new Error("SQUEEZE_FRAC exceeds the centreline-safe bound");
+}
+
+/** The (tile → banks) index the squeeze reads, built from `informalParked()`. */
+export function buildSqueezeBanks(
+  parked: Iterable<{ tileId: string; bank: Port }>,
+): Map<string, Set<Port>> {
+  const banks = new Map<string, Set<Port>>();
+  for (const p of parked) {
+    let set = banks.get(p.tileId);
+    if (!set) banks.set(p.tileId, (set = new Set()));
+    set.add(p.bank);
+  }
+  return banks;
+}
+
+/**
+ * A coupler's lane offsets with the informal-parking squeeze applied. The
+ * shift applies at a coupler END when its own tile OR the neighbour across
+ * that seam carries an informally parked car on the relevant bank — so the
+ * ease glides in over the approach tile, holds alongside, and glides out,
+ * instead of stepping at the seam.
+ */
+export function informalSqueeze(
+  banks: ReadonlyMap<string, ReadonlySet<Port>>,
+  c: { coord: Coordinates; entryPort: Port; exitPort: Port | null },
+  off: LaneOffsets,
+  lanePos: number,
+  tileSize: number,
+): LaneOffsets {
+  if (banks.size === 0) return off;
+  const strength = Math.max(0, 1 - lanePos);
+  if (strength <= 0) return off;
+  const sq = SQUEEZE_FRAC * tileSize * strength;
+  const rightBank = bankFor(c.entryPort, "right");
+  const leftBank = bankFor(c.entryPort, "left");
+  const at = (coord: Coordinates | null, bank: Port): boolean =>
+    !!coord && (banks.get(getCoordinatesId(coord))?.has(bank) ?? false);
+  const deltaAt = (nb: Coordinates | null): number =>
+    (at(c.coord, rightBank) || at(nb, rightBank) ? -sq : 0) +
+    (at(c.coord, leftBank) || at(nb, leftBank) ? sq : 0);
+  const dEntry = deltaAt(neighborCoord(c.coord, c.entryPort));
+  const dExit = deltaAt(c.exitPort !== null ? neighborCoord(c.coord, c.exitPort) : null);
+  if (dEntry === 0 && dExit === 0) return off;
+  return { offEntry: off.offEntry + dEntry, offExit: off.offExit + dExit };
+}

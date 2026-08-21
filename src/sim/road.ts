@@ -12,7 +12,7 @@ import {
 } from "./junctionSignal";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { laneSegmentLength } from "./pathGeometry";
-import { laneIndexAcrossSeam } from "./laneOffset";
+import { LANE_WIDTH_FRAC, LARGE_BODY_WIDTH_FRAC, laneIndexAcrossSeam } from "./laneOffset";
 import { createLaneGeometry } from "./laneGeometry";
 import { makeRng } from "@/utils/globalHelpers";
 import { planRoute, planRouteToGoals, RouteTurn } from "./roadRouter";
@@ -1003,15 +1003,16 @@ const LANE_SETTLE = 1e-3;
 // `laneDropUrgent`) — it must get out — but never the one-lane cap.
 const LANE_CHANGE_SETTLE = 1.2;
 // Lateral separation (in lanes) below which two same-direction bodies physically
-// CLIP — a car's rendered width (~20px) over the lane width (~28px) is ~0.71 lane,
-// so bodies whose lane centres are closer than this overlap sideways. Used by the
-// swept-body overlap-recovery clamp in clearAhead: a car that ends up within this
-// of another (a half-finished overtake pull-out/return, or two cars merged onto
-// one lane) is held its following gap behind that body so the overlap can't
-// persist. Set at the true body-width ratio so steady traffic a full lane apart is
-// never gated, but anything closer is — this is also the threshold the swept-body
-// test asserts against.
-const CLIP_LANES = 0.72;
+// CLIP — the WIDEST rendered body (a bus/lorry, LARGE_BODY_WIDTH_FRAC) over the
+// lane width, so bodies whose lane centres are closer than this overlap
+// sideways. Used by the swept-body overlap-recovery clamp in clearAhead: a car
+// that ends up within this of another (a half-finished overtake pull-out/return,
+// or two cars merged onto one lane) is held its following gap behind that body
+// so the overlap can't persist. DERIVED from the true body-width ratio (not a
+// literal, which is how it silently went stale when the sprites slimmed) so
+// steady traffic a full lane apart is never gated, but anything closer is —
+// this is also the threshold the swept-body test asserts against.
+const CLIP_LANES = LARGE_BODY_WIDTH_FRAC / LANE_WIDTH_FRAC;
 // How many tiles ahead a car looks for the junction it must be lane-sorted for,
 // so it starts moving into its turn lane with room to spare (sub-project F).
 const TURN_LANE_LOOKAHEAD = 4;

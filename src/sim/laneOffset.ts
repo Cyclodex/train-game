@@ -16,6 +16,18 @@
 // match the same constant in game.ts and Tile.vue.
 export const LANE_WIDTH_FRAC = 0.14;
 
+// Rendered BODY WIDTHS, as tile fractions — the lateral size of the sprites the
+// views draw (`.road-car { height }` in PlayView/TestStage; keep the CSS in
+// lockstep). Sized against the lane so the width RATIO matches a real street:
+// a 1.8m car on a 3.2m lane is ~0.55, so a 28px lane carries a 16px car — the
+// old 20px (0.71) left only 4px of air per side, and a car passing an
+// informally parked one clipped straight through it (the 2026-08-21 report).
+// Buses and lorries are genuinely wider than cars (2.55m) and keep 18px.
+// These are what the body-overlap oracle measures with, and what the squeeze
+// cap below is proven against.
+export const CAR_BODY_WIDTH_FRAC = 0.08; // 16px at the native tile
+export const LARGE_BODY_WIDTH_FRAC = 0.09; // 18px — bus, lorry cab + trailer
+
 // The lane-positioning band for a road approach: half the combined lanes of both
 // travel directions, (forward + backward) / 2.
 //

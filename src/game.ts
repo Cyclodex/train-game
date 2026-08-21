@@ -36,7 +36,7 @@ import {
   TripPurpose,
   createCitizenSim,
 } from "@/sim/citizens";
-import { bankFor, facilityOf, rowFor } from "@/tiles/parking";
+import { facilityOf, rowFor } from "@/tiles/parking";
 import { JunctionSignal } from "@/sim/junctionSignal";
 import {
   laneCount,
@@ -48,7 +48,12 @@ import {
   VehicleClass,
   type Lane,
 } from "@/tiles/lanes";
-import { createLaneGeometry, type LaneOffsets } from "@/sim/laneGeometry";
+import {
+  buildSqueezeBanks,
+  createLaneGeometry,
+  informalSqueeze,
+  type LaneOffsets,
+} from "@/sim/laneGeometry";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 import { getCoordinatesId } from "@/utils/tileHelpers";
 import { segmentPathD, roadSegmentPathD, laneSegmentPointAt } from "@/sim/pathGeometry";
@@ -2693,58 +2698,19 @@ export function createGame(
     );
   }
 
-  // THE SQUEEZE — passing traffic eases around an informally parked car.
-  //
-  // An informal car stands HALF ON THE KERB (stallPose), so ~10px of body
-  // protrude into the kerb lane. Moving cars shift a quarter of that lane's
-  // clearance toward the centre while alongside — the real residential-street
-  // move — purely in the RENDERER: 4px of lateral ease changes a segment's
-  // driven length by well under 0.1%, so the sim keeps its unshifted lengths.
-  //
-  // NEVER INTO ONCOMING TRAFFIC, by construction rather than by checking: the
-  // smallest kerb-lane centre is half a lane (14px, a 1+1 street or a 1-lane
-  // one-way) and a car body is 20px wide, so a shift of 14 − 10 = 4px is the
-  // exact maximum at which no body ever crosses the centreline — which is why
-  // SQUEEZE_FRAC is 0.02 (4px at the native tile) and not a dial. Inner lanes
-  // scale the shift away (`1 − lanePos`), so on a multi-lane road only the
-  // kerb lane moves and lane gaps stay clear. A car parked on the LEFT bank
-  // (one-way streets allow both) pushes the other way, toward the kerb; a car
-  // on each side cancels to zero — wedged in, hold the line.
-  const SQUEEZE_FRAC = 0.02;
   function updateRoadCars() {
     const samples = roadSim.sample();
     const seen = new Set<string>();
-    // (tile, bank) pairs carrying an informally parked car this frame. The
-    // shift applies at a coupler END when its own tile OR the neighbour across
-    // that seam carries one — so the ease glides in over the approach tile,
-    // holds alongside, and glides out, instead of stepping at the seam.
-    const squeezeBanks = new Map<string, Set<Position>>();
-    for (const p of roadSim.informalParked()) {
-      let set = squeezeBanks.get(p.tileId);
-      if (!set) squeezeBanks.set(p.tileId, (set = new Set()));
-      set.add(p.bank);
-    }
+    // THE SQUEEZE — passing traffic eases around informally parked cars. The
+    // maths (and its never-into-oncoming-traffic proof) live in
+    // sim/laneGeometry.ts, where the body-overlap oracle tests the exact
+    // function the renderer runs here.
+    const squeezeBanks = buildSqueezeBanks(roadSim.informalParked());
     const squeezed = (
       c: { coord: Coordinates; entryPort: Position; exitPort: Position | null },
       off: LaneOffsets,
       lanePos: number,
-    ): LaneOffsets => {
-      if (squeezeBanks.size === 0) return off;
-      const strength = Math.max(0, 1 - lanePos);
-      if (strength <= 0) return off;
-      const sq = SQUEEZE_FRAC * tileSize * strength;
-      const rightBank = bankFor(c.entryPort, "right");
-      const leftBank = bankFor(c.entryPort, "left");
-      const at = (coord: Coordinates | null, bank: Position): boolean =>
-        !!coord && (squeezeBanks.get(getCoordinatesId(coord))?.has(bank) ?? false);
-      const deltaAt = (nb: Coordinates | null): number =>
-        (at(c.coord, rightBank) || at(nb, rightBank) ? -sq : 0) +
-        (at(c.coord, leftBank) || at(nb, leftBank) ? sq : 0);
-      const dEntry = deltaAt(neighborCoord(c.coord, c.entryPort));
-      const dExit = deltaAt(c.exitPort !== null ? neighborCoord(c.coord, c.exitPort) : null);
-      if (dEntry === 0 && dExit === 0) return off;
-      return { offEntry: off.offEntry + dEntry, offExit: off.offExit + dExit };
-    };
+    ): LaneOffsets => informalSqueeze(squeezeBanks, c, off, lanePos, tileSize);
     for (const s of samples) {
       const curIndex = s.laneIndex;
       for (let u = 0; u < s.units.length; u++) {
