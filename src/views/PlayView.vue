@@ -650,6 +650,11 @@
            fare flying off toward the HUD account. Absolutely positioned like
            the fare pins (KNOWHOW → RENDER LAYOUT). -->
       <FxLayer :fx="game.fx" :tile-size="config.tileSize" :cash-target="fxCashTarget" />
+      <!-- The coach-mark: one anchored hint at a time, dismissed by performing
+           the action it teaches (src/coach.ts). Absolutely positioned world
+           chrome like the fare pins, and pointer-events:none so it can never
+           swallow the click that would dismiss it. -->
+      <CoachMark :zoom="camera.zoom" />
       <!-- Build cost tag: rides the hovered tile while the ghost route is up —
            Train Valley's live "-2000$" (M2). Absolutely positioned like the
            fare pins (a box-generating direct child of .level would become a
@@ -875,6 +880,7 @@ import { scenarioById, SCENARIOS } from "@/levels/test/index";
 import { loadBest, recordResult, BestResult } from "@/objectiveStore";
 import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
+import CoachMark from "@/components/CoachMark.vue";
 import FarePin from "@/components/FarePin.vue";
 import FxLayer from "@/components/FxLayer.vue";
 import CityPanel from "@/components/CityPanel.vue";
@@ -999,7 +1005,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { BuildDock, Crossing, FarePin, FxLayer, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { BuildDock, CoachMark, Crossing, FarePin, FxLayer, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];

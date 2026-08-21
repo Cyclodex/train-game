@@ -226,6 +226,10 @@
            The stage has no money HUD to fly to, so the cash chip drifts up in
            place (cash-target unset). -->
       <FxLayer :fx="game.fx" :tile-size="config.tileSize" />
+      <!-- The coach-mark (src/coach.ts): the stage runs the same game, so a
+           board with a hint list teaches here too — /test/coachmarks is the
+           mechanic's isolation scenario. -->
+      <CoachMark :zoom="camera.zoom" />
       <!-- The meadow theme's backdrop trees: one world overlay in the canopy
            band, above rails/trains/cars (see components/BackdropTrees.vue).
            Absolutely positioned, so it is not a grid ITEM (KNOWHOW → RENDER
@@ -275,6 +279,7 @@ import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
 import { setEditorSeed } from "@/editorSeed";
+import CoachMark from "@/components/CoachMark.vue";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
 import FxLayer from "@/components/FxLayer.vue";
@@ -302,7 +307,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { Crossing, FarePin, FxLayer, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { CoachMark, Crossing, FarePin, FxLayer, CityPanel, CitizenInspector, PersonPin } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;

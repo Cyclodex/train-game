@@ -83,7 +83,7 @@ None of these should be traded for parity items.
 |---|---|---|---|
 | 1 | ~~Goals on the Ready card~~ | S | **DONE** 2026-07-27 — and it turned out the HUD pip row was showing gold stars *behind* the Ready overlay, because a predicate over zeroed counters is mostly true before the run |
 | 2 | ~~**Campaign shell**~~ | M | **DONE** 2026-07-27 — `src/campaign.ts`, `/campaign`, unlock chain derived from `objectiveStore`, "Next level" on the win card |
-| 3 | **Coach-marks / teaching** | M | Level 1 does not work without it — now the largest remaining gap |
+| 3 | ~~**Coach-marks / teaching**~~ | M | **DONE** 2026-08-21 — `src/coach.ts` + `CoachMark.vue`, hints on all three campaign boards, dismissed by doing the taught action; see the main doc §8 item 8 |
 | 4 | Briefing screen (M11) | M | Built on `thumb.ts` |
 | 5 | Explicit destinations + badge (M6/G4) | S–M | Also removes the two-same-colour-depots hazard |
 | 6 | Clearing costs + green plots (M3/M4) | M | Phase 3. Land prices landed 2026-07-27 (`TERRAIN_BUILD_FACTOR`); the green-plot mask and the dashed gap hint remain |
@@ -164,7 +164,7 @@ level 7; the last two levels are combinations, not additions.
 | **Board** | 9×7, three stations, unbuildable lake, ring with the south run deleted |
 | **Money** | $15,000 against a 7-piece/$7,000 rebuild — deliberately ~2× |
 | **Stars** | Payday $1,700 · Under budget $6,000 · Rail baron 7 pieces |
-| **Needs** | **Coach-marks** (A4.3). Everything else is built. |
+| **Needs** | Nothing — coach-marks (A4.3) landed 2026-08-21. |
 | **Session** | ~3 min |
 
 Already measured and e2e-covered. The one change: it currently teaches by not
@@ -317,7 +317,7 @@ decisions rather than a designer's number.
 
 | Levels | State |
 |---|---|
-| 1 | Exists; needs coach-marks |
+| 1 | Exists, coach-marks included (2026-08-21) |
 | 2, 3, 4, 6, 8 | **Buildable today**, no engine work |
 | 5 | Buildable today + one star predicate wired to `maxCarWaitSec` |
 | 7 | Needs bridges |
