@@ -332,14 +332,6 @@
           ⚠ can't pay next year — deliver, or clear surplus track
         </span>
       </div>
-      <div
-        v-if="showCrossingFlow"
-        class="score-crossing"
-        :class="crossingFlowClass"
-        title="Longest car wait at a crossing"
-      >
-        🚗 {{ crossingWaitLabel }}
-      </div>
       <div v-if="hud.stars && phase !== 'ready'" class="score-stars">
         <span
           v-for="s in stars"
@@ -1275,21 +1267,12 @@ class PlayView extends Vue {
   get earnedStars(): number {
     return this.stars.filter(s => s.earned).length;
   }
-  // The crossing-flow readout (Crossing Keeper): the live worst car wait. Shown
-  // only when the mode controls the crossing gate, so other modes' HUDs are
-  // unchanged. The colour ramps amber→red as the wait climbs (the live tension).
-  get showCrossingFlow(): boolean {
-    return this.game.mode.controls.crossingGate;
-  }
-  get crossingWaitLabel(): string {
-    return this.game.roadFrame.maxCarWaitSec.toFixed(0) + "s";
-  }
-  get crossingFlowClass(): string {
-    const w = this.game.roadFrame.maxCarWaitSec;
-    if (w >= 18) return "score-crossing--bad";
-    if (w >= 8) return "score-crossing--warn";
-    return "";
-  }
+  // The crossing-flow readout is gone with Crossing Keeper (#121): every
+  // remaining mode declares `crossingGate: false`, so the worst-car-wait chip
+  // and its amber→red ramp were unreachable markup. `game.roadFrame
+  // .maxCarWaitSec` and the `maxCarWaitSec`/`carsDelivered`/`crossingIncidents`
+  // counters in `sim/objectives.ts` are untouched — a future road-scoring mode
+  // re-reads them and paints its own overlay.
   get lostReason(): string {
     return this.game.objective.lostReason ?? "";
   }
@@ -3203,19 +3186,6 @@ export default toNative(PlayView);
   45% {
     transform: translateX(0);
   }
-}
-.score-crossing {
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: #8fd19e; // calm green while traffic flows
-  transition: color 0.3s ease;
-}
-.score-crossing--warn {
-  color: #e6c34a; // amber as a wait builds
-}
-.score-crossing--bad {
-  color: #e2574c; // red when a car is stuck dangerously long
 }
 /* --- the service panel (network mode) ---
    The player's whole verb set in this mode: which trains run which stops, and
