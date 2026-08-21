@@ -140,4 +140,8 @@ export const puzzleMode: GameMode = {
     endOverlay: true,
     money: false,
   },
+  fits(caps) {
+    // Zero trains would mean deliveriesRequired 0 — an instantly-won board.
+    return caps.trains > 0 ? null : "Needs a train to deliver";
+  },
 };
