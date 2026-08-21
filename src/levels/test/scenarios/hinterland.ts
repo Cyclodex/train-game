@@ -17,12 +17,17 @@ const { Top, Right, Bottom, Left } = Position;
 // The valley, and why each place is where it is:
 //
 //   MARKTSTADT (west)  the big village. Two railway corridors run through it —
-//                      the main line at x=4 and the branch at x=11 — because the
+//                      the main line at x=4 and the branch at x=10 — because the
 //                      walking reach of a platform is two tiles, so a town wider
 //                      than five tiles needs a second station or it is not a town,
-//                      it is a ribbon. Its middle (x=7-8) is out of reach of both,
-//                      which is exactly right: that is the pedestrian core, and it
-//                      holds the school, the café and the shops.
+//                      it is a ribbon. Between them the two catchments cover every
+//                      house column: x=2, 6, 8 and 12 are each EXACTLY two tiles
+//                      from a corridor. The only column out of reach of both is
+//                      x=7, the middle street, and nobody lives on a street. The
+//                      pedestrian core is the x=8 column — the school, the café
+//                      and the shops — and it sits two tiles from the branch on
+//                      purpose, which is what makes the school reachable by a
+//                      child with no car (see the ZONES note below).
 //   NORDHEIM (north)   houses and a shop. NO ROAD AT ALL.
 //   WERK OST (east)    the heavy industry, where most of the valley's jobs are.
 //                      NO ROAD AT ALL.
@@ -98,6 +103,16 @@ const { Top, Right, Bottom, Left } = Position;
 //   + two lanes each way, no middle rung  |     649 |      80 |   40 of 40
 //   + both (what ships)                   |    2797 |       0 |    0 of 40
 //
+// READ THAT TABLE AS A COMPARISON, NOT AS A CEILING (corrected 2026-08-21).
+// Forty concurrent journeys confined to the village's 84 road tiles is well past
+// what this street plan carries: re-measured across seeds 1..12, the SHIPPED
+// plan deadlocks on 8 of them at that load, and the two seeds the table was
+// taken on are two of the four that come through. The plan is a large, real
+// improvement — +37% arrivals at every seed — but it is not deadlock-proof at
+// saturation. Its clean envelope is about 18 concurrent village journeys; 24
+// already jams on a third of seeds. `hinterlandTraffic.spec.ts` therefore
+// asserts THROUGHPUT at 18 and not "nothing froze" at 40 — see its header.
+//
 // and end to end on the citizens board, six days at `secPerDay: 900`:
 //
 //   Marktstadt commute | before 0.24 0.00 0.06 0.04 0.01 0.08
@@ -109,7 +124,7 @@ const { Top, Right, Bottom, Left } = Position;
 // What is LEFT is the board's own difficulty and not a jam: the give-ups that
 // remain read "5h 08m", the RAIL patience clock (`maxWaitSec`), not the car one.
 // This valley is over-populated for its railway on purpose — see above.
-// `tests/unit/sim/hinterlandTraffic.spec.ts` is the guard, and it fails on the
+// `tests/unit/levels/hinterlandTraffic.spec.ts` is the guard, and it fails on the
 // old plan. `/test/citizenday` was never affected either way (zero abandoned
 // trips, commute 0.89-0.96, before and after).
 //
@@ -229,12 +244,15 @@ function roadTiles(): Set<string> {
   const run = (x0: number, y0: number, x1: number, y1: number) => {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) road.add(`${x},${y}`);
   };
-  // Marktstadt's ladder: four streets either side of the two railway corridors,
-  // rungs top and bottom. Every plot column ends up exactly one tile from a
-  // carriageway, which is what a driveway is.
-  // FIVE STREETS ALTERNATING WITH THE FOUR HOUSE COLUMNS, and the pattern is
-  // the design: rail-road-house-road-rail-road-house-road, so every column of
-  // houses is one tile from a carriageway AND two from a platform.
+  // Marktstadt's ladder: five streets alternating with the four house columns,
+  // rungs top, middle and bottom.
+  // THE COLUMN PATTERN IS THE DESIGN. Reading x=2 to x=12:
+  //
+  //   house(2) road(3) RAIL(4) road(5) house(6) road(7) house(8) road(9)
+  //   RAIL(10) road(11) house(12)
+  //
+  // so every column of houses is one tile from a carriageway — that is what a
+  // driveway is — AND exactly two from a platform.
   //
   // Both halves of that were learned the hard way. Without the middle streets,
   // the village centre was five tiles from its outer houses — one more than
@@ -258,11 +276,22 @@ function roadTiles(): Set<string> {
   // queues that made met head to head in the junction boxes at the ends and the
   // whole town centre deadlocked (see the note at the top of this file).
   //
-  // y=10 is the only row a rung can use: it must miss both railways' platforms
-  // (x=4 calls at y=7/11/15, x=10 at y=8/13), the two block signals at (4,9) and
-  // (4,17), and the zoned plots (the school at 8,8, the café at 8,12). It costs
-  // four house plots — (2,10), (6,10), (8,10) and (12,10) — and buys the ladder a
-  // second way round every jam.
+  // y=10 is the BEST row, not the only one. A rung has to miss both railways'
+  // platforms (x=4 calls at y=7/11/15, x=10 at y=8/13), the two block signals at
+  // (4,9) and (4,17), and every zoned plot INSIDE ITS OWN SPAN (the school at
+  // 8,8, the shop at 6,11, the café at 8,12, the shop at 8,15). Four rows
+  // between the existing rungs survive all three: 6, 10, 14 and 16.
+  //
+  // A rung is worth most in the middle, and the middle rows are exactly the
+  // blocked ones — y=11 carries a platform and a shop, y=12 the café. y=10 is
+  // the closest a rung gets: it splits the thirteen rows 5/8, where y=14 splits
+  // them 9/4 and y=6 and y=16 sit one and two rows off an existing rung and so
+  // split almost nothing.
+  //
+  // It lays four new road tiles. (4,10) and (10,10) fall on the two rail columns
+  // and become LEVEL CROSSINGS; only (6,10) and (8,10) are a cost, two of the
+  // twelve house plots in each of those columns. (2,10) and (12,10) lie outside
+  // the rung's x=3..11 span and stay plots.
   run(3, 10, 11, 10);
   run(3, 18, 23, 18); // the rung that becomes the road east to Südau
   // The southern loop: down the west street, along the bottom, back up at x=23.
@@ -335,7 +364,7 @@ const rect = (x0: number, y0: number, x1: number, y1: number): string[] => {
 const col = (x: number, y0: number, y1: number) => rect(x, y0, x, y1);
 const row = (y: number, x0: number, x1: number) => rect(x0, y, x1, y);
 
-// MARKTSTADT. Plot columns only — 3, 5, 7, 10 and 12 are streets and 4 and 11
+// MARKTSTADT. Plot columns only — 3, 5, 7, 9 and 11 are streets and 4 and 10
 // are railway.
 //
 // The works at the top of x=13 is DELIBERATELY SMALL. A village that can employ

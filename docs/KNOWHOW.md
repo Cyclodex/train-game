@@ -1680,6 +1680,16 @@ Four rules, each measured on that board, each of which failed silently:
     the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
     and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
     every local trip into a full circuit.
+  · **A "NOTHING DEADLOCKED" ASSERTION AT SATURATION IS SEED LUCK, NOT A GUARD**
+    (2026-08-21). The numbers above were taken at 40 concurrent trips inside the
+    village's 84 road tiles — past what the plan carries. Swept over seeds 1..12
+    the SHIPPED plan freezes on 8 of them at that load; the pair the first guard
+    shipped with were two of the four that come through. Worse, the check does
+    not even discriminate: at a load both plans survive (12, 18 trips) NEITHER
+    freezes, and at 24 BOTH freeze on a third of seeds. Assert THROUGHPUT at a
+    load both survive instead — at 18 trips/900s the old ladder lands 495-514
+    arrivals and the new plan 693-713, +37% on every seed, longest stand 13.5s.
+    Sweep before you pick a seed; a green on one stream proves nothing.
   · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
     straight or bend whose neighbour has a different lane count (the renderer
     paints it red); a junction fans and merges unequal arms by design and is
@@ -1688,7 +1698,16 @@ Four rules, each measured on that board, each of which failed silently:
     x=3..11, y=5..18 and its two exits, (3,18) and (11,18), are both T junctions.
   · A mid rung has to miss BOTH lines' platforms (a station may not carry road),
     the block signals (a road tile silently drops the signal authored on it) and
-    the zoned plots. On hinterland exactly one row, y=10, satisfies all three.
+    the zoned plots INSIDE ITS OWN SPAN — and that normally leaves a CHOICE, not
+    one row. On hinterland four rows survive all three (6, 10, 14, 16); y=10
+    ships because a rung is worth most in the middle and the middle rows are the
+    blocked ones (y=11 platform + shop, y=12 café). Choose by how evenly the rung
+    splits the ladder: y=10 → 5/8 rows, y=14 → 9/4, y=6 and y=16 sit one and two
+    rows off an existing rung. Cost is read off the SPAN too: hinterland's rung
+    is x=3..11, so it takes exactly two plots, (6,10) and (8,10); the tiles on
+    the rail columns become level crossings and plots outside the span ((2,10),
+    (12,10)) are untouched. Counting the NEW ROAD TILES as the plot cost is the
+    easy mistake — half of them are rail.
 - **PARKING WAS NOT THE CULPRIT, AND CHECK BEFORE YOU BLAME IT.**
   `deriveWorkplaceParking` is applied in a scenario's OWN data — `workparking`
   and `homeparking` call it, and nothing else does. hinterland never has, so the
