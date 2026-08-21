@@ -47,21 +47,33 @@ const p = new Profiler({ sampleInterval: 10, maxBufferSize: 100000 });
 const trace = await p.stop(); // aggregate trace.samples by frame
 ```
 
-## Baseline (2026-08-22, Windows dev machine, node 24, headless bench)
+## Baseline (2026-08-22 evening, Windows dev machine, node 24, headless bench)
 
-Steady-state ms per `advance(1/60)` tick (avg over the stated window):
+Steady-state ms per `advance(1/60)` tick (avg over the stated window). "before"
+is the same bench on the same machine earlier the same day, before the
+crossing-gate and render-mirror work below.
 
-| case | state | avg ms/tick | p95 | note |
+| case | state | avg ms/tick | before | note |
 | --- | --- | --- | --- | --- |
-| demoworld (20x14, 3 trains, 26 cars) | steady | **1.0** | 1.9 | comfortable |
-| perfworld, trains only (8 trains, 0 cars) | steady | **0.3** | 0.6 | rail is cheap |
-| perfworld + traffic (fills to 160 cars) | filling→steady | **18–31** | 24–46 | 1–2x the whole frame budget |
-| perfcity (everything, citizens mode) | normal day | **13–15** | ~20 | model alone ≈ frame budget |
-| perfcity | citizens' morning rush (window ≥135s) | **27–37** | 50–70 | rush hour doubles the tick |
-| road sim alone, crossings open | 50 cars | **1.0** | 1.2 | |
-| road sim alone | 100 cars | **2.8** | 3.5 | |
-| road sim alone | 200 cars | **12** | 16 | 2x cars ≈ 4x cost |
-| road sim alone | ~357 cars | **120** | 256 | congestion collapse |
+| demoworld (20x14, 3 trains, 26 cars) | steady | **1.2–1.9** | 1.0 | small-board wash, and a loaded machine — re-measure quiet |
+| perfworld, trains only (8 trains, 0 cars) | steady | **0.3** | 0.3 | rail is cheap; unchanged, as expected |
+| perfworld + traffic (fills to 160 cars) | steady | **8–11** | 18–31 | **~2.2x** |
+| perfcity (everything, citizens mode) | normal day | **5.6–8** | 13–15 | **~2x** |
+| perfcity | citizens' morning rush (window ≥135s) | **8.1** | 27–37 | **~4.5x** — the rush spike is gone |
+| road sim alone, crossings open | 50 cars | 1.0 | 1.0 | not re-measured: these cases pass their own `() => false` gate, so the change cannot reach them |
+| road sim alone | 100 cars | 2.8 | 2.8 | " |
+| road sim alone | 200 cars | 12 | 12 | " |
+| road sim alone | ~357 cars | 120 | 120 | " — congestion collapse |
+
+Scaling law, unchanged: the road sim is still superlinear in live vehicles. What
+changed is the constant — the per-tick cost the whole board paid for the
+crossing gate is gone, which is why the citizens' rush (many more vehicles
+against the same trains) no longer spikes.
+
+The small-board rows are the ones to re-check on a quiet machine: a snapshot
+costs a little more than the handful of queries a tiny board would have made,
+so demoworld is expected to be a wash rather than a win, and the numbers above
+were taken while other work was running.
 
 Scaling law: the road sim is superlinear in live vehicles — roughly quadratic
 at moderate density and worse under congestion (jammed cars re-scan their
@@ -85,24 +97,42 @@ Measured on the bench + browser profiles, in descending order of leverage:
 2. **Junction arbitration scans.** Per approaching car per junction,
    `activeMovementsAt` and `waitingCarsAt` walk every vehicle again
    (`src/sim/road.ts:2116/2135`).
-3. **The crossing-closed predicate.** `game.advance` hands the road sim
-   `id => sim.reservedBy(id) || sim.occupiedBy(id) || claimed.includes(id)`
-   (`src/game.ts` ~3385). Measured: ~630 calls/tick on perfworld, up to
-   ~3.5ms/tick (~25% of the tick). Each `occupiedBy` is a full train scan that
-   builds a fresh body-tile Set per train per call (`occupantOf`,
-   `src/sim/simulation.ts:828`, `bodyClaimKeys` in the browser profile).
-4. **The fill-fast spawn storm.** `fillFast` retries EVERY map entry EVERY tick
-   until the cap is reached; each attempt plans a route (seeded BFS,
-   `roadRouter.ts planRouteToGoals` — top of the browser profile). On a jammed
-   board the cap is never reached and the storm runs for ever. Measured in the
-   browser: car cap 0 → 18ms/tick, cap restored → 38–120ms/tick, same 23 live
-   cars.
-5. **Per-frame render mirrors that scale with the WORLD, not with activity.**
-   `updateReservations` and `updateStationQueues` iterate every level tile
-   every frame (`src/game.ts:2593/2640`) — 1120 tiles on the stress boards,
-   each `occupiedBy(id)` a full train scan (see 3). `updateRoadCars` does
-   `roadCars.find(...)` per body unit per frame on a reactive array
-   (`src/game.ts:2771`) — O(cars²) proxy reads.
+3. ~~**The crossing-closed predicate.**~~ **FIXED 2026-08-22.** `game.advance`
+   handed the road sim `id => sim.reservedBy(id) || sim.occupiedBy(id) ||
+   claimed.includes(id)`, and the road sim asks that per route tile per car per
+   tick: ~630 calls/tick on perfworld, ~3.5ms/tick, about a quarter of the tick,
+   because each `occupiedBy` is a full train scan rebuilding every train's body
+   claim keys. It is now one `sim.claimSnapshot()` per tick behind a `Set`
+   (`src/sim/simulation.ts`, `claimSnapshot`), measured at **0.021ms/tick and 0
+   per-tile queries** — a 170x cut on that component.
+   · Exact, not approximate: `sim.step()` runs BEFORE `roadSim.step()` in
+     `advance`, so no train moves while the road sim is stepping and every one
+     of those calls was already returning the same answer.
+   · The snapshot reproduces the queries' flyover level precedence and
+     first-train-wins tie-break, and `tests/unit/sim/claimSnapshot.spec.ts`
+     pins that equivalence tile-by-tile across five boards — plus a budget guard
+     that fails if per-tile polling ever comes back (nothing else in the suite
+     would notice: correctness is unchanged, only the cost).
+4. **The fill-fast spawn storm.** STILL OPEN, and deliberately so — see the
+   note below, it is a decision rather than a free win. `fillFast` retries every
+   map entry every tick until the cap is reached; each attempt plans a route
+   (seeded BFS, `roadRouter.ts` — top of the browser profile) and only THEN
+   probes whether the entry lane is clear, so on a jammed board it pays a
+   discarded BFS per attempt, for ever, because the cap is never reached.
+   Measured in the browser: car cap 0 → 18ms/tick, cap restored →
+   38–120ms/tick, same 23 live cars.
+5. ~~**Per-frame render mirrors that scale with the WORLD, not with activity.**~~
+   **FIXED 2026-08-22.** `updateReservations` walked every level tile per frame
+   asking `reservedBy`/`occupiedBy` about each (1120 tiles x trains on the
+   stress boards); it now reads one `claimSnapshot` and is proportional to what
+   is actually claimed. `updateStationQueues` walked every tile to reach the
+   handful that are stops, for a "no longer a stop" cleanup branch that was
+   dead (`transitStops` is derived once and never mutated); it iterates the
+   stops. `updateRoadCars` did `roadCars.find(...)` per rendered body per frame
+   over a REACTIVE array — quadratic, every probe through a Vue proxy — and now
+   keeps an id→element Map beside it (`roadCarIndex`, holding the reactive
+   element, never the raw pushed object, or writes would update nothing
+   visible).
 6. **SVG DOM path sampling.** Train/car placement measures positions with
    native `getTotalLength`/`getPointAtLength` on cached `<path>` elements,
    2–3 calls per coupler per frame (`src/game.ts:2361–2374`); it shows up in
@@ -111,33 +141,50 @@ Measured on the bench + browser profiles, in descending order of leverage:
 7. **DOM size.** 40x28 renders ~64k nodes (~55 per tile); every tile component
    is mounted whether or not the camera can see it.
 
-## The improvement plan (in leverage order)
+## The improvement plan
+
+**Done 2026-08-22** (all four provably behaviour-neutral, ~2x on the model tick):
+the per-tick closed-crossing set (`claimSnapshot`), and the three render mirrors
+— reservations/occupancy, station queues, and the `roadCars` id index. See items
+3 and 5 above for what each was and how the neutrality is pinned.
+
+**Next, in leverage order:**
 
 1. **Spatial index in the road sim.** Maintain `tileId → Set<vehicle>`
    incrementally as bodies move (the body memo already knows its tiles);
    `clearAhead`/junction/lane-change scans then look up only vehicles on their
-   route tiles. Turns the quadratic column near-linear. Verify with the
-   state-trace hash (KNOWHOW → SIM HOT PATH: `ed41e161…5723`) — this must be
-   behaviour-neutral.
-2. **Per-tick closed-crossing set.** Build the set of closed tile ids ONCE per
-   `advance` (reservations map + an incrementally-maintained occupancy map in
-   the sim) and hand the road sim a `Set.has` closure. Kills cost item 3; also
-   fixes item 5's `occupiedBy` scans if the sim keeps `tileId → trainId` as
-   trains move instead of deriving it per query.
-3. **Spawn backoff.** When a fill-fast attempt at an entry fails, skip that
-   entry for a second or two of sim time (per-entry cooldown) and cache the
-   planned route per entry while the level is unchanged. Kills item 4 without
-   changing spawn behaviour on an open map.
-4. **Render mirrors keyed by activity.** Mirror reservations/occupancy from sim
-   EVENTS (reserve/release already exist as events) instead of polling every
-   tile per frame; index `roadCars` by id in a Map for O(1) reconciliation.
-5. **Closed-form path sampling.** Replace `getPointAtLength` with the pure
+   route tiles. Turns the quadratic column near-linear — this is now the biggest
+   remaining win by a distance. Verify with the state-trace hash (KNOWHOW → SIM
+   HOT PATH: `ed41e161…5723`); it must be behaviour-neutral. The trap is that
+   `step` advances cars one at a time, so a tick-scoped index goes stale
+   mid-tick — key it on car STATE the way the body memo does, or not at all.
+2. **Spawn backoff — A DECISION, NOT A FREE WIN.** The obvious fix (probe the
+   entry lanes first, skip the BFS when the spawn cannot succeed) is *not*
+   behaviour-neutral, and it is worth knowing why before someone "optimises" it:
+   · The seeded RNG streams advance on a FAILED spawn today — `planRoute` draws
+     its destination (`roadRouter.ts`, one `rng()` call before the search) and
+     the parking branch draws `parkRng()`. Skip those and every later spawn on
+     the board changes. Every seeded road test and the state-trace hash move.
+   · A partial fix that keeps the draws and skips only the search is possible
+     for the through-trip (the draw is cleanly separable from the BFS), but the
+     parking branch's draws depend on its own search, so it cannot follow.
+   · And the lane probe cannot simply be hoisted: for cars the probe ORDER comes
+     from `preferredSpawnLane(…, routePlan, …)`, which returns a lane from the
+     junction's approach — not provably a member of the entry's usable lanes.
+     Probing "all usable lanes" first is therefore not equivalent to probing
+     `order`, and could change which spawns succeed.
+   · So the honest options are (a) accept a one-off re-baseline of the seeded
+     road fixtures and take the win, or (b) memoise the BFS per
+     (spawn, target, class) with an invalidation hook on level edits (build-in-
+     play mutates the level the router reads). Pick deliberately; do not sneak
+     either into a perf pass.
+3. **Closed-form path sampling.** Replace `getPointAtLength` with the pure
    geometry used headless (straight lerp + arc parameterisation) so browser and
    headless run the same math — removes SVG DOM from the hot loop and one
    browser/headless behaviour difference.
-6. **Camera culling.** Render only tiles intersecting the viewport (+margin);
+4. **Camera culling.** Render only tiles intersecting the viewport (+margin);
    at typical zoom that is 10–20% of a 40x28 board. Biggest DOM win, most
-   invasive change — measure 1–5 first.
+   invasive change — measure the rest first.
 
 ## Regression monitoring
 
@@ -156,3 +203,4 @@ Measured on the bench + browser profiles, in descending order of leverage:
 | date | change | perfworld+traffic avg | perfcity avg | road@200 |
 | --- | --- | --- | --- | --- |
 | 2026-08-22 | baseline (this file) | 18–31ms | 13–15ms (rush 27–37ms) | 12ms |
+| 2026-08-22 | per-tick `claimSnapshot` + render mirrors | **8–11ms** | **5.6–8ms** (rush 8.1ms) | 12ms (untouched) |

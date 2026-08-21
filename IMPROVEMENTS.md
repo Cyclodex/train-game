@@ -308,17 +308,21 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     hash (`docs/KNOWHOW.md` → SIM HOT PATH), which has survived both rounds
     unchanged. **Not** by cutting the long-run cases' seeds or ticks — that was
     weighed and rejected, see TEST TIERS.
-    unchanged. **Measured now** (2026-08-22, `docs/PERFORMANCE.md`): the road
-    tick is the game's perf ceiling — ~1ms at 50 cars, ~12ms at 200, ~120ms at
-    357 — and three NEW hot spots sit beside the pair scans, each cheaper to
-    fix than the index: (a) the crossing-closed predicate (`occupiedBy` is a
-    full train scan allocating a Set per call, ~630 calls/tick — build the
-    closed-tile set once per tick instead); (b) the fillFast spawn storm
-    (every entry re-plans a BFS route every tick for ever on a jammed board —
-    add a per-entry cooldown); (c) render mirrors that walk every level tile
-    per frame (`updateReservations`) and the `roadCars.find` per unit per
-    frame. Baselines, receipts and the full ordered plan: `docs/PERFORMANCE.md`;
-    bench: `PERF=1 npx vitest run tests/unit/perf/perfBench.spec.ts` on the
+    unchanged. **Measured** (2026-08-22, `docs/PERFORMANCE.md`): the road tick
+    is the game's perf ceiling — ~1ms at 50 cars, ~12ms at 200, ~120ms at 357.
+    A third round has since landed and roughly HALVED the model tick on the
+    stress boards (perfworld+traffic 18–31 → 8–11ms, perfcity 13–15 → 5.6–8ms,
+    its citizens' rush spike 27–37 → 8.1ms): the crossing gate is one
+    `sim.claimSnapshot()` per tick behind a Set instead of a per-tile
+    `occupiedBy` poll, and the three per-frame render mirrors no longer walk
+    the whole board. All four provably behaviour-neutral and pinned by
+    `tests/unit/sim/claimSnapshot.spec.ts`.
+    **What is left**, in order: the all-pairs candidate scans (this item — now
+    the biggest single win); the fillFast spawn storm, which is a DECISION
+    rather than a free win because the seeded streams advance on a failed spawn
+    (see PERFORMANCE.md → the plan, and KNOWHOW → PERF BENCH); `getPointAtLength`
+    on the render hot path; and camera culling for the ~64k DOM nodes.
+    Bench: `PERF=1 npx vitest run tests/unit/perf/perfBench.spec.ts` on the
     `/test/perfworld` + `/test/perfcity` stress boards.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the

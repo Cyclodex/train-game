@@ -4430,15 +4430,45 @@ mode, shared paths — are NOT).
   ~2.8 at 100, ~12 at 200, ~120 at 357 (congestion collapse). Rail is noise
   (8 trains on 40x28 = 0.3ms/tick). Citizens' MORNING RUSH doubles the tick
   (perfcity 13→37ms) — "the game got slow" can simply be 07:00 in town.
+- FIXED 2026-08-22, ~2x on the model tick (perfworld+traffic 18-31 -> 8-11ms,
+  perfcity 13-15 -> 5.6-8ms, and the citizens' RUSH spike 27-37 -> 8.1ms):
+  · `sim.claimSnapshot()` — every claim, by TILE ID, in one pass. The crossing
+    gate used to ask `reservedBy(id) || occupiedBy(id)` per route tile per car
+    per tick (~630 calls/tick, ~3.5ms, a quarter of the tick) and `occupiedBy`
+    is a full train scan rebuilding each body's claim keys. Now one snapshot
+    per tick behind a Set: 0.021ms/tick, 0 per-tile queries.
+    EXACT, not approximate — `sim.step()` runs BEFORE `roadSim.step()` in
+    `advance`, so no train moves during the road step and every one of those
+    calls was already returning the same answer. The snapshot reproduces the
+    queries' flyover precedence (`claimKeysOf` order = rank bare/#over/#under,
+    lowest wins) and first-train-wins tie-break.
+  · The render mirrors: `updateReservations` reads the snapshot instead of
+    polling every level tile; `updateStationQueues` iterates `transitStops`
+    (its "no longer a stop" cleanup was dead code — transitStops is derived
+    once and never mutated); `updateRoadCars` keeps `roadCarIndex` (id -> the
+    REACTIVE element, never the raw pushed object) instead of `roadCars.find`.
+  · Pinned by `tests/unit/sim/claimSnapshot.spec.ts`: tile-by-tile equivalence
+    against the real queries on five boards INCLUDING flyover (the precedence
+    case), with a vacuity guard (it caught a run too short to hold a
+    reservation) and a per-tick polling BUDGET — because nothing else in the
+    suite notices per-tile polling coming back: correctness is unchanged, only
+    the cost.
 - Unsolved hot spots, in leverage order (details + fixes in PERFORMANCE.md):
   all-pairs candidate scans in clearAhead/junction arbitration (the memo+prune
-  of SIM HOT PATH made pairs cheap, not fewer); the crossing-closed predicate
-  (`occupiedBy` = full train scan building a Set PER CALL, ~630 calls/tick);
-  the fillFast spawn storm (every entry re-plans a BFS route every tick for
-  ever on a jammed board — measured 2-6x tick cost in the browser); per-frame
-  mirrors that walk EVERY level tile (`updateReservations`); `roadCars.find`
-  per unit per frame on a reactive array; native `getPointAtLength` per
-  coupler per frame.
+  of SIM HOT PATH made pairs cheap, not fewer) — now the biggest remaining win;
+  the fillFast spawn storm; native `getPointAtLength` per coupler per frame;
+  ~64k DOM nodes with no camera culling.
+- THE SPAWN STORM IS A DECISION, NOT A FREE WIN — read this before "fixing" it.
+  fillFast plans a BFS route per attempt and only THEN probes whether the entry
+  lane is clear, so a jammed board pays a discarded BFS per attempt for ever.
+  But: the seeded streams ADVANCE on a failed spawn (`planRoute` draws its
+  destination, the parking branch draws `parkRng`), so skipping the work moves
+  every later spawn — every seeded road test and the state-trace hash. And the
+  probe cannot simply be hoisted: for cars the probe ORDER comes from
+  `preferredSpawnLane(…, routePlan, …)`, which returns a lane off the JUNCTION's
+  approach and is not provably one of the entry's usable lanes, so "probe all
+  usable first" is not equivalent to probing `order`. Either accept a re-baseline
+  or memoise the BFS with a level-edit invalidation hook — deliberately.
 - BROWSER MEASUREMENT TRAPS: a hidden automation tab doesn't just stop rAF —
   Chrome deprioritises the whole renderer, so wall-clock timings there are
   several-fold pessimistic and the Self-Profiling API barely samples. Real

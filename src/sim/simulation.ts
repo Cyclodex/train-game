@@ -455,6 +455,18 @@ export interface Simulation {
   reservedBy(tileId: string): string | undefined;
   // The train (if any) physically on `tileId` right now — for the switch lock.
   occupiedBy(tileId: string): string | undefined;
+  // EVERY claim the trains hold right now, by tile id, in ONE pass.
+  //
+  // `reservedBy`/`occupiedBy` answer for one tile, and `occupiedBy` costs a full
+  // scan of every train (each rebuilding its body's claim keys) per call. A
+  // caller that asks about MANY tiles — the road sim's crossing gate, which asks
+  // per car per route tile, and the render mirrors, which ask per level tile per
+  // frame — therefore paid trains x tiles for an answer that is the same for the
+  // whole tick. This walks the trains and the reservation map once instead, and
+  // returns exactly what the per-tile queries would have said (same flyover
+  // precedence, same first-train-wins tie-break), so a caller can swap a
+  // thousand queries for one snapshot with no change in behaviour.
+  claimSnapshot(): ClaimSnapshot;
   // Trains STRANDED on this tile: the head sits here and there is no onward
   // connection from the port it came in through. Such a train has committed to
   // no exit, which is precisely what makes it safe to lay track under it — the
@@ -476,10 +488,35 @@ export interface Simulation {
   isProceedForced(tileId: string, exitPort: Port): boolean;
 }
 
+/**
+ * Who holds what, right now, keyed by TILE ID (not by claim key) — the whole
+ * board's occupancy and reservation state in two maps. See `claimSnapshot`.
+ *
+ * A tile absent from a map is free of that kind of claim, which is what makes
+ * `snapshot.occupied.has(id)` a drop-in for `!!sim.occupiedBy(id)`.
+ */
+export interface ClaimSnapshot {
+  // tileId -> the train physically on it.
+  occupied: Map<string, string>;
+  // tileId -> the train that has reserved it.
+  reserved: Map<string, string>;
+}
+
 // Cruise speed in tiles/sec. Exported because the fare model prices a delivery
 // against its IDEAL travel time (`modes/tycoon.ts`), and a second copy of this
 // number would silently mis-price every fare the day it is retuned here.
 export const DEFAULT_SPEED = 0.5;
+
+// Which LEVEL of a tile a claim key names, as a precedence rank. `claimKeysOf`
+// orders its keys [tileId, #over, #under] and the by-tile queries take the first
+// one that has an owner, so a lower rank must win when a snapshot folds several
+// keys onto one tile id — otherwise a flyover tile would report the deck's train
+// where `occupiedBy` reports the ground line's.
+function claimRank(key: string): number {
+  const i = key.indexOf("#");
+  if (i === -1) return 0;
+  return key.slice(i + 1) === "over" ? 1 : 2;
+}
 
 export function createSimulation(config: SimConfig): Simulation {
   const { level } = config;
@@ -1658,6 +1695,34 @@ export function createSimulation(config: SimConfig): Simulation {
         if (on !== undefined) return on;
       }
       return undefined;
+    },
+    claimSnapshot(): ClaimSnapshot {
+      const occupied = new Map<string, string>();
+      const occupiedRank = new Map<string, number>();
+      // Trains in `Object.keys` order, and a strictly-lower rank required to
+      // overwrite — together these reproduce `occupantOf`'s first-train-wins and
+      // `claimKeysOf`'s level precedence exactly.
+      for (const id of Object.keys(trains)) {
+        for (const key of bodyClaimKeys(trains[id])) {
+          const tileId = tileIdOfClaim(key);
+          const rank = claimRank(key);
+          const prev = occupiedRank.get(tileId);
+          if (prev !== undefined && prev <= rank) continue;
+          occupiedRank.set(tileId, rank);
+          occupied.set(tileId, id);
+        }
+      }
+      const reserved = new Map<string, string>();
+      const reservedRank = new Map<string, number>();
+      for (const [key, owner] of reservations) {
+        const tileId = tileIdOfClaim(key);
+        const rank = claimRank(key);
+        const prev = reservedRank.get(tileId);
+        if (prev !== undefined && prev <= rank) continue;
+        reservedRank.set(tileId, rank);
+        reserved.set(tileId, owner);
+      }
+      return { occupied, reserved };
     },
     strandedOn(tileId: string) {
       const out: string[] = [];

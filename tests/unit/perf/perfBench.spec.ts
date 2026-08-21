@@ -177,43 +177,49 @@ describe("perf bench (PERF=1 to run)", () => {
   );
 
   itPerf(
-    "attribution: what the crossing-closed predicate costs the road step",
+    "attribution: what the crossing gate costs the road step",
     async () => {
-      // The road sim asks `sim.reservedBy(id) || sim.occupiedBy(id)` for route
-      // tiles while it steps cars (the crossing gate in game.advance). Both are
-      // full scans over the trains — occupiedBy builds a body-tile Set per train
-      // per call — so their share of the tick grows with cars × trains. Wrapping
-      // the sim's methods times exactly the calls the road layer makes.
+      // HISTORY, and the shape of the win. The road sim asks "is this tile
+      // closed?" per route tile per car per tick. That predicate used to be
+      // `sim.reservedBy(id) || sim.occupiedBy(id)` — two full scans over the
+      // trains, `occupiedBy` rebuilding each one's body claim keys — so the gate
+      // alone measured ~630 calls and ~3.5ms a tick, about a quarter of the
+      // whole tick. It is now one `claimSnapshot()` per tick behind a Set
+      // (2026-08-22); the per-tile counters below should read ~0, and
+      // `tests/unit/sim/claimSnapshot.spec.ts` is what fails if polling returns.
       const game = gameFor("perfworld");
       const sim = game.sim as unknown as {
         reservedBy(id: string): string | undefined;
         occupiedBy(id: string): string | undefined;
+        claimSnapshot(): unknown;
       };
-      const counts = { reserved: 0, occupied: 0, ms: 0 };
+      const counts = { perTile: 0, snapshots: 0, snapshotMs: 0 };
       const origR = sim.reservedBy.bind(sim);
       const origO = sim.occupiedBy.bind(sim);
+      const origS = sim.claimSnapshot.bind(sim);
       sim.reservedBy = id => {
-        const t = performance.now();
-        const r = origR(id);
-        counts.ms += performance.now() - t;
-        counts.reserved++;
-        return r;
+        counts.perTile++;
+        return origR(id);
       };
       sim.occupiedBy = id => {
+        counts.perTile++;
+        return origO(id);
+      };
+      sim.claimSnapshot = () => {
         const t = performance.now();
-        const r = origO(id);
-        counts.ms += performance.now() - t;
-        counts.occupied++;
+        const r = origS();
+        counts.snapshotMs += performance.now() - t;
+        counts.snapshots++;
         return r;
       };
       const stats = await bench(dt => game.advance(dt), 60, 15, () => "");
       print("perfworld with traffic — total tick while instrumented", stats);
       const ticks = 60 * 60;
       console.log(
-        `  closed-predicate: ${counts.reserved + counts.occupied} calls ` +
-          `(${((counts.reserved + counts.occupied) / ticks).toFixed(0)}/tick), ` +
-          `${counts.ms.toFixed(0)}ms total = ${(counts.ms / ticks).toFixed(2)}ms/tick ` +
-          `(timer overhead included — read as an upper bound)`,
+        `  crossing gate: ${counts.perTile} per-tile queries ` +
+          `(${(counts.perTile / ticks).toFixed(2)}/tick), ` +
+          `${counts.snapshots} snapshots costing ${counts.snapshotMs.toFixed(0)}ms ` +
+          `= ${(counts.snapshotMs / ticks).toFixed(3)}ms/tick`,
       );
       expect(true).toBe(true);
     },

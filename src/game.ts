@@ -1400,6 +1400,15 @@ export function createGame(
   }
   buildSims();
   const roadCars = reactive([]) as RoadCar[];
+  // id -> that car's entry in `roadCars`, so the per-frame reconciliation is a
+  // lookup instead of a scan. `roadCars.find(...)` ran once per rendered body
+  // per frame over a REACTIVE array, so every probe went through Vue's proxy —
+  // quadratic in vehicles, on the hot path (docs/PERFORMANCE.md).
+  //
+  // It holds the REACTIVE element (what `find` returned), never the raw object
+  // that was pushed: writing through the raw one would update the value and
+  // notify nobody, which is a stale sprite rather than a slow one.
+  const roadCarIndex = new Map<string, RoadCar>();
   // Road-junction tiles a car currently holds (tileId → car id), refreshed each
   // frame from the road sim. Cars have no stored reservation like trains, so this
   // is derived live; the renderer reads it to highlight a held junction in debug.
@@ -2591,16 +2600,22 @@ export function createGame(
   }
 
   function updateReservations() {
-    for (const id of Object.keys(level)) {
-      const owner = sim.reservedBy(id);
-      // Vue's reactive set is no-op when the value is unchanged, so this is
-      // cheap on the frames where reservations don't move.
-      if (owner) reservations[id] = owner;
-      else if (id in reservations) delete reservations[id];
-
-      const on = sim.occupiedBy(id);
-      if (on) occupied[id] = on;
-      else if (id in occupied) delete occupied[id];
+    // Driven by the CLAIMS, not by the board. This used to walk every level tile
+    // and ask `reservedBy`/`occupiedBy` about each one — trains x tiles of work
+    // per frame, and on a 40x28 board that is 1120 tiles against a handful of
+    // claims (docs/PERFORMANCE.md). One snapshot names every claim there is, so
+    // the work is now proportional to what is actually claimed; the deletes
+    // still need a pass, but only over the keys the mirror itself holds.
+    const claims = sim.claimSnapshot();
+    // Vue's reactive set is a no-op when the value is unchanged, so writing the
+    // same owner again on a frame where nothing moved notifies nobody.
+    for (const [id, owner] of claims.reserved) reservations[id] = owner;
+    for (const id of Object.keys(reservations)) {
+      if (!claims.reserved.has(id)) delete reservations[id];
+    }
+    for (const [id, on] of claims.occupied) occupied[id] = on;
+    for (const id of Object.keys(occupied)) {
+      if (!claims.occupied.has(id)) delete occupied[id];
     }
   }
 
@@ -2638,13 +2653,14 @@ export function createGame(
   // waiting people are just as real. Vue's reactive set is a no-op while the
   // count is unchanged, so this is cheap.
   function updateStationQueues() {
-    for (const id of Object.keys(level)) {
-      if (!transitStops.has(id)) {
-        if (id in stationQueues) delete stationQueues[id];
-        if (id in stationWaiting) delete stationWaiting[id];
-        if (id in stationWaitingColours) delete stationWaitingColours[id];
-        continue;
-      }
+    // The STOPS, not the board. This walked every level tile to reach the
+    // handful that are stops — 1120 tiles for 6 platforms on the stress board —
+    // and the "not a stop any more, drop its mirror" branch it did that for was
+    // dead: `transitStops` is derived once from the level and never mutated, and
+    // nothing else writes these mirrors, so a key that is not a stop can never
+    // be in them. (Should stops ever become editable in play, this loop has to
+    // regain a cleanup pass — over the MIRROR's keys, not the level's.)
+    for (const id of transitStops) {
       stationQueues[id] = sim.stationQueue(id);
       const waiting = sim.stationWaiting(id);
       // Replace in place only when it really changed, so Vue does not
@@ -2768,7 +2784,7 @@ export function createGame(
 
         const { x, y, angle } = positionRoadUnit(unit, offsetFront, offsetRear);
         const widthPx = unit.lengthTiles * tileSize;
-        const existing = roadCars.find(c => c.id === id);
+        const existing = roadCarIndex.get(id);
         if (existing) {
           existing.x = x;
           existing.y = y;
@@ -2777,11 +2793,16 @@ export function createGame(
           existing.part = unit.part;
         } else {
           roadCars.push({ id, vehicleId: s.id, unit: u, x, y, angle, widthPx, part: unit.part });
+          // Read the element back out: `push` takes the raw object, and it is
+          // the array's reactive view of it that must go in the index.
+          roadCarIndex.set(id, roadCars[roadCars.length - 1]);
         }
       }
     }
     for (let i = roadCars.length - 1; i >= 0; i--) {
-      if (!seen.has(roadCars[i].id)) roadCars.splice(i, 1);
+      if (seen.has(roadCars[i].id)) continue;
+      roadCarIndex.delete(roadCars[i].id);
+      roadCars.splice(i, 1);
     }
 
     // Refresh the live junction occupancy (in-place so Vue's reactive map only
@@ -3381,11 +3402,21 @@ export function createGame(
     // now, while somebody is crossing the road on a zebra there. One predicate,
     // two reasons: the road sim already knows how to brake for a closed tile, so
     // yielding to a pedestrian needed no new rule in the traffic model.
-    const claimed = pedestrianClaims;
-    roadSim.step(
-      scaled,
-      id => !!(sim.reservedBy(id) || sim.occupiedBy(id)) || claimed.includes(id)
-    );
+    //
+    // SNAPSHOTTED, not queried per tile. The road sim asks this once per route
+    // tile per car per tick — measured at ~630 calls a tick on a 40x28 board —
+    // and `occupiedBy` is a full scan of every train that rebuilds each one's
+    // body claim keys, so the gate alone was about a quarter of the tick
+    // (docs/PERFORMANCE.md). Freezing it is exact rather than approximate: the
+    // trains have already moved (`sim.step` above) and nothing moves them again
+    // until the next tick, so every one of those calls was returning the same
+    // answer as this snapshot. The pedestrian claims join the same Set — a small
+    // array, but `includes` inside a per-car loop is the same shape of mistake.
+    const claims = sim.claimSnapshot();
+    const closed = new Set<string>(claims.occupied.keys());
+    for (const id of claims.reserved.keys()) closed.add(id);
+    for (const id of pedestrianClaims) closed.add(id);
+    roadSim.step(scaled, id => closed.has(id));
     // Where the cars ended up, for the walkers waiting at a kerb.
     //
     // Only bodies WELL INSIDE a tile count. A car held at a closed crossing
@@ -3994,6 +4025,7 @@ export function createGame(
       rebuildCitizens();
       prevStalls = new Set();
       roadCars.splice(0, roadCars.length);
+      roadCarIndex.clear(); // its entries point into the array just emptied
       roadFrame.maxCarWaitSec = 0;
       roadFrame.carWaitTotalSec = 0;
       roadFrame.carsDelivered = 0;
