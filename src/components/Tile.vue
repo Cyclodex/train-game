@@ -1265,6 +1265,13 @@ class Tile extends Vue {
     return (this.tile.road ?? []).filter(l => l.from === p && l.kind === "cycle").length;
   }
 
+  // Kerb-side shoulder lanes of one direction (the wide street's edge zone) —
+  // suppresses the kerb slot's divider in roadLaneMarkingPaths without adding
+  // any line: the street just paints wider.
+  private shoulderLanesFrom(p: Position): number {
+    return (this.tile.road ?? []).filter(l => l.from === p && l.kind === "shoulder").length;
+  }
+
   // A ONE-WAY junction has no arm carrying oncoming traffic: every port it
   // touches is EITHER an entry OR an exit, never both (a bidirectional arm makes
   // it a normal two-way junction). This gates the lane-anchored turn-off paint
@@ -1461,7 +1468,7 @@ class Tile extends Vue {
         // other's, like real intersection guide lines.
         const laneMarkings = this.tileIsRoadJunction
           ? this.junctionTurnGuides(coord, a, b, size)
-          : roadLaneMarkingPaths(a, b, size, selfA, selfB, undefined, undefined, this.cycleLanesFrom(a), this.cycleLanesFrom(b));
+          : roadLaneMarkingPaths(a, b, size, selfA, selfB, undefined, undefined, this.cycleLanesFrom(a), this.cycleLanesFrom(b), this.shoulderLanesFrom(a), this.shoulderLanesFrom(b));
         return {
           surface: roadCurvePolygonPathTapered(a, b, size, widthA2, widthB2),
           laneMarkings,
@@ -1537,6 +1544,7 @@ class Tile extends Vue {
           entryCount,
           exitCount,
           this.cycleLanesFrom(entry),
+          this.shoulderLanesFrom(entry),
         );
         return {
           surface: roadRibbonPolygonPath(entry, exit, size, innerEntry, kerbOff, innerExit, kerbOff),
@@ -1591,7 +1599,7 @@ class Tile extends Vue {
       }
       return {
         surface: roadSurfacePolygonPath(a, b, size, widthA, widthB),
-        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2, this.cycleLanesFrom(a), this.cycleLanesFrom(b)),
+        laneMarkings: roadLaneMarkingPaths(a, b, size, selfA, selfB, widthA / 2, widthB / 2, this.cycleLanesFrom(a), this.cycleLanesFrom(b), this.shoulderLanesFrom(a), this.shoulderLanesFrom(b)),
         edges,
         mismatch: false,
         mismatchTip: "",
@@ -1814,9 +1822,10 @@ class Tile extends Vue {
 
     for (const lane of road) {
       const isBus = lane.kind === "bus";
-      // A cycle lane's arrows go green. No junction-fan refinement like the bus
-      // branch below: cycle lanes are straight-authored for now.
-      const isCycle = lane.kind === "cycle";
+      // A bike-only lane's arrows go green — the painted cycle lane and the wide
+      // street's shoulder alike (both are the bike's ride space). No junction-fan
+      // refinement like the bus branch below: both are straight-authored for now.
+      const isCycle = lane.kind === "cycle" || lane.kind === "shoulder";
       // Lateral offset (px) right-of-travel for this lane, identical to the car
       // renderer (game.ts): a lane `index` of an approach with `count` lanes sits
       // at (count - 0.5 - index) · LANE_WIDTH_PX_FRAC · tileSize. 0 = kerb side.

@@ -92,6 +92,9 @@ import { cycleoneway } from "@/levels/test/scenarios/cycleoneway";
 import { bikerack } from "@/levels/test/scenarios/bikerack";
 import { bikeandride } from "@/levels/test/scenarios/bikeandride";
 import { citizenbike } from "@/levels/test/scenarios/citizenbike";
+import { widestreet } from "@/levels/test/scenarios/widestreet";
+import { motorcycles } from "@/levels/test/scenarios/motorcycles";
+import { bikedetour } from "@/levels/test/scenarios/bikedetour";
 import { turnglide } from "@/levels/test/scenarios/turnglide";
 import { cardestination } from "@/levels/test/scenarios/cardestination";
 import { carroute } from "@/levels/test/scenarios/carroute";
@@ -234,7 +237,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "cycling",
         label: "Cycling",
-        scenarios: [bikemix, bikeovertake, cyclelane, cyclebend, cycleoneway, bikeleftturn, bikerack, bikeandride],
+        scenarios: [bikemix, bikeovertake, cyclelane, cyclebend, cycleoneway, bikeleftturn, bikerack, bikeandride, widestreet, motorcycles, bikedetour],
       },
       {
         id: "routing",
