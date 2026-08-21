@@ -20,14 +20,17 @@ const { Top, Right, Bottom, Left } = Position;
 //                      the main line at x=4 and the branch at x=10 — because the
 //                      walking reach of a platform is two tiles, so a town wider
 //                      than five tiles needs a second station or it is not a town,
-//                      it is a ribbon. Between them the two catchments cover every
+//                      it is a ribbon. Between them the two corridors reach every
 //                      house column: x=2, 6, 8 and 12 are each EXACTLY two tiles
-//                      from a corridor. The only column out of reach of both is
-//                      x=7, the middle street, and nobody lives on a street. The
-//                      pedestrian core is the x=8 column — the school, the café
-//                      and the shops — and it sits two tiles from the branch on
-//                      purpose, which is what makes the school reachable by a
-//                      child with no car (see the ZONES note below).
+//                      from one. The only column out of reach of both is x=7, the
+//                      middle street, and nobody lives on a street. (A platform's
+//                      reach is a 5x5 box, not a column, so the last two rows of
+//                      the eastern columns — (8,16-17) and (12,16-17) — do fall
+//                      outside one; the main line's three calls cover x=2 and x=6
+//                      end to end.) The pedestrian core is the x=8 column — the
+//                      school, the café and a shop — and it sits two tiles from
+//                      the branch on purpose, which is what makes the school
+//                      reachable by a child with no car (see the ZONES note).
 //   NORDHEIM (north)   houses and a shop. NO ROAD AT ALL.
 //   WERK OST (east)    the heavy industry, where most of the valley's jobs are.
 //                      NO ROAD AT ALL.
@@ -89,10 +92,11 @@ const { Top, Right, Bottom, Left } = Position;
 // with a junction only at each END and nothing in between. So every trip across
 // the village was a lap of the whole ladder, and when a queue reached back into
 // a junction box it blocked the very stream that would have let it out. A cycle
-// of full tiles has no head to move first, and `BOX_KEEP_CLEAR_PATIENCE` (which
-// exists so a saturated ring is not gridlocked by politeness) lets the last car
-// into the box that closes the ring. Nothing clears it; the cars are there for
-// the rest of the run.
+// of full tiles has no head to move first. Nothing clears it; the cars are there
+// for the rest of the run. (An earlier draft of this note named
+// `BOX_KEEP_CLEAR_PATIENCE` as what closes the ring. Measured false — disabling
+// the valve outright reproduces the knot bit for bit — so read the mechanism
+// named below instead.)
 //
 // The fix is two changes to the plan, both below, and it needs BOTH — measured
 // on the road layer alone, a steady fleet of 40 village journeys over 900s:
@@ -103,15 +107,50 @@ const { Top, Right, Bottom, Left } = Position;
 //   + two lanes each way, no middle rung  |     649 |      80 |   40 of 40
 //   + both (what ships)                   |    2797 |       0 |    0 of 40
 //
-// READ THAT TABLE AS A COMPARISON, NOT AS A CEILING (corrected 2026-08-21).
-// Forty concurrent journeys confined to the village's 84 road tiles is well past
-// what this street plan carries: re-measured across seeds 1..12, the SHIPPED
-// plan deadlocks on 8 of them at that load, and the two seeds the table was
-// taken on are two of the four that come through. The plan is a large, real
-// improvement — +37% arrivals at every seed — but it is not deadlock-proof at
-// saturation. Its clean envelope is about 18 concurrent village journeys; 24
-// already jams on a third of seeds. `hinterlandTraffic.spec.ts` therefore
-// asserts THROUGHPUT at 18 and not "nothing froze" at 40 — see its header.
+// CORRECTION (2026-08-21, the seed-11 investigation, re-swept when the guard
+// moved). The shipped row above is a per-seed fact, not a guarantee. At a
+// CONSTANT 40 concurrent journeys the shipped layout still gridlocks
+// permanently on most seeds — re-probed over two independent trip streams x
+// seeds 1..12, only 4 of those 24 runs come through clean — and WHICH seeds
+// freeze re-rolls on any change to the sim's dynamics: an unrelated constants
+// retune (PR #98, CLIP_LANES) is what turned the guard's seed 11 red without
+// touching a single road rule. The load is the point — a constant 40 holds the
+// village PAST its stable capacity for the entire run, which the citizens
+// board's bursty demand never does. The clean envelope ends between 24 and 30:
+// at a constant 24 all 40 probed runs come through (arrived 887-967, zero
+// give-ups, longest stand 24.25s), while at 30 two of six seeds already stand
+// for 350s. 24 is the load the guard drives.
+//
+// The table's ABSOLUTE numbers are pre-#98 as well and no longer reproduce —
+// re-run today the shipped plan lands 1345-1406 at load 40 on the seeds it
+// survives, not 2797. Read the rows against each other, never the values on
+// their own.
+//
+// AND WHAT THE GUARD ASSERTS AT 24 IS THROUGHPUT. Freeze-freedom on its own
+// cannot carry the claim: at any load both plans survive, NEITHER freezes. What
+// separates them on every seed is how much the streets CARRY — at a constant 24
+// the shipped plan lands 887-967 journeys per 900s where the old ladder never
+// once clears 700 (192-674 over twelve runs, jamming on a third of them). The
+// freeze checks stay as the backstop, not as the evidence.
+//
+// The residual supercritical knot is NOT the ladder mechanism above, and NOT
+// the box patience valve (disabling `BOX_KEEP_CLEAR_PATIENCE` outright
+// reproduces the seed-11 knot bit for bit). It lives where the rung crosses
+// the branch line: a LEVEL CROSSING directly between two junction boxes —
+// box (9,10), crossing (10,10), box (11,10). The rail-crossing keep-clear
+// ("never rest straddling the rails", road.ts) has no patience valve and
+// demands room past the crossing's far edge, so it couples the two boxes into
+// one mutual-exclusion zone; two opposing streams and one turner close a
+// wait-cycle through it in which every hold is locally correct: eastbound
+// cars inside box (9,10) wait for room past the crossing; that room is held
+// by cars the arbiter refuses at box (11,10) because the box is full; the box
+// is full of cars following a westbound turner pinned off the rails whose
+// turn conflicts with the eastbound cars inside box (9,10). The same trap is
+// authored at (3..5,10) over the main line. Retracting the rung to x=5..9 (no
+// crossings, T junctions) measured WORSE — 11 of 20 seeds frozen, throughput
+// down everywhere — the rung's connectivity outweighs its trap. Raising this
+// ceiling needs a sim mechanism (spillback control / wait-cycle resolution),
+// not another street.
 //
 // and end to end on the citizens board, six days at `secPerDay: 900`:
 //
@@ -289,9 +328,10 @@ function roadTiles(): Set<string> {
   // split almost nothing.
   //
   // It lays four new road tiles. (4,10) and (10,10) fall on the two rail columns
-  // and become LEVEL CROSSINGS; only (6,10) and (8,10) are a cost, two of the
-  // twelve house plots in each of those columns. (2,10) and (12,10) lie outside
-  // the rung's x=3..11 span and stay plots.
+  // and become LEVEL CROSSINGS; only (6,10) and (8,10) are a cost — one plot out
+  // of each of those two twelve-plot columns, so TWO in all. (2,10) and (12,10)
+  // lie outside the rung's x=3..11 span and stay plots. Counting every new road
+  // tile as a lost plot is the easy mistake; half of them are rail.
   run(3, 10, 11, 10);
   run(3, 18, 23, 18); // the rung that becomes the road east to Südau
   // The southern loop: down the west street, along the bottom, back up at x=23.

@@ -114,6 +114,70 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
+## PINCH-ZOOM / TOUCH INPUT (2026-08-21)
+- Pinch lives in `cameraController.ts`, so all three boards (PlayView, EditorView,
+  TestStage) get it once. Two fingers zoom AND drag; the `−/%/+` buttons stay.
+- **Every view must hand the controller EVERY pointer**, saying only whether that
+  pointer may pan: `cam.onPointerDown(e, { pan })`. Returning early on a pointer
+  the view does not want (what all three used to do) hides the SECOND finger from
+  the camera, and the editor — where one finger belongs to the connect tool and
+  never pans — could then not be moved by touch at all. A pinch outranks every
+  tool: nothing in this app takes two fingers.
+- **Zoom about the PREVIOUS midpoint, then pan by the midpoint's travel.** The
+  other order (zoom about the new midpoint, then pan) leaks
+  `delta * (1/oldZoom - 1/newZoom)` every frame, so the board slides out from
+  under the fingers on any pinch that also drifts — which is all of them. Proved
+  in `tests/unit/cameraController.spec.ts` as a world-point invariant, not as a
+  number.
+- **Never read `e.movementX` for a drag.** It is undefined-or-zero for touch
+  pointers in several engines, so a one-finger drag moved the board by nothing on
+  a phone. The controller tracks `clientX/Y` itself — identical for a mouse
+  (the pointer is never locked here) and the only thing that exists for a finger.
+- Ending a touch gesture has three cases, all of them live: 3→2 fingers must
+  RE-BASELINE the span (a different pair spans a different distance, and without
+  it the board jumps); 2→1 hands the pan to the finger still down (lifting a thumb
+  and dragging on is ordinary map handling); and the LAST finger up must clear
+  `state.panning` even when no pointer ever owned the pan, or the board keeps the
+  grabbing cursor and swallows every click from then on.
+- **The build/edit edge zones are bound to `@mousedown`/`@mouseup`, not pointer
+  events** (`EditorView.vue`, `PlayView.vue`). A `touch-action: none` surface
+  fires NO compatibility mouse events — measured: a touch drag over a zone
+  delivers `pointerdown`/`touchstart`/`pointerup` and nothing else. So the
+  drawing tools cannot be used by touch at all yet. Moving them to pointer events
+  is what unlocks that; the `cam.pinching` → `clearPress()` guard in both views
+  is already in place for the day it happens.
+- `MIN_ZOOM` is still 0.15, so `fitWorld()` on a landscape phone (a ~170px-tall
+  viewport) cannot show a big world whole — pinch and pan reach the rest.
+
+## PHONE LAYOUT (2026-08-21) — the /test gallery, and one grid trap
+- ONE breakpoint pair for the whole app: `@media (max-width: 700px), (max-height:
+  500px)`. `_hud.scss`, `BuildDock.vue`, `EditorView.vue`, `TestView.vue` and
+  `TestStage.vue` all use it. The height clause is not decoration — a landscape
+  phone is 812x375, wide but shorter than anything the desktop layout assumes.
+- **A grid item whose children are ALL `position:absolute` contributes ZERO
+  content height, so an `auto` row track cannot see its `aspect-ratio`.** While
+  the rows still fit the container nothing shows; the moment they do not, Chrome
+  collapses every track to a slice of the leftover space and the items OVERLAP.
+  Measured on `/test` at 375px: 45px tracks under 214px cards — the gallery was a
+  stack of stripes with every title and description buried under the next card,
+  and it looked fine on a desktop because four columns fit their three rows.
+  Fix: `grid-auto-rows: max-content` on the grid (`.card-grid`, TestView.vue).
+  Reach for it on ANY scrolling grid of aspect-ratio cards.
+- A breadcrumb crumb needs `white-space: nowrap` + ellipsis, or a narrow header
+  tears "One-way & lanes" into four stacked lines of one word each. Wrap BETWEEN
+  crumbs (`flex-wrap` on the row), never inside one.
+- `.stage-controls` wraps at every width, not just on phones: it is ~700px of
+  chips, so an 800px window already clipped the right-hand readouts off-screen.
+- Prose panels get a `max-height` in `vh` + `overflow-y: auto` on small screens.
+  `/test/roadlanemerge`'s description is a paragraph and took HALF a phone screen,
+  pushing the board out of view; capped at 24vh it scrolls inside its own panel
+  and nothing is hidden.
+- Scenario descriptions carry paths (`/test/lanedrop`) and arrows (`1→3→1`) with no
+  space to break at — `.card-desc` needs `overflow-wrap: anywhere`.
+- Touch pan works on the board (pointer events cover touch, `touch-action: none`);
+  there is NO pinch-zoom — mobile zooms with the −/%/+ buttons. `MIN_ZOOM` is 0.15,
+  so on a landscape phone a big world stays clipped and must be panned.
+
 ## ROLLING STOCK ART (procedural SVG, 2026-07-26)
 - Locos, wagons and the engine shed are DRAWN (`utils/trainArt.ts`), not loaded.
   `src/assets/` is gone — the project now ships zero third-party assets (ASSETS.md).
@@ -1660,10 +1724,11 @@ Four rules, each measured on that board, each of which failed silently:
   together they are fatal: every trip across the village is a LAP of the whole
   ladder, and a queue long enough to reach back into a junction box blocks the
   stream that would have let it out. That is a cycle of full tiles with no head
-  to move first — and `BOX_KEEP_CLEAR_PATIENCE` (right, so a saturated ring is
-  not gridlocked by politeness) is what lets the last car into the box that
-  closes it. It does not clear: measured, 42 of 46 cars standing still for the
-  rest of a six-day run, one for 354 unbroken seconds.
+  to move first. It does not clear: measured, 42 of 46 cars standing still for
+  the rest of a six-day run, one for 354 unbroken seconds. (An earlier version
+  of this note blamed `BOX_KEEP_CLEAR_PATIENCE` for closing the ring — measured
+  false on the shipped layout: disabling the valve outright reproduces the
+  seed-11 knot bit for bit. The real closer is below.)
   · **The tell is a car clock, not a queue.** 35 journeys a day "given up on
     after 9h 36m" = `maxWaitSec * 2`, `advanceTrip`'s give-up for a driver whose
     car never arrives, with the town's Work bar pinned at 0.00 while its
@@ -1680,16 +1745,42 @@ Four rules, each measured on that board, each of which failed silently:
     the town's commute went 0.00-0.08 → 0.36-0.60. One-way circulation was tried
     and measured WORSE (566 arrived): with rungs only at the ends, one-way turns
     every local trip into a full circuit.
-  · **A "NOTHING DEADLOCKED" ASSERTION AT SATURATION IS SEED LUCK, NOT A GUARD**
-    (2026-08-21). The numbers above were taken at 40 concurrent trips inside the
-    village's 84 road tiles — past what the plan carries. Swept over seeds 1..12
-    the SHIPPED plan freezes on 8 of them at that load; the pair the first guard
-    shipped with were two of the four that come through. Worse, the check does
-    not even discriminate: at a load both plans survive (12, 18 trips) NEITHER
-    freezes, and at 24 BOTH freeze on a third of seeds. Assert THROUGHPUT at a
-    load both survive instead — at 18 trips/900s the old ladder lands 495-514
-    arrivals and the new plan 693-713, +37% on every seed, longest stand 13.5s.
-    Sweep before you pick a seed; a green on one stream proves nothing.
+  · **A per-seed zero is not a guarantee — probe a SWEEP, and probe INSIDE
+    capacity** (2026-08-21). The "0 frozen at 40" above was one lucky seed
+    pair: at a CONSTANT 40 only 4 of 24 probed runs come through clean (two
+    independent trip streams x seeds 1..12), and which ones flip re-rolls on
+    ANY dynamics change — an unrelated CLIP_LANES retune (PR #98) turned the
+    guard's seed 11 red. A constant-load harness holds the network at that
+    density forever (every arrival instantly replaced), which bursty citizen
+    demand never does; a zero-freeze assertion at supercritical load asserts a
+    coin toss. The clean envelope ends between 24 and 30: at a constant 24 all
+    40 probed runs are clean (longest stand 24s), at 30 two of six seeds
+    already stand for 350s. 24 is the guard's load.
+  · **AND ASSERT THE THROUGHPUT, not only the freeze.** At a load both plans
+    survive NEITHER freezes, and at one neither survives BOTH do, so "nothing
+    froze" on its own never separates a layout from the one it replaced. What
+    does, on every seed: at a constant 24 the shipped plan carries 887-967
+    journeys per 900s where the old ladder never once clears 700 (192-674, and
+    it jams on a third of its seeds). The freeze checks are the backstop; the
+    number the layout actually moves is the evidence.
+  · **Do not hand-roll a PRNG for a harness — `makeRng` (mulberry32) is right
+    there.** The obvious glibc `s * 1103515245 + 12345` constants overflow the
+    double mantissa in JS and the state space collapses: measured period 10466
+    from every seed tried, against the 2^31 the arithmetic promises. It stays
+    deterministic, so nothing goes red — it is simply not the generator the test
+    believes it is sampling with.
+  · **BOX–CROSSING–BOX IS A DEADLOCK TRAP.** A level crossing directly between
+    two junction boxes (the rung crossing the branch: box 9,10 / crossing
+    10,10 / box 11,10) couples the boxes through the rail-crossing keep-clear
+    — which is patience-less by design (`won't roll onto a rail crossing`,
+    road.spec) and demands room past the far edge. Two opposing streams plus
+    one conflicting turner close a wait-cycle in which every hold is locally
+    correct (keep-clear → full tile → arbiter-refused box → follower → turner
+    → back). Diagnose knots by labelling `bind()` calls in `clearAhead` and
+    dumping each frozen car's binding gate — the wait-for graph names the
+    cycle in one run. Retracting the rung to avoid the crossings measured
+    WORSE (11/20 seeds frozen): connectivity outweighs the trap. The real fix
+    is a sim mechanism (spillback / wait-cycle resolution) — open ticket.
   · A width change may only happen ON A JUNCTION. `seamMismatch` flags a plain
     straight or bend whose neighbour has a different lane count (the renderer
     paints it red); a junction fans and merges unequal arms by design and is
