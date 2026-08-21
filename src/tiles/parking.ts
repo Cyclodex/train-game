@@ -425,7 +425,14 @@ const DEPTH_FRAC: Record<StallKind, number> = {
 const PITCH_FRAC: Record<StallKind, number> = {
   // One coach's worth of kerb (a bus is 55px), plus room for the markings.
   busstop: 0.4,
-  parallel: 0.3, // 60px — a 38px car plus room to get in and out
+  // EXACTLY a third of the tile, so three bays FILL it — no orphaned stub of
+  // kerb at the seam. At the old 60px, a packed row spanned 180px and the
+  // apron's seam extension paved the last 20px, which read as a fourth bay cut
+  // off mid-box; at 66.67px, two parking tiles side by side repeat as one
+  // continuous rank of six. A 38px car has generous room either way, and the
+  // truck/coach that would now "fit" the longer box is still refused by the
+  // bay-CLASS gate (`bayAdmits` — a car bay admits cars, full stop).
+  parallel: 1 / 3,
   perpendicular: 0.14, // 28px — a car is 20px wide
   // 29px. NOT the 45° diagonal of the car: in a real echelon rank the along-kerb
   // pitch is the car's WIDTH divided by sin45 (20 / 0.707 = 28px) — the cars nest
@@ -434,12 +441,14 @@ const PITCH_FRAC: Record<StallKind, number> = {
   // 90° bays and wastes a third of the kerb.
   angled: 0.145,
   garage: 1, // the ramp mouth is one object, whatever the capacity
-  // 12px per stand — a bike is 9px wide, so each hoop leaves a hand's width to
-  // wheel in beside a parked neighbour, which is what a real Anlehnbügel rank
-  // looks like. 16 stands per tile where 3 cars fit (parallel pitch 60px): the
-  // density argument FOR racks, made visible. (First shipped at 18px and it
-  // read as half-empty — the bikes are small, and the kerb had room to spare.)
-  bikerack: 0.06,
+  // EXACTLY a sixteenth of the tile (12.5px) — a bike is 9px wide, so each
+  // hoop leaves a hand's width to wheel in beside a parked neighbour, which is
+  // what a real Anlehnbügel rank looks like. 16 stands per tile where 3 cars
+  // fit: the density argument FOR racks, made visible. The whole-fraction
+  // pitch is the same seam rule as the parallel bay's third: a full row FILLS
+  // its tile, so two rack tiles repeat as one continuous rank. (First shipped
+  // at 18px and read half-empty — the bikes are small.)
+  bikerack: 1 / 16,
 };
 
 // A LONG bay — the lorry/coach bay. The longest single-box vehicle the sim builds
