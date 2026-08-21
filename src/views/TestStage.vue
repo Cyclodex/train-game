@@ -37,6 +37,29 @@
       <span class="stage-deliveries">
         Delivered {{ delivered }} / {{ totalTrains }}
       </span>
+      <!-- The mode's live scoreboard (#115): the stage auto-starts its run and
+           shows no blocking overlays, so a scenario that demonstrates a MODE
+           carries its objective here — timer, star pips, outcome. Every piece
+           is gated by the mode's own HUD descriptor, so free-play demos
+           (Sandbox, Citizens) show none of it. -->
+      <span v-if="hud.passengers" class="stage-passengers" title="Passengers carried">
+        🧍 {{ passengersCarried }}
+      </span>
+      <span v-if="hud.timer" class="stage-timer" title="Elapsed time">
+        ⏱ {{ timeLabel }}
+      </span>
+      <span v-if="hud.stars && objectiveStars.length" class="stage-stars" :title="starsTitle">
+        <span
+          v-for="s in objectiveStars"
+          :key="s.id"
+          :class="['stage-star', { 'stage-star--earned': s.earned }]"
+          >★</span
+        >
+      </span>
+      <span v-if="phase === 'won'" class="stage-phase stage-phase--won">✔ Won</span>
+      <span v-else-if="phase === 'lost'" class="stage-phase stage-phase--lost" :title="lostReason">
+        ✖ Lost
+      </span>
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
       </span>
@@ -227,6 +250,7 @@ import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, FareBadge, Game, MoneyState, RoadCar, TrainDef } from "@/game";
+import { StarState } from "@/sim/objectives";
 import { sandboxMode } from "@/modes/sandbox";
 import { modeById } from "@/modes/index";
 import { TestScenario, scenarioGrid } from "@/levels/test/scenario";
@@ -561,6 +585,37 @@ class TestStage extends Vue {
   get totalTrains(): number {
     return Object.keys(this.trains).length;
   }
+
+  // --- the mode's objective, compact (#115) ---------------------------------
+  // The stage auto-starts every scenario and has no start/end overlays, so a
+  // mode demo's scoreboard lives on the control strip instead. Each piece is
+  // gated by the mode's own HUD descriptor. Star pips are LIVE state: a
+  // restraint star ("hands off") starts earned and dims when forfeited.
+  get hud() {
+    return this.game.mode.hud;
+  }
+  get objectiveStars(): StarState[] {
+    return this.game.objective.stars;
+  }
+  get starsTitle(): string {
+    return this.objectiveStars
+      .map(s => `${s.earned ? "★" : "☆"} ${s.label}`)
+      .join("\n");
+  }
+  get phase(): string {
+    return this.game.objective.phase;
+  }
+  get lostReason(): string {
+    return this.game.objective.lostReason ?? "";
+  }
+  get timeLabel(): string {
+    const t =
+      this.game.objective.timeLeftSec ?? this.game.objective.counters.elapsedSec;
+    return t.toFixed(1) + "s";
+  }
+  get passengersCarried(): number {
+    return this.game.objective.counters.passengersDelivered ?? 0;
+  }
   get recentLog() {
     return this.game.eventLog.slice(-60).reverse();
   }
@@ -654,6 +709,10 @@ export default toNative(TestStage);
 // same dark chip the buttons carry, so the whole bar reads on any backdrop.
 .stage-cars,
 .stage-deliveries,
+.stage-passengers,
+.stage-timer,
+.stage-stars,
+.stage-phase,
 .stage-money,
 .stage-calendar {
   padding: 7px 12px;
@@ -683,6 +742,31 @@ export default toNative(TestStage);
   color: #eaf1f7;
   font-size: 13px;
   font-weight: 600;
+}
+.stage-passengers,
+.stage-timer {
+  color: #eaf1f7;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stage-stars {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 14px;
+  letter-spacing: 2px;
+}
+.stage-star--earned {
+  color: #ffd873;
+}
+.stage-phase {
+  font-size: 13px;
+  font-weight: 800;
+}
+.stage-phase--won {
+  color: #5fd39a;
+}
+.stage-phase--lost {
+  color: #ff8a80;
 }
 .stage-money {
   color: #ffd873;

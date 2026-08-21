@@ -8,7 +8,10 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 export const objectives: TestScenario = {
   id: "objectives",
   name: "Objectives",
-  description: "A winnable lane: deliver the train to its matching depot.",
+  description:
+    "A winnable lane under the Puzzle mode: deliver the train to its matching " +
+    "depot — timer, star pips and the win, live on the stage strip.",
+  modeId: "puzzle",
   level: {
     "0,0": expandKind("depot", 1),
     "1,0": expandKind("straight", 1),

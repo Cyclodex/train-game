@@ -36,6 +36,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/routing": "📍",
   "streets/parking": "🅿️",
   "challenges/modes": "🎯",
+  "challenges/economy": "💰",
   "challenges/worlds": "🌍",
 };
 
@@ -99,6 +100,8 @@ export const SCENARIO_ICONS: Record<string, string> = {
   buildgap: "🏗️",
   daily: "📅",
   networkmode: "🚉",
+  dispatch: "💰",
+  threecities: "🏙️",
 };
 
 export function iconForDomain(domainId: string): string {
