@@ -9,6 +9,8 @@ import {
   PLAIN_STATION,
 } from "@/levels/test/scenarios/edgedemand";
 import { Level } from "@/tiles/model";
+import type { TestScenario } from "@/levels/test/scenario";
+import { itSlow } from "./support/tier";
 
 // THE DEMAND CONVERGENCE, phase 1 (#117): the per-mode XOR between citizen
 // demand and the synthetic per-station schedule becomes two DEFAULTS of one
@@ -20,7 +22,7 @@ import { Level } from "@/tiles/model";
 // real platforms, and people whose journeys those calls begin and end.
 // Design: docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md
 
-function defsOf(scenario: { trains: Record<string, { id: string; x: number; y: number; type: "people" | "fraight"; wagons?: { id: string }[] }> }): TrainDef[] {
+function defsOf(scenario: TestScenario): TrainDef[] {
   return Object.values(scenario.trains).map(t => ({
     id: t.id,
     x: t.x,
@@ -73,7 +75,7 @@ describe("citizens ride the bus (#117 step 1)", () => {
     expect(peak).toBeGreaterThan(0);
   });
 
-  it("carries them end to end: boarding and alighting mirrored off the bus's own calls", () => {
+  itSlow("carries them end to end: boarding and alighting mirrored off the bus's own calls", () => {
     const game = busGame();
     run(game, 2 * DAY);
     const s = game.citizenStats;
@@ -87,12 +89,40 @@ describe("citizens ride the bus (#117 step 1)", () => {
     // car, so the bus is load-bearing, not decorative.
     expect(game.sim.passengersDelivered()).toBeGreaterThan(0);
   });
+
+  itSlow("a deleted line sets its riders down instead of stranding them", () => {
+    const game = busGame();
+    // Run into the peak until somebody is actually aboard the bus.
+    let sawRider = false;
+    for (let t = 0; t < 2 * DAY && !sawRider; t += 0.2) {
+      game.advance(0.2);
+      sawRider = game.busServices.some(b => b.passengers > 0);
+    }
+    expect(sawRider).toBe(true);
+    const line = game.lines[0]?.id;
+    expect(line).toBeTruthy();
+    expect(game.deleteLine(line)).toBe(true);
+    game.advance(0.2);
+    // Everyone was set down at the last stop the bus called at — a citizen in
+    // a seat is driven only by events, so a manifest surviving the line would
+    // be a person frozen mid-trip forever.
+    expect(game.busServices.every(b => b.passengers === 0)).toBe(true);
+  });
+
+  it("a reset empties the buses too — no riders carried into the new world", () => {
+    const game = busGame();
+    run(game, 90); // into the peak: somebody has boarded by now
+    game.reset();
+    game.advance(0.2);
+    expect(game.busServices.every(b => b.passengers === 0)).toBe(true);
+    expect(game.sim.passengersDelivered()).toBe(0);
+  });
 });
 
 describe("edge demand is additive (#117 step 2)", () => {
-  function edgeGame(overrides: { startHour?: number } = {}, level: Level = edgedemand.level) {
+  function edgeGame(overrides: { startHour?: number } = {}) {
     return createGame(
-      level,
+      edgedemand.level,
       defsOf(edgedemand),
       200,
       citizensModeWith({ secPerDay: DAY, ...overrides }),
@@ -124,7 +154,7 @@ describe("edge demand is additive (#117 step 2)", () => {
     expect(game.citizenStats.tripsCompleted).toBe(0);
   });
 
-  it("citizens and edge riders share the platform without double-counting", () => {
+  itSlow("citizens and edge riders share the platform without double-counting", () => {
     const game = edgeGame();
     run(game, 2 * DAY);
     const s = game.citizenStats;
@@ -159,5 +189,26 @@ describe("edge demand is additive (#117 step 2)", () => {
     // one stays empty. `??` semantics, never `||`: 0 must mean off.
     expect(game.sim.stationQueue(PLAIN_STATION)).toBeGreaterThan(0);
     expect(game.sim.stationQueue(EDGE_STATION)).toBe(0);
+  });
+
+  it("a hostile dial cannot hang the game: Infinity is clamped, not divided by", () => {
+    // Level JSON is imported raw, and the dial divides a spawn interval — an
+    // interval driven to 0 never leaves advanceDemand's catch-up loop. The
+    // share is clamped instead, so this board TICKS rather than hanging, and
+    // the platform fills at the clamped (fast) rate up to its cap.
+    const hostile: Level = structuredClone(edgedemand.level);
+    hostile[EDGE_STATION] = { ...hostile[EDGE_STATION], edgeDemand: Number.POSITIVE_INFINITY };
+    const game = createGame(
+      hostile,
+      defsOf(edgedemand),
+      200,
+      networkMode,
+      1,
+      edgedemand.colors,
+      undefined,
+      "edgedemand-hostile"
+    );
+    run(game, 5);
+    expect(game.sim.stationQueue(EDGE_STATION)).toBeGreaterThan(0);
   });
 });

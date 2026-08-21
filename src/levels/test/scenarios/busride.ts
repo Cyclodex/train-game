@@ -60,9 +60,11 @@ level[EAST_HALT] = halt("halt-east", "East Works");
 // Houses west, jobs east — each block inside its halt's walking reach (±2),
 // and the gap between them (x 5..8) both keeps the two towns two towns to the
 // clustering AND puts the nearest house five tiles from the nearest job: one
-// more than anybody walks (`walkMaxTiles: 4`), which is what makes this a
-// transport board at all. The longest commutes (13 tiles) are past every
-// bike's range, so the residents without a car genuinely need the bus.
+// more than anybody walks under the citizens MODE's tuning (`walkMaxTiles: 4`
+// in modes/citizens.ts — the engine default is 6, so this board's lesson holds
+// only under that mode, which is the mode it declares). The longest commutes
+// (13 tiles) are past every bike's range, so the residents without a car
+// genuinely need the bus.
 for (let x = 0; x <= 4; x++) level[`${x},0`] = home();
 for (let x = 9; x <= 13; x++) level[`${x},0`] = works();
 

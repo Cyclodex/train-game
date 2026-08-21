@@ -1071,14 +1071,45 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
 - CITIZENS RIDE BUSES (#111 step 1): a plot's `stationsInReach` are BOARDING
   POINTS — rail stations AND busstop rows (`boardingPointsInReachOf`,
   tiles/cities.ts). The citizen transit port binds to the SHARED transit layer
-  (`transit.enqueue`/`serves`), and bus calls are fed to `citizenSim.step` in
-  the same dwell-event shape a train emits (`trainId` = the bus id; `busDwells`
-  in game.ts). The mirror is vehicle-agnostic — `riders` keys by vehicle id.
+  (`transit.enqueue`/`dequeue`/`serves`), and `busEvents` (game.ts) holds bus
+  calls directly IN the DwellEvent shape (`trainId` = the bus id) — no
+  translation layer to drift. The mirror is vehicle-agnostic — `riders` keys
+  by vehicle id.
 - Bus calls reach the citizen sim ONE TICK LATE (`advanceBuses` runs after
   `citizenSim.step` in `advance()`); tests stepping in large chunks step once
-  more before asserting a boarding.
+  more before asserting a boarding. Three corollaries, each learned the hard
+  way: bus events are PREPENDED to the rail events (they are the older tick —
+  appended, a stale bus alight replays over a fresher train boarding at an
+  interchange); the buffer is cleared only on a tick the citizen sim consumed
+  (`scaled > 0` — `step(0)` skips the mirror, and start() after stop() begins
+  with advance(0)); and reset() clears the buffer AND every bus manifest, or
+  the old world's riders exchange into the new world's ledger.
+- ARRIVAL vs CHANGE is told by the EVENT (`DwellEvent.changingTags`, filled by
+  `transit.exchange`), never by comparing stations: a rider whose destination
+  is one walk-link past the platform is walked home by the transit layer and
+  ARRIVES without the stations matching — reading that as a change left them
+  waiting at a queue that no longer held them.
+- A citizen who GIVES UP waiting is withdrawn from the queue
+  (`TransitPort.dequeue` → `transit.dequeue`). Left behind, the tag was a
+  ghost the next vehicle boarded, corrupting whatever trip the person had
+  moved on to.
+- EVERY bus-withdrawal path sets riders down (`setDownAll`): assignBus(null),
+  removeBus, the stops<2 despawn in advanceBuses, AND game.deleteLine (which
+  takes the line's buses off via assignBus AFTER sim.deleteLine — before, and
+  pruneLineIfUnused sweeps the line out from under the delete). A citizen in a
+  seat is driven only by events; a surviving manifest is a person frozen
+  forever.
+- `edgeDemand` is SANITISED (`edgeShareOf`, clamp 0..EDGE_DEMAND_MAX): the
+  dial divides a spawn interval, and an interval driven to 0 (authored
+  Infinity on imported JSON) never leaves `advanceDemand`'s catch-up loop.
+  `latentDemandAt` scales by the same share, so the unserved-platform badge
+  cannot promise a crowd the dial has turned off. `eraseLayer` drops the dial
+  when the tile's last stop goes.
 - The transit quote still prices a bus leg at TRAIN speed/headway — a recorded
   approximation, not an oversight (per-kind ride speed needs the line kind).
+  P&R/B+R alights are chosen by CONNECTIVITY over all of the destination's
+  boarding points (`bestAlightFrom`) — the single nearest point can be an
+  unserved kerb since bus stops joined the pool.
 - Boards: `/test/busride` (citizens on a bus, no rails at all — dead before
   #117), `/test/edgedemand` (both crowds on one platform). Design:
   `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —

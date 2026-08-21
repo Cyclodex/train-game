@@ -235,6 +235,12 @@ export interface DwellEvent {
   // aboard or waiting had a tag, so anonymous boards are unaffected.
   boardedTags?: string[];
   alightedTags?: string[];
+  // Of the alighted tags, who was re-queued to CHANGE (as against having
+  // arrived — set down at their destination, or walked the last hop by the
+  // transit layer). The citizen mirror tells the two apart with this rather
+  // than by comparing stations: a rider whose final stop is one walk-link past
+  // the platform ARRIVES here without the stations matching.
+  changingTags?: string[];
 }
 
 // A retiring train reached a depot and was stabled: it is gone from the sim.
@@ -1255,7 +1261,7 @@ export function createSimulation(config: SimConfig): Simulation {
       // on — belongs to the shared transit layer, because it is identical for a
       // bus and it must run against ONE set of queues (issue #90). What stays
       // here is the railway's own part: the dwell it costs and the line cursor.
-      const { boarded, alighted, changing, boardedTags, alightedTags } =
+      const { boarded, alighted, changing, boardedTags, alightedTags, changingTags } =
         transit.exchange({
           stopId: tileId,
           lineId: train.lineId,
@@ -1284,6 +1290,7 @@ export function createSimulation(config: SimConfig): Simulation {
         ...(changing ? { changing } : {}),
         ...(boardedTags.length ? { boardedTags } : {}),
         ...(alightedTags.length ? { alightedTags } : {}),
+        ...(changingTags.length ? { changingTags } : {}),
       });
   }
 

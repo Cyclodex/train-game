@@ -120,8 +120,9 @@ export interface Activity {
 }
 
 // The legs a trip passes through. Timed legs (`walking`, `driving`) run down a
-// clock; `waiting` and `riding` are driven by what the RAIL simulation actually
-// does, which is what makes a bad timetable cost real time.
+// clock; `waiting` and `riding` are driven by what the carrier simulations
+// (rail dwells, bus calls) actually do, which is what makes a bad timetable
+// cost real time.
 // "parking" is the walk from the space to the door. It is its own leg and not
 // part of "walking" because of what ENDS it: an ordinary walking leg either
 // finishes the journey or delivers somebody to a platform, and this one always
@@ -509,19 +510,27 @@ export const DEFAULT_TUNING: CitizenTuning = {
   },
 };
 
-// The rail world, as the citizen sim is allowed to touch it. Omitted → transit
-// and park & ride are simply not available, which is exactly right for a
-// headless test with no railway in it.
+// The TRANSIT world — the shared carrier layer, rail and bus alike — as the
+// citizen sim is allowed to touch it. Omitted → transit and park & ride are
+// simply not available, which is exactly right for a headless test with no
+// services in it.
 export interface TransitPort {
-  // Put ONE named person on this platform, bound for `dest`. False when the
-  // platform is at its cap; the citizen only counts as waiting once accepted,
-  // and keeps trying while the clock runs. The `tag` comes back on the rail
-  // sim's dwell events, which is how this layer learns when its person boarded
-  // and where they got off — instead of shadowing the sim's queue and guessing.
+  // Put ONE named person at this boarding point (a platform or a bus kerb),
+  // bound for `dest`. False when the queue is at its cap; the citizen only
+  // counts as waiting once accepted, and keeps trying while the clock runs.
+  // The `tag` comes back on the carriers' dwell events, which is how this
+  // layer learns when its person boarded and where they got off — instead of
+  // shadowing the layer's queue and guessing.
   enqueue(stationId: string, dest: string, tag: string): boolean;
-  // Does any chain of SERVICES connect these two platforms? Nobody sets out for
-  // a station nothing can take them to: they drive, they walk, or they stay at
-  // home and think less of you for it (D10).
+  // Take that person back OUT of the queue — they gave up waiting. Without
+  // this the entry stayed behind as a ghost the next vehicle would board,
+  // corrupting whatever trip the person had moved on to. Optional so a
+  // hand-built port from before it existed still typechecks; when absent the
+  // old ghost behaviour remains.
+  dequeue?(stationId: string, tag: string): boolean;
+  // Does any chain of SERVICES connect these two boarding points? Nobody sets
+  // out for a stop nothing can take them from: they drive, they walk, or they
+  // stay at home and think less of you for it (D10).
   connects(fromStation: string, toStation: string): boolean;
 }
 
@@ -871,11 +880,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const people = new Map<string, Citizen>();
   let nextId = 1;
 
-  // Who is aboard which train. Built from the rail sim's own boarded/alighted
-  // TAGS, so this is a view of the sim's ledger rather than a second one —
-  // there used to be a shadow queue here, and a rider kept a seat the sim had
-  // already freed.
-  const riders = new Map<string, string[]>(); // train id → citizen ids aboard
+  // Who is aboard which VEHICLE — a train or a bus, keyed by whatever id the
+  // dwell event carries; this layer never asks the species. Built from the
+  // carriers' own boarded/alighted TAGS, so it is a view of the transit
+  // ledger rather than a second one — there used to be a shadow queue here,
+  // and a rider kept a seat the sim had already freed.
+  const riders = new Map<string, string[]>(); // vehicle id → citizen ids aboard
 
   let clock = 0;
   // How far into the first day t=0 sits. See `startHour`.
@@ -1057,8 +1067,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   }
 
   function walkToStation(p: WorldPlot, station: string): number {
-    const s = stationCoord.get(station);
-    return s ? manhattan(p, s) : Infinity;
+    // Stop ids ARE coord ids, so an id outside the memo (a stop no plot has in
+    // reach — e.g. the interchange a rider was walked home from) still
+    // measures rather than answering Infinity, which upstream turned into an
+    // egress leg that never ended.
+    const s = stationCoord.get(station) ?? parseCoordId(station);
+    return manhattan(p, s);
   }
 
   function nearestStation(p: WorldPlot): string | null {
@@ -1099,6 +1113,26 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
           best = { board, alight, access, egress };
         }
       }
+    }
+    return best;
+  }
+
+  // The best stop to get OFF at for `to`, coming from a FIXED boarding stop —
+  // the interchange modes' half of `railPairFor`'s question. Chosen by
+  // connectivity over ALL of the destination's boarding points, not "the
+  // nearest": since bus stops joined `stationsInReach`, the nearest point can
+  // be an unserved kerb, and hinging the whole quote on it refused a
+  // park-and-ride whose railway was running fine.
+  function bestAlightFrom(
+    boardStop: string,
+    to: WorldPlot
+  ): { alight: string; egress: number } | null {
+    if (!transit) return null;
+    let best: { alight: string; egress: number } | null = null;
+    for (const s of to.stationsInReach) {
+      if (s === boardStop || !transit.connects(boardStop, s)) continue;
+      const egress = walkToStation(to, s) / tuning.walkSpeed;
+      if (!best || egress < best.egress) best = { alight: s, egress };
     }
     return best;
   }
@@ -1256,22 +1290,27 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
 
     // PARK & RIDE. Drive to a station that has parking, ride in, walk out.
-    // Only worth offering when the destination end is served by rail.
+    // Only worth offering when the destination end is served at all. The
+    // alight is chosen by CONNECTIVITY from the P+R station over every
+    // boarding point in the destination's reach (`bestAlightFrom`) — hinging
+    // it on the single nearest point broke the moment bus stops joined the
+    // pool: an unserved kerb beside the workplace refused the whole mode.
     const pr = transit && c.profile.carOwner ? nearestParkAndRide(from) : null;
+    const prAlight = pr ? bestAlightFrom(pr.station, to) : null;
     if (!transit || !alight) refuse("parkAndRide", "no-railway");
     else if (!c.profile.carOwner) refuse("parkAndRide", "no-car");
     else if (from.roadComponent === null || !pr) refuse("parkAndRide", "no-park-and-ride");
-    else if (pr.station === alight) refuse("parkAndRide", "same-station");
-    else if (!transit.connects(pr.station, alight)) refuse("parkAndRide", "no-service");
+    else if (!prAlight)
+      refuse("parkAndRide", pr.station === alight ? "same-station" : "no-service");
     else {
       const prCoord = stationCoord.get(pr.station) as { x: number; y: number };
       const drive =
         (manhattan(from, prCoord) * tuning.roadDetour) / tuning.carSpeed +
         tuning.parkPenaltySec +
         accessSec;
-      const egress = walkToStation(to, alight) / tuning.walkSpeed;
+      const egress = prAlight.egress;
       const ride =
-        manhattan(prCoord, stationCoord.get(alight) as { x: number; y: number }) /
+        manhattan(prCoord, stationCoord.get(prAlight.alight) ?? parseCoordId(prAlight.alight)) /
         tuning.trainSpeed;
       const sec = drive + tuning.assumedHeadwaySec + ride + egress;
       out.push({
@@ -1279,7 +1318,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         estimateSec: sec,
         cost: sec * ((c.profile.transitAffinity + c.profile.carAffinity) / 2),
         station: pr.station,
-        toStation: alight,
+        toStation: prAlight.alight,
         approachSec: drive,
         chosen: false,
       });
@@ -1293,6 +1332,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // `bikeAndRideStationsOf` uses the WALK radius).
     const br = transit && c.profile.bikeOwner ? nearestBikeAndRide(from) : null;
     const brCoord = br ? stationCoord.get(br.station) : undefined;
+    const brAlight = br ? bestAlightFrom(br.station, to) : null;
     if (!transit || !alight) refuse("bikeAndRide", "no-railway");
     else if (!c.profile.bikeOwner) refuse("bikeAndRide", "no-bike");
     else if (from.roadComponent === null || !br || !brCoord)
@@ -1302,8 +1342,8 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // riding neighbourhood", not "how long is the ride" (the ride itself is
     // priced below at its full detoured length).
     else if (chebyshev(from, brCoord) > bikeRange) refuse("bikeAndRide", "too-far");
-    else if (br.station === alight) refuse("bikeAndRide", "same-station");
-    else if (!transit.connects(br.station, alight)) refuse("bikeAndRide", "no-service");
+    else if (!brAlight)
+      refuse("bikeAndRide", br.station === alight ? "same-station" : "no-service");
     else {
       const rideUp =
         (manhattan(from, brCoord) * tuning.roadDetour) / tuning.bikeSpeed +
@@ -1313,9 +1353,9 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // qualifies by being within the WALK radius, and the exact figure is
       // measured live when the leg is walked (`advanceTrip`).
       const rackWalk = 1 / tuning.walkSpeed;
-      const egress = walkToStation(to, alight) / tuning.walkSpeed;
+      const egress = brAlight.egress;
       const ride =
-        manhattan(brCoord, stationCoord.get(alight) as { x: number; y: number }) /
+        manhattan(brCoord, stationCoord.get(brAlight.alight) ?? parseCoordId(brAlight.alight)) /
         tuning.trainSpeed;
       const sec = rideUp + rackWalk + tuning.assumedHeadwaySec + ride + egress;
       out.push({
@@ -1323,7 +1363,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         estimateSec: sec,
         cost: sec * ((c.profile.transitAffinity + bikeCostOf(c)) / 2),
         station: br.station,
-        toStation: alight,
+        toStation: brAlight.alight,
         approachSec: rideUp,
         chosen: false,
       });
@@ -1807,13 +1847,17 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     boardOrWait(c);
   }
 
-  // Giving up on a wait. The person stops counting themselves as waiting; the
-  // entry they left in the rail sim's queue becomes anonymous demand from here
-  // on, which the platform cap still bounds. (There is no shadow queue to prune
-  // any more — that WAS the second ledger.)
+  // Giving up on a wait. The person stops counting themselves as waiting AND
+  // their entry is withdrawn from the queue — left behind, the tag was a ghost
+  // the next vehicle would board, and the mirror then corrupted whatever trip
+  // this person had moved on to (flipped to "waiting" at a stop that no longer
+  // held them, or teleported to "egress" at a station they never rode to).
+  // An old port without `dequeue` keeps the old behaviour: the entry decays
+  // into anonymous demand, bounded by the platform cap.
   function leavePlatform(c: Citizen): void {
     const t = c.trip;
     if (!t?.station) return;
+    if (t.onPlatform) transit?.dequeue?.(t.station, c.id);
     t.onPlatform = false;
   }
 
@@ -1845,13 +1889,15 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         continue;
       }
       if (e.type !== "dwell") continue;
-      // WHO the rail sim just moved — its own ledger, by name. This used to be
-      // a shadow queue here plus a guess about who was carried where, and the
+      // WHO the carrier just moved — the transit ledger's own answer, by name
+      // (`trainId` is the vehicle id, train or bus alike). This used to be a
+      // shadow queue here plus a guess about who was carried where, and the
       // guess kept a rider in a seat the sim had already freed.
       const aboard = riders.get(e.trainId) ?? [];
       const off = new Set(e.alightedTags ?? []);
+      const changingSet = new Set(e.changingTags ?? []);
       const staying = aboard.filter(id => !off.has(id));
-      for (const id of off) alightedAt(id, e.tileId);
+      for (const id of off) alightedAt(id, e.tileId, changingSet.has(id));
       for (const id of e.boardedTags ?? []) {
         const c = people.get(id);
         if (!c?.trip) continue;
@@ -1864,22 +1910,24 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     }
   }
 
-  // The rail sim set this person down here. Either it is where they were going —
-  // and the walk from the platform is the last leg — or it is an INTERCHANGE and
-  // the sim has already put them back on the platform to wait for the service
-  // that finishes the job. Both are told apart by one question: is this the
-  // station they asked for?
+  // The carrier set this person down here. Either they ARRIVED — the walk from
+  // the stop is the last leg — or they are CHANGING, and the transit layer has
+  // already re-queued them to wait for the service that finishes the job. The
+  // event says which (`changingTags`); it is not derivable from the stations,
+  // because a rider whose destination is one WALK-LINK past the platform is
+  // walked home by the transit layer and arrives WITHOUT the stations matching
+  // — reading that as a change left them "waiting" at a queue that no longer
+  // held them, until they timed out as an abandoned trip the delivery counter
+  // had already scored.
   //
-  // Nothing is DECIDED here any more. The sim carries a passenger to the station
-  // they named, changing trains where it has to (`sim/lineGraph.ts`), so this
-  // layer only has to record what happened. It used to guess from station
-  // geography — and its own comment admitted the cost, a through-rider holding a
-  // seat the sim had already freed.
-  function alightedAt(citizenId: string, stationId: string): void {
+  // Nothing is DECIDED here any more. The layer carries a passenger to the stop
+  // they named, changing vehicles where it has to (`sim/lineGraph.ts`), so this
+  // layer only has to record what happened.
+  function alightedAt(citizenId: string, stationId: string, changing: boolean): void {
     const c = people.get(citizenId);
     const t = c?.trip;
     if (!c || !t) return; // vanished mid-ride
-    if (stationId === t.toStation) {
+    if (!changing) {
       const dest = plotOf(t.to);
       t.leg = "egress";
       t.station = stationId;
@@ -1887,15 +1935,20 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       t.legRemaining = dest ? walkToStation(dest, stationId) / tuning.walkSpeed : 0;
       return;
     }
-    // A CHANGE. They are back on a platform — the sim re-queued them itself, so
-    // they are already waiting under their own id and this layer must not queue
-    // them a second time.
+    // A CHANGE. They are back in a queue — the transit layer re-queued them
+    // itself, so they are already waiting under their own id and this layer
+    // must not queue them a second time.
     t.transfers += 1;
     t.station = stationId;
     t.trainId = null;
     t.onPlatform = true;
     t.leg = "waiting";
-    if (t.transfers > tuning.maxTransfers) finishTrip(c, false);
+    if (t.transfers > tuning.maxTransfers) {
+      // Withdraw the queue entry the layer just made, or the given-up rider
+      // ghosts through the next vehicle exactly like a timed-out wait would.
+      leavePlatform(c);
+      finishTrip(c, false);
+    }
   }
 
   // --- the day -----------------------------------------------------------------
