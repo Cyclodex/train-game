@@ -16,7 +16,7 @@ import { Level } from "@/tiles/model";
 import {
   laneCount,
   laneCountAt,
-  cycleLaneIndices,
+  bikeLaneIndices,
   isRoadJunction,
   isOneWayStraight,
   oneWayRunMax,
@@ -142,10 +142,12 @@ export function createLaneGeometry(level: Level, tileSize: number) {
   // A bike on a CYCLE lane rides the green strip, not the slot centre: the strip
   // is painted at HALF the lane width against the kerb (Tile.vue
   // restrictedLaneBands + roadGeometry's solid cycle edge), so the ride line
-  // shifts a quarter-lane kerbward. Scaled by the continuous lane position's
-  // proximity to the cycle lane, so a merge onto / off the strip glides instead
-  // of stepping sideways. Zero for every other vehicle class (nothing else may
-  // enter a cycle lane).
+  // shifts a quarter-lane kerbward. A wide street's SHOULDER is the same
+  // machinery minus the paint — the bike rides the edge zone's kerb half, cars
+  // pass in their own lane. Scaled by the continuous lane position's proximity
+  // to the bike's lane, so a merge onto / off the strip glides instead of
+  // stepping sideways. Zero for every other vehicle class (nothing else may
+  // enter a cycle lane or shoulder).
   function cycleStripShiftPx(
     coord: Coordinates,
     entry: Port,
@@ -153,7 +155,7 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     cls: VehicleClass,
   ): number {
     if (cls !== "bike") return 0;
-    const cycles = cycleLaneIndices(level[getCoordinatesId(coord)]?.road, entry);
+    const cycles = bikeLaneIndices(level[getCoordinatesId(coord)]?.road, entry);
     if (!cycles.length) return 0;
     const near = Math.max(...cycles.map(c => 1 - Math.min(1, Math.abs(lanePos - c))));
     return near * 0.25 * LANE_WIDTH_FRAC * tileSize;
@@ -233,15 +235,15 @@ export function createLaneGeometry(level: Level, tileSize: number) {
     if (exit === null) return { offEntry, offExit: offEntry };
     const offExit = turnExitOffsetPx(s.coord, entry, exit, lanePos, cls);
     if (offExit === null) return { offEntry, offExit: offEntry };
-    // A bike leaving a turn onto an arm that carries a cycle lane lands
-    // kerb-most — ON the half-width strip — so the exit offset carries the same
-    // quarter-lane kerbward shift, keeping the glide continuous across the seam
-    // (the next tile's entry offset includes it via cycleStripShiftPx).
+    // A bike leaving a turn onto an arm that carries a cycle lane or shoulder
+    // lands kerb-most — ON the half-width strip — so the exit offset carries the
+    // same quarter-lane kerbward shift, keeping the glide continuous across the
+    // seam (the next tile's entry offset includes it via cycleStripShiftPx).
     const next = neighborCoord(s.coord, exit);
     const exitStrip =
       cls === "bike" &&
       next &&
-      cycleLaneIndices(level[getCoordinatesId(next)]?.road, oppositePort(exit)).length > 0
+      bikeLaneIndices(level[getCoordinatesId(next)]?.road, oppositePort(exit)).length > 0
         ? 0.25 * LANE_WIDTH_FRAC * tileSize
         : 0;
     return { offEntry, offExit: offExit + exitStrip };

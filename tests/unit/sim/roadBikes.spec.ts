@@ -1,11 +1,23 @@
 import { describe, it, expect } from "vitest";
 import { Position } from "@/types";
 import { createRoadSim, vehicleClassOf, vehicleSpec, specLength } from "@/sim/road";
-import { cycleLaneIndices, laneUsableBy, oneWay } from "@/tiles/lanes";
+import {
+  cycleLaneIndices,
+  bikeLaneIndices,
+  laneUsableBy,
+  oneWay,
+  type LaneKind,
+} from "@/tiles/lanes";
+import { planRoute } from "@/sim/roadRouter";
+import { addCycleLane } from "@/tiles/editOps";
+import { Level } from "@/tiles/model";
 import { bikemix } from "@/levels/test/scenarios/bikemix";
 import { bikeovertake } from "@/levels/test/scenarios/bikeovertake";
 import { cyclelane } from "@/levels/test/scenarios/cyclelane";
 import { bikeleftturn } from "@/levels/test/scenarios/bikeleftturn";
+import { widestreet } from "@/levels/test/scenarios/widestreet";
+import { motorcycles } from "@/levels/test/scenarios/motorcycles";
+import { bikedetour } from "@/levels/test/scenarios/bikedetour";
 
 // BICYCLES — phase A+B of the bicycle plan
 // (docs/superpowers/specs/2026-08-05-bicycle-travel-mode-design.md).
@@ -33,8 +45,22 @@ describe("the bike vehicle kind", () => {
   });
 });
 
+describe("the motorcycle vehicle kind", () => {
+  it("is a fast, narrow CAR by class — any general lane, overtaking allowed", () => {
+    expect(vehicleClassOf("motorcycle")).toBe("car");
+  });
+
+  it("is as short as a bike (the capsule the bike used to wear)", () => {
+    const moto = specLength(vehicleSpec("motorcycle", 0.23));
+    const bike = specLength(vehicleSpec("bike", 0.23));
+    const car = specLength(vehicleSpec("car", 0.23));
+    expect(moto).toBeCloseTo(bike, 6);
+    expect(moto).toBeLessThan(car * 0.5);
+  });
+});
+
 describe("the lane access matrix", () => {
-  const lane = (kind?: "all" | "bus" | "cycle") => ({ ...oneWay(L, R), ...(kind ? { kind } : {}) });
+  const lane = (kind?: LaneKind) => ({ ...oneWay(L, R), ...(kind ? { kind } : {}) });
 
   it("cars: general lanes only", () => {
     expect(laneUsableBy(lane(), "car")).toBe(true);
@@ -54,6 +80,12 @@ describe("the lane access matrix", () => {
     expect(laneUsableBy(lane("cycle"), "bike")).toBe(true);
   });
 
+  it("shoulders (the wide street's edge zone): bikes only, like a cycle lane", () => {
+    expect(laneUsableBy(lane("shoulder"), "car")).toBe(false);
+    expect(laneUsableBy(lane("shoulder"), "bus")).toBe(false);
+    expect(laneUsableBy(lane("shoulder"), "bike")).toBe(true);
+  });
+
   it("cycleLaneIndices lists only cycle lanes, ascending", () => {
     const road = [
       { from: L, to: [R], index: 1 },
@@ -61,6 +93,16 @@ describe("the lane access matrix", () => {
     ];
     expect(cycleLaneIndices(road, L)).toEqual([0]);
     expect(cycleLaneIndices(road, R)).toEqual([]);
+  });
+
+  it("bikeLaneIndices lists cycle AND shoulder lanes — the bike's ride space", () => {
+    const road = [
+      { from: L, to: [R], index: 2 },
+      { from: L, to: [R], index: 0, kind: "shoulder" as const },
+      { from: L, to: [R], index: 1, kind: "cycle" as const },
+    ];
+    expect(bikeLaneIndices(road, L)).toEqual([0, 1]);
+    expect(cycleLaneIndices(road, L)).toEqual([1]); // the paint query stays kind-specific
   });
 });
 
@@ -72,6 +114,7 @@ function drive(
 ): {
   kinds: Set<string>;
   bikes: { speed: number; laneIndex: number; overtakePhase: string }[];
+  motos: { speed: number; laneIndex: number; overtakePhase: string }[];
   carLanes: number[];
   carOnCycleLane: number;
   bikeOnCycleLaneRatio: number;
@@ -92,6 +135,7 @@ function drive(
   });
   const kinds = new Set<string>();
   const bikes: { speed: number; laneIndex: number; overtakePhase: string }[] = [];
+  const motos: { speed: number; laneIndex: number; overtakePhase: string }[] = [];
   const carLanes: number[] = [];
   let carOnCycleLane = 0;
   let bikeSamples = 0;
@@ -109,17 +153,20 @@ function drive(
       if (!Number.isFinite(c.laneIndex)) badPos++;
       const road = scenario.level[c.tileId]?.road;
       // Which side the car entered from is not exposed here; on these straight
-      // E-W scenarios the cycle lane is index 0 from BOTH approaches, so lane
-      // membership is a plain index test.
+      // E-W scenarios the bike lane (cycle or shoulder) is index 0 from BOTH
+      // approaches, so lane membership is a plain index test.
       const cycles = new Set([
-        ...cycleLaneIndices(road, L),
-        ...cycleLaneIndices(road, R),
+        ...bikeLaneIndices(road, L),
+        ...bikeLaneIndices(road, R),
       ]);
       const onCycle = cycles.has(Math.round(c.laneIndex));
       if (c.kind === "bike") {
         bikes.push({ speed: c.speed, laneIndex: c.laneIndex, overtakePhase: c.overtakePhase });
         bikeSamples++;
         if (onCycle) bikeOnCycle++;
+      } else if (c.kind === "motorcycle") {
+        motos.push({ speed: c.speed, laneIndex: c.laneIndex, overtakePhase: c.overtakePhase });
+        if (onCycle) carOnCycleLane++; // a motorcycle is a car to every lane rule
       } else {
         carLanes.push(c.laneIndex);
         if (onCycle) carOnCycleLane++;
@@ -131,6 +178,7 @@ function drive(
   return {
     kinds,
     bikes,
+    motos,
     carLanes,
     carOnCycleLane,
     bikeOnCycleLaneRatio: bikeSamples ? bikeOnCycle / bikeSamples : 0,
@@ -192,6 +240,94 @@ describe("the kerb rule at a left turn (bikeleftturn)", () => {
   });
 });
 
+describe("the wide street (widestreet)", () => {
+  it("bikes ride the edge zone; cars keep their own lane and keep flowing", () => {
+    const r = drive(widestreet, 90);
+    expect(r.bikes.length).toBeGreaterThan(0);
+    // The shoulder is bikes-only — no car (or motorcycle) sample ever sits on it.
+    expect(r.carOnCycleLane).toBe(0);
+    // Bikes spawn onto and hold the edge zone, exactly like a cycle lane.
+    expect(r.bikeOnCycleLaneRatio).toBeGreaterThan(0.9);
+    // The point of the wide street: cars pass alongside without queueing, so
+    // the street delivers like the cycle-lane remedy, not like the bikemix queue.
+    expect(r.completed).toBeGreaterThan(5);
+    expect(r.badPos).toBe(0);
+  });
+});
+
+describe("motorcycles among bikes (motorcycles)", () => {
+  it("motorcycles use the inner lane to pass; bikes hold the kerb", () => {
+    const r = drive(motorcycles, 90);
+    expect(r.motos.length).toBeGreaterThan(0);
+    expect(r.bikes.length).toBeGreaterThan(0);
+    // A motorcycle is a fast, narrow car: it may enter the overtaking lane a
+    // bike must never touch. With bikes clogging the kerb lane, some sample
+    // shows it passing (or already out on the inner lane mid-pass).
+    expect(
+      r.motos.some(m => m.overtakePhase === "passing" || Math.round(m.laneIndex) === 1),
+    ).toBe(true);
+    // The bikes stay bikes: kerb lane, never a passing phase.
+    for (const b of r.bikes) {
+      expect(b.overtakePhase).toBe("none");
+      expect(Math.round(b.laneIndex)).toBe(0);
+    }
+    expect(r.completed).toBeGreaterThan(5);
+  });
+});
+
+describe("bike routing avoids 3-lane arterials (bikedetour)", () => {
+  const { Bottom: Bo } = Position;
+  const entries = [
+    { coord: { x: 0, y: 1 }, entryPort: L },
+    { coord: { x: 5, y: 1 }, entryPort: R },
+  ];
+  // rng → 0 picks the first surviving target: from the west spawn that is the
+  // east entry, so the route choice is deterministic.
+  const rng0 = () => 0;
+
+  it("a car rides the arterial straight through", () => {
+    const plan = planRoute(bikedetour.level, { x: 0, y: 1 }, L, entries, rng0, "car");
+    expect(plan.destination).toBe(entries[1]);
+    expect(plan.turns).toEqual([
+      { junctionId: "1,1", exitArm: R },
+      { junctionId: "4,1", exitArm: R },
+    ]);
+  });
+
+  it("a bike routes round via the 1-lane back street", () => {
+    const plan = planRoute(bikedetour.level, { x: 0, y: 1 }, L, entries, rng0, "bike");
+    expect(plan.destination).toBe(entries[1]);
+    expect(plan.turns).toEqual([
+      { junctionId: "1,1", exitArm: Bo }, // down into the quiet street…
+      { junctionId: "4,1", exitArm: R }, // …and rejoin at the far junction
+    ]);
+  });
+
+  it("a cycle lane on the arterial lifts the avoidance", () => {
+    const withCycle: Level = { ...bikedetour.level };
+    for (const id of ["0,1", "2,1", "3,1", "5,1"]) {
+      withCycle[id] = addCycleLane(withCycle[id], L);
+    }
+    const plan = planRoute(withCycle, { x: 0, y: 1 }, L, entries, rng0, "bike");
+    expect(plan.turns).toEqual([
+      { junctionId: "1,1", exitArm: R },
+      { junctionId: "4,1", exitArm: R },
+    ]);
+  });
+
+  it("with no alternative the bike still takes the arterial — a soft penalty, not a ban", () => {
+    const direct: Level = Object.fromEntries(
+      Object.entries(bikedetour.level).filter(([id]) => id.endsWith(",1")),
+    );
+    const plan = planRoute(direct, { x: 0, y: 1 }, L, entries, rng0, "bike");
+    expect(plan.destination).toBe(entries[1]);
+    expect(plan.turns).toEqual([
+      { junctionId: "1,1", exitArm: R },
+      { junctionId: "4,1", exitArm: R },
+    ]);
+  });
+});
+
 describe("seeded-board determinism", () => {
   it("a zero-weight bike entry draws the identical kind sequence", () => {
     const run = (mix: Record<string, number>) => {
@@ -220,6 +356,36 @@ describe("seeded-board determinism", () => {
     };
     const before = run({ car: 1, truck: 0.4 });
     const after = run({ car: 1, truck: 0.4, bike: 0 });
+    expect(after).toEqual(before);
+  });
+
+  it("a zero-weight motorcycle entry draws the identical kind sequence too", () => {
+    const run = (mix: Record<string, number>) => {
+      const sim = createRoadSim({
+        level: bikemix.level,
+        width: 6,
+        height: 3,
+        seed: 11,
+        spawnInterval: 0.6,
+        carSpeed: 0.5,
+        carLength: 0.2,
+        maxCars: 10,
+        mix,
+      });
+      const seen: string[] = [];
+      const known = new Set<string>();
+      for (let i = 0; i < 600; i++) {
+        sim.step(0.05, () => false);
+        for (const c of sim.cars()) {
+          if (known.has(c.id)) continue;
+          known.add(c.id);
+          seen.push(`${c.id}:${c.kind}`);
+        }
+      }
+      return seen;
+    };
+    const before = run({ car: 1, truck: 0.4 });
+    const after = run({ car: 1, truck: 0.4, motorcycle: 0 });
     expect(after).toEqual(before);
   });
 });

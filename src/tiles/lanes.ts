@@ -4,8 +4,12 @@ import { laneOffsetConstPx, seamPositioningBand } from "@/sim/laneOffset";
 import { neighborCoord, oppositePort } from "@/sim/topology";
 
 // A lane's vehicle class, for restrictions. "bus" is a bus lane (bikes admitted,
-// the usual street rule); "cycle" is a cycle lane (bikes only).
-export type LaneKind = "all" | "bus" | "cycle"; // extensible
+// the usual street rule); "cycle" is a cycle lane (bikes only); "shoulder" is a
+// WIDE STREET's edge zone — access-wise a cycle lane (bikes only), paint-wise
+// plain asphalt (no green tint, no solid edge line, no divider: the street just
+// reads wider, and bikes ride its edge while cars pass alongside in their own
+// lane).
+export type LaneKind = "all" | "bus" | "cycle" | "shoulder"; // extensible
 
 // A vehicle's lane-access class. "car" is the general motor vehicle
 // (car/truck/semi), "bus" a bus, "bike" a bicycle. Access is the matrix in
@@ -15,15 +19,15 @@ export type VehicleClass = "car" | "bus" | "bike";
 
 // May a vehicle of class `cls` drive in `lane`? The access matrix:
 //
-//   lane kind →   all   bus   cycle
-//   car           ✓     ✗     ✗
-//   bus           ✓     ✓     ✗
-//   bike          ✓     ✓     ✓     (bikes ride bus lanes; nobody else rides theirs)
+//   lane kind →   all   bus   cycle  shoulder
+//   car           ✓     ✗     ✗      ✗
+//   bus           ✓     ✓     ✗      ✗
+//   bike          ✓     ✓     ✓      ✓     (bikes ride bus lanes; nobody else rides theirs)
 export function laneUsableBy(lane: Lane, cls: VehicleClass): boolean {
   const kind = lane.kind ?? "all";
   if (kind === "all") return true;
   if (kind === "bus") return cls === "bus" || cls === "bike";
-  return cls === "bike"; // "cycle"
+  return cls === "bike"; // "cycle" | "shoulder"
 }
 
 // One physical lane through a tile, directed. A car enters via `from` and may
@@ -156,11 +160,24 @@ export function busLaneIndices(road: Lane[] | undefined, from: Port): number[] {
 }
 
 // The cycle-lane indices of an approach (kind === "cycle"), ascending by index.
-// A bike prefers these — the drift twin of `busLaneIndices`; empty when the
-// approach has no cycle lane.
+// PAINT-side query (the green tint / solid edge line follow it); the sim's ride
+// preference is `bikeLaneIndices` below, which also counts a wide street's
+// shoulder.
 export function cycleLaneIndices(road: Lane[] | undefined, from: Port): number[] {
   return lanesFrom(road, from)
     .filter(l => l.kind === "cycle")
+    .map(l => l.index)
+    .sort((a, b) => a - b);
+}
+
+// The lane indices of an approach a BIKE prefers to ride: its cycle lane(s) and
+// a wide street's shoulder(s) — the drift twin of `busLaneIndices`; empty when
+// the approach has neither. The two kinds share every ride-side behaviour
+// (spawn-onto, drift-to, the quarter-lane kerbward ride line); only the paint
+// differs, which is why the paint queries above stay kind-specific.
+export function bikeLaneIndices(road: Lane[] | undefined, from: Port): number[] {
+  return lanesFrom(road, from)
+    .filter(l => l.kind === "cycle" || l.kind === "shoulder")
     .map(l => l.index)
     .sort((a, b) => a - b);
 }

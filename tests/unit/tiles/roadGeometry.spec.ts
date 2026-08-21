@@ -286,6 +286,47 @@ describe("roadLaneMarkingPaths", () => {
       expect(inner[0].d.split(" L ").length).toBeGreaterThan(2);
     });
   });
+
+  // A wide street's SHOULDER is the cycle lane minus the paint: the kerb slot's
+  // full-width dashed divider is suppressed exactly the same, but NO solid edge
+  // line (and no tint) replaces it — the street simply reads as wider asphalt.
+  describe("kerb-side shoulders (the wide street)", () => {
+    const LANE_W = 200 * 0.14; // 28px
+    const yOf = (d: string) => parseFloat(d.match(/M [\d.]+ (-?[\d.]+)/)![1]);
+
+    it("straight: the kerb slot's divider is suppressed and nothing replaces it", () => {
+      // 1 car + 1 shoulder each way: without the shoulder this is a plain 2+2
+      // with dividers at ±1·LANE_W; with it, only the centreline remains.
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Right, 200, 2, 2, 2 * LANE_W, 2 * LANE_W, 0, 0, 1, 1,
+      );
+      expect(marks.filter(m => m.kind === "inner")).toHaveLength(0);
+      expect(marks.filter(m => m.kind === "centre")).toHaveLength(1);
+    });
+
+    it("straight: a wider street keeps its car dividers, gains no line at the edge", () => {
+      // 2 car + 1 shoulder each way: the divider between the car lanes stays,
+      // the shoulder's slot boundary is gone, and no solid edge appears.
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Right, 200, 3, 3, 3 * LANE_W, 3 * LANE_W, 0, 0, 1, 1,
+      );
+      const inner = marks.filter(m => m.kind === "inner");
+      expect(inner).toHaveLength(2); // one car divider per direction
+      expect(inner.every(m => !m.solid)).toBe(true);
+      expect(inner.map(m => yOf(m.d)).sort((a, b) => a - b)).toEqual([
+        100 - 1 * LANE_W,
+        100 + 1 * LANE_W,
+      ]);
+    });
+
+    it("bend: the same suppression on the arc — no solid edge either", () => {
+      const marks = roadLaneMarkingPaths(
+        Position.Left, Position.Bottom, 200, 2, 2, undefined, undefined, 0, 0, 1, 1,
+      );
+      expect(marks.filter(m => m.kind === "inner")).toHaveLength(0);
+      expect(marks.filter(m => m.kind === "centre")).toHaveLength(1);
+    });
+  });
 });
 
 describe("oneWayStraightMarkingPaths (kerb-anchored one-way straights)", () => {
@@ -359,6 +400,17 @@ describe("oneWayStraightMarkingPaths (kerb-anchored one-way straights)", () => {
   it("a one-way that is ONLY a cycle lane draws no lane line at all", () => {
     // Its own kerb edges bound it — there is no lane boundary to swap.
     expect(oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 1, 1, 1, 1)).toEqual([]);
+  });
+
+  it("a shoulder suppresses the kerb slot's divider and adds NOTHING (wide one-way)", () => {
+    // 1 car + 1 kerb shoulder: the k=1 divider is gone and no edge line appears —
+    // just the wider asphalt.
+    expect(oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 2, 2, 2, 0, 1)).toEqual([]);
+    // 2 car + 1 shoulder: the divider between the car lanes (k=2) survives alone.
+    const marks = oneWayStraightMarkingPaths(Position.Left, Position.Right, 200, 3, 3, 3, 0, 1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0].solid).toBeUndefined();
+    expect(yOf(marks[0].d)).toBeCloseTo(100 + (1.5 - 2) * LANE_W, 3);
   });
 });
 
