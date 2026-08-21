@@ -23,6 +23,13 @@
       >
         🚗 {{ stats.driving }}
       </span>
+      <span
+        v-if="stats.cycling > 0"
+        class="city-panel__driving"
+        title="Citizens who are a bike on the road right now"
+      >
+        🚴 {{ stats.cycling }}
+      </span>
     </header>
 
     <!-- The sentence the player is trying to change: how this board gets about. -->
@@ -100,8 +107,10 @@ class CityPanel extends Vue {
     return [
       { key: "walk", label: "Walk", value: s.walk },
       { key: "car", label: "Car", value: s.car },
+      { key: "bike", label: "Bike", value: s.bike },
       { key: "transit", label: "Train", value: s.transit },
       { key: "parkAndRide", label: "P+R", value: s.parkAndRide },
+      { key: "bikeAndRide", label: "B+R", value: s.bikeAndRide },
     ].filter(m => m.value > 0);
   }
 
@@ -230,6 +239,14 @@ export default toNative(CityPanel);
 }
 .is-parkAndRide {
   background: #c79bf2;
+}
+/* The cycling pair sit near the walk green — active travel reads as one
+   family — but distinct enough to tell a shifted share apart. */
+.is-bike {
+  background: #3fbf6f;
+}
+.is-bikeAndRide {
+  background: #8fd4c2;
 }
 
 .city-panel__list {

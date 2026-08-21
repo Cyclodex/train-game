@@ -663,15 +663,21 @@ export function createSimulation(config: SimConfig): Simulation {
   // True when this train still owes a stop at its current (station) segment:
   // the head is on a station tile it has not yet dwelled at this pass.
   // Does this train CALL at that station, or run past it? A train on a line
-  // serves its OWN stops and nothing else — that is what makes an express
-  // express, and without it a line is only a suggestion about the order in
-  // which a train visits everything. A train with no line stops everywhere,
-  // which is the classic service every older board expects.
+  // serves its stops IN LINE ORDER and nothing else — it stops only at the one
+  // it is currently bound for, and runs past every other platform, its own
+  // line's included (the Transport-Fever rule). That is what makes an express
+  // express, AND what makes the order a contract: a line A→C→B→C really visits
+  // C twice a lap, and a train bound for A cannot be waylaid by a nearer stop
+  // on the way. (The old rule — call at ANY of the line's stops when passing —
+  // meant a ring line never reached a stop whose route led past the others:
+  // every en-route platform hijacked the cursor and A was never served.)
+  // A train with no line stops everywhere, the classic service every older
+  // board expects.
   function callsAt(train: SimTrain, tileId: string): boolean {
     if (!isStationTile(tileId)) return false;
     const stops = stopsOf(train);
     if (!stops?.length) return true;
-    return stops.includes(tileId);
+    return tileId === currentStop(train);
   }
 
   // How far past a station tile's ENTRY this train's head has to run before the
@@ -1259,17 +1265,15 @@ export function createSimulation(config: SimConfig): Simulation {
         });
       train.dwellRemaining =
         STATION_DWELL_SEC + boarded * BOARDING_SEC_PER_PASSENGER;
-      // On a line, calling anywhere on it moves the cursor PAST that stop —
-      // not just at the one we were bound for. A line is an order to visit, and
-      // arriving early at a later stop (a loop can bring one up sooner than the
-      // cursor expects) should still count as having served it, or the train
-      // would come back for a platform it just worked.
-      if (stops?.length) {
-        const at = stops.indexOf(tileId);
-        if (at >= 0) {
-          train.lineIndex = (at + 1) % stops.length;
-          planLeg(train);
-        }
+      // On a line the cursor simply steps forward: `callsAt` only ever stops a
+      // lined train at the stop it is bound for, so "we dwelled" means "that
+      // stop is served". NEVER recompute the cursor from `indexOf` — a line may
+      // name the same station twice (A→C→B→C), and the first occurrence would
+      // swallow the second, which is exactly the bug that made a revisit
+      // impossible.
+      if (stops?.length && tileId === currentStop(train)) {
+        train.lineIndex = (train.lineIndex + 1) % stops.length;
+        planLeg(train);
       }
       events.push({
         type: "dwell",

@@ -48,12 +48,13 @@ describe("a train on a line drives itself", () => {
     });
     const events = run(sim, 90);
     const calls = dwellsAt(events);
-    // Out to the far stop, then back — and on the way back it calls at 4,0
-    // again, because an intermediate station is served whether or not it is
-    // the stop the train is bound for. That is what a real shuttle does, and
-    // the turn-back is the depot past the end of the line (see the note on
-    // line shapes in the next test).
-    expect(calls.slice(0, 4)).toEqual(["2,0", "4,0", "4,0", "2,0"]);
+    // Out to the far stop, then back, in STRICT line order — the Transport-
+    // Fever rule: a train calls only at the stop it is bound for, and runs
+    // past every other platform (the turn-back pass through 4,0 included). A
+    // service that should call somewhere in BOTH directions names that stop
+    // twice on the line (A→X→B→X) — which is exactly what repeated stops are
+    // for, and the next describe block pins it.
+    expect(calls.slice(0, 4)).toEqual(["2,0", "4,0", "2,0", "4,0"]);
     expect(calls.length).toBeGreaterThan(4); // still running, not a one-off
     // Never terminated: it is still in service at the end.
     expect(sim.trainState("t1")).not.toBe("parked");
@@ -279,6 +280,99 @@ describe("a line says which stations a train serves", () => {
 // service here" and "a vehicle is running it" were the same fact — you could
 // not draw a line before buying a train, and withdrawing the last train
 // silently deleted the service everyone had planned around.
+// THE ORDER IS THE CONTRACT, and a stop may appear twice (Transport Fever's
+// shape). Both facts fell out of one bug: the old rule called at ANY of the
+// line's stops when passing, and advanced the cursor by indexOf — so on a ring
+// where the route to A led past the other platforms, every en-route stop
+// hijacked the cursor and A was NEVER served; and a second C on the line was
+// swallowed by indexOf finding the first.
+describe("a line is served in its own order, repeats included", () => {
+  //   1,0 ── 2,0(A) ── 3,0(B) ── 4,0
+  //    │                          │
+  //   1,1                        4,1
+  //    │                          │
+  //   1,2 ── 2,2(C) ── 3,2(D) ── 4,2
+  // Ring travel order from C, eastbound: C, D, B, A, (round again).
+  function ring(): Level {
+    const stn = () => ({
+      connections: [[Position.Left, Position.Right]] as [Position, Position][],
+      role: "station" as const,
+    });
+    return {
+      "1,0": expandKind("curve", 1),
+      "2,0": stn(),
+      "3,0": stn(),
+      "4,0": expandKind("curve", 2),
+      "1,1": expandKind("straight", 0),
+      "4,1": expandKind("straight", 0),
+      "1,2": expandKind("curve", 0),
+      "2,2": stn(),
+      "3,2": stn(),
+      "4,2": expandKind("curve", 3),
+    };
+  }
+  const ringTrain = (line: string[]) => ({
+    ...train(line),
+    coord: { x: 2, y: 2 },
+    entryPort: Position.Left,
+  });
+
+  it("reaches a stop whose route leads past the others (the never-visits-A bug)", () => {
+    // Line A → C → B, against a ring whose travel order is C, D, B, A: every
+    // leg to A runs past other stops of the SAME line. Under the old
+    // call-anywhere rule the cursor never survived the journey and A was
+    // never served.
+    const sim = createSimulation({
+      level: ring(),
+      trains: [ringTrain(["2,0", "2,2", "3,0"])],
+    });
+    const calls = dwellsAt(run(sim, 240));
+    expect(calls.length).toBeGreaterThanOrEqual(6);
+    // Every stop served — A included — and in exactly the line's own order.
+    for (let i = 0; i < calls.length; i++) {
+      expect(calls[i]).toBe(["2,0", "2,2", "3,0"][i % 3]);
+    }
+  });
+
+  it("calls twice a lap at a stop the line names twice (A→C→B→C)", () => {
+    const sim = createSimulation({
+      level: ring(),
+      // A → C → B → C: out via C, back via C — the revisit the line editor
+      // can now draw.
+      trains: [ringTrain(["2,0", "2,2", "3,0", "2,2"])],
+    });
+    const calls = dwellsAt(run(sim, 300));
+    expect(calls.length).toBeGreaterThanOrEqual(8);
+    for (let i = 0; i < calls.length; i++) {
+      expect(calls[i]).toBe(["2,0", "2,2", "3,0", "2,2"][i % 4]);
+    }
+    // ...which really is C twice per lap, never twice in a row.
+    for (let i = 1; i < calls.length; i++) {
+      expect(calls[i]).not.toBe(calls[i - 1]);
+    }
+  });
+
+  it("normalises a doubled call away — consecutive, and across the wrap", () => {
+    const sim = createSimulation({ level: ring(), trains: [] });
+    const stopsOf = (id: string) => sim.lines().find(l => l.id === id)?.stops;
+    // C, C, B: the vehicle would already be standing there.
+    expect(stopsOf(sim.createLine(["2,2", "2,2", "3,0"]))).toEqual(["2,2", "3,0"]);
+    // C, B, C: a cycle, so last → first is a consecutive pair too.
+    expect(stopsOf(sim.createLine(["2,2", "3,0", "2,2"]))).toEqual(["2,2", "3,0"]);
+    // A, C, B, C is legal: the repeats are never adjacent, wrap included.
+    expect(stopsOf(sim.createLine(["2,0", "2,2", "3,0", "2,2"]))).toEqual([
+      "2,0",
+      "2,2",
+      "3,0",
+      "2,2",
+    ]);
+    // ...and re-stopping an existing line goes through the same door.
+    const id = sim.createLine(["2,0", "3,0"]);
+    sim.setLineStops(id, ["2,0", "3,0", "3,0", "2,2", "2,0"]);
+    expect(stopsOf(id)).toEqual(["2,0", "3,0", "2,2"]);
+  });
+});
+
 describe("a line exists without a train on it", () => {
   it("can be drawn with nothing running it, and stays when a train leaves", () => {
     const sim = createSimulation({

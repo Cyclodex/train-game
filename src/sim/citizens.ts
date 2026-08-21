@@ -1,5 +1,6 @@
 import { makeRng } from "@/utils/globalHelpers";
 import { parseCoordId } from "@/tiles/model";
+import { bikeRangeOf } from "@/tiles/catchment";
 import {
   CitizenWorld,
   Density,
@@ -33,8 +34,24 @@ import type { SimEvent } from "@/sim/simulation";
 // Design: docs/superpowers/specs/2026-08-01-citizens-and-cities-design.md
 //         docs/superpowers/specs/2026-08-04-life-stages-and-daily-routines-design.md
 
-export type TravelMode = "walk" | "car" | "transit" | "parkAndRide";
-export const TRAVEL_MODES: TravelMode[] = ["walk", "car", "transit", "parkAndRide"];
+export type TravelMode = "walk" | "car" | "bike" | "transit" | "parkAndRide" | "bikeAndRide";
+export const TRAVEL_MODES: TravelMode[] = [
+  "walk",
+  "car",
+  "bike",
+  "transit",
+  "parkAndRide",
+  "bikeAndRide",
+];
+
+// A fresh all-zero per-mode tally. EVERY Record<TravelMode, number> in this
+// file is built (and summed) by iterating TRAVEL_MODES rather than by literal —
+// the failure mode of a hand-written record is silent under-reporting: adding a
+// mode used to mean finding six literals and two sums by hand, and any one
+// missed just made the share bar quietly wrong.
+function zeroModes(): Record<TravelMode, number> {
+  return Object.fromEntries(TRAVEL_MODES.map(m => [m, 0])) as Record<TravelMode, number>;
+}
 
 // What a trip is FOR — and, because an activity is named by where it sends you,
 // this doubles as the set of PLACES a routine can point at (see `Activity`).
@@ -112,8 +129,23 @@ export interface Activity {
 // started being a parked vehicle holding a real bay.
 type Leg = "walking" | "driving" | "parking" | "waiting" | "riding" | "egress";
 
+// The leg a journey OPENS on, per mode. A bike is a vehicle in traffic, so it
+// rolls out on a driving-shaped leg exactly as a car does.
+const FIRST_LEG: Record<TravelMode, Leg> = {
+  walk: "walking",
+  car: "driving",
+  bike: "driving",
+  transit: "walking",
+  parkAndRide: "driving",
+  bikeAndRide: "driving",
+};
+
 export interface TravelProfile {
   carOwner: boolean;
+  // Do they have a bike in the shed? OWNERSHIP gates whether the mode exists
+  // for them at all; AFFINITY (below) shapes what it feels like and how far
+  // they will ride — never the reverse.
+  bikeOwner: boolean;
   // How far this person walks HAPPILY, in tiles. Past it they still can walk —
   // it just starts to hurt (see `optionsFor`). Patience is a preference, not a
   // gate: gating availability on it made a three-tile errand IMPOSSIBLE for an
@@ -121,6 +153,13 @@ export interface TravelProfile {
   walkPatience: number;
   transitAffinity: number; // multiplier on PERCEIVED transit time (<1 = likes trains)
   carAffinity: number;
+  // KEENNESS on the bike, 0..1 — NOT a time multiplier like the two above,
+  // because it does double duty: it shapes the perceived cost (via
+  // `bikeCostOf`, mapped into the same 0.7–1.4 band the others draw from) AND
+  // it decides how far they will ride at all (`bikeRangeOf`,
+  // tiles/catchment.ts). Most people take the bike for short hops; the sporty
+  // tail rides across the board — one number, both consequences.
+  bikeAffinity: number;
 }
 
 export interface Trip {
@@ -177,7 +216,12 @@ export type ModeRefusal =
   // they stay at home. Distinct from "no-station-in-reach": the stations are
   // right there, it is the line that is missing, and that is the player's to
   // fix rather than the map's.
-  | "no-service";
+  | "no-service"
+  // No bike in the shed — the ownership gate, the bike modes' "no-car".
+  | "no-bike"
+  // No station with a rack in reach of a ride — the thing a player fixes by
+  // building one (`StallKind "bikerack"` within a station's walking reach).
+  | "no-rack";
 
 /**
  * One mode, priced for one person on one journey — the row the inspector panel
@@ -312,6 +356,16 @@ export interface CitizenTuning {
   // Door-to-door speeds in tiles/sec, used to SCORE a mode before it is taken.
   walkSpeed: number;
   carSpeed: number;
+  // The bike sits between them — the missing middle of the mode choice. Like
+  // every speed here it only prices the ESTIMATE; a dispatched real bike rides
+  // at whatever the road sim gives it.
+  bikeSpeed: number;
+  // Getting the bike OUT — the shed, the lock, the helmet — in flat seconds,
+  // charged once per bike leg. This is what keeps the bike off the one-tile
+  // hop (nobody saddles up for 200 metres) without touching the shared
+  // door-to-kerb access charge, which stays equal across every mode. NOT the
+  // walk re-priced: it is a cost only a bike journey has.
+  bikeSaddleSec: number;
   trainSpeed: number;
   // Roads do not run in straight lines. A car's distance is the crow-fly
   // distance times this — which is most of why driving loses to rail over
@@ -380,6 +434,10 @@ export interface CitizenTuning {
   maxTransfers: number;
   // Share of adults who own a car.
   carOwnership: number;
+  // ...and a bike. Higher than car ownership — a bike is cheap and most
+  // households have one in the shed whether or not it gets ridden (how far it
+  // gets ridden is `bikeAffinity`'s business, not ownership's).
+  bikeOwnership: number;
   /**
    * How the town is made up, by life stage. Shares; normalised, so they need not
    * add to one.
@@ -409,6 +467,13 @@ export const DEFAULT_TUNING: CitizenTuning = {
   startHour: 7,
   walkSpeed: 0.25,
   carSpeed: 0.6,
+  // 1.8× walking, 0.75× driving — the middle the mode is FOR. The acceptance
+  // test (bicycle spec §6): bikes should eat WALK-OR-DRIVE share on the 2–4
+  // tile trips, never transit share — the "three numbers" lesson says a bike
+  // range priced too fast re-creates the walkMaxTiles failure and flatlines
+  // rail, so tune this against /test/citizenbike's share bar, not upward.
+  bikeSpeed: 0.45,
+  bikeSaddleSec: 6,
   trainSpeed: 0.45, // the sim's 0.5, minus what dwells cost on the way
   roadDetour: 1.35,
   // What a person thinks the trip "should" take. Deliberately slower than any
@@ -430,6 +495,7 @@ export const DEFAULT_TUNING: CitizenTuning = {
   maxWaitSec: 45,
   maxTransfers: 6,
   carOwnership: 0.55,
+  bikeOwnership: 0.7,
   // Roughly a Swiss village: half of it holds an ordinary day job, an eighth
   // works a shift, an eighth has a trade that takes them out on the road, and
   // the remaining quarter is the school run and the retired — the two groups
@@ -491,10 +557,13 @@ export interface DrivingPort {
   // `park.searchTiles` bounds how far from the destination a space is still
   // worth having. It is deliberately much shorter going home than going to work
   // — see `HOME_PARK_TILES`.
+  // `kind` picks the vehicle: a cycling citizen is a BIKE on the road, the way
+  // a driving citizen is a car. Omitted = "car", so every older caller stands.
   request(
     fromTileId: string,
     toTileId: string,
     park?: { permit?: string; searchTiles?: number },
+    kind?: "car" | "bike",
   ): string | null;
   // Is that car still going? "parked" means the driving leg is over and the
   // vehicle is standing in a bay waiting for its owner.
@@ -534,6 +603,11 @@ export interface CitizenStats {
   // to see from OUTSIDE that a driving citizen became a vehicle rather than a
   // timer, since the renderer's car list does not exist in a headless run.
   driving: number;
+  // ...the same for people who are a BIKE on the road right now. Separate from
+  // `driving` because the two are the trade the whole phase is about: a mode
+  // shift the player causes has to be visible as one number falling and the
+  // other rising.
+  cycling: number;
   // ...and the same for people on an actual pavement.
   onFoot: number;
   // Citizens whose car is standing in a real bay right now, holding it against
@@ -603,6 +677,10 @@ function clamp01(v: number): number {
 
 function manhattan(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+function chebyshev(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
 
 // A small stable number from an id. Used wherever something must vary between
@@ -710,6 +788,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   const placeRng = makeRng(seed);
   const profileRng = makeRng((seed ^ 0x9e3779b9) >>> 0);
   const habitRng = makeRng((seed ^ 0x517cc1b7) >>> 0);
+  // The BIKE fields draw from their own stream, exactly why the streams are
+  // separate at all: adding two draws per profile to `profileRng` would shift
+  // every later citizen's patience, affinities and stage on every seeded
+  // board — a whole town reshaped by the existence of bicycles.
+  const bikeRng = makeRng((seed ^ 0x85ebca6b) >>> 0);
 
   const plotById = new Map<string, WorldPlot>();
   for (const p of world.plots) plotById.set(p.id, p);
@@ -724,6 +807,15 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   for (const s of world.parkAndRideStations) {
     if (!stationCoord.has(s.station)) stationCoord.set(s.station, parseCoordId(s.station));
     parkAndRideByStation.set(s.station, s);
+  }
+  // The bike-and-ride sibling: stations with a RACK in walking reach. Guarded
+  // with ?? [] so a hand-built CitizenWorld from before racks existed still
+  // loads — it simply has no bike-and-ride to offer.
+  const bikeAndRideStations = world.bikeAndRideStations ?? [];
+  const bikeAndRideByStation = new Map<string, ParkAndRideStation>();
+  for (const s of bikeAndRideStations) {
+    if (!stationCoord.has(s.station)) stationCoord.set(s.station, parseCoordId(s.station));
+    bikeAndRideByStation.set(s.station, s);
   }
 
   // --- state -------------------------------------------------------------------
@@ -754,11 +846,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       capacity: 0,
       jobs: { filled: 0, total: 0 },
       happiness: { commute: 0.5, errands: 0.5, access: 0.5, overall: 0.5 },
-      modeShare: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+      modeShare: zeroModes(),
       populationYesterday: 0,
       wantsRoom: false,
       ema: { commute: 0.5, errands: 0.5, access: 0.5 },
-      modeCounts: { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+      modeCounts: zeroModes(),
     });
   }
 
@@ -778,12 +870,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   let tripsCompleted = 0;
   let tripsRefused = 0;
   let tripsAbandoned = 0;
-  const modeTotals: Record<TravelMode, number> = {
-    walk: 0,
-    car: 0,
-    transit: 0,
-    parkAndRide: 0,
-  };
+  const modeTotals: Record<TravelMode, number> = zeroModes();
 
   // --- population --------------------------------------------------------------
 
@@ -814,12 +901,33 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         : stage === "child"
           ? false
           : roll < tuning.carOwnership * (stage === "retired" ? 0.6 : 1);
+    // The bike, by stage: a CHILD very likely has one (it is how children get
+    // about at all), a tradesperson does not haul tools on two wheels to a
+    // job, the retired keep one less often. Keenness is uniform — how far it
+    // gets ridden is `bikeAffinity`'s business, not ownership's. From the
+    // bike stream, so these two draws shift nobody else's profile.
+    const bikeRoll = bikeRng();
+    const bikeOwner =
+      stage === "tradesperson"
+        ? false
+        : bikeRoll <
+          tuning.bikeOwnership * (stage === "child" ? 1.25 : stage === "retired" ? 0.7 : 1);
     return {
       carOwner,
+      bikeOwner,
       walkPatience: stage === "retired" ? patience * 0.7 : patience,
       transitAffinity: transit,
       carAffinity: stage === "tradesperson" ? car * 0.6 : car,
+      bikeAffinity: bikeRng(),
     };
+  }
+
+  // The perceived-time multiplier a rider's keenness earns — mapped into the
+  // SAME 0.7–1.4 band the transit/car affinities are drawn from, so no mode's
+  // preferences can dominate by construction. Keen cyclists (affinity → 1)
+  // discount the saddle time; reluctant ones only ride when it clearly wins.
+  function bikeCostOf(c: Citizen): number {
+    return 1.4 - 0.7 * c.profile.bikeAffinity;
   }
 
   // Which life this resident gets. A weighted pick over `stageMix`, drawn from
@@ -984,9 +1092,22 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   // The nearest station you can drive to and leave the car at — "drive to"
   // meaning on the same road network as the plot, not merely near it.
   function nearestParkAndRide(p: WorldPlot): ParkAndRideStation | null {
+    return nearestRideFrom(world.parkAndRideStations, p);
+  }
+
+  // The nearest station with a RACK you can ride to — same road-network rule as
+  // the car's park-and-ride, because a bike rides the streets too.
+  function nearestBikeAndRide(p: WorldPlot): ParkAndRideStation | null {
+    return nearestRideFrom(bikeAndRideStations, p);
+  }
+
+  function nearestRideFrom(
+    stations: ParkAndRideStation[],
+    p: WorldPlot,
+  ): ParkAndRideStation | null {
     let best: ParkAndRideStation | null = null;
     let bestD = Infinity;
-    for (const s of world.parkAndRideStations) {
+    for (const s of stations) {
       if (s.roadComponent === null || s.roadComponent !== p.roadComponent) continue;
       const c = stationCoord.get(s.station);
       if (!c) continue;
@@ -1010,7 +1131,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
   // side is touched, and then it is worse than no panel, because it is
   // confidently wrong. What the player reads IS what the model compared.
   //
-  // The four modes are always considered in the same order, so a panel can
+  // The six modes are always considered in the same order, so a panel can
   // render them in a stable layout whatever the map does.
   function quoteModes(c: Citizen, fromId: string, toId: string): ModeQuote[] {
     const from = plotOf(fromId);
@@ -1071,6 +1192,23 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       refuse("car", "no-road-link");
     else offer("car", driveSec, driveSec * c.profile.carAffinity, null);
 
+    // BIKE. The missing middle: rides the ROAD network (same one-component rule
+    // and the same detour factor as the car — a bike does not fly), pays the
+    // same door-to-kerb access as every mode, and pays NO parking penalty —
+    // a bike locks at the door, which is half of why it wins the short hops.
+    // The gate is DISTANCE, and it is per-rider: `bikeRangeOf` turns their own
+    // keenness into how far they will ride at all — most people a few tiles,
+    // the sporty tail across the board. No slog curve past a patience point
+    // like the walk: the range IS the patience, already personal.
+    const bikeRange = bikeRangeOf(c.profile.bikeAffinity);
+    const bikeSec =
+      (d * tuning.roadDetour) / tuning.bikeSpeed + tuning.bikeSaddleSec + accessSec;
+    if (!c.profile.bikeOwner) refuse("bike", "no-bike");
+    else if (from.roadComponent === null || from.roadComponent !== to.roadComponent)
+      refuse("bike", "no-road-link");
+    else if (d > bikeRange) refuse("bike", "too-far");
+    else offer("bike", bikeSec, bikeSec * bikeCostOf(c), null);
+
     const board = transit ? nearestStation(from) : null;
     const alight = transit ? nearestStation(to) : null;
 
@@ -1129,6 +1267,50 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         station: pr.station,
         toStation: alight,
         approachSec: drive,
+        chosen: false,
+      });
+    }
+
+    // BIKE & RIDE. Ride to the station's rack, lock the bike, WALK to the
+    // platform, ride in — the park-and-ride template on two wheels. The ride to
+    // the rack is bounded by the rider's own range exactly like a plain bike
+    // trip; the rack→platform leg is a WALK and is priced as one (the rack is
+    // within the station's walking reach by construction —
+    // `bikeAndRideStationsOf` uses the WALK radius).
+    const br = transit && c.profile.bikeOwner ? nearestBikeAndRide(from) : null;
+    const brCoord = br ? stationCoord.get(br.station) : undefined;
+    if (!transit || !alight) refuse("bikeAndRide", "no-railway");
+    else if (!c.profile.bikeOwner) refuse("bikeAndRide", "no-bike");
+    else if (from.roadComponent === null || !br || !brCoord)
+      refuse("bikeAndRide", "no-rack");
+    // CHEBYSHEV, like every station-reach measure in this codebase (the walk
+    // catchment's square ring) — the range says "is that station's rack in my
+    // riding neighbourhood", not "how long is the ride" (the ride itself is
+    // priced below at its full detoured length).
+    else if (chebyshev(from, brCoord) > bikeRange) refuse("bikeAndRide", "too-far");
+    else if (br.station === alight) refuse("bikeAndRide", "same-station");
+    else if (!transit.connects(br.station, alight)) refuse("bikeAndRide", "no-service");
+    else {
+      const rideUp =
+        (manhattan(from, brCoord) * tuning.roadDetour) / tuning.bikeSpeed +
+        tuning.bikeSaddleSec +
+        accessSec;
+      // The walk from the stands to the platform: about a tile — the rack
+      // qualifies by being within the WALK radius, and the exact figure is
+      // measured live when the leg is walked (`advanceTrip`).
+      const rackWalk = 1 / tuning.walkSpeed;
+      const egress = walkToStation(to, alight) / tuning.walkSpeed;
+      const ride =
+        manhattan(brCoord, stationCoord.get(alight) as { x: number; y: number }) /
+        tuning.trainSpeed;
+      const sec = rideUp + rackWalk + tuning.assumedHeadwaySec + ride + egress;
+      out.push({
+        mode: "bikeAndRide",
+        estimateSec: sec,
+        cost: sec * ((c.profile.transitAffinity + bikeCostOf(c)) / 2),
+        station: br.station,
+        toStation: alight,
+        approachSec: rideUp,
         chosen: false,
       });
     }
@@ -1218,7 +1400,11 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       // make. Still a straight line, still nothing to do with the network: a bad
       // network cannot grade itself.
       expectedSec: Math.max(4, (dist + tuning.walkAccessTiles) / tuning.refSpeed),
-      leg: option.mode === "walk" ? "walking" : option.mode === "car" ? "driving" : option.mode === "parkAndRide" ? "driving" : "walking",
+      // Which leg the journey opens on: wheels roll out of the gate (a bike is
+      // a driving-shaped leg — it is a vehicle in traffic), everything else
+      // walks first. Exhaustive by TravelMode so a new mode cannot fall
+      // through to a wrong default.
+      leg: FIRST_LEG[option.mode],
       legRemaining: option.approachSec,
       station: option.station,
       toStation: option.toStation,
@@ -1236,12 +1422,19 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     // street blocked, the road at its cap) the leg stays on its clock, which is
     // exactly what it always was.
     const trip = c.trip;
-    if (driving && (trip.mode === "car" || trip.mode === "parkAndRide")) {
+    const wheeled =
+      trip.mode === "car" ||
+      trip.mode === "parkAndRide" ||
+      trip.mode === "bike" ||
+      trip.mode === "bikeAndRide";
+    if (driving && wheeled) {
       const origin = plotOf(fromId)?.roadTile ?? null;
       const target =
-        trip.mode === "car"
+        trip.mode === "car" || trip.mode === "bike"
           ? (plotOf(toId)?.roadTile ?? null)
-          : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
+          : trip.mode === "bikeAndRide"
+            ? (bikeAndRideByStation.get(option.station ?? "")?.roadTile ?? null)
+            : (parkAndRideByStation.get(option.station ?? "")?.roadTile ?? null);
       // THEIR OWN CAR IS ALREADY HERE. Somebody leaving work does not have a
       // second car materialise on the driveway — they walk to the one they left
       // outside this morning and drive it away. Same vehicle, same id, and the
@@ -1253,7 +1446,18 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
           : trip.mode === "car"
             ? {}
             : undefined;
-      if (mine && mine.at === fromId && target && driving.resume(mine.tripId, target, parkAtEnd)) {
+      // A BIKE MODE never resumes the parked CAR — different vehicle. (The
+      // bike itself is not held between journeys yet: like park & ride's car
+      // it is retired at the far end and the return leg quotes fresh. The
+      // "return half" is one debt for both modes.)
+      const bikeMode = trip.mode === "bike" || trip.mode === "bikeAndRide";
+      if (
+        !bikeMode &&
+        mine &&
+        mine.at === fromId &&
+        target &&
+        driving.resume(mine.tripId, target, parkAtEnd)
+      ) {
         trip.carTrip = mine.tripId;
         c.parkedCar = null;
       } else if (origin && target && origin !== target) {
@@ -1281,7 +1485,12 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
         //    a station, and a HELD bay there needs the return half too — you come
         //    back to a different platform and have to reach the car you left at
         //    the first one.
-        trip.carTrip = driving.request(origin, target, parkAtEnd);
+        //  · A BIKE: no. It locks at the door (no parking cost is half of why it
+        //    wins the short hops), and the bike-and-ride bike is retired at the
+        //    rack's street on the same terms as the P+R car — the rack stalls
+        //    themselves fill with the road sim's own riders until the return
+        //    half exists for both modes.
+        trip.carTrip = driving.request(origin, target, parkAtEnd, bikeMode ? "bike" : "car");
       }
     }
     // Departing from where the car is by any OTHER means still moves the car:
@@ -1534,11 +1743,30 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     return tiles / tuning.walkSpeed;
   }
 
-  // The driving leg is over. For a car trip that IS the journey; for park & ride
-  // the car has been left at the station and the platform is next.
+  // The driving leg is over. For a car or bike trip that IS the journey; for
+  // park & ride the car has been left at the station and the platform is next;
+  // for bike & ride the bike has been locked at the rack and the platform is a
+  // WALK away — an actual walk, not a teleport.
   function arriveFromDrive(c: Citizen, t: Trip): void {
-    if (t.mode === "car") {
+    if (t.mode === "car" || t.mode === "bike") {
       finishTrip(c, true);
+      return;
+    }
+    if (t.mode === "bikeAndRide") {
+      // Rack → platform, ON FOOT. A real figure on the pavement where one
+      // connects the rack's street to the station (`planWalk` takes a street
+      // tile as an endpoint), the clock as the usual backstop — and the walk's
+      // length is measured from where the rack actually is, not assumed.
+      const rackTile = bikeAndRideByStation.get(t.station ?? "")?.roadTile ?? null;
+      t.leg = "walking";
+      const dist =
+        rackTile && t.station
+          ? Math.max(0.5, manhattan(parseCoordId(rackTile), parseCoordId(t.station)))
+          : 1;
+      t.legRemaining = dist / tuning.walkSpeed;
+      if (walking && rackTile && t.station) {
+        t.walkTrip = walking.request(rackTile, t.station);
+      }
       return;
     }
     t.leg = "waiting";
@@ -1893,19 +2121,13 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
           0.5 * mood +
           0.5 * (city.ema.commute * 0.5 + city.ema.errands * 0.2 + city.ema.access * 0.3),
       };
-      const total =
-        city.modeCounts.walk +
-        city.modeCounts.car +
-        city.modeCounts.transit +
-        city.modeCounts.parkAndRide;
-      city.modeShare = total
-        ? {
-            walk: city.modeCounts.walk / total,
-            car: city.modeCounts.car / total,
-            transit: city.modeCounts.transit / total,
-            parkAndRide: city.modeCounts.parkAndRide / total,
-          }
-        : { walk: 0, car: 0, transit: 0, parkAndRide: 0 };
+      // Summed and shared by ITERATING the mode list — a hand-written sum is
+      // how a new mode silently under-reports (the bicycle spec's named risk).
+      const total = TRAVEL_MODES.reduce((n, m) => n + city.modeCounts[m], 0);
+      city.modeShare = zeroModes();
+      if (total) {
+        for (const m of TRAVEL_MODES) city.modeShare[m] = city.modeCounts[m] / total;
+      }
     }
   }
 
@@ -1936,6 +2158,7 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
     let travelling = 0;
     let population = 0;
     let drivingNow = 0;
+    let cyclingNow = 0;
     let walkingNow = 0;
     const byStage: Record<LifeStage, number> = {
       child: 0,
@@ -1950,15 +2173,21 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       population += 1;
       byStage[c.stage] += 1;
       if (c.trip) travelling += 1;
-      if (c.trip?.carTrip) drivingNow += 1;
+      // The same road-sim trip handle carries a car OR a bike; the MODE says
+      // which vehicle this citizen actually is out there.
+      if (c.trip?.carTrip) {
+        if (c.trip.mode === "bike" || c.trip.mode === "bikeAndRide") cyclingNow += 1;
+        else drivingNow += 1;
+      }
       if (c.trip?.walkTrip) walkingNow += 1;
       if (c.parkedCar) {
         parkedNow += 1;
         if (c.parkedCar.at === c.home) atHomeNow += 1;
       }
     }
-    const total =
-      modeTotals.walk + modeTotals.car + modeTotals.transit + modeTotals.parkAndRide;
+    const total = TRAVEL_MODES.reduce((n, m) => n + modeTotals[m], 0);
+    const share = zeroModes();
+    if (total) for (const m of TRAVEL_MODES) share[m] = modeTotals[m] / total;
     const hour = hourNow();
     const hh = Math.floor(hour);
     const mm = Math.floor((hour - hh) * 60);
@@ -1967,20 +2196,14 @@ export function createCitizenSim(config: CitizenSimConfig): CitizenSim {
       citizens: population,
       travelling,
       driving: drivingNow,
+      cycling: cyclingNow,
       onFoot: walkingNow,
       carsParked: parkedNow,
       carsAtHome: atHomeNow,
       tripsCompleted,
       tripsRefused,
       tripsAbandoned,
-      modeShare: total
-        ? {
-            walk: modeTotals.walk / total,
-            car: modeTotals.car / total,
-            transit: modeTotals.transit / total,
-            parkAndRide: modeTotals.parkAndRide / total,
-          }
-        : { walk: 0, car: 0, transit: 0, parkAndRide: 0 },
+      modeShare: share,
       byStage,
       day: dayIndex,
       hour,

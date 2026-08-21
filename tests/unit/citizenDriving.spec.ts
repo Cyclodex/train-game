@@ -94,7 +94,11 @@ describe("citizens drive real cars", () => {
       const brookfield = game.cities.find(c => c.name === "Brookfield");
       if (brookfield) worstAccess = Math.min(worstAccess, brookfield.happiness.access);
     });
-    expect(game.citizenStats.tripsRefused).toBeGreaterThan(50);
+    // Since phase C′ a BIKE also rides these roads, so some of the carless are
+    // no longer stranded at all — refusals came down from the pre-bike ~55 to
+    // the high 40s. The lesson stands: whoever has neither vehicle is still
+    // refused outright, in numbers no healthy town would show.
+    expect(game.citizenStats.tripsRefused).toBeGreaterThan(35);
     expect(worstAccess).toBeLessThan(0.7);
   });
 });

@@ -114,7 +114,7 @@ describe("parking geometry — a bay is where the car in it stands", () => {
     // whole street — which is why "centre" is opt-in, for a lone lay-by.
     const packed: ParkingRow = { from: Position.Left, kind: "parallel", count: 2 };
     const centred: ParkingRow = { ...packed, align: "centre" };
-    const pitch = 0.3 * 200;
+    const pitch = 200 / 3;
     // First bay's centre sits half a pitch in from the edge it starts at.
     expect(stallPose(packed, 0, 200, 28).x).toBeCloseTo(pitch / 2);
     // Centred, the pair straddles the middle of the tile instead.
@@ -374,7 +374,7 @@ describe("a 90 deg bay needs an aisle to turn in", () => {
     // A row that does NOT pack is a pocket and keeps its own extent: paving a
     // whole tile for one centred bay would read as a mistake, not as a car park.
     const lone: ParkingRow = { from: Position.Left, kind: "parallel", count: 1, align: "centre" };
-    expect(apronSpan(lone, 200)).toEqual({ from: 70, to: 130 });
+    expect(apronSpan(lone, 200)).toEqual({ from: 200 / 3, to: 200 - 200 / 3 });
     // Nor is a packed rank that simply does not REACH the far seam stretched to
     // it: six 90° bays are 168px of a 200px tile, and 32px of bare tarmac past
     // the last one would read as a rank someone gave up on. "Within half a pitch"
@@ -541,7 +541,7 @@ describe("a lay-by opens out of the kerb, and is entered along its own opening",
       layByTaperPx(bay, 200) - 0.5,
     );
     // An ordinary rank still packs, so consecutive tiles line up.
-    expect(stallPose(rank, 0, 200, 28).x).toBeCloseTo(30);
+    expect(stallPose(rank, 0, 200, 28).x).toBeCloseTo(200 / 6);
   });
 
   it("makes the entry SHALLOWER, not just longer", async () => {

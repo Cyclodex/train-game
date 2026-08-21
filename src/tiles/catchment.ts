@@ -17,6 +17,40 @@ import { parseCoordId } from "@/tiles/model";
 // ring, matching how neighbourhoods read on a grid).
 export const WALK_RADIUS_TILES = 2;
 
+// How far people CYCLE — deliberately NOT one number, and deliberately not this
+// walk radius scaled up. Riding range differs by rider the way walking range
+// does not: most people take the bike for short hops (a few tiles, the
+// errand-and-station distance), while a sporty minority happily rides across
+// the board. So cycling reach is a RANGE, not a constant:
+//   • `typical` — the distance most riders accept; the centre of the
+//     distribution a citizen's own range is drawn from (phase C′ draws it from
+//     the rider's `bikeAffinity`, so keen cyclists sit toward `max`).
+//   • `max`     — the sporty ceiling, and the honest answer to "could ANY
+//     cyclist reach this?": bike-and-ride targeting and reachability tests use
+//     it, per-rider willingness then prices the actual trip.
+// Raising the shared WALK_RADIUS_TILES instead would inflate every station's
+// demand schedule (it also feeds catchment + P+R) — cycling gets its own
+// numbers precisely so it cannot.
+export const BIKE_RANGE_TILES = { typical: 5, max: 9 } as const;
+
+// A rider's own cycling range, from how keen they are (0..1 — phase C′ feeds
+// the citizen's `bikeAffinity` in). Linear between typical and max ABOVE the
+// midpoint and down toward the walkable scale below it: a reluctant cyclist
+// only takes the bike where walking almost reaches anyway.
+export function bikeRangeOf(affinity: number): number {
+  const a = Math.max(0, Math.min(1, affinity));
+  if (a >= 0.5) {
+    return (
+      BIKE_RANGE_TILES.typical +
+      (BIKE_RANGE_TILES.max - BIKE_RANGE_TILES.typical) * ((a - 0.5) / 0.5)
+    );
+  }
+  return (
+    WALK_RADIUS_TILES +
+    (BIKE_RANGE_TILES.typical - WALK_RADIUS_TILES) * (a / 0.5)
+  );
+}
+
 // What the ground within walking reach contains.
 export interface StationCatchment {
   urban: number; // town tiles in reach — the passenger driver

@@ -287,29 +287,73 @@ export function sideAcross(
  * whose destination is across the road from the nearest crossing really does
  * walk down to it and back, and that detour is paid for in their journey time.
  */
+// The street tile a walk to/from `id` joins the pavement at: an address's own
+// driveway (`accessTileOf`), a street tile itself, or — for a station or any
+// other non-address — the nearest street beside it, sides before diagonals.
+function walkEndpointOf(level: Level, id: string): string | null {
+  const viaAddress = accessTileOf(level, id);
+  if (viaAddress) return viaAddress;
+  const cell = level[id];
+  if (hasFootway(cell)) return id;
+  const { x, y } = parseCoordId(id);
+  for (const [dx, dy] of [
+    [0, -1],
+    [1, 0],
+    [0, 1],
+    [-1, 0],
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ]) {
+    const nid = `${x + dx},${y + dy}`;
+    if (level[nid]?.road?.length) return nid;
+  }
+  return null;
+}
+
 export function planWalk(
   level: Level,
   fromPlot: string,
   toPlot: string
 ): { tiles: string[]; sides: (1 | -1)[] } | null {
   if (fromPlot === toPlot) return null;
-  const start = accessTileOf(level, fromPlot);
-  const goal = accessTileOf(level, toPlot);
+  // An endpoint is normally an ADDRESS (a plot) resolved to the street that
+  // serves it — but two more shapes are legal ends of a walk:
+  //  · a STREET TILE with a pavement, in its own right: someone can start at
+  //    the kerb they just dismounted at (the bike rack's tile is the case
+  //    that needs it — the walk begins on that tile's own pavement, no stub);
+  //  · a STATION (rail on the tile, so never an address): its door is the
+  //    nearest street beside it, the same sides-then-diagonals rule as a
+  //    plot's driveway. Before this, every "walk to the platform" silently
+  //    fell back to a clock because the platform resolved to nothing.
+  const start = walkEndpointOf(level, fromPlot);
+  const goal = walkEndpointOf(level, toPlot);
   if (!start || !goal) return null;
   if (!hasFootway(level[start]) || !hasFootway(level[goal])) return null;
 
   // Which pavement each end is on: the side of the street the plot stands on.
-  const startSide = sideOfPlot(level, fromPlot, start);
-  const goalSide = sideOfPlot(level, toPlot, goal);
-  if (startSide === null || goalSide === null) return null;
+  // A STREET-TILE endpoint has no plot to stand on a side — someone at the
+  // kerb can start (or finish) on EITHER pavement, so both are seeded/accepted
+  // and the BFS simply finds whichever reads shortest. Changing sides is still
+  // only legal at a crossing (`walkMoves`), exactly as for everybody else.
+  const startSides: (1 | -1)[] =
+    start === fromPlot ? [1, -1] : ([sideOfPlot(level, fromPlot, start)] as (1 | -1)[]);
+  const goalSides: (1 | -1)[] =
+    goal === toPlot ? [1, -1] : ([sideOfPlot(level, toPlot, goal)] as (1 | -1)[]);
+  if (startSides.some(s => s === null) || goalSides.some(s => s === null)) return null;
 
-  const from: WalkNode = { tileId: start, side: startSide };
-  const goalKey = walkNodeKey({ tileId: goal, side: goalSide });
-  if (walkNodeKey(from) === goalKey) return { tiles: [start], sides: [startSide] };
+  const sources = startSides.map(side => ({ tileId: start, side }) as WalkNode);
+  const goalKeys = new Set(goalSides.map(side => walkNodeKey({ tileId: goal, side })));
+  for (const from of sources) {
+    if (goalKeys.has(walkNodeKey(from))) return { tiles: [start], sides: [from.side] };
+  }
 
-  const prev = new Map<string, WalkNode | null>([[walkNodeKey(from), null]]);
-  const node = new Map<string, WalkNode>([[walkNodeKey(from), from]]);
-  const queue: WalkNode[] = [from];
+  const prev = new Map<string, WalkNode | null>(
+    sources.map(from => [walkNodeKey(from), null]),
+  );
+  const node = new Map<string, WalkNode>(sources.map(from => [walkNodeKey(from), from]));
+  const queue: WalkNode[] = [...sources];
 
   while (queue.length) {
     const cur = queue.shift() as WalkNode;
@@ -318,7 +362,7 @@ export function planWalk(
       if (prev.has(key)) continue;
       prev.set(key, cur);
       node.set(key, next);
-      if (key === goalKey) {
+      if (goalKeys.has(key)) {
         const tiles: string[] = [];
         const sides: (1 | -1)[] = [];
         for (let at: string | undefined = key; at; ) {

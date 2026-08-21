@@ -255,12 +255,21 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     and `LaneKind "cycle"` + bikes-in-bus-lanes via the `laneUsableBy` access
     matrix — the player's remedy for that queue; editor lane tool cycles
     normal → bus → cycle; scenarios `bikemix`/`bikeovertake`/`cyclelane`.
-    Remaining: (C) bike racks (`StallKind "bikerack"`, the busstop precedent
-    mirrored) + bike-and-ride at stations; (C′) `TravelMode
-    "bike"`/`"bikeAndRide"` in `quoteModes` — the citizens spec's reserved
-    "phase C"; (D) shared foot/bike paths, queued behind the standalone-footpath
-    axis. Files remaining: `src/tiles/parking.ts`, `src/sim/citizens.ts`;
-    scenarios `bikerack`/`bikeandride`/`citizenbike`.
+    **Phase C SHIPPED 2026-08-20**: `StallKind "bikerack"` (walk-in, no
+    manoeuvre — the busstop mirrored off-lane) + `BayClass "bike"` closing the
+    class matrix both ways, the P+R/bike-and-ride split by bay class
+    (`bikeAndRideStationsOf`), the racked-bike→platform transfer, and cycling
+    reach as a per-rider range (`BIKE_RANGE_TILES`/`bikeRangeOf` — casual
+    majority short, sporty tail far); scenarios `bikerack`/`bikeandride`.
+    **Phase C′ SHIPPED 2026-08-21**: `TravelMode "bike"`/`"bikeAndRide"` —
+    ownership gates, affinity shapes cost and per-rider range
+    (`bikeRangeOf(bikeAffinity)`), `bikeSaddleSec` keeps the bike off the
+    one-tile hop, a cycling citizen is a real bike on the road, and the
+    rack→platform leg is walked by a real figure (stations and street tiles
+    became legal walk endpoints); scenario `citizenbike`. Remaining: (D)
+    shared foot/bike paths, queued behind the standalone-footpath axis, and
+    the held-stall "return half" shared with P+R (the commuter's bike keeping
+    its rack stand all day).
 
 ## Architecture / code health
 
