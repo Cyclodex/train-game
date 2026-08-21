@@ -4037,8 +4037,12 @@ export function createGame(
       clearLineOverlay();
       for (const def of trainDefs) syncLine(def.id);
       syncLines();
-      // The town starts over too: same seed, same people, same jobs.
+      // The town starts over too: same seed, same people, same jobs. The bus
+      // calls of the tick before the reset go with it — the citizen feed reads
+      // `busEvents` one tick late (see advance()), and the first tick of the
+      // new world must not mirror the old world's last exchange.
       rebuildCitizens();
+      busEvents.length = 0;
       prevStalls = new Set();
       roadCars.splice(0, roadCars.length);
       roadFrame.maxCarWaitSec = 0;
