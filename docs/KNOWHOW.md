@@ -114,24 +114,55 @@ lean — prune as much as you add. This file only stays useful if every task ten
   `--unit-angle` custom property `game.ts` publishes next to the transform. Without
   it a westbound train (~180°) renders its id mirrored and upside down.
 
-## GAME FEEL — SOUND + FEEDBACK FX (2026-08-21)
-- Sound is synthesised Web Audio, no assets: `audio/cues.ts` (PURE event→cue
-  mapping + `rollingGain`, unit-tested) and `audio/engine.ts` (the singleton
-  `gameAudio`). World cues fire from `game.ts:handleEvents` (delivery/bounce off
-  `cuesForEvents`, "cash" pushed only when the settled fare > 0); click cues fire
-  at the click site (`game.cycleSignal`/`toggleHold` → "signal", `Tile.pickArm` →
-  "switch", only when the arm actually changes).
+## GAME FEEL — SOUND + FEEDBACK FX (2026-08-21, samples 2026-08-22)
+- Four files: `audio/cues.ts` (PURE, unit-tested: event→cue mapping,
+  `rollingGain`, `takeClacks`), `audio/samples.ts` (the CC0 manifest),
+  `audio/synth.ts` (fallback gestures + the ambience), `audio/engine.ts` (the
+  singleton `gameAudio`). World cues fire from `game.ts:handleEvents`
+  (delivery/bounce off `cuesForEvents`, "cash" only when the settled fare > 0);
+  click cues fire at the click site (`game.cycleSignal`/`toggleHold` → "signal",
+  `Tile.pickArm` → "switch", only when the arm actually changes).
+- DISCRETE CUES ARE CC0 SAMPLES, ambience is SYNTHESISED — the split is
+  deliberate, see below. Samples are Kenney CC0 in `src/audio/samples/`,
+  imported with `?url` (Vite fingerprints + base-path-rewrites them, so the
+  GitHub Pages preview prefix just works). **Provenance lives in
+  `docs/ASSETS.md`; the repo files are renamed to their ROLE, so that document
+  is the only chain of custody — update it in the same commit.** Project rule
+  recorded there: CC0 only (CC-BY-SA/NC rejected, to keep a commercial release
+  open).
+- A MISSING SAMPLE IS NOT SILENCE: buffers decode asynchronously after unlock,
+  so `play()` falls back to `synthCue` until one lands (and for good if its
+  fetch failed). Discriminator when probing: a sample cue creates 1
+  BufferSource + 0 Oscillators; every synth gesture creates ≥1 Oscillator.
+- PICK SOUNDS BY MEASUREMENT, not by filename. Decode candidates through the
+  same Web Audio path the game uses and compare duration/attack/band
+  energies/pitch movement (`docs/ASSETS.md` → how these were chosen). The one
+  worth remembering: a delivery chime must RISE (the pick goes 196→393Hz, an
+  octave) — flat reads as an acknowledgement, falling as an error. Kenney's
+  `switchNN` files all have a 90–170ms wind-up (plastic rocker); a points lever
+  needs a ~1.6ms attack, which is why the switch cue is an `impactMetal` file.
 - The engine is a NO-OP headless (`typeof window` guard), so `advance()`-driven
   tests never touch it; browsers refuse pre-gesture audio, so the AudioContext is
   created on the first pointerdown/keydown (listeners NOT `{once:true}` — iOS can
-  re-suspend a context and resuming takes another gesture). Mute is
-  `gameConfig.soundMuted` (persisted via `setSoundMuted`), read live per call.
-- The ambient rolling bed is a looped-noise gain ramped per FRAME from the count
-  of moving trains (`sim.trainVelocity`), forced to 0 while paused and in
-  `game.stop()` — real-time work lives in `frame()`, never in `advance()`.
-  TUNE IT FOR LAPTOP SPEAKERS: lowpassed noise at 180Hz/gain 0.02 is inaudible
-  on small speakers — the bed sits at 320Hz cutoff, gain 0.055–0.14, with a
-  2.8Hz LFO on the FILTER frequency (never the gain: a gain LFO hums at rest).
+  re-suspend a context and resuming takes another gesture) and that is also when
+  the samples start loading. Mute is `gameConfig.soundMuted` (persisted via
+  `setSoundMuted`), read live per call.
+- THE AMBIENCE IS SYNTHESISED ON PURPOSE, not for want of a recording: a loop
+  plays at its recorded tempo and drifts against the trains on screen, which the
+  1x/2x/4x dial makes obvious. Driving it from `sim.trainVelocity` (tiles/sec)
+  locks sound to picture at every speed. Two parts, both per FRAME (real-time
+  work lives in `frame()`, never in `advance()`), forced silent while paused and
+  in `game.stop()`:
+  - the bed: looped-noise gain ramped from the count of moving trains. TUNE IT
+    FOR LAPTOP SPEAKERS: lowpassed noise at 180Hz/gain 0.02 is inaudible on
+    small speakers — it sits at 320Hz cutoff, gain 0.055–0.14, with a 2.8Hz LFO
+    on the FILTER frequency (never the gain: a gain LFO hums at rest).
+  - the rail joints: `takeClacks` converts DISTANCE TRAVELLED (Σ v·scaledDt) into
+    knocks, one per `CLACK_SPACING_TILES` (0.25 → two a second at the 0.5
+    tiles/sec `DEFAULT_SPEED`), carrying the remainder so the rhythm cannot
+    drift. Each is a DOUBLE knock (a bogie has two axles) whose gap shortens
+    with speed. Capped at `MAX_CLACKS_PER_FRAME` and the backlog DISCARDED, or a
+    backgrounded tab's huge dt returns as a machine-gun burst.
 - Feedback FX are model data: `game.fx` (`FeedbackFx[]`) appended in
   `handleEvents` (delivery pulse / bounce squash / cash chip with the banked
   amount), pruned in `frame()` by WALL-CLOCK age (`FX_TTL_MS` — CSS animations

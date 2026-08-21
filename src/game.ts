@@ -3557,16 +3557,32 @@ export function createGame(
     updateReservations();
     updateStationQueues();
     updateTrainStatus();
-    // The ambient rolling bed follows how many trains are moving right now
-    // (silent while paused — a frozen board must not hum). Real-time work, so
-    // it lives in the frame, not in advance(): headless runs make no sound.
+    // The rolling ambience: the bed's level follows how many trains are moving,
+    // and the rail-joint knocks follow how far they actually travelled this
+    // frame — so the clackety-clack keeps time with the trains on screen at 1x,
+    // 2x and 4x alike. Silent while paused (a frozen board must not hum).
+    //
+    // Real-time work, so it lives in the frame and not in advance(): a headless
+    // run makes no sound, and the audio must not become something `advance()`
+    // callers have to think about.
     let moving = 0;
+    let travelled = 0;
+    let fastest = 0;
     if (!paused.value) {
+      // The SAME scaled dt the world was just advanced by, so distance here is
+      // the distance the sim actually moved (and a Ready screen, which advances
+      // by 0, produces no knocks).
+      const waitingToStart = mode.hud.startOverlay && objective.phase === "ready";
+      const scaled = waitingToStart ? 0 : dt * speed.value;
       for (const id of Object.keys(sim.trains)) {
-        if (sim.trainVelocity(id) > 0.01) moving += 1;
+        const v = sim.trainVelocity(id);
+        if (v <= 0.01) continue;
+        moving += 1;
+        travelled += v * scaled;
+        if (v > fastest) fastest = v;
       }
     }
-    gameAudio.setMovingTrains(moving);
+    gameAudio.setTrainMotion(moving, travelled, fastest);
     // Collect finished feedback effects. Wall-clock age, not sim time: the CSS
     // animations these drive run in real time whatever the speed dial says.
     if (fx.length) {
@@ -4057,7 +4073,7 @@ export function createGame(
       raf = 0;
       // The frame that fed the rolling loop is gone; silence it rather than
       // leaving the last volume humming under whatever view comes next.
-      gameAudio.setMovingTrains(0);
+      gameAudio.setTrainMotion(0, 0, 0);
     },
     advance,
     startObjective() {

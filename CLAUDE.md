@@ -264,10 +264,15 @@ Key files:
   optional `fits(caps)` names the missing requirement — the picker disables
   unfit cards and PlayView's URL guard falls back rather than loading a game
   that can never engage. Boards stay multi-mode; nothing pins a board to one.
-- `src/audio/` — the synthesised sound layer (no assets): `cues.ts` is the pure
-  event→cue mapping + ambient `rollingGain` (unit-tested), `engine.ts` the Web
-  Audio singleton `gameAudio` (unlocked on first pointer/key gesture, headless
-  no-op, muted live via `gameConfig.soundMuted`). World cues fire from
+- `src/audio/` — the sound layer. `cues.ts` is the pure, unit-tested core (event→
+  cue mapping, `rollingGain`, `takeClacks`); `samples.ts` the CC0 sample manifest
+  (bundled Kenney files in `samples/`, **provenance in `docs/ASSETS.md` — CC0
+  only, keep it updated in the same commit**); `synth.ts` the fallback gestures
+  plus the synthesised ambience; `engine.ts` the Web Audio singleton `gameAudio`
+  (unlocked on first pointer/key gesture, headless no-op, muted live via
+  `gameConfig.soundMuted`, synth fallback until a sample decodes). Discrete cues
+  are samples; the rolling bed and its rail-joint clacks are synthesised so they
+  track `sim.trainVelocity` at any speed setting. World cues fire from
   `game.ts:handleEvents`; click cues at the click site. Feedback FX (delivery
   pulse / bounce squash / flying fare) are `game.fx`, drawn by
   `components/FxLayer.vue` on both boards — `/test/gamefeel` demos the lot.

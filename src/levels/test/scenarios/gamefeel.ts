@@ -15,6 +15,11 @@ import { TestScenario, mkTrain } from "@/levels/test/scenario";
 // it (junction switches clack the same way on any junction board). Sounds are
 // gated behind the first click anyway (browser autoplay policy), so the pin
 // click that dispatches a train is also what unlocks the audio.
+//
+// LISTEN PAST THE CUES TOO: while a train rolls there is a low bed under it and
+// a rail-joint clackety-clack, both driven by the train's own speed — put the
+// stage on 2x and the rhythm doubles with it, because it is distance travelled
+// that clocks it, not a loop (src/audio/synth.ts).
 export const gamefeel: TestScenario = {
   id: "gamefeel",
   name: "Game feel: chime, thud & cash",

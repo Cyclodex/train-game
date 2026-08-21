@@ -1,9 +1,10 @@
 import { SimEvent } from "@/sim/simulation";
 
-// The game's sound vocabulary. Every cue is a short synthesised gesture (see
-// engine.ts); nothing here loads assets. The names are the contract between the
-// event stream and the synth — the mapping below and the click handlers in the
-// views speak in these.
+// The game's sound vocabulary. Each cue is played from a small bundled CC0
+// sample (see samples.ts), falling back to a synthesised gesture (synth.ts)
+// when a sample has not loaded. The names are the contract between the event
+// stream and the engine — the mapping below and the click handlers in the
+// views speak in these, and neither has to know which backend made the noise.
 export type SoundCue =
   // A train parked on a colour match — the win chime.
   | "delivery"
@@ -42,4 +43,42 @@ export const ROLLING_CAP = 0.14;
 export function rollingGain(movingTrains: number): number {
   if (movingTrains <= 0) return 0;
   return Math.min(ROLLING_CAP, ROLLING_BASE + ROLLING_STEP * (movingTrains - 1));
+}
+
+// --- rail joints: the clackety-clack ----------------------------------------
+//
+// The iconic train sound is not a rumble, it is the double-knock of a bogie
+// crossing a rail joint — and its RATE is the train's speed. That is why this
+// is synthesised from the simulation's own `trainVelocity` (tiles/sec) rather
+// than looped from a recording: a sample loop plays at whatever tempo it was
+// recorded at, so it drifts against the train the player is watching, and the
+// speed dial (1x/2x/4x) makes the mismatch obvious. Driving it from distance
+// travelled keeps picture and sound locked together for free.
+//
+// One joint every quarter tile: at the 0.5 tiles/sec cruise speed
+// (DEFAULT_SPEED) that is two knocks a second — a train rolling at an easy
+// pace, and it speeds up exactly when the train does.
+export const CLACK_SPACING_TILES = 0.25;
+
+// Never fire more than this many in one frame. A backgrounded tab hands back a
+// huge dt on return, which would otherwise arrive as a burst of dozens of
+// clacks at once — a machine-gun, not a train.
+export const MAX_CLACKS_PER_FRAME = 2;
+
+// How many rail joints the fleet has just rolled over, given the distance
+// accumulated since the last frame. Returns the clacks to play now and the
+// remainder to carry forward, so no fraction of a joint is ever lost or
+// double-counted. Pure, so the rhythm is testable without an AudioContext.
+export function takeClacks(accumTiles: number): {
+  clacks: number;
+  rest: number;
+} {
+  if (!(accumTiles > 0)) return { clacks: 0, rest: Math.max(0, accumTiles || 0) };
+  const due = Math.floor(accumTiles / CLACK_SPACING_TILES);
+  if (due <= 0) return { clacks: 0, rest: accumTiles };
+  const clacks = Math.min(due, MAX_CLACKS_PER_FRAME);
+  // Everything beyond the cap is DISCARDED, not banked: those joints are in the
+  // past, and carrying them forward would pay the burst back over the following
+  // frames instead of dropping it.
+  return { clacks, rest: accumTiles - due * CLACK_SPACING_TILES };
 }
