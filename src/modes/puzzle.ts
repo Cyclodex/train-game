@@ -102,6 +102,13 @@ export const puzzleMode: GameMode = {
       0
     );
     const starTime = starTimeFor(trainCount) + lastSpawn;
+    // The cap can never sit BELOW the board's own starting backlog. The tracker
+    // seeds `active` from initialActiveTrains and fails on the first observe()
+    // when it exceeds the cap — so a board with 5 unscheduled trains plus one
+    // scheduled arrival would be lost at t=0, before the player touched
+    // anything. Since #113 this ruleset is reached implicitly (any roster with
+    // a spawnAtSec), not by choosing a mode, so the board author never opted in.
+    const overflowCap = Math.max(MAX_ACTIVE_TRAINS, initialActive + 1);
     return {
       levelId: ctx.levelId,
       level: ctx.level,
@@ -109,7 +116,7 @@ export const puzzleMode: GameMode = {
       objective: {
         deliveriesRequired: trainCount,
         initialActiveTrains: initialActive,
-        fail: { maxActiveTrains: MAX_ACTIVE_TRAINS },
+        fail: { maxActiveTrains: overflowCap },
         // "Free flowing": keep the peak backlog at or below half the cap.
         stars: rushStars(
           starTime,

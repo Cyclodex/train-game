@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { puzzleMode } from "@/modes/puzzle";
+import { puzzleMode, MAX_ACTIVE_TRAINS } from "@/modes/puzzle";
+import { createObjectiveTracker, emptyObservation } from "@/sim/objectives";
 import { straight } from "@/levels/test/scenarios/straight";
 
 function ctx() {
@@ -130,5 +131,41 @@ describe("puzzle mode on a scheduled board (Rush variant)", () => {
     };
     expect(speedrun.predicate(base)).toBe(true);
     expect(speedrun.predicate({ ...base, elapsedSec: 31 })).toBe(false);
+  });
+
+  it("a board with more init trains than the cap does not lose at t=0", () => {
+    // The latent instant-loss: the tracker seeds `active` from
+    // initialActiveTrains and fails on the FIRST observe() once it exceeds
+    // fail.maxActiveTrains. With a fixed cap of MAX_ACTIVE_TRAINS (4), a board
+    // carrying 5 unscheduled trains plus a single scheduled arrival was lost
+    // before the player touched anything — and since #113 this ruleset is
+    // reached IMPLICITLY (any roster with a spawnAtSec), so no author opted in.
+    const trains = [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `init${i}`,
+        x: 0,
+        y: i,
+        type: "people" as const,
+        wagonIds: [],
+      })),
+      { id: "late", x: 1, y: 0, type: "people" as const, wagonIds: [], spawnAtSec: 5 },
+    ];
+    const setup = puzzleMode.setup({ level: straight.level, trains, levelId: "crowded" });
+    expect(setup.objective.initialActiveTrains).toBe(5);
+    // The cap always leaves room for the board's own starting backlog.
+    expect(setup.objective.fail!.maxActiveTrains!).toBeGreaterThan(5);
+
+    const tracker = createObjectiveTracker(setup.objective);
+    tracker.start();
+    expect(tracker.state().phase).toBe("playing");
+    tracker.observe(emptyObservation, 0.1);
+    expect(tracker.state().phase).toBe("playing");
+    expect(tracker.state().lostReason).toBeUndefined();
+  });
+
+  it("keeps the cap at MAX_ACTIVE_TRAINS on a board that fits under it", () => {
+    // The common case is unchanged: 1 init train, cap 4.
+    const setup = puzzleMode.setup(scheduledCtx());
+    expect(setup.objective.fail?.maxActiveTrains).toBe(MAX_ACTIVE_TRAINS);
   });
 });
