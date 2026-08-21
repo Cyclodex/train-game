@@ -124,6 +124,19 @@ export interface Economy {
   // purchase did not happen" — it is the same answer as a failed edit.
   spend(amount: number, reason: LedgerReason, label?: string): LedgerEntry | null;
   reset(): void;
+  // Save/load: the ledger's whole moving state (the spec is construction-time
+  // data). `seq` travels so entries booked after a restore keep a stable order.
+  snapshot(): EconomySnapshot;
+  restore(snap: EconomySnapshot): void;
+}
+
+export interface EconomySnapshot {
+  balance: number;
+  earned: number;
+  spent: number;
+  clock: number;
+  seq: number;
+  entries: LedgerEntry[];
 }
 
 export function createEconomy(spec: EconomySpec = {}): Economy {
@@ -188,6 +201,24 @@ export function createEconomy(spec: EconomySpec = {}): Economy {
       seq = 0;
       clock = 0;
       entries = [];
+    },
+    snapshot() {
+      return {
+        balance,
+        earned,
+        spent,
+        clock,
+        seq,
+        entries: entries.map(e => ({ ...e })),
+      };
+    },
+    restore(snap: EconomySnapshot) {
+      balance = snap.balance;
+      earned = snap.earned;
+      spent = snap.spent;
+      clock = snap.clock;
+      seq = snap.seq;
+      entries = snap.entries.map(e => ({ ...e }));
     },
   };
 }
@@ -288,6 +319,15 @@ export interface FareBook {
   settle(trainId: string): number;
   // Back to age 0, nothing settled — for a true do-over (game.reset()).
   reset(): void;
+  // Save/load: ages + the settled set. The fare SPECS are construction-time
+  // data (the mode's setup rebuilds them), so they do not travel.
+  snapshot(): FareBookSnapshot;
+  restore(snap: FareBookSnapshot): void;
+}
+
+export interface FareBookSnapshot {
+  ages: Record<string, number>;
+  settled: string[];
 }
 
 export function createFareBook(specs: Record<string, FareSpec> = {}): FareBook {
@@ -333,6 +373,18 @@ export function createFareBook(specs: Record<string, FareSpec> = {}): FareBook {
     reset() {
       settled.clear();
       for (const id of fares.keys()) ages.set(id, 0);
+    },
+    snapshot() {
+      return {
+        ages: Object.fromEntries(ages),
+        settled: [...settled].sort(),
+      };
+    },
+    restore(snap: FareBookSnapshot) {
+      ages.clear();
+      for (const [id, age] of Object.entries(snap.ages)) ages.set(id, age);
+      settled.clear();
+      for (const id of snap.settled) settled.add(id);
     },
   };
 }

@@ -216,6 +216,24 @@ export interface TransitLayer {
   // The unassigned vehicles, as services over what they can reach. Set by each
   // sim; the graph asks for them whenever it rebuilds.
   setStoppers(source: string, stoppers: () => StopperService[]): void;
+
+  // --- save / load ----------------------------------------------------------
+  // Everything a save must carry to resume exactly: the line registry (with
+  // its id sequence, so future lines cannot collide), who is waiting where,
+  // the spawn clocks and destination cursors, and the delivered total. Plain
+  // JSON data. `restore` mutates IN PLACE — game.ts shares one transit object
+  // between the rail and road sims, so the identity must survive.
+  snapshot(): TransitSnapshot;
+  restore(snap: TransitSnapshot): void;
+}
+
+export interface TransitSnapshot {
+  lines: SimLine[]; // in creation order, `pinned` included
+  lineSeq: number;
+  queues: Record<string, Waiting[]>;
+  spawnClocks: Record<string, number>;
+  destCursors: Record<string, number>;
+  delivered: number;
 }
 
 export interface TransitConfig {
@@ -612,6 +630,49 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     },
     setStoppers(source: string, stoppers: () => StopperService[]) {
       stopperSources.set(source, stoppers);
+      touch();
+    },
+    snapshot(): TransitSnapshot {
+      return {
+        lines: lineOrder
+          .map(id => lines[id])
+          .filter(Boolean)
+          .map(l => ({ ...l, stops: [...l.stops] })),
+        lineSeq,
+        queues: Object.fromEntries(
+          [...queues].map(([id, q]) => [id, q.map(w => ({ ...w }))])
+        ),
+        spawnClocks: Object.fromEntries(spawnClocks),
+        destCursors: Object.fromEntries(destCursors),
+        delivered: deliveredTotal,
+      };
+    },
+    restore(snap: TransitSnapshot) {
+      for (const id of Object.keys(lines)) delete lines[id];
+      lineOrder.length = 0;
+      for (const l of snap.lines) {
+        lines[l.id] = { ...l, stops: [...l.stops] };
+        lineOrder.push(l.id);
+      }
+      lineSeq = snap.lineSeq;
+      queues.clear();
+      for (const [id, q] of Object.entries(snap.queues)) {
+        queues.set(id, q.map(w => ({ ...w })));
+      }
+      spawnClocks.clear();
+      for (const [id, c] of Object.entries(snap.spawnClocks)) {
+        spawnClocks.set(id, c);
+      }
+      destCursors.clear();
+      for (const [id, c] of Object.entries(snap.destCursors)) {
+        destCursors.set(id, c);
+      }
+      deliveredTotal = snap.delivered;
+      // The fare buffer is deliberately NOT part of a snapshot: it holds at
+      // most one tick's uncollected journeys, and billing the restored world
+      // for arrivals the abandoned one made would be wrong money. Dropped, so
+      // a restore never carries a stranger's fares.
+      journeys = [];
       touch();
     },
   };

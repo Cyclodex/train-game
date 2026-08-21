@@ -2413,6 +2413,45 @@ Four rules, each measured on that board, each of which failed silently:
 - `createGame` takes the VIEW's colours and ignores the ones `setup()` returns,
   so a scenario whose mode pins colours must repeat them in `scenario.colors`.
 
+## SAVE / LOAD — Spielstand (2026-08-21)
+- Spec: `docs/superpowers/specs/2026-08-21-save-load-design.md`. Layers:
+  `sim.snapshot()/restore()` (simulation.ts, + transit/objectives/economy
+  snapshots), `game.captureSave()/restoreSave()` (game.ts, `GameSave` +
+  `SAVE_VERSION`), `saveStore.ts` (localStorage slots), PlayView (`?save=<id>`
+  resume, Saves overlay in the drawer, autosave slot on leave while playing).
+- THE RULE: everything `step(dt)` reads that a player action or elapsed time
+  moved is snapshotted VERBATIM; derived fields (unitOffsets, lookAhead,
+  plan.exitAt) are recomputed. RESERVATIONS TRAVEL — re-deriving them would
+  claim blocks a train had not yet claimed (a train reserves only when it
+  crosses) and change who yields to whom. A train's committed `plan` travels
+  as its steps: replanning mid-leg can tie-break differently.
+- Round-trip exactness (step N, save, restore, step M == step N+M, bit-equal)
+  is asserted over FULL snapshots: `tests/unit/sim/saveRestore.spec.ts` (sim),
+  `tests/unit/gameSave.spec.ts` (game: tycoon fares, dispatch gate, time-attack
+  spawner fast-forward, retry-after-load). The spawner is a pure cursor:
+  restore = `reset()` + one `step(elapsedSec)`, returned defs discarded.
+- NOT snapshotted, by design: road traffic (rebuilt from the same seed, cars
+  restart at t=0), bus positions/riders aboard (roster re-bought onto lines),
+  the citizen layer (save UI hidden in Citizens mode, v1), the undo window,
+  the event log. `blockStates` is dropped → one re-emitted `blocked` log line
+  per held train after a load.
+- ALIASING TRAP: on the load path the game is CREATED from `save.level`, so
+  `level === save.level` inside `restoreSave` — copy the save's level BEFORE
+  clearing the live one, or you restore an empty board (measured: every train
+  dead on `exitPort: null`). Same reason the save carries `pristineLevel`:
+  Retry after a load must reset to the SAVE's opening board, or restoring
+  starting capital alongside kept bought track is free money.
+- `saveStore.read()` treats localStorage as the SOURCE and the in-memory map
+  only as the no-storage fallback: a cache-first read served a stale slot to a
+  second tab, and stale state restored silently is the worst save failure.
+- `?board=` NOW HONOURS `scenario.colors` in PlayView (same pins /test uses).
+  Found via saveload: the seeded assignment is reachability-blind, and on a
+  board with disabled turns it homed a train on a depot it could never reach —
+  the board bounced forever, no save/load involved.
+- The demo/round-trip board is `/test/challenges/save/saveload` (a signalled
+  pure-cross contention pocket, puzzle mode, pinned colours), playable at
+  `/#/play?board=saveload`.
+
 ## CAMPAIGN (2026-07-27)
 - `src/campaign.ts` is the whole shell: an ordered `CAMPAIGN`, an unlock rule, a
   star total. Headless and pure, so the progression is unit-tested without a DOM.

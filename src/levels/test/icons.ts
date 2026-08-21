@@ -37,6 +37,7 @@ export const CATEGORY_ICONS: Record<string, string> = {
   "streets/parking": "🅿️",
   "challenges/modes": "🎯",
   "challenges/economy": "💰",
+  "challenges/save": "💾",
   "challenges/worlds": "🌍",
 };
 
@@ -99,6 +100,7 @@ export const SCENARIO_ICONS: Record<string, string> = {
   timeattack: "⏱️",
   buildgap: "🏗️",
   daily: "📅",
+  saveload: "💾",
   networkmode: "🚉",
   dispatch: "💰",
   threecities: "🏙️",
