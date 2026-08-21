@@ -3311,6 +3311,12 @@ export function createGame(
   let leviesBilled = 0;
   let taxPaidTotal = 0;
   let unpaidTaxTotal = 0;
+  // Road throughput delivered BEFORE the road sim was last rebuilt. The road
+  // sim is deliberately not saved (it respawns from its seed), but its
+  // cumulative `carsDelivered` is reported as an ABSOLUTE into the objective
+  // counters — without this offset the first post-load tick would overwrite a
+  // restored counter with the fresh sim's zero.
+  let carsDeliveredBase = 0;
 
   function refreshObjective() {
     Object.assign(objective, tracker.state());
@@ -3479,7 +3485,7 @@ export function createGame(
     // automatic crossing can't produce an incident, so the delta stays 0.
     const rf = roadSim.frame();
     obs.maxCarWaitSec = rf.maxCarWaitSec;
-    obs.carsDelivered = rf.carsDelivered;
+    obs.carsDelivered = carsDeliveredBase + rf.carsDelivered;
     obs.crossingIncidentDelta = 0;
     roadFrame.maxCarWaitSec = rf.maxCarWaitSec;
     roadFrame.carWaitTotalSec = rf.carWaitTotalSec;
@@ -3902,7 +3908,15 @@ export function createGame(
         // Live colours (bought trains included), with the seeded base colours
         // winning for the original roster — the live record is repainted to
         // line colours in passenger modes, and the base is the honest livery.
-        trainColors: { ...trainColors, ...assignedColors.trainColors },
+        // ONLY trains that still have a definition: `forgetTrain` never prunes
+        // `trainColors` (the removal animation still reads it), and a dead id
+        // carried into a save resurrects as a permanent ghost row in the
+        // service panel of the loaded game (`removedTrains` starts empty).
+        trainColors: Object.fromEntries(
+          Object.entries({ ...trainColors, ...assignedColors.trainColors }).filter(
+            ([id]) => defById[id] !== undefined
+          )
+        ),
       },
       switches: deepCopy(switches),
       sim: sim.snapshot(),
@@ -3928,10 +3942,14 @@ export function createGame(
   }
 
   // Overwrite the moving state of a game FRESHLY built from this save's level,
-  // trains, mode and colours (PlayView's load path passes exactly those to
-  // createGame, so everything derived at construction — catchment demand,
-  // transit stops, unit ids, fare specs — already matches). The level content
-  // is re-asserted anyway so the call is safe on any same-shaped game.
+  // trains, mode and colours — the LOAD PATH ONLY. PlayView passes exactly
+  // those to createGame, and that matters: plenty of state is derived at
+  // construction and NOT re-derived here (catchment demand and transit stops,
+  // parking sign tiles, road junction/extent caches, station/depot lists,
+  // unit ids, fare specs). Applying a save whose board differs from the one
+  // this game was built from would leave all of those describing the wrong
+  // world, silently. The level content is still re-asserted below, but only
+  // because on the load path `level` and `save.level` alias each other.
   function restoreSave(save: GameSave): void {
     // The board, live and pristine. Writes go through the RAW level object
     // (the one the sim indexes); the levelVersion bump at the end notifies
@@ -4008,10 +4026,18 @@ export function createGame(
     const elapsed = save.objective.counters.elapsedSec;
     if (spawner && elapsed > 0) spawner.step(elapsed);
 
+    // The road sim restarts from zero (not saved); carry the delivered total
+    // forward so the restored counter is not clobbered on the next tick.
+    carsDeliveredBase = save.objective.counters.carsDelivered ?? 0;
+
     // A load ends the undo window and any open overlay; the log starts over
     // (its entries reference a run this session never played).
     setLastBuild(null);
     clearLineOverlay();
+    // The save's roster IS the roster: nothing in it is removed, so a stale
+    // removal list (from this game's own pre-restore life) must not hide a
+    // train the restore just brought back.
+    removedTrains.splice(0, removedTrains.length);
     eventLog.splice(0, eventLog.length);
     for (const id of Object.keys(reservations)) delete reservations[id];
     for (const id of Object.keys(occupied)) delete occupied[id];
@@ -4191,6 +4217,7 @@ export function createGame(
       leviesBilled = 0;
       taxPaidTotal = 0;
       unpaidTaxTotal = 0;
+      carsDeliveredBase = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
       for (const id of Object.keys(reservations)) delete reservations[id];

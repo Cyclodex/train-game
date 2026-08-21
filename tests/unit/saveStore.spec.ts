@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { GameSave, SAVE_VERSION } from "@/game";
 import {
   deleteSave,
@@ -107,5 +107,35 @@ describe("saveStore slots", () => {
     putSave("mein-spielstand-1", mkSave("Mein Spielstand #1!"));
     expect(slotIdFor("Mein Spielstand #1!")).toBe("mein-spielstand-1-2");
     expect(slotIdFor("!!!")).toBe("save");
+  });
+
+  it("reserves the autosave slot: a manual save named 'Autosave' never lands on it", () => {
+    // The leave-autosave overwrites AUTOSAVE_ID unasked; a player's named save
+    // must not be the thing it clobbers.
+    expect(slotIdFor("Autosave")).not.toBe("autosave");
+    expect(slotIdFor("Autosave")).toBe("autosave-2");
+  });
+
+  it("degrades a corrupt stored value to 'no saves' instead of crashing", () => {
+    // The unit env is node (no localStorage; the store falls back to memory
+    // everywhere else in this file) — stub one holding a corrupt value:
+    // "null" passes JSON.parse, and Object.entries(null) would brick the
+    // overlay if read() trusted it.
+    const backing = new Map<string, string>([["train-game:saves", "null"]]);
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => backing.get(k) ?? null,
+      setItem: (k: string, v: string) => void backing.set(k, v),
+      removeItem: (k: string) => void backing.delete(k),
+    });
+    try {
+      expect(listSaves()).toEqual([]);
+      expect(getSave("anything")).toBeNull();
+      // …and the store recovers on the next write.
+      putSave("fresh", mkSave("Fresh"));
+      expect(listSaves().map(m => m.id)).toEqual(["fresh"]);
+    } finally {
+      vi.unstubAllGlobals();
+      deleteSave("fresh");
+    }
   });
 });

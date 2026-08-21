@@ -915,9 +915,11 @@ import {
   listSaves,
   putSave,
   slotIdFor,
+  stageLoad,
+  takeStagedLoad,
 } from "@/saveStore";
 import { modeById, MODES } from "@/modes/index";
-import { dailyMode } from "@/modes/daily";
+import { dailyMode, dailyModeFor } from "@/modes/daily";
 import { sandboxMode } from "@/modes/sandbox";
 import { boardCapabilities } from "@/modes/compat";
 import { GameMode, ModeSetup } from "@/modes/types";
@@ -986,6 +988,29 @@ const PLAY_DOCK: BuildDockCategoryView[] = [
   },
 ];
 
+// The inverse of `buildTrainDefs`: a TrainsDefinition rebuilt from the mode
+// shape, for @Provide()/totalTrains when the defs are the source of truth (a
+// mode-generated board, a resumed save). One mapping for both callers, so a
+// TrainDef field added later cannot silently exist on one path only.
+function trainsDefinitionOf(defs: TrainDef[]): TrainsDefinition {
+  const out: TrainsDefinition = {};
+  for (const def of defs) {
+    out[def.id] = {
+      id: def.id,
+      x: def.x,
+      y: def.y,
+      status: TrainStatus.LeavingDepot,
+      type: def.type,
+      wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
+      routeDestinations: (def.destinations ?? []).map(to => ({ to })),
+      currentRouteDestination: 0,
+      ...(def.line?.length ? { line: [...def.line] } : {}),
+      ...(def.spawnAtSec !== undefined ? { spawnAtSec: def.spawnAtSec } : {}),
+    };
+  }
+  return out;
+}
+
 function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
   return Object.values(trains).map(t => ({
     id: t.id,
@@ -1032,20 +1057,12 @@ function resolveBoard(
     // Reconstruct a TrainsDefinition from the TrainDef[] the mode produced.
     // The view only uses TrainsDefinition for `totalTrains` (key count) and
     // for @Provide(); the actual sim is driven from TrainDef[] in createGame.
-    const genTrains: TrainsDefinition = {};
-    for (const def of setup.trains) {
-      genTrains[def.id] = {
-        id: def.id,
-        x: def.x,
-        y: def.y,
-        status: TrainStatus.LeavingDepot,
-        type: def.type,
-        wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
-        routeDestinations: [],
-        currentRouteDestination: 0,
-      };
-    }
-    return { level: setup.level, trains: genTrains, levelId: setup.levelId, setup };
+    return {
+      level: setup.level,
+      trains: trainsDefinitionOf(setup.trains),
+      levelId: setup.levelId,
+      setup,
+    };
   }
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
@@ -1064,6 +1081,13 @@ class PlayView extends Vue {
   // URL's board would restore state onto a world it was never taken from.
   // Null when the slot is absent or from an incompatible save version.
   private pendingSave: GameSave | null = (() => {
+    // The STAGED copy first: loadSlot stages the save it listed before it
+    // navigates, because the OLD PlayView unmounts (and writes its
+    // leave-autosave) before this initializer runs — reading the store here
+    // would hand back the state the player just left, not the slot they
+    // clicked. `?save=` alone still works (deep link, refresh).
+    const staged = takeStagedLoad();
+    if (staged) return staged;
     const id = hashParam("save");
     return id ? getSave(id) : null;
   })();
@@ -1106,7 +1130,17 @@ class PlayView extends Vue {
     // pair ran together when it was saved, so it fits by construction.
     if (this.pendingSave) {
       const id = this.pendingSave.modeId;
-      return id === dailyMode.id ? dailyMode : modeById(id);
+      if (id === dailyMode.id) {
+        // Pin the ruleset to the SAVE's calendar day (levelId "daily:<date>"),
+        // not to today: daily.setup() ignores its context and regenerates from
+        // the date, so an unpinned mode loaded tomorrow would build tomorrow's
+        // objective spec (deliveries target, stars) over the saved board.
+        const date = this.pendingSave.levelId.startsWith("daily:")
+          ? this.pendingSave.levelId.slice("daily:".length)
+          : undefined;
+        return date ? dailyModeFor(date) : dailyMode;
+      }
+      return modeById(id);
     }
     const requested = this.requestedModeId;
     if (hashParam("board") === "daily" || requested === "daily") {
@@ -1160,24 +1194,9 @@ class PlayView extends Vue {
       });
       // Daily's setup generates its own board; pin the SAVED one back over it
       // so the sim, the renderer and the restore all agree on one world.
-      const genTrains: TrainsDefinition = {};
-      for (const def of savedDefs) {
-        genTrains[def.id] = {
-          id: def.id,
-          x: def.x,
-          y: def.y,
-          status: TrainStatus.LeavingDepot,
-          type: def.type,
-          wagons: def.wagonIds.map(wid => ({ id: wid, type: def.type })),
-          routeDestinations: (def.destinations ?? []).map(to => ({ to })),
-          currentRouteDestination: 0,
-          ...(def.line?.length ? { line: [...def.line] } : {}),
-          ...(def.spawnAtSec !== undefined ? { spawnAtSec: def.spawnAtSec } : {}),
-        };
-      }
       return {
         level: savedLevel,
-        trains: genTrains,
+        trains: trainsDefinitionOf(savedDefs),
         levelId,
         setup: { ...setup, level: savedLevel, trains: savedDefs, levelId },
       };
@@ -1262,6 +1281,9 @@ class PlayView extends Vue {
     const known = asked !== null && (asked === dailyMode.id || MODES.some(m => m.id === asked));
     saveLastModeId(known ? asked : this.mode.id);
     this.best = loadBest(this.levelId);
+    // A refresh/close skips beforeUnmount entirely; the browser hook keeps the
+    // autosave honest there too (a synchronous localStorage write is allowed).
+    window.addEventListener("beforeunload", this.writeAutosave);
     this.game.start(); // start the rAF loop (rendering); objective stays Ready
     if (this.pendingSave) {
       // Resume: the save carries the whole moving state — trains mid-leg,
@@ -1536,7 +1558,14 @@ class PlayView extends Vue {
   }
 
   loadSlot(id: string) {
+    const save = getSave(id);
+    if (!save) return; // incompatible/vanished slot — the button was disabled
     this.savesOpen = false;
+    // STAGE the save before navigating: this view's own beforeUnmount writes
+    // the leave-autosave first, so reading the store from the next mount would
+    // hand the autosave slot the state the player just left. The staged copy
+    // is exactly what the list showed when they clicked.
+    stageLoad(save);
     // The nonce remounts the view even when the same slot is loaded twice in
     // a row — the router-view is keyed on the full path.
     this.$router.push({
@@ -1554,14 +1583,20 @@ class PlayView extends Vue {
     return new Date(s.savedAt).toLocaleString();
   }
 
-  beforeUnmount() {
-    // Autosave on leave: a running game survives navigating away (the editor,
-    // the picker, a board switch) without the player having thought about it.
-    // Only while the objective is live — a Ready screen or a finished run is
-    // not progress worth clobbering the autosave slot with.
+  // Autosave on leave: a running game survives navigating away (the editor,
+  // the picker, a board switch) — and, via the `beforeunload` hook below, a
+  // tab refresh or close — without the player having thought about it. Only
+  // while the objective is live: a Ready screen or a finished run is not
+  // progress worth clobbering the autosave slot with.
+  private writeAutosave = () => {
     if (this.canSave && this.phase === "playing") {
       putSave(AUTOSAVE_ID, this.game.captureSave("Autosave"));
     }
+  };
+
+  beforeUnmount() {
+    this.writeAutosave();
+    window.removeEventListener("beforeunload", this.writeAutosave);
     this.game.stop();
     window.removeEventListener("resize", this.onWindowResize);
     window.removeEventListener("keydown", this.boundKeydown);

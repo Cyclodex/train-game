@@ -1871,9 +1871,8 @@ export function createSimulation(config: SimConfig): Simulation {
       for (const key of snap.manualProceed) manualProceed.add(key);
       // Re-derived on the next tick; the one cost is a re-emitted `blocked`
       // event per train that is still held (a log line, not state).
+      // (transit.restore above already invalidated the line-graph memo.)
       blockStates.clear();
-      // The services on offer changed wholesale.
-      transit.touch();
     },
   };
 }
