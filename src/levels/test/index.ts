@@ -114,6 +114,7 @@ import { buildgap } from "@/levels/test/scenarios/buildgap";
 import { taxyear } from "@/levels/test/scenarios/taxyear";
 import { bankrupt } from "@/levels/test/scenarios/bankrupt";
 import { daily } from "@/levels/test/scenarios/daily";
+import { saveload } from "@/levels/test/scenarios/saveload";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { linerevisit } from "@/levels/test/scenarios/linerevisit";
 import { demoworld } from "@/levels/test/scenarios/demoworld";
@@ -273,6 +274,11 @@ export const DOMAINS: ScenarioDomain[] = [
       // distance, blocked routes, buying track, land prices, the tax year and
       // its bankruptcy fail state.
       { id: "economy", label: "Tycoon economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt] },
+      // The save/load round-trip board (docs/superpowers/specs/
+      // 2026-08-21-save-load-design.md): the level the snapshot/restore unit
+      // tests run on, and — via /#/play?board=saveload — a small deterministic
+      // game to exercise the Spielstand UI on.
+      { id: "save", label: "Save & load", scenarios: [saveload] },
       // Not an isolated mechanic like the rest of the gallery — a full-size board
       // that exercises rail, roads and their crossings together. It lives here so
       // it gets the same validation every scenario does, and so it is playable
