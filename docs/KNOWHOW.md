@@ -3007,6 +3007,27 @@ Four rules, each measured on that board, each of which failed silently:
   a CYCLE, not a sink, and that is the property to assert. `frontTiles` must skip
   parked cars AND unit-less samples (a garaged car has `units: []`).
   Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
+- **THE BIKE FORECOURT IS DERIVED TOO** (`tiles/workplaceBikeRacks.ts`,
+  2026-08-21): every work/shop plot grows a SIX-stand `bikerack` row at its
+  frontage — deliberately short of the workforce, the same gap as the three
+  staff car bays. Placement negotiates the frontage in order: the gate kerb,
+  then ONE TILE ALONG the same kerb run (the usual outcome — the car bays fill
+  the gate kerb edge to edge and two rows may never hug one bank), then the far
+  kerb of the frontage street. `align: "centre"` (street furniture, not a
+  parking edge), ambient `dwellSec` [180,420] like the staff bays.
+  · CLASH RULES: a rack is KERBSIDE furniture, so it vetoes with
+    `kerbRunClash(..., "parallel")` — legal beside parallel car bays next door,
+    refused beside a drive/forecourt (across-kerb) on the same flank.
+  · A rack row REJECTED by `validateParking` is dropped, NOT re-planned onto
+    the plot's next candidate kerb (the car pass's one-shot discipline). A 3+3
+    boulevard rejects racks outright: kerb 84px + 18px depth overhangs the tile.
+  · IDEMPOTENT PER PLOT, not per kerb (the home pass's lesson): a rack already
+    standing at any of the plot's candidate kerbs serves it.
+  · The citizens mode's `setup()` now derives the ladder (cars then racks) for
+    the board it is handed — reaches /play via PlayView's `setup.level`
+    promotion; scenarios still derive in their OWN data for /test and tests.
+  · `/test/bikeforecourt` is the demo: one works, three car bays, six stands,
+    more riders than stands.
 
 ## WORKPLACE PARKING (the commuter's car stops somewhere, 2026-08-04)
 Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.

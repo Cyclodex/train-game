@@ -88,6 +88,8 @@ export const SCENARIO_ICONS: Record<string, string> = {
   // Streets — routing
   cardestination: "📍",
   carroute: "🗺️",
+  // Streets — parking
+  bikeforecourt: "🚲",
   // Streets — curves
   carcircle: "🔄",
   carscurve: "🛤️",
