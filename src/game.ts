@@ -2988,7 +2988,26 @@ export function createGame(
   // Puzzle/Daily/Sandbox byte-for-byte as they were.
   const economySetup = setup.economy;
   const economy = economySetup ? createEconomy(economySetup) : null;
-  const fares = economySetup ? createFareBook(economySetup.fares ?? {}) : null;
+  // A SCHEDULED train's fare is withheld from the book until the train
+  // actually arrives (injectTrain adds it), because `tick` ages every fare it
+  // holds — including one whose train is still hours from the board. Left in
+  // at construction, a train arriving at t=120s would step onto the platform
+  // with a fare already decayed to its floor, and the pin would simply show a
+  // small number: a silent, unwinnable level. The two features had never met
+  // (the only scheduled board ran under Puzzle, which has no economy), so this
+  // was latent rather than broken.
+  const scheduledIds = new Set(
+    trainDefs.filter(isScheduled).map(d => d.id)
+  );
+  const fares = economySetup
+    ? createFareBook(
+        Object.fromEntries(
+          Object.entries(economySetup.fares ?? {}).filter(
+            ([id]) => !scheduledIds.has(id)
+          )
+        )
+      )
+    : null;
   // The second clock. Present only when the mode's tuning named one, so every
   // untuned board (and every mode without an economy) keeps exactly the HUD and
   // the ledger it had before the calendar existed.
@@ -3077,6 +3096,10 @@ export function createGame(
   function injectTrain(def: TrainDef) {
     if (sim.trains[def.id]) return;
     sim.addTrain(trainInit(def));
+    // Its fare starts decaying NOW, on arrival — see the fare book's
+    // construction. Re-injection after a reset() is covered by `has`.
+    const spec = economySetup?.fares?.[def.id];
+    if (spec && fares && !fares.has(def.id)) fares.add(def.id, spec);
   }
   const defById: Record<string, TrainDef> = {};
   for (const def of trainDefs) defById[def.id] = def;
@@ -3251,6 +3274,56 @@ export function createGame(
 
   // Release whatever can leave: the head of the queue whose depot is clear.
   // Called every world step, so a queue drains by itself in order.
+  // Scheduled arrivals released from the shed queue this tick (see
+  // releasePendingTrains). Drained into the observation by advance().
+  let releasedFromSchedule = 0;
+
+  // --- a delivered train leaves the world ------------------------------------
+  // How long a delivered train sits in its shed before it is stabled and gone,
+  // in sim seconds. Long enough to read as "it pulled in and the doors shut",
+  // short enough that the platform is free for the next arrival.
+  const STABLE_AFTER_SEC = 1.5;
+  // trainId -> how long it has been parked.
+  const parkedFor: Record<string, number> = {};
+
+  // WITHOUT THIS, A STATION CAN RECEIVE EXACTLY ONE TRAIN, EVER. A matched
+  // arrival parks and stays parked, so the depot is occupied for the rest of
+  // the run and every later train for that town noses up behind it and stops.
+  // That is invisible on a board with one train per destination — which is
+  // every board we had — and it is a hard wall the moment a timetable sends a
+  // second train to the same place (measured: 2 of 8 delivered, the other six
+  // stacked up the line).
+  //
+  // Train Valley's model is that the train enters the station and is gone. So:
+  // let it glide in and park normally (the animation is the reward), then take
+  // it out of the sim. renderTrains already hides the units of any def the
+  // sim does not hold — that is how a not-yet-spawned train stays invisible —
+  // so the sprite disappears with no view change at all.
+  //
+  // Deliberately NOT forgetTrain(): that splices the def out of `trainDefs`,
+  // and Retry rebuilds the run from exactly that array. The roster has to
+  // survive, or a second attempt would start short of the trains the first one
+  // delivered.
+  //
+  // Gated on `controls.dispatch`. Where trains are not dispatched the level
+  // ends the moment the last one arrives, so there is nothing to make room
+  // for, and vanishing trains would only take the finished board away from
+  // the player looking at it.
+  function stableDeliveredTrains(dt: number): void {
+    if (!mode.controls.dispatch) return;
+    for (const def of trainDefs) {
+      const train = sim.trains[def.id];
+      if (!train || train.state !== "parked") {
+        delete parkedFor[def.id];
+        continue;
+      }
+      parkedFor[def.id] = (parkedFor[def.id] ?? 0) + dt;
+      if (parkedFor[def.id] < STABLE_AFTER_SEC) continue;
+      delete parkedFor[def.id];
+      sim.removeTrain(def.id);
+    }
+  }
+
   function releasePendingTrains(): void {
     for (let i = 0; i < pendingTrains.length; i++) {
       const def = pendingTrains[i];
@@ -3261,6 +3334,11 @@ export function createGame(
       const at = queuedTrains.indexOf(def.id);
       if (at >= 0) queuedTrains.splice(at, 1);
       injectTrain(def);
+      // A SCHEDULED arrival that was held back by a busy shed counts as spawned
+      // now, when it actually reaches the board — so `active` stays "trains in
+      // play" rather than "trains the timetable has named". A BOUGHT train is
+      // not the spawner's and is not counted here.
+      if (scheduledIds.has(def.id)) releasedFromSchedule += 1;
       syncLine(def.id);
     }
   }
@@ -3599,6 +3677,31 @@ export function createGame(
     let spawnedDelta = 0;
     if (objective.phase === "playing") {
       for (const def of spawner?.step(scaled) ?? []) {
+        // ONE TRAIN PER SHED, but only where trains WAIT. A due train whose
+        // depot still holds the last one joins the pending queue instead of
+        // being injected on top of it — exactly what an ordered train already
+        // does, and what Train Valley means by spawning "at a vacant station".
+        // Injected regardless, three waiting trains stack invisibly on one
+        // tile: three sprites and three fare pins at identical coordinates,
+        // and nothing on screen says there is more than one (measured).
+        //
+        // Gated on `controls.dispatch` because the problem only exists there.
+        // Where trains leave the instant they appear (Puzzle, and the Rush
+        // variant that has shipped timetables since #113) an overlap lasts a
+        // frame and the queue would be a behaviour change on boards nobody
+        // authored for it — including degenerate shuttle demos whose origin
+        // depot is occupied for ever, where the gate would hold every later
+        // arrival permanently (measured on tests/unit/gameSave.spec.ts's lane).
+        //
+        // releasePendingTrains() runs later in this same tick, so an arrival
+        // finding its shed clear still enters the board immediately.
+        if (
+          mode.controls.dispatch &&
+          sim.occupiedBy(getCoordinatesId({ x: def.x, y: def.y }))
+        ) {
+          if (!pendingTrains.some(d => d.id === def.id)) pendingTrains.push(def);
+          continue;
+        }
         injectTrain(def);
         spawnedDelta += 1;
       }
@@ -3703,8 +3806,18 @@ export function createGame(
     // test — which is exactly what happened on the first cut, and what the
     // comment on updateVehicleLoads claimed it had avoided.
     updateVehicleLoads();
-    // Ordered trains roll out of the shed as it clears, in the order bought.
+    // A delivered train is stabled and leaves the board, freeing its platform
+    // for the next arrival. BEFORE releasePendingTrains(), so a shed that just
+    // cleared can take its next train in the same tick.
+    stableDeliveredTrains(scaled);
+    // Ordered trains roll out of the shed as it clears, in the order bought —
+    // and so do timetabled arrivals that found their platform busy.
     releasePendingTrains();
+    // Folded into the OBSERVATION, not into the local: obs.spawnedDelta was
+    // assigned before the shed queue ran, so adding it to the local here would
+    // be written nowhere and the counter would sit at 0 for ever.
+    obs.spawnedDelta = (obs.spawnedDelta ?? 0) + releasedFromSchedule;
+    releasedFromSchedule = 0;
     // Fold the road's crossing-flow snapshot into the observation so the
     // objective layer can score patience + throughput (Crossing Keeper). The
     // automatic crossing can't produce an incident, so the delta stays 0.
@@ -4482,6 +4595,19 @@ export function createGame(
       // capital and every fare un-settled at full value.
       economy?.reset();
       fares?.reset();
+      // Scheduled trains were dropped from the sim by buildSims(); their fares
+      // have to leave the book with them, or the next run ages them from its
+      // own t=0 and every Retry pays less than the one before (measured: a
+      // 20s arrival paid 126 instead of 490 on the second attempt).
+      for (const id of scheduledIds) fares?.remove(id);
+      // ...and any arrival still queued for a busy shed leaves with them; the
+      // spawner re-arms from the top, so run 2 would otherwise open holding
+      // run 1's backlog.
+      for (let i = pendingTrains.length - 1; i >= 0; i--) {
+        if (scheduledIds.has(pendingTrains[i].id)) pendingTrains.splice(i, 1);
+      }
+      releasedFromSchedule = 0;
+      for (const id of Object.keys(parkedFor)) delete parkedFor[id];
       fareBadges.splice(0, fareBadges.length);
       refreshMoney();
       tracker.reset();
