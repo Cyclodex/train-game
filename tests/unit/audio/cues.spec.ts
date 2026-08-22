@@ -3,6 +3,7 @@ import {
   cuesForEvents,
   rollingGain,
   takeClacks,
+  sliderGain,
   ROLLING_BASE,
   ROLLING_CAP,
   CLACK_SPACING_TILES,
@@ -129,6 +130,30 @@ describe("takeClacks (rail joints keep time with the trains)", () => {
 
   it("treats a standstill as no distance at all", () => {
     expect(takeClacks(0)).toEqual({ clacks: 0, rest: 0 });
+  });
+});
+
+describe("sliderGain (the volume sliders' curve)", () => {
+  it("is exactly silent at 0 and exactly unity at 100", () => {
+    expect(sliderGain(0)).toBe(0);
+    expect(sliderGain(100)).toBe(1);
+  });
+  it("is monotonic and spends the travel on the audible range (-12dB at half, -6dB near 70%)", () => {
+    let prev = -1;
+    for (let p = 0; p <= 100; p += 5) {
+      const g = sliderGain(p);
+      expect(g).toBeGreaterThanOrEqual(prev);
+      prev = g;
+    }
+    const dbAtHalf = 20 * Math.log10(sliderGain(50));
+    expect(dbAtHalf).toBeCloseTo(-12.04, 1);
+    const dbAt71 = 20 * Math.log10(sliderGain(70.7));
+    expect(dbAt71).toBeCloseTo(-6.02, 1);
+  });
+  it("clamps garbage", () => {
+    expect(sliderGain(-20)).toBe(0);
+    expect(sliderGain(250)).toBe(1);
+    expect(sliderGain(NaN)).toBe(0);
   });
 });
 

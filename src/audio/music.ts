@@ -69,12 +69,22 @@ export interface MusicPlayer {
   // `true` starts the playlist, a later `false` PAUSES it (position kept), so
   // switching views resumes the same track rather than restarting.
   setOn(on: boolean): void;
+  // The user's music level, 0–1, applied on its own node so it never fights
+  // the on/off fade. Smoothed, so a slider drag is heard without zipper noise.
+  setVolume(v: number): void;
 }
 
 export function createMusicPlayer(ctx: AudioContext, dest: AudioNode): MusicPlayer {
+  // Three gains in series, each with one job: `level` normalises the track,
+  // `bus` is the on/off fade (0 ↔ 1), `volume` is MUSIC_BUS_LEVEL × the user's
+  // slider. Keeping the fade and the slider apart is what lets a drag during a
+  // fade do the right thing — and keeps the bus level from being applied twice.
+  const volume = ctx.createGain();
+  volume.gain.value = MUSIC_BUS_LEVEL;
+  volume.connect(dest);
   const bus = ctx.createGain();
   bus.gain.value = 0;
-  bus.connect(dest);
+  bus.connect(volume);
   const level = ctx.createGain();
   level.connect(bus);
 
@@ -135,7 +145,7 @@ export function createMusicPlayer(ctx: AudioContext, dest: AudioNode): MusicPlay
     if (on) {
       if (!loaded) load(index);
       play();
-      bus.gain.linearRampToValueAtTime(MUSIC_BUS_LEVEL, now + MUSIC_FADE_SEC);
+      bus.gain.linearRampToValueAtTime(1, now + MUSIC_FADE_SEC);
     } else {
       bus.gain.linearRampToValueAtTime(0, now + MUSIC_FADE_SEC);
       // Pause once the fade is done, so the element is not left playing into
@@ -144,5 +154,10 @@ export function createMusicPlayer(ctx: AudioContext, dest: AudioNode): MusicPlay
     }
   }
 
-  return { setOn };
+  function setVolume(v: number): void {
+    const target = MUSIC_BUS_LEVEL * Math.max(0, Math.min(1, v));
+    volume.gain.setTargetAtTime(target, ctx.currentTime, 0.05);
+  }
+
+  return { setOn, setVolume };
 }

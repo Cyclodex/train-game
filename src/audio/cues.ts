@@ -45,6 +45,18 @@ export function rollingGain(movingTrains: number): number {
   return Math.min(ROLLING_CAP, ROLLING_BASE + ROLLING_STEP * (movingTrains - 1));
 }
 
+// --- volume sliders ----------------------------------------------------------
+//
+// A slider's 0–100 to a gain. Not linear: loudness is perceived roughly on a
+// log scale, so a linear gain puts almost all the audible range in the slider's
+// bottom third and leaves the top half doing nothing. A squared curve spreads
+// the usable range across the travel (-12dB at the midpoint, -6dB around 70%),
+// the shape of an audio-taper fader. 0 is exactly silent, 100 exactly unity.
+export function sliderGain(pct: number): number {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0)) / 100;
+  return p * p;
+}
+
 // --- rail joints: the clackety-clack ----------------------------------------
 //
 // The iconic train sound is not a rumble, it is the double-knock of a bogie

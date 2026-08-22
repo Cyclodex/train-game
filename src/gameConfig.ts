@@ -8,6 +8,34 @@ import {
 const THEME_KEY = "train-game:worldTheme";
 const SOUND_KEY = "train-game:soundMuted";
 const MUSIC_KEY = "train-game:musicMuted";
+const SOUND_VOL_KEY = "train-game:soundVolume";
+const MUSIC_VOL_KEY = "train-game:musicVolume";
+
+// A persisted level, 0–100, or the default when absent/garbage.
+function loadVolume(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) return n;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+function saveVolume(key: string, pct: number): void {
+  try {
+    localStorage.setItem(key, String(pct));
+  } catch {
+    /* ignore */
+  }
+}
+
+// The defaults. Music sits well under the effects: it is a bed, and the first
+// cut at one level was heard as "a bit loud" over the clacks.
+export const DEFAULT_SOUND_VOLUME = 80;
+export const DEFAULT_MUSIC_VOLUME = 45;
 
 // A persisted mute flag. Absent (the default) means ON — audio is the feature,
 // muting it is the opt-out.
@@ -100,6 +128,11 @@ export interface GameConfig {
   // `setMusicMuted`. People who want the clacks but not the banjo are common
   // enough that one switch for both would cost us the clacks.
   musicMuted: boolean;
+  // The two levels, 0–100, under the mutes: the master (everything) and the
+  // music bus (music only, under the master). Persisted via the setters; the
+  // engine reads both live, every frame, so a slider drag is heard as it moves.
+  soundVolume: number;
+  musicVolume: number;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -125,7 +158,26 @@ export const gameConfig: GameConfig = reactive({
   plainBackdrop: false,
   soundMuted: loadMuted(SOUND_KEY),
   musicMuted: loadMuted(MUSIC_KEY),
+  soundVolume: loadVolume(SOUND_VOL_KEY, DEFAULT_SOUND_VOLUME),
+  musicVolume: loadVolume(MUSIC_VOL_KEY, DEFAULT_MUSIC_VOLUME),
 });
+
+// Clamp a slider value to the 0–100 the levels are kept in.
+function clampPct(pct: number): number {
+  return Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+}
+
+// Set + persist the master level (drawer slider).
+export function setSoundVolume(pct: number): void {
+  gameConfig.soundVolume = clampPct(pct);
+  saveVolume(SOUND_VOL_KEY, gameConfig.soundVolume);
+}
+
+// Set + persist the music level (drawer slider).
+export function setMusicVolume(pct: number): void {
+  gameConfig.musicVolume = clampPct(pct);
+  saveVolume(MUSIC_VOL_KEY, gameConfig.musicVolume);
+}
 
 // Set + persist the master mute. Views call this from the drawer's 🔊 button.
 export function setSoundMuted(muted: boolean): void {

@@ -216,8 +216,10 @@ world's real size is derived from its tiles by `levelBounds`, see
 depot/train colour assignment), `roads` (master switch for the road layer),
 `roadScoring`, `maxCars` (road density as a % of map capacity, read live),
 `worldTheme` (persisted backdrop theme), `plainBackdrop` (debug: strip the
-themed backdrop for flat ground) and `soundMuted` (persisted master mute for the
-audio layer, `setSoundMuted()`). Toggle `debug` in the UI to see per-tile
+themed backdrop for flat ground) `soundMuted` / `musicMuted` (persisted mutes for the audio
+layer and its music bus, `setSoundMuted()` / `setMusicMuted()`) and
+`soundVolume` / `musicVolume` (persisted 0–100 levels, `setSoundVolume()` /
+`setMusicVolume()`). Toggle `debug` in the UI to see per-tile
 coordinates and route overlays. `setWorldTheme()` mutates + persists the theme.
 
 Key files:

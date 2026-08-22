@@ -1,5 +1,5 @@
 import { gameConfig } from "@/gameConfig";
-import { rollingGain, takeClacks, SoundCue } from "./cues";
+import { rollingGain, sliderGain, takeClacks, SoundCue } from "./cues";
 import { SAMPLES } from "./samples";
 import { createRollingBed, makeNoise, railJoint, synthCue } from "./synth";
 import { createMusicPlayer, MusicPlayer } from "./music";
@@ -22,6 +22,9 @@ import { createMusicPlayer, MusicPlayer } from "./music";
 //  4. A MISSING SAMPLE IS NOT SILENCE. Until a cue's buffer has decoded — and
 //     for good if its fetch failed — the cue plays its synthesised gesture
 //     instead. The game is never mute because an asset did not arrive.
+//  6. LEVELS ARE LIVE TOO. `gameConfig.soundVolume` drives the master gain and
+//     `musicVolume` the music bus, both re-applied every frame (`applyLevels`),
+//     so a slider is heard as it is dragged.
 //  5. MUSIC FOLLOWS THE GAME, NOT THE PAGE. It starts when a game's frame loop
 //     starts and pauses when it stops (`setMusic`), so it plays on the play
 //     board and the test stage and not under the editor or a picker — and it
@@ -40,6 +43,10 @@ interface AudioEngine {
   // this; the mute flags are applied on top, live.
   setMusic(on: boolean): void;
 }
+
+// The master's gain at a 100% slider. Under unity so five cues landing on one
+// frame do not clip the output.
+const MASTER_CEILING = 0.9;
 
 function createAudioEngine(): AudioEngine {
   let ctx: AudioContext | null = null;
@@ -80,7 +87,7 @@ function createAudioEngine(): AudioEngine {
     }
     ctx = new AudioContext();
     master = ctx.createGain();
-    master.gain.value = 0.9;
+    master.gain.value = MASTER_CEILING * sliderGain(gameConfig.soundVolume);
     master.connect(ctx.destination);
     noise = makeNoise(ctx);
     bed = createRollingBed(ctx, master, noise);
@@ -93,6 +100,18 @@ function createAudioEngine(): AudioEngine {
   // the music mute. Idempotent, so it is safe to call every frame.
   function applyMusic(): void {
     music?.setOn(musicWanted && !gameConfig.soundMuted && !gameConfig.musicMuted);
+  }
+
+  // The two sliders, re-applied per frame. Smoothed ramps, so a drag is heard
+  // continuously rather than in steps, and never as zipper noise.
+  function applyLevels(): void {
+    if (!ctx || !master) return;
+    master.gain.setTargetAtTime(
+      MASTER_CEILING * sliderGain(gameConfig.soundVolume),
+      ctx.currentTime,
+      0.05
+    );
+    music?.setVolume(sliderGain(gameConfig.musicVolume));
   }
 
   // Register the unlock listeners exactly once, from the first engine call made
@@ -129,8 +148,10 @@ function createAudioEngine(): AudioEngine {
     install();
     if (!ctx || !bed) return;
     // Per frame, so a mute toggled in the drawer fades the music within a
-    // frame of the click rather than waiting for the next start()/stop().
+    // frame of the click rather than waiting for the next start()/stop() —
+    // and a slider is heard as it moves.
     applyMusic();
+    applyLevels();
     const muted = gameConfig.soundMuted;
     // A short ramp per call: smooth, and self-correcting toward the latest
     // target without stacking automation events.

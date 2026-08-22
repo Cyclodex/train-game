@@ -159,6 +159,13 @@ lean — prune as much as you add. This file only stays useful if every task ten
   the master; both applied per frame (`applyMusic`), so a drawer toggle fades
   within a frame. Why at all: between cues a board at rest was SILENT, which in
   a building game reads as broken audio, not calm.
+- LEVELS: two sliders (`gameConfig.soundVolume`/`musicVolume`, 0–100,
+  persisted via `setSoundVolume`/`setMusicVolume`) under the two mutes. The
+  curve is `sliderGain` = (p/100)² (-12dB at half, -6dB near 70% — audio
+  taper; a linear gain crams the audible range into the bottom third). The engine re-applies both EVERY FRAME
+  with `setTargetAtTime` (`applyLevels`), so a drag is heard live, without
+  zipper noise. The music player keeps the slider on its OWN gain node, apart
+  from the on/off fade bus — the two must not fight.
 - THE AMBIENCE IS SYNTHESISED ON PURPOSE, not for want of a recording: a loop
   plays at its recorded tempo and drifts against the trains on screen, which the
   1x/2x/4x dial makes obvious. Driving it from `sim.trainVelocity` (tiles/sec)

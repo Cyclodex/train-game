@@ -48,6 +48,24 @@
         <span>{{ soundMuted ? "🔇" : "🔊" }}</span><span>Sound</span>
         <span class="drawer-btn__val">{{ soundMuted ? "off" : "on" }}</span>
       </button>
+      <!-- The two levels. Read live by the engine every frame, so the drag is
+           heard as it happens; persisted through the setters like the mutes. -->
+      <div class="drawer-slider">
+        <span>🔊</span><span>Volume</span>
+        <span class="drawer-btn__val">{{ config.soundVolume }}%</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="config.soundVolume"
+          :disabled="soundMuted"
+          title="Master level — everything"
+          @input="onSoundVolume"
+          @click.stop
+        />
+      </div>
       <button
         class="drawer-btn"
         :class="{ on: !musicMuted && !soundMuted }"
@@ -58,6 +76,22 @@
         <span>🎵</span><span>Music</span>
         <span class="drawer-btn__val">{{ musicMuted ? "off" : "on" }}</span>
       </button>
+      <div class="drawer-slider">
+        <span>🎵</span><span>Volume</span>
+        <span class="drawer-btn__val">{{ config.musicVolume }}%</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="config.musicVolume"
+          :disabled="soundMuted || musicMuted"
+          title="Music level — under the master"
+          @input="onMusicVolume"
+          @click.stop
+        />
+      </div>
       <div class="drawer-divider"></div>
       <button v-if="canSave" class="drawer-btn" @click="openSaves">
         <span>💾</span><span>Saves</span>
@@ -917,6 +951,8 @@ import {
   setWorldTheme,
   setSoundMuted,
   setMusicMuted,
+  setSoundVolume,
+  setMusicVolume,
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import { Coordinates, Position, TrainsDefinition, TrainStatus } from "@/types";
@@ -2787,6 +2823,12 @@ class PlayView extends Vue {
   }
   toggleMusic() {
     setMusicMuted(!this.config.musicMuted);
+  }
+  onSoundVolume(e: Event) {
+    setSoundVolume(Number((e.target as HTMLInputElement).value));
+  }
+  onMusicVolume(e: Event) {
+    setMusicVolume(Number((e.target as HTMLInputElement).value));
   }
 
   // Lifetime earnings — the money row's flash key: a banked fare changes it,
