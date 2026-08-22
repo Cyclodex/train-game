@@ -281,10 +281,22 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     (`bikeRangeOf(bikeAffinity)`), `bikeSaddleSec` keeps the bike off the
     one-tile hop, a cycling citizen is a real bike on the road, and the
     rack→platform leg is walked by a real figure (stations and street tiles
-    became legal walk endpoints); scenario `citizenbike`. Remaining: (D)
-    shared foot/bike paths, queued behind the standalone-footpath axis, and
-    the held-stall "return half" shared with P+R (the commuter's bike keeping
-    its rack stand all day).
+    became legal walk endpoints); scenario `citizenbike`.
+    **Destination parking SHIPPED 2026-08-22** (spec:
+    `docs/superpowers/specs/2026-08-21-bike-destination-parking-design.md`,
+    tasks 1-3): the bike's held-stall RETURN HALF (`Citizen.parkedBike` — the
+    stand held all day, the same bike ridden home; the P+R **car's** return
+    half is still open, item 15), derived six-stand mini-racks at every
+    works/shop gate (`tiles/workplaceBikeRacks.ts`), and WILD PARKING as the
+    visible backstop (`parkedBike.wild` + `bikeSearchSec` charged to the
+    journey — the canon-conform "reputation"; leaning-bike clutter rendered at
+    the frontage); scenarios `bikeforecourt`/`bikeoverflow`. Remaining: (D)
+    shared foot/bike paths, queued behind the standalone-footpath axis.
+    Possible later extension, explicitly OUT OF SCOPE until the user asks: an
+    "Ortsbild"/streetscape happiness topic fed by pavement clutter (wild
+    bikes, informal kerb cars) — rejected for now because a fourth
+    `CityHappiness` topic drags `recompute()`/HUD, and the journey-seconds
+    path already prices the same fact.
 
 ## Architecture / code health
 

@@ -607,6 +607,17 @@
           :style="{ transform: `translate(-50%, -50%) rotate(${-car.angle}deg)` }"
         >{{ car.id }}</span>
       </div>
+      <!-- Wild-parked bikes: citizens' bicycles left LEANING on the pavement
+           because every rack stand in reach was taken (game.wildBikes, mirrored
+           from the citizen records). Renderer-only — no road-sim vehicle behind
+           one, and pedestrians walk straight past. Absolutely positioned like
+           the road cars, so they are not grid ITEMS (KNOWHOW → RENDER LAYOUT). -->
+      <div
+        v-for="b in wildBikes"
+        :key="`wild-${b.id}`"
+        class="wild-bike"
+        :style="{ transform: `translate(-50%, -50%) translate(${b.x}px, ${b.y}px) rotate(${b.angle}deg)` }"
+      />
       <!-- People on the pavement. Absolutely positioned like the road cars,
            so they are not grid ITEMS and cannot displace a tile (KNOWHOW →
            RENDER LAYOUT). Empty on every board without a citizen layer. -->
@@ -2594,6 +2605,12 @@ class PlayView extends Vue {
     return this.game.pedestrians;
   }
 
+  // Bikes left leaning at a full rack's frontage (the wild park) — the same
+  // getter-onto-a-reactive-array contract as the two above.
+  get wildBikes() {
+    return this.game.wildBikes;
+  }
+
   get roadCars() {
     return this.game.roadCars;
   }
@@ -2979,6 +2996,43 @@ export default toNative(PlayView);
   transform: translateY(-50%);
   border-radius: 50%;
   background: rgba(28, 24, 20, 0.85);
+}
+// A wild-parked bike: somebody's bicycle left LEANING on the pavement because
+// every rack stand in reach was taken (game.ts → updateWildBikes). Duller than
+// a ridden bike and with NO rider head-dot — a standing object, not traffic —
+// with two hub rings so a jumble of them at a gate reads as bicycles at a
+// glance. Below the moving vehicles (a leaning bike never occludes a bus),
+// above the road/pavement paint. This block is DUPLICATED in TestStage.vue on
+// purpose (the two boards share no stylesheet); keep both in step.
+.wild-bike {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(72, 80, 92, 0.92);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  pointer-events: none; // clutter, not a control — clicks fall through
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    transform: translateY(-50%);
+    border-radius: 50%;
+    border: 1px solid rgba(44, 50, 60, 0.85);
+  }
+  &::before {
+    left: -2px;
+  }
+  &::after {
+    right: -2px;
+  }
 }
 // The fare pin lives in `components/FarePin.vue` — markup and styles both, so the
 // two views that draw it cannot drift apart.

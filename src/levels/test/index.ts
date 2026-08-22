@@ -150,6 +150,8 @@ import { parkvariants } from "@/levels/test/scenarios/parkvariants";
 import { parkechelon } from "@/levels/test/scenarios/parkechelon";
 import { parkcity } from "@/levels/test/scenarios/parkcity";
 import { workparking } from "@/levels/test/scenarios/workparking";
+import { bikeforecourt } from "@/levels/test/scenarios/bikeforecourt";
+import { bikeoverflow } from "@/levels/test/scenarios/bikeoverflow";
 import { streetparking } from "@/levels/test/scenarios/streetparking";
 import { homeparking } from "@/levels/test/scenarios/homeparking";
 import { syncJunctionLanesAround } from "@/tiles/editOps";
@@ -254,7 +256,7 @@ export const DOMAINS: ScenarioDomain[] = [
       {
         id: "parking",
         label: "Parking",
-        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, homeparking, parkpass, busstops, buslayby],
+        scenarios: [parkvariants, parkingkerb, parkinglot, parkechelon, parkinglorry, streetparking, workparking, bikeforecourt, bikeoverflow, homeparking, parkpass, busstops, buslayby],
       },
     ],
   },

@@ -1,6 +1,8 @@
 import { GameMode, ModeContext, ModeSetup } from "@/modes/types";
 import { createObjectiveTracker, ObjectiveTracker } from "@/sim/objectives";
 import { CitizenTuning } from "@/sim/citizens";
+import { deriveWorkplaceParking } from "@/tiles/workplaceParking";
+import { deriveWorkplaceBikeRacks } from "@/tiles/workplaceBikeRacks";
 
 // The mode's dials, calibrated against what a train on THIS engine actually
 // does. A train cruises at `DEFAULT_SPEED` = 0.5 tiles/sec, so a shuttle on a
@@ -81,19 +83,35 @@ const TUNING: Partial<CitizenTuning> = {
 // day — so a full staff car park costs its owner a walk, and the player a mood.
 // See docs/superpowers/specs/2026-08-04-workplace-parking-design.md.
 //
-// What this mode does NOT do yet: derive staff parking for whatever board it is
-// handed. The pass (`tiles/workplaceParking.ts`) is applied in a board's OWN
-// data, because `createGame` takes the level it is given rather than the one
-// `setup()` returns — see KNOWHOW → WORKPLACE PARKING.
+// Since 2026-08-21, `setup()` derives the forecourt LADDER for whatever board
+// it is handed: three staff car bays at every works' gate, then a six-stand
+// bike rack beside them. The transform reaches /play through PlayView's
+// `setup.level` promotion; TestStage and unit tests hand `createGame` the
+// scenario's own level, which is why every scenario still applies the passes
+// in its OWN data — see KNOWHOW → WORKPLACE PARKING.
 export const citizensMode: GameMode = {
   id: "citizens",
   label: "Citizens",
   description:
     "Towns full of people who need to get to work. Build the network they will actually use.",
   setup(ctx: ModeContext): ModeSetup {
+    // THE PARKING LADDER, derived for the board the mode is handed: the car
+    // pass first (three staff bays claim the gate kerb), the bike pass right
+    // after (the rack yields it and lands one tile along). Both passes are
+    // idempotent and hand back the SAME object when there is nothing to lay,
+    // so a board that already derived its parking in its own data — every
+    // /test scenario does — passes through untouched and PlayView's
+    // `setup.level !== ctx.level` promotion stays off.
+    //
+    // Seed: the passes' default (1) matches `gameConfig.colorSeed`'s default,
+    // which is what the citizen world falls back to (`citizenSetup.seed ??
+    // colorSeed` in game.ts). Today the seed only spreads plot DENSITY —
+    // work/shop kinds are seed-independent — so a custom colorSeed cannot
+    // misplace a forecourt.
+    const level = deriveWorkplaceBikeRacks(deriveWorkplaceParking(ctx.level));
     return {
       levelId: ctx.levelId,
-      level: ctx.level,
+      level,
       trains: ctx.trains,
       // Endless: the objective never completes, so the phase stays Playing and
       // the city cards are the score. Losing people is the failure, and it is

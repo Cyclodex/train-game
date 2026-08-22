@@ -1756,6 +1756,73 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   leave, and are replaced by people who may also lack cars. Population holds
   steady while the town self-selects for drivers, so `access` shows the failure
   only as a DIP — assert on the minimum over a run, never the end state.
+- **THE BIKE HAS ITS RETURN HALF** (2026-08-22, destination-parking task 1).
+  `Citizen.parkedBike` is `parkedCar`'s sibling ({tripId, at, tileId}): a bike
+  trip to work/shop dispatches with a park ask (`bikeParkTiles` = 2 — its OWN
+  tiny radius, never `PARK_SEARCH_TILES`/`homeParkTiles`; the class gate makes
+  the same ask land only on `BayClass "bike"` stands), the stand is HELD for
+  the dwell (the road sim's `HELD_DWELL_SEC` requested-trip contract, owner's
+  return ends it), and going home `resume`s the SAME bike, retired at the door
+  — the shed; home bike parking has no scarcity by design, so `parkedBike`
+  never points home.
+    · `parkedBike.at` is a PLOT id for a plain ride and a STATION id for
+      bike-and-ride — the reversed quote looks the station up by it.
+    · Bike-and-ride's return is the quote REVERSED (`ModeQuote.bikeReturn` /
+      `Trip.bikeReturn`): walk to a platform, train to the racked bike, walk
+      platform→rack, `mountParkedBike` rides it home. Offered INSTEAD of the
+      outbound shape while the bike is racked; the plain-bike quote also
+      refuses ("no-bike") whenever the one bike is not at `fromId` — the
+      one-bike invariant that keeps a second dispatch from overwriting the
+      record and stranding a held stand.
+    · NO free stand at dispatch → the park-asking request returns null and the
+      citizen layer retries WITHOUT the ask, flagging `Trip.wildPark` — the
+      WILD PARK (task 3, 2026-08-22): the ride still happens, and on arrival
+      the bike becomes `parkedBike` with `wild: true` at the destination's
+      frontage road tile (B+R: the station's rack tile). A car never gets that
+      retry: nowhere to park means the car does not set off.
+    · A bike mode never resumes the parked CAR and vice versa (separate
+      fields, `mine = bikeMode ? parkedBike : parkedCar`); send-it-after-them,
+      refusal and abandon all mirror the car via `sendBikeAway`; emigrants'
+      bikes are sent home too. `citizenStats.bikesParked` is the headless
+      observable (no at-home twin — the shed holds no record).
+- **WILD PARKING — the ladder's visible bottom rung** (2026-08-22, task 3).
+  The bike ladder is now COMPLETE: derived mini-rack → player-built racks →
+  wild park; slow, never strand, same shape as the car's forecourt→car
+  park→informal kerb.
+    · A wild bike is a CITIZEN RECORD ONLY (`parkedBike.wild`): the road-sim
+      vehicle is retired at the address as before, no rack stand is held and
+      no parking-registry row exists. `CitizenSim.wildBikes()` is the single
+      per-tile source (tests + renderer); `stats().bikesWild` /
+      `citizenStats.bikesWild` the count.
+    · THE COST PATH is the journey, per canon (no standing reputation stat):
+      arrival charges `wildSearchSec(count)` = `bikeSearchSec` (15s) + 2s per
+      bike already leaning there, capped at +10 — as a "parking" leg, so it
+      lands on the trip stopwatch and thence in mood. The QUOTE adds the same
+      figure only when wild bikes ALREADY stand at the destination frontage
+      (evidence, never speculation — the share pins in citizenBikes.spec.ts
+      stay untouched); the first rider to find the rack full pays unquoted,
+      which is the mood gap working as designed.
+    · `wantedSpace` must be read BEFORE `driving.release` — release clears the
+      road sim's trip record and the flag reads false after (the car's
+      arrival-search charge was dead through the real wiring for exactly this;
+      fixed in the same pass). AND it is per-TRIP, surviving the evening
+      resume: the arrival branch needs the `purpose !== "home"` shed guard or
+      every commute home ends wild-parked on its own doorstep.
+    · RETURN LEG: `resume` on a wild bike's stale trip id answers false and
+      the existing chain (fresh bike from the frontage tile → clock) rides
+      them home unchanged; the record clears via the send-away guard.
+    · RENDERING is a mirror, not a model: `game.ts → updateWildBikes()` poses
+      `.wild-bike` divs on the pavement band by the plot's driveway (slots
+      alternate outward from the gate, lean/jitter seeded from the owner id —
+      no RNG at read time), CSS duplicated in PlayView.vue AND TestStage.vue
+      like the road-car block. Pedestrians ignore them (footway refuses
+      conflict modelling). `/test/bikeoverflow` is the demo; its geometry is
+      measured: doors past manhattan 5-6 refuse the bike row (`bikeRangeOf`),
+      so an overflow board keeps every home 4-6 from the works.
+    · `transferParkedArrivals` (game.ts) now skips stalls claimed by a
+      CITIZEN's own vehicle (trip/parkedCar/parkedBike id match): a B+R
+      commuter's racked bike no longer injects a daily anonymous phantom
+      passenger beside its real rider.
 
 ## LIFE STAGES & DAILY ROUTINES (2026-08-04)
 - Everybody used to get the same three numbers (`outHour`/`backHour`/`shopHour`),
@@ -2434,7 +2501,12 @@ Four rules, each measured on that board, each of which failed silently:
   restart at t=0), bus positions/riders aboard (roster re-bought onto lines),
   the citizen layer (save UI hidden in Citizens mode, v1), the undo window,
   the event log. `blockStates` is dropped → one re-emitted `blocked` log line
-  per held train after a load.
+  per held train after a load. The citizen layer's held parking claims ride on
+  this: `parkedCar`/`parkedBike` (incl. wild bikes) live inside the citizen sim
+  + road sim + parking registry, ALL freshly constructed on the load path
+  (`restoreSave` targets a game freshly built from the save), so a stall can
+  never survive a load as "taken" with its owner forgotten. Whoever lifts the
+  v1 gate must either snapshot those claims or keep this rebuild property.
 - ALIASING TRAP: on the load path the game is CREATED from `save.level`, so
   `level === save.level` inside `restoreSave` — copy the save's level BEFORE
   clearing the live one, or you restore an empty board (measured: every train
@@ -3344,6 +3416,27 @@ Four rules, each measured on that board, each of which failed silently:
   a CYCLE, not a sink, and that is the property to assert. `frontTiles` must skip
   parked cars AND unit-less samples (a garaged car has `units: []`).
   Dwell must fit the sweep's 40s window on a demo map, or one cycle is all you get.
+- **THE BIKE FORECOURT IS DERIVED TOO** (`tiles/workplaceBikeRacks.ts`,
+  2026-08-21): every work/shop plot grows a SIX-stand `bikerack` row at its
+  frontage — deliberately short of the workforce, the same gap as the three
+  staff car bays. Placement negotiates the frontage in order: the gate kerb,
+  then ONE TILE ALONG the same kerb run (the usual outcome — the car bays fill
+  the gate kerb edge to edge and two rows may never hug one bank), then the far
+  kerb of the frontage street. `align: "centre"` (street furniture, not a
+  parking edge), ambient `dwellSec` [180,420] like the staff bays.
+  · CLASH RULES: a rack is KERBSIDE furniture, so it vetoes with
+    `kerbRunClash(..., "parallel")` — legal beside parallel car bays next door,
+    refused beside a drive/forecourt (across-kerb) on the same flank.
+  · A rack row REJECTED by `validateParking` is dropped, NOT re-planned onto
+    the plot's next candidate kerb (the car pass's one-shot discipline). A 3+3
+    boulevard rejects racks outright: kerb 84px + 18px depth overhangs the tile.
+  · IDEMPOTENT PER PLOT, not per kerb (the home pass's lesson): a rack already
+    standing at any of the plot's candidate kerbs serves it.
+  · The citizens mode's `setup()` now derives the ladder (cars then racks) for
+    the board it is handed — reaches /play via PlayView's `setup.level`
+    promotion; scenarios still derive in their OWN data for /test and tests.
+  · `/test/bikeforecourt` is the demo: one works, three car bays, six stands,
+    more riders than stands.
 
 ## WORKPLACE PARKING (the commuter's car stops somewhere, 2026-08-04)
 Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
@@ -3367,11 +3460,12 @@ Design: `docs/superpowers/specs/2026-08-04-workplace-parking-design.md`.
     and any the validator objects to is DROPPED, because the objections are not
     local: bays on a dead-end stub turn that stub into a car park with no way out,
     which is a property of a flood fill. Idempotent, so a second pass is a no-op.
-  · APPLIED IN THE SCENARIO'S OWN DATA, not in `citizensMode.setup`. `PlayView`
-    uses `setup.level`, but **TestStage passes `scenario.level` straight to
-    `createGame`** and `createGame` never reads `setup.level` either — so a
-    mode-setup transform reaches the play board and NOTHING in `/test` or in any
-    unit test. Wiring it into the mode needs that fixed first.
+  · APPLIED IN BOTH PLACES since 2026-08-21: `citizensMode.setup` derives the
+    ladder (cars, then bike racks) for the board it is handed — reaching /play
+    through PlayView's `setup.level` promotion — AND every scenario still
+    derives in its OWN data, because **TestStage passes `scenario.level`
+    straight to `createGame`** and `createGame` never reads `setup.level`. Both
+    passes are idempotent, so the double application is a no-op by design.
 - **`ParkingRow.marking: "none"` IS THE AMERICAN WIDE STREET**: carriageway keeps
   every one of its own markings, the parking edge has no white boxes. PAINT, not a
   new `StallKind` — depth/pitch/manoeuvre/exit are identical to `parallel`, and

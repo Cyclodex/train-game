@@ -32,7 +32,12 @@ bikes beat the walk from one tile out and the walking boards inverted. §6's
 acceptance held: bikes eat walk-or-drive share (citizenwalk 0.89→0.62 walk,
 walk+bike >0.7; a car-only town's strandings FALL — bikes rescue some of the
 carless). B+R's bike is retired at the rack's street like P+R's car — the
-held-stall "return half" is one shared debt. Scenario `/test/citizenbike`;
+held-stall "return half" is one shared debt. *(2026-08-22: no longer — the
+BIKE's return half shipped with the destination-parking design
+(`2026-08-21-bike-destination-parking-design.md`, tasks 1-3): the stand is
+held all day and the same bike rides home, with derived mini-racks at the
+gates and visible wild parking as the backstop. Only the P+R CAR's return
+half remains open, IMPROVEMENTS item 15.)* Scenario `/test/citizenbike`;
 pins in `tests/unit/citizenBikes.spec.ts`. Phase D (shared paths) remains a
 plan. The rest of this document is the impact survey and
 phased design for bringing bicycles into the game: on the carriageway, in their

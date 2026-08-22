@@ -39,6 +39,7 @@ import {
   createCitizenSim,
 } from "@/sim/citizens";
 import { facilityOf, rowFor } from "@/tiles/parking";
+import { pavementOffsets } from "@/tiles/footway";
 import { JunctionSignal } from "@/sim/junctionSignal";
 import {
   laneCount,
@@ -295,6 +296,21 @@ export interface RoadCar {
   angle: number;
   widthPx: number;
   part: string;
+}
+
+// A wild-parked bike, posed for drawing: a citizen's bike left LEANING on the
+// pavement band near its destination's driveway because every rack stand in
+// reach was taken. Renderer-only bodies — the model is the citizen's own
+// `parkedBike` record (`CitizenSim.wildBikes()` is the single source), there is
+// no road-sim vehicle and no parking-registry stall behind one of these, and
+// pedestrians walk straight through them (the footway module refuses conflict
+// modelling by design). Pose and scatter are seeded from the owner's id, so the
+// same bike leans the same way on every frame and every run.
+export interface WildBikeView {
+  id: string; // the owning citizen's id — stable for the bike's whole stay
+  x: number; // px, world
+  y: number;
+  angle: number; // deg — roughly along the kerb, scattered
 }
 
 // One tile-local segment of a car's drawn route: the SVG path `d` (from
@@ -558,6 +574,11 @@ export interface Game {
   // People on the pavements, sampled to world PIXELS each frame for rendering.
   // Empty for every mode without a citizen layer.
   pedestrians: PedestrianDot[];
+  // Bikes left LEANING at a frontage because every rack stand in reach was
+  // taken — the wild park made visible. Posed world-pixel bodies mirrored from
+  // `CitizenSim.wildBikes()` each world step; renderer-only (no road-sim
+  // vehicle, no stall). Empty for every mode without a citizen layer.
+  wildBikes: WildBikeView[];
   // THE INSPECTOR. All built on demand — nothing is stepped or stored, so a
   // closed panel costs nothing. Null/empty on every mode without citizens.
   inspectPlot(plotId: string): PlotCard | null;
@@ -836,6 +857,10 @@ export interface CitizenHud {
   // ...and how many of those are on their own drive at home rather than out at
   // a workplace. The two swap over across a day, which is the cycle itself.
   carsAtHome: number;
+  // Bikes left LEANING at a frontage because every stand in reach was taken —
+  // the wild park as one number. Zero means the racks are coping; a rising
+  // count is the pavement clutter, readable headlessly.
+  bikesWild: number;
   tripsCompleted: number;
   tripsRefused: number;
   tripsAbandoned: number;
@@ -1537,6 +1562,7 @@ export function createGame(
   // coming, so cars brake, queue and resume with no new traffic rule at all.
   let pedestrianClaims: string[] = [];
   const pedestrians = reactive([]) as PedestrianDot[];
+  const wildBikes = reactive([]) as WildBikeView[];
   const cities = reactive([]) as CityState[];
   const citizenStats = reactive({
     enabled: false,
@@ -1547,6 +1573,7 @@ export function createGame(
     onFoot: 0,
     carsParked: 0,
     carsAtHome: 0,
+    bikesWild: 0,
     tripsCompleted: 0,
     tripsRefused: 0,
     tripsAbandoned: 0,
@@ -1563,6 +1590,7 @@ export function createGame(
       return;
     }
     pedestrians.splice(0, pedestrians.length);
+    wildBikes.splice(0, wildBikes.length);
     pedestrianClaims = [];
     carTiles.clear();
     // The people ON the pavements. Its own little sim, NOT part of the road
@@ -1669,6 +1697,7 @@ export function createGame(
     citizenStats.onFoot = s.onFoot;
     citizenStats.carsParked = s.carsParked;
     citizenStats.carsAtHome = s.carsAtHome;
+    citizenStats.bikesWild = s.bikesWild;
     citizenStats.tripsCompleted = s.tripsCompleted;
     citizenStats.tripsRefused = s.tripsRefused;
     citizenStats.tripsAbandoned = s.tripsAbandoned;
@@ -1997,6 +2026,85 @@ export function createGame(
     }
   }
 
+  // The same tiny stable-number-from-an-id the citizen sim uses: a wild bike's
+  // lean and jitter must not re-roll between frames or runs (determinism
+  // canon — no RNG draw at read time).
+  function wildHash(id: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+    return h >>> 0;
+  }
+
+  // WILD-PARKED BIKES, posed for the board: every `wild` record in the citizen
+  // sim becomes a small leaning body on the pavement band of its frontage tile,
+  // by the driveway of the plot it was left for. Renderer-only — the record IS
+  // the model (no road-sim vehicle, no stall), so this mirror is the only place
+  // a screen position exists. Sampled in `advance()` like the pedestrians, so a
+  // hidden tab does not freeze it and a headless test could read the array.
+  //
+  // THE POSE. Bikes fill the kerb OUTWARD from the driveway: the first leans
+  // right at the gate, later ones alternate left/right of it a slot at a time,
+  // so the clutter visibly GROWS along the street with the count — which is the
+  // entire message of the feature. Each bike adds its own seeded lean (±20°
+  // about the kerb line) and a little positional jitter that gets messier for
+  // the outer slots: a full gate reads as a jumble, not as a derived rack.
+  function updateWildBikes() {
+    const records = citizenSim?.wildBikes() ?? [];
+    const byTile = new Map<string, { citizenId: string; at: string }[]>();
+    for (const r of records) {
+      const list = byTile.get(r.tileId) ?? [];
+      list.push(r);
+      byTile.set(r.tileId, list);
+    }
+    const next: WildBikeView[] = [];
+    for (const [tileId, list] of byTile) {
+      // Owner-id order: deterministic whatever order the records arrived in.
+      list.sort((a, b) => (a.citizenId < b.citizenId ? -1 : a.citizenId > b.citizenId ? 1 : 0));
+      const tile = parseCoordId(tileId);
+      const cx = (tile.x + 0.5) * tileSize;
+      const cy = (tile.y + 0.5) * tileSize;
+      // Just past the pavement's centreline, toward the plot: leaning at the
+      // fence line, behind the walkers, clearly off the carriageway.
+      const lat = ((pavementOffsets(level[tileId])[0] + 3) / 100) * tileSize;
+      const pitch = tileSize * 0.055; // ~11px between slots at the native tile
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i];
+        // Which side of the street the plot (or station) lies on — its
+        // driveway's side, which is the pavement the bike leans against.
+        const at = parseCoordId(r.at);
+        const ddx = at.x - tile.x;
+        const ddy = at.y - tile.y;
+        const vertical = Math.abs(ddy) >= Math.abs(ddx);
+        const side = vertical ? (ddy >= 0 ? 1 : -1) : (ddx >= 0 ? 1 : -1);
+        const h = wildHash(r.citizenId);
+        // Slot 0 at the gate, then alternating outward; jitter grows with the
+        // slot so the far end of a long row is the untidiest.
+        const slot = (((i + 1) >> 1) * (i % 2 === 0 ? 1 : -1)) * pitch;
+        const mess = 1 + Math.min(i, 6) * 0.2;
+        const along = slot + ((h % 7) - 3) * 0.6 * mess;
+        const across = (((h >> 3) % 5) - 2) * 0.8;
+        const lean = ((h >> 6) % 41) - 20;
+        // The kerb line: 0° on an east-west street, 90° on a north-south one.
+        const base = vertical ? 0 : 90;
+        next.push({
+          id: r.citizenId,
+          x: vertical ? cx + along : cx + side * lat + across,
+          y: vertical ? cy + side * lat + across : cy + along,
+          angle: base + lean * mess,
+        });
+      }
+    }
+    // In-place mirror, only notifying on real change — the roadCars manner.
+    wildBikes.length = next.length;
+    for (let i = 0; i < next.length; i++) {
+      const cur = wildBikes[i];
+      const w = next[i];
+      if (cur && cur.id === w.id && cur.x === w.x && cur.y === w.y && cur.angle === w.angle)
+        continue;
+      wildBikes[i] = w;
+    }
+  }
+
   rebuildCitizens();
 
   // Park & ride: the station (if any) within walking reach of each tile,
@@ -2031,12 +2139,39 @@ export function createGame(
   // stallId: `${tileId}|…`), which locates both the station in reach and the
   // row that says who got out.
   let prevStalls = new Set<string>();
+
+  // Is this parked vehicle a CITIZEN's — a named person the citizen layer is
+  // already walking to the platform (or to their desk) itself? The ambient
+  // transfer below must skip those, or every bike-and-ride commuter's racked
+  // bike would put a SECOND, anonymous passenger on the platform beside its
+  // real rider, one phantom per commuter per day. Checked against all three
+  // places the citizen layer can be holding the trip id when the stall claim
+  // lands: the live trip (this runs after `citizenSim.step`, which usually has
+  // already moved the id...), and the parked records it moved it to.
+  function citizenVehicle(carId: string): boolean {
+    for (const c of citizenSim?.citizens() ?? []) {
+      if (
+        c.trip?.carTrip === carId ||
+        c.parkedCar?.tripId === carId ||
+        c.parkedBike?.tripId === carId
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function transferParkedArrivals() {
-    const cur = new Set(Object.keys(roadSim.parkingOccupancy()));
+    const held = roadSim.parkingOccupancy();
+    const cur = new Set(Object.keys(held));
     for (const id of cur) {
       if (!prevStalls.has(id)) {
         const station = prTargets[id.split("|")[0]];
-        if (station) sim.addStationPassengers(station, transferSizeOf(id));
+        // Ambient vehicles only: an anonymous car's driver becomes anonymous
+        // platform demand, a citizen's own vehicle already carries its rider.
+        if (station && !citizenVehicle(held[id])) {
+          sim.addStationPassengers(station, transferSizeOf(id));
+        }
       }
     }
     prevStalls = cur;
@@ -3594,6 +3729,7 @@ export function createGame(
       );
       refreshCitizens();
       updatePedestrians();
+      updateWildBikes();
     }
     // A crossing is closed while a train reserves or sits on that tile — and,
     // now, while somebody is crossing the road on a zebra there. One predicate,
@@ -4278,6 +4414,7 @@ export function createGame(
     cities,
     citizenStats,
     pedestrians,
+    wildBikes,
     inspectPlot,
     inspectPerson,
     compareModes,
