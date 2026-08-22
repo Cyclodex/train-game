@@ -571,6 +571,7 @@
 <script lang="ts">
 import { Component, Inject, Prop, Vue, toNative } from "vue-facing-decorator";
 import { GameConfig, GAME_CONFIG_KEY } from "@/gameConfig";
+import { gameAudio } from "@/audio/engine";
 import type { Game } from "@/game";
 import type { SimTrain } from "@/sim/simulation";
 import { getCoordinatesId } from "@/utils/tileHelpers";
@@ -2312,6 +2313,12 @@ class Tile extends Vue {
         : arm;
     if (next === null) return;
     if (!this.game.switches[this.coordId]) this.game.switches[this.coordId] = {};
+    // The clack only when the points actually MOVE. Gated on `next`, not on the
+    // clicked `arm`: clicking the armed exit now steps on to the following one,
+    // so the arm clicked and the arm set are routinely different — and the one
+    // case that still changes nothing (a switch with a single reachable exit,
+    // where nextArm hands back what is already set) must stay silent.
+    if (this.game.switches[this.coordId][entry] !== next) gameAudio.play("switch");
     this.game.switches[this.coordId][entry] = next;
     // Keep the fan open on the entry just thrown: on a touch screen there is no
     // hover to hold it, and after a cycle the player wants to see what the other

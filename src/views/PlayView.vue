@@ -44,6 +44,54 @@
         <span>🎨</span><span>Theme</span>
         <span class="drawer-btn__val">{{ themeIcon }}</span>
       </button>
+      <button class="drawer-btn" :class="{ on: !soundMuted }" @click="toggleSound">
+        <span>{{ soundMuted ? "🔇" : "🔊" }}</span><span>Sound</span>
+        <span class="drawer-btn__val">{{ soundMuted ? "off" : "on" }}</span>
+      </button>
+      <!-- The two levels. Read live by the engine every frame, so the drag is
+           heard as it happens; persisted through the setters like the mutes. -->
+      <div class="drawer-slider">
+        <span>🔊</span><span>Volume</span>
+        <span class="drawer-btn__val">{{ config.soundVolume }}%</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="config.soundVolume"
+          :disabled="soundMuted"
+          title="Master level — everything"
+          @input="onSoundVolume"
+          @click.stop
+        />
+      </div>
+      <button
+        class="drawer-btn"
+        :class="{ on: !musicMuted && !soundMuted }"
+        :disabled="soundMuted"
+        title="The music under the game — its own switch, so you can keep the clacks and lose the banjo"
+        @click="toggleMusic"
+      >
+        <span>🎵</span><span>Music</span>
+        <span class="drawer-btn__val">{{ musicMuted ? "off" : "on" }}</span>
+      </button>
+      <div class="drawer-slider">
+        <span>🎵</span><span>Volume</span>
+        <span class="drawer-btn__val">{{ config.musicVolume }}%</span>
+        <input
+          class="drawer-range"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          :value="config.musicVolume"
+          :disabled="soundMuted || musicMuted"
+          title="Music level — under the master"
+          @input="onMusicVolume"
+          @click.stop
+        />
+      </div>
       <div class="drawer-divider"></div>
       <button v-if="canSave" class="drawer-btn" @click="openSaves">
         <span>💾</span><span>Saves</span>
@@ -310,7 +358,16 @@
       <!-- The whole money HUD off the board is this one line. The fares live on
            the board as pins over their trains; anything more and we are building
            TV2's chrome (design doc §5.5). -->
-      <div v-if="hud.money" class="score-money" title="Balance">
+      <!-- Keyed on lifetime earnings so the row flashes exactly once per
+           banked fare (the tax row's pattern) — the class gate keeps the very
+           first mount, earnings still zero, from flashing over nothing. -->
+      <div
+        v-if="hud.money"
+        :key="`bank-${moneyEarned}`"
+        class="score-money"
+        :class="{ 'score-money--banked': moneyEarned > 0 }"
+        title="Balance"
+      >
         💰 {{ balanceLabel }}
       </div>
       <!-- The second clock (§1.3), and the whole of it: a date instead of a
@@ -637,6 +694,10 @@
         :badge="badge"
         @send="onFareClick(badge)"
       />
+      <!-- Transient feedback: delivery pulse, bounce squash, and the banked
+           fare flying off toward the HUD account. Absolutely positioned like
+           the fare pins (KNOWHOW → RENDER LAYOUT). -->
+      <FxLayer :fx="game.fx" :tile-size="config.tileSize" :cash-target="fxCashTarget" />
       <!-- The coach-mark: one anchored hint at a time, dismissed by performing
            the action it teaches (src/coach.ts). Absolutely positioned world
            chrome like the fare pins, and pointer-events:none so it can never
@@ -888,6 +949,10 @@ import {
   gameConfig,
   SwitchLockMode,
   setWorldTheme,
+  setSoundMuted,
+  setMusicMuted,
+  setSoundVolume,
+  setMusicVolume,
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import { Coordinates, Position, TrainsDefinition, TrainStatus } from "@/types";
@@ -937,6 +1002,7 @@ import { CampaignLevel, nextLevelAfter } from "@/campaign";
 import Crossing from "@/components/Crossing.vue";
 import CoachMark from "@/components/CoachMark.vue";
 import FarePin from "@/components/FarePin.vue";
+import FxLayer from "@/components/FxLayer.vue";
 import CityPanel from "@/components/CityPanel.vue";
 import CitizenInspector from "@/components/CitizenInspector.vue";
 import PersonPin from "@/components/PersonPin.vue";
@@ -1074,7 +1140,7 @@ function resolveBoard(
   return { level: fallbackLevel, trains: fallbackTrains, levelId: fallbackLevelId, setup };
 }
 
-@Component({ components: { BuildDock, CoachMark, Crossing, FarePin, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { BuildDock, CoachMark, Crossing, FarePin, FxLayer, GoalList, MenuDrawer, CityPanel, CitizenInspector, PersonPin } })
 class PlayView extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   speeds = [1, 2, 4];
@@ -2746,6 +2812,39 @@ class PlayView extends Vue {
     setWorldTheme(nextTheme(this.config.worldTheme));
   }
 
+  get soundMuted(): boolean {
+    return this.config.soundMuted;
+  }
+  toggleSound() {
+    setSoundMuted(!this.config.soundMuted);
+  }
+  get musicMuted(): boolean {
+    return this.config.musicMuted;
+  }
+  toggleMusic() {
+    setMusicMuted(!this.config.musicMuted);
+  }
+  onSoundVolume(e: Event) {
+    setSoundVolume(Number((e.target as HTMLInputElement).value));
+  }
+  onMusicVolume(e: Event) {
+    setMusicVolume(Number((e.target as HTMLInputElement).value));
+  }
+
+  // Lifetime earnings — the money row's flash key: a banked fare changes it,
+  // so the row replays its animation exactly once per payout.
+  get moneyEarned(): number {
+    return this.game.money.earned;
+  }
+
+  // Where a banked fare's chip flies to, in WORLD px: the score card's money
+  // row lives at the viewport's top-left, so the screen point is fixed and the
+  // camera maps it into the world (screen = (world - cam) * zoom, inverted).
+  get fxCashTarget(): { x: number; y: number } {
+    const cam = this.camera;
+    return { x: cam.x + 150 / cam.zoom, y: cam.y + 150 / cam.zoom };
+  }
+
   switchDebugMode() {
     this.config.debug = !this.config.debug;
   }
@@ -3422,6 +3521,27 @@ export default toNative(PlayView);
   font-size: 17px;
   letter-spacing: 0.01em;
   color: #f4d47a;
+}
+// One green pop per banked fare (keyed on lifetime earnings) — the landing
+// half of the flying cash chip.
+.score-money--banked {
+  animation: money-banked 0.8s ease-out;
+}
+@keyframes money-banked {
+  0% {
+    color: #f4d47a;
+    transform: scale(1);
+  }
+  25% {
+    color: #5fd39a;
+    transform: scale(1.18);
+    text-shadow: 0 0 14px rgba(95, 211, 154, 0.8);
+  }
+  100% {
+    color: #f4d47a;
+    transform: scale(1);
+    text-shadow: none;
+  }
 }
 .score-calendar {
   margin-top: 2px;

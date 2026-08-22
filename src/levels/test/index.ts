@@ -113,6 +113,7 @@ import { timeattack } from "@/levels/test/scenarios/timeattack";
 import { coachmarks } from "@/levels/test/scenarios/coachmarks";
 import { dispatch } from "@/levels/test/scenarios/dispatch";
 import { faredistance } from "@/levels/test/scenarios/faredistance";
+import { gamefeel } from "@/levels/test/scenarios/gamefeel";
 import { heldby } from "@/levels/test/scenarios/heldby";
 import { buildgap } from "@/levels/test/scenarios/buildgap";
 import { taxyear } from "@/levels/test/scenarios/taxyear";
@@ -275,11 +276,12 @@ export const DOMAINS: ScenarioDomain[] = [
       // objective-carrying picker mode present.
       { id: "modes", label: "Game modes", scenarios: [daily, objectives, dispatch, networkmode, threecities, timeattack] },
       // The Tycoon deep-dives, one dial per board: fare decay by distance,
-      // blocked routes, buying track, land prices, the tax year and its
-      // bankruptcy fail state — plus the coach-marks that teach the mode's
-      // verbs (a second tycoon board, so it lives here rather than in the
-      // one-demo-per-mode gallery above).
-      { id: "economy", label: "Economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks, farebox] },
+      // the feedback layer (sound + FX), blocked routes, buying track, land
+      // prices, the tax year and its bankruptcy fail state — plus the
+      // coach-marks that teach the mode's verbs (a second tycoon board, so it
+      // lives here rather than in the one-demo-per-mode gallery above) and the
+      // farebox, where the demand modes join the ledger.
+      { id: "economy", label: "Economy", scenarios: [faredistance, gamefeel, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks, farebox] },
       // The save/load round-trip board (docs/superpowers/specs/
       // 2026-08-21-save-load-design.md): the level the snapshot/restore unit
       // tests run on, and — via /#/play?board=saveload — a small deterministic

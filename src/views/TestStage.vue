@@ -11,6 +11,13 @@
       >
         {{ config.plainBackdrop ? "🌳 BG off" : "🌳 BG on" }}
       </button>
+      <button
+        class="stage-button"
+        title="The music under the game (its own switch; the master mute lives in the play drawer)"
+        @click="toggleMusic"
+      >
+        {{ config.musicMuted ? "🎵 off" : "🎵 on" }}
+      </button>
       <button class="stage-button" @click="pausePlay">
         {{ paused ? "Start" : "Pause" }}
       </button>
@@ -223,6 +230,10 @@
         :badge="badge"
         @send="onFareClick(badge)"
       />
+      <!-- Transient feedback (delivery pulse / bounce squash / flying fare).
+           The stage has no money HUD to fly to, so the cash chip drifts up in
+           place (cash-target unset). -->
+      <FxLayer :fx="game.fx" :tile-size="config.tileSize" />
       <!-- The coach-mark (src/coach.ts): the stage runs the same game, so a
            board with a hint list teaches here too — /test/coachmarks is the
            mechanic's isolation scenario. -->
@@ -267,7 +278,7 @@
 <script lang="ts">
 import { markRaw } from "vue";
 import { Component, Inject, Prop, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
+import { GameConfig, GAME_CONFIG_KEY, gameConfig, setMusicMuted } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, FareBadge, Game, MoneyState, RoadCar, TrainDef } from "@/game";
@@ -279,6 +290,7 @@ import { setEditorSeed } from "@/editorSeed";
 import CoachMark from "@/components/CoachMark.vue";
 import Crossing from "@/components/Crossing.vue";
 import FarePin from "@/components/FarePin.vue";
+import FxLayer from "@/components/FxLayer.vue";
 import CityPanel from "@/components/CityPanel.vue";
 import CitizenInspector from "@/components/CitizenInspector.vue";
 import PersonPin from "@/components/PersonPin.vue";
@@ -303,7 +315,7 @@ function buildTrainDefs(trains: TrainsDefinition): TrainDef[] {
 // Renders one scenario: it owns a fresh game and provides it (with markRaw, like
 // PlayView). TestView keys this component on the scenario id, so switching
 // scenarios destroys and recreates it — a clean teardown of the old game.
-@Component({ components: { CoachMark, Crossing, FarePin, CityPanel, CitizenInspector, PersonPin } })
+@Component({ components: { CoachMark, Crossing, FarePin, FxLayer, CityPanel, CitizenInspector, PersonPin } })
 class TestStage extends Vue {
   @Inject({ from: GAME_CONFIG_KEY }) config!: GameConfig;
   @Prop({ required: true }) scenario!: TestScenario;
@@ -658,6 +670,9 @@ class TestStage extends Vue {
   cycleSpeed() {
     const i = this.speeds.indexOf(this.game.speed.value);
     this.game.speed.value = this.speeds[(i + 1) % this.speeds.length];
+  }
+  toggleMusic() {
+    setMusicMuted(!this.config.musicMuted);
   }
 }
 

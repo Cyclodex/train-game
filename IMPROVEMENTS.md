@@ -132,9 +132,18 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    only), and ROAD-over-rail grade separation — deliberately deferred until the
    parking branch lands, since it touches the road layer that branch rewrites.
    `docs/road-future-improvements.md` §3.1/3.2.
-7. **Polish.** Sound effects (depart, brake, deliver, crash), richer arrival
-   feedback, and pixel-uniform wagon coupling (spacing is measured in tile
-   fractions, so couplings read slightly tighter on curves than on straights).
+7. **Polish.** PARTLY SHIPPED 2026-08-21/22: a sound layer (`src/audio/`) —
+   CC0 samples for the discrete cues (delivery chime, bounce thud, points
+   clack, signal click, Tycoon cash) with a synthesis fallback, plus a
+   synthesised rolling ambience whose bed AND rail-joint clackety-clack follow
+   `sim.trainVelocity`, so they keep time at 1x/2x/4x; mute persisted in
+   `gameConfig.soundMuted`; and a CC0 music playlist under the game
+   (`src/audio/music.ts`, own switch `musicMuted`). Asset provenance + the
+   CC0-only rule live in `docs/ASSETS.md`. Feedback FX (`game.fx` + `FxLayer.vue`: delivery pulse,
+   bounce squash-flash, banked fare flying to the HUD; `/test/gamefeel`).
+   Remaining: depart/brake/crash sounds, a whistle on departure, and
+   pixel-uniform wagon coupling (spacing is measured in tile fractions, so
+   couplings read slightly tighter on curves than on straights).
 8. **Platforms longer than one tile** (the open end of the station thread, filed
    2026-08-04). A platform is one tile; a loco and two carriages are 1.54 of
    one. Since 2026-08-04 the sim stops a train so its CARRIAGES are centred on

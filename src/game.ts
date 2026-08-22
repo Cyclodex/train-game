@@ -70,6 +70,8 @@ export const SERVICE_TRAIN_WAGONS = 2;
 import { Colors, makeRng } from "@/utils/globalHelpers";
 import { assignColors, ColorAssignment } from "@/utils/colorAssignment";
 import { GameLogEntry, toLogEntry } from "@/gameLog";
+import { cuesForEvents, SoundCue } from "@/audio/cues";
+import { gameAudio } from "@/audio/engine";
 import { GameMode } from "@/modes/types";
 import {
   GoalSpec,
@@ -463,6 +465,26 @@ function sameHold(a: FareHold | undefined, b: FareHold | undefined): boolean {
 // clear the sprite and the depot roof without leaving the tile.
 const FARE_BADGE_LIFT = 0.34;
 
+// One transient feedback effect on the board (see components/FxLayer.vue):
+// a delivery pulse or bounce squash at a depot tile, or a banked fare flying
+// off toward the HUD. Appended by the event drain, pruned by age in the frame
+// loop; `at` is a wall-clock ms stamp (Date.now) so the pruning is real-time —
+// an animation's life must not stretch or shrink with the sim speed.
+export interface FeedbackFx {
+  id: number;
+  kind: "delivery" | "bounce" | "cash";
+  tileId: string;
+  // The banked amount, for the cash chip's label. Cash only.
+  amount?: number;
+  at: number;
+}
+
+// How long a feedback effect stays in the list. Longer than any of the CSS
+// animations it drives (the slowest is the cash flight at ~1.1s), so an effect
+// is never cut off mid-animation; the views keep finished ones invisible via
+// fill-mode until the prune collects them.
+export const FX_TTL_MS = 3000;
+
 // --- save / load (Spielstand) ------------------------------------------------
 //
 // A GameSave is the whole running game as plain JSON: the board (live AND the
@@ -687,6 +709,9 @@ export interface Game {
   // Newest-last activity log of decision-level simulation events (reservations,
   // holds, deliveries) for the debug panel. Capped to the most recent entries.
   eventLog: GameLogEntry[];
+  // Transient board feedback (delivery pulse / bounce squash / flying fare),
+  // appended by the event drain and pruned by age. Rendered by FxLayer.vue.
+  fx: FeedbackFx[];
   paused: Ref<boolean>;
   speed: Ref<number>;
   deliveries: Ref<number>;
@@ -2977,6 +3002,11 @@ export function createGame(
   let logSeq = 0;
   let clock = 0; // accumulated sim time in seconds
 
+  // Transient board feedback (see FeedbackFx). Appended in handleEvents,
+  // pruned by wall-clock age in frame().
+  const fx = reactive([]) as FeedbackFx[];
+  let fxSeq = 0;
+
   // The objective tracker for the active mode, driven by the per-tick observation.
   const tracker = mode.createObjective(setup);
   const goals = goalsOf(setup.objective);
@@ -3518,6 +3548,9 @@ export function createGame(
     let deliveredDelta = 0;
     let mismatchedDelta = 0;
     let passengersDeliveredDelta = 0;
+    // The tick's sound cues: the event mapping (delivery chime / bounce thud),
+    // plus the register when a fare is actually banked below.
+    const cues: SoundCue[] = cuesForEvents(events);
     for (const e of events) {
       // A train that reached its shed is gone from the sim; forget it here too
       // so the board stops drawing it and the panel stops listing it.
@@ -3534,10 +3567,21 @@ export function createGame(
           // decaying, which is exactly the cost of routing a train wrongly.
           const fare = fares?.settle(e.trainId) ?? 0;
           economy?.earn(fare, "fare", e.trainId);
-        } else mismatchedDelta += 1;
+          fx.push({ id: fxSeq++, kind: "delivery", tileId: e.tileId, at: Date.now() });
+          if (fare > 0) {
+            // A fare decayed to zero banks nothing — no register, no flying
+            // chip: the feedback must not congratulate an empty payout.
+            cues.push("cash");
+            fx.push({ id: fxSeq++, kind: "cash", tileId: e.tileId, amount: fare, at: Date.now() });
+          }
+        } else {
+          mismatchedDelta += 1;
+          fx.push({ id: fxSeq++, kind: "bounce", tileId: e.tileId, at: Date.now() });
+        }
       }
       eventLog.push(toLogEntry(e, logSeq++, clock));
     }
+    for (const cue of cues) gameAudio.play(cue);
     if (eventLog.length > MAX_LOG) eventLog.splice(0, eventLog.length - MAX_LOG);
     const manualHoldDelta = manualHoldTotal - lastHoldTotal;
     const manualGreenDelta = manualGreenTotal - lastGreenTotal;
@@ -3746,6 +3790,38 @@ export function createGame(
     updateReservations();
     updateStationQueues();
     updateTrainStatus();
+    // The rolling ambience: the bed's level follows how many trains are moving,
+    // and the rail-joint knocks follow how far they actually travelled this
+    // frame — so the clackety-clack keeps time with the trains on screen at 1x,
+    // 2x and 4x alike. Silent while paused (a frozen board must not hum).
+    //
+    // Real-time work, so it lives in the frame and not in advance(): a headless
+    // run makes no sound, and the audio must not become something `advance()`
+    // callers have to think about.
+    let moving = 0;
+    let travelled = 0;
+    let fastest = 0;
+    if (!paused.value) {
+      // The SAME scaled dt the world was just advanced by, so distance here is
+      // the distance the sim actually moved (and a Ready screen, which advances
+      // by 0, produces no knocks).
+      const waitingToStart = mode.hud.startOverlay && objective.phase === "ready";
+      const scaled = waitingToStart ? 0 : dt * speed.value;
+      for (const id of Object.keys(sim.trains)) {
+        const v = sim.trainVelocity(id);
+        if (v <= 0.01) continue;
+        moving += 1;
+        travelled += v * scaled;
+        if (v > fastest) fastest = v;
+      }
+    }
+    gameAudio.setTrainMotion(moving, travelled, fastest);
+    // Collect finished feedback effects. Wall-clock age, not sim time: the CSS
+    // animations these drive run in real time whatever the speed dial says.
+    if (fx.length) {
+      const cutoff = Date.now() - FX_TTL_MS;
+      while (fx.length && fx[0].at < cutoff) fx.shift();
+    }
     // LAST: a getter woken by the heartbeat must see a fully-mirrored frame,
     // not one halfway through being updated.
     renderTick.value += 1;
@@ -4267,6 +4343,10 @@ export function createGame(
     // train the restore just brought back.
     removedTrains.splice(0, removedTrains.length);
     eventLog.splice(0, eventLog.length);
+    // ...and the board's transient feedback with it, for the same reason: a
+    // delivery ring or a fare still flying belongs to the run that was on
+    // screen a moment ago, not to the one just loaded.
+    fx.splice(0, fx.length);
     for (const id of Object.keys(reservations)) delete reservations[id];
     for (const id of Object.keys(occupied)) delete occupied[id];
     for (const id of Object.keys(stationQueues)) delete stationQueues[id];
@@ -4371,6 +4451,7 @@ export function createGame(
     roadSignals,
     carRoute,
     eventLog,
+    fx,
     paused,
     speed,
     deliveries,
@@ -4397,10 +4478,17 @@ export function createGame(
       if (raf) return;
       last = 0;
       raf = requestAnimationFrame(frame);
+      // Music lives as long as the frame loop: on for a board being played or
+      // watched, off under the editor and the pickers (see engine.ts rule 5).
+      gameAudio.setMusic(true);
     },
     stop() {
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
+      // The frame that fed the rolling loop is gone; silence it rather than
+      // leaving the last volume humming under whatever view comes next.
+      gameAudio.setTrainMotion(0, 0, 0);
+      gameAudio.setMusic(false);
     },
     advance,
     startObjective() {
@@ -4452,6 +4540,7 @@ export function createGame(
       carsDeliveredBase = 0;
       clock = 0;
       eventLog.splice(0, eventLog.length);
+      fx.splice(0, fx.length);
       for (const id of Object.keys(reservations)) delete reservations[id];
       for (const id of Object.keys(occupied)) delete occupied[id];
       for (const id of Object.keys(stationQueues)) delete stationQueues[id];
@@ -4499,6 +4588,7 @@ export function createGame(
       const wasHeld = sim.isHeld(tileId, exitPort);
       sim.toggleHold(tileId, exitPort);
       if (!wasHeld && sim.isHeld(tileId, exitPort)) manualHoldTotal += 1;
+      gameAudio.play("signal");
     },
     isHeld(tileId: string, exitPort: Position) {
       return sim.isHeld(tileId, exitPort);
@@ -4531,6 +4621,7 @@ export function createGame(
       } else {
         sim.toggleHold(tileId, exitPort); // red -> auto
       }
+      gameAudio.play("signal");
     },
     positionUnit,
     roadLaneCount(coord: Coordinates, port: Position): number {
