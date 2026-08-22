@@ -137,8 +137,9 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
    clack, signal click, Tycoon cash) with a synthesis fallback, plus a
    synthesised rolling ambience whose bed AND rail-joint clackety-clack follow
    `sim.trainVelocity`, so they keep time at 1x/2x/4x; mute persisted in
-   `gameConfig.soundMuted`. Asset provenance + the CC0-only rule live in
-   `docs/ASSETS.md`. Feedback FX (`game.fx` + `FxLayer.vue`: delivery pulse,
+   `gameConfig.soundMuted`; and a CC0 music playlist under the game
+   (`src/audio/music.ts`, own switch `musicMuted`). Asset provenance + the
+   CC0-only rule live in `docs/ASSETS.md`. Feedback FX (`game.fx` + `FxLayer.vue`: delivery pulse,
    bounce squash-flash, banked fare flying to the HUD; `/test/gamefeel`).
    Remaining: depart/brake/crash sounds, a whistle on departure, and
    pixel-uniform wagon coupling (spacing is measured in tile fractions, so

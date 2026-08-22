@@ -11,6 +11,13 @@
       >
         {{ config.plainBackdrop ? "🌳 BG off" : "🌳 BG on" }}
       </button>
+      <button
+        class="stage-button"
+        title="The music under the game (its own switch; the master mute lives in the play drawer)"
+        @click="toggleMusic"
+      >
+        {{ config.musicMuted ? "🎵 off" : "🎵 on" }}
+      </button>
       <button class="stage-button" @click="pausePlay">
         {{ paused ? "Start" : "Pause" }}
       </button>
@@ -270,7 +277,7 @@
 <script lang="ts">
 import { markRaw } from "vue";
 import { Component, Inject, Prop, Provide, Vue, toNative } from "vue-facing-decorator";
-import { GameConfig, GAME_CONFIG_KEY, gameConfig } from "@/gameConfig";
+import { GameConfig, GAME_CONFIG_KEY, gameConfig, setMusicMuted } from "@/gameConfig";
 import { TrainsDefinition } from "@/types";
 import { Level, TileCell, isLevelCrossing } from "@/tiles/model";
 import { createGame, FareBadge, Game, MoneyState, RoadCar, TrainDef } from "@/game";
@@ -662,6 +669,9 @@ class TestStage extends Vue {
   cycleSpeed() {
     const i = this.speeds.indexOf(this.game.speed.value);
     this.game.speed.value = this.speeds[(i + 1) % this.speeds.length];
+  }
+  toggleMusic() {
+    setMusicMuted(!this.config.musicMuted);
   }
 }
 

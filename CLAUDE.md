@@ -268,7 +268,9 @@ Key files:
   cue mapping, `rollingGain`, `takeClacks`); `samples.ts` the CC0 sample manifest
   (bundled Kenney files in `samples/`, **provenance in `docs/ASSETS.md` — CC0
   only, keep it updated in the same commit**); `synth.ts` the fallback gestures
-  plus the synthesised ambience; `engine.ts` the Web Audio singleton `gameAudio`
+  plus the synthesised ambience; `music.ts` the CC0 playlist + its
+  media-element player (on while a game's frame loop runs, own mute
+  `gameConfig.musicMuted`); `engine.ts` the Web Audio singleton `gameAudio`
   (unlocked on first pointer/key gesture, headless no-op, muted live via
   `gameConfig.soundMuted`, synth fallback until a sample decodes). Discrete cues
   are samples; the rolling bed and its rail-joint clacks are synthesised so they

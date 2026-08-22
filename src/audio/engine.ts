@@ -2,10 +2,11 @@ import { gameConfig } from "@/gameConfig";
 import { rollingGain, takeClacks, SoundCue } from "./cues";
 import { SAMPLES } from "./samples";
 import { createRollingBed, makeNoise, railJoint, synthCue } from "./synth";
+import { createMusicPlayer, MusicPlayer } from "./music";
 
 // The game's sound engine: bundled CC0 samples for the discrete cues, and
-// synthesis for the rolling ambience (see synth.ts for why that split). Four
-// rules shape it:
+// synthesis for the rolling ambience (see synth.ts for why that split), with a
+// CC0 playlist underneath (music.ts). Five rules shape it:
 //
 //  1. NO-OP OFF THE BROWSER. `game.ts` calls in from the frame loop and the
 //     event drain, both of which the unit tests drive headlessly via
@@ -21,6 +22,10 @@ import { createRollingBed, makeNoise, railJoint, synthCue } from "./synth";
 //  4. A MISSING SAMPLE IS NOT SILENCE. Until a cue's buffer has decoded — and
 //     for good if its fetch failed — the cue plays its synthesised gesture
 //     instead. The game is never mute because an asset did not arrive.
+//  5. MUSIC FOLLOWS THE GAME, NOT THE PAGE. It starts when a game's frame loop
+//     starts and pauses when it stops (`setMusic`), so it plays on the play
+//     board and the test stage and not under the editor or a picker — and it
+//     has its own mute (`gameConfig.musicMuted`) under the master one.
 
 interface AudioEngine {
   // Play one cue now (dropped while muted / locked / headless).
@@ -31,6 +36,9 @@ interface AudioEngine {
   // rail-joint knocks follow the distance, so they stay locked to the trains
   // on screen at any speed setting.
   setTrainMotion(moving: number, tilesTravelled: number, fastest: number): void;
+  // Whether a game wants music under it right now. game.start()/stop() drive
+  // this; the mute flags are applied on top, live.
+  setMusic(on: boolean): void;
 }
 
 function createAudioEngine(): AudioEngine {
@@ -43,6 +51,9 @@ function createAudioEngine(): AudioEngine {
   const buffers = new Map<SoundCue, AudioBuffer>();
   // Distance carried between frames, so no fraction of a rail joint is lost.
   let clackAccum = 0;
+  let music: MusicPlayer | null = null;
+  // What the GAME asked for; the mutes are combined in at apply time.
+  let musicWanted = false;
 
   const supported = (): boolean =>
     typeof window !== "undefined" && "AudioContext" in window;
@@ -74,6 +85,14 @@ function createAudioEngine(): AudioEngine {
     noise = makeNoise(ctx);
     bed = createRollingBed(ctx, master, noise);
     loadSamples(ctx);
+    music = createMusicPlayer(ctx, master);
+    applyMusic();
+  }
+
+  // The one place the three switches meet: the game's wish, the master mute,
+  // the music mute. Idempotent, so it is safe to call every frame.
+  function applyMusic(): void {
+    music?.setOn(musicWanted && !gameConfig.soundMuted && !gameConfig.musicMuted);
   }
 
   // Register the unlock listeners exactly once, from the first engine call made
@@ -109,6 +128,9 @@ function createAudioEngine(): AudioEngine {
   function setTrainMotion(moving: number, tilesTravelled: number, fastest: number): void {
     install();
     if (!ctx || !bed) return;
+    // Per frame, so a mute toggled in the drawer fades the music within a
+    // frame of the click rather than waiting for the next start()/stop().
+    applyMusic();
     const muted = gameConfig.soundMuted;
     // A short ramp per call: smooth, and self-correcting toward the latest
     // target without stacking automation events.
@@ -131,7 +153,13 @@ function createAudioEngine(): AudioEngine {
     }
   }
 
-  return { play, setTrainMotion };
+  function setMusic(on: boolean): void {
+    install();
+    musicWanted = on;
+    applyMusic();
+  }
+
+  return { play, setTrainMotion, setMusic };
 }
 
 // The one engine. Created eagerly (it holds no resources until unlocked), used

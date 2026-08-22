@@ -48,6 +48,16 @@
         <span>{{ soundMuted ? "🔇" : "🔊" }}</span><span>Sound</span>
         <span class="drawer-btn__val">{{ soundMuted ? "off" : "on" }}</span>
       </button>
+      <button
+        class="drawer-btn"
+        :class="{ on: !musicMuted && !soundMuted }"
+        :disabled="soundMuted"
+        title="The music under the game — its own switch, so you can keep the clacks and lose the banjo"
+        @click="toggleMusic"
+      >
+        <span>🎵</span><span>Music</span>
+        <span class="drawer-btn__val">{{ musicMuted ? "off" : "on" }}</span>
+      </button>
       <div class="drawer-divider"></div>
       <button v-if="canSave" class="drawer-btn" @click="openSaves">
         <span>💾</span><span>Saves</span>
@@ -905,6 +915,7 @@ import {
   SwitchLockMode,
   setWorldTheme,
   setSoundMuted,
+  setMusicMuted,
 } from "@/gameConfig";
 import { nextTheme, themeMeta } from "@/themes";
 import { Coordinates, Position, TrainsDefinition, TrainStatus } from "@/types";
@@ -2769,6 +2780,12 @@ class PlayView extends Vue {
   }
   toggleSound() {
     setSoundMuted(!this.config.soundMuted);
+  }
+  get musicMuted(): boolean {
+    return this.config.musicMuted;
+  }
+  toggleMusic() {
+    setMusicMuted(!this.config.musicMuted);
   }
 
   // Lifetime earnings — the money row's flash key: a banked fare changes it,

@@ -4412,6 +4412,9 @@ export function createGame(
       if (raf) return;
       last = 0;
       raf = requestAnimationFrame(frame);
+      // Music lives as long as the frame loop: on for a board being played or
+      // watched, off under the editor and the pickers (see engine.ts rule 5).
+      gameAudio.setMusic(true);
     },
     stop() {
       if (raf) cancelAnimationFrame(raf);
@@ -4419,6 +4422,7 @@ export function createGame(
       // The frame that fed the rolling loop is gone; silence it rather than
       // leaving the last volume humming under whatever view comes next.
       gameAudio.setTrainMotion(0, 0, 0);
+      gameAudio.setMusic(false);
     },
     advance,
     startObjective() {

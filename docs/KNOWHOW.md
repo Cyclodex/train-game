@@ -147,6 +147,18 @@ lean — prune as much as you add. This file only stays useful if every task ten
   re-suspend a context and resuming takes another gesture) and that is also when
   the samples start loading. Mute is `gameConfig.soundMuted` (persisted via
   `setSoundMuted`), read live per call.
+- MUSIC (`audio/music.ts`): a 4-track CC0 playlist (OpenGameArt; CC-BY/OGA-BY
+  candidates rejected, provenance in `docs/ASSETS.md`). A MEDIA ELEMENT routed
+  through `createMediaElementSource` into the master — it streams, where
+  decoding four minute-long tracks would hold ~60MB of PCM. One element for the
+  whole list (the source node can be created once per element), tracks swap by
+  `src`. Per-track gain from a MEASURED dBFS (`trackGain`) so the list sits at
+  one level. Lifetime = the frame loop: `game.start()`→`setMusic(true)`,
+  `stop()`→false (pause, position kept, so a view change resumes not restarts);
+  plays under play + test stage, not the editor. Own mute `musicMuted` under
+  the master; both applied per frame (`applyMusic`), so a drawer toggle fades
+  within a frame. Why at all: between cues a board at rest was SILENT, which in
+  a building game reads as broken audio, not calm.
 - THE AMBIENCE IS SYNTHESISED ON PURPOSE, not for want of a recording: a loop
   plays at its recorded tempo and drifts against the trains on screen, which the
   1x/2x/4x dial makes obvious. Driving it from `sim.trainVelocity` (tiles/sec)

@@ -48,6 +48,27 @@ rate and pitch movement; the winner's measurements are quoted in
 while the flat and falling candidates read as a mere acknowledgement, or as an
 error.
 
+## Music — `src/audio/music/`
+
+All four: **OpenGameArt**, each page's licence field reads **CC0** (checked on
+the page itself, not inferred from a search filter — a fifth candidate, *Gone
+Fishin'*, showed CC-BY 4.0 / OGA-BY 3.0 there and was dropped). Downloaded
+**2026-08-22**. Credits are voluntary under CC0 and given anyway.
+
+| File in repo | Title | Author (OGA user) | Page | Original filename |
+|---|---|---|---|---|
+| `lasso-lady.ogg` | Lasso Lady (seamless loop) | congusbongus | <https://opengameart.org/content/lasso-lady-seamless-loop> | `lassolady_4.ogg` |
+| `backfoot.ogg` | Backfoot (extended) | centurionofwar | <https://opengameart.org/content/backfoot> | `backfootextended_0.ogg` |
+| `old-west-style.ogg` | Old West Style | Tozan | <https://opengameart.org/content/old-west-style> | `west1_0.ogg` |
+| `bluebonnet.ogg` | Bluebonnet in B major (looped) | kistol | <https://opengameart.org/content/bluebonnet> | `bluebonnet_in_b_major_looped_0.ogg` |
+
+Chosen for the bluegrass/western lilt Railroad Tycoon made the genre's
+signature (three of them) plus one soft track so a long session has somewhere
+to breathe; each file's measured level is in `src/audio/music.ts`, where a
+per-track gain brings the playlist to one loudness (as published they differ by
+~11dB). ~6MB in total, fetched lazily after the first gesture, never in the
+main bundle.
+
 ### What is NOT a sample
 
 The rolling ambience — the bed under moving trains and the rail-joint

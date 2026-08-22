@@ -7,14 +7,24 @@ import {
 
 const THEME_KEY = "train-game:worldTheme";
 const SOUND_KEY = "train-game:soundMuted";
+const MUSIC_KEY = "train-game:musicMuted";
 
-// The persisted mute state. Absent (the default) means sound ON — audio is the
-// feature, muting it is the opt-out.
-function loadSoundMuted(): boolean {
+// A persisted mute flag. Absent (the default) means ON — audio is the feature,
+// muting it is the opt-out.
+function loadMuted(key: string): boolean {
   try {
-    return localStorage.getItem(SOUND_KEY) === "1";
+    return localStorage.getItem(key) === "1";
   } catch {
     return false;
+  }
+}
+
+function saveMuted(key: string, muted: boolean): void {
+  try {
+    if (muted) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -83,8 +93,13 @@ export interface GameConfig {
   // Master mute for the game's sound layer (src/audio/). Persisted via
   // `setSoundMuted`, like the world theme. The audio engine reads this live, so
   // toggling it silences (or restores) everything at once, including the
-  // ambient rolling loop.
+  // ambient rolling loop — and the music, which has no life outside the sound
+  // layer.
   soundMuted: boolean;
+  // The music on its own switch, under the master. Persisted via
+  // `setMusicMuted`. People who want the clacks but not the banjo are common
+  // enough that one switch for both would cost us the clacks.
+  musicMuted: boolean;
 }
 
 export const GAME_CONFIG_KEY = "gameConfig";
@@ -108,18 +123,20 @@ export const gameConfig: GameConfig = reactive({
   maxCars: 5, // % of map capacity — a quiet default (few cars on screen)
   worldTheme: loadWorldTheme(),
   plainBackdrop: false,
-  soundMuted: loadSoundMuted(),
+  soundMuted: loadMuted(SOUND_KEY),
+  musicMuted: loadMuted(MUSIC_KEY),
 });
 
-// Set + persist the mute state. Views call this from the drawer's 🔊 button.
+// Set + persist the master mute. Views call this from the drawer's 🔊 button.
 export function setSoundMuted(muted: boolean): void {
   gameConfig.soundMuted = muted;
-  try {
-    if (muted) localStorage.setItem(SOUND_KEY, "1");
-    else localStorage.removeItem(SOUND_KEY);
-  } catch {
-    /* ignore */
-  }
+  saveMuted(SOUND_KEY, muted);
+}
+
+// Set + persist the music mute. The drawer's 🎵 button.
+export function setMusicMuted(muted: boolean): void {
+  gameConfig.musicMuted = muted;
+  saveMuted(MUSIC_KEY, muted);
 }
 
 // Set + persist the world theme. Views call this from the drawer's 🎨 button.
