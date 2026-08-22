@@ -103,8 +103,10 @@ action; the done set survives Retry. `/test/coachmarks` demonstrates it in
 isolation (the stage CAN show marks — they gate on `phase === "playing"`, which
 the stage enters in `mounted()`; only Ready-card/campaign chrome cannot appear
 there). E2e: the lakevalley-open loop asserts appear → advance → silent.
-`KNOWHOW` → COACH-MARKS. **Where it goes next** — the two-tier concept
-(scripted lessons + TF-style once-per-player first-encounter hints):
+`KNOWHOW` → COACH-MARKS. **Tier 2 is also built** (2026-08-22): the global
+first-encounter catalog (`held-train`, `signal-hold`, `first-levy`,
+`tax-warning`), once per player via `coachStore`; what remains of the concept
+(more hints, hints on/off + reset, campaign lessons per new level):
 `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`. The original
 brief, kept for context:
 

@@ -96,7 +96,14 @@ import {
   taxFor,
 } from "@/sim/calendar";
 import { RoadFrame } from "@/sim/road";
-import { CoachActive, coachMarksFor, createCoach } from "@/coach";
+import {
+  COACH_CONCEPTS,
+  CoachActive,
+  CoachAnchor,
+  coachMarksFor,
+  createCoach,
+} from "@/coach";
+import { coachSeenStore } from "@/coachStore";
 
 export interface TrainDef {
   id: string;
@@ -3410,11 +3417,18 @@ export function createGame(
   let carsDeliveredBase = 0;
 
   // --- coach-marks (the teaching layer, src/coach.ts) ------------------------
-  // The controller sequences a board's authored hints against cumulative run
-  // facts; the reactive mirror is what the views draw. Marks whose verb the
-  // mode has disabled are filtered out up front (a hint that can never be
-  // dismissed is a dead end, not a lesson).
-  const coachCtl = createCoach(coachMarksFor(setup.levelId, mode.controls));
+  // The controller sequences the board's authored lessons plus the global
+  // first-encounter catalog against per-tick facts; the reactive mirror is
+  // what the views draw. Lesson marks whose verb the mode has disabled are
+  // filtered out up front (a hint that can never be dismissed is a dead end,
+  // not a lesson); the first-encounter hints are self-gating by construction
+  // (no calendar → no levy, one train → no holds). Their once-per-player
+  // memory lives in coachStore (localStorage).
+  const coachCtl = createCoach(
+    coachMarksFor(setup.levelId, mode.controls),
+    COACH_CONCEPTS,
+    coachSeenStore()
+  );
   const coach = reactive({ active: null }) as { active: CoachActive | null };
   // Successful dispatches this run (zeroed by reset(), like the totals above).
   let coachDispatchTotal = 0;
@@ -3427,7 +3441,19 @@ export function createGame(
   let coachPrevArms: Record<string, Record<number, ActiveIntersection>> | null =
     null;
 
-  function stepCoach() {
+  // Whether two anchors point at the same place — the mirror only reassigns
+  // on a real change, or a dynamic anchor rebuilding every tick would re-patch
+  // the DOM 60 times a second for a bubble that is standing still.
+  function sameAnchor(a: CoachAnchor, b: CoachAnchor): boolean {
+    if (a.kind !== b.kind) return false;
+    if (a.kind === "hud" && b.kind === "hud") return a.slot === b.slot;
+    if (a.kind === "tile" && b.kind === "tile")
+      return a.id === b.id && a.dx === b.dx && a.dy === b.dy;
+    if (a.kind === "train" && b.kind === "train") return a.id === b.id;
+    return false;
+  }
+
+  function stepCoach(dt: number) {
     if (coachCtl.empty) return;
     if (coachPrevArms && !coachSwitchTouched) {
       outer: for (const id of Object.keys(coachPrevArms)) {
@@ -3445,16 +3471,40 @@ export function createGame(
     const snap: Record<string, Record<number, ActiveIntersection>> = {};
     for (const id of Object.keys(switches)) snap[id] = { ...switches[id] };
     coachPrevArms = snap;
-    coachCtl.step({
-      phase: objective.phase,
-      tilesBuilt: tilesBuiltTotal,
-      dispatches: coachDispatchTotal,
-      switchTouched: coachSwitchTouched,
-      delivered: deliveries.value,
-    });
+    // The situational facts for the first-encounter hints, read off the live
+    // sim: who is standing still because of ANOTHER train's reservation, and
+    // who is held at the player's own signal. A WAITING train is neither — it
+    // is the player's turn, not a block (same rule the fare pin applies).
+    const heldByTrainIds: string[] = [];
+    const signalHeldTrainIds: string[] = [];
+    for (const def of trainDefs) {
+      if (!sim.trains[def.id]) continue;
+      if (sim.trainState(def.id) === "waiting") continue;
+      const block = sim.trainBlock(def.id);
+      if (!block) continue;
+      if (block.reason === "signal-hold") signalHeldTrainIds.push(def.id);
+      else if (block.blockedBy) heldByTrainIds.push(def.id);
+    }
+    coachCtl.step(
+      {
+        phase: objective.phase,
+        tilesBuilt: tilesBuiltTotal,
+        dispatches: coachDispatchTotal,
+        switchTouched: coachSwitchTouched,
+        delivered: deliveries.value,
+        heldByTrainIds,
+        signalHeldTrainIds,
+        taxPaid: taxPaidTotal,
+        taxUnaffordable: money.taxUnaffordable,
+      },
+      dt
+    );
     const a = coachCtl.active;
-    if (coach.active?.id !== a?.id) {
-      coach.active = a ? { id: a.id, text: a.text, anchor: a.anchor } : null;
+    const cur = coach.active;
+    if (!a || !cur || cur.id !== a.id || !sameAnchor(cur.anchor, a.anchor)) {
+      coach.active = a
+        ? { id: a.id, text: a.text, anchor: a.anchor, kind: a.kind }
+        : null;
     }
   }
 
@@ -3671,7 +3721,7 @@ export function createGame(
     updateGridlock(scaled);
     // Last, over the freshly refreshed objective phase: the coach teaches the
     // state the player is actually in this tick.
-    stepCoach();
+    stepCoach(scaled);
   }
 
   function frame(now: number) {

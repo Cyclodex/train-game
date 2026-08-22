@@ -954,10 +954,14 @@ test.describe("Train game", () => {
 
     // Dispatch all three by clicking their fare pins, then run fast.
     for (const pin of await page.locator(".fare-pin").all()) await pin.click();
-    // Every verb has now been performed, so the coach has nothing left to
-    // teach — the dispatch dismissed its own mark, and the switch lesson
-    // auto-completed on the arm change above.
-    await expect(page.getByTestId("coach-mark")).toHaveCount(0);
+    // Every verb has now been performed, so the LESSONS are over — the
+    // dispatch dismissed its own mark, and the switch lesson auto-completed
+    // on the arm change above. Scoped to lessons: this fresh browser profile
+    // has seen no first-encounter hints, and the running trains will
+    // legitimately raise one (held-train) once they block each other.
+    await expect(
+      page.locator('[data-testid="coach-mark"][data-coach-kind="lesson"]')
+    ).toHaveCount(0);
     await page.evaluate(() => {
       (window as any).__game.speed.value = 4;
     });
