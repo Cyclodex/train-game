@@ -1115,6 +1115,29 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —
   also the epic's roadmap (passenger fares, vehicle costs, mode convergence).
 
+## THE FAREBOX — passengers pay (#117 phase 2, 2026-08-22)
+- Every DELIVERED passenger pays: `passengerFare(from, to)` (economy.ts, $2
+  flag fall + $3/tile Manhattan), booked in game.ts as ONE ledger entry per
+  tick ("N passengers") right after `advanceBuses` — per-person entries would
+  churn the 200-entry log. Drained UNCONDITIONALLY (`collectDeliveries`), so
+  the journey buffer never grows on a money-less board.
+- The transit layer reports journeys, never prices them: `Waiting.from` /
+  `Rider.from` carry the ORIGIN through every change and walk; a change
+  re-queues with `rode: true`; a walk-only journey (walk-links were the whole
+  trip) is delivered for the score but earns NOTHING — nobody pays a railway
+  for a walk. A depot terminus calls `deliverRiders(manifest, tileId)`: paid
+  for the distance CARRIED (origin → the terminus reached), not asked.
+- Modes: tycoon keeps its per-train decaying fares (the only mode with
+  `economy.fares`); NETWORK runs `startingBalance: 0` (pure takings — no
+  spend verbs until phase 3/#91); CITIZENS runs `CITIZENS_TREASURY` ($40k),
+  because an economy prices the BUILD verb and an empty purse would kill the
+  mode's whole answer — sized for one intercity line, refilled by fares. The
+  invariant `hud.money === (economy !== undefined)` is pinned by a test.
+- On a two-station board every journey is the same hop, so
+  `balance === fare × passengersDelivered` EXACTLY — the double-collection
+  guard as a one-line assertion (`tests/unit/passengerFares.spec.ts`).
+  `/test/farebox` is the isolation board.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get

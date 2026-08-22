@@ -81,6 +81,7 @@ import {
 import {
   createEconomy,
   createFareBook,
+  passengerFare,
   CLEARING_COST_PER_TILE,
   EconomySnapshot,
   FareBookSnapshot,
@@ -3631,6 +3632,21 @@ export function createGame(
     if (scaled > 0) busEvents.length = 0;
     advanceBuses(scaled);
     syncBuses();
+    // THE FAREBOX (economy convergence phase 2): every journey the transit
+    // layer finished this tick — train, bus or a mix, citizen or edge rider
+    // alike — pays a fare into the ledger. Drained UNCONDITIONALLY so the
+    // layer's journey buffer never grows on a board without money, booked as
+    // ONE entry per tick so a busy platform cannot churn the ledger's log.
+    const journeys = transit.collectDeliveries();
+    if (economy && journeys.length) {
+      let total = 0;
+      for (const j of journeys) total += passengerFare(j.from, j.to);
+      economy.earn(
+        total,
+        "fare",
+        `${journeys.length} passenger${journeys.length === 1 ? "" : "s"}`
+      );
+    }
     // How full each vehicle is: a MODEL fact (who is aboard, how many seats),
     // so it is refreshed with the world and not with the render frame. Put in
     // `frame()` it would freeze in a hidden tab and be invisible to a headless

@@ -97,6 +97,12 @@ export const networkMode: GameMode = {
         fail: { maxStationQueue: OVERCROWD_LIMIT },
         stars: networkStars(target, Math.max(2, Math.floor(OVERCROWD_LIMIT / 2))),
       },
+      // The farebox (economy convergence phase 2): every passenger this
+      // network delivers pays a fare into the ledger, so the balance is the
+      // service's takings. Pure income for now — this mode has no build or
+      // dispatch verbs to spend it on; the costs arrive with phase 3 (#91),
+      // which is what will make "add another train" a decision.
+      economy: { startingBalance: 0 },
     };
   },
   controls: {
@@ -133,6 +139,8 @@ export const networkMode: GameMode = {
     stars: true,
     startOverlay: true,
     endOverlay: true,
-    money: false,
+    // The takings, one line. What the passenger count means to the company —
+    // and the readout phase 3's running costs will start draining.
+    money: true,
   },
 };

@@ -12,7 +12,14 @@ const A = "a";
 const B = "b";
 const C = "c";
 
-const seat = (final: string, off: string): Rider => ({ final, off });
+// `from` is the journey's origin, carried into the seat since fares are priced
+// against it (phase 2). Defaults to the boarding stop, which in these small
+// fixtures is where the person was enqueued.
+const seat = (final: string, off: string, from?: string): Rider => ({
+  final,
+  off,
+  ...(from !== undefined ? { from } : {}),
+});
 
 describe("the transit layer: lines", () => {
   it("draws a line with nothing running it, and keeps it", () => {
@@ -87,8 +94,9 @@ describe("the transit layer: the exchange", () => {
     const manifest: Rider[] = [];
     const onboard = t.exchange({ stopId: A, lineId: west.id, capacity: 4, manifest });
     expect(onboard.boarded).toBe(1);
-    // Bound for C, set down at the interchange.
-    expect(manifest).toEqual([seat(C, B)]);
+    // Bound for C, set down at the interchange — origin A riding along for
+    // the fare.
+    expect(manifest).toEqual([seat(C, B, A)]);
 
     const change = t.exchange({ stopId: B, lineId: west.id, capacity: 4, manifest });
     expect(change.alighted).toBe(1);
@@ -100,7 +108,8 @@ describe("the transit layer: the exchange", () => {
 
     const second: Rider[] = [];
     t.exchange({ stopId: B, lineId: east.id, capacity: 4, manifest: second });
-    expect(second).toEqual([seat(C, C)]);
+    // Still priced from A: the origin survives the change.
+    expect(second).toEqual([seat(C, C, A)]);
     const arrive = t.exchange({ stopId: C, lineId: east.id, capacity: 4, manifest: second });
     expect(arrive.alighted).toBe(1);
     expect(arrive.changing).toBe(0);
