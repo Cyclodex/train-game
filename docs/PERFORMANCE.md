@@ -267,6 +267,84 @@ Leaving the browser (Electron, Tauri) would change nothing: they ship the same
 renderer. The problem is not where the game runs, it is what it asks the renderer
 to do.
 
+## HOW BIG CAN A WORLD BE? canvas 2d vs webgl, measured (2026-08-22)
+
+The question behind the renderer choice is not "canvas or WebGL" but "how much
+is on screen at once". `scripts/renderbench.html` draws the same scene both
+ways — chunked world, culled to the camera, sprites moving every frame — so the
+two can be swept against each other. Open it directly with query parameters:
+
+```
+scripts/renderbench.html?mode=canvas|webgl&cols=200&rows=140&sprites=5000&zoom=fit|near&lod=1&cache=4000
+```
+
+### What actually costs: sprites on screen
+
+Fixed world (200x140 tiles, 450 chunks, nothing evicted), fit zoom, so the only
+variable is how many moving sprites are visible:
+
+| visible sprites | canvas 2D | webgl |
+| --- | --- | --- |
+| 1 000 | 3.3 ms · 60 fps | 0.86 ms · 60 fps |
+| 2 500 | 5.8 ms · 60 fps | 1.25 ms · 60 fps |
+| 5 000 | 11.0 ms · 60 fps | 1.78 ms · 60 fps |
+| 10 000 | 23.9 ms · **39 fps** | 2.9 ms · 60 fps |
+| 20 000 | 46.4 ms · **20 fps** | 4.8 ms · 60 fps |
+| 40 000 | 94.8 ms · **10 fps** | 12.5 ms · 60 fps |
+
+Both are linear in sprite count; the constant differs by ~8x (canvas ~2.4µs per
+sprite, webgl ~0.3µs). Against a 16.7ms budget:
+
+- **canvas 2D holds to roughly 7 000 visible sprites**
+- **webgl holds to roughly 50 000**
+
+### What does NOT cost: world size
+
+Same benchmark at a playing zoom on an 800x560 world (448 000 tiles, 30 000
+vehicles in the world): **60 fps in BOTH renderers, ~1.9ms**, because four
+chunks and five sprites are on screen. World size is a MEMORY question — how
+many baked chunks are held — not a per-frame one, and that is what the chunk
+LRU and per-zoom bake resolution (`lod=1`) are for.
+
+Two traps the benchmark walked into, both worth knowing:
+
+- **Naive full-world pre-baking is an out-of-memory crash, not a slowdown.**
+  448 000 tiles at full chunk resolution is ~70GB of bitmaps; the page died.
+  Bake per zoom level (a chunk needs only the pixels the camera can show) and
+  evict what is off screen.
+- **A cache smaller than the working set is worse than no cache.** With 1750
+  chunks visible and room for 400, canvas re-baked ~1350 chunks every frame and
+  produced almost no frames at all. The webgl path in the same run had no such
+  cap and looked 60x better — an artefact of the harness, not of WebGL. Size
+  the cache to the visible set, and never compare two renderers whose caches
+  differ.
+
+### And the constraint that beats both: the simulation
+
+The road sim alone costs 24.8ms/tick at 357 vehicles (see the baseline). So the
+MODEL caps this game at roughly 250-300 vehicles at 60fps — while canvas 2D
+could draw 7 000 of them. **The renderer has ~20x more headroom than the
+simulation can currently feed.** Any plan for Transport-Fever-scale traffic is a
+simulation plan first (spatial index, and simplified stepping for what is far
+from the camera) and a renderer plan second.
+
+### Level of detail — the ideas, cheapest first
+
+1. **Per-zoom bake resolution** (measured above): a chunk is baked at the
+   pixels the camera can actually show. Same idea as map tiles.
+2. **Vehicle LOD**: bodies → dots → nothing. Below ~3px a body is a dot anyway.
+3. **Aggregate instead of individual**: far out, draw a road's traffic as a
+   colour/thickness on the road rather than as vehicles. Reads better AND costs
+   less — it is the "where is it congested?" view a player wants when zoomed out.
+4. **Schematic / map mode** at maximum zoom-out: the network as lines and
+   station dots, like a metro map. Genre-appropriate, and nearly free to draw.
+5. **Time-slicing**: not everything needs 60Hz. Pedestrians at 15Hz, distant
+   vehicles at 10Hz, the HUD at 4Hz.
+6. **Simulation LOD**: step distant regions less often, or statistically. This
+   is the one that actually raises the ceiling — and the one that must be
+   designed carefully, because this sim is deterministic and that is load-
+   bearing (the seeded tests and the state-trace hash).
+
 ## The improvement plan
 
 **Done 2026-08-22** — all four provably behaviour-neutral: the per-tick
