@@ -4721,6 +4721,97 @@ mode, shared paths — are NOT).
   still the binding constraint on a busy machine, and "make it faster, don't raise
   the limit" was too strong a rule for a HANG GUARD).
 
+## PERF BENCH + STRESS BOARDS (2026-08-22)
+- `docs/PERFORMANCE.md` is the perf canon: instruments, dated baseline table,
+  where the time goes (with file:line receipts), the improvement plan. Update
+  its baseline/history when a change moves the numbers.
+- Instruments: `/test/perfworld` (40x28, 8 trains, 160-car traffic) and
+  `/test/perfcity` (same skeleton + citizens/buses/stations/parking — the
+  "everything" board), measured by `PERF=1 npx vitest run
+  tests/unit/perf/perfBench.spec.ts` (skips entirely without PERF=1, so CI
+  never pays). It times `game.advance(1/60)` headless — the reliable meter.
+- The scaling law (quiet machine, AC): the ROAD sim is the perf dial and is
+  superlinear, cost ~ cars^1.7 — 0.73ms/tick at 50 cars, 2.08 at 100, 7.4 at
+  200, 24.8 at 357. Rail is noise (8 trains on 40x28 = 0.17ms/tick).
+- MEASURE BY ALTERNATING, NEVER BEFORE-AND-LATER. This machine swung 3.6x
+  between two runs of IDENTICAL code (the sim is deterministic — same work).
+  A before/after pair taken an hour apart measures the MACHINE: it turned a
+  real 1.4x into a reported 2x here, and invented a "citizens' rush hour
+  doubles the tick" spike that does not exist on a quiet box. Run new/old/
+  new/old back to back, 3 reps, and look for group separation.
+- And an isolated component overstates its own worth: the old crossing gate
+  measured 3.5ms/tick in a microbenchmark of its 630 calls, but removing it
+  from the real tick saved 1.4ms. In situ is the number that counts.
+- FIXED 2026-08-22, 1.38x on the model tick (alternating A/B, quiet AC:
+  perfworld+traffic 5.16 -> 3.74ms, perfcity 6.41 -> 4.66ms):
+  · `sim.claimSnapshot()` — every claim, by TILE ID, in one pass. The crossing
+    gate used to ask `reservedBy(id) || occupiedBy(id)` per route tile per car
+    per tick (~630 calls/tick, ~3.5ms, a quarter of the tick) and `occupiedBy`
+    is a full train scan rebuilding each body's claim keys. Now one snapshot
+    per tick behind a Set: 0.02ms/tick, 0 per-tile queries. NOTE the bench only
+    calls advance(), so it measures the GATE alone — the three mirror fixes sit
+    in frame() and are browser-side, still unquantified.
+    EXACT, not approximate — `sim.step()` runs BEFORE `roadSim.step()` in
+    `advance`, so no train moves during the road step and every one of those
+    calls was already returning the same answer. The snapshot reproduces the
+    queries' flyover precedence (`claimKeysOf` order = rank bare/#over/#under,
+    lowest wins) and first-train-wins tie-break.
+  · The render mirrors: `updateReservations` reads the snapshot instead of
+    polling every level tile; `updateStationQueues` iterates `transitStops`
+    (its "no longer a stop" cleanup was dead code — transitStops is derived
+    once and never mutated); `updateRoadCars` keeps `roadCarIndex` (id -> the
+    REACTIVE element, never the raw pushed object) instead of `roadCars.find`.
+  · Pinned by `tests/unit/sim/claimSnapshot.spec.ts`: tile-by-tile equivalence
+    against the real queries on five boards INCLUDING flyover (the precedence
+    case), with a vacuity guard (it caught a run too short to hold a
+    reservation) and a per-tick polling BUDGET — because nothing else in the
+    suite notices per-tile polling coming back: correctness is unchanged, only
+    the cost.
+- THE RENDER LAYER IS THE REAL CEILING, not the model (2026-08-22, measured in a
+  VISIBLE window with `npm run frameperf` — a hidden tab throttles rAF and
+  reports fiction). perfcity at 60% density: **10-12 fps**, frame callback
+  23-35ms, against a 4.7ms model tick. demoworld (a quarter the area): 80 fps.
+  · Ablations say what it is: PAUSE THE SIM and the same 64k-node world draws at
+    55 fps — a static world is nearly free, a moving one is not. Hiding the cars
+    does NOT help (their paint is not the bill); hiding the whole world still
+    leaves a ~30ms frame callback, because the mirrors and DOM writes run
+    regardless of visibility.
+  · The browser is NOT the limit — the DOM is. Same browser, same machine, same
+    scene (1120 tiles, no culling, 200 vehicles, 32 train units): DOM/SVG 12.5
+    fps / 23.4ms, canvas 2D **132.7 fps / 0.92ms**. 25x. Electron/Tauri would
+    change nothing; they ship this renderer.
+  · Biggest single JS function: `sampleWorld` (game.ts) at 6% of all samples —
+    the SVG getTotalLength/getPointAtLength sampling, twice per coupler per
+    unit per frame. Vue's vnode/patch machinery is ~40% of the ATTRIBUTED
+    samples. Full analysis + the ordered options: docs/PERFORMANCE.md.
+- Unsolved hot spots, in leverage order (details + fixes in PERFORMANCE.md):
+  all-pairs candidate scans in clearAhead/junction arbitration (the memo+prune
+  of SIM HOT PATH made pairs cheap, not fewer) — now the biggest remaining win;
+  the fillFast spawn storm; native `getPointAtLength` per coupler per frame;
+  ~64k DOM nodes with no camera culling.
+- THE SPAWN STORM IS A DECISION, NOT A FREE WIN — read this before "fixing" it.
+  fillFast plans a BFS route per attempt and only THEN probes whether the entry
+  lane is clear, so a jammed board pays a discarded BFS per attempt for ever.
+  But: the seeded streams ADVANCE on a failed spawn (`planRoute` draws its
+  destination, the parking branch draws `parkRng`), so skipping the work moves
+  every later spawn — every seeded road test and the state-trace hash. And the
+  probe cannot simply be hoisted: for cars the probe ORDER comes from
+  `preferredSpawnLane(…, routePlan, …)`, which returns a lane off the JUNCTION's
+  approach and is not provably one of the entry's usable lanes, so "probe all
+  usable first" is not equivalent to probing `order`. Either accept a re-baseline
+  or memoise the BFS with a level-edit invalidation hook — deliberately.
+- BROWSER MEASUREMENT TRAPS: a hidden automation tab doesn't just stop rAF —
+  Chrome deprioritises the whole renderer, so wall-clock timings there are
+  several-fold pessimistic and the Self-Profiling API barely samples. Real
+  browser numbers need a visible window. Dev serves `Document-Policy:
+  js-profiling` (vite.config.ts) so `new Profiler(...)` works; PlayView
+  exposes `window.__game` (e2e hook) — `stop()`, patch rAF to capture the
+  frame callback, `start()`, then pump frames manually with synthetic
+  timestamps to drive the loop in a hidden tab at all.
+- PlayView always passes DEFAULT_TRAFFIC + the density slider; a scenario's
+  authored `traffic` tuning applies in /test (TestStage) but NOT on
+  /#/play?board=… — the two routes measure different traffic configs.
+
 ## A RED SIM TEST THAT IS NOT A BUG — READ THE FAILURE LINE FIRST (2026-08-02)
 - `sim/parking.spec.ts` (or any long-run sim case) failing on `master` with a
   DIFFERENT COUNT EACH RUN — 2 one time, 6 the next — is the signature. Before

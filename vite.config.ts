@@ -21,6 +21,13 @@ export default defineConfig({
   server: {
     port: assignedPort,
     strictPort: assignedPort !== undefined,
+    headers: {
+      // Allow the JS Self-Profiling API (`new Profiler(...)`) in dev, so the
+      // perf harness can take real CPU profiles of the frame loop in a page
+      // context (see docs/PERFORMANCE.md). Chrome refuses the API without this
+      // Document-Policy header; it has no effect on anything else.
+      "Document-Policy": "js-profiling",
+    },
   },
   resolve: {
     alias: {

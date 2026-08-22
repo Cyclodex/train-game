@@ -317,6 +317,26 @@ into a puzzle. What remains of terrain is rules, not data — see items 1 and 6.
     hash (`docs/KNOWHOW.md` → SIM HOT PATH), which has survived both rounds
     unchanged. **Not** by cutting the long-run cases' seeds or ticks — that was
     weighed and rejected, see TEST TIERS.
+    unchanged. **Measured** (2026-08-22, `docs/PERFORMANCE.md`): the road tick
+    is the game's perf ceiling and superlinear (~cars^1.7) — 0.73ms at 50 cars,
+    7.4ms at 200, 24.8ms at 357 on a quiet machine.
+    A third round has since landed, worth 1.38x on the model tick (alternating
+    A/B: perfworld+traffic 5.16 → 3.74ms, perfcity 6.41 → 4.66ms): the gate is one
+    `sim.claimSnapshot()` per tick behind a Set instead of a per-tile
+    `occupiedBy` poll, and the three per-frame render mirrors no longer walk
+    the whole board. All four provably behaviour-neutral and pinned by
+    `tests/unit/sim/claimSnapshot.spec.ts`. (The bench only calls `advance()`,
+    so that 1.38x is the GATE alone; the mirror fixes are browser-side and not
+    yet quantified. And measure by ALTERNATING variants — a before/after pair
+    taken hours apart measures the machine: it turned this 1.4x into a
+    reported 2x once already.)
+    **What is left**, in order: the all-pairs candidate scans (this item — now
+    the biggest single win); the fillFast spawn storm, which is a DECISION
+    rather than a free win because the seeded streams advance on a failed spawn
+    (see PERFORMANCE.md → the plan, and KNOWHOW → PERF BENCH); `getPointAtLength`
+    on the render hot path; and camera culling for the ~64k DOM nodes.
+    Bench: `PERF=1 npx vitest run tests/unit/perf/perfBench.spec.ts` on the
+    `/test/perfworld` + `/test/perfcity` stress boards.
 17. **Longer term**: migrate the class components to `<script setup>` +
     composables now that a Vitest/Playwright safety net exists. This removes the
     `vue-facing-decorator` inheritance machinery but is a large, careful refactor.
