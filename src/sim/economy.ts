@@ -303,6 +303,13 @@ export function fareAt(spec: FareSpec, ageSec: number): number {
 // `settle` freezes one at the moment of delivery and hands back what it is worth.
 export interface FareBook {
   add(trainId: string, spec: FareSpec): void;
+  // Take a fare back OUT of the book, forgetting its age and its settlement.
+  // The counterpart of `add`, for a train that is no longer on the board and
+  // whose fare must therefore stop ageing: a scheduled arrival after a Retry.
+  // `reset()` alone is not enough there — it zeroes ages but keeps entries, so
+  // a fare added mid-run would start ageing again from t=0 of the NEXT run and
+  // the board would pay less on every attempt.
+  remove(trainId: string): void;
   has(trainId: string): boolean;
   ids(): string[];
   // Seconds this train's fare has been decaying (0 for an unknown train).
@@ -356,6 +363,11 @@ export function createFareBook(specs: Record<string, FareSpec> = {}): FareBook {
       return total;
     },
     isSettled: trainId => settled.has(trainId),
+    remove(trainId) {
+      fares.delete(trainId);
+      ages.delete(trainId);
+      settled.delete(trainId);
+    },
     tick(dt) {
       if (!(dt > 0)) return;
       for (const id of fares.keys()) {

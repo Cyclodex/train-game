@@ -3,9 +3,11 @@ import {
   GameMode,
   ModeContext,
   ModeSetup,
+  Spawner,
   TrainDef,
   objectiveFromSpec,
 } from "@/modes/types";
+import { createScheduleSpawner, scheduleFor } from "@/modes/schedule";
 import { Counters, StarSpec } from "@/sim/objectives";
 import { FareSpec, fareFloor } from "@/sim/economy";
 import { CalendarSetup } from "@/sim/calendar";
@@ -431,16 +433,27 @@ export const tycoonMode: GameMode = {
     "down. Send it, route it, bank whatever is left when it gets home.",
   setup(ctx: ModeContext): ModeSetup {
     const tuning = tuningFor(ctx.levelId);
+    // TIMED ARRIVALS. A board whose trains carry a spawnAtSec runs as a SHIFT
+    // rather than a pile: some trains stand in their sheds at t=0 and the rest
+    // arrive during the run, each appearing at its platform in the "waiting"
+    // state (the sim's addTrain honours waitForDispatch), fare ticking, asking
+    // to be sent. Puzzle has read the same board data since #113 — this is the
+    // identical schedule, arriving in a mode that charges for it. A board with
+    // no spawnAtSec anywhere is untouched.
+    const scheduled = ctx.trains.filter(t => (t.spawnAtSec ?? 0) > 0);
     return {
       levelId: ctx.levelId,
       level: ctx.level,
       trains: ctx.trains,
       objective: {
         deliveriesRequired: ctx.trains.length,
-        // Every train is in play from t=0 — waiting counts as in play, since its
-        // fare is already burning. Without this the tracker's live `active`
-        // backlog counts down through zero into negatives.
-        initialActiveTrains: ctx.trains.length,
+        // Trains in play at t=0 — waiting counts as in play, since its fare is
+        // already burning. Without this the tracker's live `active` backlog
+        // counts down through zero into negatives. A SCHEDULED train is not in
+        // play yet: counting it here would open the level with a backlog that
+        // includes trains nobody can see, and every later arrival would then be
+        // double-counted against it.
+        initialActiveTrains: ctx.trains.length - scheduled.length,
         // The tax's other half. Until it existed the only way to empty the
         // purse was to over-spend on track, i.e. to make a mistake you could
         // see; now TIME drains it too, and a board that silently stops
@@ -452,6 +465,13 @@ export const tycoonMode: GameMode = {
       },
       economy: economyFor(ctx.trains, tuning),
     };
+  },
+  // The schedule cursor, from the same helper Puzzle uses — a spawner is a pure
+  // schedule cursor and game.ts performs the injection, so nothing about it is
+  // mode-specific. Yields an empty schedule (and therefore never fires) for
+  // every board authored without a spawnAtSec.
+  createSpawner(setup: ModeSetup): Spawner {
+    return createScheduleSpawner(scheduleFor(setup.trains));
   },
   controls: {
     switches: true,
