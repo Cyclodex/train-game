@@ -23,6 +23,7 @@ import { citizenday } from "@/levels/test/scenarios/citizenday";
 import { citizenhouse } from "@/levels/test/scenarios/citizenhouse";
 import { busride } from "@/levels/test/scenarios/busride";
 import { edgedemand } from "@/levels/test/scenarios/edgedemand";
+import { farebox } from "@/levels/test/scenarios/farebox";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -278,8 +279,9 @@ export const DOMAINS: ScenarioDomain[] = [
       // the feedback layer (sound + FX), blocked routes, buying track, land
       // prices, the tax year and its bankruptcy fail state — plus the
       // coach-marks that teach the mode's verbs (a second tycoon board, so it
-      // lives here rather than in the one-demo-per-mode gallery above).
-      { id: "economy", label: "Tycoon economy", scenarios: [faredistance, gamefeel, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks] },
+      // lives here rather than in the one-demo-per-mode gallery above) and the
+      // farebox, where the demand modes join the ledger.
+      { id: "economy", label: "Economy", scenarios: [faredistance, gamefeel, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks, farebox] },
       // The save/load round-trip board (docs/superpowers/specs/
       // 2026-08-21-save-load-design.md): the level the snapshot/restore unit
       // tests run on, and — via /#/play?board=saveload — a small deterministic

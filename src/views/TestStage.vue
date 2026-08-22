@@ -95,6 +95,7 @@
         class="stage-calendar"
         :class="{ 'stage-calendar--broke': money.taxUnaffordable }"
         title="The year, and this railway's annual upkeep"
+        data-coach-slot="calendar"
       >
         📅 {{ money.dateLabel }} · 🏛 ${{ money.taxPerYear.toLocaleString("en-US") }}/yr
         <template v-if="money.taxUnaffordable"> ⚠</template>

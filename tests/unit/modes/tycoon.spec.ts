@@ -78,9 +78,15 @@ describe("tycoon mode", () => {
     expect(dispatching).toEqual([tycoonMode]);
   });
 
-  it("is the ONLY mode that declares an economy", () => {
-    const withMoney = MODES.filter(m => m.setup(ctx).economy !== undefined);
-    expect(withMoney).toEqual([tycoonMode]);
+  it("shares the ledger with network and citizens — and with nobody else", () => {
+    // Phase 2 of the economy convergence: passengers pay fares, so the two
+    // demand-driven modes carry an economy too. Puzzle and Sandbox stay
+    // money-free — a puzzle is a puzzle and a sandbox builds free.
+    const withMoney = MODES.filter(m => m.setup(ctx).economy !== undefined).map(m => m.id);
+    expect(withMoney.sort()).toEqual(["citizens", "network", "tycoon"]);
+    // Only tycoon carries per-train fares; the other two earn per passenger.
+    const withTrainFares = MODES.filter(m => m.setup(ctx).economy?.fares !== undefined);
+    expect(withTrainFares).toEqual([tycoonMode]);
   });
 
   it("prices a fare from the handling fee, the cargo AND the distance", () => {
@@ -188,9 +194,13 @@ describe("tycoon mode", () => {
     expect(stars.filter(s => s.predicate(rich)).map(s => s.id)).toEqual(["payday"]);
   });
 
-  it("shows the money HUD, and no other mode does", () => {
+  it("shows the money HUD — as does every mode with a ledger, and no other", () => {
     expect(tycoonMode.hud.money).toBe(true);
-    expect(MODES.filter(m => m.hud.money)).toEqual([tycoonMode]);
+    // The HUD flag and the economy travel together: money on screen exactly
+    // where money exists (phase 2 added network + citizens).
+    for (const m of MODES) {
+      expect(m.hud.money).toBe(m.setup(ctx).economy !== undefined);
+    }
   });
 
   it("enables the build tool (phase 2) alongside dispatch", () => {

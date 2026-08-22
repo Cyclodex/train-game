@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   COACH_BY_BOARD,
+  COACH_CONCEPTS,
+  CONCEPT_COOLDOWN_SEC,
+  CoachMarkSpec,
   CoachObs,
   coachMarksFor,
   createCoach,
@@ -14,11 +17,12 @@ import { createGame, TrainDef } from "@/game";
 import { parseCoordId } from "@/tiles/model";
 import { ActiveIntersection } from "@/types";
 
-// The teaching system (src/coach.ts): a per-board list of anchored hints,
-// shown one at a time in authored order, each dismissed by the player actually
-// performing the action it teaches. The controller is a pure state machine
-// over cumulative run facts, which is what makes all of this testable here
-// without a browser.
+// The teaching system (src/coach.ts): board-scripted LESSONS shown in
+// authored order, each dismissed by the player performing the taught action —
+// plus the global FIRST-ENCOUNTER catalog (the Transport Fever model), each
+// hint triggered by its situation and remembered once per player. The
+// controller is a pure state machine over per-tick facts, which is what makes
+// all of this testable here without a browser.
 
 function obs(partial: Partial<CoachObs> = {}): CoachObs {
   return {
@@ -27,79 +31,192 @@ function obs(partial: Partial<CoachObs> = {}): CoachObs {
     dispatches: 0,
     switchTouched: false,
     delivered: 0,
+    heldByTrainIds: [],
+    signalHeldTrainIds: [],
+    taxPaid: 0,
+    taxUnaffordable: false,
     ...partial,
   };
 }
 
-const SPECS = [
+const SPECS: CoachMarkSpec[] = [
   {
     id: "a-build",
     text: "build",
-    anchor: { kind: "tile" as const, id: "0,0" },
+    anchor: { kind: "tile", id: "0,0" },
     done: (o: CoachObs) => o.tilesBuilt >= 1,
   },
   {
     id: "b-dispatch",
     text: "dispatch",
-    anchor: { kind: "tile" as const, id: "1,0" },
+    anchor: { kind: "tile", id: "1,0" },
     done: (o: CoachObs) => o.dispatches >= 1,
   },
 ];
 
-describe("createCoach — sequencing", () => {
+describe("createCoach — lesson sequencing", () => {
   it("shows nothing outside the playing phase", () => {
     const coach = createCoach(SPECS);
-    coach.step(obs({ phase: "ready" }));
+    coach.step(obs({ phase: "ready" }), 0.1);
     expect(coach.active).toBeNull();
-    coach.step(obs({ phase: "won", tilesBuilt: 0 }));
+    coach.step(obs({ phase: "won", tilesBuilt: 0 }), 0.1);
     expect(coach.active).toBeNull();
   });
 
   it("shows the first mark, and advances to the next when its action happens", () => {
     const coach = createCoach(SPECS);
-    coach.step(obs());
+    coach.step(obs(), 0.1);
     expect(coach.active?.id).toBe("a-build");
+    expect(coach.active?.kind).toBe("lesson");
     // Doing something else does not dismiss it.
-    coach.step(obs({ dispatches: 1 }));
+    coach.step(obs({ dispatches: 1 }), 0.1);
     expect(coach.active?.id).toBe("a-build");
     // Doing THE thing does — and the next mark takes over in the same step.
-    coach.step(obs({ tilesBuilt: 1, dispatches: 0 }));
+    coach.step(obs({ tilesBuilt: 1, dispatches: 0 }), 0.1);
     expect(coach.active?.id).toBe("b-dispatch");
   });
 
   it("never re-teaches a verb performed before its mark appeared", () => {
     const coach = createCoach(SPECS);
-    // The player dispatched during the build lesson; when the build completes,
-    // the dispatch mark's action has already happened, so it never shows.
-    coach.step(obs({ dispatches: 1 }));
+    coach.step(obs({ dispatches: 1 }), 0.1);
     expect(coach.active?.id).toBe("a-build");
-    coach.step(obs({ tilesBuilt: 1, dispatches: 1 }));
+    coach.step(obs({ tilesBuilt: 1, dispatches: 1 }), 0.1);
     expect(coach.active).toBeNull();
   });
 
   it("keeps completed marks completed across newRun (Retry never nags)", () => {
     const coach = createCoach(SPECS);
-    coach.step(obs({ tilesBuilt: 1 }));
+    coach.step(obs({ tilesBuilt: 1 }), 0.1);
     expect(coach.active?.id).toBe("b-dispatch");
     coach.newRun();
-    // The new run's facts start at zero, but the build lesson stays learned:
-    // the first mark shown is the one the player never finished.
-    coach.step(obs());
+    coach.step(obs(), 0.1);
     expect(coach.active?.id).toBe("b-dispatch");
+  });
+
+  it("re-arms a tier:'run' mark on newRun", () => {
+    const coach = createCoach([
+      { ...SPECS[0], tier: "run" },
+    ]);
+    coach.step(obs({ tilesBuilt: 1 }), 0.1);
+    expect(coach.active).toBeNull();
+    coach.newRun();
+    coach.step(obs(), 0.1);
+    expect(coach.active?.id).toBe("a-build");
   });
 
   it("reports empty for a board with no hints", () => {
     expect(createCoach([]).empty).toBe(true);
     expect(createCoach(SPECS).empty).toBe(false);
+    expect(createCoach([], COACH_CONCEPTS).empty).toBe(false);
+  });
+});
+
+describe("createCoach — first-encounter hints", () => {
+  const HINT: CoachMarkSpec = {
+    id: "h-held",
+    text: "held",
+    anchorOf: o =>
+      o.heldByTrainIds.length
+        ? { kind: "train", id: o.heldByTrainIds[0] }
+        : null,
+    tier: "player",
+    trigger: o => o.heldByTrainIds.length > 0,
+    done: o => o.heldByTrainIds.length === 0,
+    dwellSec: 10,
+  };
+  const INFO: CoachMarkSpec = {
+    id: "h-levy",
+    text: "levy",
+    anchor: { kind: "hud", slot: "calendar" },
+    tier: "player",
+    trigger: o => o.taxPaid > 0,
+    dwellSec: 8,
+  };
+
+  it("shows only while its situation holds, anchored to the thing", () => {
+    const coach = createCoach([], [HINT]);
+    coach.step(obs(), 0.1);
+    expect(coach.active).toBeNull();
+    coach.step(obs({ heldByTrainIds: ["red"] }), 0.1);
+    expect(coach.active?.id).toBe("h-held");
+    expect(coach.active?.kind).toBe("concept");
+    expect(coach.active?.anchor).toMatchObject({ kind: "train", id: "red" });
+  });
+
+  it("completes by its action (the situation resolving) and stays seen", () => {
+    const seen = new Set<string>();
+    const coach = createCoach([], [HINT], seen);
+    coach.step(obs({ heldByTrainIds: ["red"] }), 0.1);
+    expect(coach.active?.id).toBe("h-held");
+    coach.step(obs(), 0.1);
+    expect(coach.active).toBeNull();
+    expect(seen.has("h-held")).toBe(true);
+    // Another hold later teaches nothing — this player knows.
+    coach.step(obs({ heldByTrainIds: ["blue"] }), CONCEPT_COOLDOWN_SEC + 1);
+    expect(coach.active).toBeNull();
+  });
+
+  it("dwells out an info-only hint and counts it as seen", () => {
+    const seen = new Set<string>();
+    const coach = createCoach([], [INFO], seen);
+    coach.step(obs({ taxPaid: 300 }), 0.1);
+    expect(coach.active?.id).toBe("h-levy");
+    coach.step(obs({ taxPaid: 300 }), 7);
+    expect(coach.active?.id).toBe("h-levy");
+    coach.step(obs({ taxPaid: 300 }), 2);
+    expect(coach.active).toBeNull();
+    expect(seen.has("h-levy")).toBe(true);
+  });
+
+  it("a situation that passes unshown keeps its turn for the next occurrence", () => {
+    const seen = new Set<string>();
+    const coach = createCoach(SPECS, [HINT], seen);
+    // The lesson is up, and a hold comes and goes behind it.
+    coach.step(obs({ heldByTrainIds: ["red"] }), 0.1);
+    expect(coach.active?.id).toBe("a-build");
+    coach.step(obs(), 0.1);
+    // The hint was never shown, so it is NOT burned...
+    expect(seen.has("h-held")).toBe(false);
+    // ...and teaches at the next hold, once the lessons are out of the way.
+    coach.step(obs({ tilesBuilt: 1, dispatches: 1 }), 0.1);
+    coach.step(
+      obs({ tilesBuilt: 1, dispatches: 1, heldByTrainIds: ["red"] }),
+      CONCEPT_COOLDOWN_SEC + 1
+    );
+    expect(coach.active?.id).toBe("h-held");
+  });
+
+  it("waits the cooldown after any dismissal before the next hint", () => {
+    const seen = new Set<string>();
+    const coach = createCoach([], [HINT, INFO], seen);
+    coach.step(obs({ heldByTrainIds: ["red"], taxPaid: 300 }), 0.1);
+    expect(coach.active?.id).toBe("h-held");
+    // The hold resolves — the hint completes, and the levy hint must WAIT.
+    coach.step(obs({ taxPaid: 300 }), 0.1);
+    expect(coach.active).toBeNull();
+    coach.step(obs({ taxPaid: 300 }), CONCEPT_COOLDOWN_SEC / 2);
+    expect(coach.active).toBeNull();
+    coach.step(obs({ taxPaid: 300 }), CONCEPT_COOLDOWN_SEC);
+    expect(coach.active?.id).toBe("h-levy");
+  });
+
+  it("lessons always outrank hints", () => {
+    const coach = createCoach(SPECS, [INFO]);
+    coach.step(obs({ taxPaid: 300 }), CONCEPT_COOLDOWN_SEC + 1);
+    expect(coach.active?.id).toBe("a-build");
+  });
+
+  it("skips hints this player has already seen, from construction", () => {
+    const seen = new Set<string>(["h-held"]);
+    const coach = createCoach([], [HINT, INFO], seen);
+    coach.step(obs({ heldByTrainIds: ["red"], taxPaid: 300 }), 0.1);
+    expect(coach.active?.id).toBe("h-levy");
   });
 });
 
 describe("coachMarksFor — mode gating", () => {
   it("filters marks whose verb the mode has disabled", () => {
-    // Tycoon has build+dispatch, so buildgap teaches both.
     expect(coachMarksFor("board:buildgap", tycoonMode.controls)).toHaveLength(2);
-    // Puzzle has neither, so the same board teaches nothing there — a mark
-    // that could never be dismissed would be a dead end.
     expect(coachMarksFor("board:buildgap", puzzleMode.controls)).toHaveLength(0);
   });
 
@@ -142,20 +259,24 @@ describe("COACH_BY_BOARD — registry integrity", () => {
         scenario.size?.rows ??
         Math.max(...Object.keys(scenario.level).map(k => parseCoordId(k).y)) + 1;
       for (const mark of marks) {
-        if (mark.anchor.kind === "tile") {
+        const anchor = mark.anchor;
+        expect(anchor, `${board}/${mark.id} lessons carry a static anchor`).toBeDefined();
+        if (!anchor) continue;
+        if (anchor.kind === "tile") {
           // A tile anchor may name an EMPTY cell (a build mark points at the
           // gap), so the check is "inside the world", not "has a tile".
-          const { x, y } = parseCoordId(mark.anchor.id);
-          const dx = mark.anchor.dx ?? 0;
-          const dy = mark.anchor.dy ?? 0;
+          const { x, y } = parseCoordId(anchor.id);
+          const dx = anchor.dx ?? 0;
+          const dy = anchor.dy ?? 0;
           expect(x + dx, `${board}/${mark.id} x`).toBeGreaterThanOrEqual(0);
           expect(x + dx, `${board}/${mark.id} x`).toBeLessThan(cols);
           expect(y + dy, `${board}/${mark.id} y`).toBeGreaterThanOrEqual(0);
           expect(y + dy, `${board}/${mark.id} y`).toBeLessThan(rows);
-        } else {
-          const train = scenario.trains[mark.anchor.id];
+        } else if (anchor.kind === "train") {
+          const train = scenario.trains[anchor.id];
           expect(train, `${board}/${mark.id} train`).toBeDefined();
-          const home = parseCoordId(mark.anchor.homeTile);
+          expect(anchor.homeTile, `${board}/${mark.id} homeTile`).toBeDefined();
+          const home = parseCoordId(anchor.homeTile!);
           expect({ x: train.x, y: train.y }, `${board}/${mark.id} home`).toEqual(
             { x: home.x, y: home.y }
           );
@@ -175,6 +296,19 @@ describe("COACH_BY_BOARD — registry integrity", () => {
           `${board}/${mark.id} needs ${mark.needs}`
         ).toBe(true);
       }
+    }
+  });
+});
+
+describe("COACH_CONCEPTS — catalog integrity", () => {
+  it("every hint is player-tier, triggered, anchored and dismissable", () => {
+    for (const s of COACH_CONCEPTS) {
+      expect(s.tier, `${s.id} tier`).toBe("player");
+      expect(s.trigger, `${s.id} trigger`).toBeDefined();
+      expect(s.anchor ?? s.anchorOf, `${s.id} anchor`).toBeDefined();
+      // Every hint can end: an action predicate, a dwell, or both — a hint
+      // with neither would stand for ever.
+      expect(s.done ?? s.dwellSec, `${s.id} dismissal`).toBeDefined();
     }
   });
 });
@@ -208,22 +342,20 @@ describe("game.coach — the coachmarks board end to end", () => {
 
   it("teaches dispatch, then the switch, each dismissed by the action itself", () => {
     const game = coachGame();
-    // Nothing floats over the Ready card.
     game.advance(0.1);
     expect(game.coach.active).toBeNull();
 
     game.startObjective();
     game.advance(0.1);
     expect(game.coach.active?.id).toBe("dispatch-train");
+    expect(game.coach.active?.kind).toBe("lesson");
     expect(game.coach.active?.anchor).toMatchObject({ kind: "train", id: "t1" });
 
-    // Sending the train is the dismissal — and the switch lesson takes over.
     expect(game.dispatch("t1")).toBe(true);
     game.advance(0.1);
     expect(game.coach.active?.id).toBe("set-switch");
     expect(game.coach.active?.anchor).toMatchObject({ kind: "tile", id: "2,1" });
 
-    // Setting the junction's arm (what Tile.vue's pickArm does) ends the class.
     const arms = game.switches["2,1"];
     const entry = Number(Object.keys(arms)[0]);
     arms[entry] = ((arms[entry] + 1) % 3) as ActiveIntersection;

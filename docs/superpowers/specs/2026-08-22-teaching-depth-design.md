@@ -1,6 +1,7 @@
 # Teaching depth — from level lessons to a two-tier help system
 
-**Date:** 2026-08-22 · **Status:** concept (step 1 built, steps 2–6 designed)
+**Date:** 2026-08-22 · **Status:** steps 1–3 built (+ the calendar HUD slot
+from step 5, pulled forward); steps 4-remainder–7 designed
 **Companion to:** `2026-07-25-train-valley-mode-design.md` §8 item 8,
 `2026-07-27-campaign-and-levels-design.md` §A2.3/§A4.3
 
@@ -81,11 +82,11 @@ is the player's first "is the game broken?" moment.
 
 | id | Trigger (first time ever…) | Anchor | Dismissed by |
 |---|---|---|---|
-| `held-train` | a fare pin enters its HELD state (`badge.held`) | that train | the train moving again, or dwell. Text: the pin already names the blocker; the hint explains *reservations* — "a train reserves its whole path to the next signal; the ring is the passing loop". This is the #1 unexplained mechanic (FarePin.vue's own comment says an unexplained hold "reads as a broken game"). |
-| `red-signal` | a train stops at a signal (`sim.trainBlock` reason signal) | the signal | the train proceeding, or the player clicking the signal. "A signal splits the line into blocks. Click it to hold or force." |
+| `held-train` | a train is blocked by ANOTHER train (`trainBlock` reason `reservation`/`occupancy` with a culprit) — **BUILT 2026-08-22** | that train | the block clearing, or dwell. Text: the pin already names the blocker; the hint explains *reservations*. This is the #1 unexplained mechanic (FarePin.vue's own comment says an unexplained hold "reads as a broken game"). |
+| `signal-hold` | a train is held at the player's OWN signal (`trainBlock` reason `"signal-hold"`) — **BUILT 2026-08-22**. (The concept was first sketched as "red-signal", but in this sim an automatic red IS a failed reservation — reason `reservation` — so the only distinct signal situation is the player's own forgotten hold.) | that train | the hold clearing, or dwell. |
 | `switch-locked` | a click on a locked switch is refused (`isSwitchLocked`) | the junction | dwell. "Locked while a train holds this path — it frees when the train has passed." Needs a small event from `Tile.vue` (the refusal is currently silent). |
-| `first-levy` | the first annual levy books (`money.taxPaid` > 0) | HUD calendar row | dwell. "Every year you pay upkeep on each piece of track you laid." |
-| `tax-warning` | `money.taxUnaffordable` turns true | HUD calendar row | the warning clearing, or dwell. "Next year's bill exceeds the balance — deliver fares, or bulldoze track you don't need." (The red row exists; this explains it once.) |
+| `first-levy` | the first annual levy books (`money.taxPaid` > 0) — **BUILT 2026-08-22** | HUD calendar row | dwell. "Every year you pay upkeep on each piece of track you laid." |
+| `tax-warning` | `money.taxUnaffordable` turns true — **BUILT 2026-08-22** | HUD calendar row | the warning clearing, or dwell. "Next year's bill exceeds the balance — deliver fares, or bulldoze track you don't need." (The red row exists; this explains it once.) |
 | `undo-window` | the first build purchase lands (`tilesBuilt` 0→1) | HUD undo button | the window closing (next action). "Misdragged? Ctrl+Z takes the last purchase back in full. Bulldozing later costs money." |
 | `camera` | a board overflows the viewport (`worldOverflows`) | HUD zoom pill | the player panning or zooming. "Drag to pan, scroll to zoom." |
 | `mismatch-bounce` | the first mismatched arrival (`mismatchedArrivals` 0→1) | the bounced train | dwell. "Wrong station — the train bounced and its fare keeps falling. Set the junction before it returns." |
@@ -178,9 +179,9 @@ keeps the coach ignorant of view internals.
 | Order | Step | Size | Why here |
 |---|---|---|---|
 | 1 | ~~Scripted lessons~~ | M | **DONE** (PR #130) |
-| 2 | Seen-store + tiers (step 3) | S | The memory everything TF-like needs; invisible, riskless |
-| 3 | Triggers + queue + `held-train`, `red-signal`, `first-levy`, `tax-warning` (step 4, four hints) | M | The four "is it broken?" moments; all world/HUD-row anchored, all signals exist |
-| 4 | HUD anchors + `undo-window`, `camera` (step 5) | S–M | Needs the slot layer; the two chrome hints ride it |
+| 2 | ~~Seen-store + tiers (step 3)~~ | S | **DONE** 2026-08-22 — `src/coachStore.ts`, `CoachMarkSpec.tier` |
+| 3 | ~~Triggers + queue + the four hints (step 4)~~ | M | **DONE** 2026-08-22 — `held-train`, `signal-hold` (né red-signal), `first-levy`, `tax-warning`; the `calendar` HUD slot came forward from step 5 because two of the four point at chrome |
+| 4 | HUD anchors for `undo-window`, `camera` (step 5 remainder) | S | The slot layer exists (`data-coach-slot` + a Teleport-to-body bubble); these are content + two more slots |
 | 5 | Hints on/off + reset (step 6) | S | Ships with the first tier-2 content, not before |
 | 6 | Campaign level lessons (step 2) | S each | Content; lands with each Part B level, not ahead of them |
 

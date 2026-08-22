@@ -1191,6 +1191,29 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   `docs/superpowers/specs/2026-08-21-economy-demand-convergence-design.md` —
   also the epic's roadmap (passenger fares, vehicle costs, mode convergence).
 
+## THE FAREBOX — passengers pay (#117 phase 2, 2026-08-22)
+- Every DELIVERED passenger pays: `passengerFare(from, to)` (economy.ts, $2
+  flag fall + $3/tile Manhattan), booked in game.ts as ONE ledger entry per
+  tick ("N passengers") right after `advanceBuses` — per-person entries would
+  churn the 200-entry log. Drained UNCONDITIONALLY (`collectDeliveries`), so
+  the journey buffer never grows on a money-less board.
+- The transit layer reports journeys, never prices them: `Waiting.from` /
+  `Rider.from` carry the ORIGIN through every change and walk; a change
+  re-queues with `rode: true`; a walk-only journey (walk-links were the whole
+  trip) is delivered for the score but earns NOTHING — nobody pays a railway
+  for a walk. A depot terminus calls `deliverRiders(manifest, tileId)`: paid
+  for the distance CARRIED (origin → the terminus reached), not asked.
+- Modes: tycoon keeps its per-train decaying fares (the only mode with
+  `economy.fares`); NETWORK runs `startingBalance: 0` (pure takings — no
+  spend verbs until phase 3/#91); CITIZENS runs `CITIZENS_TREASURY` ($40k),
+  because an economy prices the BUILD verb and an empty purse would kill the
+  mode's whole answer — sized for one intercity line, refilled by fares. The
+  invariant `hud.money === (economy !== undefined)` is pinned by a test.
+- On a two-station board every journey is the same hop, so
+  `balance === fare × passengersDelivered` EXACTLY — the double-collection
+  guard as a one-line assertion (`tests/unit/passengerFares.spec.ts`).
+  `/test/farebox` is the isolation board.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get
@@ -2568,10 +2591,36 @@ Four rules, each measured on that board, each of which failed silently:
   perfectly visible in the app. Shoot the ROUTE (`'#/test/<id>'`, full
   viewport) instead — and in Git Bash prefix `MSYS_NO_PATHCONV=1`, or the
   leading `#/` is rewritten to `C:/Program Files/Git/…` before node sees it.
-- WHERE IT GOES NEXT: the two-tier concept (these scripted lessons + TF-style
-  once-per-player first-encounter hints — seen-store, triggers, HUD anchors,
-  dwell dismissal) is designed in
-  `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`.
+- TIER 2 IS BUILT (2026-08-22): `COACH_CONCEPTS`, a GLOBAL catalog of
+  first-encounter hints (`held-train`, `signal-hold`, `first-levy`,
+  `tax-warning`), each `tier: "player"` — completion persists in
+  `src/coachStore.ts` (localStorage `train-game:coach-seen`) so a concept is
+  taught once EVER. Lessons stay session-scoped; `tier: "run"` re-arms on
+  Retry. Design: `docs/superpowers/specs/2026-08-22-teaching-depth-design.md`.
+- A HINT SHOWS ONLY WHILE ITS `trigger(obs)` IS CURRENTLY TRUE, and completes
+  ONLY WHILE SHOWING (action predicate or `dwellSec` of active time). Both
+  halves are load-bearing: a latched trigger would point at a problem that
+  already resolved itself, and completing unshown would silently burn a
+  once-per-player hint the first time its situation flickered past behind a
+  lesson.
+- LESSONS ALWAYS OUTRANK HINTS, and any dismissal starts an 8s
+  (`CONCEPT_COOLDOWN_SEC`, sim-time) cooldown before the next hint — the
+  anti-lecture rule. There is never more than one bubble.
+- "RED SIGNAL" IS NOT A DISTINCT SITUATION in this sim: an automatic red IS a
+  failed reservation (`BlockReason "reservation"`). The only signal-specific
+  block is the player's own hold (`"signal-hold"`), which is what the
+  `signal-hold` hint teaches. Don't re-add a red-signal hint.
+- HUD-ANCHORED MARKS (`{kind:"hud", slot}`) render through `<Teleport
+  to="body">` at `position: fixed`, aimed at the element tagged
+  `data-coach-slot="<slot>"` — NOT inside `.level`: the world container's CSS
+  transform makes it the containing block for fixed descendants, so a fixed
+  bubble there pans with the board. z-index 3500, because the score card and
+  drawers sit at 2000-3000 and the first-levy bubble's first line vanished
+  under the card at less (measured).
+- A HIDDEN BROWSER PANE LAYS OUT AT 0×0: `getBoundingClientRect` on HUD
+  chrome returns garbage (a centred card reports x = −width/2). Judge HUD
+  positioning from a real-viewport screenshot, never from rects queried in a
+  hidden pane.
 
 ## GOALS ON THE READY CARD (M9, 2026-07-27)
 - A STAR PREDICATE IS TRUE BEFORE THE RUN. `stars()` evaluates every predicate

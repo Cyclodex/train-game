@@ -1,9 +1,30 @@
 <template>
+  <!-- HUD-anchored hints (the calendar row) teleport to <body>: the world
+       container carries a CSS transform, which makes it the containing block
+       for position:fixed descendants — a fixed bubble inside .level would pan
+       and zoom with the board it is trying to stand apart from. -->
+  <Teleport to="body" v-if="mark && hudRect">
+    <div
+      class="coach-mark coach-mark--hud"
+      data-testid="coach-mark"
+      :data-coach-id="mark.id"
+      :data-coach-kind="mark.kind"
+      :style="{
+        left: `${hudRect.x}px`,
+        top: `${hudRect.y}px`,
+        transform: 'translate(-50%, 0)',
+      }"
+    >
+      <div class="coach-mark__arrow coach-mark__arrow--up" />
+      <div class="coach-mark__bubble">{{ mark.text }}</div>
+    </div>
+  </Teleport>
   <div
-    v-if="mark"
+    v-else-if="mark && mark.anchor.kind !== 'hud'"
     class="coach-mark"
     data-testid="coach-mark"
     :data-coach-id="mark.id"
+    :data-coach-kind="mark.kind"
     :style="{
       transform: `translate(-50%, -100%) translate(${pos.x}px, ${pos.y}px) scale(${counterScale})`,
       transformOrigin: '50% 100%',
@@ -36,8 +57,10 @@ const TILE_LIFT = 0.18;
 // How far above a fare badge (which already floats over its loco) the tip
 // sits, so the bubble clears the pin it points past.
 const BADGE_LIFT = 0.24;
-// Fallback lift over a train's home tile on boards without fare pins.
+// Fallback lift over a train's tile on boards without fare pins.
 const HOME_LIFT = 0.3;
+// Gap between a HUD slot element and the bubble below it, in screen px.
+const HUD_GAP = 6;
 
 @Component({})
 class CoachMark extends Vue {
@@ -55,17 +78,26 @@ class CoachMark extends Vue {
     return Math.min(1, 1 / Math.max(this.zoom, 0.01));
   }
 
-  // The arrow tip's world position. A train anchor rides its fare badge (which
-  // the game refreshes each frame beside the sprite) and falls back to the
-  // train's home tile on boards whose mode draws no fares.
+  // The arrow tip's world position for world anchors. A train anchor rides
+  // its fare badge (which the game refreshes each frame beside the sprite);
+  // on boards whose mode draws no fares it falls back to the train's LIVE sim
+  // tile, then to the authored home tile.
   get pos(): { x: number; y: number } {
     const ts = this.game.tileSize;
     const anchor = this.mark?.anchor;
-    if (!anchor) return { x: 0, y: 0 };
+    if (!anchor || anchor.kind === "hud") return { x: 0, y: 0 };
     if (anchor.kind === "train") {
       const badge = this.game.fareBadges.find(b => b.trainId === anchor.id);
       if (badge) return { x: badge.x, y: badge.y - ts * BADGE_LIFT };
-      const { x, y } = parseCoordId(anchor.homeTile);
+      // The live position reads the markRaw'd sim — touch the heartbeat or
+      // this computed is cached at its first answer for ever (KNOWHOW).
+      void this.game.renderTick.value;
+      const tileId =
+        this.game.sim.trains[anchor.id] !== undefined
+          ? this.game.sim.trainTileId(anchor.id)
+          : anchor.homeTile;
+      if (!tileId) return { x: 0, y: 0 };
+      const { x, y } = parseCoordId(tileId);
       return { x: (x + 0.5) * ts, y: (y + 0.5 - HOME_LIFT) * ts };
     }
     const { x, y } = parseCoordId(anchor.id);
@@ -73,6 +105,21 @@ class CoachMark extends Vue {
       x: (x + 0.5 + (anchor.dx ?? 0)) * ts,
       y: (y + 0.5 + (anchor.dy ?? 0) - TILE_LIFT) * ts,
     };
+  }
+
+  // Where a HUD-anchored bubble goes, in viewport px: centred under the slot
+  // element the view tagged with data-coach-slot. Null hides the bubble (no
+  // slot on this view — the hint still dwells out in the controller, which is
+  // acceptable for chrome that genuinely is not on screen). Reads the DOM, so
+  // it must touch the heartbeat to re-run each drawn frame.
+  get hudRect(): { x: number; y: number } | null {
+    const anchor = this.mark?.anchor;
+    if (!anchor || anchor.kind !== "hud") return null;
+    void this.game.renderTick.value;
+    const el = document.querySelector(`[data-coach-slot="${anchor.slot}"]`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.bottom + HUD_GAP };
   }
 }
 
@@ -95,6 +142,15 @@ export default toNative(CoachMark);
   pointer-events: none;
   animation: coach-mark-float 2.4s ease-in-out infinite;
 }
+// The HUD variant teleports to <body> and positions in screen space, above
+// the game chrome it annotates — the score card and the drawers sit at
+// 2000-3000, and a hint hiding behind the very row it points at teaches
+// nothing (measured: the first-levy bubble's opening line vanished under the
+// score card at a smaller z).
+.coach-mark--hud {
+  position: fixed;
+  z-index: 3500;
+}
 .coach-mark__bubble {
   max-width: 240px;
   padding: 9px 13px;
@@ -113,6 +169,10 @@ export default toNative(CoachMark);
   border-left: 8px solid transparent;
   border-right: 8px solid transparent;
   border-top: 10px solid #5fd39a;
+}
+.coach-mark__arrow--up {
+  border-top: none;
+  border-bottom: 10px solid #5fd39a;
 }
 @keyframes coach-mark-float {
   0%,

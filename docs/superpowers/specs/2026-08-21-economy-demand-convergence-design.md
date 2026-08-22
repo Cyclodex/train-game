@@ -184,8 +184,19 @@ having.
   order. Citizens quote and ride buses through the shared layer; `demandFor`
   becomes additive under the `edgeDemand` dial; the XOR survives only as the
   pair of defaults. Feature scenario: `/test/edgedemand`.
-- **Phase 2 — passengers pay** (D3): per-delivery earnings into the ledger,
-  `hud.money` on network/citizens boards that opt in.
+- **Phase 2 — passengers pay (D3): BUILT 2026-08-22.** The transit layer
+  carries each journey's ORIGIN through every change and walk
+  (`Waiting.from`/`Rider.from`) and reports finished, fare-worthy journeys
+  (`collectDeliveries` — a walk-only journey is delivered for the score and
+  earns nothing, `Waiting.rode`); a depot terminus reports the riders
+  themselves (`deliverRiders`), paid for the distance carried. The game prices
+  each journey (`passengerFare` in `economy.ts`: $2 flag fall + $3/tile
+  Manhattan) and books ONE ledger entry per tick. Network gained
+  `economy: { startingBalance: 0 }` (pure takings — no verbs to spend on
+  until phase 3); Citizens gained `CITIZENS_TREASURY` ($40,000 — because an
+  economy prices the BUILD verb, an empty purse would have killed the mode's
+  whole answer; sized for one intercity line, refilled by the fares).
+  `hud.money` on both. Scenario: `/test/farebox`.
 - **Phase 3 — vehicles cost** (D4, #91): purchase + running costs.
 - **Phase 4 — the roster reads the model** (D5): network/citizens differ only
   in objective + HUD; a tycoon town board prices fares off real demand.

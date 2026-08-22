@@ -47,6 +47,16 @@ export interface SimLine {
 export interface Waiting {
   dest: string;
   tag?: string;
+  // The stop this JOURNEY began at — set when they first join a queue and
+  // carried through every change and walk, because it is what a fare is
+  // priced against (phase 2 of the economy convergence: a delivered passenger
+  // pays by the distance they asked to be carried). Optional so every fixture
+  // written before fares existed still compares equal.
+  from?: string;
+  // They have been aboard a vehicle at least once. A journey made entirely on
+  // your own legs (a walk-link was the whole trip) is DELIVERED for the score
+  // but earns no fare — nobody pays a railway for a walk.
+  rode?: boolean;
 }
 
 // Someone in a seat. `final` is where they asked to go; `off` is where THIS
@@ -61,6 +71,17 @@ export interface Rider {
   // puts its citizen id here, so the town and the vehicles keep ONE ledger
   // instead of a shadow copy each guessing at the other's.
   tag?: string;
+  // Where the journey began (see Waiting.from) — a rider is by definition
+  // someone who rode, so no `rode` flag is needed in a seat.
+  from?: string;
+}
+
+// One finished, fare-worthy journey: where it began and where it ended. What
+// `collectDeliveries` drains and the game layer prices — the layer itself
+// stays money-blind, exactly as the sims stay terrain-blind.
+export interface DeliveredJourney {
+  from: string;
+  to: string;
 }
 
 // How many people turn up at a stop, and how many it will hold.
@@ -177,10 +198,19 @@ export interface TransitLayer {
   // --- the exchange --------------------------------------------------------
   exchange(req: ExchangeRequest): Exchange;
   delivered(): number;
-  // Count arrivals that did not happen at a stop. The one caller is a matched
-  // DEPOT arrival: "everyone home" ends every ride aboard and has always
-  // counted them all, and a depot is not a place anyone can be re-queued at.
+  // Count arrivals that did not happen at a stop. The one caller shape is a
+  // matched DEPOT arrival: "everyone home" ends every ride aboard and has
+  // always counted them all, and a depot is not a place anyone can be
+  // re-queued at. Anonymous — records no fare-worthy journeys; prefer
+  // `deliverRiders` where the manifest is at hand.
   deliver(count: number): void;
+  // The same terminus arrival, with the riders themselves: counts them all
+  // AND records each one's journey (their origin → the terminus they actually
+  // reached — they are paid for the distance carried, not the distance asked).
+  deliverRiders(riders: readonly Rider[], at: string): void;
+  // Drain the fare-worthy journeys finished since the last call. The game
+  // layer prices them; this layer only says who was carried whence to where.
+  collectDeliveries(): DeliveredJourney[];
 
   // --- what the owning sims contribute -------------------------------------
   // The unassigned vehicles, as services over what they can reach. Set by each
@@ -240,6 +270,10 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
   // clumping the way random would.
   const destCursors = new Map<string, number>();
   let deliveredTotal = 0;
+  // Fare-worthy journeys finished since the last collect. Only ever appended
+  // here and drained whole — the game layer prices them in one booking per
+  // tick, so this can never grow past a tick's worth of arrivals.
+  let journeys: DeliveredJourney[] = [];
 
   const stopperSources = new Map<string, () => StopperService[]>();
   let graph: LineGraph | null = null;
@@ -411,7 +445,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       const cap = demand[stopId]?.max ?? hardCap;
       const q = queues.get(stopId) ?? [];
       if (q.length >= cap) return false;
-      q.push({ dest, ...(tag !== undefined ? { tag } : {}) });
+      q.push({ dest, from: stopId, ...(tag !== undefined ? { tag } : {}) });
       queues.set(stopId, q);
       return true;
     },
@@ -434,7 +468,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         // somewhere (D10). No service, no passenger, and the count says so.
         const dest = nextDestination(stopId);
         if (!dest) break;
-        q.push({ dest });
+        q.push({ dest, from: stopId });
         accepted += 1;
       }
       queues.set(stopId, q);
@@ -451,7 +485,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
           clock -= d.intervalSec;
           if (q.length < d.max) {
             const dest = nextDestination(id);
-            if (dest) q.push({ dest });
+            if (dest) q.push({ dest, from: id });
           }
         }
         spawnClocks.set(id, clock);
@@ -464,7 +498,7 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         const start: Waiting[] = [];
         for (let i = 0; i < n; i++) {
           const dest = nextDestination(id);
-          if (dest) start.push({ dest });
+          if (dest) start.push({ dest, from: id });
         }
         queues.set(id, start);
       }
@@ -508,12 +542,19 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         // destination — which is what treating the walk as a change did — is a
         // state `enqueue` itself forbids, and it sent every Altstadt rider round
         // the railway one more time before anybody counted them.
-        if (on === rider.final) deliveredTotal += 1;
-        else {
+        if (on === rider.final) {
+          deliveredTotal += 1;
+          // Priced over the whole journey they asked for — the short walk off
+          // the last stop is part of arriving, not a separate unpaid leg.
+          journeys.push({ from: rider.from ?? stopId, to: rider.final });
+        } else {
           if (rider.tag !== undefined) changingTags.push(rider.tag);
           changing.push({
             dest: rider.final,
             ...(rider.tag !== undefined ? { tag: rider.tag } : {}),
+            ...(rider.from !== undefined ? { from: rider.from } : {}),
+            // Mid-journey by definition: they just stepped off a vehicle.
+            rode: true,
             at: on,
           });
         }
@@ -552,6 +593,10 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
             manifest.push({
               final: w.dest,
               off,
+              // The journey's origin survives into the seat (falling back to
+              // this stop for a fixture-built queue entry without one), so a
+              // fare is priced from where they set OUT, not their last change.
+              from: w.from ?? stopId,
               ...(w.tag !== undefined ? { tag: w.tag } : {}),
             });
             if (w.tag !== undefined) boardedTags.push(w.tag);
@@ -568,6 +613,20 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
     },
     deliver(count: number) {
       deliveredTotal += Math.max(0, count);
+    },
+    deliverRiders(riders: readonly Rider[], at: string) {
+      for (const rider of riders) {
+        deliveredTotal += 1;
+        // Paid for the distance CARRIED — origin to the terminus they actually
+        // reached — not the distance they asked for: "everyone home" at a
+        // depot ends the ride wherever it ends.
+        journeys.push({ from: rider.from ?? at, to: at });
+      }
+    },
+    collectDeliveries() {
+      const out = journeys;
+      journeys = [];
+      return out;
     },
     setStoppers(source: string, stoppers: () => StopperService[]) {
       stopperSources.set(source, stoppers);
@@ -609,6 +668,11 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
         destCursors.set(id, c);
       }
       deliveredTotal = snap.delivered;
+      // The fare buffer is deliberately NOT part of a snapshot: it holds at
+      // most one tick's uncollected journeys, and billing the restored world
+      // for arrivals the abandoned one made would be wrong money. Dropped, so
+      // a restore never carries a stranger's fares.
+      journeys = [];
       touch();
     },
   };
@@ -654,9 +718,13 @@ export function createTransit(config: TransitConfig = {}): TransitLayer {
       for (const w of q) {
         const to = walkOnward(at, w.dest);
         if (to === at) staying.push(w);
-        // The walk WAS the last leg: they have arrived, on foot.
-        else if (to === w.dest) deliveredTotal += 1;
-        else arrivals.set(to, [...(arrivals.get(to) ?? []), w]);
+        else if (to === w.dest) {
+          // The walk WAS the last leg: they have arrived, on foot. A fare only
+          // if a vehicle carried them at some point — a journey made entirely
+          // on their own legs is delivered for the score and earns nothing.
+          deliveredTotal += 1;
+          if (w.rode) journeys.push({ from: w.from ?? at, to: w.dest });
+        } else arrivals.set(to, [...(arrivals.get(to) ?? []), w]);
       }
       if (staying.length !== q.length) queues.set(at, staying);
     }
