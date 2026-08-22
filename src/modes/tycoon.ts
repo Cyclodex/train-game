@@ -414,7 +414,76 @@ const LANDPRICES_TUNING: TycoonTuning = {
   stars: tycoonStars,
 };
 
+// `thefork` — campaign level 4, and the first board authored as a TIMETABLE
+// (docs/superpowers/specs/2026-08-22-level-pacing-design.md §5). Eight trains
+// arrive over ~2 minutes through one shed, alternating between two towns; the
+// junction's arm is the only decision.
+//
+// The budget covers the two-tile southern gap ($2,000) three times over,
+// because money is not this level's question — the arm is. What money DOES do
+// here is score: Payday is only reachable if the trains keep moving, since
+// every fare on the board burns while the player thinks.
+//
+// NO CALENDAR, per the arc: the second clock arrives later, and a levy on a
+// level whose lesson is "set the points" would be a second thing to think
+// about at the moment the player is learning the first.
+export const THEFORK_BALANCE = 6000;
+// Win inside this, in seconds. The level's third axis, and the reason it is
+// TIME rather than money: the gap is two tiles on a board with no alternative
+// route, so a spend star would be earned by everyone who finished at all —
+// measured, the optimal line spends exactly the $2,000 the level requires.
+// What this board can be played well or badly at is KEEPING THE TIMETABLE
+// MOVING: twelve trains come through one shed ten seconds apart, so every
+// second a train is left standing is a second the next one waits outside.
+//
+// Measured through the real objective (tests/unit/thefork.spec.ts pins them):
+//   prompt, points set every time          125s   $6,690
+//   five seconds of dawdle per train       130s   $6,450
+//   ten seconds                            183s   $6,090
+//   fifteen                                243s   $5,850
+// 145 sits twenty seconds above the prompt line — a hesitation is forgiven,
+// a habit is not.
+export const THEFORK_ON_TIME_SEC = 145;
+
+function theforkStars(maxPayout: number): StarSpec[] {
+  // Re-measured whenever the timetable moves — Payday scales with the roster,
+  // and a longer roster moves it (the trap LAKEVALLEY_OPEN_PAYDAY documents).
+  const payday = Math.round(maxPayout * 0.6);
+  return [
+    {
+      id: "payday",
+      label: `Payday ($${payday.toLocaleString("en-US")})`,
+      hint: "Bank at least that much - send each train as it arrives",
+      predicate: (c: Counters) => (c.earned ?? 0) >= payday,
+    },
+    {
+      // THE level's star. Eight trains, two towns, one arm: the only way to
+      // keep this clean is to set the points before every single departure.
+      id: "perfect-colours",
+      label: "Perfect colours",
+      hint: "No train ever arrives at the wrong town",
+      predicate: (c: Counters) => c.mismatchedArrivals === 0,
+    },
+    {
+      id: "on-time",
+      label: `On time (${THEFORK_ON_TIME_SEC}s)`,
+      hint: "Clear the whole timetable inside that - do not leave trains standing",
+      predicate: (c: Counters) => c.elapsedSec <= THEFORK_ON_TIME_SEC,
+    },
+  ];
+}
+
+const THEFORK_TUNING: TycoonTuning = {
+  startingBalance: THEFORK_BALANCE,
+  // The opening level's slower burn: a fare has to survive the wait for the
+  // shed as well as its own journey, and at the generic 4 trips the later
+  // arrivals would be at their floor before the player could reach them.
+  fareGrace: LAKEVALLEY_OPEN_GRACE,
+  stars: theforkStars,
+};
+
 const TUNING_BY_BOARD: Record<string, TycoonTuning> = {
+  thefork: THEFORK_TUNING,
   "lakevalley-open": LAKEVALLEY_OPEN_TUNING,
   taxyear: TAXYEAR_TUNING,
   bankrupt: BANKRUPT_TUNING,

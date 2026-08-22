@@ -72,6 +72,17 @@ export const CAMPAIGN: CampaignLevel[] = [
     modeId: "tycoon",
     stars: 3,
   },
+  {
+    // The first level authored as a TIMETABLE rather than as a pile of trains
+    // present at t=0 — twelve arrivals over two minutes through one shed. See
+    // docs/superpowers/specs/2026-08-22-level-pacing-design.md for why every
+    // level before it is over in well under a minute.
+    id: "thefork",
+    name: "The Fork",
+    blurb: "Trains keep coming, for one town or the other. The junction decides.",
+    modeId: "tycoon",
+    stars: 3,
+  },
 ];
 
 // The objective store's key for a level — the same string PlayView records a win

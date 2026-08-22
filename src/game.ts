@@ -3278,6 +3278,52 @@ export function createGame(
   // releasePendingTrains). Drained into the observation by advance().
   let releasedFromSchedule = 0;
 
+  // --- a delivered train leaves the world ------------------------------------
+  // How long a delivered train sits in its shed before it is stabled and gone,
+  // in sim seconds. Long enough to read as "it pulled in and the doors shut",
+  // short enough that the platform is free for the next arrival.
+  const STABLE_AFTER_SEC = 1.5;
+  // trainId -> how long it has been parked.
+  const parkedFor: Record<string, number> = {};
+
+  // WITHOUT THIS, A STATION CAN RECEIVE EXACTLY ONE TRAIN, EVER. A matched
+  // arrival parks and stays parked, so the depot is occupied for the rest of
+  // the run and every later train for that town noses up behind it and stops.
+  // That is invisible on a board with one train per destination — which is
+  // every board we had — and it is a hard wall the moment a timetable sends a
+  // second train to the same place (measured: 2 of 8 delivered, the other six
+  // stacked up the line).
+  //
+  // Train Valley's model is that the train enters the station and is gone. So:
+  // let it glide in and park normally (the animation is the reward), then take
+  // it out of the sim. renderTrains already hides the units of any def the
+  // sim does not hold — that is how a not-yet-spawned train stays invisible —
+  // so the sprite disappears with no view change at all.
+  //
+  // Deliberately NOT forgetTrain(): that splices the def out of `trainDefs`,
+  // and Retry rebuilds the run from exactly that array. The roster has to
+  // survive, or a second attempt would start short of the trains the first one
+  // delivered.
+  //
+  // Gated on `controls.dispatch`. Where trains are not dispatched the level
+  // ends the moment the last one arrives, so there is nothing to make room
+  // for, and vanishing trains would only take the finished board away from
+  // the player looking at it.
+  function stableDeliveredTrains(dt: number): void {
+    if (!mode.controls.dispatch) return;
+    for (const def of trainDefs) {
+      const train = sim.trains[def.id];
+      if (!train || train.state !== "parked") {
+        delete parkedFor[def.id];
+        continue;
+      }
+      parkedFor[def.id] = (parkedFor[def.id] ?? 0) + dt;
+      if (parkedFor[def.id] < STABLE_AFTER_SEC) continue;
+      delete parkedFor[def.id];
+      sim.removeTrain(def.id);
+    }
+  }
+
   function releasePendingTrains(): void {
     for (let i = 0; i < pendingTrains.length; i++) {
       const def = pendingTrains[i];
@@ -3760,6 +3806,10 @@ export function createGame(
     // test — which is exactly what happened on the first cut, and what the
     // comment on updateVehicleLoads claimed it had avoided.
     updateVehicleLoads();
+    // A delivered train is stabled and leaves the board, freeing its platform
+    // for the next arrival. BEFORE releasePendingTrains(), so a shed that just
+    // cleared can take its next train in the same tick.
+    stableDeliveredTrains(scaled);
     // Ordered trains roll out of the shed as it clears, in the order bought —
     // and so do timetabled arrivals that found their platform busy.
     releasePendingTrains();
@@ -4557,6 +4607,7 @@ export function createGame(
         if (scheduledIds.has(pendingTrains[i].id)) pendingTrains.splice(i, 1);
       }
       releasedFromSchedule = 0;
+      for (const id of Object.keys(parkedFor)) delete parkedFor[id];
       fareBadges.splice(0, fareBadges.length);
       refreshMoney();
       tracker.reset();

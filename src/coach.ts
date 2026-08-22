@@ -330,6 +330,25 @@ const COACH_BY_BOARD: Record<string, CoachMarkSpec[]> = {
       done: doneSwitch,
     },
   ],
+  // Campaign level 4 (`thefork`, tycoon): the first TIMETABLE level. The build
+  // and dispatch verbs are known by now, so it teaches only what is new — that
+  // trains keep coming, and that the arm has to be set for each one.
+  thefork: [
+    {
+      id: "build-gap",
+      text: "The southern line stops short. Open Build and drag rails down to the orange town.",
+      anchor: { kind: "tile", id: "3,3", dy: 0.5 },
+      needs: "build",
+      done: doneBuild,
+    },
+    {
+      id: "set-switch",
+      text: "Trains keep arriving, for one town or the other. Click the junction to send this one the right way.",
+      anchor: { kind: "tile", id: "3,2" },
+      needs: "switches",
+      done: doneSwitch,
+    },
+  ],
   // The /test scenario for the lesson mechanic in isolation (project rule:
   // every feature ships one). Only verbs the STAGE can perform — the build
   // gesture lives in PlayView, so the stage's pair is dispatch + switch.
