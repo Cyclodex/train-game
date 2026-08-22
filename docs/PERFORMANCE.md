@@ -34,7 +34,15 @@ frame budget is 16.7ms and the tick is only the MODEL's share — rendering come
 on top — so **tick avg > ~4ms is a red flag, > 16ms is unplayable** before a
 single DOM write happens.
 
-**3. In the browser.** PlayView exposes the live game as `window.__game`. Real
+**3. The frame meter** — `node scripts/frameperf.mjs [--board perfcity]
+[--seconds 20] [--density 60] [--profile] [--ablate sim|cars|tiles|nomirror]`.
+Launches a VISIBLE browser window (the only kind whose frame rate is real) and
+reports fps, the game's own rAF-callback time, the share of long frames, and the
+browser's script/style/layout split via CDP. `--ablate` removes one layer at a
+time, which is how the table below was produced. THIS is the meter that matters
+to a player; the headless bench above only sees the model.
+
+**4. In the browser by hand.** PlayView exposes the live game as `window.__game`. Real
 frame numbers need a VISIBLE window — a hidden/automation tab not only stops
 rAF (KNOWHOW → VERIFY), Chrome also deprioritises the whole renderer, so
 wall-clock timings taken there overstate cost several-fold; treat them as
@@ -169,6 +177,96 @@ Measured on the bench + browser profiles, in descending order of leverage:
 7. **DOM size.** 40x28 renders ~64k nodes (~55 per tile); every tile component
    is mounted whether or not the camera can see it.
 
+## THE FRAME A PLAYER SEES — and why it is the real problem (2026-08-22)
+
+The headless bench measures `advance()`, the model. It is blind to `frame()`,
+where the mirrors, the DOM writes and Vue's re-renders live — and that is where
+this game is actually slow. Measured with `node scripts/frameperf.mjs` in a
+VISIBLE window (a hidden tab throttles rAF and would report fiction):
+
+| board | fps | frame ms (mean / p95) | DOM nodes | cars |
+| --- | --- | --- | --- | --- |
+| perfcity, 60% density | **9.7–12.5** | 23–35 / 35–49 | 64 400 | ~190 |
+| demoworld, 60% density | **80.7** | 3.5 / 4.3 | 16 500 | 69 |
+
+Four times the area and 2.7x the cars costs ~7x the frame. **On the big board
+the game runs at ten frames a second** — the model tick it was optimised for
+(4.7ms) is a rounding error next to it.
+
+### Where the frame goes
+
+Ablations, each removing ONE layer (`--ablate`), 12s runs on perfcity:
+
+| variant | fps | frame ms | reading |
+| --- | --- | --- | --- |
+| baseline | 9.7 | 35.0 | |
+| **sim paused** (world still drawn) | **55.4** | 5.8 | drawing a STATIC 64k-node world is nearly free |
+| cars hidden | 8.5 | 47.0 | the vehicles' PAINT is not the bill |
+| whole world hidden | 20.2 | 29.8 | even with nothing shown, the frame callback still costs ~30ms |
+
+And the browser's own split (CDP `Performance.getMetrics`, share of wall):
+script ~26–30%, style ~5%, layout ~1%, while the main thread is busy ~100% of
+the time. So roughly a third of the wall is JS, and most of the rest is paint
+and raster of everything that moved.
+
+The two findings that matter:
+
+1. **The frame callback alone (~23–35ms) is already over the 16.7ms budget** —
+   before the browser paints anything. About 5ms of that is the model; the rest
+   is the render half: mirrors, per-sprite DOM writes, and Vue patching.
+2. **A static world is cheap; a moving one is not.** Pausing the sim takes the
+   same 64k nodes from 9.7 to 55 fps. The cost is proportional to what MOVES and
+   to how much of the page has to be re-painted because of it.
+
+The single biggest JS function in the profile is `sampleWorld` (`game.ts`), at
+6% of all samples: the SVG `getTotalLength`/`getPointAtLength` path sampling,
+called twice per coupler per unit per frame. Vue's own vnode/patch machinery
+(`createVNodeWithArgsTransform`, `patchStyle`, `patchKeyedChildren`, …) makes up
+roughly another 40% of the ATTRIBUTED samples.
+
+### Is the browser the limit? No — the DOM is.
+
+Same browser, same machine, same scene scale: a canvas 2D renderer drawing the
+equivalent picture — all 1120 tiles blitted from pre-baked tile images with **no
+culling**, plus 200 vehicles and 32 train units, all moving:
+
+| renderer | fps | draw ms per frame |
+| --- | --- | --- |
+| DOM + SVG (the game today) | 12.5 | 23.4 |
+| **canvas 2D (same scene)** | **132.7** | **0.92** |
+
+**25x**, and the canvas version is running at the display's refresh cap with
+zero long frames. The browser has ample headroom for this game; what has none is
+putting a world of 64 000 nodes in the document and asking the browser to
+re-style, re-layout and re-paint the parts of it that move, sixty times a second.
+
+Caveats, stated honestly: the benchmark's tile art is simpler than the game's.
+That does not change the conclusion, because the technique is bake-once-blit-
+many — per-frame cost is independent of how elaborate a tile looks, which is
+exactly the property the DOM version lacks. What canvas costs instead is
+hit-testing (currently free via DOM events) and accessibility.
+
+### The options, in order of effort
+
+1. **Closed-form path sampling** (small, safe, do it anyway). Replace
+   `getPointAtLength` with the arc/lerp math already used headless. ~6% of the
+   frame, and it removes a browser/headless behaviour difference.
+2. **Camera culling** (moderate). Mount only tiles in view. Cuts the DOM by ~90%
+   when zoomed in — but note it buys NOTHING at fit zoom, which is exactly how a
+   big board is looked at, so it is not the answer on its own.
+3. **Canvas 2D for the world** (the real fix, contained). The architecture is
+   already right for it: the simulation is headless and authoritative, and
+   `game.ts` already samples every unit's position each frame — today it writes
+   those into DOM transforms, and it would instead draw them. Tiles bake once per
+   distinct appearance; sprites draw per frame. HUD, panels and the build dock
+   stay DOM, where they belong.
+4. **WebGL / a sprite batcher** (only if canvas 2D ever runs out). At 0.92ms for
+   this scene there is no evidence it is needed.
+
+Leaving the browser (Electron, Tauri) would change nothing: they ship the same
+renderer. The problem is not where the game runs, it is what it asks the renderer
+to do.
+
 ## The improvement plan
 
 **Done 2026-08-22** — all four provably behaviour-neutral: the per-tick
@@ -182,8 +280,22 @@ the crossing gate ALONE: the three mirror fixes live in `frame()` and are
 invisible to it. Their effect is browser-side and still unquantified — a
 visible-window frame measurement is the missing piece.
 
+**The finding that reorders everything else** (see the frame section above): the
+MODEL is not what makes this game slow on a big board. At 60% density perfcity
+runs at 10 fps with a 4.7ms model tick, and a canvas 2D renderer draws the same
+scene 25x cheaper in the same browser. Sim work still matters — it is half the
+frame callback at high vehicle counts — but the render layer is now the headline.
+
 **Next, in leverage order:**
 
+0. **Move the world off the DOM (canvas 2D).** The one change that makes big
+   boards playable. Contained: the sim is already headless and `game.ts` already
+   samples every unit each frame; it would draw them instead of writing DOM
+   transforms. HUD and panels stay DOM. See the frame section for the evidence
+   and the caveats (hit-testing, accessibility).
+0b. **Closed-form path sampling** — do this one regardless, it is small: replace
+   `getPointAtLength` with the arc/lerp math already used headless. Measured at
+   6% of all profile samples (`sampleWorld`), the biggest single JS function.
 1. **Spatial index in the road sim.** Maintain `tileId → Set<vehicle>`
    incrementally as bodies move (the body memo already knows its tiles);
    `clearAhead`/junction/lane-change scans then look up only vehicles on their
@@ -213,13 +325,10 @@ visible-window frame measurement is the missing piece.
      (spawn, target, class) with an invalidation hook on level edits (build-in-
      play mutates the level the router reads). Pick deliberately; do not sneak
      either into a perf pass.
-3. **Closed-form path sampling.** Replace `getPointAtLength` with the pure
-   geometry used headless (straight lerp + arc parameterisation) so browser and
-   headless run the same math — removes SVG DOM from the hot loop and one
-   browser/headless behaviour difference.
-4. **Camera culling.** Render only tiles intersecting the viewport (+margin);
-   at typical zoom that is 10–20% of a 40x28 board. Biggest DOM win, most
-   invasive change — measure the rest first.
+3. **Camera culling.** Render only tiles intersecting the viewport (+margin).
+   Worth doing for the zoomed-in case, but note it buys NOTHING at fit zoom —
+   where the whole world is on screen, which is how a big board gets looked at.
+   A stopgap if the canvas move is deferred, not a substitute for it.
 
 ## Regression monitoring
 

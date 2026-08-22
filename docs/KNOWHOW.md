@@ -4463,6 +4463,23 @@ mode, shared paths — are NOT).
     reservation) and a per-tick polling BUDGET — because nothing else in the
     suite notices per-tile polling coming back: correctness is unchanged, only
     the cost.
+- THE RENDER LAYER IS THE REAL CEILING, not the model (2026-08-22, measured in a
+  VISIBLE window with `npm run frameperf` — a hidden tab throttles rAF and
+  reports fiction). perfcity at 60% density: **10-12 fps**, frame callback
+  23-35ms, against a 4.7ms model tick. demoworld (a quarter the area): 80 fps.
+  · Ablations say what it is: PAUSE THE SIM and the same 64k-node world draws at
+    55 fps — a static world is nearly free, a moving one is not. Hiding the cars
+    does NOT help (their paint is not the bill); hiding the whole world still
+    leaves a ~30ms frame callback, because the mirrors and DOM writes run
+    regardless of visibility.
+  · The browser is NOT the limit — the DOM is. Same browser, same machine, same
+    scene (1120 tiles, no culling, 200 vehicles, 32 train units): DOM/SVG 12.5
+    fps / 23.4ms, canvas 2D **132.7 fps / 0.92ms**. 25x. Electron/Tauri would
+    change nothing; they ship this renderer.
+  · Biggest single JS function: `sampleWorld` (game.ts) at 6% of all samples —
+    the SVG getTotalLength/getPointAtLength sampling, twice per coupler per
+    unit per frame. Vue's vnode/patch machinery is ~40% of the ATTRIBUTED
+    samples. Full analysis + the ordered options: docs/PERFORMANCE.md.
 - Unsolved hot spots, in leverage order (details + fixes in PERFORMANCE.md):
   all-pairs candidate scans in clearAhead/junction arbitration (the memo+prune
   of SIM HOT PATH made pairs cheap, not fewer) — now the biggest remaining win;
