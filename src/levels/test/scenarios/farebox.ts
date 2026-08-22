@@ -43,12 +43,20 @@ for (let x = WEST + 1; x < EAST; x++) {
   level[`${x},${RAIL_Y}`] = expandKind("straight", 1);
 }
 level[`${EAST},${RAIL_Y}`] = expandKind("depot", 3);
-level[WEST_STATION] = expandKind("station", 1);
-level[EAST_STATION] = expandKind("station", 1);
+// Each platform imports a THINNED share of what its catchment would send
+// (the edgeDemand dial from phase 1). At the full rate two busy towns
+// overwhelm the shuttle and the board is LOST inside twenty seconds — which
+// was true from the day this board was written and went unnoticed only
+// because fares used to book after the run ended. Dialled down, the shuttle
+// keeps up, the run lasts, and the takings are what there is to watch.
+export const EDGE_SHARE = 0.4;
+for (const id of [WEST_STATION, EAST_STATION]) {
+  level[id] = { ...expandKind("station", 1), edgeDemand: EDGE_SHARE };
+}
 
 // A town at each end, inside its station's walking reach: the catchment is
-// what gives each platform a crowd to sell tickets to (network mode runs the
-// full derived schedule — edgeDemand defaults to 1 without a citizen layer).
+// what gives each platform a crowd to sell tickets to, at the share dialled
+// above.
 for (const y of [0, 1]) {
   for (let x = 1; x <= 5; x++) level[`${x},${y}`] = town();
   for (let x = 8; x <= 12; x++) level[`${x},${y}`] = town();

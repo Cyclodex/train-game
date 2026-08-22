@@ -82,6 +82,12 @@ import {
   createEconomy,
   createFareBook,
   passengerFare,
+  periodsDue,
+  wagesFor,
+  DEFAULT_UPKEEP_LABEL,
+  VEHICLE_PRICE,
+  type UpkeepSpec,
+  type VehicleKind,
   CLEARING_COST_PER_TILE,
   EconomySnapshot,
   FareBookSnapshot,
@@ -353,6 +359,15 @@ export interface MoneyState {
   // bulldoze (refund now, lower the bill) or hurry a delivery. Literal, not
   // predictive: it does not try to guess what the fares will bring in.
   taxUnaffordable: boolean;
+  // WAGES — what the fleet costs to keep (#91), all inert when the mode names
+  // no upkeep: both stay 0 and the HUD renders no wages row.
+  //
+  // `wagesPerPeriod` is what the CURRENT fleet bills next period, so it falls the
+  // moment a train is withdrawn — the number that makes retiring one a visible
+  // saving rather than an act of faith. `wagesPaid` is the lifetime total, and
+  // doubles as the HUD flash key exactly as `taxPaid` does.
+  wagesPerPeriod: number;
+  wagesPaid: number;
 }
 
 // Whether the board has jammed. `sec` is how long every runnable train has been
@@ -490,6 +505,10 @@ export interface GameSave {
     trackSpentTotal: number;
     leviesBilled: number;
     taxPaidTotal: number;
+    // Wages (#91) — optional, because a save written before they existed has
+    // neither, and 0 is the honest answer for it.
+    wagesBilled?: number;
+    wagesPaidTotal?: number;
     unpaidTaxTotal: number;
     boughtPieces: string[];
     boughtCount: number;
@@ -644,7 +663,13 @@ export interface Game {
   // it. Bought INTO service — with a line it starts running at once, without
   // one it waits. There is no garage: a bus lives on its line and appears at
   // its first stop.
-  buyBus(lineId?: string): string;
+  // Null when the company cannot afford one (#91).
+  buyBus(lineId?: string): string | null;
+  // What ordering one costs right now, and whether the purse covers it — the
+  // panel prices its own buttons from these rather than from a constant, so a
+  // board with no economy correctly shows no price at all.
+  vehiclePrice(kind: VehicleKind): number;
+  canBuyVehicle(kind: VehicleKind): boolean;
   assignBus(busId: string, lineId: string | null): boolean;
   removeBus(busId: string): boolean;
   // Every bus, mirrored for the panel.
@@ -2334,7 +2359,20 @@ export function createGame(
   // Order a bus. Like a train it is bought INTO service — with a line it
   // starts running it at once, without one it waits to be assigned. There is no
   // garage to queue in: a bus lives on its line, and appears at its first stop.
-  function buyBus(lineId?: string): string {
+  // Order a bus, and pay for it. Null when the company cannot: a bus has no
+  // shed to queue in, so price is the only thing that can refuse one.
+  function buyBus(lineId?: string): string | null {
+    const price = vehiclePrice("bus");
+    if (price > 0 && !economy?.spend(price, "vehicle", "bus")) return null;
+    const id = addBus(lineId);
+    refreshMoney();
+    return id;
+  }
+
+  // The bus itself, FREE OF CHARGE. Its own function because restoring a save
+  // re-creates the roster (the buses are not in the sim snapshot) and must not
+  // re-buy it: the balance in the save already had those purchases taken out.
+  function addBus(lineId?: string): string {
     busSeq += 1;
     const id = `bus${busSeq}`;
     buses.push({ id, lineId, stopIndex: 0, dwellLeft: 0, manifest: [] });
@@ -2382,6 +2420,9 @@ export function createGame(
     if (bus.lineId) pruneLineIfUnused(bus.lineId);
     syncLines();
     syncBuses();
+    // One fewer vehicle to pay for, and the wages figure says so at once —
+    // which is what makes withdrawing one a visible saving.
+    refreshMoney();
     return true;
   }
 
@@ -2986,6 +3027,9 @@ export function createGame(
   // untuned board (and every mode without an economy) keeps exactly the HUD and
   // the ledger it had before the calendar existed.
   const calendar: CalendarSetup | null = economySetup?.calendar ?? null;
+  // What the fleet costs to keep, per period (#91). Null on every board whose
+  // mode names none, and then every wages code path below is dead.
+  const upkeep: UpkeepSpec | null = economySetup?.upkeep ?? null;
   const money = reactive({
     enabled: !!economy,
     balance: economy?.balance ?? 0,
@@ -2997,6 +3041,8 @@ export function createGame(
     taxPaid: 0,
     unpaidTax: 0,
     taxUnaffordable: false,
+    wagesPerPeriod: 0,
+    wagesPaid: 0,
   }) as MoneyState;
   const fareBadges = reactive([]) as FareBadge[];
   // How long the board has been jammed, and whether that has passed the point
@@ -3015,6 +3061,8 @@ export function createGame(
     money.trackSpent = trackSpentTotal;
     money.taxPaid = taxPaidTotal;
     money.unpaidTax = unpaidTaxTotal;
+    money.wagesPaid = wagesPaidTotal;
+    money.wagesPerPeriod = upkeep ? wagesFor(upkeep, fleetCount()) : 0;
     if (calendar) {
       money.dateLabel = calendarAt(calendar, economy.clock).label;
       money.taxPerYear = taxFor(calendar, tilesBuiltTotal);
@@ -3060,6 +3108,53 @@ export function createGame(
         unpaidTaxTotal += owed - paid;
         return;
       }
+    }
+  }
+
+  // THE FLEET, by kind — what wages are billed against. Every vehicle the
+  // company owns counts, authored or bought: a train the board handed you is
+  // still rolling stock somebody has to pay for, and exempting the opening
+  // fleet would make the first train the only free one on the board.
+  // WHAT A VEHICLE COSTS TO ORDER, and whether the company can afford one.
+  // Free on any board with no economy at all (Sandbox, every /test scenario
+  // written before this), so nothing that used to be free stops working.
+  function vehiclePrice(kind: VehicleKind): number {
+    return economy ? VEHICLE_PRICE[kind] : 0;
+  }
+  function canBuyVehicle(kind: VehicleKind): boolean {
+    const price = vehiclePrice(kind);
+    return price <= 0 || !!economy?.canAfford(price);
+  }
+
+  function fleetCount(): Record<VehicleKind, number> {
+    return { train: trainDefs.length, bus: buses.length };
+  }
+
+  // Wages: the periodic bill for keeping the fleet. The same shape as the
+  // annual levy above and for the same three reasons — a WHILE loop, because
+  // one frame at 4x can cross several boundaries and a skipped period is
+  // silent free money; billed at the fleet size AT THAT MOMENT, so
+  // withdrawing a train stops its wages from the next period; and taking
+  // what there is when the balance falls short, because being broke must not
+  // be free.
+  //
+  // Unlike the levy it does NOT declare bankruptcy. The modes that run wages
+  // (network, citizens) have no fail-by-money state, and their real failure —
+  // a platform overflowing, a town emptying — is the one the player is playing
+  // against. A fleet you cannot pay for simply empties the purse, and then you
+  // can no longer buy your way out of the queue, which is punishment enough.
+  function collectWages() {
+    if (!economy || !upkeep) return;
+    const due = periodsDue(upkeep, economy.clock);
+    while (wagesBilled < due) {
+      wagesBilled += 1;
+      const owed = wagesFor(upkeep, fleetCount());
+      const paid = Math.min(owed, economy.balance);
+      if (paid > 0) {
+        economy.spend(paid, "wages", upkeep.label ?? DEFAULT_UPKEEP_LABEL);
+        wagesPaidTotal += paid;
+      }
+      if (owed > paid) return; // broke: stop billing rather than pile it up
     }
   }
 
@@ -3267,6 +3362,13 @@ export function createGame(
   function buyTrain(stops: string[], depotId?: string): TrainDef | null {
     const depot = depotId ?? depotTiles[0];
     if (!depot || !level[depot]) return null;
+    // AN EMPTY WALLET IS A DIFFERENT REFUSAL FROM A FULL SHED (#91), and the
+    // two must not be confused: a busy depot DELAYS the departure (the order
+    // queues below, exactly as it always has), while an unaffordable price
+    // refuses the ORDER outright. Charged before anything is created, so a
+    // refusal leaves no half-bought train behind.
+    const price = vehiclePrice("train");
+    if (price > 0 && !economy?.spend(price, "vehicle", "train")) return null;
     const { x, y } = parseCoordId(depot);
     boughtCount += 1;
     const id = `bought${boughtCount}`;
@@ -3303,11 +3405,14 @@ export function createGame(
     // only in the inject branch made an order placed into a busy depot read
     // "no line", which is the state that says "your click did nothing".
     syncLine(def.id);
+    // The purse moved and the fleet grew: both are on the HUD.
+    refreshMoney();
     return def;
   }
 
   // Everything the game keeps about a train, forgotten in one place. Called
-  // when the sim tells us one is gone (retired) and when we scrap one.
+  // when the sim tells us one is gone (retired) and when we scrap one — and
+  // the wages figure goes with it, since the fleet just shrank.
   function forgetTrain(trainId: string): void {
     const at = trainDefs.findIndex(d => d.id === trainId);
     if (at >= 0) trainDefs.splice(at, 1);
@@ -3320,6 +3425,7 @@ export function createGame(
     if (pendingAt >= 0) pendingTrains.splice(pendingAt, 1);
     if (!removedTrains.includes(trainId)) removedTrains.push(trainId);
     syncLines();
+    refreshMoney();
   }
 
   function retireTrain(trainId: string): boolean {
@@ -3401,6 +3507,8 @@ export function createGame(
   // zeroed by reset(), like the ledger itself.
   let leviesBilled = 0;
   let taxPaidTotal = 0;
+  let wagesBilled = 0;
+  let wagesPaidTotal = 0;
   let unpaidTaxTotal = 0;
   // Road throughput delivered BEFORE the road sim was last rebuilt. The road
   // sim is deliberately not saved (it respawns from its seed), but its
@@ -3562,6 +3670,7 @@ export function createGame(
       // The other clock, on the same gate and for the same reason: no upkeep
       // accrues on a level the player has not started.
       collectTax();
+      collectWages();
     }
     const simEvents = sim.step(scaled);
     const obs = handleEvents(simEvents);
@@ -3638,7 +3747,12 @@ export function createGame(
     // layer's journey buffer never grows on a board without money, booked as
     // ONE entry per tick so a busy platform cannot churn the ledger's log.
     const journeys = transit.collectDeliveries();
-    if (economy && journeys.length) {
+    // Booked only while the run is LIVE, on the same gate as the ledger's own
+    // clock and the two upkeep bills above. Without it a won board went on
+    // earning for as long as it was left running while its wages — which are
+    // gated — did not: free money, and entries stamped at a frozen clock. The
+    // drain above stays unconditional so the buffer can never grow.
+    if (economy && journeys.length && objective.phase === "playing") {
       let total = 0;
       for (const j of journeys) total += passengerFare(j.from, j.to);
       economy.earn(
@@ -4108,6 +4222,8 @@ export function createGame(
         trackSpentTotal,
         leviesBilled,
         taxPaidTotal,
+        wagesBilled,
+        wagesPaidTotal,
         unpaidTaxTotal,
         boughtPieces: [...boughtPieces].sort(),
         boughtCount,
@@ -4174,7 +4290,7 @@ export function createGame(
     }
     buses.length = 0;
     busSeq = 0;
-    for (const b of save.game.buses) buyBus(b.lineId);
+    for (const b of save.game.buses) addBus(b.lineId);
 
     tracker.restore(save.objective);
     if (economy && save.game.economy) economy.restore(save.game.economy);
@@ -4191,6 +4307,10 @@ export function createGame(
     trackSpentTotal = save.game.trackSpentTotal;
     leviesBilled = save.game.leviesBilled;
     taxPaidTotal = save.game.taxPaidTotal;
+    // Saves written before wages existed carry neither field; 0 is the honest
+    // answer (nothing had been billed) and keeps an old save loadable.
+    wagesBilled = save.game.wagesBilled ?? 0;
+    wagesPaidTotal = save.game.wagesPaidTotal ?? 0;
     unpaidTaxTotal = save.game.unpaidTaxTotal;
     boughtPieces.clear();
     for (const key of save.game.boughtPieces) boughtPieces.add(key);
@@ -4303,6 +4423,8 @@ export function createGame(
     setLineOverlay,
     lines,
     buyBus,
+    vehiclePrice,
+    canBuyVehicle,
     assignBus,
     removeBus,
     busServices,
@@ -4398,6 +4520,8 @@ export function createGame(
       // already billed are forgotten with the capital they were paid out of.
       leviesBilled = 0;
       taxPaidTotal = 0;
+      wagesBilled = 0;
+      wagesPaidTotal = 0;
       unpaidTaxTotal = 0;
       carsDeliveredBase = 0;
       clock = 0;

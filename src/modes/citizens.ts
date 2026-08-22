@@ -40,6 +40,8 @@ import { CitizenTuning } from "@/sim/citizens";
 // intercity haul, which is exactly what it looks like. The cost is that a full
 // in-game day is half an hour of real time at 1x, which is why the mode has
 // 2x/4x; a city builder is not meant to be watched a day at a sitting.
+export const CITIZEN_DAY_SEC = 1800;
+
 // The town's opening treasury. Sized against the build price, not the fares:
 // one intercity line on a reference-scale board is ~26 tiles at $1,000/tile
 // plus terrain surcharges, so $40,000 buys the line that changes the board and
@@ -49,7 +51,7 @@ import { CitizenTuning } from "@/sim/citizens";
 export const CITIZENS_TREASURY = 40000;
 
 const TUNING: Partial<CitizenTuning> = {
-  secPerDay: 1800,
+  secPerDay: CITIZEN_DAY_SEC,
   maxWaitSec: 180,
   assumedHeadwaySec: 50,
   refSpeed: 0.1,
@@ -111,6 +113,18 @@ export const citizensMode: GameMode = {
       // an unaffordable build is refused up front, and the failure of this
       // mode stays what it always was, a shrinking town.
       economy: { startingBalance: CITIZENS_TREASURY },
+      // NO FLEET WAGES HERE, deliberately (#91). This mode shows no service
+      // panel (`hud.passengers` is off), so there is no verb for buying a
+      // train and none for withdrawing one — and a recurring charge on a
+      // fleet the player cannot change is exactly the constant nobody can act
+      // on that the Tycoon doc rejects for the track levy. The build tool is
+      // this mode's money sink and the fares are its income; that pair is a
+      // decision, and a wage bill on top would only be weather.
+      //
+      // THE TRIGGER for revisiting: the day Citizens gains a roster (buy a
+      // train, put it on a line, withdraw it), wages become a decision here
+      // too — `upkeep: { periodSec: CITIZEN_DAY_SEC }` is the one line it
+      // needs, billed on the day clock its people already live on.
     };
   },
   controls: {

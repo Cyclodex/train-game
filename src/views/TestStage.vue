@@ -78,6 +78,13 @@
       </span>
       <span v-if="money.enabled" class="stage-money" title="Balance">
         💰 {{ money.balance.toLocaleString("en-US") }}
+        <!-- What the fleet bills next period (#91). On the stage as well as
+             in /play, because /test/vehiclecosts is where the mechanic is
+             demonstrated and the figure IS the lesson. Absent on every board
+             whose mode names no upkeep. -->
+        <template v-if="money.wagesPerPeriod">
+          · 🧑‍🔧 ${{ money.wagesPerPeriod.toLocaleString("en-US") }}
+        </template>
       </span>
       <!-- The second clock, on the stage as well as in /play: `/test/taxyear`
            is where the mechanic is demonstrated, so the date and the annual

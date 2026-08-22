@@ -7,7 +7,7 @@ import {
   Observation,
   createObjectiveTracker,
 } from "@/sim/objectives";
-import { EconomySpec, FareSpec } from "@/sim/economy";
+import { EconomySpec, FareSpec, UpkeepSpec } from "@/sim/economy";
 import { CalendarSetup } from "@/sim/calendar";
 import { CitizenTuning } from "@/sim/citizens";
 
@@ -59,6 +59,15 @@ export interface EconomySetup extends EconomySpec {
   // tax, which is every board that has not been tuned for one; the money HUD
   // then shows the balance line alone, exactly as before.
   calendar?: CalendarSetup;
+  // What the FLEET costs to keep, per billing period (#91). Omitted → rolling
+  // stock is free to run, which is every board written before this existed.
+  //
+  // Buying is priced whenever there is an economy at all (VEHICLE_PRICE); this
+  // is the recurring half, and it is opt-in per mode because it is the half
+  // that needs balancing against the board's income. Deliberately NOT the
+  // calendar levy — see UpkeepSpec in sim/economy.ts for why the two clocks
+  // stay apart.
+  upkeep?: UpkeepSpec;
 }
 
 // The citizen layer, handed to game.ts by setup(). Omitted → no cities, no

@@ -114,7 +114,7 @@
           :title="buyTitle"
           @click="buyTrain"
         >
-          + Train
+          + Train<span v-if="trainPrice" class="service-price">{{ trainPrice }}</span>
         </button>
         <!-- A bus is planned exactly like a train (#90). It needs no depot:
              a bus lives on its line and appears at its first stop, so the
@@ -126,7 +126,7 @@
           :title="buyBusTitle"
           @click="buyBus"
         >
-          + Bus
+          + Bus<span v-if="busPrice" class="service-price">{{ busPrice }}</span>
         </button>
       </div>
       <!-- THE LINES. A line is a plan and stands on its own: you draw it
@@ -312,6 +312,19 @@
            TV2's chrome (design doc §5.5). -->
       <div v-if="hud.money" class="score-money" title="Balance">
         💰 {{ balanceLabel }}
+        <!-- WHAT THE FLEET COSTS to keep, per billing period (#91). Rides
+             the balance line rather than taking a row of its own: it is the
+             other half of the same sentence, and a second card here is the
+             chrome density the design doc warns against. Keyed on the wages
+             paid so it flashes exactly once per bill — money leaving
+             silently is the one thing a balance readout must not do. -->
+        <span
+          v-if="wagesPerPeriod"
+          :key="wagesPaid"
+          class="score-wages"
+          :title="wagesTitle"
+          >🧑‍🔧 {{ wagesLabel }}</span
+        >
       </div>
       <!-- The second clock (§1.3), and the whole of it: a date instead of a
            stopwatch, and what the railway costs to hold for a year. Keyed on
@@ -1493,6 +1506,23 @@ class PlayView extends Vue {
   get balanceLabel(): string {
     return this.game.money.balance.toLocaleString("en-US");
   }
+  // What the CURRENT fleet bills next period (#91) — so it falls the moment
+  // a vehicle is withdrawn, which is what makes retiring one a visible
+  // saving. 0 on a mode that names no upkeep, and then the span is not
+  // rendered at all.
+  get wagesPerPeriod(): number {
+    return this.game.money.wagesPerPeriod;
+  }
+  get wagesPaid(): number {
+    return this.game.money.wagesPaid;
+  }
+  get wagesLabel(): string {
+    return this.wagesPerPeriod.toLocaleString("en-US");
+  }
+  get wagesTitle(): string {
+    const paid = this.wagesPaid.toLocaleString("en-US");
+    return `Fleet upkeep, per period. Paid so far: ${paid}`;
+  }
   // The calendar row. Empty `dateLabel` = this board named no calendar, and the
   // row is not rendered at all — the pre-tax money HUD, unchanged.
   get dateLabel(): string {
@@ -2037,15 +2067,34 @@ class PlayView extends Vue {
     // stops it cannot reach, so the order is refused rather than silently
     // producing a train that never moves.
     if (this.lineKindOf(this.editingLineId) === "road") return false;
-    return this.game.depotTiles.length > 0;
+    if (this.game.depotTiles.length === 0) return false;
+    // ...and the purse. An empty wallet is a DIFFERENT refusal from a full
+    // shed (#91): the shed delays the departure of an order it still takes,
+    // while this one refuses the order, so the button says which.
+    return this.game.canBuyVehicle("train");
   }
   get buyTitle(): string {
     if (this.lineKindOf(this.editingLineId) === "road") {
       return "The line you are editing is a bus line — buy a bus for it";
     }
-    return this.canBuyTrain
-      ? "Order another train, in service on the line you are editing"
-      : "This board has no depot to build a train in";
+    if (this.game.depotTiles.length === 0) {
+      return "This board has no depot to build a train in";
+    }
+    if (!this.game.canBuyVehicle("train")) {
+      return `Not enough money — a train costs ${this.trainPrice}`;
+    }
+    return "Order another train, in service on the line you are editing";
+  }
+  // What each costs, as the button prints it. Empty on a board with no
+  // economy at all, where rolling stock is free and a price tag would be a
+  // lie — every /test scenario written before #91 is one of those.
+  get trainPrice(): string {
+    const p = this.game.vehiclePrice("train");
+    return p > 0 ? `${p.toLocaleString("en-US")}` : "";
+  }
+  get busPrice(): string {
+    const p = this.game.vehiclePrice("bus");
+    return p > 0 ? `${p.toLocaleString("en-US")}` : "";
   }
   // A bus needs no depot: it lives on its line and appears at its first stop.
   // What it does need is somewhere to appear — a board with no bus stops has
@@ -2057,11 +2106,14 @@ class PlayView extends Vue {
     // The mirror of canBuyTrain: a rail line open means the bus would be bought
     // onto platforms it cannot drive to.
     if (this.lineKindOf(this.editingLineId) === "rail") return false;
-    return this.hasBusStops;
+    return this.hasBusStops && this.game.canBuyVehicle("bus");
   }
   get buyBusTitle(): string {
     if (this.lineKindOf(this.editingLineId) === "rail") {
       return "The line you are editing is a rail line — buy a train for it";
+    }
+    if (!this.game.canBuyVehicle("bus")) {
+      return `Not enough money — a bus costs ${this.busPrice}`;
     }
     return this.editingLineId
       ? "Order a bus, in service on the line you are editing"
@@ -3436,6 +3488,20 @@ export default toNative(PlayView);
 .score-tax {
   margin-left: 6px;
   color: #d9a3a3;
+}
+// Fleet upkeep, beside the balance it comes out of. Same muted red as the
+// track levy: both are money leaving on a schedule the player did not pick.
+.score-wages {
+  margin-left: 6px;
+  color: #d9a3a3;
+  animation: tax-levy 1.1s ease-out;
+}
+// The price on a + Train / + Bus button. Dimmer than the label: it is what
+// the click costs, not what it does.
+.service-price {
+  margin-left: 5px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
 // Insolvency warning: the bill outgrew the balance. Loud on purpose — this is
 // the last moment bulldozing can still save the run.

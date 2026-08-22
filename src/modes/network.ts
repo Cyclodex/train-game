@@ -6,6 +6,35 @@ import {
 } from "@/modes/types";
 import { Counters, StarSpec } from "@/sim/objectives";
 import { Level } from "@/tiles/model";
+import { VEHICLE_PRICE, VehicleKind } from "@/sim/economy";
+
+// Opening capital: one train, with change for a bus (#91). Deliberately
+// small — the mode is about EARNING the fleet, and a purse deep enough to
+// buy the whole service up front would put the decision off until the board
+// is already solved.
+export const NETWORK_CAPITAL = VEHICLE_PRICE.train + VEHICLE_PRICE.bus;
+
+// A billing period, in seconds of scored play. Short, because a network run
+// is scored in minutes (briskSecondsFor is target x 4): at a minute a period
+// a run bills a handful of times, so a fleet you stopped needing shows up
+// inside the run rather than after it.
+export const WAGE_PERIOD_SEC = 60;
+
+// What a vehicle costs per period HERE. The generic VEHICLE_WAGES are a
+// fifteenth of the purchase price, which is right for a mode whose period is
+// a whole in-game day and far too steep for one whose period is a minute.
+// MEASURED on /test/vehiclecosts (2026-08-22), one train, headless through
+// game.advance(): won at 382s having carried 48, earned $2,688 in fares
+// against $720 of wages over six periods, closing $3,568 from a $9,600
+// opening less the $8,000 train. So a busy train clears its keep about 3.7x
+// over and does NOT pay back its purchase inside one run — the fleet is a
+// capital decision, which is the point. Both halves are pinned by
+// tests/unit/vehicleCosts.spec.ts, so the next tweak cannot quietly invert
+// either one.
+export const NETWORK_WAGES: Partial<Record<VehicleKind, number>> = {
+  train: 120,
+  bus: 30,
+};
 
 // How full a platform may get before the level is lost. The Mini-Metro
 // pressure in station form: the crowd is the clock, and a line that cannot
@@ -97,12 +126,19 @@ export const networkMode: GameMode = {
         fail: { maxStationQueue: OVERCROWD_LIMIT },
         stars: networkStars(target, Math.max(2, Math.floor(OVERCROWD_LIMIT / 2))),
       },
-      // The farebox (economy convergence phase 2): every passenger this
-      // network delivers pays a fare into the ledger, so the balance is the
-      // service's takings. Pure income for now — this mode has no build or
-      // dispatch verbs to spend it on; the costs arrive with phase 3 (#91),
-      // which is what will make "add another train" a decision.
-      economy: { startingBalance: 0 },
+      // THE BOOKS (economy convergence phases 2-3). Every passenger this
+      // network delivers pays a fare in; every vehicle it runs costs money to
+      // buy and to keep. That pair is the mode: an overcrowded platform used
+      // to have exactly one answer and it was free, so "+ Train" was a button
+      // you pressed until the complaining stopped.
+      //
+      // The opening capital buys ONE train with change for a bus, so the first
+      // decision is made before a fare is earned and the rest of the fleet has
+      // to be earned. See NETWORK_CAPITAL.
+      economy: {
+        startingBalance: NETWORK_CAPITAL,
+        upkeep: { periodSec: WAGE_PERIOD_SEC, perVehicle: NETWORK_WAGES },
+      },
     };
   },
   controls: {

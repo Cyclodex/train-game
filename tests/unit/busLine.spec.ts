@@ -70,6 +70,7 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     expect(game.busServices.map(b => b.id)).toEqual([bus]);
     // A line counts what runs it, whatever kind that is.
     expect(game.lines.find(l => l.id === line)?.buses).toEqual([bus]);
@@ -82,13 +83,14 @@ describe("a bus runs a line", () => {
   it("carries nobody until it is assigned to a line", () => {
     const game = gameFor();
     const bus = game.buyBus();
+    expect(bus).not.toBeNull();
     run(game, 120);
     expect(game.busServices[0]?.passengers ?? 0).toBe(0);
     // …and nobody is waiting either, because nothing serves the halts (D10).
     expect(game.sim.stationQueue(WEST)).toBe(0);
 
     const line = game.createLine([WEST, EAST]);
-    expect(game.assignBus(bus, line)).toBe(true);
+    expect(game.assignBus(bus as string, line)).toBe(true);
     run(game, 200);
     expect(game.sim.passengersDelivered()).toBeGreaterThan(0);
   });
@@ -97,10 +99,11 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     run(game, 40);
     expect(game.busServices[0]?.tileId).toBeDefined();
 
-    expect(game.assignBus(bus, null)).toBe(true);
+    expect(game.assignBus(bus as string, null)).toBe(true);
     run(game, 5);
     // Off the board rather than wandering: a bus with no line has nowhere to be.
     expect(game.busServices[0]?.tileId).toBeUndefined();
@@ -110,9 +113,10 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     expect(game.lines.map(l => l.id)).toContain(line);
 
-    expect(game.removeBus(bus)).toBe(true);
+    expect(game.removeBus(bus as string)).toBe(true);
     // The line was drawn by the player, so it stands even with nothing on it
     // (D11) — and the board is rid of the vehicle.
     expect(game.lines.map(l => l.id)).toContain(line);
@@ -157,12 +161,13 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     run(game, 60);
     const aboard = game.busServices[0]?.passengers ?? 0;
     expect(aboard).toBeGreaterThan(0);
 
     const before = carried(game);
-    expect(game.removeBus(bus)).toBe(true);
+    expect(game.removeBus(bus as string)).toBe(true);
     // Everyone aboard is either back at a stop or counted as arrived.
     expect(carried(game)).toBe(before + aboard);
   });
@@ -171,12 +176,13 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     run(game, 60);
     const aboard = game.busServices[0]?.passengers ?? 0;
     expect(aboard).toBeGreaterThan(0);
 
     const before = carried(game);
-    expect(game.assignBus(bus, null)).toBe(true);
+    expect(game.assignBus(bus as string, null)).toBe(true);
     expect(carried(game)).toBe(before + aboard);
     expect(game.busServices[0]?.passengers).toBe(0);
   });
@@ -191,6 +197,7 @@ describe("a bus runs a line", () => {
     const game = gameFor();
     const line = game.createLine([WEST, EAST]);
     const bus = game.buyBus(line);
+    expect(bus).not.toBeNull();
     run(game, 60);
     // 0,0 is a town tile: no road on it at all, so no route can ever be planned.
     game.setLineStops(line, [WEST, "0,0"]);

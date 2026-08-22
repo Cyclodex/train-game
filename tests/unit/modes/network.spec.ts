@@ -13,6 +13,7 @@ import { expandKind } from "@/tiles/kinds";
 import { Level } from "@/tiles/model";
 import { networkmode } from "@/levels/test/scenarios/networkmode";
 import { createGame, TrainDef } from "@/game";
+import type { ModeContext } from "@/modes/types";
 import { MODES } from "@/modes/index";
 import { Position } from "@/types";
 
@@ -227,7 +228,13 @@ describe("the network board is winnable — and not trivially", () => {
 // the whole player loop of this mode — order a train, put it on a line, take
 // it off again — is testable without a browser.
 describe("the service: buying trains and setting lines", () => {
-  function gameFor() {
+  // `capital` overrides the mode's opening balance. Since #91 a train costs
+  // money and the shipped capital buys exactly one — but the subject of the
+  // queue test below is the SHED, and the two refusals are deliberately
+  // different (a busy shed delays an order it still takes; an empty wallet
+  // refuses one). The price gate is pinned in vehicleCosts.spec.ts; here it
+  // is kept out of the way, so the queue is what fails if anything does.
+  function gameFor(capital?: number) {
     const trains: TrainDef[] = Object.values(networkmode.trains).map(t => ({
       id: t.id,
       x: t.x,
@@ -236,11 +243,21 @@ describe("the service: buying trains and setting lines", () => {
       wagonIds: (t.wagons ?? []).map(w => w.id),
       ...(t.line?.length ? { line: t.line } : {}),
     }));
+    const mode =
+      capital === undefined
+        ? networkMode
+        : {
+            ...networkMode,
+            setup: (ctx: ModeContext) => {
+              const s = networkMode.setup(ctx);
+              return { ...s, economy: { ...s.economy, startingBalance: capital } };
+            },
+          };
     return createGame(
       networkmode.level,
       trains,
       200,
-      networkMode,
+      mode,
       1,
       networkmode.colors
     );
@@ -376,7 +393,7 @@ describe("the service: buying trains and setting lines", () => {
   // The depot is a QUEUE, not a gate: ordering never fails for want of room —
   // what a busy shed delays is the departure, not the purchase.
   it("queues trains ordered while the shed is busy, and rolls them out in order", () => {
-    const game = gameFor();
+    const game = gameFor(100000);
     // At t=0 the authored train is still standing in the only depot.
     expect(game.sim.occupiedBy(game.depotTiles[0])).toBeTruthy();
 
