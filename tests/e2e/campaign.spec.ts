@@ -1,4 +1,13 @@
 import { test, expect, Page } from "@playwright/test";
+import { CAMPAIGN } from "../../src/campaign";
+
+// DERIVED from the campaign, never hard-coded: these counts used to be literal
+// 3s and 9s, so adding a level turned a green suite red for no reason anyone
+// could act on. The shape is what is under test — every level after the first
+// is locked, and the star total is the sum on offer — not how many there
+// happen to be today.
+const LEVEL_COUNT = CAMPAIGN.length;
+const STAR_TOTAL = CAMPAIGN.reduce((n, l) => n + l.stars, 0);
 
 // The campaign shell, driven through the real UI: locked list → play level 1 →
 // win → "Next" → level 2, and the list updated behind you.
@@ -26,11 +35,11 @@ test.describe("Campaign", () => {
     await page.goto("/#/campaign");
 
     const rows = page.locator("[data-level-id]");
-    await expect(rows).toHaveCount(3);
+    await expect(rows).toHaveCount(LEVEL_COUNT);
     // Level 1 is a button (playable); the rest are inert divs until cleared.
     await expect(page.locator("button[data-level-id]")).toHaveCount(1);
-    await expect(page.locator(".campaign-row--locked")).toHaveCount(2);
-    await expect(page.getByText("★ 0 / 9")).toBeVisible();
+    await expect(page.locator(".campaign-row--locked")).toHaveCount(LEVEL_COUNT - 1);
+    await expect(page.getByText(`★ 0 / ${STAR_TOTAL}`)).toBeVisible();
   });
 
   test("plays level 1, offers the next one, and unlocks it", async ({ page }) => {
@@ -61,8 +70,9 @@ test.describe("Campaign", () => {
     // And the list has moved on with us: level 2 playable, level 3 still shut,
     // level 1 showing what it scored.
     await page.goto("/#/campaign");
+    // One level cleared: two are now playable, the rest still locked.
     await expect(page.locator("button[data-level-id]")).toHaveCount(2);
-    await expect(page.locator(".campaign-row--locked")).toHaveCount(1);
+    await expect(page.locator(".campaign-row--locked")).toHaveCount(LEVEL_COUNT - 2);
     await expect(page.locator(".campaign-pip--on").first()).toBeVisible();
   });
 
