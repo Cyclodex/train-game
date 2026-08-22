@@ -1138,6 +1138,47 @@ the sim or does not exist. A train ORDERED INTO A BUSY SHED is neither.
   guard as a one-line assertion (`tests/unit/passengerFares.spec.ts`).
   `/test/farebox` is the isolation board.
 
+## WHAT THE FLEET COSTS (#91 / convergence phase 3, 2026-08-22)
+- BUYING is priced wherever an economy exists: `VEHICLE_PRICE` (train $8,000,
+  bus $1,600), charged in `buyTrain`/`buyBus` BEFORE anything is created, so
+  a refusal leaves no half-bought vehicle. `vehiclePrice`/`canBuyVehicle` on
+  the Game are what the panel prices its buttons from — a board with no
+  economy shows no price and stays free.
+- TWO REFUSALS, and they must not be confused (the issue is explicit): a busy
+  SHED delays the departure of an order it still takes and charges for; an
+  empty WALLET refuses the order. The button title says which.
+- KEEPING is `UpkeepSpec` (economy.ts): `periodSec` + per-kind rates, billed
+  by `collectWages()` beside `collectTax()` — a WHILE loop (4x can cross
+  several boundaries), at the fleet size AT THAT MOMENT, taking what there is
+  when short. NOT bankruptcy: network/citizens fail by a full platform or an
+  emptying town, so an unpayable fleet just empties the purse.
+- WAGES ARE NOT THE CALENDAR LEVY, deliberately. Same shape, different clock:
+  the levy is denominated in the calendar (shown as "Apr 1832"), wages in the
+  mode's own operating period — a citizens DAY, a network MINUTE. Reusing the
+  levy would have put a year-per-in-game-day date on the citizens HUD.
+- THE FLEET IS EVERY VEHICLE, authored or bought (`fleetCount`). Exempting the
+  opening fleet would make the first train the only free one on the board.
+- `refreshMoney()` runs on every path that moves money OR changes the fleet
+  (buy, withdraw, forgetTrain), not only inside `advance()` — the balance and
+  the wages figure are read exactly when the board is PAUSED and somebody is
+  deciding what to buy.
+- Fares and wages both book ONLY while `objective.phase === "playing"`. Fares
+  used to be ungated: a won board left running earned for free, at a ledger
+  clock that had already stopped. The delivery buffer is still drained
+  unconditionally so it cannot grow.
+- BOARDS UNDER THE GATE NEED THEIR DEMAND DIALLED DOWN. Gating the fares
+  exposed that `/test/farebox` had been LOST at 18s since the day it was
+  written (peak queue 13 against the overcrowd limit of 12) — nobody noticed
+  because ungated fares went on booking afterwards. `edgeDemand: 0.4` there,
+  0.25 on `/test/vehiclecosts`. GENERAL LESSON: on a network board, check the
+  objective PHASE in any test that asserts money, or a lost board reads as a
+  broken ledger.
+- `/test/vehiclecosts` is the board, and it needs its demand DIALLED DOWN
+  (`edgeDemand: 0.25`): at the full catchment rate four busy towns overwhelm
+  one train in forty seconds and the board is lost before the first wage bill
+  — teaching the overcrowding rule instead of this one. Measured there: one
+  train won at 382s, earned $2,688 against $720 wages.
+
 ## CHANGING TRAINS (phase 9, 2026-08-03)
 - `sim/lineGraph.ts` is a SECOND router and answers a different question from
   `railRouter`: not "can a train physically get there" but "can a PASSENGER get

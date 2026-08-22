@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createGame, TrainDef } from "@/game";
-import { networkMode } from "@/modes/network";
+import { networkMode, NETWORK_CAPITAL } from "@/modes/network";
 import { citizensModeWith, CITIZENS_TREASURY } from "@/modes/citizens";
 import {
   passengerFare,
@@ -106,18 +106,31 @@ describe("the farebox on a network board", () => {
       "farebox"
     );
     game.startObjective();
-    run(game, 120);
+    // Measured over the LIVE run and stopped the moment it ends: fares book
+    // only while the objective is playing (#91), so carrying on past the win
+    // would count deliveries no fare was taken for and the exact identity
+    // below — the point of the test — would dissolve into an inequality.
+    for (let t = 0; t < 200 && game.objective.phase === "playing"; t += 0.2) {
+      game.advance(0.2);
+    }
     const delivered = game.sim.passengersDelivered();
     expect(delivered).toBeGreaterThan(0);
     // Every journey on this board is the single 7-tile hop between the two
     // stations (no walk links, no depot parking — the shuttle bounces), so
-    // the balance is EXACTLY fare × delivered. This is the double-collection
+    // the takings are EXACTLY fare × delivered. This is the double-collection
     // guard in one line: one fare per journey, never per leg.
     expect(game.money.enabled).toBe(true);
-    expect(game.money.balance).toBe(
+    expect(game.money.earned).toBe(
       delivered * passengerFare(WEST_STATION, EAST_STATION)
     );
-    expect(game.money.earned).toBe(game.money.balance);
+    // ...and the books close: opening capital, plus the takings, less what
+    // the fleet cost to keep (#91 — this board buys nothing, so its only
+    // outgoing is the authored train's wages). Phase 2 and phase 3 in one
+    // line, and the ledger sums to the balance exactly as it claims to.
+    expect(game.money.spent).toBe(game.money.wagesPaid);
+    expect(game.money.balance).toBe(
+      NETWORK_CAPITAL + game.money.earned - game.money.spent
+    );
   });
 });
 
@@ -133,6 +146,9 @@ describe("the farebox under the citizen layer", () => {
       undefined,
       "edgedemand"
     );
+    // Fares book only while the objective is live (#91), and PlayView starts
+    // an overlay-less mode for the player — so a headless run must too.
+    game.startObjective();
     expect(game.money.enabled).toBe(true);
     expect(game.money.balance).toBe(CITIZENS_TREASURY);
     // 55s of a 300s day: 01:00 → 05:24, before anyone in town wakes — every

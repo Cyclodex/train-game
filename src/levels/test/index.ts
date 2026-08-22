@@ -24,6 +24,7 @@ import { citizenhouse } from "@/levels/test/scenarios/citizenhouse";
 import { busride } from "@/levels/test/scenarios/busride";
 import { edgedemand } from "@/levels/test/scenarios/edgedemand";
 import { farebox } from "@/levels/test/scenarios/farebox";
+import { vehiclecosts } from "@/levels/test/scenarios/vehiclecosts";
 import { rollingstock } from "@/levels/test/scenarios/rollingstock";
 import { signals } from "@/levels/test/scenarios/signals";
 import { junction } from "@/levels/test/scenarios/junction";
@@ -279,7 +280,7 @@ export const DOMAINS: ScenarioDomain[] = [
       // bankruptcy fail state — plus the coach-marks that teach the mode's
       // verbs (a second tycoon board, so it lives here rather than in the
       // one-demo-per-mode gallery above).
-      { id: "economy", label: "Economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks, farebox] },
+      { id: "economy", label: "Economy", scenarios: [faredistance, heldby, buildgap, landprices, taxyear, bankrupt, coachmarks, farebox, vehiclecosts] },
       // The save/load round-trip board (docs/superpowers/specs/
       // 2026-08-21-save-load-design.md): the level the snapshot/restore unit
       // tests run on, and — via /#/play?board=saveload — a small deterministic

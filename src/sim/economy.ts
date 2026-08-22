@@ -21,7 +21,9 @@ export type LedgerReason =
   | "build" // track laid (phase 2)
   | "refund" // track bulldozed — money back for pieces the player bought
   | "clearing" // scenery cleared (phase 3)
-  | "tax" // periodic upkeep (phase 4)
+  | "tax" // periodic upkeep on the track the player laid (phase 4)
+  | "vehicle" // rolling stock BOUGHT — a train or a bus ordered into service
+  | "wages" // rolling stock RUN — the periodic cost of keeping one in service
   | "dispatch" // calling an extra train (phase 5)
   | "adjustment"; // a level's own bookkeeping
 
@@ -85,6 +87,74 @@ export function passengerFare(from: string, to: string): number {
   const b = parseCoordId(to);
   const tiles = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
   return PASSENGER_FARE_BOARDING + PASSENGER_FARE_PER_TILE * tiles;
+}
+
+// --- rolling stock: what it costs to own one (convergence phase 3, #91) ------
+//
+// Until this existed, "the line is overcrowded" had exactly one answer and it
+// was free: press + Train until the complaining stops. A price makes it a
+// DECISION, and the two prices below are the decision:
+//
+//   a BUS is the cheap answer to a thin flow — it shares a street somebody
+//   else already paid for;
+//   a TRAIN is the expensive answer to a thick one — five times the bus, and
+//   it needs metals to run on that were not free either.
+//
+// Set against the farebox: a bus pays itself back in ~50 ten-tile journeys, a
+// train in ~250. On a busy line that is minutes; on a line nobody rides it is
+// never, which is the sentence the price exists to say.
+export const VEHICLE_PRICE = { train: 8000, bus: 1600 } as const;
+export type VehicleKind = keyof typeof VEHICLE_PRICE;
+
+// ...and what it costs to KEEP one, per billing period. This is the half that
+// makes an idle vehicle a mistake rather than a purchase you merely regret: a
+// train sitting on a line nobody rides bleeds money every period, so
+// withdrawing it becomes a verb with a reason to use it.
+//
+// About a fifteenth of the purchase price per period, so fifteen idle periods
+// cost what the vehicle cost — long enough to be patient with, short enough
+// that a fleet you stopped needing shows up in the balance.
+export const VEHICLE_WAGES = { train: 540, bus: 110 } as const;
+
+// A periodic charge for the fleet in service. Its OWN spec rather than a field
+// on CalendarSetup, and the reason is worth writing down: the track levy is
+// denominated in the CALENDAR — a Tycoon board's second clock, shown on the
+// HUD as "Apr 1832" — while wages are denominated in the MODE's own operating
+// period, which on a citizens board is a day and on a network board a couple
+// of minutes. Same shape, different clock. Forcing citizens onto a
+// year-calendar to reuse the levy would have put a nonsense date on the HUD (a
+// year passing per in-game day) to save twenty lines.
+export interface UpkeepSpec {
+  // Seconds of SCORED play per billing period.
+  periodSec: number;
+  // What one vehicle of each kind costs for one period. Omitted → VEHICLE_WAGES.
+  perVehicle?: Partial<Record<VehicleKind, number>>;
+  // What the ledger entry calls it.
+  label?: string;
+}
+
+export const DEFAULT_UPKEEP_LABEL = "wages";
+
+// What a fleet costs for one period. Owned here, beside the prices, so the
+// booking in game.ts and any HUD readout cannot disagree about the rate.
+export function wagesFor(
+  spec: UpkeepSpec,
+  fleet: Partial<Record<VehicleKind, number>>
+): number {
+  let total = 0;
+  for (const kind of Object.keys(VEHICLE_PRICE) as VehicleKind[]) {
+    const rate = spec.perVehicle?.[kind] ?? VEHICLE_WAGES[kind];
+    total += rate * (fleet[kind] ?? 0);
+  }
+  return Math.round(total);
+}
+
+// Whole billing periods completed by `clock`. The same shape as the calendar's
+// `leviesDue`, and for the same reason: one frame at 4x can cross several
+// boundaries, and a skipped period is silent free money.
+export function periodsDue(spec: UpkeepSpec, clock: number): number {
+  if (!(spec.periodSec > 0)) return 0;
+  return Math.floor(Math.max(0, clock) / spec.periodSec);
 }
 
 // What it costs to TAKE ONE PIECE OF TRACK OUT — a demolition fee, not a

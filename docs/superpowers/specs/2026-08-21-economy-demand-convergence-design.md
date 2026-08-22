@@ -1,6 +1,6 @@
 # Economy × demand — converging Tycoon and Citizens into one game
 
-_Status: design + phase 1 built (2026-08-21). The epic this document opens:
+_Status: design + phases 1-3 built (2026-08-21/22). The epic this document opens:
 the Tycoon mode has an economy (fares, taxes, land prices, bankruptcy) whose
 demand is synthetic colour-matching; the Citizens mode has real demand (people
 who live in one place, work in another, choose a mode and time the journey)
@@ -197,7 +197,25 @@ having.
   economy prices the BUILD verb, an empty purse would have killed the mode's
   whole answer; sized for one intercity line, refilled by the fares).
   `hud.money` on both. Scenario: `/test/farebox`.
-- **Phase 3 — vehicles cost** (D4, #91): purchase + running costs.
+- **Phase 3 — vehicles cost (D4, #91): BUILT 2026-08-22.** `VEHICLE_PRICE`
+  charges for a train ($8,000) or a bus ($1,600) on any board with a ledger;
+  `UpkeepSpec` bills the fleet per period, and `hud.money` grew one figure
+  for it. Two refusals stay distinct, as the issue asked: a busy SHED delays
+  the departure of an order it still takes, an empty WALLET refuses the
+  order outright before anything is created. Network opens on capital for
+  exactly one train (`NETWORK_CAPITAL`) and bills a minute; Citizens bills
+  once per in-game day. Wages are deliberately NOT the calendar levy — same
+  shape, different clock (see `UpkeepSpec`): forcing citizens onto a
+  year-calendar would put a year-per-day date on the HUD. No bankruptcy
+  either: these modes fail by an overflowing platform or an emptying town,
+  and an unpayable fleet simply empties the purse.
+  Scenario: `/test/vehiclecosts`. Measured there (one train): won at 382s,
+  earned $2,688 against $720 of wages — a busy train clears its keep ~3.7x
+  and does not repay its purchase in one run.
+
+  A bug the phase surfaced and fixed: fares were booked ungated, so a WON
+  board left running went on earning while its (gated) wages did not.
+  Both now book only while the run is live.
 - **Phase 4 — the roster reads the model** (D5): network/citizens differ only
   in objective + HUD; a tycoon town board prices fares off real demand.
 - **Phase 5 — polish the competition**: per-kind ride speed in the quote,
