@@ -47,43 +47,66 @@ const p = new Profiler({ sampleInterval: 10, maxBufferSize: 100000 });
 const trace = await p.stop(); // aggregate trace.samples by frame
 ```
 
-## Baseline (2026-08-22 evening, Windows dev machine, node 24, headless bench)
+## How to measure so the number means something
 
-Steady-state ms per `advance(1/60)` tick (avg over the stated window). "before"
-is the same bench on the same machine earlier the same day, before the
-crossing-gate and render-mirror work below.
+**Never compare two runs taken at different times.** This machine produced a
+3.6x swing between two runs of IDENTICAL code (the simulation is deterministic,
+so the WORK was byte-for-byte the same) — background load, thermal state and JIT
+warmth all move it more than most optimisations do. A before/after pair taken an
+hour apart measures the machine, not the change; that mistake was made here on
+the first round and inflated a real 1.4x into a reported 2x.
 
-| case | state | avg ms/tick | before | note |
-| --- | --- | --- | --- | --- |
-| demoworld (20x14, 3 trains, 26 cars) | steady | **1.2–1.9** | 1.0 | small-board wash, and a loaded machine — re-measure quiet |
-| perfworld, trains only (8 trains, 0 cars) | steady | **0.3** | 0.3 | rail is cheap; unchanged, as expected |
-| perfworld + traffic (fills to 160 cars) | steady | **8–11** | 18–31 | **~2.2x** |
-| perfcity (everything, citizens mode) | normal day | **5.6–8** | 13–15 | **~2x** |
-| perfcity | citizens' morning rush (window ≥135s) | **8.1** | 27–37 | **~4.5x** — the rush spike is gone |
-| road sim alone, crossings open | 50 cars | 1.0 | 1.0 | not re-measured: these cases pass their own `() => false` gate, so the change cannot reach them |
-| road sim alone | 100 cars | 2.8 | 2.8 | " |
-| road sim alone | 200 cars | 12 | 12 | " |
-| road sim alone | ~357 cars | 120 | 120 | " — congestion collapse |
+The method that holds up:
 
-Scaling law, unchanged: the road sim is still superlinear in live vehicles. What
-changed is the constant — the per-tick cost the whole board paid for the
-crossing gate is gone, which is why the citizens' rush (many more vehicles
-against the same trains) no longer spikes.
+1. **Alternate the variants back to back** in one sitting — new, old, new, old.
+2. **Repeat at least three times** and compare the groups, not single runs.
+3. Look for **separation**: three-and-three with no overlap is a result; two
+   runs a minute apart are not.
+4. Quiet machine, and say whether it was on AC. Battery throttling is real, but
+   measured here it moved the numbers far less than background load did.
 
-The small-board rows are the ones to re-check on a quiet machine: a snapshot
-costs a little more than the handful of queries a tiny board would have made,
-so demoworld is expected to be a wash rather than a win, and the numbers above
-were taken while other work was running.
+And beware isolating a component: the old crossing gate measured **3.5ms/tick**
+in a tight microbenchmark of its 630 calls, but removing it from the real tick
+saved **1.4ms**. In situ is the number that counts.
 
-Scaling law: the road sim is superlinear in live vehicles — roughly quadratic
-at moderate density and worse under congestion (jammed cars re-scan their
-blockers every tick). **Car count is the single biggest performance dial**; the
-rail sim is negligible at any plausible train count.
+## Baseline (2026-08-22, quiet machine on AC, node 24, headless bench)
 
-Browser overhead on top of the tick (structure, from a throttled hidden tab, so
-ratios not absolutes): the per-frame render mirror + DOM writes added ~25% on
-perfworld and considerably more on perfcity; the page is ~64k DOM nodes at
-40x28 (SVG-heavy tiles).
+Steady-state ms per `advance(1/60)` tick, averaged over the 60–150s windows,
+from the alternating A/B described above (3 reps per variant).
+
+| case | before (old gate) | after | ratio |
+| --- | --- | --- | --- |
+| perfworld + traffic (160 cars) | 5.07 / 5.12 / 5.28 → **5.16** | 3.83 / 3.79 / 3.60 → **3.74** | **1.38x** |
+| perfcity (everything, citizens mode) | 6.26 / 6.41 / 6.56 → **6.41** | 4.56 / 4.58 / 4.83 → **4.66** | **1.38x** |
+| perfcity, the citizens rush windows | **6.39** | **4.74** | 1.35x |
+
+Single-run figures for the cases not in the A/B (quiet AC, current code):
+
+| case | avg ms/tick |
+| --- | --- |
+| demoworld (20x14, 3 trains, 26 cars) | 0.45 |
+| perfworld, trains only (8 trains, 0 cars) | 0.17 |
+| road sim alone, 50 cars | 0.73 |
+| road sim alone, 100 cars | 2.08 |
+| road sim alone, 200 cars | 7.4 |
+| road sim alone, 357 cars | 24.8 |
+
+**The road sim is the ceiling, and it is superlinear** — roughly cost ∝ cars^1.7
+(twice the cars costs about three times as much). At 357 vehicles the road step
+alone is 24.8ms, past the whole 16.7ms frame budget before anything is drawn.
+Rail is noise by comparison: eight trains on a 40x28 board are 0.17ms.
+
+**Corrections to the first version of this file.** It was written from
+load-contaminated runs; the errors are kept visible so the numbers are not
+trusted twice:
+
+- The improvement is **1.4x, not the ~2x first reported**.
+- "The citizens' morning rush doubles the tick" was **wrong** — that spike was
+  background load. On a quiet machine perfcity's rush windows cost the same as
+  its ordinary ones (4.74 vs 4.66ms).
+- The road scaling curve was overstated at the top end: 357 cars is **24.8ms**,
+  not the 120ms first recorded.
+- The "small boards may be a wash" worry was also load: demoworld is 0.45ms.
 
 ## Where the time goes (receipts)
 
@@ -93,18 +116,23 @@ Measured on the bench + browser profiles, in descending order of leverage:
    `laneClearForChange` each walk EVERY other vehicle per car per tick
    (`src/sim/road.ts` ~2634/1971/1987/1727). The 2026-08-01 memo + spatial
    prune (KNOWHOW → SIM HOT PATH) made each pair cheap, but the candidate set
-   is still all-pairs — hence the quadratic column above.
+   is still all-pairs — hence the superlinear scaling above. With the gate
+   fixed this is the biggest remaining cost by a distance.
 2. **Junction arbitration scans.** Per approaching car per junction,
    `activeMovementsAt` and `waitingCarsAt` walk every vehicle again
    (`src/sim/road.ts:2116/2135`).
 3. ~~**The crossing-closed predicate.**~~ **FIXED 2026-08-22.** `game.advance`
    handed the road sim `id => sim.reservedBy(id) || sim.occupiedBy(id) ||
    claimed.includes(id)`, and the road sim asks that per route tile per car per
-   tick: ~630 calls/tick on perfworld, ~3.5ms/tick, about a quarter of the tick,
-   because each `occupiedBy` is a full train scan rebuilding every train's body
-   claim keys. It is now one `sim.claimSnapshot()` per tick behind a `Set`
-   (`src/sim/simulation.ts`, `claimSnapshot`), measured at **0.021ms/tick and 0
-   per-tile queries** — a 170x cut on that component.
+   tick: **629 calls/tick** on perfworld, each `occupiedBy` a full train scan
+   rebuilding every train's body claim keys. It is now one `sim.claimSnapshot()`
+   per tick behind a `Set` (`src/sim/simulation.ts`, `claimSnapshot`), measured
+   at **0.02ms/tick and 0 per-tile queries**.
+   · WORTH **1.4ms/tick** in situ — a 1.38x tick, measured by alternating A/B
+     (see the baseline). NOT the 3.5ms the same 630 calls cost in an isolated
+     microbenchmark, and not the ~2x first claimed here from runs taken under
+     different machine load. The component was expensive; the tick it sat in
+     was not paying all of that.
    · Exact, not approximate: `sim.step()` runs BEFORE `roadSim.step()` in
      `advance`, so no train moves while the road sim is stepping and every one
      of those calls was already returning the same answer.
@@ -143,18 +171,25 @@ Measured on the bench + browser profiles, in descending order of leverage:
 
 ## The improvement plan
 
-**Done 2026-08-22** (all four provably behaviour-neutral, ~2x on the model tick):
-the per-tick closed-crossing set (`claimSnapshot`), and the three render mirrors
-— reservations/occupancy, station queues, and the `roadCars` id index. See items
-3 and 5 above for what each was and how the neutrality is pinned.
+**Done 2026-08-22** — all four provably behaviour-neutral: the per-tick
+closed-crossing set (`claimSnapshot`), and the three render mirrors
+(reservations/occupancy, station queues, the `roadCars` id index). See items 3
+and 5 above for what each was and how the neutrality is pinned.
+
+Worth **1.38x on the model tick** (measured properly — alternating A/B, three
+reps, see the baseline). Note the bench only calls `advance()`, so it measures
+the crossing gate ALONE: the three mirror fixes live in `frame()` and are
+invisible to it. Their effect is browser-side and still unquantified — a
+visible-window frame measurement is the missing piece.
 
 **Next, in leverage order:**
 
 1. **Spatial index in the road sim.** Maintain `tileId → Set<vehicle>`
    incrementally as bodies move (the body memo already knows its tiles);
    `clearAhead`/junction/lane-change scans then look up only vehicles on their
-   route tiles. Turns the quadratic column near-linear — this is now the biggest
-   remaining win by a distance. Verify with the state-trace hash (KNOWHOW → SIM
+   route tiles. Turns the superlinear curve near-linear — this is now the
+   biggest remaining win by a distance (the road step alone is 24.8ms at 357
+   vehicles). Verify with the state-trace hash (KNOWHOW → SIM
    HOT PATH: `ed41e161…5723`); it must be behaviour-neutral. The trap is that
    `step` advances cars one at a time, so a tick-scoped index goes stale
    mid-tick — key it on car STATE the way the body memo does, or not at all.
@@ -202,5 +237,6 @@ the per-tick closed-crossing set (`claimSnapshot`), and the three render mirrors
 
 | date | change | perfworld+traffic avg | perfcity avg | road@200 |
 | --- | --- | --- | --- | --- |
-| 2026-08-22 | baseline (this file) | 18–31ms | 13–15ms (rush 27–37ms) | 12ms |
-| 2026-08-22 | per-tick `claimSnapshot` + render mirrors | **8–11ms** | **5.6–8ms** (rush 8.1ms) | 12ms (untouched) |
+| 2026-08-22 | first baseline — LOAD-CONTAMINATED, do not trust | 18–31ms | 13–15ms | 12ms |
+| 2026-08-22 | old gate, quiet AC, alternating A/B | 5.16ms | 6.41ms | 7.4ms |
+| 2026-08-22 | per-tick `claimSnapshot` + render mirrors | **3.74ms** | **4.66ms** | 7.4ms (untouched) |

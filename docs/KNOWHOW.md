@@ -4426,17 +4426,27 @@ mode, shared paths — are NOT).
   "everything" board), measured by `PERF=1 npx vitest run
   tests/unit/perf/perfBench.spec.ts` (skips entirely without PERF=1, so CI
   never pays). It times `game.advance(1/60)` headless — the reliable meter.
-- The scaling law: the ROAD sim is the perf dial. ~1ms/tick at 50 cars,
-  ~2.8 at 100, ~12 at 200, ~120 at 357 (congestion collapse). Rail is noise
-  (8 trains on 40x28 = 0.3ms/tick). Citizens' MORNING RUSH doubles the tick
-  (perfcity 13→37ms) — "the game got slow" can simply be 07:00 in town.
-- FIXED 2026-08-22, ~2x on the model tick (perfworld+traffic 18-31 -> 8-11ms,
-  perfcity 13-15 -> 5.6-8ms, and the citizens' RUSH spike 27-37 -> 8.1ms):
+- The scaling law (quiet machine, AC): the ROAD sim is the perf dial and is
+  superlinear, cost ~ cars^1.7 — 0.73ms/tick at 50 cars, 2.08 at 100, 7.4 at
+  200, 24.8 at 357. Rail is noise (8 trains on 40x28 = 0.17ms/tick).
+- MEASURE BY ALTERNATING, NEVER BEFORE-AND-LATER. This machine swung 3.6x
+  between two runs of IDENTICAL code (the sim is deterministic — same work).
+  A before/after pair taken an hour apart measures the MACHINE: it turned a
+  real 1.4x into a reported 2x here, and invented a "citizens' rush hour
+  doubles the tick" spike that does not exist on a quiet box. Run new/old/
+  new/old back to back, 3 reps, and look for group separation.
+- And an isolated component overstates its own worth: the old crossing gate
+  measured 3.5ms/tick in a microbenchmark of its 630 calls, but removing it
+  from the real tick saved 1.4ms. In situ is the number that counts.
+- FIXED 2026-08-22, 1.38x on the model tick (alternating A/B, quiet AC:
+  perfworld+traffic 5.16 -> 3.74ms, perfcity 6.41 -> 4.66ms):
   · `sim.claimSnapshot()` — every claim, by TILE ID, in one pass. The crossing
     gate used to ask `reservedBy(id) || occupiedBy(id)` per route tile per car
     per tick (~630 calls/tick, ~3.5ms, a quarter of the tick) and `occupiedBy`
     is a full train scan rebuilding each body's claim keys. Now one snapshot
-    per tick behind a Set: 0.021ms/tick, 0 per-tile queries.
+    per tick behind a Set: 0.02ms/tick, 0 per-tile queries. NOTE the bench only
+    calls advance(), so it measures the GATE alone — the three mirror fixes sit
+    in frame() and are browser-side, still unquantified.
     EXACT, not approximate — `sim.step()` runs BEFORE `roadSim.step()` in
     `advance`, so no train moves during the road step and every one of those
     calls was already returning the same answer. The snapshot reproduces the
